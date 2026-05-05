@@ -10,6 +10,10 @@ interface SettingsSchema {
   'tutorialSeen.image'?: boolean
   'tutorialSeen.ai'?: boolean
   streamerHandle?: string
+  filenameTemplate?: string
+  'recentFiles.video'?: string[]
+  'recentFiles.audio'?: string[]
+  'recentFiles.image'?: string[]
 }
 
 export const store = new Store<SettingsSchema>({
@@ -20,9 +24,10 @@ export const store = new Store<SettingsSchema>({
 })
 
 export function getSetting<T = unknown>(key: SettingsKey): T | undefined {
-  return store.get(key) as T | undefined
+  // electron-store types narrow per key; keep our public API uniform.
+  return store.get(key as keyof SettingsSchema) as T | undefined
 }
 
 export function setSetting<T = unknown>(key: SettingsKey, value: T): void {
-  store.set(key, value as SettingsSchema[typeof key])
+  store.set(key as keyof SettingsSchema, value as never)
 }

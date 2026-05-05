@@ -3,7 +3,12 @@ import path from 'node:path'
 import { probeAudio } from '../audio/probe'
 import { extractAudioFromVideo } from '../audio/extract'
 import { runAudioExport, runAudioMux, cancelAudioJob } from '../audio/process'
-import type { AudioExportSpec, AudioMuxSpec } from '../../shared/audio'
+import {
+  listPresets as listChainPresets,
+  savePreset as saveChainPreset,
+  deletePreset as deleteChainPreset
+} from '../audio/presets'
+import type { AudioExportSpec, AudioMuxSpec, ChainSpec } from '../../shared/audio'
 
 export function registerAudioIpc(): void {
   ipcMain.handle('audio:probe', async (_e, filePath: string) => probeAudio(filePath))
@@ -71,4 +76,10 @@ export function registerAudioIpc(): void {
       return `${base}-cleaned.${format}`
     }
   )
+
+  ipcMain.handle('audio:listPresets', () => listChainPresets())
+  ipcMain.handle('audio:savePreset', (_e, name: string, chain: ChainSpec) =>
+    saveChainPreset(name, chain)
+  )
+  ipcMain.handle('audio:deletePreset', (_e, id: string) => deleteChainPreset(id))
 }

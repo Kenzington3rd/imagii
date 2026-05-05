@@ -58,18 +58,11 @@ export interface TextLayer extends BaseLayer {
 
 export type CanvasLayer = ImageLayer | RectLayer | EllipseLayer | LineLayer | TextLayer
 
-export interface Guide {
-  id: string
-  axis: 'horizontal' | 'vertical'
-  position: number
-}
-
 export interface CanvasDocument {
   width: number
   height: number
   background: string
   layers: CanvasLayer[]
-  guides?: Guide[]
 }
 
 export type ImageExportFormat = 'png' | 'jpg' | 'svg' | 'pdf'

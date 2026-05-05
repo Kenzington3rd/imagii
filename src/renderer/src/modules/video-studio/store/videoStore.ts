@@ -30,6 +30,7 @@ interface VideoStudioState {
   setClipEnd: (id: string, endSec: number) => void
   togglePreset: (id: string, preset: PlatformId) => void
   setSelectedPresets: (id: string, presets: PlatformId[]) => void
+  setClipSpeed: (id: string, speedMultiplier: number) => void
   setClipCrop: (id: string, cropRect: CropRect | null) => void
   addTextOverlay: (id: string, overlay: Omit<TextOverlay, 'id'>) => void
   updateTextOverlay: (clipId: string, overlayId: string, patch: Partial<TextOverlay>) => void
@@ -145,6 +146,20 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
   setSelectedPresets: (id, presets) =>
     set((state) => ({
       clips: state.clips.map((c) => (c.id === id ? { ...c, selectedPresets: presets } : c))
+    })),
+  setClipSpeed: (id, speedMultiplier) =>
+    set((state) => ({
+      clips: state.clips.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              speedMultiplier:
+                Number.isFinite(speedMultiplier) && speedMultiplier > 0
+                  ? speedMultiplier
+                  : 1
+            }
+          : c
+      )
     })),
   setClipCrop: (id, cropRect) =>
     set((state) => ({

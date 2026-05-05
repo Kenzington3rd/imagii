@@ -1,16 +1,56 @@
+import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
+import { applyProject, captureProject } from '../modules/project/ProjectIO'
+
+async function handleSave(): Promise<void> {
+  try {
+    const project = captureProject()
+    const saved = await window.api.project.save(project)
+    if (saved) toast.success('Project saved')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Save failed')
+  }
+}
+
+async function handleLoad(): Promise<void> {
+  try {
+    const project = await window.api.project.load()
+    if (!project) return
+    await applyProject(project)
+    toast.success('Project loaded')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Load failed')
+  }
+}
 
 export function Home(): JSX.Element {
   return (
     <div className="h-full overflow-auto px-10 py-12">
-      <header className="mb-10">
-        <h1 className="text-4xl font-semibold tracking-tight">imagii</h1>
-        <p className="text-ink-muted mt-2">
-          Hi Mike — pick a studio to get started.
-        </p>
+      <header className="mb-10 flex items-start justify-between">
+        <div>
+          <h1 className="text-4xl font-semibold tracking-tight">imagii</h1>
+          <p className="text-ink-muted mt-2">
+            Hi Mike — pick a studio to get started.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <button className="btn-ghost px-3 py-1.5" onClick={handleLoad}>
+            📂 Open project
+          </button>
+          <button className="btn-ghost px-3 py-1.5" onClick={handleSave}>
+            💾 Save project
+          </button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
+        <NavCard
+          to="/record"
+          title="Record"
+          description="Capture screen + webcam + mic to a single video — your one-stop alternative to OBS."
+          icon="🔴"
+          accent="rgba(244, 63, 94, 0.18)"
+        />
         <NavCard
           to="/video"
           title="Video Studio"
@@ -34,8 +74,8 @@ export function Home(): JSX.Element {
         />
         <NavCard
           to="/ai-art"
-          title="AI Art"
-          description="Expand and inpaint images with local Stable Diffusion. Reference search included."
+          title="References"
+          description="Search inspiration, save mood boards, and drop them onto the canvas as reference layers."
           icon="✨"
           accent="rgba(251, 191, 36, 0.18)"
         />

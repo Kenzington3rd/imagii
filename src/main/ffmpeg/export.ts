@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
 import { PLATFORM_PRESETS } from './presets'
-import { buildVideoFilter } from './filters'
+import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
 
@@ -35,6 +35,10 @@ export async function runExportJob(
   const outputName = `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${preset.id}.mp4`
   const outputPath = path.join(job.outDir, outputName)
 
+  const speed =
+    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
+  const audioSpeed = buildAudioSpeedFilter(speed)
+
   const args: string[] = [
     '-y',
     '-ss',
@@ -44,7 +48,10 @@ export async function runExportJob(
     '-i',
     job.sourcePath,
     '-vf',
-    filterChain,
+    filterChain
+  ]
+  if (audioSpeed) args.push('-af', audioSpeed)
+  args.push(
     '-c:v',
     preset.videoCodec,
     '-preset',
@@ -65,7 +72,7 @@ export async function runExportJob(
     'pipe:1',
     '-nostats',
     outputPath
-  ]
+  )
 
   const startedAt = Date.now()
 
@@ -133,4 +140,15 @@ export function cancelExportJob(jobId: string): boolean {
   child.kill('SIGKILL')
   activeJobs.delete(jobId)
   return true
+}
+
+export function cancelAllExportJobs(): void {
+  for (const [, child] of activeJobs) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeJobs.clear()
 }

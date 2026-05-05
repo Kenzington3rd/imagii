@@ -1,19 +1,19 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ImagiiApi, SettingsKey } from '../shared/api'
 import type { ExportJobSpec, ExportProgress } from '../shared/clip'
-import type { AudioExportSpec, AudioJobProgress, AudioMuxSpec } from '../shared/audio'
 import type {
-  AiJobProgress,
-  Txt2ImgRequest,
-  InpaintRequest,
-  OutpaintRequest
-} from '../shared/ai'
+  AudioExportSpec,
+  AudioJobProgress,
+  AudioMuxSpec,
+  ChainSpec
+} from '../shared/audio'
 import type { SearchResult } from '../shared/search'
 import type {
   CaptionsProgress,
   TranscribeRequest,
   BurnInRequest
 } from '../shared/captions'
+import type { ImagiiProject, RecordingSpec } from '../shared/workspace'
 
 const api: ImagiiApi = {
   settings: {
@@ -34,6 +34,7 @@ const api: ImagiiApi = {
     },
     exportBatch: (jobs: ExportJobSpec[]) => ipcRenderer.invoke('video:exportBatch', jobs),
     cancel: (jobId: string) => ipcRenderer.invoke('video:cancel', jobId),
+    cancelAll: () => ipcRenderer.invoke('video:cancelAll'),
     revealInFolder: (filePath: string) => ipcRenderer.invoke('video:revealInFolder', filePath),
     onProgress: (handler: (p: ExportProgress) => void) => {
       const listener = (_e: unknown, p: ExportProgress): void => handler(p)
@@ -64,7 +65,8 @@ const api: ImagiiApi = {
       ): void => handler(p)
       ipcRenderer.on('video:highlightProgress', listener)
       return () => ipcRenderer.removeListener('video:highlightProgress', listener)
-    }
+    },
+    exportGif: (params) => ipcRenderer.invoke('video:exportGif', params)
   },
   audio: {
     probe: (filePath: string) => ipcRenderer.invoke('audio:probe', filePath),
@@ -82,28 +84,14 @@ const api: ImagiiApi = {
       const listener = (_e: unknown, p: AudioJobProgress): void => handler(p)
       ipcRenderer.on('audio:progress', listener)
       return () => ipcRenderer.removeListener('audio:progress', listener)
-    }
-  },
-  ai: {
-    status: () => ipcRenderer.invoke('ai:status'),
-    checkPrompt: (prompt: string) => ipcRenderer.invoke('ai:checkPrompt', prompt),
-    txt2img: (req: Txt2ImgRequest) => ipcRenderer.invoke('ai:txt2img', req),
-    inpaint: (req: InpaintRequest) => ipcRenderer.invoke('ai:inpaint', req),
-    outpaint: (req: OutpaintRequest) => ipcRenderer.invoke('ai:outpaint', req),
-    openModelsFolder: () => ipcRenderer.invoke('ai:openModelsFolder'),
-    openBinFolder: () => ipcRenderer.invoke('ai:openBinFolder'),
-    onProgress: (handler: (p: AiJobProgress) => void) => {
-      const listener = (_e: unknown, p: AiJobProgress): void => handler(p)
-      ipcRenderer.on('ai:progress', listener)
-      return () => ipcRenderer.removeListener('ai:progress', listener)
-    }
+    },
+    listPresets: () => ipcRenderer.invoke('audio:listPresets'),
+    savePreset: (name: string, chain: ChainSpec) =>
+      ipcRenderer.invoke('audio:savePreset', name, chain),
+    deletePreset: (id: string) => ipcRenderer.invoke('audio:deletePreset', id)
   },
   search: {
     images: (query: string) => ipcRenderer.invoke('search:images', query)
-  },
-  image: {
-    savePdf: (spec) => ipcRenderer.invoke('image:savePdf', spec),
-    revealInFolder: (filePath: string) => ipcRenderer.invoke('image:revealInFolder', filePath)
   },
   captions: {
     status: () => ipcRenderer.invoke('captions:status'),
@@ -131,6 +119,15 @@ const api: ImagiiApi = {
     removeItem: (collectionId: string, itemId: string) =>
       ipcRenderer.invoke('moodboard:removeItem', collectionId, itemId),
     prune: () => ipcRenderer.invoke('moodboard:prune')
+  },
+  project: {
+    save: (project: ImagiiProject, defaultName?: string) =>
+      ipcRenderer.invoke('project:save', project, defaultName),
+    load: () => ipcRenderer.invoke('project:load')
+  },
+  recording: {
+    listSources: () => ipcRenderer.invoke('recording:listSources'),
+    save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec)
   }
 }
 

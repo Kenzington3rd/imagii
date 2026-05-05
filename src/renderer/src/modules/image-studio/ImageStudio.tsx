@@ -7,7 +7,6 @@ import { LayerPanel } from './LayerPanel'
 import { PropertiesPanel } from './PropertiesPanel'
 import { ImportPanel } from './ImportPanel'
 import { ExportDialog } from './ExportDialog'
-import { ColorReplacePanel } from './ColorReplacePanel'
 import { useCanvasStore } from './state/canvasStore'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
@@ -52,8 +51,6 @@ export function ImageStudio(): JSX.Element {
         setTool('line')
       } else if (e.key === 'p' || e.key === 'P') {
         setTool('pencil')
-      } else if (e.key === 'c' || e.key === 'C') {
-        if (!ctrl) setTool('colorReplace')
       }
     }
     window.addEventListener('keydown', onKey)
@@ -101,7 +98,6 @@ export function ImageStudio(): JSX.Element {
               <ExportDialog />
             </div>
             <div className="flex flex-col gap-3 overflow-y-auto">
-              <ColorReplacePanel />
               <LayerPanel />
               <PropertiesPanel />
             </div>

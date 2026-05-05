@@ -1,34 +1,16 @@
 import { create } from 'zustand'
-import type {
-  AiInstallStatus,
-  AiJobProgress,
-  GeneratedImage,
-  GenerationResult
-} from '@shared/ai'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 
-export type AiTab = 'generate' | 'outpaint' | 'inpaint' | 'reference' | 'moodboards'
-
-interface JobUiState {
-  jobId: string
-  phase: AiJobProgress['phase']
-  percent: number
-  message?: string
-}
+export type AiTab = 'reference' | 'moodboards'
 
 interface AiStudioState {
-  status: AiInstallStatus | null
-  loadingStatus: boolean
   tab: AiTab
   searchResponse: SearchResponse | null
   searchLoading: boolean
   searchError: string | null
   collections: MoodBoardCollection[]
   selectedCollectionId: string | null
-  generations: GeneratedImage[]
-  job: JobUiState | null
 
-  refreshStatus: () => Promise<void>
   setTab: (t: AiTab) => void
 
   search: (query: string) => Promise<void>
@@ -40,33 +22,16 @@ interface AiStudioState {
   selectCollection: (id: string) => void
   addToCollection: (collectionId: string, result: SearchResult) => Promise<void>
   removeFromCollection: (collectionId: string, itemId: string) => Promise<void>
-
-  setJob: (job: JobUiState | null) => void
-  setProgress: (p: AiJobProgress) => void
-  setGenerations: (result: GenerationResult) => void
 }
 
 export const useAiStore = create<AiStudioState>((set, get) => ({
-  status: null,
-  loadingStatus: false,
   tab: 'reference',
   searchResponse: null,
   searchLoading: false,
   searchError: null,
   collections: [],
   selectedCollectionId: null,
-  generations: [],
-  job: null,
 
-  refreshStatus: async () => {
-    set({ loadingStatus: true })
-    try {
-      const status = await window.api.ai.status()
-      set({ status })
-    } finally {
-      set({ loadingStatus: false })
-    }
-  },
   setTab: (t) => set({ tab: t }),
 
   search: async (query: string) => {
@@ -124,21 +89,5 @@ export const useAiStore = create<AiStudioState>((set, get) => ({
     await window.api.moodboard.removeItem(collectionId, itemId)
     const collections = await window.api.moodboard.list()
     set({ collections })
-  },
-
-  setJob: (job) => set({ job }),
-  setProgress: (p) =>
-    set((state) =>
-      state.job && state.job.jobId === p.jobId
-        ? {
-            job: {
-              jobId: p.jobId,
-              phase: p.phase,
-              percent: p.percent ?? state.job.percent,
-              message: p.message
-            }
-          }
-        : state
-    ),
-  setGenerations: (result) => set({ generations: result.images })
+  }
 }))

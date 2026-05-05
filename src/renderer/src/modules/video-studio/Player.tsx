@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useVideoStore } from './store/videoStore'
 import { CropOverlay } from './CropOverlay'
+import { SafeZoneOverlay } from './SafeZoneOverlay'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -17,6 +18,7 @@ export function Player(): JSX.Element | null {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
+  const [showSafeZones, setShowSafeZones] = useState(false)
 
   useEffect(() => {
     setPlaying(false)
@@ -127,6 +129,11 @@ export function Player(): JSX.Element | null {
           controls={false}
         />
         <CropOverlay videoElement={videoRef.current} />
+        <SafeZoneOverlay
+          videoElement={videoRef.current}
+          show={showSafeZones}
+          ratios={['9:16', '1:1', '4:5']}
+        />
       </div>
 
       <div className="flex items-center gap-3 text-sm">
@@ -150,7 +157,15 @@ export function Player(): JSX.Element | null {
         <div className="ml-2 font-mono text-ink-muted">
           {formatTime(time)} / {formatTime(duration)}
         </div>
-        <div className="ml-auto text-xs text-ink-dim">
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showSafeZones}
+            onChange={(e) => setShowSafeZones(e.target.checked)}
+          />
+          Safe zones
+        </label>
+        <div className="text-xs text-ink-dim">
           {source.probe.width}×{source.probe.height} · {fps.toFixed(2)} fps ·{' '}
           {source.probe.videoCodec}
           {source.probe.audioCodec ? ` · ${source.probe.audioCodec}` : ' · (no audio)'}

@@ -1,9 +1,11 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { probeVideo } from '../ffmpeg/probe'
-import { runExportJob, cancelExportJob } from '../ffmpeg/export'
+import { runExportJob, cancelExportJob, cancelAllExportJobs } from '../ffmpeg/export'
 import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
 import { findHighlights } from '../ffmpeg/highlights'
+import { runGifExport } from '../ffmpeg/gif'
+import { nanoid } from 'nanoid'
 import type { ExportJobSpec, ExportResult } from '../../shared/clip'
 
 export function registerVideoIpc(): void {
@@ -56,6 +58,7 @@ export function registerVideoIpc(): void {
   )
 
   ipcMain.handle('video:cancel', (_e, jobId: string) => cancelExportJob(jobId))
+  ipcMain.handle('video:cancelAll', () => cancelAllExportJobs())
 
   ipcMain.handle('video:revealInFolder', (_e, filePath: string) => {
     shell.showItemInFolder(filePath)
@@ -104,6 +107,33 @@ export function registerVideoIpc(): void {
         e.sender.send('video:highlightProgress', p)
       )
       return candidates
+    }
+  )
+
+  ipcMain.handle(
+    'video:exportGif',
+    async (
+      _e,
+      params: {
+        sourcePath: string
+        outDir: string
+        startSec: number
+        endSec: number
+        width: number
+        fps: number
+        speed: number
+      }
+    ) => {
+      return runGifExport({
+        jobId: nanoid(10),
+        sourcePath: params.sourcePath,
+        outDir: params.outDir,
+        startSec: params.startSec,
+        endSec: params.endSec,
+        width: params.width,
+        fps: params.fps,
+        speed: params.speed
+      })
     }
   )
 }

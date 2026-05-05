@@ -4,10 +4,10 @@ import path from 'node:path'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerVideoIpc } from './ipc/video'
 import { registerAudioIpc } from './ipc/audio'
-import { registerAiIpc } from './ipc/ai'
 import { registerSearchIpc } from './ipc/search'
-import { registerImageIpc } from './ipc/image'
 import { registerCaptionsIpc } from './ipc/captions'
+import { registerProjectIpc } from './ipc/project'
+import { registerRecordingIpc } from './ipc/recording'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 
@@ -75,10 +75,10 @@ app.whenReady().then(async () => {
   registerSettingsIpc()
   registerVideoIpc()
   registerAudioIpc()
-  registerAiIpc()
   registerSearchIpc()
-  registerImageIpc()
   registerCaptionsIpc()
+  registerProjectIpc()
+  registerRecordingIpc()
   const smoke = await smokeTestFfmpeg()
   if (smoke.ffmpegOk) {
     console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)

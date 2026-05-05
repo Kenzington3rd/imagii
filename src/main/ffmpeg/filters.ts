@@ -88,6 +88,8 @@ export function buildVideoFilter(
   watermark?: WatermarkSpec | null
 ): string {
   const parts: string[] = []
+  const speed = clip.speedMultiplier && clip.speedMultiplier > 0 ? clip.speedMultiplier : 1
+  if (speed !== 1) parts.push(`setpts=PTS/${speed.toFixed(4)}`)
   if (clip.cropRect) {
     parts.push(cropToFilter(clip.cropRect, source))
   } else {
@@ -102,4 +104,23 @@ export function buildVideoFilter(
     parts.push(watermarkFilter(watermark, preset))
   }
   return parts.join(',')
+}
+
+export function buildAudioSpeedFilter(speed: number): string {
+  if (!Number.isFinite(speed) || speed <= 0 || speed === 1) return ''
+  // atempo accepts 0.5-2.0; chain for larger ratios
+  const chain: string[] = []
+  let remaining = speed
+  while (remaining > 2) {
+    chain.push('atempo=2')
+    remaining /= 2
+  }
+  while (remaining < 0.5) {
+    chain.push('atempo=0.5')
+    remaining /= 0.5
+  }
+  if (Math.abs(remaining - 1) > 0.001) {
+    chain.push(`atempo=${remaining.toFixed(4)}`)
+  }
+  return chain.join(',')
 }

@@ -4,17 +4,9 @@ import type {
   AudioExportSpec,
   AudioJobProgress,
   AudioJobResult,
-  AudioMuxSpec
+  AudioMuxSpec,
+  ChainSpec
 } from './audio'
-import type {
-  AiInstallStatus,
-  Txt2ImgRequest,
-  InpaintRequest,
-  OutpaintRequest,
-  GenerationResult,
-  AiJobProgress
-} from './ai'
-import type { SafetyResult } from './safety'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 import type {
   CaptionsInstallStatus,
@@ -23,6 +15,13 @@ import type {
   TranscribeResult,
   BurnInRequest
 } from './captions'
+import type {
+  ImagiiProject,
+  ChainPreset,
+  RecordingSource,
+  RecordingSpec,
+  RecordingResult
+} from './workspace'
 
 export type SettingsKey =
   | 'theme'
@@ -33,6 +32,10 @@ export type SettingsKey =
   | 'tutorialSeen.image'
   | 'tutorialSeen.ai'
   | 'streamerHandle'
+  | 'filenameTemplate'
+  | 'recentFiles.video'
+  | 'recentFiles.audio'
+  | 'recentFiles.image'
 
 export interface VideoProbe {
   duration: number
@@ -63,6 +66,7 @@ export interface ImagiiApi {
     fileUrl(filePath: string): string
     exportBatch(jobs: ExportJobSpec[]): Promise<ExportResult[]>
     cancel(jobId: string): Promise<boolean>
+    cancelAll(): Promise<void>
     revealInFolder(filePath: string): Promise<void>
     onProgress(handler: (p: ExportProgress) => void): Unsubscribe
     onJobComplete(handler: (info: { jobId: string; outputPath: string }) => void): Unsubscribe
@@ -84,6 +88,15 @@ export interface ImagiiApi {
     onHighlightProgress(
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe
+    exportGif(params: {
+      sourcePath: string
+      outDir: string
+      startSec: number
+      endSec: number
+      width: number
+      fps: number
+      speed: number
+    }): Promise<{ outputPath: string }>
   }
   audio: {
     probe(filePath: string): Promise<AudioProbe>
@@ -96,28 +109,12 @@ export interface ImagiiApi {
     revealInFolder(filePath: string): Promise<void>
     suggestOutputName(sourcePath: string, format: string): Promise<string>
     onProgress(handler: (p: AudioJobProgress) => void): Unsubscribe
-  }
-  ai: {
-    status(): Promise<AiInstallStatus>
-    checkPrompt(prompt: string): Promise<SafetyResult>
-    txt2img(req: Txt2ImgRequest): Promise<GenerationResult>
-    inpaint(req: InpaintRequest): Promise<GenerationResult>
-    outpaint(req: OutpaintRequest): Promise<GenerationResult>
-    openModelsFolder(): Promise<void>
-    openBinFolder(): Promise<void>
-    onProgress(handler: (p: AiJobProgress) => void): Unsubscribe
+    listPresets(): Promise<ChainPreset[]>
+    savePreset(name: string, chain: ChainSpec): Promise<ChainPreset>
+    deletePreset(id: string): Promise<void>
   }
   search: {
     images(query: string): Promise<SearchResponse>
-  }
-  image: {
-    savePdf(spec: {
-      pages: Array<{ pngBase64: string; widthPx: number; heightPx: number }>
-      dpi: number
-      title?: string
-      defaultName?: string
-    }): Promise<{ outputPath: string; sizeBytes: number } | null>
-    revealInFolder(filePath: string): Promise<void>
   }
   captions: {
     status(): Promise<CaptionsInstallStatus>
@@ -137,6 +134,14 @@ export interface ImagiiApi {
     addItem(collectionId: string, result: SearchResult): Promise<MoodBoardCollection | null>
     removeItem(collectionId: string, itemId: string): Promise<MoodBoardCollection | null>
     prune(): Promise<void>
+  }
+  project: {
+    save(project: ImagiiProject, defaultName?: string): Promise<string | null>
+    load(): Promise<ImagiiProject | null>
+  }
+  recording: {
+    listSources(): Promise<RecordingSource[]>
+    save(spec: RecordingSpec): Promise<RecordingResult | null>
   }
 }
 

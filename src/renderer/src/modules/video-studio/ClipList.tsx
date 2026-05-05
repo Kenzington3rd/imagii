@@ -14,6 +14,9 @@ export function ClipList(): JSX.Element {
   const addClip = useVideoStore((s) => s.addClip)
   const removeClip = useVideoStore((s) => s.removeClip)
   const renameClip = useVideoStore((s) => s.renameClip)
+  const setClipSpeed = useVideoStore((s) => s.setClipSpeed)
+  const selected = clips.find((c) => c.id === selectedClipId)
+  const selectedSpeed = selected?.speedMultiplier ?? 1
 
   return (
     <div className="card p-4 flex flex-col gap-3">
@@ -25,6 +28,28 @@ export function ClipList(): JSX.Element {
           + Add clip
         </button>
       </div>
+      {selected ? (
+        <div className="flex items-center gap-2 text-xs px-1 py-1.5 bg-bg-hover rounded">
+          <span className="text-ink-muted">Speed</span>
+          <input
+            type="range"
+            min={0.25}
+            max={4}
+            step={0.05}
+            value={selectedSpeed}
+            onChange={(e) => setClipSpeed(selected.id, Number(e.target.value))}
+            className="flex-1"
+          />
+          <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
+          <button
+            className="text-ink-dim hover:text-ink-base"
+            onClick={() => setClipSpeed(selected.id, 1)}
+            title="Reset to 1×"
+          >
+            ↺
+          </button>
+        </div>
+      ) : null}
       <ul className="flex flex-col gap-2">
         {clips.map((clip) => {
           const isSelected = clip.id === selectedClipId

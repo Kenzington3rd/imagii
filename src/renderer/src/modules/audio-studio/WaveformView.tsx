@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js'
 import { useAudioStore } from './state/audioStore'
+import { VolumeMeter } from './VolumeMeter'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -23,6 +24,7 @@ export function WaveformView(): JSX.Element | null {
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [ready, setReady] = useState(false)
+  const [mediaEl, setMediaEl] = useState<HTMLMediaElement | null>(null)
 
   useEffect(() => {
     if (!source || !containerRef.current) return
@@ -47,6 +49,13 @@ export function WaveformView(): JSX.Element | null {
 
     const offReady = ws.on('ready', () => {
       setReady(true)
+      try {
+        const internal = (ws as unknown as { getMediaElement?: () => HTMLMediaElement })
+          .getMediaElement
+        if (internal) setMediaEl(internal.call(ws))
+      } catch {
+        /* ignore */
+      }
     })
     const offTime = ws.on('audioprocess', (t) => {
       setTime(t)
@@ -127,6 +136,7 @@ export function WaveformView(): JSX.Element | null {
           {source.probe.sampleRate} Hz · {source.probe.channels}ch · {source.probe.codec}
         </div>
       </div>
+      <VolumeMeter audioElement={mediaEl} />
       {cutRegions.length > 0 ? (
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="text-ink-muted">Cuts:</span>

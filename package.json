@@ -27,7 +27,6 @@
     "konva": "^9.3.22",
     "music-metadata": "^10.9.1",
     "nanoid": "^5.1.11",
-    "onnxruntime-node": "^1.25.1",
     "path-browserify": "^1.0.1",
     "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
@@ -36,7 +35,6 @@
     "react-konva": "^18.2.14",
     "react-rnd": "^10.5.3",
     "react-router-dom": "^6.26.0",
-    "sharp": "^0.33.5",
     "use-image": "^1.1.4",
     "wavesurfer.js": "^7.12.6",
     "zustand": "^4.5.4"
@@ -54,6 +52,7 @@
     "electron-vite": "^2.3.0",
     "png-to-ico": "^2.1.8",
     "postcss": "^8.4.39",
+    "sharp": "^0.34.5",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.4",
     "vite": "^5.4.0"

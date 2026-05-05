@@ -31,7 +31,7 @@ export function LayerPanel(): JSX.Element {
   }
 
   return (
-    <div className="card p-3 flex flex-col gap-2">
+    <div className="card p-3 flex flex-col gap-2" data-tutorial="image-layers">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
         Layers ({layers.length})
       </h3>

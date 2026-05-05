@@ -4,7 +4,6 @@ import type {
   CanvasDocument,
   CanvasLayer,
   EllipseLayer,
-  Guide,
   ImageLayer,
   LineLayer,
   RectLayer,
@@ -18,7 +17,7 @@ interface History {
   future: CanvasDocument[]
 }
 
-export type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'pencil' | 'colorReplace'
+export type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'pencil'
 
 interface CanvasState {
   doc: CanvasDocument
@@ -49,11 +48,6 @@ interface CanvasState {
   resetDocument: () => void
   setDocument: (doc: CanvasDocument) => void
 
-  addGuide: (axis: 'horizontal' | 'vertical', position: number) => void
-  moveGuide: (id: string, position: number) => void
-  removeGuide: (id: string) => void
-  clearGuides: () => void
-
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -65,8 +59,7 @@ function defaultDoc(): CanvasDocument {
     width: 1200,
     height: 800,
     background: '#ffffff',
-    layers: [],
-    guides: []
+    layers: []
   }
 }
 
@@ -197,41 +190,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       doc,
       selectedLayerId: null,
-      history: pushHistory(get().history, prev)
-    })
-  },
-
-  addGuide: (axis, position) => {
-    const prev = get().doc
-    const guide: Guide = { id: nanoid(8), axis, position }
-    set({
-      doc: { ...prev, guides: [...(prev.guides ?? []), guide] },
-      history: pushHistory(get().history, prev)
-    })
-  },
-  moveGuide: (id, position) => {
-    const prev = get().doc
-    set({
-      doc: {
-        ...prev,
-        guides: (prev.guides ?? []).map((g) => (g.id === id ? { ...g, position } : g))
-      }
-    })
-  },
-  removeGuide: (id) => {
-    const prev = get().doc
-    set({
-      doc: {
-        ...prev,
-        guides: (prev.guides ?? []).filter((g) => g.id !== id)
-      },
-      history: pushHistory(get().history, prev)
-    })
-  },
-  clearGuides: () => {
-    const prev = get().doc
-    set({
-      doc: { ...prev, guides: [] },
       history: pushHistory(get().history, prev)
     })
   },

@@ -27,6 +27,7 @@ export interface Clip {
   cropRect: CropRect | null
   textOverlays: TextOverlay[]
   selectedPresets: PlatformId[]
+  speedMultiplier?: number
 }
 
 export interface WatermarkSpec {

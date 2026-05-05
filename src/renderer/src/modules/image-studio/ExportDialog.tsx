@@ -2,7 +2,7 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
 
-type FormatOption = 'png' | 'jpg' | 'svg' | 'pdf' | 'emote-pack'
+type FormatOption = 'png' | 'jpg'
 
 function downloadDataUrl(dataUrl: string, filename: string): void {
   const a = document.createElement('a')
@@ -13,76 +13,28 @@ function downloadDataUrl(dataUrl: string, filename: string): void {
   a.remove()
 }
 
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
-}
-
 export function ExportDialog(): JSX.Element {
-  const doc = useCanvasStore((s) => s.doc)
   const [format, setFormat] = useState<FormatOption>('png')
   const [quality, setQuality] = useState(0.92)
   const [scale, setScale] = useState(1)
-  const [pdfDpi, setPdfDpi] = useState(300)
   const [busy, setBusy] = useState(false)
 
   async function exportImage(): Promise<void> {
     setBusy(true)
     try {
-      const stage = (window as unknown as { __imagiiStage?: { toDataURL: (opts: { mimeType?: string; quality?: number; pixelRatio?: number; width?: number; height?: number }) => string; toCanvas?: () => HTMLCanvasElement } }).__imagiiStage
+      const stage = (
+        window as unknown as {
+          __imagiiStage?: {
+            toDataURL: (opts: {
+              mimeType?: string
+              quality?: number
+              pixelRatio?: number
+            }) => string
+          }
+        }
+      ).__imagiiStage
       if (!stage) {
         toast.error('Canvas not ready')
-        return
-      }
-      if (format === 'svg') {
-        const svg = buildSvg(doc)
-        downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `imagii-${Date.now()}.svg`)
-        toast.success('SVG saved')
-        return
-      }
-      if (format === 'emote-pack') {
-        const sizes = [28, 56, 112]
-        const baseDimMax = Math.max(doc.width, doc.height)
-        for (const size of sizes) {
-          const pixelRatio = size / baseDimMax
-          const dataUrl = stage.toDataURL({
-            mimeType: 'image/png',
-            pixelRatio
-          })
-          downloadDataUrl(dataUrl, `emote-${size}x${size}.png`)
-        }
-        toast.success('Emote pack exported (28 / 56 / 112)')
-        return
-      }
-      if (format === 'pdf') {
-        const pixelRatio = pdfDpi / 96
-        const dataUrl = stage.toDataURL({
-          mimeType: 'image/png',
-          pixelRatio
-        })
-        const pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, '')
-        const result = await window.api.image.savePdf({
-          pages: [
-            {
-              pngBase64,
-              widthPx: doc.width * pixelRatio,
-              heightPx: doc.height * pixelRatio
-            }
-          ],
-          dpi: pdfDpi,
-          title: 'imagii canvas',
-          defaultName: `imagii-${Date.now()}.pdf`
-        })
-        if (result) {
-          toast.success(`PDF saved (${(result.sizeBytes / 1024).toFixed(0)} KB)`)
-          window.api.image.revealInFolder(result.outputPath)
-        }
         return
       }
       const mime = format === 'png' ? 'image/png' : 'image/jpeg'
@@ -100,11 +52,8 @@ export function ExportDialog(): JSX.Element {
     }
   }
 
-  const sizeInches = (doc.width / pdfDpi).toFixed(2)
-  const heightInches = (doc.height / pdfDpi).toFixed(2)
-
   return (
-    <div className="card p-3 flex items-center gap-2 text-sm flex-wrap">
+    <div className="card p-3 flex items-center gap-2 text-sm flex-wrap" data-tutorial="image-export">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
         Export
       </h3>
@@ -115,9 +64,6 @@ export function ExportDialog(): JSX.Element {
       >
         <option value="png">PNG</option>
         <option value="jpg">JPG</option>
-        <option value="svg">SVG (basic)</option>
-        <option value="pdf">PDF</option>
-        <option value="emote-pack">Twitch emote pack</option>
       </select>
       {format === 'jpg' ? (
         <label className="flex items-center gap-1.5 text-xs">
@@ -134,100 +80,26 @@ export function ExportDialog(): JSX.Element {
           <span className="font-mono w-10 text-right">{Math.round(quality * 100)}%</span>
         </label>
       ) : null}
-      {format !== 'svg' && format !== 'pdf' ? (
-        <label className="flex items-center gap-1.5 text-xs">
-          <span className="text-ink-muted">Scale</span>
-          <select
-            className="bg-bg-base rounded px-1 py-0.5"
-            value={scale}
-            onChange={(e) => setScale(Number(e.target.value))}
-          >
-            <option value="0.5">0.5×</option>
-            <option value="1">1×</option>
-            <option value="2">2×</option>
-            <option value="3">3× (HiDPI)</option>
-          </select>
-        </label>
-      ) : null}
-      {format === 'pdf' ? (
-        <label className="flex items-center gap-1.5 text-xs">
-          <span className="text-ink-muted">DPI</span>
-          <select
-            className="bg-bg-base rounded px-1 py-0.5"
-            value={pdfDpi}
-            onChange={(e) => setPdfDpi(Number(e.target.value))}
-          >
-            <option value="72">72 (screen)</option>
-            <option value="150">150 (good)</option>
-            <option value="300">300 (print)</option>
-            <option value="600">600 (high)</option>
-          </select>
-          <span className="text-ink-dim">
-            → {sizeInches}″ × {heightInches}″
-          </span>
-        </label>
-      ) : null}
-      <button className="btn-primary px-4 py-1 ml-auto disabled:opacity-50" disabled={busy} onClick={exportImage}>
+      <label className="flex items-center gap-1.5 text-xs">
+        <span className="text-ink-muted">Scale</span>
+        <select
+          className="bg-bg-base rounded px-1 py-0.5"
+          value={scale}
+          onChange={(e) => setScale(Number(e.target.value))}
+        >
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2">2×</option>
+          <option value="3">3× (HiDPI)</option>
+        </select>
+      </label>
+      <button
+        className="btn-primary px-4 py-1 ml-auto disabled:opacity-50"
+        disabled={busy}
+        onClick={exportImage}
+      >
         {busy ? 'Exporting…' : 'Export'}
       </button>
     </div>
   )
-}
-
-function buildSvg(doc: ReturnType<typeof useCanvasStore.getState>['doc']): string {
-  const elements = doc.layers
-    .filter((l) => l.visible)
-    .map((l) => {
-      const transform = `translate(${l.x},${l.y}) rotate(${l.rotation}) scale(${l.scaleX},${l.scaleY})`
-      switch (l.type) {
-        case 'rect':
-          return `<rect x="0" y="0" width="${l.width}" height="${l.height}" rx="${l.cornerRadius}" fill="${l.fill}" stroke="${l.stroke}" stroke-width="${l.strokeWidth}" transform="${transform}" opacity="${l.opacity}"/>`
-        case 'ellipse':
-          return `<ellipse cx="0" cy="0" rx="${l.radiusX}" ry="${l.radiusY}" fill="${l.fill}" stroke="${l.stroke}" stroke-width="${l.strokeWidth}" transform="${transform}" opacity="${l.opacity}"/>`
-        case 'line': {
-          const pts = l.points
-            .reduce<string[]>((acc, n, i) => {
-              if (i % 2 === 0) acc.push(`${n}`)
-              else acc[acc.length - 1] = `${acc[acc.length - 1]} ${n}`
-              return acc
-            }, [])
-            .join(' ')
-          if (l.closed)
-            return `<polygon points="${pts}" fill="none" stroke="${l.stroke}" stroke-width="${l.strokeWidth}" transform="${transform}" opacity="${l.opacity}"/>`
-          return `<polyline points="${pts}" fill="none" stroke="${l.stroke}" stroke-width="${l.strokeWidth}" transform="${transform}" opacity="${l.opacity}"/>`
-        }
-        case 'text':
-          return `<text x="0" y="${l.fontSize}" font-size="${l.fontSize}" font-family="${l.fontFamily}" fill="${l.fill}" transform="${transform}" opacity="${l.opacity}">${escapeXml(l.text)}</text>`
-        case 'image':
-          return `<image x="0" y="0" width="${l.width}" height="${l.height}" href="${l.src}" transform="${transform}" opacity="${l.opacity}"/>`
-        default:
-          return ''
-      }
-    })
-    .join('\n')
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${doc.width}" height="${doc.height}" viewBox="0 0 ${doc.width} ${doc.height}">
-  <rect width="100%" height="100%" fill="${doc.background}"/>
-  ${elements}
-</svg>`
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/[<>&'"]/g, (c) => {
-    switch (c) {
-      case '<':
-        return '&lt;'
-      case '>':
-        return '&gt;'
-      case '&':
-        return '&amp;'
-      case "'":
-        return '&apos;'
-      case '"':
-        return '&quot;'
-      default:
-        return c
-    }
-  })
 }

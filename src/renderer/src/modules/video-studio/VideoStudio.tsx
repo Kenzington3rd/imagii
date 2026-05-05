@@ -12,6 +12,7 @@ import { TextOverlayEditor } from './TextOverlayEditor'
 import { ReframePanel } from './ReframePanel'
 import { HighlightPanel } from './HighlightPanel'
 import { CaptionsPanel } from './CaptionsPanel'
+import { GifPanel } from './GifPanel'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
@@ -84,6 +85,7 @@ export function VideoStudio(): JSX.Element {
             <ClipList />
             <HighlightPanel />
             <ReframePanel />
+            <GifPanel />
             <CaptionsPanel />
             <TextOverlayEditor />
           </div>
