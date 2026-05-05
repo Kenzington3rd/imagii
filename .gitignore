@@ -1,6 +1,8 @@
 node_modules/
 out/
 dist/
+for-mike/
+for-mike.zip
 .vite/
 *.log
 *.tsbuildinfo

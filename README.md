@@ -26,9 +26,10 @@ Everything runs on your computer. No accounts. No subscriptions. No cloud upload
 
 ### Option 1: Use the prebuilt .exe (easiest)
 
-1. **Get the file.** You should have received a file called `imagii-for-mike.exe` (or `imagii-1.0.0.exe`). It's about **227 MB** and is a single self-contained portable executable.
-2. **Save it anywhere on your computer.** Desktop, `Downloads`, `Documents` — wherever. There's no installer; the file *is* the app.
-3. **Skip to the "First launch" section below.**
+1. **Get the file.** You should have received either `imagii-for-mike.exe` (~227 MB) on its own, or `for-mike.zip` (~226 MB) containing the .exe plus a quick-start text file.
+2. **If it's a zip**, right-click → **Extract All…** to unzip it anywhere you like.
+3. **Save the .exe anywhere on your computer.** Desktop, `Downloads`, `Documents` — wherever. There's no installer; the file *is* the app.
+4. **Skip to the "First launch" section below.**
 
 ### Option 2: Build it yourself from source
 
@@ -42,7 +43,7 @@ npm install
 npm run dist       # produces dist/imagii-for-mike.exe (~227 MB)
 ```
 
-The build downloads ~150 MB of Electron binaries on first run, then takes another minute or two to package. Output ends up in `dist/`.
+The build downloads ~150 MB of Electron binaries on first run, then takes another minute or two to package. Output ends up in `dist/`. Copy the `.exe` somewhere convenient — it's portable and runs from any folder.
 
 ---
 
