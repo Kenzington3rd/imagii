@@ -1,0 +1,62 @@
+{
+  "categories": {
+    "explicit": [
+      "nude",
+      "naked",
+      "topless",
+      "nsfw",
+      "explicit",
+      "porn",
+      "pornographic",
+      "erotic",
+      "sexy",
+      "lingerie",
+      "underwear",
+      "bikini",
+      "bra",
+      "panties",
+      "sexual",
+      "intimate",
+      "seductive",
+      "fetish"
+    ],
+    "minors": [
+      "child",
+      "kid",
+      "minor",
+      "underage",
+      "teen",
+      "teenage",
+      "young girl",
+      "young boy",
+      "loli",
+      "shota",
+      "schoolgirl",
+      "schoolboy",
+      "preteen"
+    ],
+    "violence": [
+      "gore",
+      "graphic violence",
+      "torture",
+      "dismember",
+      "decapitate",
+      "execution"
+    ],
+    "harm": [
+      "suicide method",
+      "self-harm tutorial",
+      "how to make a bomb",
+      "weapon manufacture",
+      "anthrax",
+      "cyanide synthesis"
+    ],
+    "real_people_explicit": [
+      "celebrity nude",
+      "celeb nude",
+      "deepfake"
+    ]
+  },
+  "version": 1,
+  "updated": "2026-05-04"
+}

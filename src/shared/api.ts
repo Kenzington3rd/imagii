@@ -6,6 +6,16 @@ import type {
   AudioJobResult,
   AudioMuxSpec
 } from './audio'
+import type {
+  AiInstallStatus,
+  Txt2ImgRequest,
+  InpaintRequest,
+  OutpaintRequest,
+  GenerationResult,
+  AiJobProgress
+} from './ai'
+import type { SafetyResult } from './safety'
+import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 
 export type SettingsKey = 'ageVerified' | 'ageVerifiedAt' | 'theme' | 'lastRoute'
 
@@ -53,6 +63,28 @@ export interface ImagiiApi {
     revealInFolder(filePath: string): Promise<void>
     suggestOutputName(sourcePath: string, format: string): Promise<string>
     onProgress(handler: (p: AudioJobProgress) => void): Unsubscribe
+  }
+  ai: {
+    status(): Promise<AiInstallStatus>
+    checkPrompt(prompt: string): Promise<SafetyResult>
+    txt2img(req: Txt2ImgRequest): Promise<GenerationResult>
+    inpaint(req: InpaintRequest): Promise<GenerationResult>
+    outpaint(req: OutpaintRequest): Promise<GenerationResult>
+    openModelsFolder(): Promise<void>
+    openBinFolder(): Promise<void>
+    onProgress(handler: (p: AiJobProgress) => void): Unsubscribe
+  }
+  search: {
+    images(query: string): Promise<SearchResponse>
+  }
+  moodboard: {
+    list(): Promise<MoodBoardCollection[]>
+    create(name: string): Promise<MoodBoardCollection>
+    delete(id: string): Promise<void>
+    rename(id: string, name: string): Promise<MoodBoardCollection | null>
+    addItem(collectionId: string, result: SearchResult): Promise<MoodBoardCollection | null>
+    removeItem(collectionId: string, itemId: string): Promise<MoodBoardCollection | null>
+    prune(): Promise<void>
   }
 }
 

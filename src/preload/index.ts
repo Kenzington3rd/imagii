@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ImagiiApi, SettingsKey } from '../shared/api'
 import type { ExportJobSpec, ExportProgress } from '../shared/clip'
 import type { AudioExportSpec, AudioJobProgress, AudioMuxSpec } from '../shared/audio'
+import type {
+  AiJobProgress,
+  Txt2ImgRequest,
+  InpaintRequest,
+  OutpaintRequest
+} from '../shared/ai'
+import type { SearchResult } from '../shared/search'
 
 const api: ImagiiApi = {
   settings: {
@@ -52,6 +59,34 @@ const api: ImagiiApi = {
       ipcRenderer.on('audio:progress', listener)
       return () => ipcRenderer.removeListener('audio:progress', listener)
     }
+  },
+  ai: {
+    status: () => ipcRenderer.invoke('ai:status'),
+    checkPrompt: (prompt: string) => ipcRenderer.invoke('ai:checkPrompt', prompt),
+    txt2img: (req: Txt2ImgRequest) => ipcRenderer.invoke('ai:txt2img', req),
+    inpaint: (req: InpaintRequest) => ipcRenderer.invoke('ai:inpaint', req),
+    outpaint: (req: OutpaintRequest) => ipcRenderer.invoke('ai:outpaint', req),
+    openModelsFolder: () => ipcRenderer.invoke('ai:openModelsFolder'),
+    openBinFolder: () => ipcRenderer.invoke('ai:openBinFolder'),
+    onProgress: (handler: (p: AiJobProgress) => void) => {
+      const listener = (_e: unknown, p: AiJobProgress): void => handler(p)
+      ipcRenderer.on('ai:progress', listener)
+      return () => ipcRenderer.removeListener('ai:progress', listener)
+    }
+  },
+  search: {
+    images: (query: string) => ipcRenderer.invoke('search:images', query)
+  },
+  moodboard: {
+    list: () => ipcRenderer.invoke('moodboard:list'),
+    create: (name: string) => ipcRenderer.invoke('moodboard:create', name),
+    delete: (id: string) => ipcRenderer.invoke('moodboard:delete', id),
+    rename: (id: string, name: string) => ipcRenderer.invoke('moodboard:rename', id, name),
+    addItem: (collectionId: string, result: SearchResult) =>
+      ipcRenderer.invoke('moodboard:addItem', collectionId, result),
+    removeItem: (collectionId: string, itemId: string) =>
+      ipcRenderer.invoke('moodboard:removeItem', collectionId, itemId),
+    prune: () => ipcRenderer.invoke('moodboard:prune')
   }
 }
 
