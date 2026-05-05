@@ -2,7 +2,7 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
 
-type FormatOption = 'png' | 'jpg' | 'svg' | 'pdf'
+type FormatOption = 'png' | 'jpg' | 'svg' | 'pdf' | 'emote-pack'
 
 function downloadDataUrl(dataUrl: string, filename: string): void {
   const a = document.createElement('a')
@@ -44,6 +44,20 @@ export function ExportDialog(): JSX.Element {
         const svg = buildSvg(doc)
         downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `imagii-${Date.now()}.svg`)
         toast.success('SVG saved')
+        return
+      }
+      if (format === 'emote-pack') {
+        const sizes = [28, 56, 112]
+        const baseDimMax = Math.max(doc.width, doc.height)
+        for (const size of sizes) {
+          const pixelRatio = size / baseDimMax
+          const dataUrl = stage.toDataURL({
+            mimeType: 'image/png',
+            pixelRatio
+          })
+          downloadDataUrl(dataUrl, `emote-${size}x${size}.png`)
+        }
+        toast.success('Emote pack exported (28 / 56 / 112)')
         return
       }
       if (format === 'pdf') {
@@ -103,6 +117,7 @@ export function ExportDialog(): JSX.Element {
         <option value="jpg">JPG</option>
         <option value="svg">SVG (basic)</option>
         <option value="pdf">PDF</option>
+        <option value="emote-pack">Twitch emote pack</option>
       </select>
       {format === 'jpg' ? (
         <label className="flex items-center gap-1.5 text-xs">

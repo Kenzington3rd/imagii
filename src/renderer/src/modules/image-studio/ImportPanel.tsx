@@ -1,6 +1,7 @@
 import { useEffect, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { makeImageLayer, makeTextLayer, useCanvasStore } from './state/canvasStore'
+import { TemplatesDialog } from './TemplatesDialog'
 
 const ACCEPTED_EXT = ['.png', '.jpg', '.jpeg', '.bmp', '.svg', '.webp', '.gif']
 
@@ -31,6 +32,7 @@ export function ImportPanel(): JSX.Element {
   const addLayer = useCanvasStore((s) => s.addLayer)
   const layers = useCanvasStore((s) => s.doc.layers)
   const [dragOver, setDragOver] = useState(false)
+  const [showTemplates, setShowTemplates] = useState(false)
 
   async function ingestFile(file: File): Promise<void> {
     if (!isImage(file.name)) {
@@ -95,31 +97,43 @@ export function ImportPanel(): JSX.Element {
 
   if (layers.length > 0) {
     return (
-      <div
-        onDragOver={(e) => {
-          e.preventDefault()
-          setDragOver(true)
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-        className={`card p-2 flex items-center gap-2 text-sm ${
-          dragOver ? 'border-accent bg-bg-hover' : ''
-        }`}
-      >
-        <button className="btn-ghost px-3 py-1" onClick={pickFile}>
-          + Import image
-        </button>
-        <button className="btn-ghost px-3 py-1" onClick={addText}>
-          + Add text
-        </button>
-        <span className="text-xs text-ink-dim ml-auto">
-          Drop, paste (Ctrl+V), or pick a file.
-        </span>
-      </div>
+      <>
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          data-tutorial="image-import"
+          className={`card p-2 flex items-center gap-2 text-sm ${
+            dragOver ? 'border-accent bg-bg-hover' : ''
+          }`}
+        >
+          <button className="btn-ghost px-3 py-1" onClick={pickFile}>
+            + Import image
+          </button>
+          <button className="btn-ghost px-3 py-1" onClick={addText}>
+            + Add text
+          </button>
+          <button
+            className="btn-ghost px-3 py-1"
+            onClick={() => setShowTemplates(true)}
+            data-tutorial="image-templates"
+          >
+            ✨ Templates
+          </button>
+          <span className="text-xs text-ink-dim ml-auto">
+            Drop, paste (Ctrl+V), or pick a file.
+          </span>
+        </div>
+        <TemplatesDialog open={showTemplates} onClose={() => setShowTemplates(false)} />
+      </>
     )
   }
 
   return (
+    <>
     <div
       onDragOver={(e) => {
         e.preventDefault()
@@ -127,6 +141,7 @@ export function ImportPanel(): JSX.Element {
       }}
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
+      data-tutorial="image-import"
       className={`card flex flex-col items-center justify-center text-center px-10 py-16 transition-colors ${
         dragOver ? 'border-accent bg-bg-hover' : ''
       }`}
@@ -136,14 +151,19 @@ export function ImportPanel(): JSX.Element {
       <p className="text-ink-muted text-sm mb-6">
         PNG, JPG, BMP, WEBP, SVG, GIF — or paste from clipboard with Ctrl+V.
       </p>
-      <div className="flex gap-2">
+      <div className="flex gap-2 mb-3">
         <button className="btn-primary" onClick={pickFile}>
           Choose file…
         </button>
         <button className="btn-ghost" onClick={addText}>
           Start with text
         </button>
+        <button className="btn-ghost" onClick={() => setShowTemplates(true)}>
+          ✨ Templates
+        </button>
       </div>
     </div>
+    <TemplatesDialog open={showTemplates} onClose={() => setShowTemplates(false)} />
+    </>
   )
 }

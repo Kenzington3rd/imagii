@@ -16,8 +16,23 @@ import type {
 } from './ai'
 import type { SafetyResult } from './safety'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
+import type {
+  CaptionsInstallStatus,
+  CaptionsProgress,
+  TranscribeRequest,
+  TranscribeResult,
+  BurnInRequest
+} from './captions'
 
-export type SettingsKey = 'theme' | 'lastRoute' | 'welcomeSeen'
+export type SettingsKey =
+  | 'theme'
+  | 'lastRoute'
+  | 'welcomeSeen'
+  | 'tutorialSeen.video'
+  | 'tutorialSeen.audio'
+  | 'tutorialSeen.image'
+  | 'tutorialSeen.ai'
+  | 'streamerHandle'
 
 export interface VideoProbe {
   duration: number
@@ -51,6 +66,24 @@ export interface ImagiiApi {
     revealInFolder(filePath: string): Promise<void>
     onProgress(handler: (p: ExportProgress) => void): Unsubscribe
     onJobComplete(handler: (info: { jobId: string; outputPath: string }) => void): Unsubscribe
+    reframe(params: {
+      sourcePath: string
+      outDir: string
+      position: 'left' | 'center' | 'right' | 'smart'
+      startSec: number
+      endSec: number
+      targetWidth: number
+      targetHeight: number
+    }): Promise<{ outputPath: string }>
+    onReframeProgress(
+      handler: (p: { jobId: string; phase: string; percent: number }) => void
+    ): Unsubscribe
+    findHighlights(sourcePath: string): Promise<
+      Array<{ startSec: number; endSec: number; peakDb: number; reason: string }>
+    >
+    onHighlightProgress(
+      handler: (p: { jobId: string; phase: string; percent: number }) => void
+    ): Unsubscribe
   }
   audio: {
     probe(filePath: string): Promise<AudioProbe>
@@ -85,6 +118,16 @@ export interface ImagiiApi {
       defaultName?: string
     }): Promise<{ outputPath: string; sizeBytes: number } | null>
     revealInFolder(filePath: string): Promise<void>
+  }
+  captions: {
+    status(): Promise<CaptionsInstallStatus>
+    transcribe(req: TranscribeRequest): Promise<TranscribeResult>
+    burnIn(req: BurnInRequest): Promise<{ outputPath: string }>
+    saveSrt(srtPath: string, defaultName: string): Promise<string | null>
+    pickBurnInOutput(defaultName: string): Promise<string | null>
+    openBinFolder(): Promise<void>
+    openModelsFolder(): Promise<void>
+    onProgress(handler: (p: CaptionsProgress) => void): Unsubscribe
   }
   moodboard: {
     list(): Promise<MoodBoardCollection[]>

@@ -47,6 +47,7 @@ interface CanvasState {
   setBackground: (color: string) => void
   setCanvasSize: (width: number, height: number) => void
   resetDocument: () => void
+  setDocument: (doc: CanvasDocument) => void
 
   addGuide: (axis: 'horizontal' | 'vertical', position: number) => void
   moveGuide: (id: string, position: number) => void
@@ -190,6 +191,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   resetDocument: () => {
     set({ doc: defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null })
+  },
+  setDocument: (doc) => {
+    const prev = get().doc
+    set({
+      doc,
+      selectedLayerId: null,
+      history: pushHistory(get().history, prev)
+    })
   },
 
   addGuide: (axis, position) => {

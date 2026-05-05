@@ -9,6 +9,10 @@ import { ImportPanel } from './ImportPanel'
 import { ExportDialog } from './ExportDialog'
 import { ColorReplacePanel } from './ColorReplacePanel'
 import { useCanvasStore } from './state/canvasStore'
+import { Tutorial } from '../../components/Tutorial'
+import { TutorialButton } from '../../components/TutorialButton'
+import { useTutorial } from '../../hooks/useTutorial'
+import { imageTutorial } from '../../tutorials/imageTutorial'
 
 export function ImageStudio(): JSX.Element {
   const undo = useCanvasStore((s) => s.undo)
@@ -20,6 +24,7 @@ export function ImageStudio(): JSX.Element {
   const removeLayer = useCanvasStore((s) => s.removeLayer)
   const selectedLayerId = useCanvasStore((s) => s.selectedLayerId)
   const layers = useCanvasStore((s) => s.doc.layers)
+  const tutorial = useTutorial(imageTutorial)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -80,6 +85,7 @@ export function ImageStudio(): JSX.Element {
             ↷ Redo
           </button>
           <span className="ml-2 text-xs text-ink-muted">Tool: {tool}</span>
+          <TutorialButton onClick={tutorial.start} />
         </div>
       </header>
 
@@ -113,6 +119,9 @@ export function ImageStudio(): JSX.Element {
           }
         }}
       />
+      {tutorial.active ? (
+        <Tutorial def={imageTutorial} onClose={tutorial.stop} />
+      ) : null}
     </div>
   )
 }

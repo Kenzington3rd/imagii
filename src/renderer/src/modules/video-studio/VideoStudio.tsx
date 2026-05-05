@@ -9,6 +9,13 @@ import { Timeline } from './Timeline'
 import { ClipList } from './ClipList'
 import { ExportPanel } from './ExportPanel'
 import { TextOverlayEditor } from './TextOverlayEditor'
+import { ReframePanel } from './ReframePanel'
+import { HighlightPanel } from './HighlightPanel'
+import { CaptionsPanel } from './CaptionsPanel'
+import { Tutorial } from '../../components/Tutorial'
+import { TutorialButton } from '../../components/TutorialButton'
+import { useTutorial } from '../../hooks/useTutorial'
+import { videoTutorial } from '../../tutorials/videoTutorial'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
@@ -16,6 +23,7 @@ export function VideoStudio(): JSX.Element {
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
   const [extractingAudio, setExtractingAudio] = useState(false)
+  const tutorial = useTutorial(videoTutorial)
 
   async function cleanAudioFlow(): Promise<void> {
     if (!source) return
@@ -44,38 +52,44 @@ export function VideoStudio(): JSX.Element {
           </Link>
           <h1 className="text-2xl font-semibold mt-1">Video Studio</h1>
         </div>
-        {source ? (
-          <div className="flex items-center gap-3 text-sm text-ink-muted">
-            <button
-              className="btn-ghost px-3 py-1.5 disabled:opacity-50"
-              onClick={cleanAudioFlow}
-              disabled={extractingAudio}
-              title="Extract this video's audio and open it in Audio Studio"
-            >
-              🎚 Clean audio
-            </button>
-            <span className="truncate max-w-[40ch]">{source.fileName}</span>
-            <button className="btn-ghost px-3 py-1.5" onClick={clearSource}>
-              Close
-            </button>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-3 text-sm text-ink-muted">
+          {source ? (
+            <>
+              <button
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+                onClick={cleanAudioFlow}
+                disabled={extractingAudio}
+                title="Extract this video's audio and open it in Audio Studio"
+              >
+                🎚 Clean audio
+              </button>
+              <span className="truncate max-w-[40ch]">{source.fileName}</span>
+              <button className="btn-ghost px-3 py-1.5" onClick={clearSource}>
+                Close
+              </button>
+            </>
+          ) : null}
+          <TutorialButton onClick={tutorial.start} />
+        </div>
       </header>
 
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
           <div className="flex flex-col gap-4 min-w-0">
-            <Player />
-            <Timeline />
+            <div data-tutorial="video-player"><Player /></div>
+            <div data-tutorial="video-timeline"><Timeline /></div>
             <ExportPanel />
           </div>
           <div className="flex flex-col gap-4">
             <ClipList />
+            <HighlightPanel />
+            <ReframePanel />
+            <CaptionsPanel />
             <TextOverlayEditor />
           </div>
         </div>
       ) : (
-        <Importer />
+        <div data-tutorial="video-import"><Importer /></div>
       )}
 
       <Toaster
@@ -88,6 +102,9 @@ export function VideoStudio(): JSX.Element {
           }
         }}
       />
+      {tutorial.active ? (
+        <Tutorial def={videoTutorial} onClose={tutorial.stop} />
+      ) : null}
     </div>
   )
 }

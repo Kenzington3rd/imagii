@@ -21,6 +21,7 @@ interface VideoStudioState {
   setCurrentTime: (t: number) => void
 
   addClip: () => void
+  addClipFromRange: (name: string, startSec: number, endSec: number) => void
   removeClip: (id: string) => void
   selectClip: (id: string) => void
   renameClip: (id: string, name: string) => void
@@ -85,6 +86,13 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
     const { source, clips } = get()
     if (!source) return
     const next = makeDefaultClip(source.probe.duration, clips.length + 1)
+    set({ clips: [...clips, next], selectedClipId: next.id })
+  },
+  addClipFromRange: (name, startSec, endSec) => {
+    const { source, clips } = get()
+    if (!source) return
+    const base = makeDefaultClip(source.probe.duration, clips.length + 1)
+    const next = { ...base, name, startSec, endSec }
     set({ clips: [...clips, next], selectedClipId: next.id })
   },
   removeClip: (id) => {

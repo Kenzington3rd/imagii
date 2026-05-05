@@ -1,4 +1,4 @@
-import type { Clip, CropRect, TextOverlay } from '../../shared/clip'
+import type { Clip, CropRect, TextOverlay, WatermarkSpec } from '../../shared/clip'
 import type { PlatformPreset } from './presets'
 
 export interface SourceDimensions {
@@ -51,10 +51,41 @@ function drawTextFilter(overlay: TextOverlay, preset: PlatformPreset): string {
   return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${overlay.sizePx}:fontcolor=${overlay.colorHex}:x=${x}:y=${y}:enable='${between}'`
 }
 
+function watermarkFilter(spec: WatermarkSpec, preset: PlatformPreset): string {
+  const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
+  const fontSize = Math.max(12, Math.round((spec.fontSizePct / 100) * preset.height))
+  const text = escapeDrawtext(spec.text)
+  const padding = 20
+  let x: string
+  let y: string
+  switch (spec.position) {
+    case 'top-left':
+      x = `${padding}`
+      y = `${padding}`
+      break
+    case 'top-right':
+      x = `w-tw-${padding}`
+      y = `${padding}`
+      break
+    case 'bottom-left':
+      x = `${padding}`
+      y = `h-th-${padding}`
+      break
+    case 'bottom-right':
+    default:
+      x = `w-tw-${padding}`
+      y = `h-th-${padding}`
+      break
+  }
+  const alpha = Math.max(0, Math.min(1, spec.opacity)).toFixed(2)
+  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=white@${alpha}:x=${x}:y=${y}:box=1:boxcolor=black@${(Number(alpha) * 0.4).toFixed(2)}:boxborderw=8`
+}
+
 export function buildVideoFilter(
   clip: Clip,
   preset: PlatformPreset,
-  source: SourceDimensions
+  source: SourceDimensions,
+  watermark?: WatermarkSpec | null
 ): string {
   const parts: string[] = []
   if (clip.cropRect) {
@@ -66,6 +97,9 @@ export function buildVideoFilter(
   parts.push(scaleFilter(preset))
   for (const overlay of clip.textOverlays) {
     parts.push(drawTextFilter(overlay, preset))
+  }
+  if (watermark && watermark.text.trim()) {
+    parts.push(watermarkFilter(watermark, preset))
   }
   return parts.join(',')
 }

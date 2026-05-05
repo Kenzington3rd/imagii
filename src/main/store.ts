@@ -5,6 +5,11 @@ interface SettingsSchema {
   theme?: 'dark' | 'light'
   lastRoute?: string
   welcomeSeen?: boolean
+  'tutorialSeen.video'?: boolean
+  'tutorialSeen.audio'?: boolean
+  'tutorialSeen.image'?: boolean
+  'tutorialSeen.ai'?: boolean
+  streamerHandle?: string
 }
 
 export const store = new Store<SettingsSchema>({

@@ -29,12 +29,20 @@ export interface Clip {
   selectedPresets: PlatformId[]
 }
 
+export interface WatermarkSpec {
+  text: string
+  position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+  opacity: number
+  fontSizePct: number
+}
+
 export interface ExportJobSpec {
   jobId: string
   sourcePath: string
   outDir: string
   clip: Clip
   preset: PlatformId
+  watermark?: WatermarkSpec | null
 }
 
 export interface ExportProgress {

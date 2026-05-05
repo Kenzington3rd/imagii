@@ -28,7 +28,7 @@ export async function runExportJob(
   const preset = PLATFORM_PRESETS[job.preset]
   const probe = await probeVideo(job.sourcePath)
   const source = { width: probe.width, height: probe.height }
-  const filterChain = buildVideoFilter(job.clip, preset, source)
+  const filterChain = buildVideoFilter(job.clip, preset, source, job.watermark)
   const clipDuration = Math.max(0.1, job.clip.endSec - job.clip.startSec)
 
   const sourceBase = path.parse(job.sourcePath).name

@@ -17,6 +17,16 @@ export interface CutRegion {
   endSec: number
 }
 
+export type SecondaryTrackRole = 'music' | 'mic2' | 'gameaudio'
+
+export interface SecondaryTrack {
+  filePath: string
+  fileName: string
+  role: SecondaryTrackRole
+  gainDb: number
+  duckUnderPrimary: boolean
+}
+
 export interface ChainSpec {
   denoise: DenoiseStrength
   hum60: boolean
@@ -27,6 +37,7 @@ export interface ChainSpec {
   loudnormTargetLufs: number
   gainDb: number
   cutRegions: CutRegion[]
+  secondaryTrack?: SecondaryTrack | null
 }
 
 export const DEFAULT_CHAIN_SPEC: ChainSpec = {
@@ -38,7 +49,8 @@ export const DEFAULT_CHAIN_SPEC: ChainSpec = {
   loudnorm: false,
   loudnormTargetLufs: -16,
   gainDb: 0,
-  cutRegions: []
+  cutRegions: [],
+  secondaryTrack: null
 }
 
 export type AudioOutputFormat = 'mp3' | 'wav' | 'flac' | 'aac'

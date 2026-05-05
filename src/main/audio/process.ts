@@ -114,13 +114,28 @@ export async function runAudioExport(
   }
 
   const finalChain = buildChain(spec.chain, measurement)
-  const args = [
-    '-y',
-    '-i',
-    spec.sourcePath,
-    '-vn',
-    '-af',
-    finalChain.filterPass2,
+  const secondary = spec.chain.secondaryTrack
+  const args: string[] = ['-y', '-i', spec.sourcePath]
+  if (secondary) {
+    args.push('-i', secondary.filePath)
+  }
+  args.push('-vn')
+  if (secondary) {
+    const ducking = secondary.duckUnderPrimary
+    const gainDb = secondary.gainDb
+    const filterGraph = ducking
+      ? `[0:a]${finalChain.filterPass2}[primary];` +
+        `[1:a]volume=${gainDb}dB[secondary_pre];` +
+        `[secondary_pre][primary]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[secondary_ducked];` +
+        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 0.7'[mix]`
+      : `[0:a]${finalChain.filterPass2}[primary];` +
+        `[1:a]volume=${gainDb}dB[secondary];` +
+        `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
+    args.push('-filter_complex', filterGraph, '-map', '[mix]')
+  } else {
+    args.push('-af', finalChain.filterPass2)
+  }
+  args.push(
     ...codecArgsFor(spec.format, spec.bitrate),
     '-ar',
     '48000',
@@ -128,7 +143,7 @@ export async function runAudioExport(
     'pipe:1',
     '-nostats',
     spec.outputPath
-  ]
+  )
   await runFfmpegJob(args, spec.jobId, probe.duration, 'render', onProgress)
   onProgress({ jobId: spec.jobId, pass: 'render', percent: 100 })
 

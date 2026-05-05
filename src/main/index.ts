@@ -7,6 +7,7 @@ import { registerAudioIpc } from './ipc/audio'
 import { registerAiIpc } from './ipc/ai'
 import { registerSearchIpc } from './ipc/search'
 import { registerImageIpc } from './ipc/image'
+import { registerCaptionsIpc } from './ipc/captions'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 
@@ -77,6 +78,7 @@ app.whenReady().then(async () => {
   registerAiIpc()
   registerSearchIpc()
   registerImageIpc()
+  registerCaptionsIpc()
   const smoke = await smokeTestFfmpeg()
   if (smoke.ffmpegOk) {
     console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)

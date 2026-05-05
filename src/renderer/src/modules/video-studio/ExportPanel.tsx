@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
-import type { ExportJobSpec, ExportProgress, PlatformId } from '@shared/clip'
+import type {
+  ExportJobSpec,
+  ExportProgress,
+  PlatformId,
+  WatermarkSpec
+} from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
@@ -24,6 +29,21 @@ export function ExportPanel(): JSX.Element | null {
   const [outDir, setOutDir] = useState<string | null>(null)
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [running, setRunning] = useState(false)
+  const [watermarkText, setWatermarkText] = useState<string>('')
+  const [watermarkPosition, setWatermarkPosition] = useState<WatermarkSpec['position']>(
+    'bottom-right'
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    window.api.settings.get<string>('streamerHandle').then((handle) => {
+      if (cancelled) return
+      if (handle) setWatermarkText(handle)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const offProgress = window.api.video.onProgress((p: ExportProgress) => {
@@ -59,6 +79,15 @@ export function ExportPanel(): JSX.Element | null {
       toast.error('Choose an output folder first')
       return
     }
+    const watermark: WatermarkSpec | null = watermarkText.trim()
+      ? {
+          text: watermarkText.trim(),
+          position: watermarkPosition,
+          opacity: 0.85,
+          fontSizePct: 3.5
+        }
+      : null
+    if (watermark) await window.api.settings.set('streamerHandle', watermark.text)
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []
     for (const clip of clips) {
@@ -69,7 +98,8 @@ export function ExportPanel(): JSX.Element | null {
           sourcePath: source.filePath,
           outDir,
           clip,
-          preset
+          preset,
+          watermark
         })
         statuses.push({ jobId, clipName: clip.name, preset, percent: 0 })
       }
@@ -97,7 +127,7 @@ export function ExportPanel(): JSX.Element | null {
   const totalQueued = clips.reduce((acc, c) => acc + c.selectedPresets.length, 0)
 
   return (
-    <div className="card p-4 flex flex-col gap-4">
+    <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
           Export
@@ -114,6 +144,28 @@ export function ExportPanel(): JSX.Element | null {
             {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
           </button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-ink-muted">Watermark:</span>
+        <input
+          type="text"
+          placeholder="@yourhandle (leave blank for none)"
+          value={watermarkText}
+          onChange={(e) => setWatermarkText(e.target.value)}
+          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
+          maxLength={40}
+        />
+        <select
+          className="bg-bg-base rounded px-2 py-1"
+          value={watermarkPosition}
+          onChange={(e) => setWatermarkPosition(e.target.value as WatermarkSpec['position'])}
+        >
+          <option value="bottom-right">Bottom right</option>
+          <option value="bottom-left">Bottom left</option>
+          <option value="top-right">Top right</option>
+          <option value="top-left">Top left</option>
+        </select>
       </div>
 
       {selectedClip ? (

@@ -9,6 +9,11 @@ import type {
   OutpaintRequest
 } from '../shared/ai'
 import type { SearchResult } from '../shared/search'
+import type {
+  CaptionsProgress,
+  TranscribeRequest,
+  BurnInRequest
+} from '../shared/captions'
 
 const api: ImagiiApi = {
   settings: {
@@ -40,6 +45,25 @@ const api: ImagiiApi = {
         handler(info)
       ipcRenderer.on('video:jobComplete', listener)
       return () => ipcRenderer.removeListener('video:jobComplete', listener)
+    },
+    reframe: (params) => ipcRenderer.invoke('video:reframe', params),
+    onReframeProgress: (handler) => {
+      const listener = (
+        _e: unknown,
+        p: { jobId: string; phase: string; percent: number }
+      ): void => handler(p)
+      ipcRenderer.on('video:reframeProgress', listener)
+      return () => ipcRenderer.removeListener('video:reframeProgress', listener)
+    },
+    findHighlights: (sourcePath: string) =>
+      ipcRenderer.invoke('video:findHighlights', sourcePath),
+    onHighlightProgress: (handler) => {
+      const listener = (
+        _e: unknown,
+        p: { jobId: string; phase: string; percent: number }
+      ): void => handler(p)
+      ipcRenderer.on('video:highlightProgress', listener)
+      return () => ipcRenderer.removeListener('video:highlightProgress', listener)
     }
   },
   audio: {
@@ -80,6 +104,22 @@ const api: ImagiiApi = {
   image: {
     savePdf: (spec) => ipcRenderer.invoke('image:savePdf', spec),
     revealInFolder: (filePath: string) => ipcRenderer.invoke('image:revealInFolder', filePath)
+  },
+  captions: {
+    status: () => ipcRenderer.invoke('captions:status'),
+    transcribe: (req: TranscribeRequest) => ipcRenderer.invoke('captions:transcribe', req),
+    burnIn: (req: BurnInRequest) => ipcRenderer.invoke('captions:burnIn', req),
+    saveSrt: (srtPath: string, defaultName: string) =>
+      ipcRenderer.invoke('captions:saveSrt', srtPath, defaultName),
+    pickBurnInOutput: (defaultName: string) =>
+      ipcRenderer.invoke('captions:pickBurnInOutput', defaultName),
+    openBinFolder: () => ipcRenderer.invoke('captions:openBinFolder'),
+    openModelsFolder: () => ipcRenderer.invoke('captions:openModelsFolder'),
+    onProgress: (handler: (p: CaptionsProgress) => void) => {
+      const listener = (_e: unknown, p: CaptionsProgress): void => handler(p)
+      ipcRenderer.on('captions:progress', listener)
+      return () => ipcRenderer.removeListener('captions:progress', listener)
+    }
   },
   moodboard: {
     list: () => ipcRenderer.invoke('moodboard:list'),

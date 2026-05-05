@@ -8,11 +8,16 @@ import { OutpaintPanel } from './OutpaintPanel'
 import { InpaintPanel } from './InpaintPanel'
 import { ReferencePanel } from './ReferencePanel'
 import { MoodBoardPanel } from './MoodBoardPanel'
+import { Tutorial } from '../../components/Tutorial'
+import { TutorialButton } from '../../components/TutorialButton'
+import { useTutorial } from '../../hooks/useTutorial'
+import { aiTutorial } from '../../tutorials/aiTutorial'
 
 export function AiStudio(): JSX.Element {
   const tab = useAiStore((s) => s.tab)
   const setTab = useAiStore((s) => s.setTab)
   const refreshStatus = useAiStore((s) => s.refreshStatus)
+  const tutorial = useTutorial(aiTutorial)
 
   useEffect(() => {
     void refreshStatus()
@@ -27,11 +32,14 @@ export function AiStudio(): JSX.Element {
           </Link>
           <h1 className="text-2xl font-semibold mt-1">AI Art</h1>
         </div>
+        <TutorialButton onClick={tutorial.start} />
       </header>
 
-      <SetupCard />
+      <div data-tutorial="ai-setup">
+        <SetupCard />
+      </div>
 
-      <div className="flex border-b border-ink-dim/30 flex-wrap">
+      <div data-tutorial="ai-tabs" className="flex border-b border-ink-dim/30 flex-wrap">
         <TabButton id="generate" label="Generate" current={tab} onClick={setTab} />
         <TabButton id="outpaint" label="Expand (Outpaint)" current={tab} onClick={setTab} />
         <TabButton id="inpaint" label="Inpaint (Brush)" current={tab} onClick={setTab} />
@@ -63,6 +71,7 @@ export function AiStudio(): JSX.Element {
           }
         }}
       />
+      {tutorial.active ? <Tutorial def={aiTutorial} onClose={tutorial.stop} /> : null}
     </div>
   )
 }

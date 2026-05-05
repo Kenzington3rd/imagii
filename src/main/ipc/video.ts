@@ -1,6 +1,9 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
+import path from 'node:path'
 import { probeVideo } from '../ffmpeg/probe'
 import { runExportJob, cancelExportJob } from '../ffmpeg/export'
+import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
+import { findHighlights } from '../ffmpeg/highlights'
 import type { ExportJobSpec, ExportResult } from '../../shared/clip'
 
 export function registerVideoIpc(): void {
@@ -57,4 +60,50 @@ export function registerVideoIpc(): void {
   ipcMain.handle('video:revealInFolder', (_e, filePath: string) => {
     shell.showItemInFolder(filePath)
   })
+
+  ipcMain.handle(
+    'video:reframe',
+    async (
+      e,
+      params: {
+        sourcePath: string
+        outDir: string
+        position: 'left' | 'center' | 'right' | 'smart'
+        startSec: number
+        endSec: number
+        targetWidth: number
+        targetHeight: number
+      }
+    ): Promise<{ outputPath: string }> => {
+      const base = path.parse(params.sourcePath).name
+      const outputName = `${base}_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`
+      const outputPath = path.join(params.outDir, outputName)
+      const jobId = `reframe-${Date.now()}`
+      const spec: ReframeJobSpec = {
+        jobId,
+        sourcePath: params.sourcePath,
+        outputPath,
+        position: params.position,
+        startSec: params.startSec,
+        endSec: params.endSec,
+        outputWidth: params.targetWidth,
+        outputHeight: params.targetHeight
+      }
+      const result = await runReframe(spec, (progress) =>
+        e.sender.send('video:reframeProgress', progress)
+      )
+      return { outputPath: result.outputPath }
+    }
+  )
+
+  ipcMain.handle(
+    'video:findHighlights',
+    async (e, sourcePath: string) => {
+      const jobId = `highlights-${Date.now()}`
+      const candidates = await findHighlights(jobId, sourcePath, (p) =>
+        e.sender.send('video:highlightProgress', p)
+      )
+      return candidates
+    }
+  )
 }

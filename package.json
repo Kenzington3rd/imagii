@@ -28,6 +28,7 @@
     "music-metadata": "^10.9.1",
     "nanoid": "^5.1.11",
     "onnxruntime-node": "^1.25.1",
+    "path-browserify": "^1.0.1",
     "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -43,6 +44,7 @@
   "devDependencies": {
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^20.14.0",
+    "@types/path-browserify": "^1.0.3",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

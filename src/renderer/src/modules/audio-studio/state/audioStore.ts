@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { AudioProbe, ChainSpec, CutRegion } from '@shared/audio'
+import type {
+  AudioProbe,
+  ChainSpec,
+  CutRegion,
+  SecondaryTrack
+} from '@shared/audio'
 import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
 
 export interface AudioSource {
@@ -31,6 +36,7 @@ interface AudioStudioState {
   addCutRegion: (region: CutRegion) => void
   removeCutRegion: (index: number) => void
   updateCutRegion: (index: number, region: CutRegion) => void
+  setSecondaryTrack: (track: SecondaryTrack | null) => void
 
   undo: () => void
   redo: () => void
@@ -120,6 +126,13 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
         ...prev,
         cutRegions: prev.cutRegions.map((r, i) => (i === index ? region : r))
       },
+      history: pushHistory(get().history, prev)
+    })
+  },
+  setSecondaryTrack: (track) => {
+    const prev = get().chain
+    set({
+      chain: { ...prev, secondaryTrack: track },
       history: pushHistory(get().history, prev)
     })
   },

@@ -62,3 +62,15 @@ export function logsDir(): string {
 export function aiOutputDir(): string {
   return userDataPath('ai-output')
 }
+
+export function whisperExePath(): BinaryStatus {
+  return probe(resourcePath('bin', 'whisper.exe'))
+}
+
+export function whisperModelPath(modelFile = 'ggml-base.en.bin'): BinaryStatus {
+  return probe(userDataPath('models', modelFile))
+}
+
+export function captionsOutputDir(): string {
+  return userDataPath('captions')
+}
