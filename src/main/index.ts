@@ -2,6 +2,11 @@ import { app, BrowserWindow, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { registerSettingsIpc } from './ipc/settings'
+import { registerVideoIpc } from './ipc/video'
+import { smokeTestFfmpeg } from './ffmpeg/smoke'
+import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
+
+registerPrivilegedSchemes()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -41,8 +46,17 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  registerFileProtocol()
   registerSettingsIpc()
+  registerVideoIpc()
+  const smoke = await smokeTestFfmpeg()
+  if (smoke.ffmpegOk) {
+    console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)
+    console.log(`[ffprobe] ${smoke.ffprobeVersion}`)
+  } else {
+    console.error('[ffmpeg] smoke test failed:', smoke.error)
+  }
   createWindow()
 
   app.on('activate', () => {

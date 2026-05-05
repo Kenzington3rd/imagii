@@ -1,0 +1,195 @@
+import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
+import { nanoid } from 'nanoid'
+import type { ExportJobSpec, ExportProgress, PlatformId } from '@shared/clip'
+import { useVideoStore } from './store/videoStore'
+import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { SuccessIndicator } from './SuccessIndicator'
+
+interface JobStatus {
+  jobId: string
+  clipName: string
+  preset: PlatformId
+  percent: number
+  outputPath?: string
+  error?: string
+}
+
+export function ExportPanel(): JSX.Element | null {
+  const source = useVideoStore((s) => s.source)
+  const clips = useVideoStore((s) => s.clips)
+  const selectedClipId = useVideoStore((s) => s.selectedClipId)
+  const togglePreset = useVideoStore((s) => s.togglePreset)
+
+  const [outDir, setOutDir] = useState<string | null>(null)
+  const [jobs, setJobs] = useState<JobStatus[]>([])
+  const [running, setRunning] = useState(false)
+
+  useEffect(() => {
+    const offProgress = window.api.video.onProgress((p: ExportProgress) => {
+      setJobs((prev) =>
+        prev.map((j) => (j.jobId === p.jobId ? { ...j, percent: p.percent } : j))
+      )
+    })
+    const offDone = window.api.video.onJobComplete(({ jobId, outputPath }) => {
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.jobId === jobId ? { ...j, outputPath, percent: 100 } : j
+        )
+      )
+    })
+    return () => {
+      offProgress()
+      offDone()
+    }
+  }, [])
+
+  if (!source) return null
+
+  const selectedClip = clips.find((c) => c.id === selectedClipId)
+
+  async function pickOutDir(): Promise<void> {
+    const picked = await window.api.video.pickOutputDir()
+    if (picked) setOutDir(picked)
+  }
+
+  async function startExport(): Promise<void> {
+    if (!source) return
+    if (!outDir) {
+      toast.error('Choose an output folder first')
+      return
+    }
+    const queue: ExportJobSpec[] = []
+    const statuses: JobStatus[] = []
+    for (const clip of clips) {
+      for (const preset of clip.selectedPresets) {
+        const jobId = nanoid(10)
+        queue.push({
+          jobId,
+          sourcePath: source.filePath,
+          outDir,
+          clip,
+          preset
+        })
+        statuses.push({ jobId, clipName: clip.name, preset, percent: 0 })
+      }
+    }
+    if (queue.length === 0) {
+      toast.error('No presets selected on any clip')
+      return
+    }
+    setJobs(statuses)
+    setRunning(true)
+    try {
+      await window.api.video.exportBatch(queue)
+      toast.success(`Exported ${queue.length} file${queue.length === 1 ? '' : 's'}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Export failed'
+      toast.error(msg)
+      setJobs((prev) =>
+        prev.map((j) => (j.percent < 100 ? { ...j, error: msg } : j))
+      )
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const totalQueued = clips.reduce((acc, c) => acc + c.selectedPresets.length, 0)
+
+  return (
+    <div className="card p-4 flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
+          Export
+        </h3>
+        <div className="flex items-center gap-2">
+          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={pickOutDir}>
+            {outDir ? `📁 ${outDir.split(/[\\/]/).pop()}` : 'Choose folder…'}
+          </button>
+          <button
+            className="btn-primary px-4 py-1.5 text-sm disabled:opacity-50"
+            disabled={running || totalQueued === 0}
+            onClick={startExport}
+          >
+            {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
+          </button>
+        </div>
+      </div>
+
+      {selectedClip ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {ALL_PLATFORM_IDS.map((id) => {
+            const platform = PLATFORM_INFO[id]
+            const checked = selectedClip.selectedPresets.includes(id)
+            const clipDuration = selectedClip.endSec - selectedClip.startSec
+            return (
+              <label
+                key={id}
+                className={`flex items-start gap-2 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
+                  checked
+                    ? 'border-accent bg-accent/10'
+                    : 'border-ink-dim/30 hover:bg-bg-hover'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => togglePreset(selectedClip.id, id)}
+                  className="mt-1"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span>{platform.emoji}</span>
+                    <span className="font-medium">{platform.label}</span>
+                  </div>
+                  <div className="text-xs text-ink-dim mt-0.5">
+                    {platform.width}×{platform.height}
+                  </div>
+                  <div className="mt-1">
+                    <SuccessIndicator
+                      platform={platform}
+                      clipDuration={clipDuration}
+                      sourceWidth={source.probe.width}
+                      sourceHeight={source.probe.height}
+                      cropAspect={null}
+                    />
+                  </div>
+                </div>
+              </label>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {jobs.length > 0 ? (
+        <div className="flex flex-col gap-2 mt-2">
+          <h4 className="text-xs uppercase tracking-wide text-ink-muted">Queue</h4>
+          {jobs.map((j) => (
+            <div key={j.jobId} className="flex items-center gap-3 text-sm">
+              <span className="flex-1 truncate">
+                {j.clipName} · {PLATFORM_INFO[j.preset].label}
+              </span>
+              <div className="w-40 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${j.error ? 'bg-rose-400' : 'bg-accent'}`}
+                  style={{ width: `${Math.round(j.percent)}%` }}
+                />
+              </div>
+              <span className="font-mono text-xs text-ink-muted w-10 text-right">
+                {Math.round(j.percent)}%
+              </span>
+              {j.outputPath ? (
+                <button
+                  className="text-xs text-accent hover:underline"
+                  onClick={() => window.api.video.revealInFolder(j.outputPath!)}
+                >
+                  Show
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
