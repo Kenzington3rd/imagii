@@ -2,8 +2,6 @@ import Store from 'electron-store'
 import type { SettingsKey } from '../shared/api'
 
 interface SettingsSchema {
-  ageVerified?: boolean
-  ageVerifiedAt?: number
   theme?: 'dark' | 'light'
   lastRoute?: string
   welcomeSeen?: boolean

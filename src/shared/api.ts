@@ -17,12 +17,7 @@ import type {
 import type { SafetyResult } from './safety'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 
-export type SettingsKey =
-  | 'ageVerified'
-  | 'ageVerifiedAt'
-  | 'theme'
-  | 'lastRoute'
-  | 'welcomeSeen'
+export type SettingsKey = 'theme' | 'lastRoute' | 'welcomeSeen'
 
 export interface VideoProbe {
   duration: number

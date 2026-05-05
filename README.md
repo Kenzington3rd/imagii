@@ -72,15 +72,11 @@ Windows will remember your choice for this file.
 
 Some antivirus engines (Windows Defender, Norton, etc.) flag unsigned Electron apps the first time they see them. This is a generic heuristic, not a real detection. If your antivirus quarantines it, restore the file from quarantine and add an exception. The full source code is in this repo if you want to verify what it does.
 
-### 4. Age gate
-
-The first time you ever run imagii, it asks you to confirm you're 18+. This is because the AI Art tab can generate adult-themed content (with safety filters in place, but still). If you click "Under 18", the app closes after 3 seconds. If you click "I am 18 or older", it remembers and never asks again. The flag is stored at `%APPDATA%\imagii\config.json`.
-
-### 5. Welcome screen
+### 4. Welcome screen
 
 You'll see a personalized welcome the first time. Click "Let's go →" to enter the home screen.
 
-### 6. Home screen
+### 5. Home screen
 
 Four cards: Video Studio, Audio Studio, Image Canvas, AI Art. Click any of them to enter that studio.
 
