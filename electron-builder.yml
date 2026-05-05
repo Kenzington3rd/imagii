@@ -1,0 +1,22 @@
+appId: com.makenah.imagii
+productName: imagii
+copyright: Copyright (c) 2026 Makenah
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!**/*.{md,map}"
+asar: true
+compression: maximum
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: imagii-${version}.exe
+  # icon: resources/icon.ico  # add when icon is created
+portable:
+  artifactName: imagii.exe
+electronVersion: 31.3.0
