@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerVideoIpc } from './ipc/video'
+import { registerAudioIpc } from './ipc/audio'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 
@@ -50,6 +51,7 @@ app.whenReady().then(async () => {
   registerFileProtocol()
   registerSettingsIpc()
   registerVideoIpc()
+  registerAudioIpc()
   const smoke = await smokeTestFfmpeg()
   if (smoke.ffmpegOk) {
     console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)

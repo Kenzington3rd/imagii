@@ -1,0 +1,121 @@
+import { useCanvasStore } from './state/canvasStore'
+
+export function LayerPanel(): JSX.Element {
+  const layers = useCanvasStore((s) => s.doc.layers)
+  const selectedLayerId = useCanvasStore((s) => s.selectedLayerId)
+  const selectLayer = useCanvasStore((s) => s.selectLayer)
+  const removeLayer = useCanvasStore((s) => s.removeLayer)
+  const toggleVisible = useCanvasStore((s) => s.toggleVisible)
+  const toggleLocked = useCanvasStore((s) => s.toggleLocked)
+  const reorderLayers = useCanvasStore((s) => s.reorderLayers)
+  const duplicateLayer = useCanvasStore((s) => s.duplicateLayer)
+
+  function moveUp(id: string): void {
+    const ids = layers.map((l) => l.id)
+    const idx = ids.indexOf(id)
+    if (idx < ids.length - 1) {
+      const next = [...ids]
+      ;[next[idx], next[idx + 1]] = [next[idx + 1]!, next[idx]!]
+      reorderLayers(next)
+    }
+  }
+
+  function moveDown(id: string): void {
+    const ids = layers.map((l) => l.id)
+    const idx = ids.indexOf(id)
+    if (idx > 0) {
+      const next = [...ids]
+      ;[next[idx], next[idx - 1]] = [next[idx - 1]!, next[idx]!]
+      reorderLayers(next)
+    }
+  }
+
+  return (
+    <div className="card p-3 flex flex-col gap-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
+        Layers ({layers.length})
+      </h3>
+      {layers.length === 0 ? (
+        <p className="text-xs text-ink-dim">
+          Drop or paste an image, or draw with the toolbar above.
+        </p>
+      ) : null}
+      <ul className="flex flex-col gap-1">
+        {[...layers].reverse().map((layer) => {
+          const isSelected = layer.id === selectedLayerId
+          return (
+            <li
+              key={layer.id}
+              onClick={() => selectLayer(layer.id)}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer text-sm ${
+                isSelected ? 'bg-accent/15 border border-accent' : 'hover:bg-bg-hover border border-transparent'
+              }`}
+            >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleVisible(layer.id)
+                }}
+                className="w-5 text-center text-ink-muted hover:text-ink-base"
+                title="Show/hide"
+              >
+                {layer.visible ? '👁' : '·'}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleLocked(layer.id)
+                }}
+                className="w-5 text-center text-ink-muted hover:text-ink-base"
+                title="Lock/unlock"
+              >
+                {layer.locked ? '🔒' : '·'}
+              </button>
+              <span className="flex-1 truncate">{layer.name}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  moveUp(layer.id)
+                }}
+                className="text-ink-dim hover:text-ink-base px-1"
+                title="Move up"
+              >
+                ↑
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  moveDown(layer.id)
+                }}
+                className="text-ink-dim hover:text-ink-base px-1"
+                title="Move down"
+              >
+                ↓
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  duplicateLayer(layer.id)
+                }}
+                className="text-ink-dim hover:text-ink-base px-1"
+                title="Duplicate"
+              >
+                ⎘
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  removeLayer(layer.id)
+                }}
+                className="text-ink-dim hover:text-rose-300 px-1"
+                title="Delete"
+              >
+                ✕
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}

@@ -1,6 +1,8 @@
-import { Toaster } from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import toast, { Toaster } from 'react-hot-toast'
+import { Link, useNavigate } from 'react-router-dom'
 import { useVideoStore } from './store/videoStore'
+import { useAudioStore } from '../audio-studio/state/audioStore'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
@@ -11,6 +13,27 @@ import { TextOverlayEditor } from './TextOverlayEditor'
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
   const clearSource = useVideoStore((s) => s.clearSource)
+  const loadAudioSource = useAudioStore((s) => s.loadSource)
+  const navigate = useNavigate()
+  const [extractingAudio, setExtractingAudio] = useState(false)
+
+  async function cleanAudioFlow(): Promise<void> {
+    if (!source) return
+    setExtractingAudio(true)
+    toast.loading('Extracting audio…', { id: 'extract-audio' })
+    try {
+      const wavPath = await window.api.audio.extractFromVideo(source.filePath)
+      await loadAudioSource(wavPath, source.filePath)
+      toast.dismiss('extract-audio')
+      toast.success('Opening Audio Studio')
+      navigate('/audio')
+    } catch (err) {
+      toast.dismiss('extract-audio')
+      toast.error(err instanceof Error ? err.message : 'Failed to extract audio')
+    } finally {
+      setExtractingAudio(false)
+    }
+  }
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
@@ -23,6 +46,14 @@ export function VideoStudio(): JSX.Element {
         </div>
         {source ? (
           <div className="flex items-center gap-3 text-sm text-ink-muted">
+            <button
+              className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+              onClick={cleanAudioFlow}
+              disabled={extractingAudio}
+              title="Extract this video's audio and open it in Audio Studio"
+            >
+              🎚 Clean audio
+            </button>
             <span className="truncate max-w-[40ch]">{source.fileName}</span>
             <button className="btn-ghost px-3 py-1.5" onClick={clearSource}>
               Close

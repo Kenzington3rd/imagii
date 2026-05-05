@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ImagiiApi, SettingsKey } from '../shared/api'
 import type { ExportJobSpec, ExportProgress } from '../shared/clip'
+import type { AudioExportSpec, AudioJobProgress, AudioMuxSpec } from '../shared/audio'
 
 const api: ImagiiApi = {
   settings: {
@@ -32,6 +33,24 @@ const api: ImagiiApi = {
         handler(info)
       ipcRenderer.on('video:jobComplete', listener)
       return () => ipcRenderer.removeListener('video:jobComplete', listener)
+    }
+  },
+  audio: {
+    probe: (filePath: string) => ipcRenderer.invoke('audio:probe', filePath),
+    pickFile: () => ipcRenderer.invoke('audio:pickFile'),
+    pickOutputFile: (options) => ipcRenderer.invoke('audio:pickOutputFile', options),
+    extractFromVideo: (videoPath: string) =>
+      ipcRenderer.invoke('audio:extractFromVideo', videoPath),
+    export: (spec: AudioExportSpec) => ipcRenderer.invoke('audio:export', spec),
+    mux: (spec: AudioMuxSpec) => ipcRenderer.invoke('audio:mux', spec),
+    cancel: (jobId: string) => ipcRenderer.invoke('audio:cancel', jobId),
+    revealInFolder: (filePath: string) => ipcRenderer.invoke('audio:revealInFolder', filePath),
+    suggestOutputName: (sourcePath: string, format: string) =>
+      ipcRenderer.invoke('audio:suggestOutputName', sourcePath, format),
+    onProgress: (handler: (p: AudioJobProgress) => void) => {
+      const listener = (_e: unknown, p: AudioJobProgress): void => handler(p)
+      ipcRenderer.on('audio:progress', listener)
+      return () => ipcRenderer.removeListener('audio:progress', listener)
     }
   }
 }
