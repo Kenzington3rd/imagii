@@ -6,7 +6,7 @@ export function Home(): JSX.Element {
       <header className="mb-10">
         <h1 className="text-4xl font-semibold tracking-tight">imagii</h1>
         <p className="text-ink-muted mt-2">
-          Your local creative studio. Pick a tool to get started.
+          Hi Mike — pick a studio to get started.
         </p>
       </header>
 

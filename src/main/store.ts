@@ -6,6 +6,7 @@ interface SettingsSchema {
   ageVerifiedAt?: number
   theme?: 'dark' | 'light'
   lastRoute?: string
+  welcomeSeen?: boolean
 }
 
 export const store = new Store<SettingsSchema>({

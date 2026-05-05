@@ -1,6 +1,6 @@
 {
   "name": "imagii",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "imagii — local-first creative studio for video, audio, image, and AI art",
   "main": "./out/main/index.js",
   "author": "Makenah",
@@ -9,9 +9,10 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
+    "build:icon": "node scripts/build-icon.mjs",
     "build": "electron-vite build",
     "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
-    "dist": "electron-vite build && electron-builder --win portable --config electron-builder.yml",
+    "dist": "npm run build:icon && electron-vite build && electron-builder --win portable --config electron-builder.yml",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
@@ -49,6 +50,7 @@
     "electron": "^31.3.0",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
+    "png-to-ico": "^2.1.8",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.4",

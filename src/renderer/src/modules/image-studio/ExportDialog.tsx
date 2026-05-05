@@ -2,7 +2,7 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
 
-type FormatOption = 'png' | 'jpg' | 'svg'
+type FormatOption = 'png' | 'jpg' | 'svg' | 'pdf'
 
 function downloadDataUrl(dataUrl: string, filename: string): void {
   const a = document.createElement('a')
@@ -29,6 +29,7 @@ export function ExportDialog(): JSX.Element {
   const [format, setFormat] = useState<FormatOption>('png')
   const [quality, setQuality] = useState(0.92)
   const [scale, setScale] = useState(1)
+  const [pdfDpi, setPdfDpi] = useState(300)
   const [busy, setBusy] = useState(false)
 
   async function exportImage(): Promise<void> {
@@ -43,6 +44,31 @@ export function ExportDialog(): JSX.Element {
         const svg = buildSvg(doc)
         downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), `imagii-${Date.now()}.svg`)
         toast.success('SVG saved')
+        return
+      }
+      if (format === 'pdf') {
+        const pixelRatio = pdfDpi / 96
+        const dataUrl = stage.toDataURL({
+          mimeType: 'image/png',
+          pixelRatio
+        })
+        const pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+        const result = await window.api.image.savePdf({
+          pages: [
+            {
+              pngBase64,
+              widthPx: doc.width * pixelRatio,
+              heightPx: doc.height * pixelRatio
+            }
+          ],
+          dpi: pdfDpi,
+          title: 'imagii canvas',
+          defaultName: `imagii-${Date.now()}.pdf`
+        })
+        if (result) {
+          toast.success(`PDF saved (${(result.sizeBytes / 1024).toFixed(0)} KB)`)
+          window.api.image.revealInFolder(result.outputPath)
+        }
         return
       }
       const mime = format === 'png' ? 'image/png' : 'image/jpeg'
@@ -60,6 +86,9 @@ export function ExportDialog(): JSX.Element {
     }
   }
 
+  const sizeInches = (doc.width / pdfDpi).toFixed(2)
+  const heightInches = (doc.height / pdfDpi).toFixed(2)
+
   return (
     <div className="card p-3 flex items-center gap-2 text-sm flex-wrap">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
@@ -73,6 +102,7 @@ export function ExportDialog(): JSX.Element {
         <option value="png">PNG</option>
         <option value="jpg">JPG</option>
         <option value="svg">SVG (basic)</option>
+        <option value="pdf">PDF</option>
       </select>
       {format === 'jpg' ? (
         <label className="flex items-center gap-1.5 text-xs">
@@ -89,7 +119,7 @@ export function ExportDialog(): JSX.Element {
           <span className="font-mono w-10 text-right">{Math.round(quality * 100)}%</span>
         </label>
       ) : null}
-      {format !== 'svg' ? (
+      {format !== 'svg' && format !== 'pdf' ? (
         <label className="flex items-center gap-1.5 text-xs">
           <span className="text-ink-muted">Scale</span>
           <select
@@ -102,6 +132,24 @@ export function ExportDialog(): JSX.Element {
             <option value="2">2×</option>
             <option value="3">3× (HiDPI)</option>
           </select>
+        </label>
+      ) : null}
+      {format === 'pdf' ? (
+        <label className="flex items-center gap-1.5 text-xs">
+          <span className="text-ink-muted">DPI</span>
+          <select
+            className="bg-bg-base rounded px-1 py-0.5"
+            value={pdfDpi}
+            onChange={(e) => setPdfDpi(Number(e.target.value))}
+          >
+            <option value="72">72 (screen)</option>
+            <option value="150">150 (good)</option>
+            <option value="300">300 (print)</option>
+            <option value="600">600 (high)</option>
+          </select>
+          <span className="text-ink-dim">
+            → {sizeInches}″ × {heightInches}″
+          </span>
         </label>
       ) : null}
       <button className="btn-primary px-4 py-1 ml-auto disabled:opacity-50" disabled={busy} onClick={exportImage}>

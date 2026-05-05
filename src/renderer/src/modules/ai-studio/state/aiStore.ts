@@ -7,7 +7,7 @@ import type {
 } from '@shared/ai'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 
-export type AiTab = 'generate' | 'reference' | 'moodboards'
+export type AiTab = 'generate' | 'outpaint' | 'inpaint' | 'reference' | 'moodboards'
 
 interface JobUiState {
   jobId: string

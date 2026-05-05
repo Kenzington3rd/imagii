@@ -17,7 +17,12 @@ import type {
 import type { SafetyResult } from './safety'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 
-export type SettingsKey = 'ageVerified' | 'ageVerifiedAt' | 'theme' | 'lastRoute'
+export type SettingsKey =
+  | 'ageVerified'
+  | 'ageVerifiedAt'
+  | 'theme'
+  | 'lastRoute'
+  | 'welcomeSeen'
 
 export interface VideoProbe {
   duration: number
@@ -76,6 +81,15 @@ export interface ImagiiApi {
   }
   search: {
     images(query: string): Promise<SearchResponse>
+  }
+  image: {
+    savePdf(spec: {
+      pages: Array<{ pngBase64: string; widthPx: number; heightPx: number }>
+      dpi: number
+      title?: string
+      defaultName?: string
+    }): Promise<{ outputPath: string; sizeBytes: number } | null>
+    revealInFolder(filePath: string): Promise<void>
   }
   moodboard: {
     list(): Promise<MoodBoardCollection[]>

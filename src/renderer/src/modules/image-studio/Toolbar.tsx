@@ -6,7 +6,8 @@ const TOOLS: Array<{ id: Tool; label: string; icon: string; shortcut?: string }>
   { id: 'rect', label: 'Rect', icon: '▭', shortcut: 'R' },
   { id: 'ellipse', label: 'Ellipse', icon: '◯', shortcut: 'O' },
   { id: 'line', label: 'Line', icon: '╱', shortcut: 'L' },
-  { id: 'pencil', label: 'Pencil', icon: '✎', shortcut: 'P' }
+  { id: 'pencil', label: 'Pencil', icon: '✎', shortcut: 'P' },
+  { id: 'colorReplace', label: 'Color', icon: '🎨', shortcut: 'C' }
 ]
 
 export function Toolbar(): JSX.Element {
@@ -18,6 +19,10 @@ export function Toolbar(): JSX.Element {
   const setSnapToGrid = useCanvasStore((s) => s.setSnapToGrid)
   const gridSize = useCanvasStore((s) => s.gridSize)
   const setGridSize = useCanvasStore((s) => s.setGridSize)
+  const addGuide = useCanvasStore((s) => s.addGuide)
+  const clearGuides = useCanvasStore((s) => s.clearGuides)
+  const guides = useCanvasStore((s) => s.doc.guides ?? [])
+  const doc = useCanvasStore((s) => s.doc)
 
   return (
     <div className="card p-2 flex items-center gap-2 flex-wrap">
@@ -62,6 +67,30 @@ export function Toolbar(): JSX.Element {
         className="bg-bg-base rounded px-2 py-1 w-16 text-sm"
         title="Grid size (px)"
       />
+      <div className="w-px h-6 bg-ink-dim/30 mx-2" />
+      <button
+        className="px-3 py-1.5 text-sm rounded hover:bg-bg-hover"
+        onClick={() => addGuide('horizontal', doc.height / 2)}
+        title="Add horizontal guide"
+      >
+        ⎯ Guide
+      </button>
+      <button
+        className="px-3 py-1.5 text-sm rounded hover:bg-bg-hover"
+        onClick={() => addGuide('vertical', doc.width / 2)}
+        title="Add vertical guide"
+      >
+        ❘ Guide
+      </button>
+      {guides.length > 0 ? (
+        <button
+          className="px-2 py-1.5 text-xs rounded text-ink-dim hover:text-rose-300"
+          onClick={clearGuides}
+          title="Remove all guides"
+        >
+          Clear ({guides.length})
+        </button>
+      ) : null}
     </div>
   )
 }

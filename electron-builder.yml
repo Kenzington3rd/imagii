@@ -7,6 +7,7 @@ directories:
 files:
   - "out/**/*"
   - "package.json"
+  - "resources/icon.png"
   - "!**/*.{md,map}"
 asar: true
 asarUnpack:
@@ -22,7 +23,7 @@ win:
       arch:
         - x64
   artifactName: imagii-${version}.exe
-  # icon: resources/icon.ico  # add when icon is created
+  icon: resources/icon.ico
 portable:
-  artifactName: imagii.exe
+  artifactName: imagii-for-mike.exe
 electronVersion: 31.3.0

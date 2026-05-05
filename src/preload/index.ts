@@ -77,6 +77,10 @@ const api: ImagiiApi = {
   search: {
     images: (query: string) => ipcRenderer.invoke('search:images', query)
   },
+  image: {
+    savePdf: (spec) => ipcRenderer.invoke('image:savePdf', spec),
+    revealInFolder: (filePath: string) => ipcRenderer.invoke('image:revealInFolder', filePath)
+  },
   moodboard: {
     list: () => ipcRenderer.invoke('moodboard:list'),
     create: (name: string) => ipcRenderer.invoke('moodboard:create', name),

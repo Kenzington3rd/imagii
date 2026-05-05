@@ -103,6 +103,64 @@ function GridOverlay({
   return <Group>{lines}</Group>
 }
 
+function GuidesOverlay({
+  guides,
+  width,
+  height,
+  onMove,
+  onRemove
+}: {
+  guides: { id: string; axis: 'horizontal' | 'vertical'; position: number }[]
+  width: number
+  height: number
+  onMove: (id: string, position: number) => void
+  onRemove: (id: string) => void
+}): JSX.Element {
+  return (
+    <Group>
+      {guides.map((g) =>
+        g.axis === 'horizontal' ? (
+          <Line
+            key={g.id}
+            points={[0, g.position, width, g.position]}
+            stroke="#22d3ee"
+            strokeWidth={1}
+            dash={[6, 4]}
+            draggable
+            onDragMove={(e) => {
+              const node = e.target
+              const next = node.y() + g.position
+              onMove(g.id, Math.max(0, Math.min(height, next)))
+              node.x(0)
+              node.y(0)
+            }}
+            onDblClick={() => onRemove(g.id)}
+            hitStrokeWidth={10}
+          />
+        ) : (
+          <Line
+            key={g.id}
+            points={[g.position, 0, g.position, height]}
+            stroke="#22d3ee"
+            strokeWidth={1}
+            dash={[6, 4]}
+            draggable
+            onDragMove={(e) => {
+              const node = e.target
+              const next = node.x() + g.position
+              onMove(g.id, Math.max(0, Math.min(width, next)))
+              node.x(0)
+              node.y(0)
+            }}
+            onDblClick={() => onRemove(g.id)}
+            hitStrokeWidth={10}
+          />
+        )
+      )}
+    </Group>
+  )
+}
+
 export function Canvas(): JSX.Element {
   const doc = useCanvasStore((s) => s.doc)
   const tool = useCanvasStore((s) => s.tool)
@@ -113,6 +171,8 @@ export function Canvas(): JSX.Element {
   const selectLayer = useCanvasStore((s) => s.selectLayer)
   const addLayer = useCanvasStore((s) => s.addLayer)
   const updateLayer = useCanvasStore((s) => s.updateLayer)
+  const moveGuide = useCanvasStore((s) => s.moveGuide)
+  const removeGuide = useCanvasStore((s) => s.removeGuide)
 
   const stageRef = useRef<Konva.Stage>(null)
   const transformerRef = useRef<Konva.Transformer>(null)
@@ -149,9 +209,22 @@ export function Canvas(): JSX.Element {
     }
   }, [selectedLayerId, doc.layers])
 
-  function snap(value: number): number {
-    if (!snapToGrid) return value
-    return Math.round(value / gridSize) * gridSize
+  function snap(value: number, axis: 'x' | 'y'): number {
+    let result = value
+    if (snapToGrid) {
+      result = Math.round(result / gridSize) * gridSize
+    }
+    const guides = doc.guides ?? []
+    const threshold = 6
+    for (const g of guides) {
+      if ((axis === 'x' && g.axis === 'vertical') || (axis === 'y' && g.axis === 'horizontal')) {
+        if (Math.abs(result - g.position) < threshold) {
+          result = g.position
+          break
+        }
+      }
+    }
+    return result
   }
 
   const stageScale = Math.min(
@@ -178,21 +251,26 @@ export function Canvas(): JSX.Element {
     const pos = pointerInDocCoords()
     if (!pos) return
     if (tool === 'pencil') {
-      setPencilPoints([snap(pos.x), snap(pos.y)])
+      setPencilPoints([snap(pos.x, 'x'), snap(pos.y, 'y')])
       return
     }
-    setDrawing({ start: { x: snap(pos.x), y: snap(pos.y) }, current: { x: snap(pos.x), y: snap(pos.y) } })
+    setDrawing({
+      start: { x: snap(pos.x, 'x'), y: snap(pos.y, 'y') },
+      current: { x: snap(pos.x, 'x'), y: snap(pos.y, 'y') }
+    })
   }
 
   function handleMouseMove(): void {
     const pos = pointerInDocCoords()
     if (!pos) return
     if (tool === 'pencil' && pencilPoints) {
-      setPencilPoints((prev) => (prev ? [...prev, snap(pos.x), snap(pos.y)] : prev))
+      setPencilPoints((prev) =>
+        prev ? [...prev, snap(pos.x, 'x'), snap(pos.y, 'y')] : prev
+      )
       return
     }
     if (drawing) {
-      setDrawing({ ...drawing, current: { x: snap(pos.x), y: snap(pos.y) } })
+      setDrawing({ ...drawing, current: { x: snap(pos.x, 'x'), y: snap(pos.y, 'y') } })
     }
   }
 
@@ -243,8 +321,8 @@ export function Canvas(): JSX.Element {
       onTap: onSelect,
       onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) =>
         updateLayer(layer.id, {
-          x: snap(e.target.x()),
-          y: snap(e.target.y())
+          x: snap(e.target.x(), 'x'),
+          y: snap(e.target.y(), 'y')
         }),
       onTransformEnd: (e: Konva.KonvaEventObject<Event>) => {
         const node = e.target
@@ -367,6 +445,15 @@ export function Canvas(): JSX.Element {
             <GridOverlay width={doc.width} height={doc.height} size={gridSize} />
           </KonvaLayer>
         ) : null}
+        <KonvaLayer>
+          <GuidesOverlay
+            guides={doc.guides ?? []}
+            width={doc.width}
+            height={doc.height}
+            onMove={moveGuide}
+            onRemove={removeGuide}
+          />
+        </KonvaLayer>
         <KonvaLayer>
           {drawing && (tool === 'rect' || tool === 'ellipse' || tool === 'line') ? (
             tool === 'line' ? (

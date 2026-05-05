@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom'
 import { useAiStore } from './state/aiStore'
 import { SetupCard } from './SetupCard'
 import { GeneratePanel } from './GeneratePanel'
+import { OutpaintPanel } from './OutpaintPanel'
+import { InpaintPanel } from './InpaintPanel'
 import { ReferencePanel } from './ReferencePanel'
 import { MoodBoardPanel } from './MoodBoardPanel'
 
@@ -29,8 +31,10 @@ export function AiStudio(): JSX.Element {
 
       <SetupCard />
 
-      <div className="flex border-b border-ink-dim/30">
+      <div className="flex border-b border-ink-dim/30 flex-wrap">
         <TabButton id="generate" label="Generate" current={tab} onClick={setTab} />
+        <TabButton id="outpaint" label="Expand (Outpaint)" current={tab} onClick={setTab} />
+        <TabButton id="inpaint" label="Inpaint (Brush)" current={tab} onClick={setTab} />
         <TabButton id="reference" label="Reference Search" current={tab} onClick={setTab} />
         <TabButton id="moodboards" label="Mood Boards" current={tab} onClick={setTab} />
       </div>
@@ -38,6 +42,10 @@ export function AiStudio(): JSX.Element {
       <div className="min-h-0">
         {tab === 'generate' ? (
           <GeneratePanel />
+        ) : tab === 'outpaint' ? (
+          <OutpaintPanel />
+        ) : tab === 'inpaint' ? (
+          <InpaintPanel />
         ) : tab === 'reference' ? (
           <ReferencePanel />
         ) : (
@@ -65,10 +73,10 @@ function TabButton({
   current,
   onClick
 }: {
-  id: 'generate' | 'reference' | 'moodboards'
+  id: 'generate' | 'outpaint' | 'inpaint' | 'reference' | 'moodboards'
   label: string
   current: string
-  onClick: (id: 'generate' | 'reference' | 'moodboards') => void
+  onClick: (id: 'generate' | 'outpaint' | 'inpaint' | 'reference' | 'moodboards') => void
 }): JSX.Element {
   const active = id === current
   return (
