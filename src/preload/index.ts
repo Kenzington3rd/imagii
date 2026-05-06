@@ -66,7 +66,12 @@ const api: ImagiiApi = {
       ipcRenderer.on('video:highlightProgress', listener)
       return () => ipcRenderer.removeListener('video:highlightProgress', listener)
     },
-    exportGif: (params) => ipcRenderer.invoke('video:exportGif', params)
+    exportGif: (params) => ipcRenderer.invoke('video:exportGif', params),
+    listCustomPresets: () => ipcRenderer.invoke('video:listCustomPresets'),
+    saveCustomPreset: (preset) => ipcRenderer.invoke('video:saveCustomPreset', preset),
+    deleteCustomPreset: (id: string) => ipcRenderer.invoke('video:deleteCustomPreset', id),
+    concat: (params) => ipcRenderer.invoke('video:concat', params),
+    pipComposite: (params) => ipcRenderer.invoke('video:pipComposite', params)
   },
   audio: {
     probe: (filePath: string) => ipcRenderer.invoke('audio:probe', filePath),

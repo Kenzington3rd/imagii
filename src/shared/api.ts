@@ -22,6 +22,7 @@ import type {
   RecordingSpec,
   RecordingResult
 } from './workspace'
+import type { CustomPreset } from './customPresets'
 
 export type SettingsKey =
   | 'theme'
@@ -96,6 +97,25 @@ export interface ImagiiApi {
       width: number
       fps: number
       speed: number
+    }): Promise<{ outputPath: string }>
+    listCustomPresets(): Promise<CustomPreset[]>
+    saveCustomPreset(preset: Omit<CustomPreset, 'id'>): Promise<CustomPreset>
+    deleteCustomPreset(id: string): Promise<void>
+    concat(params: {
+      sourcePath: string
+      outDir: string
+      segments: Array<{ startSec: number; endSec: number; name: string }>
+      fadeMs: number
+      width: number
+      height: number
+    }): Promise<{ outputPath: string }>
+    pipComposite(params: {
+      basePath: string
+      overlayPath: string
+      outDir: string
+      overlayWidth: number
+      position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+      margin: number
     }): Promise<{ outputPath: string }>
   }
   audio: {

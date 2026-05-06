@@ -1,4 +1,4 @@
-import type { Clip, CropRect, TextOverlay, WatermarkSpec } from '../../shared/clip'
+import type { Clip, CropRect, TextOverlay, WatermarkSpec, ColorGrade } from '../../shared/clip'
 import type { PlatformPreset } from './presets'
 
 export interface SourceDimensions {
@@ -51,6 +51,34 @@ function drawTextFilter(overlay: TextOverlay, preset: PlatformPreset): string {
   return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${overlay.sizePx}:fontcolor=${overlay.colorHex}:x=${x}:y=${y}:enable='${between}'`
 }
 
+function colorGradeFilter(g: ColorGrade): string | null {
+  const parts: string[] = []
+  const eqParts: string[] = []
+  if (g.brightness !== 0) eqParts.push(`brightness=${g.brightness.toFixed(3)}`)
+  if (g.contrast !== 1) eqParts.push(`contrast=${g.contrast.toFixed(3)}`)
+  if (g.saturation !== 1) eqParts.push(`saturation=${g.saturation.toFixed(3)}`)
+  if (eqParts.length) parts.push(`eq=${eqParts.join(':')}`)
+  if (g.temperature !== 0) {
+    const t = g.temperature
+    if (t > 0) {
+      parts.push(`colorbalance=rs=${(t * 0.4).toFixed(3)}:bs=${(-t * 0.3).toFixed(3)}`)
+    } else {
+      parts.push(`colorbalance=rs=${(t * 0.3).toFixed(3)}:bs=${(-t * 0.4).toFixed(3)}`)
+    }
+  }
+  return parts.length > 0 ? parts.join(',') : null
+}
+
+function autoZoomFilter(): string {
+  // Subtle 1.05× zoom that pulses gently — purely a streamer aesthetic.
+  return `zoompan=z='1.0+0.05*abs(sin(t*0.6))':d=1:s=hd1080`
+}
+
+function hypeShakeFilter(): string {
+  // Mild jitter (~3 px) that activates briefly. Cheap approximation of a hype-shake.
+  return `crop=iw-6:ih-6:'3+3*sin(2*PI*t*8)':'3+3*cos(2*PI*t*9)'`
+}
+
 function watermarkFilter(spec: WatermarkSpec, preset: PlatformPreset): string {
   const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
   const fontSize = Math.max(12, Math.round((spec.fontSizePct / 100) * preset.height))
@@ -96,7 +124,13 @@ export function buildVideoFilter(
     const auto = autoCropForAspect(source, preset.aspectRatio)
     if (auto) parts.push(auto)
   }
+  if (clip.hypeShake) parts.push(hypeShakeFilter())
   parts.push(scaleFilter(preset))
+  if (clip.colorGrade) {
+    const cg = colorGradeFilter(clip.colorGrade)
+    if (cg) parts.push(cg)
+  }
+  if (clip.autoZoom) parts.push(autoZoomFilter())
   for (const overlay of clip.textOverlays) {
     parts.push(drawTextFilter(overlay, preset))
   }

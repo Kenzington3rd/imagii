@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { VideoProbe } from '@shared/api'
-import type { Clip, CropRect, PlatformId, TextOverlay } from '@shared/clip'
+import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
+import { DEFAULT_COLOR_GRADE } from '@shared/clip'
 
 export interface VideoSource {
   filePath: string
@@ -31,6 +32,9 @@ interface VideoStudioState {
   togglePreset: (id: string, preset: PlatformId) => void
   setSelectedPresets: (id: string, presets: PlatformId[]) => void
   setClipSpeed: (id: string, speedMultiplier: number) => void
+  setClipColorGrade: (id: string, grade: ColorGrade) => void
+  setClipAutoZoom: (id: string, on: boolean) => void
+  setClipHypeShake: (id: string, on: boolean) => void
   setClipCrop: (id: string, cropRect: CropRect | null) => void
   addTextOverlay: (id: string, overlay: Omit<TextOverlay, 'id'>) => void
   updateTextOverlay: (clipId: string, overlayId: string, patch: Partial<TextOverlay>) => void
@@ -160,6 +164,18 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
             }
           : c
       )
+    })),
+  setClipColorGrade: (id, grade) =>
+    set((state) => ({
+      clips: state.clips.map((c) => (c.id === id ? { ...c, colorGrade: grade } : c))
+    })),
+  setClipAutoZoom: (id, on) =>
+    set((state) => ({
+      clips: state.clips.map((c) => (c.id === id ? { ...c, autoZoom: on } : c))
+    })),
+  setClipHypeShake: (id, on) =>
+    set((state) => ({
+      clips: state.clips.map((c) => (c.id === id ? { ...c, hypeShake: on } : c))
     })),
   setClipCrop: (id, cropRect) =>
     set((state) => ({

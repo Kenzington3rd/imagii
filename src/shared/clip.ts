@@ -19,6 +19,20 @@ export interface TextOverlay {
   endSec: number
 }
 
+export interface ColorGrade {
+  brightness: number
+  contrast: number
+  saturation: number
+  temperature: number
+}
+
+export const DEFAULT_COLOR_GRADE: ColorGrade = {
+  brightness: 0,
+  contrast: 1,
+  saturation: 1,
+  temperature: 0
+}
+
 export interface Clip {
   id: string
   name: string
@@ -27,7 +41,11 @@ export interface Clip {
   cropRect: CropRect | null
   textOverlays: TextOverlay[]
   selectedPresets: PlatformId[]
+  customPresetIds?: string[]
   speedMultiplier?: number
+  colorGrade?: ColorGrade
+  autoZoom?: boolean
+  hypeShake?: boolean
 }
 
 export interface WatermarkSpec {
@@ -44,6 +62,7 @@ export interface ExportJobSpec {
   clip: Clip
   preset: PlatformId
   watermark?: WatermarkSpec | null
+  outputFilename?: string
 }
 
 export interface ExportProgress {

@@ -1,6 +1,8 @@
 import { useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
+import { RecentFilesMenu } from '../../components/RecentFilesMenu'
+import { useRecentFiles } from '../../hooks/useRecentFiles'
 
 const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
 
@@ -13,6 +15,7 @@ export function AudioImporter(): JSX.Element {
   const loadSource = useAudioStore((s) => s.loadSource)
   const [busy, setBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const { recent, push, clear } = useRecentFiles('audio')
 
   async function loadFile(filePath: string): Promise<void> {
     setBusy(true)
@@ -25,6 +28,7 @@ export function AudioImporter(): JSX.Element {
       } else {
         await loadSource(filePath)
       }
+      await push(filePath)
       toast.success('Loaded')
     } catch (err) {
       toast.dismiss('extract')
@@ -70,9 +74,12 @@ export function AudioImporter(): JSX.Element {
       <p className="text-ink-muted text-sm mb-6">
         MP3, WAV, FLAC, AAC, M4A, OGG, OPUS — or any video to extract its audio.
       </p>
-      <button className="btn-primary" onClick={onPickFile} disabled={busy}>
-        {busy ? 'Loading…' : 'Choose file…'}
-      </button>
+      <div className="flex items-center gap-2">
+        <button className="btn-primary" onClick={onPickFile} disabled={busy}>
+          {busy ? 'Loading…' : 'Choose file…'}
+        </button>
+        <RecentFilesMenu recent={recent} onPick={(p) => void loadFile(p)} onClear={() => void clear()} />
+      </div>
     </div>
   )
 }

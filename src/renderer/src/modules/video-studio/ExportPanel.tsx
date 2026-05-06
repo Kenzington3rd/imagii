@@ -7,6 +7,7 @@ import type {
   PlatformId,
   WatermarkSpec
 } from '@shared/clip'
+import { expandFilenameTemplate } from '@shared/filename'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
@@ -33,12 +34,17 @@ export function ExportPanel(): JSX.Element | null {
   const [watermarkPosition, setWatermarkPosition] = useState<WatermarkSpec['position']>(
     'bottom-right'
   )
+  const [filenameTemplate, setFilenameTemplate] = useState('{source}_{clip}_{preset}')
 
   useEffect(() => {
     let cancelled = false
     window.api.settings.get<string>('streamerHandle').then((handle) => {
       if (cancelled) return
       if (handle) setWatermarkText(handle)
+    })
+    window.api.settings.get<string>('filenameTemplate').then((tpl) => {
+      if (cancelled) return
+      if (tpl) setFilenameTemplate(tpl)
     })
     return () => {
       cancelled = true
@@ -88,18 +94,28 @@ export function ExportPanel(): JSX.Element | null {
         }
       : null
     if (watermark) await window.api.settings.set('streamerHandle', watermark.text)
+    if (filenameTemplate) await window.api.settings.set('filenameTemplate', filenameTemplate)
+    const sourceBase = source.fileName.replace(/\.[^.]+$/, '')
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []
     for (const clip of clips) {
       for (const preset of clip.selectedPresets) {
         const jobId = nanoid(10)
+        const filename = expandFilenameTemplate(filenameTemplate, {
+          source: sourceBase,
+          clip: clip.name,
+          preset,
+          handle: watermark?.text,
+          ext: 'mp4'
+        })
         queue.push({
           jobId,
           sourcePath: source.filePath,
           outDir,
           clip,
           preset,
-          watermark
+          watermark,
+          outputFilename: filename
         })
         statuses.push({ jobId, clipName: clip.name, preset, percent: 0 })
       }
@@ -166,6 +182,20 @@ export function ExportPanel(): JSX.Element | null {
           <option value="top-right">Top right</option>
           <option value="top-left">Top left</option>
         </select>
+      </div>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-ink-muted">Filename:</span>
+        <input
+          type="text"
+          value={filenameTemplate}
+          onChange={(e) => setFilenameTemplate(e.target.value)}
+          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
+          placeholder="{source}_{clip}_{preset}"
+        />
+        <span className="text-ink-dim font-mono">
+          Tokens: {'{source} {clip} {preset} {date} {time} {handle}'}
+        </span>
       </div>
 
       {selectedClip ? (

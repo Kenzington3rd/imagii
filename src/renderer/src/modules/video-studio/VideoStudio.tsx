@@ -13,6 +13,12 @@ import { ReframePanel } from './ReframePanel'
 import { HighlightPanel } from './HighlightPanel'
 import { CaptionsPanel } from './CaptionsPanel'
 import { GifPanel } from './GifPanel'
+import { OutputPreview } from './OutputPreview'
+import { ColorGradePanel } from './ColorGradePanel'
+import { PostChecklist } from './PostChecklist'
+import { CompilationPanel } from './CompilationPanel'
+import { PipPanel } from './PipPanel'
+import { ChatHighlightPanel } from './ChatHighlightPanel'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
@@ -83,11 +89,17 @@ export function VideoStudio(): JSX.Element {
           </div>
           <div className="flex flex-col gap-4">
             <ClipList />
+            <PreviewWrapper />
+            <ColorGradePanel />
             <HighlightPanel />
+            <ChatHighlightPanel />
             <ReframePanel />
             <GifPanel />
+            <CompilationPanel />
+            <PipPanel />
             <CaptionsPanel />
             <TextOverlayEditor />
+            <PostChecklist />
           </div>
         </div>
       ) : (
@@ -109,4 +121,11 @@ export function VideoStudio(): JSX.Element {
       ) : null}
     </div>
   )
+}
+
+function PreviewWrapper(): JSX.Element {
+  // Picks up the video element from the global window pointer set by Player.
+  // Re-renders periodically by listening to the same events.
+  const w = window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }
+  return <OutputPreview videoElement={w.__imagiiVideoEl ?? null} />
 }

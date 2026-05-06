@@ -1,6 +1,8 @@
 import { useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
+import { RecentFilesMenu } from '../../components/RecentFilesMenu'
+import { useRecentFiles } from '../../hooks/useRecentFiles'
 
 const ACCEPTED_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']
 
@@ -13,12 +15,14 @@ export function Importer(): JSX.Element {
   const loadSource = useVideoStore((s) => s.loadSource)
   const [busy, setBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const { recent, push, clear } = useRecentFiles('video')
 
   async function handleFile(filePath: string): Promise<void> {
     if (!filePath) return
     setBusy(true)
     try {
       await loadSource(filePath)
+      await push(filePath)
       toast.success('Video loaded')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load video'
@@ -66,9 +70,12 @@ export function Importer(): JSX.Element {
       <p className="text-ink-muted text-sm mb-6">
         MP4, MOV, AVI, MKV, WEBM, M4V. {busy ? 'Loading…' : 'Or use the file picker.'}
       </p>
-      <button className="btn-primary" onClick={onPickFile} disabled={busy}>
-        Choose file…
-      </button>
+      <div className="flex items-center gap-2">
+        <button className="btn-primary" onClick={onPickFile} disabled={busy}>
+          Choose file…
+        </button>
+        <RecentFilesMenu recent={recent} onPick={(p) => void handleFile(p)} onClear={() => void clear()} />
+      </div>
     </div>
   )
 }

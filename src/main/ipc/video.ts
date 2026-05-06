@@ -5,8 +5,15 @@ import { runExportJob, cancelExportJob, cancelAllExportJobs } from '../ffmpeg/ex
 import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
 import { findHighlights } from '../ffmpeg/highlights'
 import { runGifExport } from '../ffmpeg/gif'
+import { runConcat, runPipComposite } from '../ffmpeg/concat'
+import {
+  listCustomPresets,
+  saveCustomPreset,
+  deleteCustomPreset
+} from '../customPresets'
 import { nanoid } from 'nanoid'
 import type { ExportJobSpec, ExportResult } from '../../shared/clip'
+import type { CustomPreset } from '../../shared/customPresets'
 
 export function registerVideoIpc(): void {
   ipcMain.handle('video:probe', async (_e, filePath: string) => {
@@ -107,6 +114,61 @@ export function registerVideoIpc(): void {
         e.sender.send('video:highlightProgress', p)
       )
       return candidates
+    }
+  )
+
+  ipcMain.handle('video:listCustomPresets', () => listCustomPresets())
+  ipcMain.handle(
+    'video:saveCustomPreset',
+    (_e, preset: Omit<CustomPreset, 'id'>) => saveCustomPreset(preset)
+  )
+  ipcMain.handle('video:deleteCustomPreset', (_e, id: string) => deleteCustomPreset(id))
+
+  ipcMain.handle(
+    'video:concat',
+    async (
+      _e,
+      params: {
+        sourcePath: string
+        outDir: string
+        segments: Array<{ startSec: number; endSec: number; name: string }>
+        fadeMs: number
+        width: number
+        height: number
+      }
+    ) => {
+      return runConcat({
+        jobId: nanoid(10),
+        sourcePath: params.sourcePath,
+        outDir: params.outDir,
+        segments: params.segments,
+        fadeMs: params.fadeMs,
+        width: params.width,
+        height: params.height
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'video:pipComposite',
+    async (
+      _e,
+      params: {
+        basePath: string
+        overlayPath: string
+        outDir: string
+        overlayWidth: number
+        position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+        margin: number
+      }
+    ) => {
+      const base = path.parse(params.basePath).name
+      const outputPath = path.join(params.outDir, `${base}_pip.mp4`)
+      return runPipComposite(nanoid(10), params.basePath, params.overlayPath, outputPath, {
+        overlayWidth: params.overlayWidth,
+        position: params.position,
+        margin: params.margin
+      })
     }
   )
 

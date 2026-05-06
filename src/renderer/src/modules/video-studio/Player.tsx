@@ -15,7 +15,8 @@ function formatTime(seconds: number): string {
 export function Player(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const setCurrentTime = useVideoStore((s) => s.setCurrentTime)
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [, setVideoEl] = useState<HTMLVideoElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [showSafeZones, setShowSafeZones] = useState(false)
@@ -115,7 +116,13 @@ export function Player(): JSX.Element | null {
     >
       <div className="relative bg-black rounded-xl overflow-hidden flex items-center justify-center">
         <video
-          ref={videoRef}
+          ref={(el) => {
+            videoRef.current = el
+            setVideoEl(el)
+            ;(
+              window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }
+            ).__imagiiVideoEl = el
+          }}
           src={source.url}
           className="max-h-[60vh] w-auto"
           onTimeUpdate={(e) => {

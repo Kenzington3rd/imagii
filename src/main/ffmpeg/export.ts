@@ -32,7 +32,10 @@ export async function runExportJob(
   const clipDuration = Math.max(0.1, job.clip.endSec - job.clip.startSec)
 
   const sourceBase = path.parse(job.sourcePath).name
-  const outputName = `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${preset.id}.mp4`
+  const outputName =
+    job.outputFilename && job.outputFilename.trim()
+      ? job.outputFilename
+      : `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${preset.id}.mp4`
   const outputPath = path.join(job.outDir, outputName)
 
   const speed =
