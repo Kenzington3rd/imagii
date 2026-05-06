@@ -1,6 +1,8 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
 import { applyProject, captureProject } from '../modules/project/ProjectIO'
+import { AutosaveRestore } from '../components/AutosaveRestore'
+import { suppressAutosave } from '../hooks/useAutosave'
 
 async function handleSave(): Promise<void> {
   try {
@@ -13,6 +15,7 @@ async function handleSave(): Promise<void> {
 }
 
 async function handleLoad(): Promise<void> {
+  const release = suppressAutosave()
   try {
     const project = await window.api.project.load()
     if (!project) return
@@ -20,6 +23,8 @@ async function handleLoad(): Promise<void> {
     toast.success('Project loaded')
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Load failed')
+  } finally {
+    setTimeout(release, 1500)
   }
 }
 
@@ -42,6 +47,8 @@ export function Home(): JSX.Element {
           </button>
         </div>
       </header>
+
+      <AutosaveRestore />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
         <NavCard

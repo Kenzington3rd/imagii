@@ -130,6 +130,12 @@ const api: ImagiiApi = {
       ipcRenderer.invoke('project:save', project, defaultName),
     load: () => ipcRenderer.invoke('project:load')
   },
+  autosave: {
+    write: (project: ImagiiProject) => ipcRenderer.invoke('autosave:write', project),
+    read: () => ipcRenderer.invoke('autosave:read'),
+    info: () => ipcRenderer.invoke('autosave:info'),
+    clear: () => ipcRenderer.invoke('autosave:clear')
+  },
   recording: {
     listSources: () => ipcRenderer.invoke('recording:listSources'),
     save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec)

@@ -159,6 +159,25 @@ export interface ImagiiApi {
     save(project: ImagiiProject, defaultName?: string): Promise<string | null>
     load(): Promise<ImagiiProject | null>
   }
+  autosave: {
+    write(
+      project: ImagiiProject
+    ): Promise<{ ok: true; sizeBytes: number } | { ok: false; reason: string }>
+    read(): Promise<{
+      ok: boolean
+      reason?: string
+      project?: ImagiiProject
+      info?: { exists: boolean; filePath: string; savedAt?: number; ageMs?: number; sizeBytes?: number }
+    }>
+    info(): Promise<{
+      exists: boolean
+      filePath: string
+      savedAt?: number
+      ageMs?: number
+      sizeBytes?: number
+    }>
+    clear(): Promise<void>
+  }
   recording: {
     listSources(): Promise<RecordingSource[]>
     save(spec: RecordingSpec): Promise<RecordingResult | null>

@@ -1,6 +1,12 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron'
 import { writeFile, readFile } from 'node:fs/promises'
 import type { ImagiiProject } from '../../shared/workspace'
+import {
+  writeAutosave,
+  readAutosave,
+  clearAutosave,
+  getAutosaveInfo
+} from '../autosave'
 
 export function registerProjectIpc(): void {
   ipcMain.handle(
@@ -36,4 +42,9 @@ export function registerProjectIpc(): void {
     const raw = await readFile(result.filePaths[0], 'utf8')
     return JSON.parse(raw) as ImagiiProject
   })
+
+  ipcMain.handle('autosave:write', (_e, project: ImagiiProject) => writeAutosave(project))
+  ipcMain.handle('autosave:read', () => readAutosave())
+  ipcMain.handle('autosave:info', () => getAutosaveInfo())
+  ipcMain.handle('autosave:clear', () => clearAutosave())
 }
