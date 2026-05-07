@@ -2,16 +2,63 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type {
+  Clip,
   ExportJobSpec,
   ExportProgress,
   PlatformId,
   WatermarkSpec
 } from '@shared/clip'
 import { expandFilenameTemplate } from '@shared/filename'
+import { computeCropBox, findClippedSafeZones } from '@shared/safeZone'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
+import { SafeZoneWarningModal } from './SafeZoneWarningModal'
+
+interface SafeZoneRow {
+  clipName: string
+  clippedZones: string[]
+}
+
+/**
+ * Phase 3.4: for each clip×preset pair in the export queue, ask whether
+ * the chosen preset's centered crop would lose the safe zone of any
+ * other selected preset. The bound is `clips.length × presets.length`,
+ * with hard caps in the validators.
+ */
+function findSafeZoneIssues(
+  clips: ReadonlyArray<Clip>,
+  sourceWidth: number,
+  sourceHeight: number
+): SafeZoneRow[] {
+  const rows: SafeZoneRow[] = []
+  const clipCount = clips.length
+  for (let i = 0; i < clipCount; i++) {
+    const clip = clips[i]
+    if (!clip) continue
+    const selected = clip.selectedPresets
+    if (selected.length < 2) continue
+    // For each platform the user picked for this clip, compute its centered
+    // crop, then check whether any of the OTHER selected platforms' safe
+    // zones would fall outside that crop.
+    const clippedSet = new Set<string>()
+    for (const presetId of selected) {
+      const preset = PLATFORM_INFO[presetId]
+      const userCrop = computeCropBox(sourceWidth, sourceHeight, preset.aspectRatio)
+      const others = selected
+        .filter((p) => p !== presetId)
+        .map((p) => ({ label: PLATFORM_INFO[p].label, aspect: PLATFORM_INFO[p].aspectRatio }))
+      for (const lost of findClippedSafeZones(sourceWidth, sourceHeight, userCrop, others)) {
+        clippedSet.add(`${preset.label} → ${lost}`)
+      }
+    }
+    if (clippedSet.size > 0) {
+      rows.push({ clipName: clip.name, clippedZones: [...clippedSet] })
+    }
+  }
+  return rows
+}
 
 interface JobStatus {
   jobId: string
@@ -37,6 +84,7 @@ export function ExportPanel(): JSX.Element | null {
   )
   const [filenameTemplate, setFilenameTemplate] = useState('{source}_{clip}_{preset}')
   const [showPresetManager, setShowPresetManager] = useState(false)
+  const [pendingSafeZoneRows, setPendingSafeZoneRows] = useState<SafeZoneRow[] | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -87,6 +135,20 @@ export function ExportPanel(): JSX.Element | null {
       toast.error('Choose an output folder first')
       return
     }
+    // Phase 3.4: check for safe-zone collisions across the user's selected
+    // platforms before kicking off the queue. If anything is flagged, defer
+    // the actual run to the modal's "Continue anyway".
+    const issues = findSafeZoneIssues(clips, source.probe.width, source.probe.height)
+    if (issues.length > 0) {
+      setPendingSafeZoneRows(issues)
+      return
+    }
+    await runExportQueue()
+  }
+
+  async function runExportQueue(): Promise<void> {
+    if (!source) return
+    if (!outDir) return
     const watermark: WatermarkSpec | null = watermarkText.trim()
       ? {
           text: watermarkText.trim(),
@@ -145,6 +207,16 @@ export function ExportPanel(): JSX.Element | null {
   const totalQueued = clips.reduce((acc, c) => acc + c.selectedPresets.length, 0)
 
   return (
+    <>
+    <SafeZoneWarningModal
+      open={pendingSafeZoneRows !== null}
+      affectedClips={pendingSafeZoneRows ?? []}
+      onCancel={() => setPendingSafeZoneRows(null)}
+      onContinue={() => {
+        setPendingSafeZoneRows(null)
+        void runExportQueue()
+      }}
+    />
     <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
@@ -286,5 +358,6 @@ export function ExportPanel(): JSX.Element | null {
         onClose={() => setShowPresetManager(false)}
       />
     </div>
+    </>
   )
 }

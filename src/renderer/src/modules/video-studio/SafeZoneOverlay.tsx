@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { computeCropBox } from '@shared/safeZone'
 
 interface SafeZoneOverlayProps {
   videoElement: HTMLVideoElement | null
@@ -6,7 +7,7 @@ interface SafeZoneOverlayProps {
   ratios: Array<'9:16' | '1:1' | '4:5' | '16:9'>
 }
 
-const RATIO_VALUE: Record<string, number> = {
+export const RATIO_VALUE: Record<string, number> = {
   '9:16': 9 / 16,
   '1:1': 1,
   '4:5': 4 / 5,
@@ -42,8 +43,6 @@ export function SafeZoneOverlay({
 
   if (!show || !videoElement || size.w === 0 || size.h === 0) return null
 
-  const sourceAspect = size.w / size.h
-
   return (
     <div
       ref={ref}
@@ -54,17 +53,15 @@ export function SafeZoneOverlay({
         {ratios.map((label) => {
           const targetAspect = RATIO_VALUE[label]
           if (!targetAspect) return null
-          let cropW: number
-          let cropH: number
-          if (sourceAspect > targetAspect) {
-            cropH = size.h
-            cropW = cropH * targetAspect
-          } else {
-            cropW = size.w
-            cropH = cropW / targetAspect
-          }
-          const x = (size.w - cropW) / 2
-          const y = (size.h - cropH) / 2
+          // Phase 3.4: reuse the shared geometry helper rather than
+          // recomputing inline. SafeZoneOverlay (here) and the export
+          // pre-flight modal both source from the same function so the
+          // preview matches what the modal warns about.
+          const box = computeCropBox(size.w, size.h, targetAspect)
+          const x = box.x
+          const y = box.y
+          const cropW = box.w
+          const cropH = box.h
           const color = RATIO_COLOR[label] ?? '#a78bfa'
           return (
             <g key={label}>
