@@ -157,7 +157,11 @@ export interface ImagiiApi {
   }
   project: {
     save(project: ImagiiProject, defaultName?: string): Promise<string | null>
-    load(): Promise<ImagiiProject | null>
+    load(): Promise<
+      | { ok: true; project: ImagiiProject; filePath: string }
+      | { ok: false; reason: string }
+      | null
+    >
   }
   autosave: {
     write(

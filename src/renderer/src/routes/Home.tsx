@@ -17,15 +17,25 @@ async function handleSave(): Promise<void> {
 
 async function handleLoad(): Promise<void> {
   const release = suppressAutosave()
+  let opened = false
   try {
-    const project = await window.api.project.load()
-    if (!project) return
-    await applyProject(project)
+    const result = await window.api.project.load()
+    if (!result) return // user canceled the dialog
+    if (!result.ok) {
+      toast.error(`Couldn't load project: ${result.reason}`)
+      return
+    }
+    opened = true
+    await applyProject(result.project)
     toast.success('Project loaded')
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Load failed')
   } finally {
-    setTimeout(release, 1500)
+    // On a successful load, hold suppression while stores settle. On any
+    // failure path (cancel, validation rejection, throw), release immediately
+    // so the user can keep autosaving without a 1.5s stall.
+    if (opened) setTimeout(release, 1500)
+    else release()
   }
 }
 
