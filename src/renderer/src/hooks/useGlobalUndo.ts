@@ -24,8 +24,6 @@ interface UseGlobalUndoResult {
   redo: () => void
 }
 
-const ignoreDuringInitialMount = { current: true }
-
 /**
  * Tracks the most-recently-touched studio store and exposes a global undo
  * that delegates to that store's local undo. Each studio still owns its own
@@ -53,7 +51,6 @@ export function useGlobalUndo(): UseGlobalUndoResult {
     // Allow first-render store synchronization to settle before tracking.
     const t = setTimeout(() => {
       initialDoneRef.current = true
-      void ignoreDuringInitialMount
     }, 250)
     return () => {
       offV()
