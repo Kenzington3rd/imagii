@@ -116,15 +116,14 @@ export function parseLoudnormJson(stderrOutput: string): LoudnormMeasurement | n
   const end = stderrOutput.lastIndexOf('}')
   if (start === -1 || end === -1 || end < start) return null
   try {
-    const obj = JSON.parse(stderrOutput.slice(start, end + 1)) as Record<string, string>
-    if (!obj.input_i || !obj.input_tp) return null
-    return {
-      input_i: obj.input_i,
-      input_tp: obj.input_tp,
-      input_lra: obj.input_lra,
-      input_thresh: obj.input_thresh,
-      target_offset: obj.target_offset
-    }
+    const obj = JSON.parse(stderrOutput.slice(start, end + 1)) as Record<string, string | undefined>
+    const i = obj.input_i
+    const tp = obj.input_tp
+    const lra = obj.input_lra
+    const thresh = obj.input_thresh
+    const offset = obj.target_offset
+    if (!i || !tp || !lra || !thresh || !offset) return null
+    return { input_i: i, input_tp: tp, input_lra: lra, input_thresh: thresh, target_offset: offset }
   } catch {
     return null
   }

@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import path from 'node:path'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
 

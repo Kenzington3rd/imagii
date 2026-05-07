@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process'
 import { writeFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { nanoid } from 'nanoid'
 import { ffmpegPath } from './paths'
+import { assertDefined } from '../../shared/assert'
 
 export interface ConcatJobSpec {
   jobId: string
@@ -26,12 +26,19 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
   const segmentPaths: string[] = []
   const fade = Math.max(0, Math.min(2, spec.fadeMs / 1000))
 
-  for (let i = 0; i < spec.segments.length; i++) {
-    const seg = spec.segments[i]
+  const segCount = spec.segments.length
+  for (let i = 0; i < segCount; i++) {
+    const seg = assertDefined(spec.segments[i], `segments[${i}]`)
+    // Defense in depth: IPC layer also validates this, but reject reversed
+    // ranges here too so any non-IPC caller (tests, future scripts) can't
+    // produce a -ss > -to ffmpeg invocation that fails silently.
+    if (seg.endSec <= seg.startSec) {
+      throw new Error(`segments[${i}] range invalid (endSec must exceed startSec)`)
+    }
     const segPath = path.join(tempDir, `seg-${spec.jobId}-${i}.mp4`)
     const dur = Math.max(0.1, seg.endSec - seg.startSec)
     const fadeIn = i === 0 ? 0 : fade
-    const fadeOut = i === spec.segments.length - 1 ? 0 : fade
+    const fadeOut = i === segCount - 1 ? 0 : fade
     const filters: string[] = [
       `scale=${spec.width}:${spec.height}:flags=lanczos,setsar=1`
     ]
@@ -141,7 +148,7 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
 }
 
 export async function runPipComposite(
-  jobId: string,
+  _jobId: string,
   basePath: string,
   overlayPath: string,
   outputPath: string,
@@ -198,6 +205,5 @@ export async function runPipComposite(
     })
   })
 
-  void jobId
   return { outputPath }
 }

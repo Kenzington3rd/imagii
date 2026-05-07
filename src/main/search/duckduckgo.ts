@@ -20,7 +20,9 @@ interface DdgResponse {
 async function getVqd(query: string): Promise<string | null> {
   const html = await fetchText(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`)
   const m = html.match(/vqd=['"]([^'"]+)['"]/) ?? html.match(/vqd=([\d-]+)/)
-  return m ? m[1] : null
+  if (!m) return null
+  const captured = m[1]
+  return captured ?? null
 }
 
 async function fetchText(url: string): Promise<string> {

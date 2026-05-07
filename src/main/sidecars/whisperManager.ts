@@ -34,10 +34,23 @@ export function getCaptionsStatus(): CaptionsInstallStatus {
   }
 }
 
-function tsToSeconds(ts: string): number {
+/**
+ * Parse SRT-style timestamps. Supports the standard 3-digit fractional form
+ * ("00:00:01,500") AND any variable-length fractional ("00:00:01,5",
+ * "00:00:01,50", "00:00:01,1234") — Whisper and other tools occasionally
+ * emit non-3-digit fractions and the original Number(m[4]) / 1000 was
+ * silently wrong by orders of magnitude. parseFloat('0.' + frac) restores
+ * the value regardless of digit count.
+ */
+export function tsToSeconds(ts: string): number {
   const m = ts.match(/(\d+):(\d+):(\d+)[.,](\d+)/)
   if (!m) return 0
-  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000
+  const h = m[1]
+  const min = m[2]
+  const s = m[3]
+  const frac = m[4]
+  if (!h || !min || !s || !frac) return 0
+  return Number(h) * 3600 + Number(min) * 60 + Number(s) + parseFloat('0.' + frac)
 }
 
 function parseSrt(content: string): CaptionSegment[] {
@@ -48,7 +61,10 @@ function parseSrt(content: string): CaptionSegment[] {
     if (lines.length < 2) continue
     const timeLine = lines.find((l) => l.includes('-->'))
     if (!timeLine) continue
-    const [from, to] = timeLine.split('-->').map((s) => s.trim())
+    const parts = timeLine.split('-->').map((str) => str.trim())
+    const from = parts[0]
+    const to = parts[1]
+    if (!from || !to) continue
     const textLines = lines.slice(lines.indexOf(timeLine) + 1)
     if (textLines.length === 0) continue
     segments.push({

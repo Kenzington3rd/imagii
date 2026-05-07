@@ -2,7 +2,6 @@ import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { copyFile } from 'node:fs/promises'
 import {
-  exportSrt,
   getCaptionsStatus,
   runBurnIn,
   runTranscribe

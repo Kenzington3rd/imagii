@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
+import { assertDefined } from '../../shared/assert'
 
 export interface HighlightCandidate {
   startSec: number
@@ -104,8 +105,8 @@ export async function findHighlights(
   }
 
   const sorted = [...meaningful].map((s) => s.m).sort((a, b) => a - b)
-  const median = sorted[Math.floor(sorted.length / 2)]
-  const p90 = sorted[Math.floor(sorted.length * 0.9)]
+  const median = assertDefined(sorted[Math.floor(sorted.length / 2)], 'median sample')
+  const p90 = assertDefined(sorted[Math.floor(sorted.length * 0.9)], 'p90 sample')
   const threshold = Math.max(median + 6, p90 - 1)
 
   const candidates: HighlightCandidate[] = []
@@ -138,9 +139,10 @@ export async function findHighlights(
     }
   }
   if (inPeak) {
+    const lastSample = assertDefined(samples[samples.length - 1], 'final sample')
     const padded = {
       startSec: Math.max(0, peakStart - 5),
-      endSec: Math.min(totalDuration, samples[samples.length - 1].t + 5),
+      endSec: Math.min(totalDuration, lastSample.t + 5),
       peakDb: peakMax,
       reason: 'sustained-loud' as const
     }

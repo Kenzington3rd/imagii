@@ -8,7 +8,7 @@ import {
   getAutosaveInfo
 } from '../autosave'
 import { validateProject, validateProjectJsonString } from '../../shared/projectValidation'
-import { assert } from '../../shared/assert'
+import { assert, assertDefined } from '../../shared/assert'
 
 export interface ProjectLoadResult {
   ok: true
@@ -59,7 +59,7 @@ export function registerProjectIpc(): void {
         filters: [{ name: 'imagii project', extensions: ['imagii.json', 'json'] }]
       })
       if (result.canceled || result.filePaths.length === 0) return null
-      const filePath = result.filePaths[0]
+      const filePath = assertDefined(result.filePaths[0], 'filePath')
       let raw: string
       try {
         raw = await readFile(filePath, 'utf8')
