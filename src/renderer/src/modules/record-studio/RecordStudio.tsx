@@ -69,7 +69,8 @@ export function RecordStudio(): JSX.Element {
     setPhase('choosing')
     const list = await window.api.recording.listSources()
     setSources(list)
-    if (list.length > 0 && !selectedSourceId) setSelectedSourceId(list[0].id)
+    const first = list[0]
+    if (first && !selectedSourceId) setSelectedSourceId(first.id)
   }
 
   function stopAllStreams(): void {

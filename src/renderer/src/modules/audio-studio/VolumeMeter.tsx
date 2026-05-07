@@ -50,7 +50,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
       let maxAmp = 0
       for (let i = 0; i < segments; i++) {
         let sum = 0
-        for (let j = 0; j < segLen; j++) sum += data[i * segLen + j]
+        for (let j = 0; j < segLen; j++) sum += data[i * segLen + j] ?? 0
         const avg = sum / segLen / 255
         next.push(avg)
         maxAmp = Math.max(maxAmp, avg)

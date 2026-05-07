@@ -2,7 +2,6 @@ import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { VideoProbe } from '@shared/api'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
-import { DEFAULT_COLOR_GRADE } from '@shared/clip'
 
 export interface VideoSource {
   filePath: string

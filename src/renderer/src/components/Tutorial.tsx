@@ -13,9 +13,9 @@ interface TutorialProps {
   onClose: (didFinish: boolean) => void
 }
 
-export function Tutorial({ def, onClose }: TutorialProps): JSX.Element {
+export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const [stepIndex, setStepIndex] = useState(0)
-  const step: TutorialStep = def.steps[stepIndex]
+  const step: TutorialStep | undefined = def.steps[stepIndex]
 
   const [targetRect, setTargetRect] = useState<Rect | null>(null)
 
@@ -67,7 +67,12 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element {
     if (stepIndex > 0) setStepIndex(stepIndex - 1)
   }
 
-  const tooltipStyle = computeTooltipPosition(targetRect, step?.placement)
+  // Defensive: stepIndex should always be in range, but a malformed
+  // tutorial def or stale state could land us out of bounds. Return null
+  // rather than crashing.
+  if (!step) return null
+
+  const tooltipStyle = computeTooltipPosition(targetRect, step.placement)
   const cutoutPad = 8
 
   return (

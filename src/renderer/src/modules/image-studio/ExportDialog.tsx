@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { useCanvasStore } from './state/canvasStore'
 import { ThumbnailVariants } from './ThumbnailVariants'
 
 type FormatOption = 'png' | 'jpg'

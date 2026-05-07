@@ -20,10 +20,13 @@ function applyAdjust(
   const d = img.data
   const cMul = contrast
   const cOff = 128 * (1 - cMul)
+  // d is a Uint8ClampedArray — indices in [0, length) are guaranteed
+  // valid; the ?? 0 keeps the strict-mode `noUncheckedIndexedAccess`
+  // narrowing happy without changing behavior.
   for (let i = 0; i < d.length; i += 4) {
-    let r = d[i]
-    let g = d[i + 1]
-    let b = d[i + 2]
+    let r = d[i] ?? 0
+    let g = d[i + 1] ?? 0
+    let b = d[i + 2] ?? 0
     r = r * cMul + cOff + brightness
     g = g * cMul + cOff + brightness
     b = b * cMul + cOff + brightness
@@ -54,8 +57,8 @@ const VARIANTS: VariantSpec[] = [
       const img = ctx.getImageData(0, 0, w, h)
       const d = img.data
       for (let i = 0; i < d.length; i += 4) {
-        d[i] = Math.min(255, d[i] * 1.05 + 6)
-        d[i + 2] = Math.max(0, d[i + 2] * 0.92)
+        d[i] = Math.min(255, (d[i] ?? 0) * 1.05 + 6)
+        d[i + 2] = Math.max(0, (d[i + 2] ?? 0) * 0.92)
       }
       ctx.putImageData(img, 0, 0)
     }
@@ -68,8 +71,8 @@ const VARIANTS: VariantSpec[] = [
       const img = ctx.getImageData(0, 0, w, h)
       const d = img.data
       for (let i = 0; i < d.length; i += 4) {
-        d[i] = Math.max(0, d[i] * 0.92)
-        d[i + 2] = Math.min(255, d[i + 2] * 1.08 + 4)
+        d[i] = Math.max(0, (d[i] ?? 0) * 0.92)
+        d[i + 2] = Math.min(255, (d[i + 2] ?? 0) * 1.08 + 4)
       }
       ctx.putImageData(img, 0, 0)
     }

@@ -98,16 +98,18 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
 
   function generateTitles(): void {
     const out: string[] = []
+    // Helper inside the function so Power-of-Ten rule 6 keeps it scoped.
+    function pick<T>(bank: readonly T[], fallback: T): T {
+      const i = Math.floor(Math.random() * bank.length)
+      return bank[i] ?? fallback
+    }
     for (let i = 0; i < 4; i++) {
-      const t =
-        TITLE_PATTERNS[Math.floor(Math.random() * TITLE_PATTERNS.length)]
-          .replace('{verb}', VERB_BANK[Math.floor(Math.random() * VERB_BANK.length)])
-          .replace(
-            '{subject}',
-            SUBJECT_BANK[Math.floor(Math.random() * SUBJECT_BANK.length)]
-          )
-          .replace('{game}', GAME_BANK[Math.floor(Math.random() * GAME_BANK.length)])
-          .replace('{n}', String(Math.floor(Math.random() * 365) + 1))
+      const pattern = pick(TITLE_PATTERNS, TITLE_PATTERNS[0] ?? '{verb} {subject}')
+      const t = pattern
+        .replace('{verb}', pick(VERB_BANK, ''))
+        .replace('{subject}', pick(SUBJECT_BANK, ''))
+        .replace('{game}', pick(GAME_BANK, ''))
+        .replace('{n}', String(Math.floor(Math.random() * 365) + 1))
       out.push(t)
     }
     setTitles(out)
@@ -171,11 +173,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
         </select>
         <div className="flex items-center gap-2 text-xs">
           <code className="bg-bg-hover rounded px-2 py-1 flex-1 truncate font-mono">
-            {HASHTAG_TEMPLATES[hashtagPick].join(' ')}
+            {(HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' ')}
           </code>
           <button
             className="text-accent hover:underline"
-            onClick={() => copy(HASHTAG_TEMPLATES[hashtagPick].join(' '))}
+            onClick={() => copy((HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' '))}
           >
             copy
           </button>

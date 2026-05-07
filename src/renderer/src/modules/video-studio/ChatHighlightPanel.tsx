@@ -23,15 +23,15 @@ function parseTimestampToSec(ts: string): number {
   let s = 0
   let frac = 0
   if (ts.includes(':')) {
-    const main = ts.split(/[.,]/)[0]
+    const main = ts.split(/[.,]/)[0] ?? ts
     const segs = main.split(':').map((p) => Number(p) || 0)
     if (segs.length === 3) {
-      h = segs[0]
-      m = segs[1]
-      s = segs[2]
+      h = segs[0] ?? 0
+      m = segs[1] ?? 0
+      s = segs[2] ?? 0
     } else if (segs.length === 2) {
-      m = segs[0]
-      s = segs[1]
+      m = segs[0] ?? 0
+      s = segs[1] ?? 0
     }
     if (ts.includes('.') || ts.includes(',')) {
       const fracPart = ts.split(/[.,]/)[1]
@@ -49,7 +49,9 @@ function parseChatLog(input: string): ParsedMsg[] {
   for (const line of lines) {
     const m = line.match(CHAT_LINE_RE)
     if (!m) continue
-    const tSec = parseTimestampToSec(m[1])
+    const ts = m[1]
+    if (!ts) continue
+    const tSec = parseTimestampToSec(ts)
     const text = m[2]?.trim() ?? ''
     if (text.length === 0) continue
     msgs.push({ tSec, text })
@@ -69,7 +71,8 @@ function findPeaks(msgs: ParsedMsg[], bucketSec: number, padSec: number): ChatPe
   const counts = [...buckets.entries()].map(([k, arr]) => ({ k, n: arr.length }))
   if (counts.length < 3) return []
   counts.sort((a, b) => a.n - b.n)
-  const median = counts[Math.floor(counts.length / 2)].n
+  const medianEntry = counts[Math.floor(counts.length / 2)]
+  const median = medianEntry?.n ?? 0
   const threshold = Math.max(median * 2, 5)
 
   const peakBuckets = [...buckets.entries()]

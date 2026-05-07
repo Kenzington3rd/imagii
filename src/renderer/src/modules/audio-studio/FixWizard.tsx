@@ -132,6 +132,7 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
   }
 
   const q = QUESTIONS[step]
+  if (!q) return null
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
       <div className="bg-bg-elevated border border-accent/40 rounded-xl shadow-2xl w-full max-w-md p-6">

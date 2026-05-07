@@ -21,7 +21,10 @@ function clone<T>(obj: T): T {
 
 export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.Element | null {
   const setTemplate = useCanvasStore((s) => s.setDocument)
-  const [hover, setHover] = useState<CanvasTemplate | null>(null)
+  // setHover is currently used to drive future preview behavior; the value
+  // is unread for now. Keep the setter so the onMouseEnter/onMouseLeave
+  // wiring stays in place for the planned hover-preview feature.
+  const [, setHover] = useState<CanvasTemplate | null>(null)
 
   if (!open) return null
   const grouped = getTemplatesByCategory()
