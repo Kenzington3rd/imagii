@@ -13,6 +13,7 @@ import type {
   AudioJobResult,
   AudioOutputFormat
 } from '../../shared/audio'
+import { DEFAULT_DUCK_PARAMS } from '../../shared/audio'
 
 export type AudioProgressListener = (p: AudioJobProgress) => void
 
@@ -146,10 +147,19 @@ export async function runAudioExport(
     const secondaryGainOrLoud = matchLoudness
       ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
       : `volume=${gainDb}dB`
+    // Phase 3.2: replace hardcoded sidechain params with duckParams from
+    // the SecondaryTrack (falls back to defaults that preserve previous
+    // behavior). Threshold is dBFS in the UI; ffmpeg expects linear.
+    const dp = secondary.duckParams ?? DEFAULT_DUCK_PARAMS
+    const thresholdLinear = Math.pow(10, dp.thresholdDb / 20)
     const filterGraph = ducking
       ? `[0:a]${primaryStage}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
-        `[secondary_pre][primary]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[secondary_ducked];` +
+        `[secondary_pre][primary]sidechaincompress=` +
+        `threshold=${thresholdLinear.toFixed(4)}:` +
+        `ratio=${dp.ratio}:` +
+        `attack=${dp.attackMs}:` +
+        `release=${dp.releaseMs}[secondary_ducked];` +
         `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 0.7'[mix]`
       : `[0:a]${primaryStage}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +

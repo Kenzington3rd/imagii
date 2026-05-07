@@ -19,6 +19,26 @@ export interface CutRegion {
 
 export type SecondaryTrackRole = 'music' | 'mic2' | 'gameaudio'
 
+/** Phase 3.2: parameters for the FFmpeg sidechaincompress filter. */
+export interface DuckingParams {
+  /** Primary's level above which the secondary starts compressing. -60..0 dBFS. */
+  thresholdDb: number
+  /** Compression ratio. 1..20. */
+  ratio: number
+  /** Attack in ms. 1..200. */
+  attackMs: number
+  /** Release in ms. 50..2000. */
+  releaseMs: number
+}
+
+export const DEFAULT_DUCK_PARAMS: DuckingParams = {
+  // Equivalent in linear: ~0.05 (the previous hardcoded threshold).
+  thresholdDb: -26,
+  ratio: 8,
+  attackMs: 20,
+  releaseMs: 400
+}
+
 export interface SecondaryTrack {
   filePath: string
   fileName: string
@@ -26,6 +46,8 @@ export interface SecondaryTrack {
   gainDb: number
   duckUnderPrimary: boolean
   matchLoudness?: boolean
+  /** Phase 3.2: optional ducking params; falls back to DEFAULT_DUCK_PARAMS. */
+  duckParams?: DuckingParams
 }
 
 export interface ChainSpec {

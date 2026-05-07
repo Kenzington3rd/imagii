@@ -1,5 +1,6 @@
 import toast from 'react-hot-toast'
-import type { SecondaryTrackRole } from '@shared/audio'
+import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
+import { DEFAULT_DUCK_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
 
 const ROLE_OPTIONS: Array<{
@@ -44,7 +45,8 @@ export function SecondaryTrackPanel(): JSX.Element {
   async function pickAndAdd(role: SecondaryTrackRole): Promise<void> {
     const filePath = await window.api.audio.pickFile()
     if (!filePath) return
-    const opt = ROLE_OPTIONS.find((o) => o.value === role)!
+    const opt = ROLE_OPTIONS.find((o) => o.value === role)
+    if (!opt) return
     setSecondaryTrack({
       filePath,
       fileName: fileNameFromPath(filePath),
@@ -58,6 +60,12 @@ export function SecondaryTrackPanel(): JSX.Element {
   function update(patch: Partial<NonNullable<typeof secondary>>): void {
     if (!secondary) return
     setSecondaryTrack({ ...secondary, ...patch })
+  }
+
+  function updateDuck(patch: Partial<DuckingParams>): void {
+    if (!secondary) return
+    const current = secondary.duckParams ?? DEFAULT_DUCK_PARAMS
+    setSecondaryTrack({ ...secondary, duckParams: { ...current, ...patch } })
   }
 
   return (
@@ -129,6 +137,51 @@ export function SecondaryTrackPanel(): JSX.Element {
             />
             <span>Duck under primary (sidechain compress)</span>
           </label>
+          {/* Phase 3.2: ducking parameter sliders only when ducking is on. */}
+          {secondary.duckUnderPrimary ? (
+            <div className="grid grid-cols-2 gap-3 text-xs border-l-2 border-accent/30 pl-3 ml-2">
+              <DuckSlider
+                label="Threshold"
+                unit="dBFS"
+                min={-60}
+                max={0}
+                step={1}
+                value={secondary.duckParams?.thresholdDb ?? DEFAULT_DUCK_PARAMS.thresholdDb}
+                onChange={(thresholdDb) => updateDuck({ thresholdDb })}
+                hint="Primary level above which secondary starts compressing."
+              />
+              <DuckSlider
+                label="Ratio"
+                unit=":1"
+                min={1}
+                max={20}
+                step={0.5}
+                value={secondary.duckParams?.ratio ?? DEFAULT_DUCK_PARAMS.ratio}
+                onChange={(ratio) => updateDuck({ ratio })}
+                hint="How aggressively to compress (8:1 is strong)."
+              />
+              <DuckSlider
+                label="Attack"
+                unit="ms"
+                min={1}
+                max={200}
+                step={1}
+                value={secondary.duckParams?.attackMs ?? DEFAULT_DUCK_PARAMS.attackMs}
+                onChange={(attackMs) => updateDuck({ attackMs })}
+                hint="How fast ducking kicks in once primary is detected."
+              />
+              <DuckSlider
+                label="Release"
+                unit="ms"
+                min={50}
+                max={2000}
+                step={10}
+                value={secondary.duckParams?.releaseMs ?? DEFAULT_DUCK_PARAMS.releaseMs}
+                onChange={(releaseMs) => updateDuck({ releaseMs })}
+                hint="How fast secondary returns once primary stops."
+              />
+            </div>
+          ) : null}
           <p className="text-xs text-ink-dim">
             Sidechain compresses this track when the primary track has signal — your voice
             cuts through automatically. Common for music beds.
@@ -136,5 +189,38 @@ export function SecondaryTrackPanel(): JSX.Element {
         </div>
       )}
     </div>
+  )
+}
+
+interface DuckSliderProps {
+  label: string
+  unit: string
+  min: number
+  max: number
+  step: number
+  value: number
+  onChange: (next: number) => void
+  hint: string
+}
+
+function DuckSlider(props: DuckSliderProps): JSX.Element {
+  const { label, unit, min, max, step, value, onChange, hint } = props
+  return (
+    <label className="flex flex-col gap-0.5" title={hint}>
+      <div className="flex items-center justify-between">
+        <span className="text-ink-muted">{label}</span>
+        <span className="font-mono text-ink-base">
+          {value} {unit}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
   )
 }

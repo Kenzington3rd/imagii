@@ -55,6 +55,22 @@ describe('buildChain — match-loudness double-pass guard (Phase 2.9)', () => {
   })
 })
 
+describe('dB → linear conversion (Phase 3.2 ducking threshold)', () => {
+  // process.ts uses Math.pow(10, dB/20) to translate dBFS slider values
+  // into linear values for ffmpeg's sidechaincompress threshold param.
+  // These cases anchor the formula so a refactor of the call site can't
+  // silently change the resulting filter graph.
+  const dbToLinear = (db: number): number => Math.pow(10, db / 20)
+
+  it('matches well-known dB anchors', () => {
+    expect(dbToLinear(0)).toBeCloseTo(1.0, 3)
+    expect(dbToLinear(-6)).toBeCloseTo(0.501, 2)
+    expect(dbToLinear(-20)).toBeCloseTo(0.1, 4)
+    expect(dbToLinear(-26)).toBeCloseTo(0.0501, 3) // matches new default ~ 0.05
+    expect(dbToLinear(-60)).toBeCloseTo(0.001, 4)
+  })
+})
+
 describe('parseLoudnormJson', () => {
   it('parses a complete loudnorm JSON block from stderr', () => {
     const stderr = `[Parsed_loudnorm_0 @ 0x1] {
