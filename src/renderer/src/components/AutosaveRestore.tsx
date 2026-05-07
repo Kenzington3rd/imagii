@@ -64,15 +64,22 @@ export function AutosaveRestore(): JSX.Element | null {
     if (!snapshot?.project) return
     setBusy(true)
     const release = suppressAutosave()
+    let restored = false
     try {
       await applyProject(snapshot.project)
+      restored = true
       toast.success('Restored from autosave')
       setDismissed(true)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Restore failed')
     } finally {
-      // Give the stores a moment to settle before re-enabling autosave
-      setTimeout(release, 1500)
+      // Bug-fix (Phase 2.14): on success, hold suppression for 1.5s so the
+      // stores' applyProject side-effects flush before autosave re-engages.
+      // On failure, release immediately — a thrown applyProject leaves
+      // partially-applied state and there's no benefit to making the user
+      // wait an extra 1.5s before they can autosave again.
+      if (restored) setTimeout(release, 1500)
+      else release()
       setBusy(false)
     }
   }

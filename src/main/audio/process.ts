@@ -1,6 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from '../ffmpeg/paths'
-import { buildChain, parseLoudnormJson, type LoudnormMeasurement } from './chain'
+import {
+  buildChain,
+  chainEndsWithLoudnorm,
+  parseLoudnormJson,
+  type LoudnormMeasurement
+} from './chain'
 import { probeAudio } from './probe'
 import type {
   AudioExportSpec,
@@ -126,11 +131,18 @@ export async function runAudioExport(
     // Match-loudness mode runs both tracks through single-pass loudnorm at the
     // same target before mixing — handy for co-host mics or game audio that
     // arrives at very different levels.
+    //
+    // Bug-fix (Phase 2.9): if ChainSpec.loudnorm is on, finalChain.filterPass2
+    // already ends with a measurement-aware loudnorm. Appending a second
+    // loudnorm produced a double-pass (the redundant filter blew up the LRA
+    // and TP measurements before mixing). Skip the append in that case.
     const matchLoudness = secondary.matchLoudness === true
     const target = spec.chain.loudnormTargetLufs ?? -16
-    const primaryStage = matchLoudness
-      ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
-      : finalChain.filterPass2
+    const primaryAlreadyLoudnormed = chainEndsWithLoudnorm(finalChain.filterPass2)
+    const primaryStage =
+      matchLoudness && !primaryAlreadyLoudnormed
+        ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
+        : finalChain.filterPass2
     const secondaryGainOrLoud = matchLoudness
       ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
       : `volume=${gainDb}dB`

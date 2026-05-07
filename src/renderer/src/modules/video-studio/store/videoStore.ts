@@ -95,8 +95,17 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
   addClipFromRange: (name, startSec, endSec) => {
     const { source, clips } = get()
     if (!source) return
-    const base = makeDefaultClip(source.probe.duration, clips.length + 1)
-    const next = { ...base, name, startSec, endSec }
+    // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
+    // panel, future scripts) sometimes hand us a reversed range. Reject
+    // outright rather than producing a clip with negative duration that
+    // breaks export math downstream.
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return
+    if (endSec <= startSec) return
+    const duration = source.probe.duration
+    const safeStart = Math.max(0, Math.min(startSec, duration))
+    const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
+    const base = makeDefaultClip(duration, clips.length + 1)
+    const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
     set({ clips: [...clips, next], selectedClipId: next.id })
   },
   removeClip: (id) => {

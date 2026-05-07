@@ -111,6 +111,22 @@ export function buildChain(
   }
 }
 
+/**
+ * True iff the trailing filter in `filterChain` is a `loudnorm=…` segment.
+ * Used by the secondary-track match-loudness path to skip a redundant
+ * second loudnorm append when buildChain has already emitted one (which
+ * happens whenever ChainSpec.loudnorm is enabled).
+ *
+ * The filter graph uses comma-separated stages — split on the last
+ * comma-or-start and check the final stage's name.
+ */
+export function chainEndsWithLoudnorm(filterChain: string): boolean {
+  if (filterChain.length === 0) return false
+  const lastComma = filterChain.lastIndexOf(',')
+  const lastStage = lastComma === -1 ? filterChain : filterChain.slice(lastComma + 1)
+  return lastStage.startsWith('loudnorm=')
+}
+
 export function parseLoudnormJson(stderrOutput: string): LoudnormMeasurement | null {
   const start = stderrOutput.lastIndexOf('{')
   const end = stderrOutput.lastIndexOf('}')
