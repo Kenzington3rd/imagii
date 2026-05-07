@@ -20,11 +20,24 @@ interface LoudnessSample {
   m: number
 }
 
+// Defensive ceiling for the ebur128 stderr parser. ffmpeg emits one M:
+// frame every ~100ms; even a 24-hour source would produce ~864k samples,
+// well within this cap. Hitting it means the input is pathological — fail
+// loudly rather than spin forever (Power of Ten rule 2).
+const PARSE_EBUR128_MAX_ITERATIONS = 2_000_000
+
 function parseEbur128(stderr: string): LoudnessSample[] {
   const samples: LoudnessSample[] = []
   const re = /t:\s*([\d.]+).*?M:\s*(-?[\d.]+)/g
   let m: RegExpExecArray | null
+  let iterations = 0
   while ((m = re.exec(stderr)) !== null) {
+    iterations++
+    if (iterations > PARSE_EBUR128_MAX_ITERATIONS) {
+      throw new Error(
+        `parseEbur128: regex iterations exceeded ${PARSE_EBUR128_MAX_ITERATIONS}; aborting on suspected runaway input`
+      )
+    }
     const t = Number(m[1])
     const lufs = Number(m[2])
     if (Number.isFinite(t) && Number.isFinite(lufs)) {
@@ -33,6 +46,10 @@ function parseEbur128(stderr: string): LoudnessSample[] {
   }
   return samples
 }
+
+// Exported only for testing. Keeps the cap visible to test cases without
+// exposing it through the broader module API.
+export const __testing__ = { parseEbur128, PARSE_EBUR128_MAX_ITERATIONS }
 
 export async function findHighlights(
   jobId: string,

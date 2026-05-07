@@ -14,9 +14,35 @@ import {
 import { nanoid } from 'nanoid'
 import type { ExportJobSpec, ExportResult } from '../../shared/clip'
 import type { CustomPreset } from '../../shared/customPresets'
+import {
+  assertNonEmptyString,
+  assertFiniteNonNeg,
+  assertRange,
+  assertEnum,
+  assertArray,
+  assertPlainObject
+} from '../../shared/validators'
+import { assert } from '../../shared/assert'
+
+const REFRAME_POSITIONS = ['left', 'center', 'right', 'smart'] as const
+const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
+
+function validateExportJob(job: unknown, idx: number): asserts job is ExportJobSpec {
+  assertPlainObject(job, `jobs[${idx}]`)
+  assertNonEmptyString(job.jobId, `jobs[${idx}].jobId`)
+  assertNonEmptyString(job.sourcePath, `jobs[${idx}].sourcePath`)
+  assertNonEmptyString(job.outDir, `jobs[${idx}].outDir`)
+  assertPlainObject(job.clip, `jobs[${idx}].clip`)
+  const clip = job.clip
+  assertFiniteNonNeg(clip.startSec, `jobs[${idx}].clip.startSec`)
+  assertFiniteNonNeg(clip.endSec, `jobs[${idx}].clip.endSec`)
+  assert((clip.endSec as number) > (clip.startSec as number), `jobs[${idx}].clip range invalid (endSec must exceed startSec)`)
+  assertNonEmptyString(job.preset, `jobs[${idx}].preset`)
+}
 
 export function registerVideoIpc(): void {
   ipcMain.handle('video:probe', async (_e, filePath: string) => {
+    assertNonEmptyString(filePath, 'video:probe filePath')
     return probeVideo(filePath)
   })
 
@@ -52,6 +78,12 @@ export function registerVideoIpc(): void {
   ipcMain.handle(
     'video:exportBatch',
     async (e, jobs: ExportJobSpec[]): Promise<ExportResult[]> => {
+      assertArray<ExportJobSpec>(jobs, 'jobs', 1000)
+      assert(jobs.length > 0, 'jobs must not be empty')
+      const len = jobs.length
+      for (let i = 0; i < len; i++) {
+        validateExportJob(jobs[i], i)
+      }
       const results: ExportResult[] = []
       for (const job of jobs) {
         const result = await runExportJob(job, (progress) => {
@@ -64,10 +96,14 @@ export function registerVideoIpc(): void {
     }
   )
 
-  ipcMain.handle('video:cancel', (_e, jobId: string) => cancelExportJob(jobId))
+  ipcMain.handle('video:cancel', (_e, jobId: string) => {
+    assertNonEmptyString(jobId, 'video:cancel jobId')
+    return cancelExportJob(jobId)
+  })
   ipcMain.handle('video:cancelAll', () => cancelAllExportJobs())
 
   ipcMain.handle('video:revealInFolder', (_e, filePath: string) => {
+    assertNonEmptyString(filePath, 'video:revealInFolder filePath')
     shell.showItemInFolder(filePath)
   })
 
@@ -85,6 +121,15 @@ export function registerVideoIpc(): void {
         targetHeight: number
       }
     ): Promise<{ outputPath: string }> => {
+      assertPlainObject(params, 'video:reframe params')
+      assertNonEmptyString(params.sourcePath, 'sourcePath')
+      assertNonEmptyString(params.outDir, 'outDir')
+      assertEnum(params.position, REFRAME_POSITIONS, 'position')
+      assertFiniteNonNeg(params.startSec, 'startSec')
+      assertFiniteNonNeg(params.endSec, 'endSec')
+      assert(params.endSec > params.startSec, 'reframe endSec must exceed startSec')
+      assertRange(params.targetWidth, 16, 16384, 'targetWidth')
+      assertRange(params.targetHeight, 16, 16384, 'targetHeight')
       const base = path.parse(params.sourcePath).name
       const outputName = `${base}_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`
       const outputPath = path.join(params.outDir, outputName)
@@ -109,6 +154,7 @@ export function registerVideoIpc(): void {
   ipcMain.handle(
     'video:findHighlights',
     async (e, sourcePath: string) => {
+      assertNonEmptyString(sourcePath, 'video:findHighlights sourcePath')
       const jobId = `highlights-${Date.now()}`
       const candidates = await findHighlights(jobId, sourcePath, (p) =>
         e.sender.send('video:highlightProgress', p)
@@ -120,9 +166,19 @@ export function registerVideoIpc(): void {
   ipcMain.handle('video:listCustomPresets', () => listCustomPresets())
   ipcMain.handle(
     'video:saveCustomPreset',
-    (_e, preset: Omit<CustomPreset, 'id'>) => saveCustomPreset(preset)
+    (_e, preset: Omit<CustomPreset, 'id'>) => {
+      assertPlainObject(preset, 'preset')
+      assertNonEmptyString(preset.name, 'preset.name')
+      assertRange(preset.width, 16, 16384, 'preset.width')
+      assertRange(preset.height, 16, 16384, 'preset.height')
+      assertRange(preset.fps, 1, 240, 'preset.fps')
+      return saveCustomPreset(preset)
+    }
   )
-  ipcMain.handle('video:deleteCustomPreset', (_e, id: string) => deleteCustomPreset(id))
+  ipcMain.handle('video:deleteCustomPreset', (_e, id: string) => {
+    assertNonEmptyString(id, 'preset id')
+    return deleteCustomPreset(id)
+  })
 
   ipcMain.handle(
     'video:concat',
@@ -137,6 +193,23 @@ export function registerVideoIpc(): void {
         height: number
       }
     ) => {
+      assertPlainObject(params, 'video:concat params')
+      assertNonEmptyString(params.sourcePath, 'sourcePath')
+      assertNonEmptyString(params.outDir, 'outDir')
+      assertArray(params.segments, 'segments', 500)
+      assert(params.segments.length > 0, 'segments must not be empty')
+      const segs = params.segments
+      const segLen = segs.length
+      for (let i = 0; i < segLen; i++) {
+        const seg = segs[i]
+        assertPlainObject(seg, `segments[${i}]`)
+        assertFiniteNonNeg(seg.startSec, `segments[${i}].startSec`)
+        assertFiniteNonNeg(seg.endSec, `segments[${i}].endSec`)
+        assert(seg.endSec > seg.startSec, `segments[${i}] range invalid (endSec must exceed startSec)`)
+      }
+      assertFiniteNonNeg(params.fadeMs, 'fadeMs')
+      assertRange(params.width, 16, 16384, 'width')
+      assertRange(params.height, 16, 16384, 'height')
       return runConcat({
         jobId: nanoid(10),
         sourcePath: params.sourcePath,
@@ -162,6 +235,13 @@ export function registerVideoIpc(): void {
         margin: number
       }
     ) => {
+      assertPlainObject(params, 'video:pipComposite params')
+      assertNonEmptyString(params.basePath, 'basePath')
+      assertNonEmptyString(params.overlayPath, 'overlayPath')
+      assertNonEmptyString(params.outDir, 'outDir')
+      assertRange(params.overlayWidth, 0.05, 1, 'overlayWidth')
+      assertEnum(params.position, PIP_POSITIONS, 'position')
+      assertFiniteNonNeg(params.margin, 'margin')
       const base = path.parse(params.basePath).name
       const outputPath = path.join(params.outDir, `${base}_pip.mp4`)
       return runPipComposite(nanoid(10), params.basePath, params.overlayPath, outputPath, {
@@ -186,6 +266,15 @@ export function registerVideoIpc(): void {
         speed: number
       }
     ) => {
+      assertPlainObject(params, 'video:exportGif params')
+      assertNonEmptyString(params.sourcePath, 'sourcePath')
+      assertNonEmptyString(params.outDir, 'outDir')
+      assertFiniteNonNeg(params.startSec, 'startSec')
+      assertFiniteNonNeg(params.endSec, 'endSec')
+      assert(params.endSec > params.startSec, 'gif endSec must exceed startSec')
+      assertRange(params.width, 16, 4096, 'width')
+      assertRange(params.fps, 1, 60, 'fps')
+      assertRange(params.speed, 0.1, 10, 'speed')
       return runGifExport({
         jobId: nanoid(10),
         sourcePath: params.sourcePath,

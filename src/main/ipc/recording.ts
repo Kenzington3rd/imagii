@@ -10,6 +10,12 @@ import type {
   RecordingSource,
   RecordingSpec
 } from '../../shared/workspace'
+import {
+  assertNonEmptyString,
+  assertFiniteNonNeg,
+  assertPlainObject
+} from '../../shared/validators'
+import { assert } from '../../shared/assert'
 
 function recordingsDir(): string {
   return path.join(app.getPath('userData'), 'recordings')
@@ -71,6 +77,20 @@ export function registerRecordingIpc(): void {
   ipcMain.handle(
     'recording:save',
     async (_e, spec: RecordingSpec): Promise<RecordingResult | null> => {
+      assertPlainObject(spec, 'recording:save spec')
+      assertNonEmptyString(spec.filename, 'spec.filename')
+      assert(
+        spec.webmBytes instanceof ArrayBuffer || ArrayBuffer.isView(spec.webmBytes),
+        'spec.webmBytes must be an ArrayBuffer or typed array'
+      )
+      const byteLen =
+        spec.webmBytes instanceof ArrayBuffer
+          ? spec.webmBytes.byteLength
+          : (spec.webmBytes as ArrayBufferView).byteLength
+      assert(byteLen > 0, 'spec.webmBytes must not be empty')
+      if (spec.durationMs !== undefined) {
+        assertFiniteNonNeg(spec.durationMs, 'spec.durationMs')
+      }
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (!win) return null
 
