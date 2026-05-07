@@ -16,8 +16,11 @@ import type {
   CaptionsProgress,
   TranscribeRequest,
   TranscribeResult,
-  BurnInRequest
+  BurnInRequest,
+  CaptionStyle
 } from '../../shared/captions'
+import { DEFAULT_CAPTION_STYLE } from '../../shared/captions'
+import { assert } from '../../shared/assert'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
 
@@ -156,6 +159,56 @@ export async function runTranscribe(
   }
 }
 
+/**
+ * Hex `#RRGGBB` → ASS `&HbbggrrAA&` (alpha bytes prepended; bytes are
+ * little-endian BGR plus a 2-byte alpha at the front for 0=opaque).
+ * libass uses 0=opaque so we always emit "00" in the alpha slot.
+ */
+function hexToAssColor(hex: string): string {
+  // assert keeps the helper's preconditions auditable per Power-of-Ten rule 5
+  assert(/^#?[0-9a-fA-F]{6}$/.test(hex), `caption color must be #RRGGBB hex, got ${hex}`)
+  const clean = hex.startsWith('#') ? hex.slice(1) : hex
+  const r = clean.slice(0, 2)
+  const g = clean.slice(2, 4)
+  const b = clean.slice(4, 6)
+  return `&H00${b}${g}${r}&`.toLowerCase().replace('&h', '&H')
+}
+
+function alignmentForPosition(position: CaptionStyle['position']): number {
+  // libass numpad-style alignment (1..9). 2=bottom-center, 5=middle-center, 8=top-center.
+  switch (position) {
+    case 'top':
+      return 8
+    case 'middle':
+      return 5
+    case 'bottom':
+      return 2
+  }
+}
+
+function buildForceStyle(style: CaptionStyle, legacyFontSizePct: number): string {
+  // The legacy fontSizePct path scaled by 10 to get a pixel size; preserve
+  // that semantics when a fresh style isn't provided so old callers still work.
+  const fontSize =
+    style.fontSize > 0
+      ? Math.max(16, Math.min(96, Math.round(style.fontSize)))
+      : Math.max(16, Math.round(legacyFontSizePct * 10))
+  const primary = hexToAssColor(style.primaryColor)
+  const outline = hexToAssColor(style.outlineColor)
+  const alignment = alignmentForPosition(style.position)
+  const marginV = style.position === 'middle' ? 0 : 40
+  return [
+    `FontName=Arial`,
+    `FontSize=${fontSize}`,
+    `PrimaryColour=${primary}`,
+    `OutlineColour=${outline}`,
+    `Outline=2`,
+    `Shadow=0`,
+    `Alignment=${alignment}`,
+    `MarginV=${marginV}`
+  ].join(',')
+}
+
 export async function runBurnIn(
   req: BurnInRequest,
   onProgress: CaptionsProgressListener
@@ -163,11 +216,23 @@ export async function runBurnIn(
   onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 5 })
 
   const escapedSrt = req.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:')
-  const fontSize = Math.max(16, Math.round(req.fontSizePct * 10))
-  const filter = `subtitles='${escapedSrt}':force_style='FontName=Arial,FontSize=${fontSize},PrimaryColour=&Hffffff&,OutlineColour=&H80000000&,Outline=2,Shadow=0,Alignment=2,MarginV=40'`
+  const style = req.style ?? DEFAULT_CAPTION_STYLE
+  const forceStyle = buildForceStyle(style, req.fontSizePct)
+  const filter = `subtitles='${escapedSrt}':force_style='${forceStyle}'`
 
-  const args = [
-    '-y',
+  // Phase 3.1: when the renderer asks to burn over a trimmed range, use
+  // -ss/-to on the input so the output covers only that span. Same trick
+  // runReframe uses; the input stream is seekable so this is fast and
+  // accurate to the keyframe.
+  const args: string[] = ['-y']
+  if (
+    req.startSec !== undefined &&
+    req.endSec !== undefined &&
+    req.endSec > req.startSec
+  ) {
+    args.push('-ss', req.startSec.toFixed(3), '-to', req.endSec.toFixed(3))
+  }
+  args.push(
     '-i',
     req.videoPath,
     '-vf',
@@ -184,7 +249,7 @@ export async function runBurnIn(
     'pipe:1',
     '-nostats',
     req.outputPath
-  ]
+  )
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
@@ -218,3 +283,7 @@ export async function exportSrt(srtPath: string, destPath: string): Promise<void
   const content = await readFile(srtPath, 'utf8')
   await writeFile(destPath, content)
 }
+
+// Test-only export of internal helpers; prefer this over a separate file
+// since the helpers are tightly tied to the burn-in implementation.
+export const __testing__ = { hexToAssColor, alignmentForPosition, buildForceStyle }

@@ -5,8 +5,11 @@ import path from 'path-browserify'
 import type {
   CaptionSegment,
   CaptionsInstallStatus,
-  CaptionsProgress
+  CaptionsProgress,
+  CaptionStyle,
+  CaptionPosition
 } from '@shared/captions'
+import { DEFAULT_CAPTION_STYLE } from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
 
 function formatTime(seconds: number): string {
@@ -17,13 +20,16 @@ function formatTime(seconds: number): string {
 
 export function CaptionsPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
+  const selectedClipId = useVideoStore((s) => s.selectedClipId)
+  const clips = useVideoStore((s) => s.clips)
   const [status, setStatus] = useState<CaptionsInstallStatus | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<CaptionsProgress | null>(null)
   const [segments, setSegments] = useState<CaptionSegment[] | null>(null)
   const [srtPath, setSrtPath] = useState<string | null>(null)
   const [showSetup, setShowSetup] = useState(false)
-  const [fontSize, setFontSize] = useState(3.5)
+  const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
+  const [trimToClip, setTrimToClip] = useState(false)
 
   useEffect(() => {
     void window.api.captions.status().then(setStatus)
@@ -76,6 +82,18 @@ export function CaptionsPanel(): JSX.Element | null {
     const defaultName = `${path.parse(source.fileName).name}-captioned.mp4`
     const outputPath = await window.api.captions.pickBurnInOutput(defaultName)
     if (!outputPath) return
+    // Phase 3.1: when "trim to selected clip" is on, burn captions over the
+    // active clip's range only. The IPC handler validates the range, but
+    // double-check here so the toast comes from us, not from a thrown
+    // assert message.
+    const selectedClip =
+      trimToClip && selectedClipId
+        ? clips.find((c) => c.id === selectedClipId) ?? null
+        : null
+    if (trimToClip && !selectedClip) {
+      toast.error('Pick a clip first to use trim-to-clip burn-in.')
+      return
+    }
     setRunning(true)
     try {
       await window.api.captions.burnIn({
@@ -83,7 +101,14 @@ export function CaptionsPanel(): JSX.Element | null {
         videoPath: source.filePath,
         srtPath,
         outputPath,
-        fontSizePct: fontSize
+        // Legacy field — main process picks pixel size from style.fontSize
+        // when it's set, falling back to fontSizePct * 10 otherwise.
+        fontSizePct: style.fontSize / 10,
+        style,
+        ...(selectedClip && {
+          startSec: selectedClip.startSec,
+          endSec: selectedClip.endSec
+        })
       })
       toast.success('Captions burned in')
     } catch (err) {
@@ -91,6 +116,10 @@ export function CaptionsPanel(): JSX.Element | null {
     } finally {
       setRunning(false)
     }
+  }
+
+  function updateStyle(patch: Partial<CaptionStyle>): void {
+    setStyle((prev) => ({ ...prev, ...patch }))
   }
 
   return (
@@ -184,41 +213,92 @@ export function CaptionsPanel(): JSX.Element | null {
       ) : null}
 
       {segments ? (
-        <>
-          <div className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs">
-            {segments.map((seg, i) => (
-              <div key={i} className="py-0.5">
-                <span className="text-ink-dim font-mono mr-2">{formatTime(seg.startSec)}</span>
-                {seg.text}
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center gap-2 text-xs">
+        <div className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs">
+          {segments.map((seg, i) => (
+            <div key={i} className="py-0.5">
+              <span className="text-ink-dim font-mono mr-2">{formatTime(seg.startSec)}</span>
+              {seg.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Phase 3.1: standalone Save SRT — enabled whenever a srtPath is
+          available, even before the user has burned-in or re-transcribed
+          this session. */}
+      {srtPath ? (
+        <div className="flex flex-col gap-2 text-xs border-t border-ink-dim/20 pt-2">
+          <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5">
-              <span className="text-ink-muted">Font %</span>
+              <span className="text-ink-muted w-14">Font px</span>
               <input
                 type="range"
-                min={2}
-                max={6}
-                step={0.25}
-                value={fontSize}
-                onChange={(e) => setFontSize(Number(e.target.value))}
-                className="w-20"
+                min={16}
+                max={96}
+                step={1}
+                value={style.fontSize}
+                onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
+                className="flex-1"
               />
-              <span className="font-mono w-8">{fontSize.toFixed(1)}</span>
+              <span className="font-mono w-8">{style.fontSize}</span>
             </label>
-            <button className="btn-ghost px-2 py-1 ml-auto" onClick={saveSrt}>
-              Save .srt
+            <label className="flex items-center gap-1.5">
+              <span className="text-ink-muted w-14">Position</span>
+              <select
+                className="bg-bg-base rounded px-2 py-0.5 flex-1"
+                value={style.position}
+                onChange={(e) => updateStyle({ position: e.target.value as CaptionPosition })}
+              >
+                <option value="bottom">Bottom</option>
+                <option value="middle">Middle</option>
+                <option value="top">Top</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-ink-muted w-14">Text</span>
+              <input
+                type="color"
+                value={style.primaryColor}
+                onChange={(e) => updateStyle({ primaryColor: e.target.value })}
+                className="w-10 h-6 rounded"
+              />
+              <span className="font-mono">{style.primaryColor}</span>
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-ink-muted w-14">Outline</span>
+              <input
+                type="color"
+                value={style.outlineColor}
+                onChange={(e) => updateStyle({ outlineColor: e.target.value })}
+                className="w-10 h-6 rounded"
+              />
+              <span className="font-mono">{style.outlineColor}</span>
+            </label>
+          </div>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={trimToClip}
+              onChange={(e) => setTrimToClip(e.target.checked)}
+              disabled={!selectedClipId}
+            />
+            <span className={selectedClipId ? '' : 'text-ink-dim'}>
+              Burn captions over selected clip range only
+            </span>
+          </label>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost px-2 py-1 mr-auto" onClick={saveSrt}>
+              💾 Save .srt
             </button>
             <button
               className="btn-primary px-3 py-1 disabled:opacity-50"
               onClick={burnIn}
-              disabled={running}
+              disabled={running || !srtPath}
             >
               Burn into video
             </button>
           </div>
-        </>
+        </div>
       ) : null}
 
       {!segments && status?.ready ? (
