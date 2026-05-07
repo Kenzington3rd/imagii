@@ -123,13 +123,24 @@ export async function runAudioExport(
   if (secondary) {
     const ducking = secondary.duckUnderPrimary
     const gainDb = secondary.gainDb
+    // Match-loudness mode runs both tracks through single-pass loudnorm at the
+    // same target before mixing — handy for co-host mics or game audio that
+    // arrives at very different levels.
+    const matchLoudness = secondary.matchLoudness === true
+    const target = spec.chain.loudnormTargetLufs ?? -16
+    const primaryStage = matchLoudness
+      ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
+      : finalChain.filterPass2
+    const secondaryGainOrLoud = matchLoudness
+      ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
+      : `volume=${gainDb}dB`
     const filterGraph = ducking
-      ? `[0:a]${finalChain.filterPass2}[primary];` +
-        `[1:a]volume=${gainDb}dB[secondary_pre];` +
+      ? `[0:a]${primaryStage}[primary];` +
+        `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
         `[secondary_pre][primary]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[secondary_ducked];` +
         `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 0.7'[mix]`
-      : `[0:a]${finalChain.filterPass2}[primary];` +
-        `[1:a]volume=${gainDb}dB[secondary];` +
+      : `[0:a]${primaryStage}[primary];` +
+        `[1:a]${secondaryGainOrLoud}[secondary];` +
         `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
     args.push('-filter_complex', filterGraph, '-map', '[mix]')
   } else {

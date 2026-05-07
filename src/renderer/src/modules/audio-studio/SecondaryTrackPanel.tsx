@@ -116,6 +116,14 @@ export function SecondaryTrackPanel(): JSX.Element {
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
+              checked={Boolean(secondary.matchLoudness)}
+              onChange={(e) => update({ matchLoudness: e.target.checked })}
+            />
+            <span>Match loudness with primary (auto-balance via loudnorm)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
               checked={secondary.duckUnderPrimary}
               onChange={(e) => update({ duckUnderPrimary: e.target.checked })}
             />

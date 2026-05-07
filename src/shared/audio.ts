@@ -25,6 +25,7 @@ export interface SecondaryTrack {
   role: SecondaryTrackRole
   gainDb: number
   duckUnderPrimary: boolean
+  matchLoudness?: boolean
 }
 
 export interface ChainSpec {

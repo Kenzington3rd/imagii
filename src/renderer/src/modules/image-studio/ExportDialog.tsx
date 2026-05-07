@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
+import { ThumbnailVariants } from './ThumbnailVariants'
 
 type FormatOption = 'png' | 'jpg'
 
@@ -18,6 +19,7 @@ export function ExportDialog(): JSX.Element {
   const [quality, setQuality] = useState(0.92)
   const [scale, setScale] = useState(1)
   const [busy, setBusy] = useState(false)
+  const [showVariants, setShowVariants] = useState(false)
 
   async function exportImage(): Promise<void> {
     setBusy(true)
@@ -94,12 +96,20 @@ export function ExportDialog(): JSX.Element {
         </select>
       </label>
       <button
-        className="btn-primary px-4 py-1 ml-auto disabled:opacity-50"
+        className="btn-ghost px-3 py-1 text-xs"
+        onClick={() => setShowVariants(true)}
+        title="Generate 3 color-graded thumbnail variants"
+      >
+        ✨ Variants
+      </button>
+      <button
+        className="btn-primary px-4 py-1 disabled:opacity-50"
         disabled={busy}
         onClick={exportImage}
       >
         {busy ? 'Exporting…' : 'Export'}
       </button>
+      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
     </div>
   )
 }

@@ -11,6 +11,7 @@ import { expandFilenameTemplate } from '@shared/filename'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
+import { CustomPresetManager } from './CustomPresetManager'
 
 interface JobStatus {
   jobId: string
@@ -35,6 +36,7 @@ export function ExportPanel(): JSX.Element | null {
     'bottom-right'
   )
   const [filenameTemplate, setFilenameTemplate] = useState('{source}_{clip}_{preset}')
+  const [showPresetManager, setShowPresetManager] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -149,6 +151,13 @@ export function ExportPanel(): JSX.Element | null {
           Export
         </h3>
         <div className="flex items-center gap-2">
+          <button
+            className="btn-ghost px-3 py-1.5 text-sm"
+            onClick={() => setShowPresetManager(true)}
+            title="Manage custom export presets"
+          >
+            ⚙ Presets
+          </button>
           <button className="btn-ghost px-3 py-1.5 text-sm" onClick={pickOutDir}>
             {outDir ? `📁 ${outDir.split(/[\\/]/).pop()}` : 'Choose folder…'}
           </button>
@@ -272,6 +281,10 @@ export function ExportPanel(): JSX.Element | null {
           ))}
         </div>
       ) : null}
+      <CustomPresetManager
+        open={showPresetManager}
+        onClose={() => setShowPresetManager(false)}
+      />
     </div>
   )
 }

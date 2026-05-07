@@ -3,6 +3,11 @@ import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
+import {
+  describeImportError,
+  examineDroppedFile,
+  pathLooksLikeCloudSync
+} from '@shared/importDiagnostics'
 
 const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
 
@@ -20,6 +25,7 @@ export function AudioImporter(): JSX.Element {
   async function loadFile(filePath: string): Promise<void> {
     setBusy(true)
     try {
+      console.info('[audio-import] loading', filePath)
       if (isVideoExt(filePath)) {
         toast.loading('Extracting audio…', { id: 'extract' })
         const wavPath = await window.api.audio.extractFromVideo(filePath)
@@ -31,9 +37,9 @@ export function AudioImporter(): JSX.Element {
       await push(filePath)
       toast.success('Loaded')
     } catch (err) {
+      console.error('[audio-import] failed', { filePath, err })
       toast.dismiss('extract')
-      const msg = err instanceof Error ? err.message : 'Failed to load audio'
-      toast.error(msg)
+      toast.error(describeImportError(err, filePath), { duration: 8000 })
     } finally {
       setBusy(false)
     }
@@ -43,18 +49,34 @@ export function AudioImporter(): JSX.Element {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
-    if (!file) return
-    const filePath = (file as File & { path?: string }).path
-    if (!filePath) {
-      toast.error('Could not read path. Try the picker.')
+    const diag = examineDroppedFile(file)
+    console.info('[audio-import] drop', diag)
+
+    if (diag.reason === 'no-file') {
+      toast.error(diag.hint ?? 'No file dropped.')
       return
+    }
+    if (diag.reason === 'no-path') {
+      toast.error(diag.hint ?? 'Could not read file path.', { duration: 10000 })
+      return
+    }
+    const filePath = (file as File & { path?: string }).path!
+    if (diag.reason === 'cloud-placeholder') {
+      toast(diag.hint ?? 'Cloud-sync path detected.', { icon: '⚠️', duration: 6000 })
     }
     void loadFile(filePath)
   }
 
   async function onPickFile(): Promise<void> {
     const filePath = await window.api.audio.pickFile()
-    if (filePath) await loadFile(filePath)
+    if (!filePath) return
+    if (pathLooksLikeCloudSync(filePath)) {
+      toast(
+        'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
+        { icon: '⚠️', duration: 6000 }
+      )
+    }
+    await loadFile(filePath)
   }
 
   return (
@@ -80,6 +102,10 @@ export function AudioImporter(): JSX.Element {
         </button>
         <RecentFilesMenu recent={recent} onPick={(p) => void loadFile(p)} onClear={() => void clear()} />
       </div>
+      <p className="text-xs text-ink-dim mt-4 max-w-md">
+        Files in OneDrive / Google Drive that show as cloud-only need to be marked "Always keep
+        on this device" first. Files dragged from browser tabs use the picker instead.
+      </p>
     </div>
   )
 }

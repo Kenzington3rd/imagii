@@ -3,6 +3,7 @@ import { NavCard } from '../components/NavCard'
 import { applyProject, captureProject } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
 import { suppressAutosave } from '../hooks/useAutosave'
+import { useGlobalUndo } from '../hooks/useGlobalUndo'
 
 async function handleSave(): Promise<void> {
   try {
@@ -29,6 +30,7 @@ async function handleLoad(): Promise<void> {
 }
 
 export function Home(): JSX.Element {
+  const undo = useGlobalUndo()
   return (
     <div className="h-full overflow-auto px-10 py-12">
       <header className="mb-10 flex items-start justify-between">
@@ -39,6 +41,25 @@ export function Home(): JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm">
+          <button
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+            onClick={undo.undo}
+            disabled={!undo.canUndo}
+            title={`Undo last action (${undo.lastLabel})`}
+          >
+            ↶ Undo
+          </button>
+          <button
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+            onClick={undo.redo}
+            disabled={!undo.canRedo}
+            title="Redo"
+          >
+            ↷ Redo
+          </button>
+          <span className="text-xs text-ink-dim mx-2">
+            last: {undo.lastLabel}
+          </span>
           <button className="btn-ghost px-3 py-1.5" onClick={handleLoad}>
             📂 Open project
           </button>
