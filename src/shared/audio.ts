@@ -8,7 +8,23 @@ export interface AudioProbe {
   sizeBytes: number
 }
 
-export type DenoiseStrength = 'off' | 'light' | 'medium' | 'aggressive'
+export type DenoiseStrength = 'off' | 'light' | 'medium' | 'aggressive' | 'parametric'
+
+/** Phase 3.3: parametric denoise. Maps to ffmpeg's afftdn filter. */
+export interface DenoiseParams {
+  /** Noise floor in dB. afftdn `nf` parameter. -80..-10. */
+  noiseFloorDb: number
+  /** Reduction in dB. afftdn `nr` parameter. 0..50. */
+  reductionDb: number
+  /** Sensitivity. afftdn `ns` parameter. -2..2 in afftdn; 0 is default. */
+  sensitivity: number
+}
+
+export const DEFAULT_DENOISE_PARAMS: DenoiseParams = {
+  noiseFloorDb: -25,
+  reductionDb: 12,
+  sensitivity: 0
+}
 
 export type CompressorPreset = 'off' | 'voice' | 'music' | 'mixed'
 
@@ -52,6 +68,8 @@ export interface SecondaryTrack {
 
 export interface ChainSpec {
   denoise: DenoiseStrength
+  /** Phase 3.3: parameters used when denoise === 'parametric'. */
+  denoiseParams?: DenoiseParams
   hum60: boolean
   rumbleHighpass: boolean
   deEss: boolean

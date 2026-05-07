@@ -1,6 +1,15 @@
-import type { ChainSpec, CompressorPreset, DenoiseStrength } from '../../shared/audio'
+import type {
+  ChainSpec,
+  CompressorPreset,
+  DenoiseParams,
+  DenoiseStrength
+} from '../../shared/audio'
+import { DEFAULT_DENOISE_PARAMS } from '../../shared/audio'
 
-function denoiseFilter(strength: DenoiseStrength): string | null {
+export function denoiseFilter(
+  strength: DenoiseStrength,
+  params?: DenoiseParams
+): string | null {
   switch (strength) {
     case 'off':
       return null
@@ -10,6 +19,15 @@ function denoiseFilter(strength: DenoiseStrength): string | null {
       return 'afftdn=nf=-25'
     case 'aggressive':
       return 'afftdn=nf=-35'
+    case 'parametric': {
+      const p = params ?? DEFAULT_DENOISE_PARAMS
+      // Clamp the user-controllable values to afftdn's accepted ranges so
+      // a slider edge case can't produce a malformed filter string.
+      const nf = Math.max(-80, Math.min(-10, p.noiseFloorDb))
+      const nr = Math.max(0, Math.min(50, p.reductionDb))
+      const ns = Math.max(-2, Math.min(2, p.sensitivity))
+      return `afftdn=nf=${nf}:nr=${nr}:ns=${ns}`
+    }
   }
 }
 
@@ -80,7 +98,7 @@ export function buildChain(
     baseFilters.push('lowpass=f=10000')
   }
 
-  const dn = denoiseFilter(spec.denoise)
+  const dn = denoiseFilter(spec.denoise, spec.denoiseParams)
   if (dn) baseFilters.push(dn)
 
   if (spec.deEss) {

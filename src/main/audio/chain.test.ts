@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { buildChain, chainEndsWithLoudnorm, parseLoudnormJson } from './chain'
+import {
+  buildChain,
+  chainEndsWithLoudnorm,
+  denoiseFilter,
+  parseLoudnormJson
+} from './chain'
 import type { ChainSpec } from '../../shared/audio'
-import { DEFAULT_CHAIN_SPEC } from '../../shared/audio'
+import { DEFAULT_CHAIN_SPEC, DEFAULT_DENOISE_PARAMS } from '../../shared/audio'
 
 function spec(partial: Partial<ChainSpec> = {}): ChainSpec {
   return { ...DEFAULT_CHAIN_SPEC, ...partial }
@@ -68,6 +73,40 @@ describe('dB → linear conversion (Phase 3.2 ducking threshold)', () => {
     expect(dbToLinear(-20)).toBeCloseTo(0.1, 4)
     expect(dbToLinear(-26)).toBeCloseTo(0.0501, 3) // matches new default ~ 0.05
     expect(dbToLinear(-60)).toBeCloseTo(0.001, 4)
+  })
+})
+
+describe('denoiseFilter — Phase 3.3 parametric mode', () => {
+  it('returns the matching preset filter for non-parametric strengths', () => {
+    expect(denoiseFilter('off')).toBeNull()
+    expect(denoiseFilter('light')).toBe('afftdn=nf=-20')
+    expect(denoiseFilter('medium')).toBe('afftdn=nf=-25')
+    expect(denoiseFilter('aggressive')).toBe('afftdn=nf=-35')
+  })
+
+  it('emits all 3 afftdn params in parametric mode using defaults', () => {
+    const filter = denoiseFilter('parametric')
+    expect(filter).toBe(
+      `afftdn=nf=${DEFAULT_DENOISE_PARAMS.noiseFloorDb}:nr=${DEFAULT_DENOISE_PARAMS.reductionDb}:ns=${DEFAULT_DENOISE_PARAMS.sensitivity}`
+    )
+  })
+
+  it('honors custom params', () => {
+    const filter = denoiseFilter('parametric', {
+      noiseFloorDb: -40,
+      reductionDb: 25,
+      sensitivity: 1.5
+    })
+    expect(filter).toBe('afftdn=nf=-40:nr=25:ns=1.5')
+  })
+
+  it('clamps params to afftdn-accepted ranges', () => {
+    expect(
+      denoiseFilter('parametric', { noiseFloorDb: -200, reductionDb: 999, sensitivity: 99 })
+    ).toBe('afftdn=nf=-80:nr=50:ns=2')
+    expect(
+      denoiseFilter('parametric', { noiseFloorDb: 100, reductionDb: -5, sensitivity: -99 })
+    ).toBe('afftdn=nf=-10:nr=0:ns=-2')
   })
 })
 
