@@ -9,7 +9,9 @@ export function captureProject(): ImagiiProject {
   const canvas = useCanvasStore.getState()
 
   return {
-    schemaVersion: 1,
+    // Always emit MAX_SCHEMA_VERSION on save; older versions are only
+    // accepted on load (with automatic migration).
+    schemaVersion: 2,
     savedAt: Date.now(),
     appVersion: '1.0.0',
     videoStudio: video.source
@@ -17,7 +19,8 @@ export function captureProject(): ImagiiProject {
           sourcePath: video.source.filePath,
           clips: video.clips,
           selectedClipId: video.selectedClipId,
-          watermark: null
+          watermark: null,
+          srtPath: video.srtPath
         }
       : undefined,
     audioStudio: audio.source
@@ -44,6 +47,11 @@ export async function applyProject(project: ImagiiProject): Promise<void> {
         selectedClipId:
           project.videoStudio.selectedClipId ?? project.videoStudio.clips[0]?.id ?? null
       })
+    }
+    // Restore srtPath after loadSource (which clears it). Ignore on
+    // older v1 projects where the field was absent — they get null.
+    if (project.videoStudio.srtPath) {
+      useVideoStore.getState().setSrtPath(project.videoStudio.srtPath)
     }
     void v
   }

@@ -15,10 +15,15 @@ interface VideoStudioState {
   currentTime: number
   clips: Clip[]
   selectedClipId: string | null
+  /** Path to a transcribed SRT file from a prior captions run for the
+   *  current source. Persisted across sessions via the project schema
+   *  (videoStudio.srtPath). null when no transcription has been done. */
+  srtPath: string | null
 
   loadSource: (filePath: string) => Promise<void>
   clearSource: () => void
   setCurrentTime: (t: number) => void
+  setSrtPath: (p: string | null) => void
 
   addClip: () => void
   addClipFromRange: (name: string, startSec: number, endSec: number) => void
@@ -66,11 +71,14 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
   currentTime: 0,
   clips: [],
   selectedClipId: null,
+  srtPath: null,
 
   loadSource: async (filePath: string) => {
     const probe = await window.api.video.probe(filePath)
     const url = window.api.video.fileUrl(filePath)
     const initial = makeDefaultClip(probe.duration, 1)
+    // Loading a new source invalidates any prior SRT — captions belong
+    // to the previous video, not this one.
     set({
       source: {
         filePath,
@@ -80,11 +88,14 @@ export const useVideoStore = create<VideoStudioState>((set, get) => ({
       },
       currentTime: 0,
       clips: [initial],
-      selectedClipId: initial.id
+      selectedClipId: initial.id,
+      srtPath: null
     })
   },
-  clearSource: () => set({ source: null, currentTime: 0, clips: [], selectedClipId: null }),
+  clearSource: () =>
+    set({ source: null, currentTime: 0, clips: [], selectedClipId: null, srtPath: null }),
   setCurrentTime: (t: number) => set({ currentTime: t }),
+  setSrtPath: (p: string | null) => set({ srtPath: p }),
 
   addClip: () => {
     const { source, clips } = get()

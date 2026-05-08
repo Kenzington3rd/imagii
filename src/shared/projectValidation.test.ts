@@ -92,6 +92,71 @@ describe('validateProject', () => {
   })
 })
 
+describe('schema migration v1 → v2', () => {
+  it('accepts a v1 project and bumps schemaVersion to 2 in place', () => {
+    const v1 = {
+      schemaVersion: 1,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: {
+        sourcePath: 'C:/some/file.mp4',
+        clips: [],
+        selectedClipId: null
+      }
+    }
+    const result = validateProject(v1)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.schemaVersion).toBe(2)
+      expect(result.project.videoStudio?.sourcePath).toBe('C:/some/file.mp4')
+    }
+  })
+
+  it('accepts a v2 project with srtPath populated', () => {
+    const v2: ImagiiProject = {
+      schemaVersion: 2,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: {
+        sourcePath: 'C:/x.mp4',
+        clips: [],
+        selectedClipId: null,
+        srtPath: 'C:/x.srt'
+      }
+    }
+    const result = validateProject(v2)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.project.videoStudio?.srtPath).toBe('C:/x.srt')
+  })
+
+  it('rejects a project with non-string srtPath', () => {
+    const bad = {
+      schemaVersion: 2,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: {
+        sourcePath: 'C:/x.mp4',
+        clips: [],
+        selectedClipId: null,
+        srtPath: 42
+      }
+    }
+    const result = validateProject(bad)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/srtPath/)
+  })
+
+  it('rejects schemaVersion 99 (out of supported range)', () => {
+    const result = validateProject({
+      schemaVersion: 99,
+      savedAt: Date.now(),
+      appVersion: '1.0.0'
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/supported/)
+  })
+})
+
 describe('validateProjectJsonString', () => {
   it('accepts a valid JSON string', () => {
     const result = validateProjectJsonString(JSON.stringify(baseProject))

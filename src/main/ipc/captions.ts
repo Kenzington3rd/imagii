@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { copyFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import {
   cancelWhisperModelInstall,
   getCaptionsStatus,
@@ -9,6 +10,9 @@ import {
   runTranscribe
 } from '../sidecars/whisperManager'
 import type { TranscribeRequest, BurnInRequest } from '../../shared/captions'
+import {
+  assertNonEmptyString
+} from '../../shared/validators'
 
 export function registerCaptionsIpc(): void {
   ipcMain.handle('captions:status', () => getCaptionsStatus())
@@ -68,4 +72,31 @@ export function registerCaptionsIpc(): void {
 
   // Tech-debt fix: cancel an in-flight model download.
   ipcMain.handle('captions:cancelInstall', () => cancelWhisperModelInstall())
+
+  // Tech-debt fix: copy an SRT to a target path without prompting.
+  // Used by Clip Kit to bundle the SRT alongside the per-platform mp4s.
+  // Returns { ok, reason? } so the kit's UI can render a clear error if
+  // the source SRT is missing.
+  ipcMain.handle(
+    'captions:copySrtTo',
+    async (
+      _e,
+      params: { srcPath: string; destPath: string }
+    ): Promise<{ ok: true } | { ok: false; reason: string }> => {
+      assertNonEmptyString(params.srcPath, 'srcPath')
+      assertNonEmptyString(params.destPath, 'destPath')
+      if (!existsSync(params.srcPath)) {
+        return { ok: false, reason: 'source SRT not found' }
+      }
+      try {
+        await copyFile(params.srcPath, params.destPath)
+        return { ok: true }
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : 'copy failed'
+        }
+      }
+    }
+  )
 }

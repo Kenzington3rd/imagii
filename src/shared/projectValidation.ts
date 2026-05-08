@@ -1,6 +1,17 @@
 import type { ImagiiProject } from './workspace'
 
-export const SUPPORTED_SCHEMA_VERSION = 1
+/**
+ * Tech-debt fix: schema version is now ranged. Validator accepts any
+ * version in SUPPORTED_SCHEMA_VERSIONS and migrates older versions up
+ * to MAX_SCHEMA_VERSION before returning. New saves always emit
+ * MAX_SCHEMA_VERSION.
+ */
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2] as const
+export const MAX_SCHEMA_VERSION = 2
+
+/** @deprecated Use MAX_SCHEMA_VERSION. Kept for any external callers
+ *  who may have referenced the old constant name.  */
+export const SUPPORTED_SCHEMA_VERSION = MAX_SCHEMA_VERSION
 
 export type ValidationResult =
   | { ok: true; project: ImagiiProject }
@@ -21,20 +32,38 @@ function isOptionalString(v: unknown): boolean {
 }
 
 /**
+ * Migrate a v1 project to v2 in-place on the input object. v2 added an
+ * optional videoStudio.srtPath field; the migration just bumps
+ * schemaVersion. No data is dropped.
+ */
+function migrateV1ToV2(input: Record<string, unknown>): void {
+  input.schemaVersion = 2
+  // No field changes required — srtPath is optional and absent === null.
+}
+
+/**
  * Strict runtime validator for ImagiiProject. Returns either a typed project
- * or a reason string. Never throws.
+ * or a reason string. Never throws. Older schema versions are migrated up
+ * before structural validation.
  */
 export function validateProject(input: unknown): ValidationResult {
   if (!isPlainObject(input)) {
     return { ok: false, reason: 'project is not an object' }
   }
   const schemaVersion = input.schemaVersion
-  if (schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
+  if (
+    typeof schemaVersion !== 'number' ||
+    !(SUPPORTED_SCHEMA_VERSIONS as readonly number[]).includes(schemaVersion)
+  ) {
     return {
       ok: false,
-      reason: `unsupported schemaVersion ${String(schemaVersion)} (expected ${SUPPORTED_SCHEMA_VERSION})`
+      reason: `unsupported schemaVersion ${String(schemaVersion)} (supported: ${SUPPORTED_SCHEMA_VERSIONS.join(', ')})`
     }
   }
+  // Migrate older versions up. The migration steps are linear; future
+  // bumps add another `if (current === N) migrateNToN+1(input)` step.
+  if (schemaVersion === 1) migrateV1ToV2(input)
+
   if (!isFiniteNumber(input.savedAt) || input.savedAt <= 0) {
     return { ok: false, reason: 'savedAt missing or invalid' }
   }
@@ -47,6 +76,9 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isOptionalString(v.sourcePath))
       return { ok: false, reason: 'videoStudio.sourcePath invalid' }
     if (!Array.isArray(v.clips)) return { ok: false, reason: 'videoStudio.clips not array' }
+    // v2 adds optional srtPath; if present it must be string-or-null-or-undefined.
+    if (!isOptionalString(v.srtPath))
+      return { ok: false, reason: 'videoStudio.srtPath invalid' }
   }
   if (input.audioStudio !== undefined) {
     const a = input.audioStudio

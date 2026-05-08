@@ -108,6 +108,7 @@ const api: ImagiiApi = {
     burnIn: (req: BurnInRequest) => ipcRenderer.invoke('captions:burnIn', req),
     saveSrt: (srtPath: string, defaultName: string) =>
       ipcRenderer.invoke('captions:saveSrt', srtPath, defaultName),
+    copySrtTo: (params) => ipcRenderer.invoke('captions:copySrtTo', params),
     pickBurnInOutput: (defaultName: string) =>
       ipcRenderer.invoke('captions:pickBurnInOutput', defaultName),
     openBinFolder: () => ipcRenderer.invoke('captions:openBinFolder'),

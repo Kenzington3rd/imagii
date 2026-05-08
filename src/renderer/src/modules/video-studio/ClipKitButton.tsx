@@ -24,6 +24,7 @@ interface ClipKitButtonProps {
  */
 export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
+  const srtPath = useVideoStore((s) => s.srtPath)
   const [running, setRunning] = useState(false)
   const [phase, setPhase] = useState<string>('')
 
@@ -77,6 +78,21 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           timeSec,
           outputPath: outPath
         })
+      }
+
+      // Tech-debt fix: bundle the SRT when the project has a transcribed
+      // one. Silent failure (file moved/deleted since transcription) so
+      // the user still gets the rest of the kit.
+      if (srtPath) {
+        setPhase('Bundling captions…')
+        const srtDest = path.join(kitDir, `${safeName}.srt`)
+        const result = await window.api.captions.copySrtTo({
+          srcPath: srtPath,
+          destPath: srtDest
+        })
+        if (!result.ok) {
+          toast(`SRT not bundled (${result.reason})`, { icon: '⚠️', duration: 6000 })
+        }
       }
 
       toast.success('Clip kit ready', { duration: 6000 })

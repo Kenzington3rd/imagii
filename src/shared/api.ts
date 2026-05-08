@@ -153,6 +153,10 @@ export interface ImagiiApi {
     transcribe(req: TranscribeRequest): Promise<TranscribeResult>
     burnIn(req: BurnInRequest): Promise<{ outputPath: string }>
     saveSrt(srtPath: string, defaultName: string): Promise<string | null>
+    copySrtTo(params: {
+      srcPath: string
+      destPath: string
+    }): Promise<{ ok: true } | { ok: false; reason: string }>
     pickBurnInOutput(defaultName: string): Promise<string | null>
     openBinFolder(): Promise<void>
     openModelsFolder(): Promise<void>

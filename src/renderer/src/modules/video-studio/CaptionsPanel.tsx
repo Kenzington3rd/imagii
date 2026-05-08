@@ -23,11 +23,15 @@ export function CaptionsPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const clips = useVideoStore((s) => s.clips)
+  // Tech-debt fix: srtPath now lives in the videoStore so it (a) persists
+  // across sessions via project save/load and (b) is available to other
+  // panels (like Clip Kit) that want to bundle the SRT.
+  const srtPath = useVideoStore((s) => s.srtPath)
+  const setSrtPath = useVideoStore((s) => s.setSrtPath)
   const [status, setStatus] = useState<CaptionsInstallStatus | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<CaptionsProgress | null>(null)
   const [segments, setSegments] = useState<CaptionSegment[] | null>(null)
-  const [srtPath, setSrtPath] = useState<string | null>(null)
   const [showSetup, setShowSetup] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
