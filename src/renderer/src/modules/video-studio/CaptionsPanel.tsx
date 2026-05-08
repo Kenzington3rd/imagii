@@ -235,6 +235,13 @@ export function CaptionsPanel(): JSX.Element | null {
                       <span className="font-mono w-10 text-right">
                         {Math.round(installProgress.percent ?? 0)}%
                       </span>
+                      <button
+                        className="text-ink-dim hover:text-rose-300 px-1"
+                        onClick={() => void window.api.captions.cancelInstall()}
+                        title="Cancel download"
+                      >
+                        ✕
+                      </button>
                     </div>
                   ) : null}
                 </div>

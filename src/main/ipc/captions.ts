@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { copyFile } from 'node:fs/promises'
 import {
+  cancelWhisperModelInstall,
   getCaptionsStatus,
   installWhisperModel,
   runBurnIn,
@@ -64,4 +65,7 @@ export function registerCaptionsIpc(): void {
   ipcMain.handle('captions:installModel', async (e) => {
     return installWhisperModel((p) => e.sender.send('captions:modelProgress', p))
   })
+
+  // Tech-debt fix: cancel an in-flight model download.
+  ipcMain.handle('captions:cancelInstall', () => cancelWhisperModelInstall())
 }

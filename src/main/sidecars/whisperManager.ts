@@ -311,6 +311,30 @@ export async function exportSrt(srtPath: string, destPath: string): Promise<void
  */
 export type ModelInstallProgressListener = (p: ModelInstallProgress) => void
 
+/**
+ * Tech-debt fix: cancellation. We track the active request handle so the
+ * renderer can call cancelWhisperModelInstall() to abort an in-flight
+ * download mid-stream. Cancelling deletes the .partial file so the next
+ * install attempt starts clean.
+ */
+interface ActiveInstall {
+  request: ReturnType<typeof net.request>
+  partialPath: string
+  cancelled: boolean
+}
+let activeInstall: ActiveInstall | null = null
+
+export function cancelWhisperModelInstall(): boolean {
+  if (!activeInstall) return false
+  activeInstall.cancelled = true
+  try {
+    activeInstall.request.abort()
+  } catch {
+    /* already done */
+  }
+  return true
+}
+
 export async function installWhisperModel(
   onProgress: ModelInstallProgressListener
 ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
@@ -344,15 +368,23 @@ export async function installWhisperModel(
 
   return new Promise((resolve) => {
     const request = net.request(WHISPER_MODEL_URL)
+    const me: ActiveInstall = { request, partialPath, cancelled: false }
+    activeInstall = me
+    function clearIfMine(): void {
+      if (activeInstall === me) activeInstall = null
+    }
+    async function cleanupPartial(): Promise<void> {
+      try {
+        if (existsSync(partialPath)) await unlink(partialPath)
+      } catch {
+        /* ignore */
+      }
+    }
     request.on('response', (response) => {
       const status = response.statusCode
       if (status < 200 || status >= 300) {
-        // Follow up to one redirect manually if needed (Electron's net
-        // does this by default, but log if status is unexpected).
-        onProgress({
-          phase: 'failed',
-          message: `Server returned HTTP ${status}`
-        })
+        clearIfMine()
+        onProgress({ phase: 'failed', message: `Server returned HTTP ${status}` })
         resolve({ ok: false, reason: `HTTP ${status}` })
         return
       }
@@ -366,6 +398,7 @@ export async function installWhisperModel(
       let bytesDownloaded = 0
       const out = createWriteStream(partialPath)
       response.on('data', (chunk: Buffer) => {
+        if (me.cancelled) return
         bytesDownloaded += chunk.length
         out.write(chunk)
         const percent =
@@ -380,23 +413,46 @@ export async function installWhisperModel(
       response.on('end', () => {
         out.end()
         out.on('finish', () => {
-          void verifyAndFinalize(partialPath, finalPath, onProgress).then(resolve)
+          if (me.cancelled) {
+            clearIfMine()
+            void cleanupPartial().then(() => {
+              onProgress({ phase: 'failed', message: 'Cancelled by user' })
+              resolve({ ok: false, reason: 'cancelled' })
+            })
+            return
+          }
+          void verifyAndFinalize(partialPath, finalPath, onProgress).then((r) => {
+            clearIfMine()
+            resolve(r)
+          })
         })
       })
       response.on('error', (err: Error) => {
+        clearIfMine()
         out.destroy()
-        try {
-          if (existsSync(partialPath)) void unlink(partialPath)
-        } catch {
-          /* ignore */
-        }
+        void cleanupPartial()
         onProgress({ phase: 'failed', message: err.message })
         resolve({ ok: false, reason: err.message })
       })
     })
     request.on('error', (err: Error) => {
-      onProgress({ phase: 'failed', message: err.message })
-      resolve({ ok: false, reason: err.message })
+      clearIfMine()
+      // If we triggered the abort, the user-facing reason is "cancelled".
+      const reason = me.cancelled ? 'cancelled' : err.message
+      void cleanupPartial()
+      onProgress({
+        phase: 'failed',
+        message: me.cancelled ? 'Cancelled by user' : err.message
+      })
+      resolve({ ok: false, reason })
+    })
+    request.on('abort', () => {
+      // Some Electron versions emit abort without error; cover both.
+      clearIfMine()
+      void cleanupPartial().then(() => {
+        onProgress({ phase: 'failed', message: 'Cancelled by user' })
+        resolve({ ok: false, reason: 'cancelled' })
+      })
     })
     request.end()
   })

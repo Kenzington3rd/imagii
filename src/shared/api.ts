@@ -158,6 +158,7 @@ export interface ImagiiApi {
     openModelsFolder(): Promise<void>
     onProgress(handler: (p: CaptionsProgress) => void): Unsubscribe
     installModel(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+    cancelInstall(): Promise<boolean>
     onModelProgress(handler: (p: ModelInstallProgress) => void): Unsubscribe
   }
   moodboard: {

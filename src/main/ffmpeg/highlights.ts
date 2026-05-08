@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
 import { assert, assertDefined } from '../../shared/assert'
@@ -176,7 +176,16 @@ export async function findHighlights(
  * Deliberately scoped to audio only this round; motion/scene-change/face
  * signals would each add another FFmpeg pass and the audio signal alone
  * is the dominant predictor for vertical-clip hooks.
+ *
+ * Tech-debt fix: hook analysis is fundamentally a "show this for the
+ * currently selected clip" operation — there's only ever ONE relevant
+ * result at a time. When a new analysis is requested, we kill any prior
+ * in-flight ffmpeg process so rapid clip-selection doesn't pile up
+ * orphaned processes burning CPU on results no one will see.
  */
+
+let activeHookProcess: ChildProcess | null = null
+
 export async function analyzeClipHook(
   sourcePath: string,
   startSec: number,
@@ -186,6 +195,17 @@ export async function analyzeClipHook(
   assert(Number.isFinite(startSec) && startSec >= 0, 'startSec must be finite >= 0')
   assert(Number.isFinite(durationSec) && durationSec > 0 && durationSec <= 30,
     'durationSec must be in (0, 30]')
+
+  // Cancel any prior in-flight hook analysis. Killing here is safe — the
+  // renderer's effect cleanup already drops the corresponding promise via
+  // its `cancelled` flag, so the killed process's rejection is ignored.
+  if (activeHookProcess && activeHookProcess.exitCode === null) {
+    try {
+      activeHookProcess.kill()
+    } catch {
+      /* already dead */
+    }
+  }
 
   const args = [
     '-ss',
@@ -204,14 +224,22 @@ export async function analyzeClipHook(
 
   const stderr = await new Promise<string>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    activeHookProcess = child
     let buffer = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       buffer += chunk
     })
-    child.on('error', reject)
-    child.on('close', (code) => {
+    child.on('error', (err) => {
+      if (activeHookProcess === child) activeHookProcess = null
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      if (activeHookProcess === child) activeHookProcess = null
       if (code === 0) resolve(buffer)
+      // SIGTERM means we killed it on a newer request — surface a typed
+      // error the renderer is allowed to ignore.
+      else if (signal === 'SIGTERM') reject(new Error('hook analysis cancelled'))
       else reject(new Error(`hook ebur128 exit ${code}`))
     })
   })

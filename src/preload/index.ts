@@ -118,6 +118,7 @@ const api: ImagiiApi = {
       return () => ipcRenderer.removeListener('captions:progress', listener)
     },
     installModel: () => ipcRenderer.invoke('captions:installModel'),
+    cancelInstall: () => ipcRenderer.invoke('captions:cancelInstall'),
     onModelProgress: (handler: (p: ModelInstallProgress) => void) => {
       const listener = (_e: unknown, p: ModelInstallProgress): void => handler(p)
       ipcRenderer.on('captions:modelProgress', listener)
