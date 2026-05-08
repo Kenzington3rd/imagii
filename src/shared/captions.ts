@@ -46,6 +46,68 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   outlineColor: '#000000'
 }
 
+/**
+ * Phase 4A.2: named one-click caption styling presets. Each is a complete
+ * CaptionStyle the renderer can apply with a single click — most users
+ * will never touch the underlying sliders. Order is "most expected first":
+ * TikTok-style is the default people reach for; accessibility is the most
+ * conservative; subtle is for podcast-style content where captions should
+ * never dominate; reels-minimal is the muted take.
+ */
+export interface CaptionStylePreset {
+  id: 'tiktok-bold' | 'reels-minimal' | 'subtle-subtitle' | 'big-outline-accessibility'
+  label: string
+  hint: string
+  style: CaptionStyle
+}
+
+export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
+  {
+    id: 'tiktok-bold',
+    label: 'TikTok bold',
+    hint: 'Big white text, thick black outline, mid-frame — what dominates short-form right now.',
+    style: {
+      fontSize: 56,
+      position: 'middle',
+      primaryColor: '#ffffff',
+      outlineColor: '#000000'
+    }
+  },
+  {
+    id: 'reels-minimal',
+    label: 'Reels minimal',
+    hint: 'Smaller, lower-third, muted — fits Reels/IG aesthetics that punish loud captions.',
+    style: {
+      fontSize: 28,
+      position: 'bottom',
+      primaryColor: '#f5f5f5',
+      outlineColor: '#222222'
+    }
+  },
+  {
+    id: 'subtle-subtitle',
+    label: 'Subtle subtitle',
+    hint: 'Classic small bottom subtitle. Use for podcasts/long-form where captions should never dominate.',
+    style: {
+      fontSize: 24,
+      position: 'bottom',
+      primaryColor: '#ffffff',
+      outlineColor: '#000000'
+    }
+  },
+  {
+    id: 'big-outline-accessibility',
+    label: 'Big-outline accessibility',
+    hint: 'High-contrast yellow with thick black outline — maximum readability for low-vision viewers.',
+    style: {
+      fontSize: 48,
+      position: 'bottom',
+      primaryColor: '#ffff00',
+      outlineColor: '#000000'
+    }
+  }
+] as const
+
 export interface BurnInRequest {
   jobId: string
   videoPath: string

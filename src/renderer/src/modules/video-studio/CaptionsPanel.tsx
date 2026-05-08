@@ -9,7 +9,7 @@ import type {
   CaptionStyle,
   CaptionPosition
 } from '@shared/captions'
-import { DEFAULT_CAPTION_STYLE } from '@shared/captions'
+import { DEFAULT_CAPTION_STYLE, CAPTION_STYLE_PRESETS } from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
 
 function formatTime(seconds: number): string {
@@ -225,9 +225,24 @@ export function CaptionsPanel(): JSX.Element | null {
 
       {/* Phase 3.1: standalone Save SRT — enabled whenever a srtPath is
           available, even before the user has burned-in or re-transcribed
-          this session. */}
+          this session. Phase 4A.2 adds the preset row above the dials. */}
       {srtPath ? (
         <div className="flex flex-col gap-2 text-xs border-t border-ink-dim/20 pt-2">
+          {/* Phase 4A.2: one-click style presets. Sets `style` to a known-
+              good preset; the dials below stay editable for fine-tuning. */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-ink-muted">Preset</span>
+            {CAPTION_STYLE_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                title={preset.hint}
+                onClick={() => setStyle(preset.style)}
+                className="px-2 py-0.5 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover text-xs transition-colors"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5">
               <span className="text-ink-muted w-14">Font px</span>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { tsToSeconds, __testing__ } from './whisperManager'
-import { DEFAULT_CAPTION_STYLE } from '../../shared/captions'
+import { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } from '../../shared/captions'
 
 const { hexToAssColor, alignmentForPosition, buildForceStyle } = __testing__
 
@@ -97,5 +97,34 @@ describe('buildForceStyle', () => {
     expect(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, fontSize: 200 }, 0)).toContain(
       'FontSize=96'
     )
+  })
+})
+
+describe('CAPTION_STYLE_PRESETS — Phase 4A.2', () => {
+  it('exports four presets in the documented order', () => {
+    expect(CAPTION_STYLE_PRESETS).toHaveLength(4)
+    expect(CAPTION_STYLE_PRESETS.map((p) => p.id)).toEqual([
+      'tiktok-bold',
+      'reels-minimal',
+      'subtle-subtitle',
+      'big-outline-accessibility'
+    ])
+  })
+
+  it('every preset has a complete CaptionStyle that buildForceStyle accepts', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      const out = buildForceStyle(preset.style, 0)
+      expect(out).toMatch(/FontSize=\d+/)
+      expect(out).toMatch(/Alignment=[258]/)
+      expect(out).toMatch(/PrimaryColour=&H00[0-9a-f]{6}&/)
+      expect(out).toMatch(/OutlineColour=&H00[0-9a-f]{6}&/)
+    }
+  })
+
+  it('every preset has a non-empty label and hint', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      expect(preset.label.length).toBeGreaterThan(0)
+      expect(preset.hint.length).toBeGreaterThan(0)
+    }
   })
 })
