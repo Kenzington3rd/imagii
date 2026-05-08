@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
+import { parseChatLog, type ChatMessage } from '@shared/chatLog'
 import { useVideoStore } from './store/videoStore'
 
 interface ChatPeak {
@@ -8,60 +9,9 @@ interface ChatPeak {
   topMessages: string[]
 }
 
-interface ParsedMsg {
-  tSec: number
-  text: string
-}
-
-const CHAT_LINE_RE =
-  /^\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d+)?)\]\s*(?:<[^>]+>|[\w-]+:?)\s*(.*)$/
-
-function parseTimestampToSec(ts: string): number {
-  const parts = ts.split(/[:.,]/).map((p) => Number(p) || 0)
-  let h = 0
-  let m = 0
-  let s = 0
-  let frac = 0
-  if (ts.includes(':')) {
-    const main = ts.split(/[.,]/)[0] ?? ts
-    const segs = main.split(':').map((p) => Number(p) || 0)
-    if (segs.length === 3) {
-      h = segs[0] ?? 0
-      m = segs[1] ?? 0
-      s = segs[2] ?? 0
-    } else if (segs.length === 2) {
-      m = segs[0] ?? 0
-      s = segs[1] ?? 0
-    }
-    if (ts.includes('.') || ts.includes(',')) {
-      const fracPart = ts.split(/[.,]/)[1]
-      if (fracPart) frac = Number(`0.${fracPart}`)
-    }
-  } else {
-    s = parts[0] ?? 0
-  }
-  return h * 3600 + m * 60 + s + frac
-}
-
-function parseChatLog(input: string): ParsedMsg[] {
-  const lines = input.split(/\r?\n/)
-  const msgs: ParsedMsg[] = []
-  for (const line of lines) {
-    const m = line.match(CHAT_LINE_RE)
-    if (!m) continue
-    const ts = m[1]
-    if (!ts) continue
-    const tSec = parseTimestampToSec(ts)
-    const text = m[2]?.trim() ?? ''
-    if (text.length === 0) continue
-    msgs.push({ tSec, text })
-  }
-  return msgs
-}
-
-function findPeaks(msgs: ParsedMsg[], bucketSec: number, padSec: number): ChatPeak[] {
+function findPeaks(msgs: ChatMessage[], bucketSec: number, padSec: number): ChatPeak[] {
   if (msgs.length === 0) return []
-  const buckets = new Map<number, ParsedMsg[]>()
+  const buckets = new Map<number, ChatMessage[]>()
   for (const m of msgs) {
     const key = Math.floor(m.tSec / bucketSec) * bucketSec
     const arr = buckets.get(key) ?? []
