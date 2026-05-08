@@ -5,6 +5,7 @@ import {
   DEFAULT_WEIGHTS,
   HYPE_KEYWORDS,
   scoreHighlights,
+  scoreHookQuality,
   type AudioCandidate
 } from './highlights'
 import type { ChatMessage } from './chatLog'
@@ -157,5 +158,29 @@ describe('scoreHighlights — multi-signal', () => {
     ]
     const result = scoreHighlights(audio, chat)
     expect(result[0]?.topChatMessages).toEqual(['first', 'second', 'third'])
+  })
+})
+
+describe('scoreHookQuality — Phase 4C', () => {
+  it('returns "high" tier for loud openings', () => {
+    expect(scoreHookQuality(-5).tier).toBe('high')
+    expect(scoreHookQuality(-15).tier).toBe('high')
+  })
+  it('returns "medium" tier for moderate openings', () => {
+    expect(scoreHookQuality(-16).tier).toBe('medium')
+    expect(scoreHookQuality(-20).tier).toBe('medium')
+    expect(scoreHookQuality(-25).tier).toBe('medium')
+  })
+  it('returns "low" tier for quiet openings', () => {
+    expect(scoreHookQuality(-26).tier).toBe('low')
+    expect(scoreHookQuality(-50).tier).toBe('low')
+  })
+  it('attaches a non-empty reason for each tier', () => {
+    expect(scoreHookQuality(-5).reasons.length).toBeGreaterThan(0)
+    expect(scoreHookQuality(-20).reasons.length).toBeGreaterThan(0)
+    expect(scoreHookQuality(-50).reasons.length).toBeGreaterThan(0)
+  })
+  it('echoes the input audioEnergyDb in the result', () => {
+    expect(scoreHookQuality(-12.345).audioEnergyDb).toBe(-12.345)
   })
 })

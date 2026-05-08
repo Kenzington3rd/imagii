@@ -86,6 +86,11 @@ export interface ImagiiApi {
     findHighlights(sourcePath: string): Promise<
       Array<{ startSec: number; endSec: number; peakDb: number; reason: string }>
     >
+    analyzeClipHook(params: {
+      sourcePath: string
+      startSec: number
+      durationSec?: number
+    }): Promise<{ audioEnergyDb: number }>
     onHighlightProgress(
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe

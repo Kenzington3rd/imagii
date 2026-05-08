@@ -194,6 +194,54 @@ export function scoreHighlights(
 }
 
 /**
+ * Phase 4C: hook quality. Score the opening N seconds of a clip on simple
+ * heuristics and return a tier the UI can paint. Pure function; the FFmpeg
+ * pass that produces audioEnergyDb lives in the main process.
+ *
+ * Thresholds were chosen against typical streaming audio:
+ *   - >= -15 LUFS: peak-loud opening, strong attention hook
+ *   - -25..-15 LUFS: average opening, viewer might bounce
+ *   - <= -25 LUFS: quiet opening, vertical-short death sentence
+ *
+ * The audioEnergyDb arg is the *peak momentary loudness* in the opening
+ * window (max M: value from ebur128). Speech-energy / motion / face
+ * detection signals are intentionally deferred — they each need their own
+ * FFmpeg pass and the audio signal alone is the dominant predictor of a
+ * good vertical-clip hook.
+ */
+
+export type HookTier = 'high' | 'medium' | 'low'
+
+export interface HookScore {
+  tier: HookTier
+  reasons: string[]
+  audioEnergyDb: number
+}
+
+export function scoreHookQuality(audioEnergyDb: number): HookScore {
+  assert(Number.isFinite(audioEnergyDb), 'audioEnergyDb must be finite')
+  if (audioEnergyDb >= -15) {
+    return {
+      tier: 'high',
+      reasons: ['Loud, attention-grabbing opening'],
+      audioEnergyDb
+    }
+  }
+  if (audioEnergyDb >= -25) {
+    return {
+      tier: 'medium',
+      reasons: ['Moderate energy in opening — fine for talking-head, weak for hype clips'],
+      audioEnergyDb
+    }
+  }
+  return {
+    tier: 'low',
+    reasons: ['Quiet opening — viewers tend to bounce on vertical short-form'],
+    audioEnergyDb
+  }
+}
+
+/**
  * Median number of messages per bucket of size `bucketSec`. Internal helper.
  * Returns 0 when chat is empty or when all messages collapse into a single
  * bucket (in which case "median" isn't meaningful).

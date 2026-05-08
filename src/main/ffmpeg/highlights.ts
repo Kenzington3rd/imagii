@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
-import { assertDefined } from '../../shared/assert'
+import { assert, assertDefined } from '../../shared/assert'
 
 export interface HighlightCandidate {
   startSec: number
@@ -165,4 +165,75 @@ export async function findHighlights(
 
   onProgress({ jobId, phase: 'done', percent: 100 })
   return ranked
+}
+
+/**
+ * Phase 4C: analyze the first N seconds of a clip range for "hook" quality.
+ * Single FFmpeg pass with ebur128 over the window — fast (~200-500ms for
+ * 3 seconds of audio). Returns peak momentary loudness in LUFS, suitable
+ * for shared/highlights.scoreHookQuality.
+ *
+ * Deliberately scoped to audio only this round; motion/scene-change/face
+ * signals would each add another FFmpeg pass and the audio signal alone
+ * is the dominant predictor for vertical-clip hooks.
+ */
+export async function analyzeClipHook(
+  sourcePath: string,
+  startSec: number,
+  durationSec = 3
+): Promise<{ audioEnergyDb: number }> {
+  assert(typeof sourcePath === 'string' && sourcePath.length > 0, 'sourcePath required')
+  assert(Number.isFinite(startSec) && startSec >= 0, 'startSec must be finite >= 0')
+  assert(Number.isFinite(durationSec) && durationSec > 0 && durationSec <= 30,
+    'durationSec must be in (0, 30]')
+
+  const args = [
+    '-ss',
+    startSec.toFixed(3),
+    '-t',
+    durationSec.toFixed(3),
+    '-i',
+    sourcePath,
+    '-vn',
+    '-af',
+    'ebur128=metadata=1:peak=true',
+    '-f',
+    'null',
+    '-'
+  ]
+
+  const stderr = await new Promise<string>((resolve, reject) => {
+    const child = spawn(ffmpegPath, args, { windowsHide: true })
+    let buffer = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      buffer += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve(buffer)
+      else reject(new Error(`hook ebur128 exit ${code}`))
+    })
+  })
+
+  // Find max momentary loudness in the window. ebur128 stderr emits
+  // "M:" lines roughly every 100ms; we take the highest. If no readable
+  // M: line is found (silent or very short input), report -70 LUFS as a
+  // floor rather than throwing — UI will paint "low" and let the user
+  // judge.
+  const re = /M:\s*(-?[\d.]+)/g
+  let match: RegExpExecArray | null
+  let maxDb = -70
+  // PoT rule 2: bound the regex loop defensively.
+  const HOOK_PARSE_MAX_ITER = 100_000
+  let iter = 0
+  while ((match = re.exec(stderr)) !== null) {
+    iter++
+    if (iter > HOOK_PARSE_MAX_ITER) {
+      throw new Error('analyzeClipHook: M-value parse iterations exceeded cap')
+    }
+    const v = Number(match[1])
+    if (Number.isFinite(v) && v > maxDb) maxDb = v
+  }
+  return { audioEnergyDb: maxDb }
 }

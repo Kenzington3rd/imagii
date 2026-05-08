@@ -3,7 +3,7 @@ import path from 'node:path'
 import { probeVideo } from '../ffmpeg/probe'
 import { runExportJob, cancelExportJob, cancelAllExportJobs } from '../ffmpeg/export'
 import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
-import { findHighlights } from '../ffmpeg/highlights'
+import { analyzeClipHook, findHighlights } from '../ffmpeg/highlights'
 import { runGifExport } from '../ffmpeg/gif'
 import { runConcat, runPipComposite } from '../ffmpeg/concat'
 import {
@@ -160,6 +160,23 @@ export function registerVideoIpc(): void {
         e.sender.send('video:highlightProgress', p)
       )
       return candidates
+    }
+  )
+
+  // Phase 4C: hook indicator. Fast single-pass ebur128 over first N seconds
+  // of the clip range — UI calls this lazily on the selected clip.
+  ipcMain.handle(
+    'video:analyzeClipHook',
+    async (
+      _e,
+      params: { sourcePath: string; startSec: number; durationSec?: number }
+    ) => {
+      assertPlainObject(params, 'video:analyzeClipHook params')
+      assertNonEmptyString(params.sourcePath, 'sourcePath')
+      assertFiniteNonNeg(params.startSec, 'startSec')
+      const dur = params.durationSec ?? 3
+      assertRange(dur, 0.5, 30, 'durationSec')
+      return analyzeClipHook(params.sourcePath, params.startSec, dur)
     }
   )
 

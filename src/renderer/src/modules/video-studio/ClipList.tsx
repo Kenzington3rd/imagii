@@ -1,4 +1,5 @@
 import { useVideoStore } from './store/videoStore'
+import { HookIndicator } from './HookIndicator'
 
 function formatShort(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -15,6 +16,7 @@ export function ClipList(): JSX.Element {
   const removeClip = useVideoStore((s) => s.removeClip)
   const renameClip = useVideoStore((s) => s.renameClip)
   const setClipSpeed = useVideoStore((s) => s.setClipSpeed)
+  const source = useVideoStore((s) => s.source)
   const selected = clips.find((c) => c.id === selectedClipId)
   const selectedSpeed = selected?.speedMultiplier ?? 1
 
@@ -29,25 +31,35 @@ export function ClipList(): JSX.Element {
         </button>
       </div>
       {selected ? (
-        <div className="flex items-center gap-2 text-xs px-1 py-1.5 bg-bg-hover rounded">
-          <span className="text-ink-muted">Speed</span>
-          <input
-            type="range"
-            min={0.25}
-            max={4}
-            step={0.05}
-            value={selectedSpeed}
-            onChange={(e) => setClipSpeed(selected.id, Number(e.target.value))}
-            className="flex-1"
-          />
-          <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
-          <button
-            className="text-ink-dim hover:text-ink-base"
-            onClick={() => setClipSpeed(selected.id, 1)}
-            title="Reset to 1×"
-          >
-            ↺
-          </button>
+        <div className="flex flex-col gap-1.5 px-1 py-1.5 bg-bg-hover rounded">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-ink-muted">Speed</span>
+            <input
+              type="range"
+              min={0.25}
+              max={4}
+              step={0.05}
+              value={selectedSpeed}
+              onChange={(e) => setClipSpeed(selected.id, Number(e.target.value))}
+              className="flex-1"
+            />
+            <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
+            <button
+              className="text-ink-dim hover:text-ink-base"
+              onClick={() => setClipSpeed(selected.id, 1)}
+              title="Reset to 1×"
+            >
+              ↺
+            </button>
+          </div>
+          {/* Phase 4C: hook indicator. Lazy-fetches first-3-seconds energy
+              for the selected clip. Hover for the explanation. */}
+          {source ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-ink-muted">First 3s:</span>
+              <HookIndicator sourcePath={source.filePath} startSec={selected.startSec} />
+            </div>
+          ) : null}
         </div>
       ) : null}
       <ul className="flex flex-col gap-2">
