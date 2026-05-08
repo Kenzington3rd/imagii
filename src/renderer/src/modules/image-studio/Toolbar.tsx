@@ -1,12 +1,24 @@
+import { useState } from 'react'
 import type { Tool } from './state/canvasStore'
 import { useCanvasStore } from './state/canvasStore'
 
-const TOOLS: Array<{ id: Tool; label: string; icon: string; shortcut?: string }> = [
+interface ToolDef {
+  id: Tool
+  label: string
+  icon: string
+  shortcut?: string
+  /** Phase 4A.3: tools used in <5% of streamer thumbnail/overlay work
+   *  hide behind an "Advanced" disclosure to simplify the toolbar.
+   *  Keyboard shortcuts in ImageStudio.tsx still work either way. */
+  advanced?: boolean
+}
+
+const TOOLS: ToolDef[] = [
   { id: 'select', label: 'Select', icon: '↖', shortcut: 'V' },
   { id: 'rect', label: 'Rect', icon: '▭', shortcut: 'R' },
   { id: 'ellipse', label: 'Ellipse', icon: '◯', shortcut: 'O' },
-  { id: 'line', label: 'Line', icon: '╱', shortcut: 'L' },
-  { id: 'pencil', label: 'Pencil', icon: '✎', shortcut: 'P' }
+  { id: 'line', label: 'Line', icon: '╱', shortcut: 'L', advanced: true },
+  { id: 'pencil', label: 'Pencil', icon: '✎', shortcut: 'P', advanced: true }
 ]
 
 export function Toolbar(): JSX.Element {
@@ -18,11 +30,17 @@ export function Toolbar(): JSX.Element {
   const setSnapToGrid = useCanvasStore((s) => s.setSnapToGrid)
   const gridSize = useCanvasStore((s) => s.gridSize)
   const setGridSize = useCanvasStore((s) => s.setGridSize)
+  // Show advanced if the user has opened it OR if an advanced tool is
+  // currently active (otherwise selecting Line via shortcut hides the
+  // active-tool indicator).
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const activeIsAdvanced = TOOLS.some((t) => t.id === tool && t.advanced === true)
+  const showAdvanced = advancedOpen || activeIsAdvanced
 
   return (
     <div className="card p-2 flex items-center gap-2 flex-wrap" data-tutorial="image-toolbar">
       <div className="flex items-center gap-1">
-        {TOOLS.map((t) => (
+        {TOOLS.filter((t) => t.advanced !== true || showAdvanced).map((t) => (
           <button
             key={t.id}
             className={`px-3 py-1.5 text-sm rounded ${
@@ -35,6 +53,15 @@ export function Toolbar(): JSX.Element {
             {t.label}
           </button>
         ))}
+        {!showAdvanced ? (
+          <button
+            className="px-2 py-1.5 text-xs text-ink-muted hover:text-ink-base hover:bg-bg-hover rounded"
+            onClick={() => setAdvancedOpen(true)}
+            title="Show line and pencil tools"
+          >
+            + More
+          </button>
+        ) : null}
       </div>
       <div className="w-px h-6 bg-ink-dim/30 mx-2" />
       <label className="flex items-center gap-1.5 text-sm">
