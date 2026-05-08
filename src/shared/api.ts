@@ -91,6 +91,12 @@ export interface ImagiiApi {
       startSec: number
       durationSec?: number
     }): Promise<{ audioEnergyDb: number }>
+    extractFrame(params: {
+      sourcePath: string
+      timeSec: number
+      outputPath: string
+    }): Promise<{ outputPath: string }>
+    makeKitDir(params: { parentDir: string; clipName: string }): Promise<string>
     onHighlightProgress(
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe

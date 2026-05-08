@@ -1,4 +1,5 @@
 import { useVideoStore } from './store/videoStore'
+import { ClipKitButton } from './ClipKitButton'
 import { HookIndicator } from './HookIndicator'
 
 function formatShort(seconds: number): string {
@@ -60,6 +61,10 @@ export function ClipList(): JSX.Element {
               <HookIndicator sourcePath={source.filePath} startSec={selected.startSec} />
             </div>
           ) : null}
+          {/* Phase 4D: one-click clip kit (5 platforms + 3 thumbnails). */}
+          <div className="flex items-center justify-end">
+            <ClipKitButton clip={selected} />
+          </div>
         </div>
       ) : null}
       <ul className="flex flex-col gap-2">

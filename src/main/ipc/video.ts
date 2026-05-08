@@ -6,6 +6,7 @@ import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
 import { analyzeClipHook, findHighlights } from '../ffmpeg/highlights'
 import { runGifExport } from '../ffmpeg/gif'
 import { runConcat, runPipComposite } from '../ffmpeg/concat'
+import { extractFrame, makeKitDir } from '../ffmpeg/frame'
 import {
   listCustomPresets,
   saveCustomPreset,
@@ -177,6 +178,29 @@ export function registerVideoIpc(): void {
       const dur = params.durationSec ?? 3
       assertRange(dur, 0.5, 30, 'durationSec')
       return analyzeClipHook(params.sourcePath, params.startSec, dur)
+    }
+  )
+
+  // Phase 4D: Clip Kit support — single-frame thumbnail extraction
+  // and create-named-subfolder, both small fast ops.
+  ipcMain.handle(
+    'video:extractFrame',
+    async (_e, params: { sourcePath: string; timeSec: number; outputPath: string }) => {
+      assertPlainObject(params, 'video:extractFrame params')
+      assertNonEmptyString(params.sourcePath, 'sourcePath')
+      assertFiniteNonNeg(params.timeSec, 'timeSec')
+      assertNonEmptyString(params.outputPath, 'outputPath')
+      return extractFrame(params.sourcePath, params.timeSec, params.outputPath)
+    }
+  )
+
+  ipcMain.handle(
+    'video:makeKitDir',
+    async (_e, params: { parentDir: string; clipName: string }) => {
+      assertPlainObject(params, 'video:makeKitDir params')
+      assertNonEmptyString(params.parentDir, 'parentDir')
+      assertNonEmptyString(params.clipName, 'clipName')
+      return makeKitDir(params.parentDir, params.clipName)
     }
   )
 

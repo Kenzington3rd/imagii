@@ -59,6 +59,8 @@ const api: ImagiiApi = {
     findHighlights: (sourcePath: string) =>
       ipcRenderer.invoke('video:findHighlights', sourcePath),
     analyzeClipHook: (params) => ipcRenderer.invoke('video:analyzeClipHook', params),
+    extractFrame: (params) => ipcRenderer.invoke('video:extractFrame', params),
+    makeKitDir: (params) => ipcRenderer.invoke('video:makeKitDir', params),
     onHighlightProgress: (handler) => {
       const listener = (
         _e: unknown,
