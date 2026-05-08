@@ -1,17 +1,17 @@
 import { create } from 'zustand'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 
-export type AiTab = 'reference' | 'moodboards'
+export type ReferencesTab = 'reference' | 'moodboards'
 
-interface AiStudioState {
-  tab: AiTab
+interface ReferencesStudioState {
+  tab: ReferencesTab
   searchResponse: SearchResponse | null
   searchLoading: boolean
   searchError: string | null
   collections: MoodBoardCollection[]
   selectedCollectionId: string | null
 
-  setTab: (t: AiTab) => void
+  setTab: (t: ReferencesTab) => void
 
   search: (query: string) => Promise<void>
 
@@ -24,7 +24,7 @@ interface AiStudioState {
   removeFromCollection: (collectionId: string, itemId: string) => Promise<void>
 }
 
-export const useAiStore = create<AiStudioState>((set, get) => ({
+export const useReferencesStore = create<ReferencesStudioState>((set, get) => ({
   tab: 'reference',
   searchResponse: null,
   searchLoading: false,

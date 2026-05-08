@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { SearchResult } from '@shared/search'
-import { useAiStore } from './state/aiStore'
+import { useReferencesStore } from './state/referencesStore'
 
 export function ReferencePanel(): JSX.Element {
-  const search = useAiStore((s) => s.search)
-  const response = useAiStore((s) => s.searchResponse)
-  const loading = useAiStore((s) => s.searchLoading)
-  const error = useAiStore((s) => s.searchError)
-  const collections = useAiStore((s) => s.collections)
-  const selectedCollectionId = useAiStore((s) => s.selectedCollectionId)
-  const addToCollection = useAiStore((s) => s.addToCollection)
-  const refreshCollections = useAiStore((s) => s.refreshCollections)
-  const createCollection = useAiStore((s) => s.createCollection)
+  const search = useReferencesStore((s) => s.search)
+  const response = useReferencesStore((s) => s.searchResponse)
+  const loading = useReferencesStore((s) => s.searchLoading)
+  const error = useReferencesStore((s) => s.searchError)
+  const collections = useReferencesStore((s) => s.collections)
+  const selectedCollectionId = useReferencesStore((s) => s.selectedCollectionId)
+  const addToCollection = useReferencesStore((s) => s.addToCollection)
+  const refreshCollections = useReferencesStore((s) => s.refreshCollections)
+  const createCollection = useReferencesStore((s) => s.createCollection)
 
   const [query, setQuery] = useState('')
 

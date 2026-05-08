@@ -1,6 +1,6 @@
 import { Toaster } from 'react-hot-toast'
 import { Link } from 'react-router-dom'
-import { useAiStore } from './state/aiStore'
+import { useReferencesStore } from './state/referencesStore'
 import { ReferencePanel } from './ReferencePanel'
 import { MoodBoardPanel } from './MoodBoardPanel'
 import { Tutorial } from '../../components/Tutorial'
@@ -8,9 +8,9 @@ import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { aiTutorial } from '../../tutorials/aiTutorial'
 
-export function AiStudio(): JSX.Element {
-  const tab = useAiStore((s) => s.tab)
-  const setTab = useAiStore((s) => s.setTab)
+export function ReferencesStudio(): JSX.Element {
+  const tab = useReferencesStore((s) => s.tab)
+  const setTab = useReferencesStore((s) => s.setTab)
   const tutorial = useTutorial(aiTutorial)
 
   return (

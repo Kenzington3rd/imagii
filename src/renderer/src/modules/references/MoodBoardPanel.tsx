@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
-import { useAiStore } from './state/aiStore'
+import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeImageLayer } from '../image-studio/state/canvasStore'
 
 export function MoodBoardPanel(): JSX.Element {
-  const collections = useAiStore((s) => s.collections)
-  const selectedCollectionId = useAiStore((s) => s.selectedCollectionId)
-  const refreshCollections = useAiStore((s) => s.refreshCollections)
-  const createCollection = useAiStore((s) => s.createCollection)
-  const renameCollection = useAiStore((s) => s.renameCollection)
-  const deleteCollection = useAiStore((s) => s.deleteCollection)
-  const selectCollection = useAiStore((s) => s.selectCollection)
-  const removeFromCollection = useAiStore((s) => s.removeFromCollection)
+  const collections = useReferencesStore((s) => s.collections)
+  const selectedCollectionId = useReferencesStore((s) => s.selectedCollectionId)
+  const refreshCollections = useReferencesStore((s) => s.refreshCollections)
+  const createCollection = useReferencesStore((s) => s.createCollection)
+  const renameCollection = useReferencesStore((s) => s.renameCollection)
+  const deleteCollection = useReferencesStore((s) => s.deleteCollection)
+  const selectCollection = useReferencesStore((s) => s.selectCollection)
+  const removeFromCollection = useReferencesStore((s) => s.removeFromCollection)
   const addCanvasLayer = useCanvasStore((s) => s.addLayer)
   const navigate = useNavigate()
 

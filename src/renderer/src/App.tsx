@@ -5,7 +5,7 @@ import { Home } from './routes/Home'
 import { Video } from './routes/Video'
 import { Audio } from './routes/Audio'
 import { Image } from './routes/Image'
-import { AiArt } from './routes/AiArt'
+import { References } from './routes/References'
 
 type Status = { phase: 'loading' } | { phase: 'welcome' } | { phase: 'ready' }
 
@@ -49,7 +49,7 @@ export function App(): JSX.Element {
       <Route path="/video" element={<Video />} />
       <Route path="/audio" element={<Audio />} />
       <Route path="/image" element={<Image />} />
-      <Route path="/ai-art" element={<AiArt />} />
+      <Route path="/ai-art" element={<References />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
   )
