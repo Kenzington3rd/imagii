@@ -43,6 +43,15 @@ export function CaptionsPanel(): JSX.Element | null {
     void window.api.captions.status().then(setStatus)
   }, [])
 
+  // Bug fix: clear local segment + progress state when the source video
+  // changes. Without this, after loading a new video, the captions panel
+  // showed segments transcribed from the *previous* video. The store's
+  // srtPath already clears on loadSource — segments needs to follow.
+  useEffect(() => {
+    setSegments(null)
+    setProgress(null)
+  }, [source?.filePath])
+
   useEffect(() => {
     const off = window.api.captions.onProgress((p) => setProgress(p))
     return off

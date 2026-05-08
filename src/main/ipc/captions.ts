@@ -9,6 +9,7 @@ import {
   runBurnIn,
   runTranscribe
 } from '../sidecars/whisperManager'
+import { captionsOutputDir } from '../sidecars/paths'
 import type { TranscribeRequest, BurnInRequest } from '../../shared/captions'
 import {
   assertNonEmptyString
@@ -77,6 +78,13 @@ export function registerCaptionsIpc(): void {
   // Used by Clip Kit to bundle the SRT alongside the per-platform mp4s.
   // Returns { ok, reason? } so the kit's UI can render a clear error if
   // the source SRT is missing.
+  //
+  // Bug fix (path-traversal): restrict srcPath to the captions output
+  // directory. Even though the only current caller passes a path
+  // produced by our own runTranscribe, defense-in-depth prevents a
+  // future caller (or a compromised renderer) from passing
+  // ../../somewhere-sensitive and exfiltrating arbitrary files via the
+  // copy-then-read pattern.
   ipcMain.handle(
     'captions:copySrtTo',
     async (
@@ -85,11 +93,19 @@ export function registerCaptionsIpc(): void {
     ): Promise<{ ok: true } | { ok: false; reason: string }> => {
       assertNonEmptyString(params.srcPath, 'srcPath')
       assertNonEmptyString(params.destPath, 'destPath')
-      if (!existsSync(params.srcPath)) {
+      const allowedRoot = path.resolve(captionsOutputDir())
+      const resolvedSrc = path.resolve(params.srcPath)
+      // path.relative returns a path that starts with `..` if the source
+      // is outside the allowed root. Empty result = exactly the root.
+      const rel = path.relative(allowedRoot, resolvedSrc)
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        return { ok: false, reason: 'source SRT is outside the captions directory' }
+      }
+      if (!existsSync(resolvedSrc)) {
         return { ok: false, reason: 'source SRT not found' }
       }
       try {
-        await copyFile(params.srcPath, params.destPath)
+        await copyFile(resolvedSrc, params.destPath)
         return { ok: true }
       } catch (err) {
         return {

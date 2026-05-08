@@ -370,8 +370,18 @@ export async function installWhisperModel(
     const request = net.request(WHISPER_MODEL_URL)
     const me: ActiveInstall = { request, partialPath, cancelled: false }
     activeInstall = me
-    function clearIfMine(): void {
+    // Bug fix: with three event sources (response, request, abort) any
+    // of which can fire — sometimes overlapping (a network failure
+    // mid-stream triggers both response.on('error') and the outer
+    // request.on('error')) — we need a settle-once guard. Without it,
+    // resolve() could be called twice and the partial cleanup could
+    // race against itself.
+    let settled = false
+    function settle(value: { ok: true; path: string } | { ok: false; reason: string }): void {
+      if (settled) return
+      settled = true
       if (activeInstall === me) activeInstall = null
+      resolve(value)
     }
     async function cleanupPartial(): Promise<void> {
       try {
@@ -383,9 +393,8 @@ export async function installWhisperModel(
     request.on('response', (response) => {
       const status = response.statusCode
       if (status < 200 || status >= 300) {
-        clearIfMine()
         onProgress({ phase: 'failed', message: `Server returned HTTP ${status}` })
-        resolve({ ok: false, reason: `HTTP ${status}` })
+        settle({ ok: false, reason: `HTTP ${status}` })
         return
       }
       const totalHeader = response.headers['content-length']
@@ -398,7 +407,7 @@ export async function installWhisperModel(
       let bytesDownloaded = 0
       const out = createWriteStream(partialPath)
       response.on('data', (chunk: Buffer) => {
-        if (me.cancelled) return
+        if (me.cancelled || settled) return
         bytesDownloaded += chunk.length
         out.write(chunk)
         const percent =
@@ -413,45 +422,37 @@ export async function installWhisperModel(
       response.on('end', () => {
         out.end()
         out.on('finish', () => {
+          if (settled) return
           if (me.cancelled) {
-            clearIfMine()
             void cleanupPartial().then(() => {
               onProgress({ phase: 'failed', message: 'Cancelled by user' })
-              resolve({ ok: false, reason: 'cancelled' })
+              settle({ ok: false, reason: 'cancelled' })
             })
             return
           }
-          void verifyAndFinalize(partialPath, finalPath, onProgress).then((r) => {
-            clearIfMine()
-            resolve(r)
-          })
+          void verifyAndFinalize(partialPath, finalPath, onProgress).then(settle)
         })
       })
       response.on('error', (err: Error) => {
-        clearIfMine()
         out.destroy()
         void cleanupPartial()
         onProgress({ phase: 'failed', message: err.message })
-        resolve({ ok: false, reason: err.message })
+        settle({ ok: false, reason: err.message })
       })
     })
     request.on('error', (err: Error) => {
-      clearIfMine()
-      // If we triggered the abort, the user-facing reason is "cancelled".
       const reason = me.cancelled ? 'cancelled' : err.message
       void cleanupPartial()
       onProgress({
         phase: 'failed',
         message: me.cancelled ? 'Cancelled by user' : err.message
       })
-      resolve({ ok: false, reason })
+      settle({ ok: false, reason })
     })
     request.on('abort', () => {
-      // Some Electron versions emit abort without error; cover both.
-      clearIfMine()
       void cleanupPartial().then(() => {
         onProgress({ phase: 'failed', message: 'Cancelled by user' })
-        resolve({ ok: false, reason: 'cancelled' })
+        settle({ ok: false, reason: 'cancelled' })
       })
     })
     request.end()

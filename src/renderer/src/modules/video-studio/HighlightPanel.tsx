@@ -39,6 +39,8 @@ function SignalBar(props: SignalBarProps): JSX.Element {
   )
 }
 
+const CHAT_DEBOUNCE_MS = 300
+
 export function HighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const addClipFromRange = useVideoStore((s) => s.addClipFromRange)
@@ -46,6 +48,11 @@ export function HighlightPanel(): JSX.Element | null {
   const [progress, setProgress] = useState(0)
   const [audioCandidates, setAudioCandidates] = useState<AudioCandidate[] | null>(null)
   const [chatText, setChatText] = useState('')
+  // Bug fix: parseChatLog + scoreHighlights are O(n) and can run hundreds
+  // of times per second on a fast typist with a 50KB chat log pasted in.
+  // Debounce the value used for scoring so each keystroke only triggers
+  // one rerun after the user stops typing.
+  const [debouncedChat, setDebouncedChat] = useState('')
   const [showChatInput, setShowChatInput] = useState(false)
 
   useEffect(() => {
@@ -55,14 +62,20 @@ export function HighlightPanel(): JSX.Element | null {
     return off
   }, [])
 
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedChat(chatText), CHAT_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [chatText])
+
   // Phase 4B: combine audio candidates with chat data into a unified
   // ranked list. Chat input is optional — when empty, scoring degrades to
   // audio-only and behaves identically to the previous panel.
   const scored: ScoredHighlight[] = useMemo(() => {
     if (!audioCandidates || audioCandidates.length === 0) return []
-    const chatMessages = chatText.trim().length > 0 ? parseChatLog(chatText) : []
+    const chatMessages =
+      debouncedChat.trim().length > 0 ? parseChatLog(debouncedChat) : []
     return scoreHighlights(audioCandidates, chatMessages)
-  }, [audioCandidates, chatText])
+  }, [audioCandidates, debouncedChat])
 
   if (!source) return null
 
