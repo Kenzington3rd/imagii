@@ -7,7 +7,8 @@ import type {
   CaptionsInstallStatus,
   CaptionsProgress,
   CaptionStyle,
-  CaptionPosition
+  CaptionPosition,
+  ModelInstallProgress
 } from '@shared/captions'
 import { DEFAULT_CAPTION_STYLE, CAPTION_STYLE_PRESETS } from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
@@ -30,6 +31,9 @@ export function CaptionsPanel(): JSX.Element | null {
   const [showSetup, setShowSetup] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
+  // Phase 4E: Whisper model auto-install state
+  const [installing, setInstalling] = useState(false)
+  const [installProgress, setInstallProgress] = useState<ModelInstallProgress | null>(null)
 
   useEffect(() => {
     void window.api.captions.status().then(setStatus)
@@ -37,6 +41,11 @@ export function CaptionsPanel(): JSX.Element | null {
 
   useEffect(() => {
     const off = window.api.captions.onProgress((p) => setProgress(p))
+    return off
+  }, [])
+
+  useEffect(() => {
+    const off = window.api.captions.onModelProgress((p) => setInstallProgress(p))
     return off
   }, [])
 
@@ -122,6 +131,24 @@ export function CaptionsPanel(): JSX.Element | null {
     setStyle((prev) => ({ ...prev, ...patch }))
   }
 
+  async function installModel(): Promise<void> {
+    setInstalling(true)
+    setInstallProgress({ phase: 'starting', percent: 0 })
+    try {
+      const result = await window.api.captions.installModel()
+      if (result.ok) {
+        toast.success('Whisper model installed')
+        await refreshStatus()
+      } else {
+        toast.error(`Install failed: ${result.reason}`, { duration: 8000 })
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Install failed')
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-captions">
       <div className="flex items-center justify-between">
@@ -168,7 +195,8 @@ export function CaptionsPanel(): JSX.Element | null {
               </div>
               <div className="font-mono break-all">{status?.exePath}</div>
               <div>
-                2. Download <code>ggml-base.en.bin</code> (~150 MB) from{' '}
+                2. The Whisper model file (~141 MB). imagii can download
+                it for you, or you can grab it from{' '}
                 <a
                   href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
                   className="text-accent hover:underline"
@@ -177,15 +205,40 @@ export function CaptionsPanel(): JSX.Element | null {
                 >
                   Hugging Face
                 </a>{' '}
-                and place at:
-                <button
-                  className="ml-1 text-accent hover:underline"
-                  onClick={() => window.api.captions.openModelsFolder()}
-                >
-                  open folder
-                </button>
+                manually and place at:
               </div>
               <div className="font-mono break-all">{status?.modelPath}</div>
+              {/* Phase 4E: in-app model auto-install. Visible whenever the
+                  model is missing (regardless of whisper.exe state) so the
+                  download can run while the user grabs the exe in parallel. */}
+              {!status?.modelInstalled ? (
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <button
+                    className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50 self-start"
+                    onClick={installModel}
+                    disabled={installing}
+                  >
+                    {installing
+                      ? 'Downloading model…'
+                      : '⬇ Download model (~141 MB) automatically'}
+                  </button>
+                  {installing && installProgress ? (
+                    <div className="flex items-center gap-2 text-xs">
+                      <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-accent"
+                          style={{
+                            width: `${Math.round(installProgress.percent ?? 0)}%`
+                          }}
+                        />
+                      </div>
+                      <span className="font-mono w-10 text-right">
+                        {Math.round(installProgress.percent ?? 0)}%
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 className="text-accent hover:underline mt-1 self-start"
                 onClick={refreshStatus}

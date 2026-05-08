@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rename, unlink, stat } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
+import { net } from 'electron'
 import { extractAudioFromVideo } from '../audio/extract'
 import { ffmpegPath } from '../ffmpeg/paths'
 import {
@@ -14,12 +16,19 @@ import type {
   CaptionsInstallStatus,
   CaptionSegment,
   CaptionsProgress,
+  ModelInstallProgress,
   TranscribeRequest,
   TranscribeResult,
   BurnInRequest,
   CaptionStyle
 } from '../../shared/captions'
-import { DEFAULT_CAPTION_STYLE } from '../../shared/captions'
+import {
+  DEFAULT_CAPTION_STYLE,
+  WHISPER_MODEL_FILENAME,
+  WHISPER_MODEL_MAX_BYTES,
+  WHISPER_MODEL_MIN_BYTES,
+  WHISPER_MODEL_URL
+} from '../../shared/captions'
 import { assert } from '../../shared/assert'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
@@ -282,6 +291,159 @@ export async function runBurnIn(
 export async function exportSrt(srtPath: string, destPath: string): Promise<void> {
   const content = await readFile(srtPath, 'utf8')
   await writeFile(destPath, content)
+}
+
+/**
+ * Phase 4E: download the canonical Whisper model file (~141 MB) from
+ * Hugging Face into userData/models/. Streams to a `.partial` temp file,
+ * sanity-checks size, then atomically renames to the final path. Caller
+ * receives progress events including byte counts so the UI can render
+ * an accurate progress bar.
+ *
+ * Whisper executable install is *not* automated in this round — the
+ * binary lives in github releases as a per-platform ZIP and requires
+ * extraction logic. Only the model file is automated here, since it's
+ * the larger of the two friction points (141 MB download vs. ~5 MB exe).
+ *
+ * Network errors / wrong-size responses cause the partial file to be
+ * deleted and an error returned to the caller. Never overwrites an
+ * existing valid model file silently.
+ */
+export type ModelInstallProgressListener = (p: ModelInstallProgress) => void
+
+export async function installWhisperModel(
+  onProgress: ModelInstallProgressListener
+): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
+  const finalPath = path.join(modelsDir(), WHISPER_MODEL_FILENAME)
+  const partialPath = `${finalPath}.partial`
+
+  // Refuse to clobber an existing valid model file.
+  if (existsSync(finalPath)) {
+    try {
+      const s = await stat(finalPath)
+      if (s.size >= WHISPER_MODEL_MIN_BYTES && s.size <= WHISPER_MODEL_MAX_BYTES) {
+        onProgress({ phase: 'done', percent: 100, message: 'Model already installed' })
+        return { ok: true, path: finalPath }
+      }
+    } catch {
+      // fall through to download
+    }
+  }
+
+  await mkdir(modelsDir(), { recursive: true })
+  // Clean up any prior interrupted download.
+  if (existsSync(partialPath)) {
+    try {
+      await unlink(partialPath)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  onProgress({ phase: 'starting', percent: 0, message: 'Connecting to Hugging Face…' })
+
+  return new Promise((resolve) => {
+    const request = net.request(WHISPER_MODEL_URL)
+    request.on('response', (response) => {
+      const status = response.statusCode
+      if (status < 200 || status >= 300) {
+        // Follow up to one redirect manually if needed (Electron's net
+        // does this by default, but log if status is unexpected).
+        onProgress({
+          phase: 'failed',
+          message: `Server returned HTTP ${status}`
+        })
+        resolve({ ok: false, reason: `HTTP ${status}` })
+        return
+      }
+      const totalHeader = response.headers['content-length']
+      const totalBytes =
+        Array.isArray(totalHeader) && totalHeader[0]
+          ? Number(totalHeader[0])
+          : typeof totalHeader === 'string'
+            ? Number(totalHeader)
+            : 0
+      let bytesDownloaded = 0
+      const out = createWriteStream(partialPath)
+      response.on('data', (chunk: Buffer) => {
+        bytesDownloaded += chunk.length
+        out.write(chunk)
+        const percent =
+          totalBytes > 0 ? Math.min(99, (bytesDownloaded / totalBytes) * 100) : 0
+        onProgress({
+          phase: 'downloading',
+          bytesDownloaded,
+          totalBytes,
+          percent
+        })
+      })
+      response.on('end', () => {
+        out.end()
+        out.on('finish', () => {
+          void verifyAndFinalize(partialPath, finalPath, onProgress).then(resolve)
+        })
+      })
+      response.on('error', (err: Error) => {
+        out.destroy()
+        try {
+          if (existsSync(partialPath)) void unlink(partialPath)
+        } catch {
+          /* ignore */
+        }
+        onProgress({ phase: 'failed', message: err.message })
+        resolve({ ok: false, reason: err.message })
+      })
+    })
+    request.on('error', (err: Error) => {
+      onProgress({ phase: 'failed', message: err.message })
+      resolve({ ok: false, reason: err.message })
+    })
+    request.end()
+  })
+}
+
+async function verifyAndFinalize(
+  partialPath: string,
+  finalPath: string,
+  onProgress: ModelInstallProgressListener
+): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
+  onProgress({ phase: 'verifying', percent: 99, message: 'Verifying file size…' })
+  let size = 0
+  try {
+    const s = await stat(partialPath)
+    size = s.size
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : 'stat failed'
+    }
+  }
+  if (size < WHISPER_MODEL_MIN_BYTES || size > WHISPER_MODEL_MAX_BYTES) {
+    try {
+      await unlink(partialPath)
+    } catch {
+      /* ignore */
+    }
+    const reason = `Downloaded file size ${size} is outside expected range [${WHISPER_MODEL_MIN_BYTES}, ${WHISPER_MODEL_MAX_BYTES}]`
+    onProgress({ phase: 'failed', message: reason })
+    return { ok: false, reason }
+  }
+  try {
+    await rename(partialPath, finalPath)
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : 'rename failed'
+    }
+  }
+  onProgress({
+    phase: 'done',
+    percent: 100,
+    bytesDownloaded: size,
+    totalBytes: size,
+    message: 'Model installed'
+  })
+  return { ok: true, path: finalPath }
 }
 
 // Test-only export of internal helpers; prefer this over a separate file

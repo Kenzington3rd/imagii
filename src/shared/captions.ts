@@ -128,3 +128,27 @@ export interface CaptionsProgress {
   percent: number
   message?: string
 }
+
+/** Phase 4E: Whisper model auto-install progress events. */
+export interface ModelInstallProgress {
+  phase: 'starting' | 'downloading' | 'verifying' | 'done' | 'failed'
+  bytesDownloaded?: number
+  totalBytes?: number
+  percent?: number
+  message?: string
+}
+
+/** The model file imagii ships against. Pinned to base.en for English-only,
+ *  reasonable accuracy, ~141 MB on disk. Changing this requires updating
+ *  WHISPER_MODEL_URL together. */
+export const WHISPER_MODEL_FILENAME = 'ggml-base.en.bin'
+
+/** Canonical download URL. Hugging Face mirror is used because GitHub LFS
+ *  for the same file is rate-limited per IP and unreliable. */
+export const WHISPER_MODEL_URL =
+  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
+
+/** Sanity-check bounds. Real file is ~141 MB; reject anything outside this
+ *  range as either incomplete or wrong-file-served. */
+export const WHISPER_MODEL_MIN_BYTES = 100 * 1024 * 1024
+export const WHISPER_MODEL_MAX_BYTES = 200 * 1024 * 1024

@@ -10,6 +10,7 @@ import type {
 import type { SearchResult } from '../shared/search'
 import type {
   CaptionsProgress,
+  ModelInstallProgress,
   TranscribeRequest,
   BurnInRequest
 } from '../shared/captions'
@@ -115,6 +116,12 @@ const api: ImagiiApi = {
       const listener = (_e: unknown, p: CaptionsProgress): void => handler(p)
       ipcRenderer.on('captions:progress', listener)
       return () => ipcRenderer.removeListener('captions:progress', listener)
+    },
+    installModel: () => ipcRenderer.invoke('captions:installModel'),
+    onModelProgress: (handler: (p: ModelInstallProgress) => void) => {
+      const listener = (_e: unknown, p: ModelInstallProgress): void => handler(p)
+      ipcRenderer.on('captions:modelProgress', listener)
+      return () => ipcRenderer.removeListener('captions:modelProgress', listener)
     }
   },
   moodboard: {

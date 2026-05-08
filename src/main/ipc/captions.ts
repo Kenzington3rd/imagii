@@ -3,6 +3,7 @@ import path from 'node:path'
 import { copyFile } from 'node:fs/promises'
 import {
   getCaptionsStatus,
+  installWhisperModel,
   runBurnIn,
   runTranscribe
 } from '../sidecars/whisperManager'
@@ -55,5 +56,12 @@ export function registerCaptionsIpc(): void {
   ipcMain.handle('captions:openModelsFolder', async () => {
     const status = getCaptionsStatus()
     shell.openPath(status.modelsDir)
+  })
+
+  // Phase 4E: stream the Whisper model file into userData/models/.
+  // Progress events go to the focused window via captions:modelProgress
+  // so the UI can render an accurate progress bar.
+  ipcMain.handle('captions:installModel', async (e) => {
+    return installWhisperModel((p) => e.sender.send('captions:modelProgress', p))
   })
 }

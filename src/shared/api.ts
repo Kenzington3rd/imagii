@@ -11,6 +11,7 @@ import type { SearchResponse, MoodBoardCollection, SearchResult } from './search
 import type {
   CaptionsInstallStatus,
   CaptionsProgress,
+  ModelInstallProgress,
   TranscribeRequest,
   TranscribeResult,
   BurnInRequest
@@ -156,6 +157,8 @@ export interface ImagiiApi {
     openBinFolder(): Promise<void>
     openModelsFolder(): Promise<void>
     onProgress(handler: (p: CaptionsProgress) => void): Unsubscribe
+    installModel(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+    onModelProgress(handler: (p: ModelInstallProgress) => void): Unsubscribe
   }
   moodboard: {
     list(): Promise<MoodBoardCollection[]>
