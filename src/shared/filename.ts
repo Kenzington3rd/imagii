@@ -53,3 +53,18 @@ export function expandFilenameTemplate(
 function safe(s: string): string {
   return s.replace(/[\\/:*?"<>|]/g, '_').trim() || 'untitled'
 }
+
+/**
+ * Aggressive filename sanitizer used for Clip Kit subfolder + per-file
+ * names. Distinct from `safe` above: this strips ALL non-alphanumeric
+ * characters (preserving only word chars, dash, underscore) so the
+ * result is portable across filesystems and pleasant in shell paths.
+ *
+ * Returns the literal 'clip' as a fallback so we never produce an empty
+ * filename.
+ */
+export function sanitizeFilename(name: string): string {
+  if (typeof name !== 'string') return 'clip'
+  const cleaned = name.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '')
+  return cleaned.length > 0 ? cleaned : 'clip'
+}

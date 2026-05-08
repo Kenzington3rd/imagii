@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
 import { assert } from '../../shared/assert'
+import { sanitizeFilename } from '../../shared/filename'
 
 /**
  * Phase 4D: extract a single JPEG frame at a given time. Used by the
@@ -66,11 +67,9 @@ export async function extractFrame(
 export async function makeKitDir(parentDir: string, clipName: string): Promise<string> {
   assert(typeof parentDir === 'string' && parentDir.length > 0, 'parentDir required')
   assert(typeof clipName === 'string' && clipName.length > 0, 'clipName required')
-  // Filesystem-safe: remove anything that's not alphanumeric, dash, underscore.
-  const safe = clipName.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '')
-  const fallback = safe.length > 0 ? safe : 'clip'
+  const safe = sanitizeFilename(clipName)
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const subDir = `${fallback}-kit-${stamp}`
+  const subDir = `${safe}-kit-${stamp}`
   const fullPath = path.join(parentDir, subDir)
   await mkdir(fullPath, { recursive: true })
   return fullPath

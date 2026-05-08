@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
 import type { Clip, ExportJobSpec, PlatformId, WatermarkSpec } from '@shared/clip'
+import { sanitizeFilename } from '@shared/filename'
 import { ALL_PLATFORM_IDS } from './presets'
 import { useVideoStore } from './store/videoStore'
 
@@ -42,6 +43,12 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         clipName: clip.name
       })
 
+      // Tech-debt fix: per-file names get the same sanitizer as the
+      // subfolder. Otherwise a clip named "Big W!! 🎉" produces filenames
+      // ffmpeg can write but Windows Explorer renders awkwardly, and the
+      // revealInFolder path has to match exactly.
+      const safeName = sanitizeFilename(clip.name)
+
       // Build a 5-platform queue for this single clip.
       setPhase('Exporting 5 platform versions…')
       const queue: ExportJobSpec[] = ALL_PLATFORM_IDS.map((preset: PlatformId) => ({
@@ -51,7 +58,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         clip: { ...clip, selectedPresets: [preset] },
         preset,
         watermark: null as WatermarkSpec | null,
-        outputFilename: `${clip.name}_${preset}.mp4`
+        outputFilename: `${safeName}_${preset}.mp4`
       }))
       await window.api.video.exportBatch(queue)
 
@@ -64,7 +71,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       for (let i = 0; i < len; i++) {
         const t = thumbTimes[i] ?? 0.5
         const timeSec = clip.startSec + t * clipDuration
-        const outPath = path.join(kitDir, `${clip.name}_thumb_${i + 1}.jpg`)
+        const outPath = path.join(kitDir, `${safeName}_thumb_${i + 1}.jpg`)
         await window.api.video.extractFrame({
           sourcePath: source.filePath,
           timeSec,
@@ -74,7 +81,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
       toast.success('Clip kit ready', { duration: 6000 })
       // Reveal the folder so the user can grab it for posting.
-      const firstOutput = path.join(kitDir, `${clip.name}_youtube.mp4`)
+      const firstOutput = path.join(kitDir, `${safeName}_youtube.mp4`)
       void window.api.video.revealInFolder(firstOutput)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Clip kit failed')
