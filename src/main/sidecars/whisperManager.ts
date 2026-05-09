@@ -323,6 +323,14 @@ export type ModelInstallProgressListener = (p: ModelInstallProgress) => void
  * renderer can call cancelWhisperModelInstall() to abort an in-flight
  * download mid-stream. Cancelling deletes the .partial file so the next
  * install attempt starts clean.
+ *
+ * Bug-fix (regression audit 2026-05-09): there are async pauses between
+ * function entry and `activeInstall = me`. Two concurrent installs could
+ * both pass the "is null?" check before either claimed the slot, then
+ * race writes to the same .partial path. Added a synchronous
+ * `installInProgress` flag claimed at function entry — JS is single-
+ * threaded so a flag set before any await is atomic. The flag is the
+ * concurrency gate; activeInstall remains the cancel handle.
  */
 interface ActiveInstall {
   request: ReturnType<typeof net.request>
@@ -330,6 +338,7 @@ interface ActiveInstall {
   cancelled: boolean
 }
 let activeInstall: ActiveInstall | null = null
+let installInProgress = false
 
 export function cancelWhisperModelInstall(): boolean {
   if (!activeInstall) return false
@@ -342,7 +351,33 @@ export function cancelWhisperModelInstall(): boolean {
   return true
 }
 
+/** Test-only helpers for the concurrency guard. */
+export const __whisperInstallTesting__ = {
+  isInstallInProgress: (): boolean => installInProgress,
+  setInstallInProgressForTest: (value: boolean): void => {
+    installInProgress = value
+  }
+}
+
 export async function installWhisperModel(
+  onProgress: ModelInstallProgressListener
+): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
+  // Concurrency gate (claim synchronously, BEFORE any await). Two rapid
+  // calls would otherwise both pass an `activeInstall === null` check and
+  // race writes to the same .partial path.
+  if (installInProgress) {
+    return { ok: false, reason: 'install already in progress' }
+  }
+  installInProgress = true
+
+  try {
+    return await runInstall(onProgress)
+  } finally {
+    installInProgress = false
+  }
+}
+
+async function runInstall(
   onProgress: ModelInstallProgressListener
 ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
   const finalPath = path.join(modelsDir(), WHISPER_MODEL_FILENAME)

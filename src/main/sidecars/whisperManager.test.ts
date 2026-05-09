@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { tsToSeconds, __testing__ } from './whisperManager'
+import { describe, it, expect, afterEach } from 'vitest'
+import {
+  tsToSeconds,
+  installWhisperModel,
+  __testing__,
+  __whisperInstallTesting__
+} from './whisperManager'
 import { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } from '../../shared/captions'
 
 const { hexToAssColor, alignmentForPosition, buildForceStyle } = __testing__
@@ -97,6 +102,31 @@ describe('buildForceStyle', () => {
     expect(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, fontSize: 200 }, 0)).toContain(
       'FontSize=96'
     )
+  })
+})
+
+describe('installWhisperModel — concurrency guard (regression 2026-05-09)', () => {
+  afterEach(() => {
+    __whisperInstallTesting__.setInstallInProgressForTest(false)
+  })
+
+  it('rejects a concurrent install when one is already in progress', async () => {
+    // Simulate "install already running" by setting the flag directly.
+    // The full install path requires Electron's net module (not available
+    // in vitest) — testing the gate logic in isolation is the right level.
+    __whisperInstallTesting__.setInstallInProgressForTest(true)
+    const result = await installWhisperModel(() => undefined)
+    expect(result).toEqual({
+      ok: false,
+      reason: 'install already in progress'
+    })
+  })
+
+  it('reports the in-progress flag accurately', () => {
+    __whisperInstallTesting__.setInstallInProgressForTest(false)
+    expect(__whisperInstallTesting__.isInstallInProgress()).toBe(false)
+    __whisperInstallTesting__.setInstallInProgressForTest(true)
+    expect(__whisperInstallTesting__.isInstallInProgress()).toBe(true)
   })
 })
 
