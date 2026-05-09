@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  SUPPORTED_SCHEMA_VERSION,
+  MAX_SCHEMA_VERSION,
   isSafeToAutosave,
   validateProject,
   validateProjectJsonString
@@ -8,7 +8,7 @@ import {
 import type { ImagiiProject } from './workspace'
 
 const baseProject: ImagiiProject = {
-  schemaVersion: SUPPORTED_SCHEMA_VERSION,
+  schemaVersion: MAX_SCHEMA_VERSION,
   savedAt: Date.now(),
   appVersion: '1.0.0'
 }

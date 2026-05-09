@@ -10,6 +10,7 @@ import { registerProjectIpc } from './ipc/project'
 import { registerRecordingIpc } from './ipc/recording'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
+import { pruneStaleTempFiles } from './tempCleanup'
 
 registerPrivilegedSchemes()
 
@@ -86,6 +87,19 @@ app.whenReady().then(async () => {
   } else {
     console.error('[ffmpeg] smoke test failed:', smoke.error)
   }
+  // Tech-debt fix: prune temp files left behind by prior crashed sessions
+  // (audio:extractFromVideo wavs + any leftover concat segments). Async
+  // and best-effort — never block app startup on a slow/locked tempdir.
+  pruneStaleTempFiles().then(
+    ({ scanned, removed }) => {
+      if (removed > 0) {
+        console.log(`[tempCleanup] removed ${removed}/${scanned} stale temp file(s)`)
+      }
+    },
+    (err) => {
+      console.warn('[tempCleanup] failed', err)
+    }
+  )
   createWindow()
 
   app.on('activate', () => {

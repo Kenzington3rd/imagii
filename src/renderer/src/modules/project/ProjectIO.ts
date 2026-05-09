@@ -40,7 +40,6 @@ export async function applyProject(project: ImagiiProject): Promise<void> {
   }
   if (project.videoStudio?.sourcePath) {
     await useVideoStore.getState().loadSource(project.videoStudio.sourcePath)
-    const v = useVideoStore.getState()
     if (project.videoStudio.clips.length > 0) {
       useVideoStore.setState({
         clips: project.videoStudio.clips,
@@ -53,7 +52,6 @@ export async function applyProject(project: ImagiiProject): Promise<void> {
     if (project.videoStudio.srtPath) {
       useVideoStore.getState().setSrtPath(project.videoStudio.srtPath)
     }
-    void v
   }
   if (project.audioStudio?.sourcePath) {
     await useAudioStore

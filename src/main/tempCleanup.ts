@@ -1,0 +1,68 @@
+import { readdir, stat, unlink } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+import { tmpdir } from 'node:os'
+
+/**
+ * Tech-debt fix: prune old temp files left behind by prior imagii sessions.
+ *
+ * Two directories collect temp artifacts:
+ *  - %TEMP%/imagii-audio    — wav files from extractAudioFromVideo (the
+ *    audio:extractFromVideo IPC handler returns the path to the renderer
+ *    without a matching cleanup hook, so each "extract audio from video"
+ *    leaks one wav for the lifetime of the audio editing session).
+ *  - %TEMP%/imagii-concat   — per-segment mp4s + concat list files. Now
+ *    cleaned up by runConcat's try/finally on every exit path, but a
+ *    crashed imagii leaves leftovers.
+ *
+ * Both files are recoverable artifacts the user can regenerate. Reaping
+ * anything older than the threshold is safe.
+ *
+ * 6 hours is conservative — a concurrent imagii instance is unlikely to
+ * have a session that long, and Windows Storage Sense would have reaped
+ * these anyway eventually. We accelerate the cleanup at our own startup.
+ */
+
+const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
+
+const TEMP_SUBDIRS = ['imagii-audio', 'imagii-concat'] as const
+
+export async function pruneStaleTempFiles(now: number = Date.now()): Promise<{
+  scanned: number
+  removed: number
+}> {
+  let scanned = 0
+  let removed = 0
+  // Bound: 2 subdirs × N files. The directory listing acts as the upper
+  // bound on the inner loop (Power-of-Ten rule 2).
+  for (const subdir of TEMP_SUBDIRS) {
+    const dir = path.join(tmpdir(), subdir)
+    if (!existsSync(dir)) continue
+    let entries: string[]
+    try {
+      entries = await readdir(dir)
+    } catch {
+      // Permissions or transient failure — skip this directory entirely.
+      continue
+    }
+    for (const name of entries) {
+      scanned++
+      const full = path.join(dir, name)
+      try {
+        const s = await stat(full)
+        if (!s.isFile()) continue
+        if (now - s.mtimeMs < STALE_THRESHOLD_MS) continue
+        await unlink(full)
+        removed++
+      } catch {
+        // EBUSY, EPERM, ENOENT mid-iteration — keep going.
+        continue
+      }
+    }
+  }
+  return { scanned, removed }
+}
+
+// Test-only export of the threshold so the test file doesn't have to
+// hardcode the same magic number.
+export const __testing__ = { STALE_THRESHOLD_MS, TEMP_SUBDIRS }

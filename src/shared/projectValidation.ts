@@ -9,10 +9,6 @@ import type { ImagiiProject } from './workspace'
 export const SUPPORTED_SCHEMA_VERSIONS = [1, 2] as const
 export const MAX_SCHEMA_VERSION = 2
 
-/** @deprecated Use MAX_SCHEMA_VERSION. Kept for any external callers
- *  who may have referenced the old constant name.  */
-export const SUPPORTED_SCHEMA_VERSION = MAX_SCHEMA_VERSION
-
 export type ValidationResult =
   | { ok: true; project: ImagiiProject }
   | { ok: false; reason: string }

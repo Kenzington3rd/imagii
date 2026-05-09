@@ -159,6 +159,10 @@ export function CaptionsPanel(): JSX.Element | null {
       toast.error(err instanceof Error ? err.message : 'Install failed')
     } finally {
       setInstalling(false)
+      // Tech-debt fix: clear stale progress so a re-attempted install
+      // doesn't briefly show the prior run's state before the first
+      // event of the new run lands.
+      setInstallProgress(null)
     }
   }
 

@@ -65,3 +65,35 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 })
+
+describe('srtPath state — Phase 4 tech-debt', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      srtPath: null
+    })
+  })
+
+  it('starts null', () => {
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('setSrtPath updates state', () => {
+    useVideoStore.getState().setSrtPath('/tmp/captions.srt')
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/captions.srt')
+  })
+
+  it('setSrtPath(null) clears', () => {
+    useVideoStore.getState().setSrtPath('/tmp/captions.srt')
+    useVideoStore.getState().setSrtPath(null)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('clearSource resets srtPath to null', () => {
+    useVideoStore.getState().setSrtPath('/tmp/captions.srt')
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+})
