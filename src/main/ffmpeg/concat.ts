@@ -23,9 +23,15 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
   const tempDir = path.join(tmpdir(), 'imagii-concat')
   const fs = await import('node:fs/promises')
   await fs.mkdir(tempDir, { recursive: true })
+  // Bug fix: track all paths we create so try/finally can clean them up
+  // on every exit path, including a failure mid-loop. Previously, a
+  // segment-encode failure left N partially-encoded mp4s in %TEMP%
+  // until the OS reaped them.
   const segmentPaths: string[] = []
+  let listFile: string | null = null
   const fade = Math.max(0, Math.min(2, spec.fadeMs / 1000))
 
+  try {
   const segCount = spec.segments.length
   for (let i = 0; i < segCount; i++) {
     const seg = assertDefined(spec.segments[i], `segments[${i}]`)
@@ -79,6 +85,9 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       segPath
     )
 
+    // Track the segment path BEFORE starting ffmpeg so a partial-write
+    // failure mid-encode still gets cleaned up by the outer finally.
+    segmentPaths.push(segPath)
     await new Promise<void>((resolve, reject) => {
       const child = spawn(ffmpegPath, args, { windowsHide: true })
       let stderr = ''
@@ -90,14 +99,14 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
         else reject(new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`))
       })
     })
-    segmentPaths.push(segPath)
   }
 
-  const listFile = path.join(tempDir, `list-${spec.jobId}.txt`)
+  const listFilePath = path.join(tempDir, `list-${spec.jobId}.txt`)
+  listFile = listFilePath
   const listContent = segmentPaths
     .map((p) => `file '${escapeForConcatList(p)}'`)
     .join('\n')
-  await writeFile(listFile, listContent, 'utf8')
+  await writeFile(listFilePath, listContent, 'utf8')
 
   const base = path.parse(spec.sourcePath).name
   const outputPath = path.join(spec.outDir, `${base}_compilation.mp4`)
@@ -112,7 +121,7 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
         '-safe',
         '0',
         '-i',
-        listFile,
+        listFilePath,
         '-c',
         'copy',
         '-movflags',
@@ -131,20 +140,26 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     })
   })
 
-  for (const p of segmentPaths) {
-    try {
-      await unlink(p)
-    } catch {
-      /* ignore */
+  return { outputPath }
+  } finally {
+    // Cleanup runs on every exit path: success, failure mid-loop, or a
+    // throw before listFile was created. Each unlink ignores ENOENT so
+    // partial state is fine.
+    for (const p of segmentPaths) {
+      try {
+        await unlink(p)
+      } catch {
+        /* ignore */
+      }
+    }
+    if (listFile !== null) {
+      try {
+        await unlink(listFile)
+      } catch {
+        /* ignore */
+      }
     }
   }
-  try {
-    await unlink(listFile)
-  } catch {
-    /* ignore */
-  }
-
-  return { outputPath }
 }
 
 export async function runPipComposite(

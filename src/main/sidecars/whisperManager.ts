@@ -100,71 +100,78 @@ export async function runTranscribe(
   onProgress({ jobId: req.jobId, phase: 'extracting', percent: 5 })
   const extracted = await extractAudioFromVideo(req.sourcePath)
 
-  onProgress({ jobId: req.jobId, phase: 'transcribing', percent: 15 })
+  // Bug fix: try/finally ensures the temp WAV is deleted on every exit
+  // path. Previously, a Whisper failure (non-zero exit, missing SRT,
+  // throw) would leak the WAV file — for a long VOD that's 100+ MB
+  // per failed run accumulating in %TEMP%.
+  try {
+    onProgress({ jobId: req.jobId, phase: 'transcribing', percent: 15 })
 
-  const outputBase = path.join(
-    captionsOutputDir(),
-    `${path.parse(req.sourcePath).name}-${Date.now()}`
-  )
+    const outputBase = path.join(
+      captionsOutputDir(),
+      `${path.parse(req.sourcePath).name}-${Date.now()}`
+    )
 
-  const args = [
-    '-m',
-    status.modelPath,
-    '-f',
-    extracted.wavPath,
-    '-osrt',
-    '-of',
-    outputBase,
-    '-l',
-    req.language ?? 'en',
-    '-pp'
-  ]
+    const args = [
+      '-m',
+      status.modelPath,
+      '-f',
+      extracted.wavPath,
+      '-osrt',
+      '-of',
+      outputBase,
+      '-l',
+      req.language ?? 'en',
+      '-pp'
+    ]
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(status.exePath, args, { windowsHide: true })
-    let stderr = ''
-    let stdout = ''
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      stdout += chunk
-      const m = chunk.match(/(\d+):(\d+):(\d+)[.,](\d+)/g)
-      if (m && m.length > 0) {
-        onProgress({
-          jobId: req.jobId,
-          phase: 'transcribing',
-          percent: Math.min(95, 15 + Math.random() * 10),
-          message: m[m.length - 1]
-        })
-      }
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(status.exePath, args, { windowsHide: true })
+      let stderr = ''
+      let stdout = ''
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+      child.stdout.on('data', (chunk: string) => {
+        stdout += chunk
+        const m = chunk.match(/(\d+):(\d+):(\d+)[.,](\d+)/g)
+        if (m && m.length > 0) {
+          onProgress({
+            jobId: req.jobId,
+            phase: 'transcribing',
+            percent: Math.min(95, 15 + Math.random() * 10),
+            message: m[m.length - 1]
+          })
+        }
+      })
+      child.stderr.on('data', (chunk: string) => {
+        stderr += chunk
+      })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`whisper exit ${code}: ${stderr.slice(-500)}`))
+      })
     })
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`whisper exit ${code}: ${stderr.slice(-500)}`))
-    })
-  })
 
-  await extracted.cleanup()
+    onProgress({ jobId: req.jobId, phase: 'building-srt', percent: 95 })
+    const srtPath = `${outputBase}.srt`
+    if (!existsSync(srtPath)) {
+      throw new Error(`Whisper did not produce ${srtPath}`)
+    }
+    const srtContent = await readFile(srtPath, 'utf8')
+    const segments = parseSrt(srtContent)
 
-  onProgress({ jobId: req.jobId, phase: 'building-srt', percent: 95 })
-  const srtPath = `${outputBase}.srt`
-  if (!existsSync(srtPath)) {
-    throw new Error(`Whisper did not produce ${srtPath}`)
-  }
-  const srtContent = await readFile(srtPath, 'utf8')
-  const segments = parseSrt(srtContent)
+    onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
 
-  onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
-
-  return {
-    jobId: req.jobId,
-    srtPath,
-    segments,
-    durationMs: Date.now() - startedAt
+    return {
+      jobId: req.jobId,
+      srtPath,
+      segments,
+      durationMs: Date.now() - startedAt
+    }
+  } finally {
+    // Cleanup never throws (extract.ts wraps in try/catch already).
+    await extracted.cleanup()
   }
 }
 
