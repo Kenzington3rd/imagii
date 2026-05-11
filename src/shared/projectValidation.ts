@@ -1,4 +1,5 @@
 import type { ImagiiProject } from './workspace'
+import { isSafeAbsolutePath } from './pathSafety'
 
 /**
  * Tech-debt fix: schema version is now ranged. Validator accepts any
@@ -23,8 +24,15 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-function isOptionalString(v: unknown): boolean {
-  return v === undefined || v === null || typeof v === 'string'
+/**
+ * Optional path fields in project files (sourcePath, srtPath, etc.)
+ * must be either absent/null OR a safe absolute path. A malicious project
+ * file with `sourcePath: "../../etc/passwd"` would otherwise reach the
+ * file protocol handler and trigger an arbitrary file read.
+ */
+function isOptionalSafePath(v: unknown): boolean {
+  if (v === undefined || v === null) return true
+  return isSafeAbsolutePath(v)
 }
 
 /**
@@ -69,18 +77,20 @@ export function validateProject(input: unknown): ValidationResult {
   if (input.videoStudio !== undefined) {
     const v = input.videoStudio
     if (!isPlainObject(v)) return { ok: false, reason: 'videoStudio not an object' }
-    if (!isOptionalString(v.sourcePath))
-      return { ok: false, reason: 'videoStudio.sourcePath invalid' }
+    // Path fields are validated for safety (no `..` traversal, no Windows
+    // reserved names, must be absolute) — see shared/pathSafety.ts.
+    if (!isOptionalSafePath(v.sourcePath))
+      return { ok: false, reason: 'videoStudio.sourcePath unsafe or malformed' }
     if (!Array.isArray(v.clips)) return { ok: false, reason: 'videoStudio.clips not array' }
-    // v2 adds optional srtPath; if present it must be string-or-null-or-undefined.
-    if (!isOptionalString(v.srtPath))
-      return { ok: false, reason: 'videoStudio.srtPath invalid' }
+    // v2 srtPath: optional, but if present must be a safe absolute path.
+    if (!isOptionalSafePath(v.srtPath))
+      return { ok: false, reason: 'videoStudio.srtPath unsafe or malformed' }
   }
   if (input.audioStudio !== undefined) {
     const a = input.audioStudio
     if (!isPlainObject(a)) return { ok: false, reason: 'audioStudio not an object' }
-    if (!isOptionalString(a.sourcePath))
-      return { ok: false, reason: 'audioStudio.sourcePath invalid' }
+    if (!isOptionalSafePath(a.sourcePath))
+      return { ok: false, reason: 'audioStudio.sourcePath unsafe or malformed' }
     if (!isPlainObject(a.chain)) return { ok: false, reason: 'audioStudio.chain missing' }
   }
   if (input.imageCanvas !== undefined) {

@@ -78,7 +78,7 @@ describe('validateProject', () => {
   it('rejects malformed videoStudio', () => {
     const result = validateProject({
       ...baseProject,
-      videoStudio: { sourcePath: 'ok', clips: 'not an array' }
+      videoStudio: { sourcePath: 'C:/audio.wav', clips: 'not an array' }
     })
     expect(result.ok).toBe(false)
   })
@@ -86,7 +86,7 @@ describe('validateProject', () => {
   it('rejects malformed audioStudio chain', () => {
     const result = validateProject({
       ...baseProject,
-      audioStudio: { sourcePath: 'ok', chain: 'not an object' }
+      audioStudio: { sourcePath: 'C:/audio.wav', chain: 'not an object' }
     })
     expect(result.ok).toBe(false)
   })
@@ -154,6 +154,73 @@ describe('schema migration v1 → v2', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toMatch(/supported/)
+  })
+})
+
+describe('path-safety integration (bug round 4)', () => {
+  // The threat model: a malicious .imagii.json carries a sourcePath or
+  // srtPath that escapes the user's media directory via `..` traversal
+  // or targets a Windows reserved device name. validator must reject.
+
+  it('rejects videoStudio.sourcePath with .. traversal', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/Users/maken/../../../etc/passwd',
+        clips: [],
+        selectedClipId: null
+      }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/sourcePath/)
+  })
+
+  it('rejects videoStudio.srtPath with .. traversal', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [],
+        selectedClipId: null,
+        srtPath: '/var/log/../../etc/passwd'
+      }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/srtPath/)
+  })
+
+  it('rejects relative path in audioStudio.sourcePath', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: { sourcePath: 'audio.wav', chain: {} }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/sourcePath/)
+  })
+
+  it('rejects Windows reserved device names in path fields', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/Users/maken/con.mp4',
+        clips: [],
+        selectedClipId: null
+      }
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('accepts null/undefined srtPath (back-compat for v1 projects)', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [],
+        selectedClipId: null,
+        srtPath: null
+      }
+    })
+    expect(result.ok).toBe(true)
   })
 })
 
