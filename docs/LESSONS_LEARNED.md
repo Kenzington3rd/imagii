@@ -14,6 +14,28 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-11 — Bug audit round 7 (probe duration + tempCleanup input assertion)
+
+### Bug — `probeAudio` silently coerced missing `duration` to 0
+- **Root cause.** `src/main/audio/probe.ts` already threw on missing audio stream (line 49), but read `Number(data.format?.duration ?? 0)` for duration. A malformed or partial ffprobe response (audio stream present, format object empty) silently produced `duration: 0`, which propagated to `audioStore.loadSource` → produced `0:00 → 0:00` clip ranges downstream. Not a crash, but confusing UX.
+- **Fix.** Compute `duration` once, validate with `Number.isFinite(duration) && duration > 0`, throw `'ffprobe returned no usable duration for the audio stream'` if invalid. Returns the validated value (no second `??`).
+- **Test.** Not directly tested — would need to mock ffprobe stdout. Structural check at the function entry.
+- **Lesson.** **A `?? 0` default on a numeric field that flows into UI is almost always wrong.** Either the field is essential (refuse on absence) or it's truly optional (in which case 0 is correctly meaningful). "Silently substitute 0" is the third option and it produces the worst UX: the user sees broken behavior with no error to copy-paste. Audit `?? 0` and `?? ''` for similar patterns where a missing value should be an error.
+
+### Bug — `pruneStaleTempFiles` lacked parameter assertion on `now`
+- **Root cause.** PoT rule 7 (validate parameters at function entry) wasn't applied. `now: number = Date.now()` was trusted as-is. A caller passing NaN would make `now - mtime < threshold` always-false (NaN comparisons are always false) → cleanup silently no-ops, files accumulate. A negative `now` would over-delete fresh files (the threshold delta goes the wrong way).
+- **Fix.** Added `assert(Number.isFinite(now) && now >= 0, ...)` at function entry.
+- **Test.** `tempCleanup.test.ts` — new case "throws on non-finite or negative now" covers NaN, Infinity, -1.
+- **Lesson.** **PoT rule 7 isn't optional even for functions called only by trusted code.** Today's "called only by app startup with Date.now()" is tomorrow's "called from a test, an extension, or via IPC abuse." Cost of adding the assert: 1 line. Cost of debugging a silent-noop later: hours. The assert also serves as inline documentation of the function's preconditions.
+
+### False alarms verified clean (5 candidates checked, 2 real)
+- `scoreHighlights` inverted-range crash — inputs come from `findHighlights` (FFmpeg ebur128 output, always sorted), not from untrusted state. No injection path.
+- `pathSafety.ts` permissive type guard — the guard variant intentionally returns false on bad input; the `assertSafe*` variant calls `assert()`. Already correct.
+- `audio:extractFromVideo` cleanup lifecycle — leaked WAVs are mitigated by `pruneStaleTempFiles` (the prior round's fix). Acceptable.
+- All test-coverage gaps flagged (probe, scoreHighlights, extractAudioFromVideo) require mocking native binaries; cost > value at the current scale.
+
+---
+
 ## 2026-05-11 — Bug audit round 6 (transcribe race + drawtext newline escape)
 
 ### Bug — `runTranscribe` had no concurrency guard
