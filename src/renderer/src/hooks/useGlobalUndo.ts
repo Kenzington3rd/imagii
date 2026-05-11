@@ -80,22 +80,31 @@ export function useGlobalUndo(): UseGlobalUndoResult {
 
   const undo = useCallback(() => {
     if (!last) return
+    // Bug-fix (audit round 5): Zustand fires subscribers synchronously
+    // inside the setState() call from undo()/redo(). The prior 50ms
+    // setTimeout left a window where a user mutation arriving between
+    // undoingRef=true and the timeout could be misclassified as
+    // "from undo" and dropped from the tracker. Use a synchronous
+    // try/finally instead — the flag is true only for the exact
+    // span of the store call.
     undoingRef.current = true
-    if (last.store === 'image') useCanvasStore.getState().undo()
-    else if (last.store === 'audio') useAudioStore.getState().undo()
-    setTimeout(() => {
+    try {
+      if (last.store === 'image') useCanvasStore.getState().undo()
+      else if (last.store === 'audio') useAudioStore.getState().undo()
+    } finally {
       undoingRef.current = false
-    }, 50)
+    }
   }, [last])
 
   const redo = useCallback(() => {
     if (!last) return
     undoingRef.current = true
-    if (last.store === 'image') useCanvasStore.getState().redo()
-    else if (last.store === 'audio') useAudioStore.getState().redo()
-    setTimeout(() => {
+    try {
+      if (last.store === 'image') useCanvasStore.getState().redo()
+      else if (last.store === 'audio') useAudioStore.getState().redo()
+    } finally {
       undoingRef.current = false
-    }, 50)
+    }
   }, [last])
 
   return { canUndo, canRedo, lastLabel, undo, redo }
