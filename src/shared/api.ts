@@ -38,6 +38,7 @@ export type SettingsKey =
   | 'recentFiles.video'
   | 'recentFiles.audio'
   | 'recentFiles.image'
+  | 'record.webcamCorner'
 
 export interface VideoProbe {
   duration: number

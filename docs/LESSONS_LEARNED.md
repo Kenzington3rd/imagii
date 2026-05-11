@@ -14,6 +14,16 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-11 — Webcam preview fix (held item → shipped)
+
+### Bug — "Show webcam preview while recording" was preview-only, didn't composite into the saved file
+- **Root cause.** `RecordStudio.tsx:startRecording` built the MediaRecorder's input from `screenStream.getVideoTracks()` + `micStream.getAudioTracks()`. The webcam's stream was attached to a `<video>` element for on-screen preview but never reached the MediaRecorder. Users would tick the box, see themselves in the preview window, and end up with a recording that contained only the screen.
+- **Fix.** New `compositor.ts` module: when both screen and webcam are active, mount two hidden offscreen `<video>` elements, draw to a hidden `<canvas>` at the screen's natural resolution per `requestAnimationFrame`, and feed the recorder via `canvas.captureStream(fps)`. Compositor handle exposes a `stop()` that tears down the canvas + offscreen videos + captured stream tracks on recording end. Corner is user-selectable (top-left / top-right / bottom-left / bottom-right) and persisted via electron-store as `record.webcamCorner`.
+- **Test.** `compositor.test.ts` — 11 cases covering `computeCornerRect` (all 4 corners, min-size clamp, negative-margin clamp, invalid inputs) and `drawFrame` (correct call order, aspect-preserve letterboxing when cam ratio ≠ box ratio, skipping webcam draw when null, skipping screen draw when not ready).
+- **Lesson.** **A "preview" toggle that doesn't match the recorded output is a misleading-feature anti-pattern.** Either the preview IS the output or the toggle label needs to say so explicitly. The held-item docs flagged this — "looks like it'll record, doesn't" — and the fix took the harder path (actually composite) rather than the easy one (just rename to "preview only"). Worth it: webcam-in-recording is a baseline streamer feature; matching user expectations beats matching the original implementation's scope.
+
+---
+
 ## 2026-05-11 — Bug audit round 7 (probe duration + tempCleanup input assertion)
 
 ### Bug — `probeAudio` silently coerced missing `duration` to 0
