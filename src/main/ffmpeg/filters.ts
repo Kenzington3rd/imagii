@@ -6,13 +6,29 @@ export interface SourceDimensions {
   height: number
 }
 
+/**
+ * Escape arbitrary user text for FFmpeg's drawtext filter param.
+ * Handles the well-known offenders (backslash, single-quote, colon,
+ * percent) plus newlines / carriage returns — without the newline
+ * handling, a multiline text overlay (or a watermark someone pasted
+ * with embedded newlines) breaks the filter graph and the entire
+ * export fails. We normalize to FFmpeg's `\n` escape sequence.
+ *
+ * Order matters: escape backslash FIRST so we don't double-escape
+ * the `\\` we introduce for other replacements.
+ */
 function escapeDrawtext(text: string): string {
   return text
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
     .replace(/:/g, '\\:')
     .replace(/%/g, '\\%')
+    .replace(/\r\n/g, '\\n')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\n')
 }
+
+export const __testing__ = { escapeDrawtext }
 
 function cropToFilter(crop: CropRect, source: SourceDimensions): string {
   const w = Math.max(2, Math.round(crop.w * source.width))

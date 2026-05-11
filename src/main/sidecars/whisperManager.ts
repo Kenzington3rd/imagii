@@ -88,7 +88,41 @@ function parseSrt(content: string): CaptionSegment[] {
   return segments
 }
 
+// Concurrency guard for transcription — same pattern as installInProgress.
+// Two rapid concurrent transcribes would each spawn whisper.exe (heavy
+// CPU contention) AND would each extract a separate WAV from the source.
+// The earlier-finishing run's SRT result gets overwritten in renderer
+// state when the second finishes; the first SRT becomes an orphan in
+// captionsOutputDir.
+let transcribeInProgress = false
+
+/** Test-only access to the concurrency flag. */
+export const __whisperTranscribeTesting__ = {
+  isTranscribeInProgress: (): boolean => transcribeInProgress,
+  setTranscribeInProgressForTest: (value: boolean): void => {
+    transcribeInProgress = value
+  }
+}
+
 export async function runTranscribe(
+  req: TranscribeRequest,
+  onProgress: CaptionsProgressListener
+): Promise<TranscribeResult> {
+  // Synchronous claim before any await — JS single-threaded guarantee.
+  // Lessons: see "claim flag must be set synchronously" entry in
+  // docs/LESSONS_LEARNED.md (2026-05-09).
+  if (transcribeInProgress) {
+    throw new Error('Transcription already in progress')
+  }
+  transcribeInProgress = true
+  try {
+    return await runTranscribeBody(req, onProgress)
+  } finally {
+    transcribeInProgress = false
+  }
+}
+
+async function runTranscribeBody(
   req: TranscribeRequest,
   onProgress: CaptionsProgressListener
 ): Promise<TranscribeResult> {
