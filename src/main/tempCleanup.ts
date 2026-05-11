@@ -2,6 +2,7 @@ import { readdir, stat, unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { assert } from '../shared/assert'
 
 /**
  * Tech-debt fix: prune old temp files left behind by prior imagii sessions.
@@ -31,6 +32,13 @@ export async function pruneStaleTempFiles(now: number = Date.now()): Promise<{
   scanned: number
   removed: number
 }> {
+  // Bug-fix (audit round 7): PoT rule 7 — validate the input parameter
+  // at function entry. A caller passing NaN would make `now - mtime <
+  // threshold` always false (NaN < N is always false), silently turning
+  // the cleanup into a no-op. A negative `now` would delete files newer
+  // than `|now| + threshold` seconds, including fresh in-flight temps.
+  // Refuse outright.
+  assert(Number.isFinite(now) && now >= 0, 'pruneStaleTempFiles: `now` must be a finite non-negative ms timestamp')
   let scanned = 0
   let removed = 0
   // Bound: 2 subdirs × N files. The directory listing acts as the upper

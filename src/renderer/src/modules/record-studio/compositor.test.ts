@@ -1,0 +1,235 @@
+import { describe, it, expect, vi } from 'vitest'
+import { computeCornerRect, drawFrame, __testing__ } from './compositor'
+
+/**
+ * Pure-function tests for the compositor. The actual canvas drawing and
+ * MediaStream lifecycle need a browser env; those are exercised by manual
+ * smoke testing. Geometry is the part that breaks silently if math
+ * regresses, so it gets unit coverage.
+ */
+
+describe('computeCornerRect', () => {
+  // 1920x1080 canvas, 20% scale, 32 px margin → cam box 384x216
+  it('places the webcam in the bottom-right corner by default math', () => {
+    const r = computeCornerRect(1920, 1080, 'bottom-right', 0.2, 32)
+    expect(r.w).toBe(384)
+    expect(r.h).toBe(216)
+    expect(r.x).toBe(1920 - 384 - 32)
+    expect(r.y).toBe(1080 - 216 - 32)
+  })
+
+  it('top-left corner uses margin only', () => {
+    const r = computeCornerRect(1920, 1080, 'top-left', 0.2, 32)
+    expect(r.x).toBe(32)
+    expect(r.y).toBe(32)
+  })
+
+  it('top-right has bottom-right x, top-left y', () => {
+    const r = computeCornerRect(1920, 1080, 'top-right', 0.2, 32)
+    expect(r.x).toBe(1920 - 384 - 32)
+    expect(r.y).toBe(32)
+  })
+
+  it('bottom-left has top-left x, bottom-right y', () => {
+    const r = computeCornerRect(1920, 1080, 'bottom-left', 0.2, 32)
+    expect(r.x).toBe(32)
+    expect(r.y).toBe(1080 - 216 - 32)
+  })
+
+  it('enforces minimum webcam width to keep faces legible', () => {
+    // 100x100 canvas at 20% would mathematically be 20 px wide — too tiny.
+    // The function clamps to 64 px minimum.
+    const r = computeCornerRect(100, 100, 'bottom-right', 0.2, 0)
+    expect(r.w).toBe(64)
+  })
+
+  it('rejects invalid input', () => {
+    expect(() => computeCornerRect(0, 1080, 'top-left', 0.2, 32)).toThrow()
+    expect(() => computeCornerRect(1920, 0, 'top-left', 0.2, 32)).toThrow()
+    expect(() => computeCornerRect(1920, 1080, 'top-left', 0, 32)).toThrow()
+    expect(() => computeCornerRect(1920, 1080, 'top-left', 1.5, 32)).toThrow()
+  })
+
+  it('clamps negative margin to zero', () => {
+    const r = computeCornerRect(1920, 1080, 'top-left', 0.2, -50)
+    expect(r.x).toBe(0)
+    expect(r.y).toBe(0)
+  })
+})
+
+describe('drawFrame', () => {
+  // Stub a CanvasRenderingContext2D — we only assert the calls happen
+  // in the right order with the right rects. A real canvas/video would
+  // need a JSDOM/browser env.
+  interface DrawCall {
+    image: 'screen' | 'webcam'
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+
+  function makeStubCtx(): { ctx: CanvasRenderingContext2D; calls: DrawCall[] } {
+    const calls: DrawCall[] = []
+    const screenVid = { tag: 'screen' as const }
+    const webcamVid = { tag: 'webcam' as const }
+    const ctx = {
+      drawImage: (
+        img: { tag: 'screen' | 'webcam' },
+        x: number,
+        y: number,
+        w: number,
+        h: number
+      ) => {
+        calls.push({ image: img.tag, x, y, w, h })
+      }
+    } as unknown as CanvasRenderingContext2D
+    return { ctx, calls, screenVid, webcamVid } as unknown as {
+      ctx: CanvasRenderingContext2D
+      calls: DrawCall[]
+    }
+  }
+
+  function makeStubVideo(tag: 'screen' | 'webcam', w: number, h: number): HTMLVideoElement {
+    return {
+      tag,
+      readyState: 4,
+      videoWidth: w,
+      videoHeight: h
+    } as unknown as HTMLVideoElement
+  }
+
+  it('draws screen full-canvas then webcam inside the corner rect', () => {
+    const { ctx, calls } = makeStubCtx()
+    const screen = makeStubVideo('screen', 1920, 1080)
+    const webcam = makeStubVideo('webcam', 1280, 720)
+    const corner = { x: 1504, y: 832, w: 384, h: 216 }
+    drawFrame(ctx, screen, webcam, corner, 1920, 1080)
+    expect(calls.length).toBe(2)
+    expect(calls[0]).toEqual({ image: 'screen', x: 0, y: 0, w: 1920, h: 1080 })
+    // Webcam's 1280x720 has 16:9, same as the corner box, so it fills exactly.
+    expect(calls[1]).toEqual({ image: 'webcam', x: 1504, y: 832, w: 384, h: 216 })
+  })
+
+  it('letterboxes the webcam if its aspect is taller than the corner box', () => {
+    const { ctx, calls } = makeStubCtx()
+    const screen = makeStubVideo('screen', 1920, 1080)
+    const webcam = makeStubVideo('webcam', 480, 640) // 3:4 portrait
+    const corner = { x: 0, y: 0, w: 400, h: 300 } // 4:3
+    drawFrame(ctx, screen, webcam, corner, 1920, 1080)
+    expect(calls.length).toBe(2)
+    const camCall = calls[1]
+    expect(camCall).toBeDefined()
+    // Box is wider than cam → fit by height. drawH = 300, drawW = 300*(3/4)=225
+    expect(camCall?.image).toBe('webcam')
+    expect(camCall?.h).toBe(300)
+    expect(camCall?.w).toBe(225)
+    // Centered horizontally in the 400-wide box
+    expect(camCall?.x).toBe(Math.round((400 - 225) / 2))
+  })
+
+  it('skips webcam draw when webcam is null', () => {
+    const { ctx, calls } = makeStubCtx()
+    const screen = makeStubVideo('screen', 1920, 1080)
+    drawFrame(ctx, screen, null, { x: 0, y: 0, w: 100, h: 100 }, 1920, 1080)
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.image).toBe('screen')
+  })
+
+  it('skips screen draw when screen is not ready', () => {
+    const { ctx, calls } = makeStubCtx()
+    const screen = {
+      ...makeStubVideo('screen', 1920, 1080),
+      readyState: 0
+    } as unknown as HTMLVideoElement
+    const webcam = makeStubVideo('webcam', 1280, 720)
+    drawFrame(ctx, screen, webcam, { x: 0, y: 0, w: 100, h: 100 }, 1920, 1080)
+    // Webcam still draws, but screen doesn't
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.image).toBe('webcam')
+  })
+})
+
+/**
+ * Regression: prior to the 2026-05-11 partial-init fix, `startCompositor`
+ * appended two offscreen `<video>` elements to `document.body` BEFORE
+ * awaiting `play()` / `waitForMetadata()` / `getContext()`. If any of
+ * those steps threw, the function rejected without removing the videos
+ * from the DOM. Result: the input MediaStreams stayed open through the
+ * orphaned video elements until the page unloaded.
+ *
+ * The fix wraps the setup phase in try/catch and calls `teardownOffscreen`
+ * on failure. These tests pin both halves: the teardown helper itself,
+ * and the contract that it survives elements already torn down or
+ * missing srcObject.
+ */
+describe('teardownOffscreen (partial-init cleanup)', () => {
+  function makeVideoLike(): HTMLVideoElement {
+    const paused = { value: false }
+    const src = { value: 'something' as unknown }
+    const removed = { value: false }
+    return {
+      get _paused() {
+        return paused.value
+      },
+      get _srcObject() {
+        return src.value
+      },
+      get _removed() {
+        return removed.value
+      },
+      pause: () => {
+        paused.value = true
+      },
+      set srcObject(v: unknown) {
+        src.value = v
+      },
+      get srcObject() {
+        return src.value
+      },
+      parentNode: {
+        removeChild: () => {
+          removed.value = true
+        }
+      }
+    } as unknown as HTMLVideoElement
+  }
+
+  it('pauses each element, nulls srcObject, and removes from parent', () => {
+    const a = makeVideoLike()
+    const b = makeVideoLike()
+    __testing__.teardownOffscreen([a, b])
+    // After teardown both should report paused, srcObject=null, and removed.
+    expect((a as unknown as { _paused: boolean })._paused).toBe(true)
+    expect((b as unknown as { _paused: boolean })._paused).toBe(true)
+    expect(a.srcObject).toBeNull()
+    expect(b.srcObject).toBeNull()
+    expect((a as unknown as { _removed: boolean })._removed).toBe(true)
+    expect((b as unknown as { _removed: boolean })._removed).toBe(true)
+  })
+
+  it('swallows pause() throws so a half-torn-down element does not block the second one', () => {
+    const a = {
+      pause: () => {
+        throw new Error('already detached')
+      },
+      set srcObject(_v: unknown) {
+        // Setting srcObject after a thrown pause is the realistic mid-cleanup state
+      },
+      parentNode: { removeChild: vi.fn() }
+    } as unknown as HTMLVideoElement
+    const b = makeVideoLike()
+    expect(() => __testing__.teardownOffscreen([a, b])).not.toThrow()
+    // The second element still gets cleaned up
+    expect((b as unknown as { _paused: boolean })._paused).toBe(true)
+  })
+
+  it('handles a detached element (no parentNode)', () => {
+    const a = {
+      pause: () => undefined,
+      set srcObject(_v: unknown) {},
+      parentNode: null
+    } as unknown as HTMLVideoElement
+    expect(() => __testing__.teardownOffscreen([a])).not.toThrow()
+  })
+})

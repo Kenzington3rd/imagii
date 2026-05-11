@@ -14,6 +14,7 @@ interface SettingsSchema {
   'recentFiles.video'?: string[]
   'recentFiles.audio'?: string[]
   'recentFiles.image'?: string[]
+  'record.webcamCorner'?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 }
 
 export const store = new Store<SettingsSchema>({

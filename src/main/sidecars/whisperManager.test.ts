@@ -2,8 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   tsToSeconds,
   installWhisperModel,
+  runTranscribe,
   __testing__,
-  __whisperInstallTesting__
+  __whisperInstallTesting__,
+  __whisperTranscribeTesting__
 } from './whisperManager'
 import { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } from '../../shared/captions'
 
@@ -127,6 +129,29 @@ describe('installWhisperModel — concurrency guard (regression 2026-05-09)', ()
     expect(__whisperInstallTesting__.isInstallInProgress()).toBe(false)
     __whisperInstallTesting__.setInstallInProgressForTest(true)
     expect(__whisperInstallTesting__.isInstallInProgress()).toBe(true)
+  })
+})
+
+describe('runTranscribe — concurrency guard (audit round 6)', () => {
+  afterEach(() => {
+    __whisperTranscribeTesting__.setTranscribeInProgressForTest(false)
+  })
+
+  it('rejects a concurrent transcribe when one is already in progress', async () => {
+    __whisperTranscribeTesting__.setTranscribeInProgressForTest(true)
+    await expect(
+      runTranscribe(
+        { jobId: 'test', sourcePath: 'C:/test.mp4', language: 'en' },
+        () => undefined
+      )
+    ).rejects.toThrow(/already in progress/)
+  })
+
+  it('reports the in-progress flag accurately', () => {
+    __whisperTranscribeTesting__.setTranscribeInProgressForTest(false)
+    expect(__whisperTranscribeTesting__.isTranscribeInProgress()).toBe(false)
+    __whisperTranscribeTesting__.setTranscribeInProgressForTest(true)
+    expect(__whisperTranscribeTesting__.isTranscribeInProgress()).toBe(true)
   })
 })
 

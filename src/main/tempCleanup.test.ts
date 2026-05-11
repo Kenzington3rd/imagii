@@ -74,4 +74,13 @@ describe('pruneStaleTempFiles', () => {
     expect(existsSync(file)).toBe(true)
     expect(result.removed).toBe(0)
   })
+
+  // Regression: audit round 7 added a parameter assertion to refuse
+  // NaN / Infinity / negative timestamps. Without it, NaN would silently
+  // skip the cleanup; negative would over-delete fresh files.
+  it('throws on non-finite or negative now', async () => {
+    await expect(pruneStaleTempFiles(NaN)).rejects.toThrow(/finite non-negative/)
+    await expect(pruneStaleTempFiles(Infinity)).rejects.toThrow(/finite non-negative/)
+    await expect(pruneStaleTempFiles(-1)).rejects.toThrow(/finite non-negative/)
+  })
 })

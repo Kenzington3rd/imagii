@@ -3,8 +3,17 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import { Link } from 'react-router-dom'
 import type { RecordingSource } from '@shared/workspace'
+import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
 type Phase = 'idle' | 'choosing' | 'recording' | 'saving'
+
+const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
+  'top-left': 'Top-left',
+  'top-right': 'Top-right',
+  'bottom-left': 'Bottom-left',
+  'bottom-right': 'Bottom-right'
+}
 
 interface MicDevice {
   deviceId: string
@@ -27,12 +36,24 @@ export function RecordStudio(): JSX.Element {
   const [cams, setCams] = useState<CamDevice[]>([])
   const [selectedCamId, setSelectedCamId] = useState<string | null>(null)
   const [showCam, setShowCam] = useState(false)
+  const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
   const [elapsed, setElapsed] = useState(0)
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const camStreamRef = useRef<MediaStream | null>(null)
+  // Raw screen capture stream from desktopCapturer. Tracked separately
+  // from `streamRef` because in the webcam-composited path, `streamRef`
+  // holds the compositor's canvas-captureStream output — NOT the original
+  // screen tracks. Stopping streamRef alone would leave the desktop
+  // capture pipeline running indefinitely (visible as the OS "screen is
+  // being shared" indicator hanging around after recording stops).
+  const screenStreamRef = useRef<MediaStream | null>(null)
+  // Composited stream backing the MediaRecorder when the user opts into
+  // webcam-in-recording. Owns its own canvas + offscreen video elements
+  // and must be stopped to release them.
+  const compositorRef = useRef<CompositorHandle | null>(null)
   const previewRef = useRef<HTMLVideoElement>(null)
   const camPreviewRef = useRef<HTMLVideoElement>(null)
   const startTimeRef = useRef<number>(0)
@@ -40,10 +61,22 @@ export function RecordStudio(): JSX.Element {
 
   useEffect(() => {
     void refreshDevices()
+    // Restore the user's preferred webcam corner across sessions.
+    let cancelled = false
+    void window.api.settings.get<WebcamCorner>('record.webcamCorner').then((stored) => {
+      if (cancelled || !stored) return
+      if (WEBCAM_CORNERS.includes(stored)) setWebcamCorner(stored)
+    })
     return () => {
+      cancelled = true
       stopAllStreams()
     }
   }, [])
+
+  // Persist the corner choice whenever it changes — survives restart.
+  useEffect(() => {
+    void window.api.settings.set('record.webcamCorner', webcamCorner)
+  }, [webcamCorner])
 
   async function refreshDevices(): Promise<void> {
     try {
@@ -78,6 +111,15 @@ export function RecordStudio(): JSX.Element {
     streamRef.current = null
     camStreamRef.current?.getTracks().forEach((t) => t.stop())
     camStreamRef.current = null
+    // Stop the RAW screen tracks. When the compositor path was used,
+    // streamRef holds the canvas-captureStream output (not the screen
+    // tracks themselves), so without this the desktop capture stays
+    // open after recording stops.
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop())
+    screenStreamRef.current = null
+    // Tear down the composited canvas + offscreen videos if we ran them.
+    compositorRef.current?.stop()
+    compositorRef.current = null
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current)
       elapsedTimerRef.current = null
@@ -100,6 +142,10 @@ export function RecordStudio(): JSX.Element {
         }
       } as unknown as MediaStreamConstraints
       const screenStream = await navigator.mediaDevices.getUserMedia(screenConstraints)
+      // Track the raw screen capture BEFORE we possibly hand it to the
+      // compositor. stopAllStreams now releases this on every exit path,
+      // including the failure paths where the compositor never started.
+      screenStreamRef.current = screenStream
 
       let micStream: MediaStream | null = null
       if (includeMic) {
@@ -109,27 +155,48 @@ export function RecordStudio(): JSX.Element {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint })
       }
 
-      const tracks = [
-        ...screenStream.getVideoTracks(),
-        ...(micStream ? micStream.getAudioTracks() : [])
-      ]
-      const combined = new MediaStream(tracks)
-      streamRef.current = combined
-
+      // If the user wants the webcam IN the recording (not just a preview),
+      // grab the cam stream and run it through the compositor. The
+      // compositor returns a synthetic MediaStream that contains a single
+      // video track (screen + webcam corner drawn per frame) — we mix
+      // mic audio into it for the recorder.
+      let camStream: MediaStream | null = null
+      let videoTrackSource: MediaStream = screenStream
       if (showCam && selectedCamId) {
         try {
-          const camStream = await navigator.mediaDevices.getUserMedia({
+          camStream = await navigator.mediaDevices.getUserMedia({
             video: { deviceId: { exact: selectedCamId } }
           })
           camStreamRef.current = camStream
+          const compositor = await startCompositor({
+            screenStream,
+            webcamStream: camStream,
+            webcamCorner,
+            webcamScalePct: 0.2,
+            fps: 30
+          })
+          compositorRef.current = compositor
+          videoTrackSource = compositor.outputStream
           if (camPreviewRef.current) {
             camPreviewRef.current.srcObject = camStream
             void camPreviewRef.current.play()
           }
-        } catch {
-          toast.error('Could not start webcam — recording without it.')
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? `Webcam failed: ${err.message}. Recording screen only.`
+              : 'Webcam failed; recording screen only.'
+          )
+          // Fall through with videoTrackSource still pointing at the raw screen
         }
       }
+
+      const tracks = [
+        ...videoTrackSource.getVideoTracks(),
+        ...(micStream ? micStream.getAudioTracks() : [])
+      ]
+      const combined = new MediaStream(tracks)
+      streamRef.current = combined
 
       if (previewRef.current) {
         previewRef.current.srcObject = combined
@@ -307,7 +374,7 @@ export function RecordStudio(): JSX.Element {
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                Webcam preview
+                Webcam
               </h3>
               <label className="flex items-center gap-2">
                 <input
@@ -315,7 +382,7 @@ export function RecordStudio(): JSX.Element {
                   checked={showCam}
                   onChange={(e) => setShowCam(e.target.checked)}
                 />
-                <span>Show webcam preview while recording</span>
+                <span>Include webcam in recording (picture-in-picture)</span>
               </label>
               {showCam && cams.length > 0 ? (
                 <select
@@ -330,9 +397,26 @@ export function RecordStudio(): JSX.Element {
                   ))}
                 </select>
               ) : null}
+              {showCam ? (
+                <label className="flex items-center gap-2 text-xs">
+                  <span className="text-ink-muted w-16">Corner</span>
+                  <select
+                    className="bg-bg-base rounded px-2 py-1 text-sm flex-1"
+                    value={webcamCorner}
+                    onChange={(e) => setWebcamCorner(e.target.value as WebcamCorner)}
+                  >
+                    {WEBCAM_CORNERS.map((c) => (
+                      <option key={c} value={c}>
+                        {WEBCAM_CORNER_LABELS[c]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <p className="text-xs text-ink-dim">
-                Note: webcam shows in a preview window only — for true picture-in-picture
-                composite, record screen first, then add the webcam clip in Video Studio.
+                Webcam is composited into the recording at the chosen corner. The
+                preview overlay in the recording view shows the cam alongside the
+                screen for monitoring.
               </p>
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">

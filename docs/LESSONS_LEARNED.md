@@ -14,6 +14,132 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-11 — Bug sweep round 8 (compositor + assertDefined leaks)
+
+### Bug — Screen MediaStream leaked when recording with webcam composited in
+- **Root cause.** `RecordStudio.tsx:startRecording` opened the raw screen capture via `getUserMedia(screenConstraints)` and handed the resulting `MediaStream` to `startCompositor()`. The compositor wrapped it in a hidden `<video>` + `<canvas>` and returned a synthetic `outputStream` (the canvas-captureStream). RecordStudio stored *the synthetic stream* in `streamRef` and only stopped that ref in `stopAllStreams`. The original screen tracks from `desktopCapturer` were never `.stop()`d. After each webcam-composited recording, Windows kept the "screen is being shared" indicator visible and the GPU encode pipeline stayed open. Repeated recordings degraded framerate and eventually failed to start because the source was already in use.
+- **Fix.** Added `screenStreamRef` in `RecordStudio.tsx`, assigned at the moment `getUserMedia` resolves (before any path that might hand it to the compositor). `stopAllStreams` now releases tracks from all four refs: `streamRef`, `camStreamRef`, `screenStreamRef`, and `compositorRef`. The pattern is uniform — every track-owning ref is in the cleanup function, no exceptions.
+- **Test.** No direct unit test — covering this requires mocking `getUserMedia`/`MediaRecorder`/the whole device pipeline, which is high mock weight for one structural bug. This lesson doc is the test of record. The structural invariant is verifiable by reading `stopAllStreams`: if a new MediaStream-owning ref is added, it must be added to the cleanup block.
+- **Lesson.** **A handle that wraps another handle is not a substitute for tracking both.** The compositor abstracts the canvas-captureStream pipeline cleanly, but it does NOT take ownership of the input streams — and it shouldn't, because the caller may want to fall back to a screen-only path with the same screenStream. Caller-owns-the-source is the right boundary; the bug was that the caller forgot to actually hold the source. When wrapping a resource, document explicitly who is responsible for stopping the wrapped thing.
+
+### Bug — `startCompositor` leaked offscreen `<video>` elements on setup failure
+- **Root cause.** `compositor.ts:startCompositor` appended two offscreen `<video>` elements to `document.body` BEFORE awaiting `play()`, `waitForMetadata()`, and `getContext('2d')`. If any of those steps threw (e.g., `play()` rejecting on a denied autoplay policy, `waitForMetadata` hanging on a stream that never emits `loadedmetadata`, `getContext` returning null in a low-memory scenario), the function rejected without removing the videos from the DOM. The orphaned elements kept their `srcObject` references to the input MediaStreams, so the screen and webcam tracks stayed open until page unload.
+- **Fix.** Extracted `teardownOffscreen(elements)` helper (also reused by the normal `stop()` path). Wrapped the setup phase in try/catch: on failure, call `teardownOffscreen` before re-throwing. Hoisted `canvasW`/`canvasH`/`ctx`/`canvas` declarations outside the try so the post-setup code can use them, with `assert` ensuring `ctx` is non-null.
+- **Test.** `compositor.test.ts` — 3 new cases under "teardownOffscreen (partial-init cleanup)": (1) pauses + nulls srcObject + removes from parent for each element, (2) survives a `pause()` throw on a half-detached element and still cleans the second one, (3) handles a detached element (no parentNode).
+- **Lesson.** **`appendChild` is a side effect that must be undone on every failure path between it and the function's return.** The pattern "create → append → await → return handle" is dangerous because the awaits can throw. Either move the appendChild AFTER all the can-throw work (when feasible), or wrap the awaits in try/catch with an explicit cleanup. The same pattern bit us in `runConcat` (segment-encode failures leaving temp mp4s) — different resource, same root cause: side effects without paired cleanup.
+
+### Bug — `assertDefined` silently returned `null` as type `T` in production
+- **Root cause.** `src/shared/assert.ts:assertDefined` mirrored the `assert()` prod fallback ("warn + continue") but in a way that defeated its own purpose. When `value` was null/undefined in production, the function logged a warning and `return value as T`. The caller, trusting the `T` return type, immediately did `result.foo` or `result.length` and crashed with `TypeError: Cannot read properties of null` — a less informative error than the named `AssertionError` it would otherwise have produced. The whole point of using `assertDefined` over the `!` non-null assertion was Power-of-Ten compliance and clear failure messages; the prod path threw both away.
+- **Fix.** `assertDefined` now throws in both dev and prod. Prod path still logs `console.warn` for telemetry, but then falls through to the same `throw new AssertionError(...)`. The post-condition matches the type signature: if you got a value back, it's defined.
+- **Test.** `assert.test.ts` — 3 new cases under "assertDefined in production": (1) still throws AssertionError on null with the named message, (2) still throws on undefined, (3) returns defined values unchanged (zero, empty string, false — the falsy-but-defined cases).
+- **Lesson.** **A "soft" assertion is only soft if the post-condition is preserved without the asserted invariant.** `assert(cond, ...)` is genuinely soft: it returns void, callers that don't rely on `asserts cond` narrowing keep working. `assertDefined(value, ...)` is NOT soft: callers always rely on the return value being non-null. Throwing later with a worse message is strictly worse than throwing now with a good one. The "never crash a user's session" goal is real, but it applies to invariants that callers can degrade gracefully through — not to invariants the caller is about to dereference.
+
+### False alarms verified clean (3 of 7 agent-flagged "bugs" were misreads)
+- `concat.ts` missing `await` on `fs.mkdir` — agent misread; `const fs = await import(...)` is correctly assigned before use.
+- `filename.ts sanitizeFilename` allowing trailing dots — regex `[^\w\-]+` matches `.`; the dots ARE stripped. Verified by hand.
+- `ImportPanel.tsx` paste handler stale closure — `addLayer` is a Zustand action, stable across renders. Closure does the right thing.
+- `ImageStudio.tsx` keyboard handler stale closure — dep array `[undo, redo, selectedLayerId, removeLayer, setTool]` is complete; effect re-binds when selection changes.
+- `audioStore patchChain` race — JavaScript is single-threaded; Zustand `set/get` are synchronous; there is no race.
+- `whisperManager cleanupPartial().then()` rejection — `cleanupPartial` has internal try/catch around the only awaited operation; it never rejects, so the `.then()` always fires.
+- `safeZone.ts` floating-point asymmetric tolerance — symmetric tolerance is by construction (`>= outer - eps` on both sides, `<= outer + size + eps` on both sides). Misread.
+
+**Process lesson.** Three of three sub-agents in this sweep returned at least one false-positive bug. They're useful for locating candidate files and patterns, but EVERY claim needs verification against source. Total agent-flagged bugs: 11. Real after verification: 3. Hit rate: 27%. Plan accordingly.
+
+---
+
+## 2026-05-11 — Webcam preview fix (held item → shipped)
+
+### Bug — "Show webcam preview while recording" was preview-only, didn't composite into the saved file
+- **Root cause.** `RecordStudio.tsx:startRecording` built the MediaRecorder's input from `screenStream.getVideoTracks()` + `micStream.getAudioTracks()`. The webcam's stream was attached to a `<video>` element for on-screen preview but never reached the MediaRecorder. Users would tick the box, see themselves in the preview window, and end up with a recording that contained only the screen.
+- **Fix.** New `compositor.ts` module: when both screen and webcam are active, mount two hidden offscreen `<video>` elements, draw to a hidden `<canvas>` at the screen's natural resolution per `requestAnimationFrame`, and feed the recorder via `canvas.captureStream(fps)`. Compositor handle exposes a `stop()` that tears down the canvas + offscreen videos + captured stream tracks on recording end. Corner is user-selectable (top-left / top-right / bottom-left / bottom-right) and persisted via electron-store as `record.webcamCorner`.
+- **Test.** `compositor.test.ts` — 11 cases covering `computeCornerRect` (all 4 corners, min-size clamp, negative-margin clamp, invalid inputs) and `drawFrame` (correct call order, aspect-preserve letterboxing when cam ratio ≠ box ratio, skipping webcam draw when null, skipping screen draw when not ready).
+- **Lesson.** **A "preview" toggle that doesn't match the recorded output is a misleading-feature anti-pattern.** Either the preview IS the output or the toggle label needs to say so explicitly. The held-item docs flagged this — "looks like it'll record, doesn't" — and the fix took the harder path (actually composite) rather than the easy one (just rename to "preview only"). Worth it: webcam-in-recording is a baseline streamer feature; matching user expectations beats matching the original implementation's scope.
+
+---
+
+## 2026-05-11 — Bug audit round 7 (probe duration + tempCleanup input assertion)
+
+### Bug — `probeAudio` silently coerced missing `duration` to 0
+- **Root cause.** `src/main/audio/probe.ts` already threw on missing audio stream (line 49), but read `Number(data.format?.duration ?? 0)` for duration. A malformed or partial ffprobe response (audio stream present, format object empty) silently produced `duration: 0`, which propagated to `audioStore.loadSource` → produced `0:00 → 0:00` clip ranges downstream. Not a crash, but confusing UX.
+- **Fix.** Compute `duration` once, validate with `Number.isFinite(duration) && duration > 0`, throw `'ffprobe returned no usable duration for the audio stream'` if invalid. Returns the validated value (no second `??`).
+- **Test.** Not directly tested — would need to mock ffprobe stdout. Structural check at the function entry.
+- **Lesson.** **A `?? 0` default on a numeric field that flows into UI is almost always wrong.** Either the field is essential (refuse on absence) or it's truly optional (in which case 0 is correctly meaningful). "Silently substitute 0" is the third option and it produces the worst UX: the user sees broken behavior with no error to copy-paste. Audit `?? 0` and `?? ''` for similar patterns where a missing value should be an error.
+
+### Bug — `pruneStaleTempFiles` lacked parameter assertion on `now`
+- **Root cause.** PoT rule 7 (validate parameters at function entry) wasn't applied. `now: number = Date.now()` was trusted as-is. A caller passing NaN would make `now - mtime < threshold` always-false (NaN comparisons are always false) → cleanup silently no-ops, files accumulate. A negative `now` would over-delete fresh files (the threshold delta goes the wrong way).
+- **Fix.** Added `assert(Number.isFinite(now) && now >= 0, ...)` at function entry.
+- **Test.** `tempCleanup.test.ts` — new case "throws on non-finite or negative now" covers NaN, Infinity, -1.
+- **Lesson.** **PoT rule 7 isn't optional even for functions called only by trusted code.** Today's "called only by app startup with Date.now()" is tomorrow's "called from a test, an extension, or via IPC abuse." Cost of adding the assert: 1 line. Cost of debugging a silent-noop later: hours. The assert also serves as inline documentation of the function's preconditions.
+
+### False alarms verified clean (5 candidates checked, 2 real)
+- `scoreHighlights` inverted-range crash — inputs come from `findHighlights` (FFmpeg ebur128 output, always sorted), not from untrusted state. No injection path.
+- `pathSafety.ts` permissive type guard — the guard variant intentionally returns false on bad input; the `assertSafe*` variant calls `assert()`. Already correct.
+- `audio:extractFromVideo` cleanup lifecycle — leaked WAVs are mitigated by `pruneStaleTempFiles` (the prior round's fix). Acceptable.
+- All test-coverage gaps flagged (probe, scoreHighlights, extractAudioFromVideo) require mocking native binaries; cost > value at the current scale.
+
+---
+
+## 2026-05-11 — Bug audit round 6 (transcribe race + drawtext newline escape)
+
+### Bug — `runTranscribe` had no concurrency guard
+- **Root cause.** Same shape as the `installWhisperModel` race from round 4, in a different function. The UI gates rapid clicks via `disabled={running}`, but a caller bypassing UI (dev console, multi-window scenario, IPC abuse) could trigger two concurrent transcribes. Each would extract a separate WAV (CPU + disk waste), spawn its own `whisper.exe` (CPU contention), and produce a separate timestamped SRT. The first-to-complete SRT path lands in renderer state; the second overwrites it; the first SRT becomes an orphan in `captionsOutputDir/`.
+- **Fix.** Added a `transcribeInProgress` flag claimed synchronously at function entry, mirroring the `installInProgress` pattern. Refactored existing body into `runTranscribeBody`. New `__whisperTranscribeTesting__` export for unit-testable gate logic.
+- **Test.** `whisperManager.test.ts` — 2 new cases under "runTranscribe — concurrency guard". 
+- **Lesson.** **When you fix a concurrency-claim race in one function, immediately grep for the same pattern elsewhere.** The `installWhisperModel` fix (round 4) and this `runTranscribe` fix are structurally identical: long-running operation with module-level state, no synchronous claim before async work. The lessons doc now lists three "claim-flag must be synchronous" instances. Future code that spawns long-running sidecars should adopt the pattern proactively, not after the bug surfaces.
+
+### Bug — `escapeDrawtext` didn't escape newlines or carriage returns
+- **Root cause.** `src/main/ffmpeg/filters.ts:escapeDrawtext` escaped the well-known four offenders (backslash, single quote, colon, percent) but not `\n` / `\r`. A text overlay (multi-line caption) or a watermark with embedded newlines produced a malformed `drawtext=text='line1[NEWLINE]line2'...` arg, which FFmpeg's drawtext filter parser rejects. Result: the entire export fails with a cryptic FFmpeg error.
+- **Fix.** Added `.replace(/\r\n/g, '\\n').replace(/\n/g, '\\n').replace(/\r/g, '\\n')` to the escape chain. All three forms (CRLF, LF, CR) collapse to FFmpeg's `\n` escape sequence. Exported the helper via `__testing__` for direct unit testing.
+- **Test.** New `src/main/ffmpeg/filters.test.ts` — 5 cases covering the four classics, all three newline forms, combined offenders without double-escape, empty input, safe-passthrough.
+- **Lesson.** **"User text" includes whitespace characters, not just printable characters.** Any text-as-arg escape function should explicitly handle `\n` / `\r` / `\t`. The first three are the most common; harder-to-spot ones (RTL marks, zero-width joiners) are rarer but exist. Default to "block everything in a known-broken set" and add to the set as bugs surface — don't try to enumerate "every safe character."
+
+### False alarms verified clean
+- `HighlightPanel.tsx` onHighlightProgress cleanup — agent missed that `return off` IS the useEffect cleanup; not missing.
+- `ExportPanel.tsx` offProgress/offDone null-check — preload always returns a function from these subscribe APIs; the null check is defensive but not addressing a real bug.
+- `Canvas.tsx` ResizeObserver leak — early `if (!containerRef.current) return` means no observer is created in the leak scenario; nothing to leak.
+- `exportBatch` cancel mid-loop — agent missed that `await runExportJob(...)` rejects on cancel, propagating up out of the for-of loop and terminating the batch.
+- `Player.tsx` pause on source change — playback state IS reset; no audible artifact in practice.
+- `aselectForCuts` overlapping cuts — `not(A + B)` in FFmpeg's expression evaluator correctly implements the union-drop; agent misread the semantics.
+- `whisperManager.ts` partial SRT detection — existing `if (code === 0)` gate rejects before SRT is read.
+- RecordStudio webcam stream toggle — flagged as a held product-decision item; not part of this audit's scope.
+
+---
+
+## 2026-05-11 — Bug audit round 5 (undo race + missing error boundary)
+
+### Bug — `useGlobalUndo` 50ms setTimeout flag-clear created a race window
+- **Root cause.** The `undoingRef` flag was set to `true` before calling the store's `undo()`/`redo()`, then cleared inside `setTimeout(() => { undoingRef.current = false }, 50)`. The intent was to suppress the change-tracker from logging the undo itself as a new user action. But Zustand fires its subscribers SYNCHRONOUSLY inside `setState()`, so by the time `undo()` returns, all subscribers have already run. The 50ms timeout created a window where a user-initiated mutation arriving immediately after the undo (e.g., a fast `Ctrl+Z` followed by typing) would be misclassified as "from undo" and dropped from the tracker. The next undo would then skip the user's real edit.
+- **Fix.** Replaced `setTimeout(release, 50)` with a synchronous `try { storeUndo() } finally { undoingRef.current = false }`. The flag is true only for the exact span of the store call — zero ticks of stale window.
+- **Test.** No unit test added: testing this would require `@testing-library/react` (a new dev dep) to render the hook and simulate the timing race. The fix is structural — there's nothing async between `undo()` returning and the flag clear, so the race can't exist. Lesson logged here is the test of record.
+- **Lesson.** **A `setTimeout(..., 50)` placed "to let things settle" is almost always papering over a misunderstanding of the underlying API's timing.** If the API is synchronous (Zustand subscribers, React render passes within `act()`, etc.), the right fix is a `try/finally` that clears state on the same tick. If the API is async, the right fix is to await the actual signal of completion, not a wall-clock guess. Wall-clock guesses introduce races that are nearly impossible to reproduce in tests but show up as "occasionally lost edits" in user reports.
+
+### Bug — No React error boundary; any render error crashes the whole app to a white screen
+- **Root cause.** `App.tsx` wrapped its routes directly: `<Routes>...</Routes>`. React doesn't have a built-in error catch for render errors; the default behavior is to unmount the entire tree. A throw inside any studio component crashed the user to a white screen with no recovery UI; they had to force-quit imagii.
+- **Fix.** New `src/renderer/src/components/ErrorBoundary.tsx` — class component, dependency-free, inline-styled (doesn't depend on Tailwind layout context in case the error came from layout itself). Catches via `getDerivedStateFromError`, logs to console with component stack, renders a recovery UI with the error message + collapsible component stack + a "Reload to Home" button that resets routing without losing autosave state. Wrapped around `<Routes>` in `App.tsx`.
+- **Test.** Same situation — testing error boundaries needs RTL. Structurally guaranteed by React's error boundary contract.
+- **Lesson.** **Every renderer app needs at least one error boundary at the top of the route tree.** Without one, every render error is a force-quit. The fix is small (~80 lines) and the failure mode it prevents is "user loses their work because we forgot." Treat it as table stakes alongside autosave.
+
+---
+
+## 2026-05-10 — Bug audit round 4 (paths + recording temp leak)
+
+### Bug — Path traversal in `imagii-file://` protocol handler
+- **Root cause.** `src/main/protocol.ts` registered a custom URL scheme to serve user files to the renderer (video/audio/image preview). The handler decoded the URL, called `pathToFileURL(decoded)`, then `net.fetch`. Zero validation. A malicious `.imagii.json` carrying `videoStudio.sourcePath: "../../../Users/victim/secret"` (or an absolute path to a sensitive file) would slip through: the project validator only checked `isOptionalString`, the renderer dutifully built an `imagii-file://` URL via `pathToImagiiFileUrl`, the protocol handler fetched it. Arbitrary file read on import.
+- **Surface.** A user opening a shared `.imagii.json` (the user-facing import flow) is the attack vector. Renderer is trusted; the trust line is broken by treating the project file as data not code.
+- **Fix.** New `src/shared/pathSafety.ts` with `isSafeAbsolutePath()` + `assertSafeAbsolutePath()`. Rejects: relative paths, unresolved `..` segments, Windows reserved device basenames (CON/PRN/AUX/NUL/COM1-9/LPT1-9). Wired into TWO sites for defense in depth:
+  1. `projectValidation.ts` — new `isOptionalSafePath` predicate; rejects malicious paths at *load* time so they never reach the renderer.
+  2. `protocol.ts` — `if (!isSafeAbsolutePath(decoded)) return 403` so even a path that somehow bypasses project validation still can't be fetched.
+- **Test.** `src/shared/pathSafety.test.ts` (8 cases — accepted paths, rejected paths, the `foo..bar` non-false-positive, reserved-name case-insensitive, non-string input). `src/shared/projectValidation.test.ts` adds 5 integration cases (sourcePath traversal, srtPath traversal, relative audioStudio path, Windows reserved name, null srtPath back-compat).
+- **Lesson.** **Anywhere a user-provided path is read, validate it the same way you'd validate untrusted SQL.** "It's just a string field" is how arbitrary-file-read bugs ship. Two-layer defense — project-file validator rejects, protocol handler also rejects — means a regression in one layer doesn't expose the other. The `isOptionalString` check is necessary but insufficient for any field that ultimately gets passed to a file API.
+
+### Bug — `convertWebmToMp4` leaked 100MB+ WebM temp files on conversion failure
+- **Root cause.** Recording flow in `src/main/ipc/recording.ts`. The `unlink(tempPath)` call sat AFTER `await convertWebmToMp4(tempPath, outputPath)`. If ffmpeg exited non-zero (any conversion error — bad codec, disk full, permissions, killed process), `convertWebmToMp4` threw and the `unlink` never ran. A typical 5-minute recording is 100–250 MB; multiple failed conversions = significant disk waste accumulating in `%APPDATA%/imagii/recordings/`.
+- **Fix.** Same shape as the prior `runTranscribe` / `runConcat` fixes: wrap the post-dialog conversion/copy block in `try/finally`. The `unlink(tempPath)` lives in the finally; runs on every exit path.
+- **Test.** Structural guarantee — try/finally enforces the invariant. Integration test would need a way to make ffmpeg fail predictably.
+- **Lesson.** **This is the same pattern (success-path-only cleanup) that bit us in `runTranscribe` and `runConcat`.** Once is a coincidence; twice is a pattern; three times is a code-review checklist item. Going forward: ANY function that writes a temp file and then runs a subprocess MUST wrap the subprocess in `try/finally` with cleanup. Grep `await mkdir` + nearby `spawn` / `await writeFile` + nearby `spawn` should be flagged in review.
+
+---
+
 ## 2026-05-09 — Regression audit round
 
 ### Bug — `installWhisperModel` could clobber its own concurrency-tracking pointer

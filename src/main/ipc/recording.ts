@@ -121,17 +121,20 @@ export function registerRecordingIpc(): void {
         return null
       }
 
-      let outputPath = result.filePath
-      if (spec.convertToMp4) {
-        await convertWebmToMp4(tempPath, outputPath)
-        try {
-          await unlink(tempPath)
-        } catch {
-          /* ignore */
+      const outputPath = result.filePath
+      // Bug-fix (2026-05-10 audit): on ffmpeg conversion failure the
+      // prior code never reached the unlink(tempPath) call — a 100MB+
+      // WebM leaked into userData/recordings/ on every failed convert.
+      // Same shape as the prior runTranscribe / runConcat leaks. Wrap
+      // the conversion in try/finally so cleanup runs on every exit.
+      try {
+        if (spec.convertToMp4) {
+          await convertWebmToMp4(tempPath, outputPath)
+        } else {
+          const fs = await import('node:fs/promises')
+          await fs.copyFile(tempPath, outputPath)
         }
-      } else {
-        const fs = await import('node:fs/promises')
-        await fs.copyFile(tempPath, outputPath)
+      } finally {
         try {
           await unlink(tempPath)
         } catch {

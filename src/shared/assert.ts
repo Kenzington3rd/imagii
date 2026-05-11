@@ -1,8 +1,18 @@
 /**
  * Runtime assertion helpers for Power-of-Ten rule 5 (≥2 assertions per function).
  *
- * Throws an Error in dev so the failure surfaces immediately; warns and
- * continues in prod so a stray assertion never crashes a user's session.
+ * `assert(cond, msg)` — dev throws on falsy; prod warns and continues. Safe
+ * because the return type is void; downstream code that only relies on the
+ * `asserts cond` narrowing degrades gracefully (TS still narrows; runtime
+ * may misbehave but doesn't crash).
+ *
+ * `assertDefined(value, name)` — throws in BOTH dev and prod when value is
+ * null/undefined. Earlier we tried "warn + return value as T" in prod to
+ * mirror `assert()`, but that defeats its own purpose: the next line that
+ * does `result.foo` or `result.length` crashes with a less helpful
+ * `TypeError: Cannot read properties of null` instead of the named
+ * assertion message. Crashing early with the right error beats crashing
+ * later with the wrong one.
  *
  * Importable from main, preload, and renderer — uses `globalThis.process`
  * (electron-vite injects this in the renderer).
@@ -38,15 +48,20 @@ export function assert(cond: unknown, msg: string): asserts cond {
 /**
  * Assert a value is not null/undefined and return it as the narrowed type.
  * Use instead of the `!` non-null assertion operator.
+ *
+ * Throws in BOTH dev and prod — see the module docstring for rationale.
  */
 export function assertDefined<T>(value: T | null | undefined, name: string): T {
   if (typeof name !== 'string' || name.length === 0) {
     throw new AssertionError('assertDefined() called without a name')
   }
   if (value !== null && value !== undefined) return value
+  // Also log in prod for telemetry, then throw so callers fail fast with a
+  // named message instead of a downstream `TypeError: Cannot read
+  // properties of null`. The named throw is strictly more useful than the
+  // anonymous TypeError it would otherwise become.
   if (isProd()) {
     console.warn(`[assertDefined] ${name} was ${value === null ? 'null' : 'undefined'}`)
-    return value as T
   }
   throw new AssertionError(`${name} was ${value === null ? 'null' : 'undefined'}`)
 }
