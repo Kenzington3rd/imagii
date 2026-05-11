@@ -64,7 +64,7 @@ export function ImageStudio(): JSX.Element {
           <Link to="/home" className="text-sm text-ink-muted hover:text-ink-base">
             ← Home
           </Link>
-          <h1 className="text-2xl font-semibold mt-1">Image Canvas</h1>
+          <h1 className="text-2xl font-semibold mt-1">Stream Graphics</h1>
         </div>
         <div className="flex items-center gap-2 text-sm">
           <button

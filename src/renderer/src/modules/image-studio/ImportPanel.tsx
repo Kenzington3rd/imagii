@@ -1,7 +1,20 @@
 import { useEffect, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
+import { nanoid } from 'nanoid'
 import { makeImageLayer, makeTextLayer, useCanvasStore } from './state/canvasStore'
 import { TemplatesDialog } from './TemplatesDialog'
+import { getTemplatesByCategory, type CanvasTemplate, type TemplateCategory } from './templates'
+
+const CATEGORY_LABEL: Record<TemplateCategory, string> = {
+  thumbnail: '🖼 Thumbnails',
+  overlay: '🎮 Stream overlays',
+  banner: '🪧 Banners',
+  emote: '😀 Emotes'
+}
+
+function cloneDoc<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj)) as T
+}
 
 const ACCEPTED_EXT = ['.png', '.jpg', '.jpeg', '.bmp', '.svg', '.webp', '.gif']
 
@@ -30,9 +43,20 @@ function loadImageDimensions(dataUrl: string): Promise<{ width: number; height: 
 
 export function ImportPanel(): JSX.Element {
   const addLayer = useCanvasStore((s) => s.addLayer)
+  const setDocument = useCanvasStore((s) => s.setDocument)
   const layers = useCanvasStore((s) => s.doc.layers)
   const [dragOver, setDragOver] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
+
+  // Stream Graphics pivot: when the canvas is empty, surface the
+  // templates catalog as the primary call-to-action. The drop-zone
+  // becomes secondary. Users still get the modal version of templates
+  // via the toolbar button once they have layers loaded.
+  function applyTemplate(template: CanvasTemplate): void {
+    const doc = cloneDoc(template.doc)
+    doc.layers = doc.layers.map((l) => ({ ...l, id: nanoid(8) }))
+    setDocument(doc)
+  }
 
   async function ingestFile(file: File): Promise<void> {
     if (!isImage(file.name)) {
@@ -132,38 +156,87 @@ export function ImportPanel(): JSX.Element {
     )
   }
 
+  // Stream Graphics empty state: templates-first. Show grouped grid up
+  // top, secondary blank-canvas / import-file CTAs below. Once the user
+  // picks a template (or imports an image), the studio switches to its
+  // normal toolbar+canvas+layers layout.
+  const grouped = getTemplatesByCategory()
   return (
-    <>
-    <div
-      onDragOver={(e) => {
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={onDrop}
-      data-tutorial="image-import"
-      className={`card flex flex-col items-center justify-center text-center px-10 py-16 transition-colors ${
-        dragOver ? 'border-accent bg-bg-hover' : ''
-      }`}
-    >
-      <div className="text-5xl mb-4">🖼</div>
-      <h2 className="text-2xl font-semibold mb-2">Drop or paste an image</h2>
-      <p className="text-ink-muted text-sm mb-6">
-        PNG, JPG, BMP, WEBP, SVG, GIF — or paste from clipboard with Ctrl+V.
-      </p>
-      <div className="flex gap-2 mb-3">
-        <button className="btn-primary" onClick={pickFile}>
-          Choose file…
-        </button>
-        <button className="btn-ghost" onClick={addText}>
-          Start with text
-        </button>
-        <button className="btn-ghost" onClick={() => setShowTemplates(true)}>
-          ✨ Templates
-        </button>
+    <div className="flex flex-col gap-5 overflow-y-auto" data-tutorial="image-import">
+      <div className="flex flex-col gap-2">
+        <h2 className="text-xl font-semibold">Pick a template to start</h2>
+        <p className="text-ink-muted text-sm">
+          Streamer-ready presets sized for the platforms you post to. Pick one to drop
+          into the editor, or start blank below.
+        </p>
       </div>
+
+      {(Object.keys(grouped) as TemplateCategory[]).map((category) => {
+        const items = grouped[category]
+        if (items.length === 0) return null
+        return (
+          <section key={category} className="flex flex-col gap-2">
+            <h3 className="text-xs uppercase tracking-wide text-ink-muted">
+              {CATEGORY_LABEL[category]}
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {items.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => applyTemplate(t)}
+                  className="card p-3 text-left hover:border-accent transition-colors"
+                >
+                  <div
+                    className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"
+                    style={{
+                      aspectRatio: `${t.doc.width} / ${t.doc.height}`,
+                      background:
+                        t.doc.background === 'transparent'
+                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          : t.doc.background
+                    }}
+                  />
+                  <div className="text-sm font-medium">{t.name}</div>
+                  <div className="text-xs text-ink-muted mt-1">{t.description}</div>
+                  <div className="text-xs text-ink-dim mt-1 font-mono">
+                    {t.doc.width} × {t.doc.height}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        )
+      })}
+
+      <div className="border-t border-ink-dim/20 pt-4 flex flex-col gap-2">
+        <h3 className="text-xs uppercase tracking-wide text-ink-muted">
+          Or start blank
+        </h3>
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          className={`card flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-4 transition-colors ${
+            dragOver ? 'border-accent bg-bg-hover' : ''
+          }`}
+        >
+          <div className="text-sm text-ink-muted">
+            Drop, paste (Ctrl+V), or import a file to edit your own image instead.
+          </div>
+          <div className="flex gap-2 flex-shrink-0">
+            <button className="btn-primary" onClick={pickFile}>
+              Import image
+            </button>
+            <button className="btn-ghost" onClick={addText}>
+              Start with text
+            </button>
+          </div>
+        </div>
+      </div>
+      <TemplatesDialog open={showTemplates} onClose={() => setShowTemplates(false)} />
     </div>
-    <TemplatesDialog open={showTemplates} onClose={() => setShowTemplates(false)} />
-    </>
   )
 }

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 
-export type ReferencesTab = 'reference' | 'moodboards'
+export type ReferencesTab = 'reference' | 'moodboards' | 'assets'
 
 interface ReferencesStudioState {
   tab: ReferencesTab

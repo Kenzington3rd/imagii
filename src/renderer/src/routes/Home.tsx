@@ -105,8 +105,8 @@ export function Home(): JSX.Element {
         />
         <NavCard
           to="/image"
-          title="Image Canvas"
-          description="Manipulate images with rotation, layers, color replace, and CAD-like guides."
+          title="Stream Graphics"
+          description="Templates for thumbnails, Twitch overlays, banners, and emotes — start from a preset or import your own image."
           icon="🖼"
           accent="rgba(52, 211, 153, 0.18)"
         />
