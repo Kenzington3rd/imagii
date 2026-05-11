@@ -121,9 +121,35 @@ export function drawFrame(
 }
 
 /**
+ * Tear down the offscreen video elements created during setup. Used both
+ * by the normal stop() path and by the partial-init catch in
+ * startCompositor — if any step between `appendChild` and the final
+ * `return` throws, we still want the offscreen videos removed from the
+ * DOM. Without this, a setup failure leaves zombie elements consuming
+ * the input MediaStream tracks until the page unloads.
+ */
+function teardownOffscreen(elements: HTMLVideoElement[]): void {
+  for (const v of elements) {
+    try {
+      v.pause()
+      v.srcObject = null
+    } catch {
+      /* element already detached */
+    }
+    if (v.parentNode) v.parentNode.removeChild(v)
+  }
+}
+
+/**
  * Spin up the compositor. Resolves once both videos are playing and the
  * canvas dimensions are pinned to the screen's natural size. Callers must
  * invoke handle.stop() on recording stop.
+ *
+ * On partial-init failure (any throw between appendChild and the final
+ * return) we tear down the offscreen videos before propagating the
+ * error — see teardownOffscreen above. Callers still own the input
+ * MediaStream tracks; this function does NOT stop them, since the caller
+ * may want to fall back to a screen-only path with the same screenStream.
  */
 export async function startCompositor(opts: CompositorOptions): Promise<CompositorHandle> {
   assert(opts.screenStream !== null && opts.screenStream !== undefined, 'screenStream required')
@@ -149,19 +175,33 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   camVid.style.display = 'none'
   document.body.appendChild(camVid)
 
-  await Promise.all([screenVid.play(), camVid.play()])
-  await waitForMetadata(screenVid)
-  await waitForMetadata(camVid)
+  // Setup phase: anything that can throw goes inside this try so the
+  // offscreen <video> elements are torn down on failure. Without this,
+  // a thrown play()/waitForMetadata/getContext leaves them attached to
+  // document.body, still consuming the input MediaStreams indefinitely.
+  let canvasW: number
+  let canvasH: number
+  let ctx: CanvasRenderingContext2D
+  let canvas: HTMLCanvasElement
+  try {
+    await Promise.all([screenVid.play(), camVid.play()])
+    await waitForMetadata(screenVid)
+    await waitForMetadata(camVid)
 
-  const canvasW = screenVid.videoWidth
-  const canvasH = screenVid.videoHeight
-  assert(canvasW > 0 && canvasH > 0, 'screen video reported zero dimensions')
+    canvasW = screenVid.videoWidth
+    canvasH = screenVid.videoHeight
+    assert(canvasW > 0 && canvasH > 0, 'screen video reported zero dimensions')
 
-  const canvas = document.createElement('canvas')
-  canvas.width = canvasW
-  canvas.height = canvasH
-  const ctx = canvas.getContext('2d')
-  assert(ctx !== null, 'canvas 2d context unavailable')
+    canvas = document.createElement('canvas')
+    canvas.width = canvasW
+    canvas.height = canvasH
+    const ctxMaybe = canvas.getContext('2d')
+    assert(ctxMaybe !== null, 'canvas 2d context unavailable')
+    ctx = ctxMaybe
+  } catch (err) {
+    teardownOffscreen([screenVid, camVid])
+    throw err
+  }
 
   const cornerRect = computeCornerRect(canvasW, canvasH, opts.webcamCorner, scalePct, marginPx)
 
@@ -169,7 +209,7 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   let running = true
   function frame(): void {
     if (!running) return
-    drawFrame(ctx as CanvasRenderingContext2D, screenVid, camVid, cornerRect, canvasW, canvasH)
+    drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
     rafHandle = requestAnimationFrame(frame)
   }
   rafHandle = requestAnimationFrame(frame)
@@ -183,16 +223,7 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
       cancelAnimationFrame(rafHandle)
       rafHandle = null
     }
-    try {
-      screenVid.pause()
-      camVid.pause()
-      screenVid.srcObject = null
-      camVid.srcObject = null
-    } catch {
-      /* element already gone */
-    }
-    if (screenVid.parentNode) screenVid.parentNode.removeChild(screenVid)
-    if (camVid.parentNode) camVid.parentNode.removeChild(camVid)
+    teardownOffscreen([screenVid, camVid])
     outputStream.getTracks().forEach((t) => t.stop())
   }
 
@@ -216,3 +247,10 @@ function waitForMetadata(v: HTMLVideoElement): Promise<void> {
     v.addEventListener('loadedmetadata', onReady)
   })
 }
+
+/**
+ * Test-only export of internal helpers. Pulled out from `startCompositor`
+ * specifically so the partial-init cleanup logic can be unit-tested
+ * without spinning up a real MediaStream pipeline.
+ */
+export const __testing__ = { teardownOffscreen }

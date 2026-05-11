@@ -43,6 +43,13 @@ export function RecordStudio(): JSX.Element {
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const camStreamRef = useRef<MediaStream | null>(null)
+  // Raw screen capture stream from desktopCapturer. Tracked separately
+  // from `streamRef` because in the webcam-composited path, `streamRef`
+  // holds the compositor's canvas-captureStream output — NOT the original
+  // screen tracks. Stopping streamRef alone would leave the desktop
+  // capture pipeline running indefinitely (visible as the OS "screen is
+  // being shared" indicator hanging around after recording stops).
+  const screenStreamRef = useRef<MediaStream | null>(null)
   // Composited stream backing the MediaRecorder when the user opts into
   // webcam-in-recording. Owns its own canvas + offscreen video elements
   // and must be stopped to release them.
@@ -104,6 +111,12 @@ export function RecordStudio(): JSX.Element {
     streamRef.current = null
     camStreamRef.current?.getTracks().forEach((t) => t.stop())
     camStreamRef.current = null
+    // Stop the RAW screen tracks. When the compositor path was used,
+    // streamRef holds the canvas-captureStream output (not the screen
+    // tracks themselves), so without this the desktop capture stays
+    // open after recording stops.
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop())
+    screenStreamRef.current = null
     // Tear down the composited canvas + offscreen videos if we ran them.
     compositorRef.current?.stop()
     compositorRef.current = null
@@ -129,6 +142,10 @@ export function RecordStudio(): JSX.Element {
         }
       } as unknown as MediaStreamConstraints
       const screenStream = await navigator.mediaDevices.getUserMedia(screenConstraints)
+      // Track the raw screen capture BEFORE we possibly hand it to the
+      // compositor. stopAllStreams now releases this on every exit path,
+      // including the failure paths where the compositor never started.
+      screenStreamRef.current = screenStream
 
       let micStream: MediaStream | null = null
       if (includeMic) {

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { computeCornerRect, drawFrame } from './compositor'
+import { describe, it, expect, vi } from 'vitest'
+import { computeCornerRect, drawFrame, __testing__ } from './compositor'
 
 /**
  * Pure-function tests for the compositor. The actual canvas drawing and
@@ -147,5 +147,89 @@ describe('drawFrame', () => {
     // Webcam still draws, but screen doesn't
     expect(calls.length).toBe(1)
     expect(calls[0]?.image).toBe('webcam')
+  })
+})
+
+/**
+ * Regression: prior to the 2026-05-11 partial-init fix, `startCompositor`
+ * appended two offscreen `<video>` elements to `document.body` BEFORE
+ * awaiting `play()` / `waitForMetadata()` / `getContext()`. If any of
+ * those steps threw, the function rejected without removing the videos
+ * from the DOM. Result: the input MediaStreams stayed open through the
+ * orphaned video elements until the page unloaded.
+ *
+ * The fix wraps the setup phase in try/catch and calls `teardownOffscreen`
+ * on failure. These tests pin both halves: the teardown helper itself,
+ * and the contract that it survives elements already torn down or
+ * missing srcObject.
+ */
+describe('teardownOffscreen (partial-init cleanup)', () => {
+  function makeVideoLike(): HTMLVideoElement {
+    const paused = { value: false }
+    const src = { value: 'something' as unknown }
+    const removed = { value: false }
+    return {
+      get _paused() {
+        return paused.value
+      },
+      get _srcObject() {
+        return src.value
+      },
+      get _removed() {
+        return removed.value
+      },
+      pause: () => {
+        paused.value = true
+      },
+      set srcObject(v: unknown) {
+        src.value = v
+      },
+      get srcObject() {
+        return src.value
+      },
+      parentNode: {
+        removeChild: () => {
+          removed.value = true
+        }
+      }
+    } as unknown as HTMLVideoElement
+  }
+
+  it('pauses each element, nulls srcObject, and removes from parent', () => {
+    const a = makeVideoLike()
+    const b = makeVideoLike()
+    __testing__.teardownOffscreen([a, b])
+    // After teardown both should report paused, srcObject=null, and removed.
+    expect((a as unknown as { _paused: boolean })._paused).toBe(true)
+    expect((b as unknown as { _paused: boolean })._paused).toBe(true)
+    expect(a.srcObject).toBeNull()
+    expect(b.srcObject).toBeNull()
+    expect((a as unknown as { _removed: boolean })._removed).toBe(true)
+    expect((b as unknown as { _removed: boolean })._removed).toBe(true)
+  })
+
+  it('swallows pause() throws so a half-torn-down element does not block the second one', () => {
+    const a = {
+      pause: () => {
+        throw new Error('already detached')
+      },
+      set srcObject(_v: unknown) {
+        // Setting srcObject after a thrown pause is the realistic mid-cleanup state
+      },
+      parentNode: { removeChild: vi.fn() }
+    } as unknown as HTMLVideoElement
+    const b = makeVideoLike()
+    expect(() => __testing__.teardownOffscreen([a, b])).not.toThrow()
+    // The second element still gets cleaned up
+    expect((b as unknown as { _paused: boolean })._paused).toBe(true)
+  })
+
+  it('handles a detached element (no parentNode)', () => {
+    const a = {
+      pause: () => undefined,
+      set srcObject(_v: unknown) {},
+      parentNode: null
+    } as unknown as HTMLVideoElement
+    expect(() => __testing__.teardownOffscreen([a])).not.toThrow()
   })
 })

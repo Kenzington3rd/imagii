@@ -14,6 +14,39 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-11 — Bug sweep round 8 (compositor + assertDefined leaks)
+
+### Bug — Screen MediaStream leaked when recording with webcam composited in
+- **Root cause.** `RecordStudio.tsx:startRecording` opened the raw screen capture via `getUserMedia(screenConstraints)` and handed the resulting `MediaStream` to `startCompositor()`. The compositor wrapped it in a hidden `<video>` + `<canvas>` and returned a synthetic `outputStream` (the canvas-captureStream). RecordStudio stored *the synthetic stream* in `streamRef` and only stopped that ref in `stopAllStreams`. The original screen tracks from `desktopCapturer` were never `.stop()`d. After each webcam-composited recording, Windows kept the "screen is being shared" indicator visible and the GPU encode pipeline stayed open. Repeated recordings degraded framerate and eventually failed to start because the source was already in use.
+- **Fix.** Added `screenStreamRef` in `RecordStudio.tsx`, assigned at the moment `getUserMedia` resolves (before any path that might hand it to the compositor). `stopAllStreams` now releases tracks from all four refs: `streamRef`, `camStreamRef`, `screenStreamRef`, and `compositorRef`. The pattern is uniform — every track-owning ref is in the cleanup function, no exceptions.
+- **Test.** No direct unit test — covering this requires mocking `getUserMedia`/`MediaRecorder`/the whole device pipeline, which is high mock weight for one structural bug. This lesson doc is the test of record. The structural invariant is verifiable by reading `stopAllStreams`: if a new MediaStream-owning ref is added, it must be added to the cleanup block.
+- **Lesson.** **A handle that wraps another handle is not a substitute for tracking both.** The compositor abstracts the canvas-captureStream pipeline cleanly, but it does NOT take ownership of the input streams — and it shouldn't, because the caller may want to fall back to a screen-only path with the same screenStream. Caller-owns-the-source is the right boundary; the bug was that the caller forgot to actually hold the source. When wrapping a resource, document explicitly who is responsible for stopping the wrapped thing.
+
+### Bug — `startCompositor` leaked offscreen `<video>` elements on setup failure
+- **Root cause.** `compositor.ts:startCompositor` appended two offscreen `<video>` elements to `document.body` BEFORE awaiting `play()`, `waitForMetadata()`, and `getContext('2d')`. If any of those steps threw (e.g., `play()` rejecting on a denied autoplay policy, `waitForMetadata` hanging on a stream that never emits `loadedmetadata`, `getContext` returning null in a low-memory scenario), the function rejected without removing the videos from the DOM. The orphaned elements kept their `srcObject` references to the input MediaStreams, so the screen and webcam tracks stayed open until page unload.
+- **Fix.** Extracted `teardownOffscreen(elements)` helper (also reused by the normal `stop()` path). Wrapped the setup phase in try/catch: on failure, call `teardownOffscreen` before re-throwing. Hoisted `canvasW`/`canvasH`/`ctx`/`canvas` declarations outside the try so the post-setup code can use them, with `assert` ensuring `ctx` is non-null.
+- **Test.** `compositor.test.ts` — 3 new cases under "teardownOffscreen (partial-init cleanup)": (1) pauses + nulls srcObject + removes from parent for each element, (2) survives a `pause()` throw on a half-detached element and still cleans the second one, (3) handles a detached element (no parentNode).
+- **Lesson.** **`appendChild` is a side effect that must be undone on every failure path between it and the function's return.** The pattern "create → append → await → return handle" is dangerous because the awaits can throw. Either move the appendChild AFTER all the can-throw work (when feasible), or wrap the awaits in try/catch with an explicit cleanup. The same pattern bit us in `runConcat` (segment-encode failures leaving temp mp4s) — different resource, same root cause: side effects without paired cleanup.
+
+### Bug — `assertDefined` silently returned `null` as type `T` in production
+- **Root cause.** `src/shared/assert.ts:assertDefined` mirrored the `assert()` prod fallback ("warn + continue") but in a way that defeated its own purpose. When `value` was null/undefined in production, the function logged a warning and `return value as T`. The caller, trusting the `T` return type, immediately did `result.foo` or `result.length` and crashed with `TypeError: Cannot read properties of null` — a less informative error than the named `AssertionError` it would otherwise have produced. The whole point of using `assertDefined` over the `!` non-null assertion was Power-of-Ten compliance and clear failure messages; the prod path threw both away.
+- **Fix.** `assertDefined` now throws in both dev and prod. Prod path still logs `console.warn` for telemetry, but then falls through to the same `throw new AssertionError(...)`. The post-condition matches the type signature: if you got a value back, it's defined.
+- **Test.** `assert.test.ts` — 3 new cases under "assertDefined in production": (1) still throws AssertionError on null with the named message, (2) still throws on undefined, (3) returns defined values unchanged (zero, empty string, false — the falsy-but-defined cases).
+- **Lesson.** **A "soft" assertion is only soft if the post-condition is preserved without the asserted invariant.** `assert(cond, ...)` is genuinely soft: it returns void, callers that don't rely on `asserts cond` narrowing keep working. `assertDefined(value, ...)` is NOT soft: callers always rely on the return value being non-null. Throwing later with a worse message is strictly worse than throwing now with a good one. The "never crash a user's session" goal is real, but it applies to invariants that callers can degrade gracefully through — not to invariants the caller is about to dereference.
+
+### False alarms verified clean (3 of 7 agent-flagged "bugs" were misreads)
+- `concat.ts` missing `await` on `fs.mkdir` — agent misread; `const fs = await import(...)` is correctly assigned before use.
+- `filename.ts sanitizeFilename` allowing trailing dots — regex `[^\w\-]+` matches `.`; the dots ARE stripped. Verified by hand.
+- `ImportPanel.tsx` paste handler stale closure — `addLayer` is a Zustand action, stable across renders. Closure does the right thing.
+- `ImageStudio.tsx` keyboard handler stale closure — dep array `[undo, redo, selectedLayerId, removeLayer, setTool]` is complete; effect re-binds when selection changes.
+- `audioStore patchChain` race — JavaScript is single-threaded; Zustand `set/get` are synchronous; there is no race.
+- `whisperManager cleanupPartial().then()` rejection — `cleanupPartial` has internal try/catch around the only awaited operation; it never rejects, so the `.then()` always fires.
+- `safeZone.ts` floating-point asymmetric tolerance — symmetric tolerance is by construction (`>= outer - eps` on both sides, `<= outer + size + eps` on both sides). Misread.
+
+**Process lesson.** Three of three sub-agents in this sweep returned at least one false-positive bug. They're useful for locating candidate files and patterns, but EVERY claim needs verification against source. Total agent-flagged bugs: 11. Real after verification: 3. Hit rate: 27%. Plan accordingly.
+
+---
+
 ## 2026-05-11 — Webcam preview fix (held item → shipped)
 
 ### Bug — "Show webcam preview while recording" was preview-only, didn't composite into the saved file

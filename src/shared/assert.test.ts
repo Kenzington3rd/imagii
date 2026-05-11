@@ -56,3 +56,43 @@ describe('assertDefined', () => {
     expect(() => assertDefined(1, '')).toThrow(/without a name/)
   })
 })
+
+// Regression: prior to this fix, assertDefined in production warned and
+// returned `value as T` — i.e. it returned null/undefined cast as the
+// expected type, then downstream code crashed with a much less helpful
+// `TypeError: Cannot read properties of null`. Throwing in both envs is
+// strictly more useful: the named AssertionError tells you which value
+// was missing and where. Keep this test if anyone is tempted to "soften"
+// the prod path again.
+describe('assertDefined in production', () => {
+  const prevEnv = process.env.NODE_ENV
+
+  beforeEach(() => {
+    process.env.NODE_ENV = 'production'
+  })
+
+  afterEach(() => {
+    process.env.NODE_ENV = prevEnv
+  })
+
+  it('still throws AssertionError on null in prod (does not return null as T)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(() => assertDefined<number>(null, 'must-be-defined')).toThrow(AssertionError)
+    expect(() => assertDefined<number>(null, 'must-be-defined')).toThrow(/null/)
+    // It still warns for telemetry, but it MUST also throw.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('must-be-defined'))
+    warn.mockRestore()
+  })
+
+  it('still throws on undefined in prod', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(() => assertDefined<number>(undefined, 'also-required')).toThrow(/undefined/)
+    warn.mockRestore()
+  })
+
+  it('returns the value unchanged in prod when defined', () => {
+    expect(assertDefined(0, 'zero is defined')).toBe(0)
+    expect(assertDefined('', 'empty string is defined')).toBe('')
+    expect(assertDefined(false, 'false is defined')).toBe(false)
+  })
+})
