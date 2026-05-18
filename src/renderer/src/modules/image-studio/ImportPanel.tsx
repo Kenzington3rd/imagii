@@ -3,14 +3,15 @@ import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import { makeImageLayer, makeTextLayer, useCanvasStore } from './state/canvasStore'
 import { TemplatesDialog } from './TemplatesDialog'
-import { getTemplatesByCategory, type CanvasTemplate, type TemplateCategory } from './templates'
-
-const CATEGORY_LABEL: Record<TemplateCategory, string> = {
-  thumbnail: '🖼 Thumbnails',
-  overlay: '🎮 Stream overlays',
-  banner: '🪧 Banners',
-  emote: '😀 Emotes'
-}
+import {
+  getTemplatesByCategory,
+  TEMPLATE_CATEGORY_LABELS,
+  TEMPLATE_CATEGORY_ICONS,
+  type CanvasTemplate,
+  type TemplateCategory
+} from './templates'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 function cloneDoc<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj)) as T
@@ -141,11 +142,11 @@ export function ImportPanel(): JSX.Element {
             + Add text
           </button>
           <button
-            className="btn-ghost px-3 py-1"
+            className="btn-ghost px-3 py-1 inline-flex items-center gap-1.5"
             onClick={() => setShowTemplates(true)}
             data-tutorial="image-templates"
           >
-            ✨ Templates
+            <Icon name="sparkle" size={14} /> Templates
           </button>
           <span className="text-xs text-ink-dim ml-auto">
             Drop, paste (Ctrl+V), or pick a file.
@@ -176,9 +177,9 @@ export function ImportPanel(): JSX.Element {
         if (items.length === 0) return null
         return (
           <section key={category} className="flex flex-col gap-2">
-            <h3 className="text-xs uppercase tracking-wide text-ink-muted">
-              {CATEGORY_LABEL[category]}
-            </h3>
+            <PanelHeader icon={TEMPLATE_CATEGORY_ICONS[category]}>
+              {TEMPLATE_CATEGORY_LABELS[category]}
+            </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
               {items.map((t) => (
                 <button
@@ -209,9 +210,7 @@ export function ImportPanel(): JSX.Element {
       })}
 
       <div className="border-t border-ink-dim/20 pt-4 flex flex-col gap-2">
-        <h3 className="text-xs uppercase tracking-wide text-ink-muted">
-          Or start blank
-        </h3>
+        <PanelHeader icon="image">Or start blank</PanelHeader>
         <div
           onDragOver={(e) => {
             e.preventDefault()

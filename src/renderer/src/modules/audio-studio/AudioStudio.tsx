@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Toaster } from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { AppToaster } from '../../components/AppToaster'
+import { HomeLink } from '../../components/HomeLink'
+import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
 import { AudioImporter } from './AudioImporter'
 import { WaveformView } from './WaveformView'
@@ -28,27 +29,25 @@ export function AudioStudio(): JSX.Element {
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
       <header className="flex items-center justify-between">
         <div>
-          <Link to="/home" className="text-sm text-ink-muted hover:text-ink-base">
-            ← Home
-          </Link>
+          <HomeLink />
           <h1 className="text-2xl font-semibold mt-1">Audio Studio</h1>
         </div>
         <div className="flex items-center gap-2 text-sm">
           {source ? (
             <>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
                 disabled={!canUndo}
                 onClick={undo}
               >
-                ↶ Undo
+                <Icon name="undo" size={15} /> Undo
               </button>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
                 disabled={!canRedo}
                 onClick={redo}
               >
-                ↷ Redo
+                <Icon name="redo" size={15} /> Redo
               </button>
               <span className="ml-3 text-ink-muted truncate max-w-[40ch]">
                 {source.fileName}
@@ -63,15 +62,18 @@ export function AudioStudio(): JSX.Element {
       </header>
 
       {source ? (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">
           <div className="flex flex-col gap-4 min-w-0">
             <div data-tutorial="audio-waveform">
               <WaveformView />
             </div>
             <div className="card p-3 flex items-center gap-2 text-sm" data-tutorial="audio-fixwizard">
               <span className="text-ink-muted">Not sure what to enable?</span>
-              <button className="btn-primary px-3 py-1.5 text-sm ml-auto" onClick={() => setShowFixWizard(true)}>
-                ✨ Help me fix this
+              <button
+                className="btn-primary px-3 py-1.5 text-sm ml-auto inline-flex items-center gap-1.5"
+                onClick={() => setShowFixWizard(true)}
+              >
+                <Icon name="sparkle" size={15} /> Help me fix this
               </button>
             </div>
             <div data-tutorial="audio-export">
@@ -95,16 +97,7 @@ export function AudioStudio(): JSX.Element {
       )}
       <FixWizard open={showFixWizard} onClose={() => setShowFixWizard(false)} />
 
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          style: {
-            background: '#16161e',
-            color: '#e5e5ee',
-            border: '1px solid rgba(149, 149, 165, 0.25)'
-          }
-        }}
-      />
+      <AppToaster />
       {tutorial.active ? (
         <Tutorial def={audioTutorial} onClose={tutorial.stop} />
       ) : null}

@@ -154,10 +154,20 @@ export function Canvas(): JSX.Element {
     return Math.round(value / gridSize) * gridSize
   }
 
+  // Fit-to-container scaling, with a generous max-zoom cap. Previously
+  // capped at 1.0, which meant a 1920×1080 document on a 4K monitor with
+  // a 2500-wide container only rendered at 1:1 (1920×1080), leaving lots
+  // of empty space. Now allows up to 4× zoom so big monitors get a big
+  // visible canvas, while a 112×112 emote can't blow up to fill a 4K
+  // screen entirely (which would look comically pixelated). 4× balances:
+  //   - 1080p doc on 4K (container ~2500): 1.3× fits, sharp
+  //   - 720p doc on 4K (container ~2500): 1.8× fits, sharp
+  //   - 112px emote on 4K (container ~2500): cap to 4×, still readable
+  const MAX_STAGE_ZOOM = 4
   const stageScale = Math.min(
     containerSize.w / doc.width,
     containerSize.h / doc.height,
-    1
+    MAX_STAGE_ZOOM
   )
   const stageWidth = doc.width * stageScale
   const stageHeight = doc.height * stageScale

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
+import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { PanelHeader } from '../../components/PanelHeader'
 
 type ReframePosition = 'left' | 'center' | 'right' | 'smart'
 
@@ -81,14 +83,16 @@ export function ReframePanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-reframe">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-          📱 Auto-reframe to 9:16
-        </h3>
-        <span className="text-xs text-ink-dim">
-          {source.probe.width}×{source.probe.height} → 1080×1920
-        </span>
-      </div>
+      <PanelHeader
+        icon="phone"
+        actions={
+          <span className="text-xs text-ink-dim">
+            {source.probe.width}×{source.probe.height} → 1080×1920
+          </span>
+        }
+      >
+        Auto-reframe to 9:16
+      </PanelHeader>
       <p className="text-xs text-ink-dim">
         Crop the trimmed range to a vertical version for TikTok / Reels.
       </p>
@@ -110,7 +114,7 @@ export function ReframePanel(): JSX.Element | null {
       </div>
       <div className="flex items-center gap-2">
         <button className="btn-ghost px-3 py-1.5 text-xs" onClick={pickDir}>
-          {outDir ? `📁 ${outDir.split(/[\\/]/).pop()}` : 'Choose folder…'}
+          <OutputDirLabel outDir={outDir} />
         </button>
         <button
           className="btn-primary px-4 py-1.5 ml-auto disabled:opacity-50"

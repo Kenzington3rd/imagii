@@ -5,10 +5,27 @@ import path from 'node:path'
 import { nanoid } from 'nanoid'
 import { moodboardsDir, thumbsCacheDir } from '../sidecars/paths'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '../../shared/search'
+import { parseCollection } from '../../shared/moodboardParse'
 
 async function ensureDirs(): Promise<void> {
   await mkdir(moodboardsDir(), { recursive: true })
   await mkdir(thumbsCacheDir(), { recursive: true })
+}
+
+/**
+ * Read + parse a board JSON file into a fully-normalized collection, or
+ * `null` if the file is missing, unreadable, not JSON, or structurally
+ * wrong. Single choke point so every caller is guarded the same way —
+ * `parseCollection` guarantees `items` is always an array, so callers
+ * can touch `collection.items` without a TypeError.
+ */
+async function readCollection(file: string): Promise<MoodBoardCollection | null> {
+  try {
+    const raw = await readFile(file, 'utf8')
+    return parseCollection(raw)
+  } catch {
+    return null
+  }
 }
 
 export async function listCollections(): Promise<MoodBoardCollection[]> {
@@ -19,12 +36,8 @@ export async function listCollections(): Promise<MoodBoardCollection[]> {
   const collections: MoodBoardCollection[] = []
   for (const f of files) {
     if (!f.endsWith('.json')) continue
-    try {
-      const raw = await readFile(path.join(dir, f), 'utf8')
-      collections.push(JSON.parse(raw) as MoodBoardCollection)
-    } catch {
-      continue
-    }
+    const collection = await readCollection(path.join(dir, f))
+    if (collection) collections.push(collection)
   }
   collections.sort((a, b) => b.createdAt - a.createdAt)
   return collections
@@ -48,14 +61,31 @@ export async function createCollection(name: string): Promise<MoodBoardCollectio
 
 export async function deleteCollection(id: string): Promise<void> {
   const file = path.join(moodboardsDir(), `${id}.json`)
-  if (existsSync(file)) await unlink(file)
+  if (!existsSync(file)) return
+  // Best-effort: clean up every cached thumbnail this board owns before
+  // unlinking the JSON, mirroring removeFromCollection's per-item cleanup.
+  // A corrupt/missing JSON yields a null collection — the JSON unlink
+  // still proceeds.
+  const collection = await readCollection(file)
+  if (collection) {
+    for (const item of collection.items) {
+      if (item.cachedThumbPath && existsSync(item.cachedThumbPath)) {
+        try {
+          await unlink(item.cachedThumbPath)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+  await unlink(file)
 }
 
 export async function renameCollection(id: string, name: string): Promise<MoodBoardCollection | null> {
   const file = path.join(moodboardsDir(), `${id}.json`)
   if (!existsSync(file)) return null
-  const raw = await readFile(file, 'utf8')
-  const collection = JSON.parse(raw) as MoodBoardCollection
+  const collection = await readCollection(file)
+  if (!collection) return null
   collection.name = name.trim() || collection.name
   await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
   return collection
@@ -81,8 +111,8 @@ export async function addToCollection(
 ): Promise<MoodBoardCollection | null> {
   const file = path.join(moodboardsDir(), `${collectionId}.json`)
   if (!existsSync(file)) return null
-  const raw = await readFile(file, 'utf8')
-  const collection = JSON.parse(raw) as MoodBoardCollection
+  const collection = await readCollection(file)
+  if (!collection) return null
   if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return collection
   const cachedThumbPath = await cacheThumb(result.thumbnail)
   const item: MoodBoardItem = {
@@ -106,8 +136,8 @@ export async function removeFromCollection(
 ): Promise<MoodBoardCollection | null> {
   const file = path.join(moodboardsDir(), `${collectionId}.json`)
   if (!existsSync(file)) return null
-  const raw = await readFile(file, 'utf8')
-  const collection = JSON.parse(raw) as MoodBoardCollection
+  const collection = await readCollection(file)
+  if (!collection) return null
   const removed = collection.items.find((i) => i.id === itemId)
   collection.items = collection.items.filter((i) => i.id !== itemId)
   if (removed?.cachedThumbPath && existsSync(removed.cachedThumbPath)) {

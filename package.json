@@ -18,7 +18,9 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:emoji": "node scripts/check-emoji.mjs",
+    "verify": "npm run check:emoji && npm run typecheck && npm run test"
   },
   "dependencies": {
     "electron-store": "^8.2.0",

@@ -8,7 +8,6 @@ export interface PlatformInfo {
   aspectRatio: number
   durationSweetSpot: { min: number; max: number }
   durationHardLimit: number
-  emoji: string
 }
 
 export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
@@ -19,8 +18,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 1080,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
-    durationHardLimit: 12 * 60 * 60,
-    emoji: '▶️'
+    durationHardLimit: 12 * 60 * 60
   },
   reels: {
     id: 'reels',
@@ -29,8 +27,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 1920,
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 15, max: 60 },
-    durationHardLimit: 90,
-    emoji: '📱'
+    durationHardLimit: 90
   },
   tiktok: {
     id: 'tiktok',
@@ -39,8 +36,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 1920,
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 21, max: 34 },
-    durationHardLimit: 600,
-    emoji: '🎵'
+    durationHardLimit: 600
   },
   twitter: {
     id: 'twitter',
@@ -49,8 +45,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 720,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 5, max: 90 },
-    durationHardLimit: 140,
-    emoji: '𝕏'
+    durationHardLimit: 140
   },
   facebook: {
     id: 'facebook',
@@ -59,8 +54,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 720,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 15, max: 240 },
-    durationHardLimit: 240 * 60,
-    emoji: '👥'
+    durationHardLimit: 240 * 60
   }
 }
 

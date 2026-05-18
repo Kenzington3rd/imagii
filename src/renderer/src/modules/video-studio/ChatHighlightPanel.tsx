@@ -2,6 +2,8 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog, type ChatMessage } from '@shared/chatLog'
 import { useVideoStore } from './store/videoStore'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface ChatPeak {
   bucketStart: number
@@ -72,7 +74,9 @@ export function ChatHighlightPanel(): JSX.Element | null {
     }
     const found = findPeaks(msgs, bucketSec, padSec)
     setPeaks(found)
-    if (found.length === 0) toast('No chat spikes detected.', { icon: '🔍' })
+    if (found.length === 0) {
+      toast('No chat spikes detected.', { icon: <Icon name="search" size={18} /> })
+    }
     else toast.success(`Found ${found.length} hype moments`)
   }
 
@@ -86,9 +90,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        💬 Chat highlight reel
-      </h3>
+      <PanelHeader icon="chat">Chat highlight reel</PanelHeader>
       <p className="text-xs text-ink-dim">
         Paste a Twitch chat log (format: <code>[mm:ss] user: message</code>) — finds bursts in
         message density.

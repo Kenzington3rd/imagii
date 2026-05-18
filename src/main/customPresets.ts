@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import type { CustomPreset } from '../shared/customPresets'
+import { parseCustomPreset } from '../shared/customPresetParse'
 
 function dir(): string {
   return path.join(app.getPath('userData'), 'export-presets')
@@ -22,7 +23,12 @@ export async function listCustomPresets(): Promise<CustomPreset[]> {
     if (!f.endsWith('.json')) continue
     try {
       const raw = await readFile(path.join(dir(), f), 'utf8')
-      presets.push(JSON.parse(raw) as CustomPreset)
+      // parseCustomPreset returns null for structurally-broken files (a
+      // half-written `{}` from a crash, `null`, `42`). Skipping nulls here
+      // means the .sort below only ever sees presets with a real `name`,
+      // so a single corrupt file can't crash the whole IPC.
+      const preset = parseCustomPreset(raw)
+      if (preset) presets.push(preset)
     } catch {
       continue
     }

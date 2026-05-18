@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { ThumbnailVariants } from './ThumbnailVariants'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 type FormatOption = 'png' | 'jpg'
 
@@ -13,10 +15,31 @@ function downloadDataUrl(dataUrl: string, filename: string): void {
   a.remove()
 }
 
+/**
+ * Pick a sensible default export scale for the user's display. On a
+ * standard 1080p monitor (DPR 1.0) we want 1× — exporting at the
+ * canvas's nominal resolution. On a HiDPI screen (DPR ≥ 2.0, typical
+ * for 4K monitors at 200% scaling or Retina) we want the export to
+ * match what the user actually SEES on canvas, which is the canvas
+ * scaled up by DPR. Konva's `toDataURL({ pixelRatio })` accepts this
+ * directly. Clamps to the supported select-box options so the picker
+ * stays in sync with the resolved default. Pure function for tests.
+ */
+export function defaultExportScale(dpr: number): number {
+  if (!Number.isFinite(dpr) || dpr <= 0) return 1
+  if (dpr >= 2.5) return 3
+  if (dpr >= 1.75) return 2
+  return 1
+}
+
 export function ExportDialog(): JSX.Element {
   const [format, setFormat] = useState<FormatOption>('png')
   const [quality, setQuality] = useState(0.92)
-  const [scale, setScale] = useState(1)
+  // Pick a default scale based on the user's display DPR — 1× on
+  // standard 1080p, 2× on 4K-at-200%, 3× on extreme HiDPI. The user
+  // can still override via the picker; this just means the first
+  // export on a 4K screen looks correct without manual intervention.
+  const [scale, setScale] = useState(() => defaultExportScale(window.devicePixelRatio))
   const [busy, setBusy] = useState(false)
   const [showVariants, setShowVariants] = useState(false)
 
@@ -55,9 +78,7 @@ export function ExportDialog(): JSX.Element {
 
   return (
     <div className="card p-3 flex items-center gap-2 text-sm flex-wrap" data-tutorial="image-export">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        Export
-      </h3>
+      <PanelHeader icon="download">Export</PanelHeader>
       <select
         className="bg-bg-base rounded px-2 py-1"
         value={format}
@@ -95,11 +116,11 @@ export function ExportDialog(): JSX.Element {
         </select>
       </label>
       <button
-        className="btn-ghost px-3 py-1 text-xs"
+        className="btn-ghost px-3 py-1 text-xs inline-flex items-center gap-1.5"
         onClick={() => setShowVariants(true)}
         title="Generate 3 color-graded thumbnail variants"
       >
-        ✨ Variants
+        <Icon name="sparkle" size={13} /> Variants
       </button>
       <button
         className="btn-primary px-4 py-1 disabled:opacity-50"

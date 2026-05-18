@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface CustomPresetManagerProps {
   open: boolean
@@ -80,16 +81,21 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
       >
         <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
           <h2 className="text-lg font-semibold">Custom export presets</h2>
-          <button className="text-ink-dim hover:text-ink-base" onClick={onClose}>
+          <button
+            className="text-ink-dim hover:text-ink-base"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
 
         <div className="p-4 flex flex-col gap-4 overflow-y-auto">
           <section>
-            <h3 className="text-xs uppercase tracking-wide text-ink-muted mb-2">
+            <PanelHeader icon="gear" className="mb-2">
               Save a new preset
-            </h3>
+            </PanelHeader>
             <p className="text-xs text-ink-dim mb-3">
               Create a custom resolution / bitrate combo on top of an existing platform preset.
               Useful for non-standard targets (Discord 1080p, vertical YouTube shorts at custom
@@ -176,9 +182,9 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
           </section>
 
           <section>
-            <h3 className="text-xs uppercase tracking-wide text-ink-muted mb-2">
+            <PanelHeader icon="gear" className="mb-2">
               Saved presets ({presets.length})
-            </h3>
+            </PanelHeader>
             {presets.length === 0 ? (
               <p className="text-xs text-ink-dim">No custom presets yet.</p>
             ) : (

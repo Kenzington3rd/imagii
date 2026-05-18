@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { AppToaster } from '../../components/AppToaster'
+import { HomeLink } from '../../components/HomeLink'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 import type { RecordingSource } from '@shared/workspace'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
@@ -162,10 +164,17 @@ export function RecordStudio(): JSX.Element {
       // mic audio into it for the recorder.
       let camStream: MediaStream | null = null
       let videoTrackSource: MediaStream = screenStream
-      if (showCam && selectedCamId) {
+      // Resolve the effective camera the same way the <select> displays
+      // it: `selectedCamId` is null until the user actually opens the
+      // dropdown, but the select shows cams[0] as its value. Without this
+      // fallback, ticking "include webcam" and hitting record without
+      // touching the dropdown silently recorded screen-only — the exact
+      // UI-doesn't-match-output bug the webcam-preview fix set out to kill.
+      const effectiveCamId = selectedCamId ?? cams[0]?.deviceId ?? null
+      if (showCam && effectiveCamId) {
         try {
           camStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: selectedCamId } }
+            video: { deviceId: { exact: effectiveCamId } }
           })
           camStreamRef.current = camStream
           const compositor = await startCompositor({
@@ -221,6 +230,12 @@ export function RecordStudio(): JSX.Element {
       }, 200)
       setPhase('recording')
     } catch (err) {
+      // By the time MediaRecorder construction / start() runs, the screen,
+      // cam, compositor, and combined streams may all be assigned. If this
+      // throws (e.g. NotSupportedError), those streams + the compositor rAF
+      // loop would leak until navigation. Release everything before the
+      // toast — every startRecording exit path must end ownership.
+      stopAllStreams()
       toast.error(err instanceof Error ? err.message : 'Could not start recording')
     }
   }
@@ -262,7 +277,7 @@ export function RecordStudio(): JSX.Element {
           </span>
         )
       } else {
-        toast('Recording discarded.', { icon: '🗑' })
+        toast('Recording discarded.', { icon: <Icon name="trash" size={18} /> })
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
@@ -283,9 +298,7 @@ export function RecordStudio(): JSX.Element {
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
       <header className="flex items-center justify-between">
         <div>
-          <Link to="/home" className="text-sm text-ink-muted hover:text-ink-base">
-            ← Home
-          </Link>
+          <HomeLink />
           <h1 className="text-2xl font-semibold mt-1">Record</h1>
           <p className="text-xs text-ink-muted mt-1">
             Capture a screen, window, or webcam — saved locally as MP4 (or WebM).
@@ -293,7 +306,9 @@ export function RecordStudio(): JSX.Element {
         </div>
         {phase === 'recording' ? (
           <div className="flex items-center gap-3">
-            <span className="font-mono text-rose-300">● REC {formatElapsed(elapsed)}</span>
+            <span className="font-mono text-rose-300 inline-flex items-center gap-1.5">
+              <Icon name="record" size={15} /> REC {formatElapsed(elapsed)}
+            </span>
             <button className="btn-primary px-4 py-2" onClick={stopRecording}>
               Stop
             </button>
@@ -302,16 +317,18 @@ export function RecordStudio(): JSX.Element {
       </header>
 
       {phase === 'idle' || phase === 'choosing' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(320px,20%,520px)] gap-5">
           <div className="card p-4 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                What to record
-              </h3>
-              <button className="btn-ghost px-3 py-1 text-xs" onClick={chooseSource}>
-                Refresh sources
-              </button>
-            </div>
+            <PanelHeader
+              icon="video"
+              actions={
+                <button className="btn-ghost px-3 py-1 text-xs" onClick={chooseSource}>
+                  Refresh sources
+                </button>
+              }
+            >
+              What to record
+            </PanelHeader>
             {sources.length === 0 ? (
               <div className="bg-bg-hover rounded p-6 text-center text-sm text-ink-muted">
                 <button className="btn-primary px-4 py-2" onClick={chooseSource}>
@@ -342,9 +359,7 @@ export function RecordStudio(): JSX.Element {
           </div>
           <div className="flex flex-col gap-3">
             <div className="card p-4 flex flex-col gap-3 text-sm">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                Audio
-              </h3>
+              <PanelHeader icon="microphone">Audio</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -373,9 +388,7 @@ export function RecordStudio(): JSX.Element {
               ) : null}
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                Webcam
-              </h3>
+              <PanelHeader icon="record">Webcam</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -420,9 +433,7 @@ export function RecordStudio(): JSX.Element {
               </p>
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                Output
-              </h3>
+              <PanelHeader icon="folder">Output</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -438,11 +449,11 @@ export function RecordStudio(): JSX.Element {
               </p>
             </div>
             <button
-              className="btn-primary px-4 py-3 text-base disabled:opacity-50"
+              className="btn-primary px-4 py-3 text-base disabled:opacity-50 inline-flex items-center justify-center gap-2"
               disabled={!selectedSourceId}
               onClick={startRecording}
             >
-              ● Start recording
+              <Icon name="record" size={18} /> Start recording
             </button>
           </div>
         </div>
@@ -469,21 +480,14 @@ export function RecordStudio(): JSX.Element {
 
       {phase === 'saving' ? (
         <div className="card p-6 text-center">
-          <div className="text-2xl mb-2">💾</div>
+          <div className="flex justify-center mb-2 text-accent">
+            <Icon name="save" size={28} />
+          </div>
           <p className="text-sm">Finishing up — converting and writing to disk…</p>
         </div>
       ) : null}
 
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          style: {
-            background: '#16161e',
-            color: '#e5e5ee',
-            border: '1px solid rgba(149, 149, 165, 0.25)'
-          }
-        }}
-      />
+      <AppToaster />
     </div>
   )
 }

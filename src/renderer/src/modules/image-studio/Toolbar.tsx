@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import type { Tool } from './state/canvasStore'
 import { useCanvasStore } from './state/canvasStore'
+import { Icon, type IconName } from '../../components/Icon'
 
 interface ToolDef {
   id: Tool
   label: string
-  icon: string
+  icon: IconName
   shortcut?: string
   /** Phase 4A.3: tools used in <5% of streamer thumbnail/overlay work
    *  hide behind an "Advanced" disclosure to simplify the toolbar.
@@ -14,11 +15,11 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
-  { id: 'select', label: 'Select', icon: '↖', shortcut: 'V' },
-  { id: 'rect', label: 'Rect', icon: '▭', shortcut: 'R' },
-  { id: 'ellipse', label: 'Ellipse', icon: '◯', shortcut: 'O' },
-  { id: 'line', label: 'Line', icon: '╱', shortcut: 'L', advanced: true },
-  { id: 'pencil', label: 'Pencil', icon: '✎', shortcut: 'P', advanced: true }
+  { id: 'select', label: 'Select', icon: 'cursor', shortcut: 'V' },
+  { id: 'rect', label: 'Rect', icon: 'square', shortcut: 'R' },
+  { id: 'ellipse', label: 'Ellipse', icon: 'circle', shortcut: 'O' },
+  { id: 'line', label: 'Line', icon: 'line', shortcut: 'L', advanced: true },
+  { id: 'pencil', label: 'Pencil', icon: 'pencil', shortcut: 'P', advanced: true }
 ]
 
 export function Toolbar(): JSX.Element {
@@ -49,8 +50,10 @@ export function Toolbar(): JSX.Element {
             onClick={() => setTool(t.id)}
             title={`${t.label}${t.shortcut ? ` (${t.shortcut})` : ''}`}
           >
-            <span className="mr-1">{t.icon}</span>
-            {t.label}
+            <span className="inline-flex items-center gap-1.5">
+              <Icon name={t.icon} size={14} />
+              {t.label}
+            </span>
           </button>
         ))}
         {!showAdvanced ? (

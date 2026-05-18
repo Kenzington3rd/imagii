@@ -1,5 +1,5 @@
-import { Toaster } from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { AppToaster } from '../../components/AppToaster'
+import { HomeLink } from '../../components/HomeLink'
 import { useReferencesStore } from './state/referencesStore'
 import { ReferencePanel } from './ReferencePanel'
 import { MoodBoardPanel } from './MoodBoardPanel'
@@ -20,9 +20,7 @@ export function ReferencesStudio(): JSX.Element {
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-4">
       <header className="flex items-center justify-between">
         <div>
-          <Link to="/home" className="text-sm text-ink-muted hover:text-ink-base">
-            ← Home
-          </Link>
+          <HomeLink />
           <h1 className="text-2xl font-semibold mt-1">References</h1>
           <p className="text-xs text-ink-muted mt-1">
             Search inspiration, save mood boards, or drop a built-in asset
@@ -48,16 +46,7 @@ export function ReferencesStudio(): JSX.Element {
         )}
       </div>
 
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          style: {
-            background: '#16161e',
-            color: '#e5e5ee',
-            border: '1px solid rgba(149, 149, 165, 0.25)'
-          }
-        }}
-      />
+      <AppToaster />
       {tutorial.active ? <Tutorial def={aiTutorial} onClose={tutorial.stop} /> : null}
     </div>
   )

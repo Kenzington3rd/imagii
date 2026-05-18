@@ -2,6 +2,7 @@ import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
 import { DEFAULT_DUCK_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 const ROLE_OPTIONS: Array<{
   value: SecondaryTrackRole
@@ -70,9 +71,7 @@ export function SecondaryTrackPanel(): JSX.Element {
 
   return (
     <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-        Add a second track
-      </h3>
+      <PanelHeader icon="audio">Add a second track</PanelHeader>
       {!secondary ? (
         <>
           <p className="text-xs text-ink-muted">

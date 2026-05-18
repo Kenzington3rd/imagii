@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import toast, { Toaster } from 'react-hot-toast'
-import { Link, useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
+import { useNavigate } from 'react-router-dom'
+import { AppToaster } from '../../components/AppToaster'
+import { HomeLink } from '../../components/HomeLink'
+import { Icon } from '../../components/Icon'
 import { useVideoStore } from './store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
 import { Importer } from './Importer'
@@ -54,21 +57,19 @@ export function VideoStudio(): JSX.Element {
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
       <header className="flex items-center justify-between">
         <div>
-          <Link to="/home" className="text-sm text-ink-muted hover:text-ink-base">
-            ← Home
-          </Link>
+          <HomeLink />
           <h1 className="text-2xl font-semibold mt-1">Video Studio</h1>
         </div>
         <div className="flex items-center gap-3 text-sm text-ink-muted">
           {source ? (
             <>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
                 onClick={cleanAudioFlow}
                 disabled={extractingAudio}
                 title="Extract this video's audio and open it in Audio Studio"
               >
-                🎚 Clean audio
+                <Icon name="audio" size={15} /> Clean audio
               </button>
               <span className="truncate max-w-[40ch]">{source.fileName}</span>
               <button className="btn-ghost px-3 py-1.5" onClick={clearSource}>
@@ -81,7 +82,7 @@ export function VideoStudio(): JSX.Element {
       </header>
 
       {source ? (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">
           <div className="flex flex-col gap-4 min-w-0">
             <div data-tutorial="video-player"><Player /></div>
             <div data-tutorial="video-timeline"><Timeline /></div>
@@ -106,16 +107,7 @@ export function VideoStudio(): JSX.Element {
         <div data-tutorial="video-import"><Importer /></div>
       )}
 
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          style: {
-            background: '#16161e',
-            color: '#e5e5ee',
-            border: '1px solid rgba(149, 149, 165, 0.25)'
-          }
-        }}
-      />
+      <AppToaster />
       {tutorial.active ? (
         <Tutorial def={videoTutorial} onClose={tutorial.stop} />
       ) : null}

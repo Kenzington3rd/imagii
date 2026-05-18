@@ -5,6 +5,7 @@ import { Home } from './routes/Home'
 import { Video } from './routes/Video'
 import { Audio } from './routes/Audio'
 import { Image } from './routes/Image'
+import { Record } from './routes/Record'
 import { References } from './routes/References'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
@@ -51,7 +52,12 @@ export function App(): JSX.Element {
         <Route path="/video" element={<Video />} />
         <Route path="/audio" element={<Audio />} />
         <Route path="/image" element={<Image />} />
-        <Route path="/ai-art" element={<References />} />
+        <Route path="/record" element={<Record />} />
+        <Route path="/references" element={<References />} />
+        {/* Back-compat: the References studio was originally routed at
+            /ai-art before the module was repurposed. Redirect so any old
+            deep link still resolves. */}
+        <Route path="/ai-art" element={<Navigate to="/references" replace />} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </ErrorBoundary>

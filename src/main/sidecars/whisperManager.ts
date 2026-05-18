@@ -466,6 +466,10 @@ async function runInstall(
         /* ignore */
       }
     }
+    // Hoisted so the request-level 'error'/'abort' handlers can destroy the
+    // write stream before cleanupPartial() unlinks partialPath. On Windows,
+    // unlinking a file whose fd is still open throws EBUSY and the file leaks.
+    let out: import('node:fs').WriteStream | null = null
     request.on('response', (response) => {
       const status = response.statusCode
       if (status < 200 || status >= 300) {
@@ -481,11 +485,25 @@ async function runInstall(
             ? Number(totalHeader)
             : 0
       let bytesDownloaded = 0
-      const out = createWriteStream(partialPath)
+      // `out` (hoisted) lets the request-level error/abort handlers close the
+      // stream; `stream` is the same instance as a non-null local for the
+      // response.* closures below.
+      const stream = createWriteStream(partialPath)
+      out = stream
+      // A write stream that emits 'error' (e.g. ENOSPC on a near-full
+      // disk during the 141 MB download) throws an uncaught exception
+      // with no listener — crashing the whole main process. Settle the
+      // install cleanly instead.
+      stream.on('error', (err: Error) => {
+        stream.destroy()
+        void cleanupPartial()
+        onProgress({ phase: 'failed', message: err.message })
+        settle({ ok: false, reason: err.message })
+      })
       response.on('data', (chunk: Buffer) => {
         if (me.cancelled || settled) return
         bytesDownloaded += chunk.length
-        out.write(chunk)
+        stream.write(chunk)
         const percent =
           totalBytes > 0 ? Math.min(99, (bytesDownloaded / totalBytes) * 100) : 0
         onProgress({
@@ -496,8 +514,8 @@ async function runInstall(
         })
       })
       response.on('end', () => {
-        out.end()
-        out.on('finish', () => {
+        stream.end()
+        stream.on('finish', () => {
           if (settled) return
           if (me.cancelled) {
             void cleanupPartial().then(() => {
@@ -510,7 +528,7 @@ async function runInstall(
         })
       })
       response.on('error', (err: Error) => {
-        out.destroy()
+        stream.destroy()
         void cleanupPartial()
         onProgress({ phase: 'failed', message: err.message })
         settle({ ok: false, reason: err.message })
@@ -518,6 +536,7 @@ async function runInstall(
     })
     request.on('error', (err: Error) => {
       const reason = me.cancelled ? 'cancelled' : err.message
+      out?.destroy()
       void cleanupPartial()
       onProgress({
         phase: 'failed',
@@ -526,6 +545,7 @@ async function runInstall(
       settle({ ok: false, reason })
     })
     request.on('abort', () => {
+      out?.destroy()
       void cleanupPartial().then(() => {
         onProgress({ phase: 'failed', message: 'Cancelled by user' })
         settle({ ok: false, reason: 'cancelled' })

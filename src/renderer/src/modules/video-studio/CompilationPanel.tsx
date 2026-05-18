@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
+import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { PanelHeader } from '../../components/PanelHeader'
 
 export function CompilationPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -60,9 +62,7 @@ export function CompilationPanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        🎞 Compile clips ({clips.length})
-      </h3>
+      <PanelHeader icon="film">Compile clips ({clips.length})</PanelHeader>
       <p className="text-xs text-ink-dim">
         Stitch all clips into one 1920×1080 montage MP4 with optional crossfades. Order = clip
         list order.
@@ -82,7 +82,7 @@ export function CompilationPanel(): JSX.Element | null {
       </label>
       <div className="flex items-center gap-2">
         <button className="btn-ghost px-3 py-1.5 text-xs" onClick={pickDir}>
-          {outDir ? `📁 ${outDir.split(/[\\/]/).pop()}` : 'Choose folder…'}
+          <OutputDirLabel outDir={outDir} />
         </button>
         <button
           className="btn-primary px-3 py-1.5 text-xs ml-auto disabled:opacity-50"

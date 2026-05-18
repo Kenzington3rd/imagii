@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   MAX_SCHEMA_VERSION,
   isSafeToAutosave,
+  isValidTextOverlay,
   validateProject,
   validateProjectJsonString
 } from './projectValidation'
@@ -221,6 +222,196 @@ describe('path-safety integration (bug round 4)', () => {
       }
     })
     expect(result.ok).toBe(true)
+  })
+
+  // chain.secondaryTrack.filePath reaches `ffmpeg -i` during audio export.
+  // A malicious project pointing it at an SSH key would mix an arbitrary
+  // file into the output — validator must reject traversal / unsafe paths.
+  it('rejects audioStudio.chain.secondaryTrack.filePath with .. traversal', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: {
+        sourcePath: 'C:/safe.wav',
+        chain: {
+          secondaryTrack: {
+            filePath: 'C:/Users/maken/../../../Users/maken/.ssh/id_rsa',
+            fileName: 'id_rsa',
+            role: 'music',
+            gainDb: 0,
+            duckUnderPrimary: false
+          }
+        }
+      }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/secondaryTrack/)
+  })
+
+  it('rejects audioStudio.chain.secondaryTrack with a non-object value', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: {
+        sourcePath: 'C:/safe.wav',
+        chain: { secondaryTrack: 'not an object' }
+      }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/secondaryTrack/)
+  })
+
+  it('accepts a safe absolute secondaryTrack.filePath', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: {
+        sourcePath: 'C:/safe.wav',
+        chain: {
+          secondaryTrack: {
+            filePath: 'C:/Users/maken/Music/bed.mp3',
+            fileName: 'bed.mp3',
+            role: 'music',
+            gainDb: -6,
+            duckUnderPrimary: true
+          }
+        }
+      }
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('accepts a chain with secondaryTrack null (back-compat)', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: { sourcePath: 'C:/safe.wav', chain: { secondaryTrack: null } }
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('accepts a chain with secondaryTrack absent (back-compat)', () => {
+    const result = validateProject({
+      ...baseProject,
+      audioStudio: { sourcePath: 'C:/safe.wav', chain: {} }
+    })
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe('clip textOverlay validation (bug round 14)', () => {
+  // Threat model: a malicious .imagii.json carries a clip with a
+  // textOverlay whose colorHex / sizePx is an FFmpeg filter-graph
+  // injection payload. drawTextFilter interpolates those raw, so the
+  // validator must reject the whole project before it ever loads.
+  const goodOverlay = {
+    id: 'o1',
+    text: 'Hello',
+    font: 'arial',
+    sizePx: 48,
+    colorHex: '#ffffff',
+    x: 0.5,
+    y: 0.5,
+    startSec: 0,
+    endSec: 2
+  }
+
+  function projectWithOverlay(overlay: unknown) {
+    return {
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [{ id: 'c1', textOverlays: [overlay] }],
+        selectedClipId: null
+      }
+    }
+  }
+
+  it('accepts a project with a well-formed text overlay', () => {
+    expect(validateProject(projectWithOverlay(goodOverlay)).ok).toBe(true)
+  })
+
+  it('accepts a clip with no textOverlays field (back-compat)', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [{ id: 'c1' }],
+        selectedClipId: null
+      }
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects a colorHex carrying an FFmpeg injection payload', () => {
+    const result = validateProject(
+      projectWithOverlay({
+        ...goodOverlay,
+        colorHex: 'white,movie=C\\:/Users/victim/.ssh/id_rsa[k];[k]'
+      })
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays/)
+  })
+
+  it('rejects a non-numeric sizePx', () => {
+    const result = validateProject(
+      projectWithOverlay({ ...goodOverlay, sizePx: '64; movie=secret' })
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays/)
+  })
+
+  it('rejects an out-of-range sizePx', () => {
+    expect(validateProject(projectWithOverlay({ ...goodOverlay, sizePx: 9999 })).ok).toBe(
+      false
+    )
+    expect(validateProject(projectWithOverlay({ ...goodOverlay, sizePx: 2 })).ok).toBe(
+      false
+    )
+  })
+
+  it('rejects a non-array textOverlays field', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [{ id: 'c1', textOverlays: 'oops' }],
+        selectedClipId: null
+      }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays/)
+  })
+
+  describe('isValidTextOverlay', () => {
+    it('accepts a well-formed overlay', () => {
+      expect(isValidTextOverlay(goodOverlay)).toBe(true)
+    })
+
+    it('accepts a bare 6-hex colorHex (no leading #)', () => {
+      expect(isValidTextOverlay({ ...goodOverlay, colorHex: 'AABBCC' })).toBe(true)
+    })
+
+    it('rejects a non-object', () => {
+      expect(isValidTextOverlay(null)).toBe(false)
+      expect(isValidTextOverlay('x')).toBe(false)
+      expect(isValidTextOverlay([])).toBe(false)
+    })
+
+    it('rejects a malformed colorHex', () => {
+      expect(isValidTextOverlay({ ...goodOverlay, colorHex: 'red' })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, colorHex: '#fff' })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, colorHex: 123 })).toBe(false)
+    })
+
+    it('rejects a non-finite or out-of-range sizePx', () => {
+      expect(isValidTextOverlay({ ...goodOverlay, sizePx: NaN })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, sizePx: 0 })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, sizePx: 1000 })).toBe(false)
+    })
+
+    it('rejects non-finite numeric position / timing fields', () => {
+      expect(isValidTextOverlay({ ...goodOverlay, x: Infinity })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, startSec: 'a' })).toBe(false)
+      expect(isValidTextOverlay({ ...goodOverlay, endSec: undefined })).toBe(false)
+    })
   })
 })
 

@@ -7,6 +7,7 @@ import { analyzeClipHook, findHighlights } from '../ffmpeg/highlights'
 import { runGifExport } from '../ffmpeg/gif'
 import { runConcat, runPipComposite } from '../ffmpeg/concat'
 import { extractFrame, makeKitDir } from '../ffmpeg/frame'
+import { ALL_PRESET_IDS } from '../ffmpeg/presets'
 import {
   listCustomPresets,
   saveCustomPreset,
@@ -24,6 +25,7 @@ import {
   assertPlainObject
 } from '../../shared/validators'
 import { assert } from '../../shared/assert'
+import { isValidTextOverlay } from '../../shared/projectValidation'
 
 const REFRAME_POSITIONS = ['left', 'center', 'right', 'smart'] as const
 const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
@@ -38,7 +40,20 @@ function validateExportJob(job: unknown, idx: number): asserts job is ExportJobS
   assertFiniteNonNeg(clip.startSec, `jobs[${idx}].clip.startSec`)
   assertFiniteNonNeg(clip.endSec, `jobs[${idx}].clip.endSec`)
   assert((clip.endSec as number) > (clip.startSec as number), `jobs[${idx}].clip range invalid (endSec must exceed startSec)`)
-  assertNonEmptyString(job.preset, `jobs[${idx}].preset`)
+  // textOverlays reach FFmpeg's drawtext filter string raw — a malformed
+  // colorHex / sizePx is a filter-graph injection vector. Reject here so a
+  // bad overlay cannot pass through the video:exportBatch IPC boundary.
+  const overlays = clip.textOverlays
+  if (overlays !== undefined) {
+    assertArray(overlays, `jobs[${idx}].clip.textOverlays`, 1000)
+    for (let i = 0; i < overlays.length; i++) {
+      assert(
+        isValidTextOverlay(overlays[i]),
+        `jobs[${idx}].clip.textOverlays[${i}] malformed`
+      )
+    }
+  }
+  assertEnum(job.preset, ALL_PRESET_IDS, `jobs[${idx}].preset`)
 }
 
 export function registerVideoIpc(): void {

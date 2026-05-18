@@ -1,14 +1,15 @@
 import { useState } from 'react'
 import { nanoid } from 'nanoid'
-import { CANVAS_TEMPLATES, getTemplatesByCategory, type CanvasTemplate } from './templates'
+import {
+  CANVAS_TEMPLATES,
+  getTemplatesByCategory,
+  TEMPLATE_CATEGORY_LABELS,
+  TEMPLATE_CATEGORY_ICONS,
+  type CanvasTemplate,
+  type TemplateCategory
+} from './templates'
 import { useCanvasStore } from './state/canvasStore'
-
-const CATEGORY_LABELS: Record<string, string> = {
-  thumbnail: '🖼 Thumbnails',
-  overlay: '🎮 Stream overlays',
-  banner: '🪧 Banners',
-  emote: '😀 Emotes'
-}
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface TemplatesDialogProps {
   open: boolean
@@ -41,16 +42,23 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
       <div className="bg-bg-elevated border border-ink-dim/30 rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
           <h2 className="text-lg font-semibold">Streamer templates</h2>
-          <button className="text-ink-dim hover:text-ink-base" onClick={onClose}>
+          <button
+            className="text-ink-dim hover:text-ink-base text-lg leading-none"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
         <div className="flex-1 overflow-auto p-4 flex flex-col gap-5">
           {Object.entries(grouped).map(([category, templates]) => (
             <section key={category}>
-              <h3 className="text-xs uppercase tracking-wide text-ink-muted mb-2">
-                {CATEGORY_LABELS[category] ?? category}
-              </h3>
+              <PanelHeader
+                icon={TEMPLATE_CATEGORY_ICONS[category as TemplateCategory]}
+                className="mb-2"
+              >
+                {TEMPLATE_CATEGORY_LABELS[category as TemplateCategory] ?? category}
+              </PanelHeader>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {templates.map((t) => (
                   <button

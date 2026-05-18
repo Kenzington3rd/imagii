@@ -4,10 +4,12 @@ import { nanoid } from 'nanoid'
 import {
   ASSET_CATALOG,
   ASSET_CATEGORY_LABELS,
+  ASSET_CATEGORY_ICONS,
   getAssetsByCategory,
   type AssetCategory,
   type CatalogAsset
 } from './assetCatalog'
+import { PanelHeader } from '../../components/PanelHeader'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 
 /**
@@ -59,9 +61,9 @@ export function AssetLibraryPanel(): JSX.Element {
         if (items.length === 0) return null
         return (
           <section key={category} className="flex flex-col gap-2">
-            <h3 className="text-xs uppercase tracking-wide text-ink-muted">
+            <PanelHeader icon={ASSET_CATEGORY_ICONS[category]}>
               {ASSET_CATEGORY_LABELS[category]}
-            </h3>
+            </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {items.map((asset) => (
                 <button

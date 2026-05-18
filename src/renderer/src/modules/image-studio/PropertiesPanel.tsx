@@ -1,5 +1,6 @@
 import type { CanvasLayer, EllipseLayer, RectLayer, TextLayer } from '@shared/canvas'
 import { useCanvasStore } from './state/canvasStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 const ROTATION_PRESETS = [0, 15, 30, 45, 90, 180, 270]
 
@@ -14,9 +15,7 @@ export function PropertiesPanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        Properties
-      </h3>
+      <PanelHeader icon="gear">Properties</PanelHeader>
 
       <label className="flex items-center gap-2">
         <span className="text-xs text-ink-muted w-16">Name</span>

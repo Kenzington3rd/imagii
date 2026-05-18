@@ -28,7 +28,7 @@ function escapeDrawtext(text: string): string {
     .replace(/\r/g, '\\n')
 }
 
-export const __testing__ = { escapeDrawtext }
+export const __testing__ = { escapeDrawtext, safeOverlaySize, safeOverlayColor }
 
 function cropToFilter(crop: CropRect, source: SourceDimensions): string {
   const w = Math.max(2, Math.round(crop.w * source.width))
@@ -58,13 +58,47 @@ function scaleFilter(preset: PlatformPreset): string {
   return `scale=${preset.width}:${preset.height}:flags=lanczos`
 }
 
+/** Allowed hex-color form for an overlay (`#RRGGBB` or `RRGGBB`). */
+const OVERLAY_COLOR_RE = /^#?[0-9A-Fa-f]{6}$/
+const OVERLAY_SIZE_MIN = 8
+const OVERLAY_SIZE_MAX = 512
+const OVERLAY_SIZE_FALLBACK = 48
+
+/**
+ * Coerce an overlay font size to a clamped finite integer. A malicious
+ * project file can carry `sizePx: NaN` or an injection string — never
+ * interpolate it raw into the filter graph.
+ */
+function safeOverlaySize(sizePx: unknown): number {
+  if (typeof sizePx !== 'number' || !Number.isFinite(sizePx)) {
+    return OVERLAY_SIZE_FALLBACK
+  }
+  const clamped = Math.min(OVERLAY_SIZE_MAX, Math.max(OVERLAY_SIZE_MIN, sizePx))
+  return Math.round(clamped)
+}
+
+/**
+ * Validate an overlay color. Returns the original value when it is a
+ * well-formed hex color (preserving FFmpeg's existing accepted behavior),
+ * otherwise falls back to a safe default. Defends against a `colorHex`
+ * crafted to inject FFmpeg filter directives (e.g. `white,movie=...`).
+ */
+function safeOverlayColor(colorHex: unknown): string {
+  if (typeof colorHex === 'string' && OVERLAY_COLOR_RE.test(colorHex)) {
+    return colorHex
+  }
+  return 'white'
+}
+
 function drawTextFilter(overlay: TextOverlay, preset: PlatformPreset): string {
   const fontPath = 'C\\:/Windows/Fonts/arial.ttf'
   const x = Math.round(overlay.x * preset.width)
   const y = Math.round(overlay.y * preset.height)
   const text = escapeDrawtext(overlay.text)
+  const fontSize = safeOverlaySize(overlay.sizePx)
+  const fontColor = safeOverlayColor(overlay.colorHex)
   const between = `between(t,${overlay.startSec.toFixed(3)},${overlay.endSec.toFixed(3)})`
-  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${overlay.sizePx}:fontcolor=${overlay.colorHex}:x=${x}:y=${y}:enable='${between}'`
+  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${x}:y=${y}:enable='${between}'`
 }
 
 function colorGradeFilter(g: ColorGrade): string | null {

@@ -35,6 +35,55 @@ function isOptionalSafePath(v: unknown): boolean {
   return isSafeAbsolutePath(v)
 }
 
+/** Allowed hex-color form for a text overlay (`#RRGGBB` or `RRGGBB`). */
+const COLOR_HEX_RE = /^#?[0-9A-Fa-f]{6}$/
+/** Sane bounds for an overlay font size, in pixels. */
+const OVERLAY_SIZE_MIN = 8
+const OVERLAY_SIZE_MAX = 512
+
+/**
+ * Validate a single clip text overlay. A malicious `.imagii.json` can set
+ * `colorHex` / `sizePx` to FFmpeg filter-graph injection payloads that
+ * `drawTextFilter` interpolates raw — so every field that reaches the
+ * filter string must be structurally sound here. Returns true only for a
+ * fully well-formed overlay; never throws.
+ */
+export function isValidTextOverlay(v: unknown): boolean {
+  if (!isPlainObject(v)) return false
+  if (typeof v.text !== 'string') return false
+  if (typeof v.colorHex !== 'string' || !COLOR_HEX_RE.test(v.colorHex)) return false
+  if (
+    !isFiniteNumber(v.sizePx) ||
+    v.sizePx < OVERLAY_SIZE_MIN ||
+    v.sizePx > OVERLAY_SIZE_MAX
+  ) {
+    return false
+  }
+  if (!isFiniteNumber(v.x) || !isFiniteNumber(v.y)) return false
+  if (!isFiniteNumber(v.startSec) || !isFiniteNumber(v.endSec)) return false
+  return true
+}
+
+/**
+ * Validate the `textOverlays` field of a clip. Absent is fine
+ * (back-compat); if present it must be an array of well-formed overlays.
+ * Returns a reason string on failure, or null on success.
+ */
+function validateClipTextOverlays(clip: unknown, idx: number): string | null {
+  if (!isPlainObject(clip)) return `videoStudio.clips[${idx}] not an object`
+  const overlays = clip.textOverlays
+  if (overlays === undefined) return null
+  if (!Array.isArray(overlays)) {
+    return `videoStudio.clips[${idx}].textOverlays not an array`
+  }
+  for (let i = 0; i < overlays.length; i++) {
+    if (!isValidTextOverlay(overlays[i])) {
+      return `videoStudio.clips[${idx}].textOverlays[${i}] malformed`
+    }
+  }
+  return null
+}
+
 /**
  * Migrate a v1 project to v2 in-place on the input object. v2 added an
  * optional videoStudio.srtPath field; the migration just bumps
@@ -82,6 +131,13 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isOptionalSafePath(v.sourcePath))
       return { ok: false, reason: 'videoStudio.sourcePath unsafe or malformed' }
     if (!Array.isArray(v.clips)) return { ok: false, reason: 'videoStudio.clips not array' }
+    // Descend into each clip's text overlays. `colorHex` / `sizePx` reach
+    // FFmpeg's drawtext filter string raw — a malicious project can smuggle
+    // a filter-graph injection payload through them, so reject here.
+    for (let i = 0; i < v.clips.length; i++) {
+      const reason = validateClipTextOverlays(v.clips[i], i)
+      if (reason !== null) return { ok: false, reason }
+    }
     // v2 srtPath: optional, but if present must be a safe absolute path.
     if (!isOptionalSafePath(v.srtPath))
       return { ok: false, reason: 'videoStudio.srtPath unsafe or malformed' }
@@ -92,6 +148,20 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isOptionalSafePath(a.sourcePath))
       return { ok: false, reason: 'audioStudio.sourcePath unsafe or malformed' }
     if (!isPlainObject(a.chain)) return { ok: false, reason: 'audioStudio.chain missing' }
+    // chain.secondaryTrack carries a filePath that reaches `ffmpeg -i`
+    // during audio export. A malicious project pointing it at an SSH key
+    // would mix an arbitrary file into the output. Optional/null for
+    // back-compat, but if present it must be a safe absolute path.
+    const secondary = a.chain.secondaryTrack
+    if (secondary !== undefined && secondary !== null) {
+      if (!isPlainObject(secondary))
+        return { ok: false, reason: 'audioStudio.chain.secondaryTrack not an object' }
+      if (!isSafeAbsolutePath(secondary.filePath))
+        return {
+          ok: false,
+          reason: 'audioStudio.chain.secondaryTrack.filePath unsafe or malformed'
+        }
+    }
   }
   if (input.imageCanvas !== undefined) {
     const c = input.imageCanvas

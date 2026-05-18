@@ -1,3 +1,5 @@
+import { Icon } from '../../components/Icon'
+
 interface SafeZoneWarningModalProps {
   open: boolean
   affectedClips: Array<{
@@ -27,7 +29,9 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 mb-3">
-          <span className="text-amber-300">⚠️</span>
+          <span className="text-amber-300">
+            <Icon name="warning" size={18} />
+          </span>
           <h2 className="text-lg font-semibold">Safe-zone warning</h2>
         </div>
         <p className="text-sm text-ink-base mb-3">

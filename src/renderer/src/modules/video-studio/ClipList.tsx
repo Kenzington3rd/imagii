@@ -1,6 +1,8 @@
 import { useVideoStore } from './store/videoStore'
 import { ClipKitButton } from './ClipKitButton'
 import { HookIndicator } from './HookIndicator'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 function formatShort(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -23,14 +25,16 @@ export function ClipList(): JSX.Element {
 
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-          Clips ({clips.length})
-        </h3>
-        <button className="btn-ghost px-3 py-1 text-xs" onClick={addClip}>
-          + Add clip
-        </button>
-      </div>
+      <PanelHeader
+        icon="film"
+        actions={
+          <button className="btn-ghost px-3 py-1 text-xs" onClick={addClip}>
+            + Add clip
+          </button>
+        }
+      >
+        Clips ({clips.length})
+      </PanelHeader>
       {selected ? (
         <div className="flex flex-col gap-1.5 px-1 py-1.5 bg-bg-hover rounded">
           <div className="flex items-center gap-2 text-xs">
@@ -46,11 +50,12 @@ export function ClipList(): JSX.Element {
             />
             <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
             <button
-              className="text-ink-dim hover:text-ink-base"
+              className="text-ink-dim hover:text-ink-base flex"
               onClick={() => setClipSpeed(selected.id, 1)}
               title="Reset to 1×"
+              aria-label="Reset speed to 1×"
             >
-              ↺
+              <Icon name="refresh" size={14} />
             </button>
           </div>
           {/* Phase 4C: hook indicator. Lazy-fetches first-3-seconds energy

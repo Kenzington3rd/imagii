@@ -2,6 +2,7 @@ import { useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
+import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 
 const ACCEPTED_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']
@@ -43,7 +44,9 @@ export function Importer(): JSX.Element {
       return
     }
     if (!looksLikeVideo(file.name)) {
-      toast(`${file.name} may not be a supported video — trying anyway.`, { icon: '⚠️' })
+      toast(`${file.name} may not be a supported video — trying anyway.`, {
+        icon: <Icon name="warning" size={18} />
+      })
     }
     void handleFile(filePath)
   }
@@ -65,7 +68,9 @@ export function Importer(): JSX.Element {
         dragOver ? 'border-accent bg-bg-hover' : ''
       }`}
     >
-      <div className="text-5xl mb-4">🎬</div>
+      <div className="mb-4 text-accent">
+        <Icon name="video" size={48} />
+      </div>
       <h2 className="text-2xl font-semibold mb-2">Drop a video here</h2>
       <p className="text-ink-muted text-sm mb-6">
         MP4, MOV, AVI, MKV, WEBM, M4V. {busy ? 'Loading…' : 'Or use the file picker.'}

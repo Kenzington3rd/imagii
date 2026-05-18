@@ -140,7 +140,12 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           <span className="text-xs uppercase tracking-wide text-accent font-semibold">
             Quick fix · {step + 1} of {QUESTIONS.length}
           </span>
-          <button className="text-ink-dim hover:text-ink-base text-sm" onClick={reset}>
+          <button
+            className="text-ink-dim hover:text-ink-base text-sm"
+            onClick={reset}
+            title="Close"
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>

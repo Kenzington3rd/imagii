@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeImageLayer } from '../image-studio/state/canvasStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -78,11 +79,9 @@ export function MoodBoardPanel(): JSX.Element {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-[clamp(220px,16%,320px)_1fr] gap-4">
       <div className="card p-3 flex flex-col gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-          Boards ({collections.length})
-        </h3>
+        <PanelHeader icon="star">Boards ({collections.length})</PanelHeader>
         <div className="flex gap-2">
           <input
             type="text"
@@ -141,7 +140,7 @@ export function MoodBoardPanel(): JSX.Element {
             </div>
             {collection.items.length === 0 ? (
               <p className="text-sm text-ink-dim">
-                Empty. Switch to Reference Search and click ★ to add inspiration here.
+                Empty. Switch to Reference Search and click Save to add inspiration here.
               </p>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

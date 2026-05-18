@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/check-emoji.mjs || exit 2",
+            "statusMessage": "Checking for emoji (STYLE_GUIDE)",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

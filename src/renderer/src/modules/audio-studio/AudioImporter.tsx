@@ -2,6 +2,7 @@ import { useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
+import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import {
   describeImportError,
@@ -62,7 +63,7 @@ export function AudioImporter(): JSX.Element {
     }
     const filePath = (file as File & { path?: string }).path!
     if (diag.reason === 'cloud-placeholder') {
-      toast(diag.hint ?? 'Cloud-sync path detected.', { icon: '⚠️', duration: 6000 })
+      toast(diag.hint ?? 'Cloud-sync path detected.', { icon: <Icon name="warning" size={18} />, duration: 6000 })
     }
     void loadFile(filePath)
   }
@@ -73,7 +74,7 @@ export function AudioImporter(): JSX.Element {
     if (pathLooksLikeCloudSync(filePath)) {
       toast(
         'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
-        { icon: '⚠️', duration: 6000 }
+        { icon: <Icon name="warning" size={18} />, duration: 6000 }
       )
     }
     await loadFile(filePath)
@@ -91,7 +92,9 @@ export function AudioImporter(): JSX.Element {
         dragOver ? 'border-accent bg-bg-hover' : ''
       }`}
     >
-      <div className="text-5xl mb-4">🎚</div>
+      <div className="mb-4 text-accent">
+        <Icon name="audio" size={48} />
+      </div>
       <h2 className="text-2xl font-semibold mb-2">Drop audio or video here</h2>
       <p className="text-ink-muted text-sm mb-6">
         MP3, WAV, FLAC, AAC, M4A, OGG, OPUS — or any video to extract its audio.

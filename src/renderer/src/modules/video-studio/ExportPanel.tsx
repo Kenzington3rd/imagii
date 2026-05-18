@@ -15,6 +15,9 @@ import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
 import { SafeZoneWarningModal } from './SafeZoneWarningModal'
+import { Icon } from '../../components/Icon'
+import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface SafeZoneRow {
   clipName: string
@@ -218,30 +221,32 @@ export function ExportPanel(): JSX.Element | null {
       }}
     />
     <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-          Export
-        </h3>
-        <div className="flex items-center gap-2">
-          <button
-            className="btn-ghost px-3 py-1.5 text-sm"
-            onClick={() => setShowPresetManager(true)}
-            title="Manage custom export presets"
-          >
-            ⚙ Presets
-          </button>
-          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={pickOutDir}>
-            {outDir ? `📁 ${outDir.split(/[\\/]/).pop()}` : 'Choose folder…'}
-          </button>
-          <button
-            className="btn-primary px-4 py-1.5 text-sm disabled:opacity-50"
-            disabled={running || totalQueued === 0}
-            onClick={startExport}
-          >
-            {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
-          </button>
-        </div>
-      </div>
+      <PanelHeader
+        icon="download"
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-ghost px-3 py-1.5 text-sm inline-flex items-center gap-1.5"
+              onClick={() => setShowPresetManager(true)}
+              title="Manage custom export presets"
+            >
+              <Icon name="gear" size={14} /> Presets
+            </button>
+            <button className="btn-ghost px-3 py-1.5 text-sm" onClick={pickOutDir}>
+              <OutputDirLabel outDir={outDir} />
+            </button>
+            <button
+              className="btn-primary px-4 py-1.5 text-sm disabled:opacity-50"
+              disabled={running || totalQueued === 0}
+              onClick={startExport}
+            >
+              {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
+            </button>
+          </div>
+        }
+      >
+        Export
+      </PanelHeader>
 
       <div className="flex items-center gap-2 text-xs">
         <span className="text-ink-muted">Watermark:</span>
@@ -302,7 +307,6 @@ export function ExportPanel(): JSX.Element | null {
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 text-sm">
-                    <span>{platform.emoji}</span>
                     <span className="font-medium">{platform.label}</span>
                   </div>
                   <div className="text-xs text-ink-dim mt-0.5">
@@ -326,7 +330,7 @@ export function ExportPanel(): JSX.Element | null {
 
       {jobs.length > 0 ? (
         <div className="flex flex-col gap-2 mt-2">
-          <h4 className="text-xs uppercase tracking-wide text-ink-muted">Queue</h4>
+          <PanelHeader icon="package">Queue</PanelHeader>
           {jobs.map((j) => (
             <div key={j.jobId} className="flex items-center gap-3 text-sm">
               <span className="flex-1 truncate">

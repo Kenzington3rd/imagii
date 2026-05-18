@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from 'react'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
+import { Icon } from './Icon'
 
 interface Rect {
   top: number
@@ -136,13 +137,27 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
         <p className="text-sm text-ink-base leading-relaxed">{step.body}</p>
         <div className="flex items-center gap-2 mt-5">
           {stepIndex > 0 ? (
-            <button className="btn-ghost px-3 py-1.5 text-sm" onClick={prev}>
-              ← Back
+            <button
+              className="btn-ghost px-3 py-1.5 text-sm inline-flex items-center gap-1.5"
+              onClick={prev}
+            >
+              <Icon name="arrow-left" size={14} /> Back
             </button>
           ) : null}
           <div className="flex-1" />
-          <button className="btn-primary px-4 py-1.5 text-sm" onClick={next}>
-            {stepIndex === def.steps.length - 1 ? 'Done ✓' : 'Next →'}
+          <button
+            className="btn-primary px-4 py-1.5 text-sm inline-flex items-center gap-1.5"
+            onClick={next}
+          >
+            {stepIndex === def.steps.length - 1 ? (
+              <>
+                Done <Icon name="check" size={14} />
+              </>
+            ) : (
+              <>
+                Next <Icon name="arrow-right" size={14} />
+              </>
+            )}
           </button>
         </div>
       </div>

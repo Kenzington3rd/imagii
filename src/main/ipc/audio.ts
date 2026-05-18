@@ -16,6 +16,7 @@ import {
   assertRange
 } from '../../shared/validators'
 import { assert } from '../../shared/assert'
+import { assertSafeAbsolutePath } from '../../shared/pathSafety'
 
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'aac'] as const
 
@@ -24,6 +25,13 @@ function validateChainSpec(chain: unknown): asserts chain is ChainSpec {
   assertRange(chain.loudnormTargetLufs, -70, 0, 'chain.loudnormTargetLufs')
   assertRange(chain.gainDb, -60, 60, 'chain.gainDb')
   assert(Array.isArray(chain.cutRegions), 'chain.cutRegions must be an array')
+  // secondaryTrack.filePath reaches `ffmpeg -i`; a traversal path would
+  // mix an arbitrary file into the export. Optional/null for back-compat.
+  const secondary = chain.secondaryTrack
+  if (secondary !== undefined && secondary !== null) {
+    assertPlainObject(secondary, 'chain.secondaryTrack')
+    assertSafeAbsolutePath(secondary.filePath, 'chain.secondaryTrack.filePath')
+  }
 }
 
 export function registerAudioIpc(): void {

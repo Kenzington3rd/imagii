@@ -1,5 +1,6 @@
 import { DEFAULT_COLOR_GRADE, type ColorGrade } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 export function ColorGradePanel(): JSX.Element | null {
   const clips = useVideoStore((s) => s.clips)
@@ -18,9 +19,7 @@ export function ColorGradePanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        🎨 Color & motion
-      </h3>
+      <PanelHeader icon="palette">Color & motion</PanelHeader>
       <Slider
         label="Brightness"
         value={grade.brightness}

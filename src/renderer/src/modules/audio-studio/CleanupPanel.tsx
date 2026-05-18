@@ -1,6 +1,7 @@
 import type { DenoiseParams, DenoiseStrength } from '@shared/audio'
 import { DEFAULT_DENOISE_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 const DENOISE_OPTIONS: Array<{ value: DenoiseStrength; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No noise reduction' },
@@ -26,9 +27,7 @@ export function CleanupPanel(): JSX.Element {
 
   return (
     <div className="card p-4 flex flex-col gap-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-        Cleanup
-      </h3>
+      <PanelHeader icon="sparkle">Cleanup</PanelHeader>
 
       <div>
         <div className="text-xs text-ink-muted mb-1.5">Denoise strength</div>

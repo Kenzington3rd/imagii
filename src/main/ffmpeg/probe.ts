@@ -69,9 +69,19 @@ export function probeVideo(filePath: string): Promise<ProbeResult> {
           reject(new Error('No video stream found in file'))
           return
         }
+        // A malformed/partial ffprobe response can carry a video stream
+        // but no `format.duration`. The prior code coerced this to `0`,
+        // which flowed into makeDefaultClip(0, 1) → a silent 0:00→0:00
+        // clip. Refuse the probe so the user sees a clear error.
+        // (Mirrors the round-7 fix in main/audio/probe.ts.)
+        const duration = Number(data.format?.duration ?? 0)
+        if (!Number.isFinite(duration) || duration <= 0) {
+          reject(new Error('ffprobe returned no usable duration for the video'))
+          return
+        }
         const fps = parseFps(video.avg_frame_rate) || parseFps(video.r_frame_rate)
         resolve({
-          duration: Number(data.format?.duration ?? 0),
+          duration,
           width: video.width ?? 0,
           height: video.height ?? 0,
           fps,

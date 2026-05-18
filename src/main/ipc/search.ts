@@ -9,13 +9,31 @@ import {
   renameCollection,
   pruneThumbCache
 } from '../search/moodboard'
-import type { SearchResult } from '../../shared/search'
+import type { SearchResponse, SearchResult } from '../../shared/search'
+
+/**
+ * Normalize an untrusted `search:images` IPC argument.
+ *
+ * A non-string arg would make `query.trim()` throw a TypeError across the
+ * IPC boundary; a non-string or blank string is treated as an empty
+ * search. Returns `{ query }` to run a real search, or `{ empty }` — the
+ * clean empty-result shape — to short-circuit.
+ */
+export function normalizeImageQuery(
+  raw: unknown
+): { query: string } | { empty: SearchResponse } {
+  const text = typeof raw === 'string' ? raw : ''
+  if (!text.trim()) {
+    return { empty: { query: text, provider: 'duckduckgo', results: [] } }
+  }
+  return { query: text }
+}
 
 export function registerSearchIpc(): void {
-  ipcMain.handle('search:images', async (_e, query: string) => {
-    if (!query.trim()) return { query, provider: 'duckduckgo', results: [] }
-    const response = await searchDuckduckgoImages(query)
-    return response
+  ipcMain.handle('search:images', async (_e, query: unknown) => {
+    const normalized = normalizeImageQuery(query)
+    if ('empty' in normalized) return normalized.empty
+    return searchDuckduckgoImages(normalized.query)
   })
 
   ipcMain.handle('moodboard:list', () => listCollections())

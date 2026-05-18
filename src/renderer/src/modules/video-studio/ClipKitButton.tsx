@@ -6,6 +6,7 @@ import type { Clip, ExportJobSpec, PlatformId, WatermarkSpec } from '@shared/cli
 import { sanitizeFilename } from '@shared/filename'
 import { ALL_PLATFORM_IDS } from './presets'
 import { useVideoStore } from './store/videoStore'
+import { Icon } from '../../components/Icon'
 
 interface ClipKitButtonProps {
   clip: Clip
@@ -45,9 +46,9 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       })
 
       // Tech-debt fix: per-file names get the same sanitizer as the
-      // subfolder. Otherwise a clip named "Big W!! 🎉" produces filenames
-      // ffmpeg can write but Windows Explorer renders awkwardly, and the
-      // revealInFolder path has to match exactly.
+      // subfolder. Otherwise a clip named with punctuation/symbols
+      // produces filenames ffmpeg can write but Windows Explorer renders
+      // awkwardly, and the revealInFolder path has to match exactly.
       const safeName = sanitizeFilename(clip.name)
 
       // Build a 5-platform queue for this single clip.
@@ -91,7 +92,10 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           destPath: srtDest
         })
         if (!result.ok) {
-          toast(`SRT not bundled (${result.reason})`, { icon: '⚠️', duration: 6000 })
+          toast(`SRT not bundled (${result.reason})`, {
+            icon: <Icon name="warning" size={18} />,
+            duration: 6000
+          })
         }
       }
 
@@ -112,9 +116,10 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       onClick={runKit}
       disabled={running}
       title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
-      className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-50"
+      className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-50 inline-flex items-center gap-1.5"
     >
-      {running ? `📦 ${phase || 'Working…'}` : `📦 Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
+      <Icon name="package" size={13} />
+      {running ? phase || 'Working…' : `Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
     </button>
   )
 }

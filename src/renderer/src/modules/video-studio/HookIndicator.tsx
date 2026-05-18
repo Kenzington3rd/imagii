@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { scoreHookQuality, type HookScore } from '@shared/highlights'
+import { Icon } from '../../components/Icon'
 
 /**
  * Phase 4C: badge that displays the "first 3 seconds" hook quality for a
@@ -61,10 +62,10 @@ export function HookIndicator(props: HookIndicatorProps): JSX.Element | null {
   if (loading) {
     return (
       <span
-        className="text-xs text-ink-dim font-mono"
+        className="text-xs text-ink-dim font-mono inline-flex items-center gap-1.5"
         title="Analyzing first 3 seconds…"
       >
-        ◌ hook…
+        <Icon name="spinner" size={12} className="animate-spin" /> hook…
       </span>
     )
   }

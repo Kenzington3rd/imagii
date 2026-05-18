@@ -1,6 +1,7 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { computeInitialWindowSize } from '../shared/windowSizing'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerVideoIpc } from './ipc/video'
 import { registerAudioIpc } from './ipc/audio'
@@ -37,10 +38,17 @@ function resolveIconPath(): string | undefined {
 
 function createWindow(): void {
   const iconPath = resolveIconPath()
+  // Size the window relative to the user's primary display work-area
+  // (the screen minus taskbar/dock). On 1080p this caps at the prior
+  // 1280x800 default; on 1440p it opens roughly 1600x1000; on 4K it
+  // opens around 2200x1400 so the studios aren't squeezed into a
+  // 1080p-sized box on a high-res screen. Pure helper, unit-tested.
+  const primary = screen.getPrimaryDisplay()
+  const sized = computeInitialWindowSize(primary.workAreaSize.width, primary.workAreaSize.height)
   mainWindow = new BrowserWindow({
     title: 'imagii',
-    width: 1280,
-    height: 800,
+    width: sized.width,
+    height: sized.height,
     minWidth: 1024,
     minHeight: 640,
     backgroundColor: '#0b0b0f',

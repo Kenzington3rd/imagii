@@ -1,5 +1,6 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
+import { Icon } from '../components/Icon'
 import { applyProject, captureProject } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
 import { suppressAutosave } from '../hooks/useAutosave'
@@ -52,29 +53,35 @@ export function Home(): JSX.Element {
         </div>
         <div className="flex items-center gap-2 text-sm">
           <button
-            className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
             onClick={undo.undo}
             disabled={!undo.canUndo}
             title={`Undo last action (${undo.lastLabel})`}
           >
-            ↶ Undo
+            <Icon name="undo" size={15} /> Undo
           </button>
           <button
-            className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
             onClick={undo.redo}
             disabled={!undo.canRedo}
             title="Redo"
           >
-            ↷ Redo
+            <Icon name="redo" size={15} /> Redo
           </button>
           <span className="text-xs text-ink-dim mx-2">
             last: {undo.lastLabel}
           </span>
-          <button className="btn-ghost px-3 py-1.5" onClick={handleLoad}>
-            📂 Open project
+          <button
+            className="btn-ghost px-3 py-1.5 inline-flex items-center gap-1.5"
+            onClick={handleLoad}
+          >
+            <Icon name="folder-open" size={15} /> Open project
           </button>
-          <button className="btn-ghost px-3 py-1.5" onClick={handleSave}>
-            💾 Save project
+          <button
+            className="btn-ghost px-3 py-1.5 inline-flex items-center gap-1.5"
+            onClick={handleSave}
+          >
+            <Icon name="save" size={15} /> Save project
           </button>
         </div>
       </header>
@@ -86,35 +93,35 @@ export function Home(): JSX.Element {
           to="/record"
           title="Record"
           description="Capture screen + webcam + mic to a single video — your one-stop alternative to OBS."
-          icon="🔴"
+          icon={<Icon name="record" size={26} />}
           accent="rgba(244, 63, 94, 0.18)"
         />
         <NavCard
           to="/video"
           title="Video Studio"
           description="Trim and clip video, then export for TikTok, Reels, YouTube, X, or Facebook."
-          icon="🎬"
+          icon={<Icon name="video" size={26} />}
           accent="rgba(244, 114, 182, 0.18)"
         />
         <NavCard
           to="/audio"
           title="Audio Studio"
           description="Clean noise, level volume, and polish audio to podcast quality."
-          icon="🎚"
+          icon={<Icon name="audio" size={26} />}
           accent="rgba(96, 165, 250, 0.18)"
         />
         <NavCard
           to="/image"
           title="Stream Graphics"
           description="Templates for thumbnails, Twitch overlays, banners, and emotes — start from a preset or import your own image."
-          icon="🖼"
+          icon={<Icon name="image" size={26} />}
           accent="rgba(52, 211, 153, 0.18)"
         />
         <NavCard
-          to="/ai-art"
+          to="/references"
           title="References"
           description="Search inspiration, save mood boards, and drop them onto the canvas as reference layers."
-          icon="✨"
+          icon={<Icon name="sparkle" size={26} />}
           accent="rgba(251, 191, 36, 0.18)"
         />
       </div>

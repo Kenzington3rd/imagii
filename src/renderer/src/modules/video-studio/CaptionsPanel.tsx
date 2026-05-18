@@ -12,6 +12,8 @@ import type {
 } from '@shared/captions'
 import { DEFAULT_CAPTION_STYLE, CAPTION_STYLE_PRESETS } from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -168,18 +170,20 @@ export function CaptionsPanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-captions">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-          🎙 Auto-captions
-        </h3>
-        <button
-          className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
-          onClick={transcribe}
-          disabled={running}
-        >
-          {running ? 'Transcribing…' : segments ? 'Re-transcribe' : 'Transcribe'}
-        </button>
-      </div>
+      <PanelHeader
+        icon="microphone"
+        actions={
+          <button
+            className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
+            onClick={transcribe}
+            disabled={running}
+          >
+            {running ? 'Transcribing…' : segments ? 'Re-transcribe' : 'Transcribe'}
+          </button>
+        }
+      >
+        Auto-captions
+      </PanelHeader>
 
       {!status?.ready ? (
         <div className="bg-amber-400/10 border border-amber-400/30 rounded p-2 text-xs">
@@ -231,13 +235,18 @@ export function CaptionsPanel(): JSX.Element | null {
               {!status?.modelInstalled ? (
                 <div className="flex flex-col gap-1.5 mt-1">
                   <button
-                    className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50 self-start"
+                    className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50 self-start inline-flex items-center gap-1.5"
                     onClick={installModel}
                     disabled={installing}
                   >
-                    {installing
-                      ? 'Downloading model…'
-                      : '⬇ Download model (~141 MB) automatically'}
+                    {installing ? (
+                      'Downloading model…'
+                    ) : (
+                      <>
+                        <Icon name="download" size={13} /> Download model (~141 MB)
+                        automatically
+                      </>
+                    )}
                   </button>
                   {installing && installProgress ? (
                     <div className="flex items-center gap-2 text-xs">
@@ -379,8 +388,11 @@ export function CaptionsPanel(): JSX.Element | null {
             </span>
           </label>
           <div className="flex items-center gap-2">
-            <button className="btn-ghost px-2 py-1 mr-auto" onClick={saveSrt}>
-              💾 Save .srt
+            <button
+              className="btn-ghost px-2 py-1 mr-auto inline-flex items-center gap-1.5"
+              onClick={saveSrt}
+            >
+              <Icon name="save" size={14} /> Save .srt
             </button>
             <button
               className="btn-primary px-3 py-1 disabled:opacity-50"

@@ -156,7 +156,9 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   assert(opts.webcamStream !== null && opts.webcamStream !== undefined, 'webcamStream required')
   const fps = opts.fps ?? 30
   const scalePct = opts.webcamScalePct ?? 0.2
-  const marginPx = opts.marginPx ?? 32
+  // marginPx is computed AFTER we know canvasW (see below). The override
+  // path (caller passed an explicit marginPx) skips the computation.
+  const explicitMargin = opts.marginPx
 
   // Offscreen video elements as the bridge from MediaStream to drawImage.
   // We append them to body with display:none so they actually decode —
@@ -203,6 +205,11 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
     throw err
   }
 
+  // Resolution-adaptive margin: 1% of canvas width (≥16 px floor) means
+  // ~13 px on 720p, ~19 px on 1080p, ~26 px on 1440p, ~38 px on 4K.
+  // Without this, a fixed 32 px sat too close to the edge on 4K but
+  // too far on 720p. Caller can still override via opts.marginPx.
+  const marginPx = explicitMargin ?? Math.max(16, Math.round(canvasW * 0.01))
   const cornerRect = computeCornerRect(canvasW, canvasH, opts.webcamCorner, scalePct, marginPx)
 
   let rafHandle: number | null = null
@@ -230,20 +237,38 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   return { outputStream, stop }
 }
 
+/** Max wait for a video element to report metadata before we give up. */
+const METADATA_TIMEOUT_MS = 10000
+
 /**
  * Resolves once the video element has reported `loadedmetadata` so
- * videoWidth/videoHeight are real numbers, not zero.
+ * videoWidth/videoHeight are real numbers, not zero. Rejects after
+ * METADATA_TIMEOUT_MS so a stream that produces a track but never emits
+ * `loadedmetadata` cannot leave `startCompositor` pending forever — the
+ * setup-phase try/catch then runs `teardownOffscreen` and propagates.
  */
 function waitForMetadata(v: HTMLVideoElement): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (v.readyState >= 1 && v.videoWidth > 0) {
       resolve()
       return
     }
-    const onReady = (): void => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const cleanup = (): void => {
       v.removeEventListener('loadedmetadata', onReady)
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+    const onReady = (): void => {
+      cleanup()
       resolve()
     }
+    timer = setTimeout(() => {
+      cleanup()
+      reject(new Error(`video metadata did not arrive within ${METADATA_TIMEOUT_MS} ms`))
+    }, METADATA_TIMEOUT_MS)
     v.addEventListener('loadedmetadata', onReady)
   })
 }

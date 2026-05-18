@@ -14,6 +14,487 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-18 — Bug round 14: overlay injection, preset-list crash, captions hardening
+
+### Bug — FFmpeg filter-graph injection via unvalidated text-overlay fields
+- **Root cause.** `drawTextFilter` in `src/main/ffmpeg/filters.ts` escaped
+  `overlay.text` and rounded `x`/`y`, but interpolated `overlay.sizePx`
+  and `overlay.colorHex` **raw** into the `drawtext` filter string.
+  `validateProject` checked that `videoStudio.clips` was an array but
+  never descended into `clips[].textOverlays[]`, and `validateExportJob`
+  validated the job's clip range but not its overlays. A malicious
+  `.imagii.json` could set `colorHex` to
+  `white,movie=C\:/Users/victim/.ssh/id_rsa[k];[k]...`, injecting
+  arbitrary FFmpeg filter directives (`movie=` reads arbitrary files into
+  the render).
+- **Fix.** Defense in depth across three layers: (1) `validateProject`
+  now descends into every clip and rejects the project via a new
+  `isValidTextOverlay` helper — `colorHex` must match `/^#?[0-9A-Fa-f]{6}$/`,
+  `sizePx` finite in 8..512, position/timing fields finite. (2)
+  `validateExportJob` in `src/main/ipc/video.ts` reuses `isValidTextOverlay`
+  on `clip.textOverlays` so a malformed overlay can't pass the
+  `video:exportBatch` IPC. (3) `drawTextFilter` no longer interpolates
+  raw — `safeOverlaySize` clamps to a finite 8..512 (fallback 48) and
+  `safeOverlayColor` falls back to `white` on any non-hex value.
+- **Test.** `src/shared/projectValidation.test.ts` — overlay injection
+  payload / bad sizePx rejected, well-formed overlay accepted, no-overlay
+  clip still accepted, plus direct `isValidTextOverlay` cases.
+  `src/main/ffmpeg/filters.test.ts` — `safeOverlaySize` /
+  `safeOverlayColor` coercion cases.
+- **Lesson.** "Escape the text field" is not "sanitize the filter
+  string." Every value interpolated into a command/filter string is an
+  injection sink — validate or coerce *all* of them, and do it at the
+  load boundary, the IPC boundary, and the sink.
+
+### Bug — `listCustomPresets` crashed the IPC on a structurally-broken preset
+- **Root cause.** `src/main/customPresets.ts` guarded `JSON.parse` in
+  try/catch, but the next line `presets.sort((a, b) => a.name.localeCompare(b.name))`
+  called `.localeCompare` on `undefined` if a preset `.json` was valid
+  JSON yet structurally wrong (`{}`, `null`, `42`, a half-written file
+  from a crash). The `TypeError` rejected the whole
+  `video:listCustomPresets` IPC and the studio's preset list failed to
+  load — the identical class fixed for mood boards in round 13.
+- **Fix.** New pure `src/shared/customPresetParse.ts` —
+  `parseCustomPreset(raw)` parses *and validates*, returning a
+  fully-formed `CustomPreset` or `null`. `listCustomPresets` routes every
+  file through it and skips nulls, so `.sort` only ever sees presets with
+  a real `name`.
+- **Test.** `src/shared/customPresetParse.test.ts` — well-formed parsed,
+  invalid JSON → null, non-object root → null, missing/blank name → null,
+  missing id → null, non-finite numeric field → null.
+- **Lesson.** Same as round 13, now generalized: any "read a directory of
+  user JSON files then operate on them" path needs a single
+  parse-and-normalize choke point. A try/catch around `JSON.parse` alone
+  is half a guard.
+
+### Bug — captions IPC handlers lacked argument validation
+- **Root cause.** `captions:transcribe` and `captions:burnIn` in
+  `src/main/ipc/captions.ts` passed the raw renderer-supplied request
+  straight to `runTranscribe` / `runBurnIn` with no validation — unlike
+  every other IPC handler. Not currently exploitable (values come from
+  the trusted renderer) but an inconsistent hardening gap.
+- **Fix.** Each handler now `assertPlainObject`s the request and
+  validates its path fields with `assertSafeAbsolutePath`
+  (`sourcePath` for transcribe; `videoPath` / `srtPath` / `outputPath`
+  for burn-in), mirroring `validateChainSpec` in `src/main/ipc/audio.ts`.
+- **Test.** No direct unit test — the handlers import `electron` and
+  cannot load under the node-env vitest config; the asserts are pure
+  reuse of already-tested validators.
+- **Lesson.** Hardening must be uniform. One handler that trusts its
+  input is the one a future refactor wires an untrusted caller into.
+
+---
+
+## 2026-05-18 — Bug round 13: complete the moodboard corrupt-file guard
+
+### Bug — a structurally-wrong board JSON still threw a `TypeError`
+- **Root cause.** Round 12 wrapped `JSON.parse` in `renameCollection` /
+  `addToCollection` / `removeFromCollection` so a *syntactically* corrupt
+  board file returned `null` instead of throwing a `SyntaxError`. But the
+  callers then immediately touched `collection.items` —
+  `addToCollection` did `collection.items.some(...)`,
+  `removeFromCollection` did `.find`/`.filter`. A file that was *valid
+  JSON yet structurally wrong* (e.g. `{"id":"x","name":"y"}` with no
+  `items`) passed `JSON.parse`, then threw
+  `TypeError: Cannot read properties of undefined` one line later. The
+  round-12 fix guarded the parse but not the access — an incomplete fix
+  for the very scenario it set out to handle.
+- **Fix.** New pure `src/shared/moodboardParse.ts` —
+  `parseCollection(raw)` parses *and normalizes*: it returns a
+  fully-formed `MoodBoardCollection` (with `items` guaranteed to be an
+  array, structurally-broken items dropped) or `null`, never a
+  half-valid object. `moodboard.ts` gained a single `readCollection`
+  choke point that every reader (`listCollections`, `deleteCollection`,
+  `renameCollection`, `addToCollection`, `removeFromCollection`) now
+  routes through.
+- **Test.** `src/shared/moodboardParse.test.ts` — 7 cases: well-formed,
+  invalid JSON, missing `items` → `[]`, non-array `items` → `[]`,
+  broken-items dropped, non-object root rejected, missing
+  id/name/createdAt rejected.
+- **Lesson.** A guard that catches a parse error but not the very next
+  line that consumes the parsed value is only half a guard. When you
+  harden a corrupt-input path, harden the *whole* path: parse AND
+  normalize to a known-good shape at one choke point, so no caller can
+  ever see a partially-valid object.
+
+---
+
+## 2026-05-18 — Bug round 12: whisper-download stream leak on cancel & unguarded moodboard parses
+
+### Bug — `installWhisperModel` leaked the write stream + `.partial` file when the download was cancelled
+- **Root cause.** In `src/main/sidecars/whisperManager.ts`, the write stream
+  `const out = createWriteStream(partialPath)` was declared inside the
+  `request.on('response')` handler, so it was only in scope for the
+  `response.*` handlers. The sibling request-level handlers
+  `request.on('error')` and `request.on('abort')` both called
+  `cleanupPartial()` — which `unlink`s `partialPath` — without first closing
+  `out`. When the user cancelled the 141 MB download, `request.abort()` fired
+  `request.on('abort')` and `unlink` ran while `out` still held an open file
+  descriptor. On Windows that throws `EBUSY` (swallowed by `cleanupPartial`),
+  so the `.partial` file leaked and the fd stayed open until GC. The
+  round-10 `out.on('error')` handler only covered the disk-error path.
+- **Fix.** Hoisted the stream: declared
+  `let out: import('node:fs').WriteStream | null = null` in the Promise
+  scope above `request.on('response')`, and assign `out = createWriteStream(...)`
+  inside the response handler. Both `request.on('error')` and
+  `request.on('abort')` now call `out?.destroy()` before `cleanupPartial()`,
+  mirroring how `response.on('error')` already destroys `out` first. The
+  `response.*` handlers reference the same `out` via closure.
+- **Test.** None — exercising it needs a network mock the suite doesn't have.
+  The structural invariant is: every path that unlinks `partialPath` first
+  destroys the write stream.
+- **Lesson.** A resource cleanup function (`unlink`) and the handle that
+  owns the resource (the write stream fd) must be released together, on
+  *every* exit path. Declaring the handle in a narrower scope than the
+  cleanup callers silently leaves cancellation paths unable to close it —
+  and on Windows an unlink over an open fd fails instead of being harmless.
+
+### Bug — moodboard `renameCollection`/`addToCollection`/`removeFromCollection` threw an uncaught `SyntaxError` on a corrupt board JSON
+- **Root cause.** In `src/main/search/moodboard.ts`, those three functions
+  each did `JSON.parse(raw) as MoodBoardCollection` with no try/catch. A
+  corrupt board `.json` (hand-edited, or a partial write from a prior crash)
+  threw a `SyntaxError` straight across the IPC boundary. The sibling
+  functions `listCollections` and `deleteCollection` already guarded their
+  parse.
+- **Fix.** Wrapped the `readFile` + `JSON.parse` of each of the three
+  functions in try/catch; on failure they `return null`, matching the
+  `MoodBoardCollection | null` return shape the not-found branch already uses.
+  The happy path is unchanged.
+- **Test.** None — `moodboard.ts` imports `electron`'s `net` and resolves
+  paths via `app.getPath`, so it is not loadable under `environment: 'node'`
+  without an electron mock the suite doesn't have.
+- **Lesson.** `JSON.parse` on any file a user (or a crash) can touch must be
+  guarded. When some functions in a module already guard their parse and
+  others don't, the unguarded ones are the latent crash — consistency across
+  sibling functions is the tell.
+
+---
+
+## 2026-05-18 — Bug round 11: enum-validate the export preset, plug a thumb-cache leak & two design-token slips
+
+### Bug — `validateExportJob` accepted any non-empty string as `preset`
+- **Root cause.** `validateExportJob` in `src/main/ipc/video.ts` ended with
+  `assertNonEmptyString(job.preset, ...)`, but `preset` must be one of the
+  five `PlatformId`s. An unknown key (e.g. `"instagram"`) passed the IPC
+  guard, then `PLATFORM_PRESETS[job.preset]` in `ffmpeg/export.ts` returned
+  `undefined` and `buildVideoFilter` read `preset.aspectRatio` — an uncaught
+  `TypeError` thrown across the IPC boundary. Every other enum field in
+  `video.ts` (reframe/pip positions) already used `assertEnum`.
+- **Fix.** Replaced it with
+  `assertEnum(job.preset, ALL_PRESET_IDS, \`jobs[${idx}].preset\`)`;
+  imported `ALL_PRESET_IDS` from `ffmpeg/presets.ts`. `assertEnum` was
+  already imported in `video.ts`.
+- **Test.** `src/main/ffmpeg/presets.test.ts` — `ALL_PRESET_IDS` exactly
+  matches `PLATFORM_PRESETS` keys, and `assertEnum` over `ALL_PRESET_IDS`
+  rejects `"instagram"`. `validateExportJob` itself is module-private and
+  `video.ts` imports `electron` at top level (not loadable under
+  `environment: 'node'`), so the guard's invariant is pinned at the
+  `ALL_PRESET_IDS` + `assertEnum` layer instead.
+- **Lesson.** A field with a closed set of valid values must be validated
+  with `assertEnum`, never `assertNonEmptyString`. An IPC validator that
+  lets a bad value reach a `Record` lookup just relocates the crash from a
+  clean rejection to an uncaught `TypeError`.
+
+### Bug — `deleteCollection` orphaned every cached thumbnail file
+- **Root cause.** `deleteCollection(id)` in `src/main/search/moodboard.ts`
+  unlinked only the `${id}.json` file. But `addToCollection` caches each
+  item's thumbnail to disk and records `cachedThumbPath`; `removeFromCollection`
+  cleans those up per-item. `deleteCollection` did not — every cached thumb
+  for a deleted board leaked until the 500 MB `pruneThumbCache` cap reaped it.
+- **Fix.** `deleteCollection` now reads + parses the collection and unlinks
+  each item's existing `cachedThumbPath` (best-effort, per-file errors
+  ignored) before unlinking the JSON. The read is wrapped in try/catch so a
+  corrupt/missing JSON still lets the JSON unlink proceed.
+- **Test.** None — `moodboard.ts` imports `electron`'s `net` and resolves
+  paths via `app.getPath`, so it is not loadable under `environment: 'node'`
+  without an electron mock the suite doesn't have.
+- **Lesson.** When one operation creates side-effect files, every operation
+  that destroys the owning record must clean them up. A per-item delete and
+  a whole-collection delete are not one path — fixing the leak in one does
+  not fix the other.
+
+### Bug — `PostChecklist` sub-headers re-derived `PanelHeader` inline
+- **Root cause.** Four sub-section headers in `PostChecklist.tsx` ("Title
+  ideas", "Hashtag pack", "Posting log", "Diary (n)") were hand-written
+  `<div className="text-xs uppercase tracking-wide text-ink-muted">` — the
+  exact `PanelHeader` typography re-derived inline. They were missed in
+  earlier passes because they are `<div>`, not `<h3>`.
+- **Fix.** Converted all four to `<PanelHeader>` with sensible icons
+  (`text` for the title/hashtag headers, `clipboard` for the log/diary).
+- **Test.** None — renderer component, needs a DOM.
+- **Lesson.** A shared component has one source of truth; grepping for the
+  `<h3>` tag misses inline copies that drifted to a `<div>`. Search for the
+  class string, not the element.
+
+### Bug — `CropOverlay` painted a raw accent hex on a DOM element
+- **Root cause.** `CropOverlay.tsx` set `border: '2px solid #a78bfa'` in the
+  inline `style` of a `react-rnd` `<Rnd>` element. `#a78bfa` is the `accent`
+  design token; `DESIGN_GUIDE` forbids raw chrome hex.
+- **Fix.** Moved the border to the element's `className` as
+  `border-2 border-accent`. The `boxShadow` scrim mask stays inline — it has
+  no token equivalent.
+- **Test.** None — renderer component, needs a DOM.
+- **Lesson.** A literal hex that equals a token is a token by another name.
+  Tailwind classes flow through `className`; only genuinely token-less
+  values (a 9999px scrim shadow) belong in inline `style`.
+
+---
+
+## 2026-05-18 — Bug round 10: unreachable Record studio, unguarded streams & IPC args
+
+### Bug — the Record studio was unreachable (no route registered)
+- **Root cause.** `App.tsx` routed Welcome/Home/Video/Audio/Image/References
+  but never registered `/record`, even though `routes/Record.tsx` existed
+  and `Home.tsx` rendered a `NavCard to="/record"`. The unmatched path
+  fell through to the `*` wildcard `<Navigate to="/home">`, so clicking
+  "Record" silently bounced back to Home — the entire screen-capture +
+  webcam-compositor studio was dead code.
+- **Fix.** `App.tsx` now imports `Record` and registers
+  `<Route path="/record" element={<Record />} />` before the wildcard.
+- **Test.** None — `App.tsx` routing needs a DOM; vitest runs
+  `environment: 'node'`.
+- **Lesson.** A nav link and a route are two halves of one feature;
+  adding a `NavCard` without the matching `<Route>` produces a silent
+  redirect, not an error. When adding a screen, grep for its route
+  string in `App.tsx` to confirm both halves exist.
+
+### Bug — `installWhisperModel` write stream had no `'error'` handler
+- **Root cause.** In `whisperManager.ts`, `createWriteStream(partialPath)`
+  received `write()`/`end()`/`on('finish')` but no `on('error')`. A Node
+  stream that emits `'error'` with no listener throws an uncaught
+  exception — an ENOSPC on a near-full disk during the 141 MB model
+  download crashed the whole Electron main process instead of failing
+  cleanly.
+- **Fix.** Added `out.on('error', ...)` that destroys the stream, runs
+  `cleanupPartial()`, reports `phase: 'failed'`, and `settle()`s with
+  `{ ok: false }` — matching the existing `response.on('error')` handler.
+- **Test.** None — needs a network + fs-failure mock.
+- **Lesson.** Every writable stream needs an `'error'` listener;
+  an unhandled stream error is a process-level crash, not a local
+  rejection.
+
+### Bug — `probeVideo` silently coerced a missing duration to `0`
+- **Root cause.** `probeVideo` used `duration: Number(data.format?.duration ?? 0)`.
+  A malformed/partial ffprobe response (video stream present, no
+  `format.duration`) yielded `duration: 0`, which flowed into
+  `videoStore.loadSource` → `makeDefaultClip(0, 1)` → a silent
+  `0:00→0:00` clip with no error. Round 7 fixed this exact pattern in
+  `probeAudio` but never mirrored it to `probeVideo`.
+- **Fix.** `probeVideo` now validates the duration once and
+  `reject(...)`s with "ffprobe returned no usable duration for the
+  video" when it is non-finite or `<= 0` — mirroring `probeAudio`.
+- **Test.** None — needs an ffprobe mock (consistent with how the
+  `probeAudio` round-7 fix was handled).
+- **Lesson.** When a bug is fixed in one of two parallel code paths,
+  immediately mirror the fix to the twin. Audio and video probes share
+  a shape; a fix to one is a TODO for the other.
+
+### Bug — `search:images` IPC handler trusted `query` was a string
+- **Root cause.** The handler ran `query.trim()` directly on the IPC
+  argument. A non-string arg (a renderer bug, or a malformed call)
+  threw a TypeError across the IPC boundary instead of returning a
+  result. Every other IPC handler guards its args.
+- **Fix.** Extracted `normalizeImageQuery(raw: unknown)` — a pure
+  helper that coerces non-strings to `''` and returns the clean
+  empty-result shape for blank/non-string input — and routed the
+  handler through it.
+- **Test.** `src/main/ipc/search.test.ts` — covers non-blank, blank,
+  empty, and a table of non-string args (`undefined`, `null`, number,
+  object, array, boolean) all returning the empty shape without
+  throwing.
+- **Lesson.** IPC arguments are untrusted input; type-guard them at
+  the boundary before any string/object method call.
+
+---
+
+## 2026-05-18 — Bug round 9: secondary-track path traversal, stream leaks, compositor hang
+
+### Bug — `secondaryTrack.filePath` bypassed path-safety validation
+- **Root cause.** `projectValidation.validateProject` validated
+  `videoStudio.sourcePath`/`srtPath` and `audioStudio.sourcePath` with
+  `isSafeAbsolutePath`, but `audioStudio.chain.secondaryTrack.filePath`
+  was never checked — the audio branch only asserted `chain` was an
+  object. A malicious `.imagii.json` could point `secondaryTrack.filePath`
+  at an SSH key; that path reaches `ffmpeg -i` during audio export →
+  arbitrary file read mixed into the output.
+- **Fix.** `validateProject` now rejects a present-but-unsafe
+  `secondaryTrack` (must be a plain object whose `filePath` passes
+  `isSafeAbsolutePath`); `null`/absent stay accepted for back-compat.
+  Mirrored in `validateChainSpec` (`main/ipc/audio.ts`) via
+  `assertSafeAbsolutePath` so the IPC boundary rejects it too.
+- **Test.** `src/shared/projectValidation.test.ts` — "rejects
+  audioStudio.chain.secondaryTrack.filePath with .. traversal",
+  "rejects ... non-object value", "accepts a safe absolute
+  secondaryTrack.filePath", plus the null/absent back-compat cases.
+- **Lesson.** When a validator walks a nested object, every
+  externally-supplied path *inside* it needs the same path-safety check
+  as the top-level ones — a single un-walked sub-object is a hole.
+  Validate at both the file-load boundary and the IPC boundary.
+
+### Bug — RecordStudio leaked streams when MediaRecorder construction threw
+- **Root cause.** In `RecordStudio.startRecording`, by the time
+  `new MediaRecorder(...)` / `recorder.start()` runs, `screenStreamRef`,
+  `camStreamRef`, `compositorRef`, and `streamRef` may all be assigned.
+  The outer `catch` only showed a toast — a `NotSupportedError` from
+  MediaRecorder left every stream and the compositor rAF loop running
+  until navigation.
+- **Fix.** The outer `catch` now calls `stopAllStreams()` before the
+  toast, releasing all four refs.
+- **Test.** None — the device/recorder pipeline needs a real browser
+  env. The structural invariant is "every `startRecording` exit path
+  either calls `stopAllStreams` or hands ownership to the recorder."
+- **Lesson.** Any function that acquires several resources in sequence
+  before the success point must release them on *every* throw, not just
+  the ones that happen before the first acquisition.
+
+### Bug — compositor `waitForMetadata` could hang forever
+- **Root cause.** `waitForMetadata(v)` resolved only on `loadedmetadata`
+  with no timeout and no reject path. A stream that produced a track but
+  never emitted `loadedmetadata` left `startCompositor` pending forever
+  — the UI stuck, offscreen `<video>`s never torn down (the partial-init
+  catch only fires on a throw).
+- **Fix.** `waitForMetadata` now races the event against a 10 000 ms
+  timeout that rejects with a clear `Error`; the timer is cleared if
+  metadata arrives first (no dangling timer). The existing setup-phase
+  try/catch in `startCompositor` then runs `teardownOffscreen` and
+  propagates.
+- **Test.** None added — `waitForMetadata` is module-private and depends
+  on a real `HTMLVideoElement` (`addEventListener`/`readyState`), which
+  needs a DOM env this vitest config (`environment: 'node'`) does not
+  provide. Covered by manual smoke testing.
+- **Lesson.** Any Promise that resolves only on a DOM event must also
+  have a timeout-reject — an event that never fires is a silent hang,
+  not an error.
+
+---
+
+## 2026-05-11 — Design system, guides, and review agents
+
+A standardization pass: built a single icon system, replaced every emoji
+in the UI, wrote five governing guides, stood up Design + QA review
+agents, and added a deterministic emoji-enforcement hook. Two real bugs
+fell out of the review.
+
+### Bug — webcam silently dropped from a recording when the camera dropdown was never opened
+- **Root cause.** `RecordStudio.tsx:startRecording` gated the compositor
+  on `showCam && selectedCamId`. But `selectedCamId` stays `null` until
+  the user actually *opens* the `<select>` and picks — the select
+  merely *displays* `cams[0]` as its value via the `value={... ?? cams[0]}`
+  fallback. A user who ticked "Include webcam", saw a camera in the
+  dropdown, and hit record without touching it got a screen-only
+  recording. Exactly the "UI shows X, output is Y" anti-pattern the
+  original webcam-preview fix existed to kill — reintroduced one level
+  down. The mic path didn't have the bug: its constraint falls back to
+  the default device.
+- **Fix.** Resolve `effectiveCamId = selectedCamId ?? cams[0]?.deviceId`
+  in `startRecording`, mirroring how the `<select>` computes its
+  displayed value. The compositor now runs whenever the dropdown shows
+  a camera, touched or not.
+- **Test.** Smoke-level (the device pipeline needs a real browser env);
+  the structural invariant — "the gate matches the select's displayed
+  value" — is the lesson of record.
+- **Lesson.** **A controlled `<select>` whose `value` uses a `?? fallback`
+  has a displayed value that its state variable doesn't reflect until
+  `onChange` fires.** Any logic gated on that state must apply the same
+  fallback, or the feature silently does nothing for the
+  never-touched-the-dropdown case — which is the *common* case.
+
+### Bug — layer "lock" toggle showed the same icon locked or unlocked
+- **Root cause.** The emoji→icon migration replaced
+  `{layer.locked ? '🔒' : '·'}` with an unconditional
+  `<Icon name="lock" />`. The sibling visibility button correctly
+  toggled `eye`/`eye-off`; lock did not, so a locked and an unlocked
+  layer looked nearly identical (only a color shift).
+- **Fix.** Added an `unlock` (open-padlock) icon; the button now toggles
+  `lock`/`unlock` like the visibility button toggles `eye`/`eye-off`.
+- **Lesson.** **When a migration swaps a two-state glyph
+  (`A ? '🔒' : '·'`) for an icon, the icon must stay two-state.**
+  Dropping the conditional turns a toggle into a label. Migrations that
+  touch dozens of files need a second pass specifically for the
+  conditional-render sites.
+
+### Standardization — emoji → one icon system
+- Built `components/Icon.tsx`: ~45 inline-SVG icons, 24×24 / 2px /
+  `currentColor`, one `IconName` union. Replaced every emoji pictograph
+  across ~30 components, plus the geometric/technical glyphs the design
+  review caught (`⏸▶⏮⏭⎘◌↺▾▸` — media controls, disclosure carets, a
+  duplicate glyph, a spinner) that an emoji-only scan had missed.
+- Extracted three shared affordances that had been copy-pasted:
+  `HomeLink`, `OutputDirLabel`, `AppToaster`.
+- **Lesson.** **Emoji are an OS-fragmentation bug, not a style choice.**
+  The same codepoint is a different glyph — sometimes color, sometimes
+  monochrome — on every OS and OS version. The fix is one owned icon
+  set. And the enforcement scan must cover *technical and geometric*
+  Unicode blocks (U+2300–27BF, U+25A0–25FF), not just the emoji planes
+  — the first version of `check-emoji.mjs` missed `⏸`/`▶` because they
+  live in Misc Technical / Geometric Shapes.
+
+### Process — guides + agents + a deterministic hook
+- Wrote `PRODUCT_GUIDE`, `DESIGN_GUIDE`, `STYLE_GUIDE`, `BRANDING_GUIDE`,
+  `USER_GUIDE` under `docs/`.
+- Added `.claude/agents/qa-reviewer.md` and `design-reviewer.md`, and a
+  `/guide-sync` command that re-checks guide↔code drift and runs both
+  reviewers.
+- Added `scripts/check-emoji.mjs` + a `PostToolUse` hook so the no-emoji
+  rule is enforced on every file change, not just at review time.
+- **Follow-up done:** the panel-header drift (~7 panels on `text-sm`
+  where `STYLE_GUIDE` pins `text-xs`) is resolved — a `<PanelHeader>`
+  component now backs all ~25 panel headers, so the markup has one
+  source of truth and can't drift again.
+- **Lesson.** **A guide only governs if something enforces it.** A prose
+  rule decays; a `check-emoji.mjs` hook does not. Pair every guide rule
+  that *can* be made deterministic with a script, and leave the
+  judgment calls to the review agents.
+
+---
+
+## 2026-05-11 — Resolution / DPI rework (1080p · 2K · 4K)
+
+Concrete fragility surfaced by a targeted audit and fixed across the renderer + main process. Goal: the app should look right and behave right on any of the three common streamer monitor classes — 1920×1080, 2560×1440, 3840×2160.
+
+### Fragility 1 — Fixed 1280×800 window default cramped 4K monitors
+- **Root cause.** `src/main/index.ts:createWindow` opened a 1280×800 BrowserWindow regardless of display size. On a 1080p screen that's the prior cramped default users got. On 2K or 4K it was actively bad: the studios were squeezed into a 1080p-sized box on a screen with 2–4× the pixel area.
+- **Fix.** New `src/shared/windowSizing.ts` with a pure `computeInitialWindowSize(workW, workH)` helper. Returns 85% of the work-area, clamped into `[MIN 1280×800, MAX 2400×1500]`, and finally clamped to the work-area itself so we never request more pixels than the screen has. Wired into `createWindow` via `screen.getPrimaryDisplay().workAreaSize`.
+- **Test.** `windowSizing.test.ts` — 6 cases pinning the behavior at each of the three resolutions plus an ultrawide and a too-small netbook case. Invalid input rejected at the function entry.
+- **Lesson.** **A fixed pixel default is a tax on every user whose monitor isn't the developer's monitor.** The right move is "scale to your display." Adding the helper as a pure function with unit tests is cheap and means the next time someone touches the window-size code they have to update tests to break it.
+
+### Fragility 2 — Canvas Stage scale capped at 1.0
+- **Root cause.** `Canvas.tsx:157` computed `stageScale = Math.min(containerSize.w / doc.width, containerSize.h / doc.height, 1)`. On a 4K monitor with a 1920×1080 document, the container after panels might be 2500×1800 — and the canvas would render at 1:1 (1920×1080), wasting the rest of the screen. Users with 4K monitors had to either resize the document or accept a tiny editing canvas.
+- **Fix.** Lifted the cap to `MAX_STAGE_ZOOM = 4`. A 1080p doc on a 2500-wide container now renders at ~1.3× (fills the area, stays sharp). A 112×112 emote caps at 4× so it doesn't blow up to a pixelated mess. Konva's pixelRatio auto-tracks DPR so the backing pixels stay crisp.
+- **Test.** Existing rendering tests cover the scale math indirectly via the Canvas component; the explicit cap value is a code-readability decision documented inline.
+- **Lesson.** **A `Math.min(..., 1)` hardcoded "never zoom in past 1×" guard usually means "I didn't have a high-res monitor when I wrote this."** Fit-to-container should fit to container — let the user's display reward them.
+
+### Fragility 3 — Side panels fixed at 280/320/360 px
+- **Root cause.** `ImageStudio`, `AudioStudio`, `VideoStudio`, `RecordStudio` all used `lg:grid-cols-[1fr_NNNpx]` with fixed pixel widths. On 1080p (1920 logical) those are ~15-19% of width (reasonable). On 4K (3840 logical) they're ~7-9% — the panels look like a strip of postage stamps next to a massive canvas.
+- **Fix.** Switched all four to `clamp(MIN_PX, PERCENTAGE, MAX_PX)` patterns: Image 260/16%/380, Audio+Video 300/18%/460, Record 320/20%/520. On 1080p the percentage equals the prior pixel widths; on 4K the panels scale up but cap at the MAX so they don't dominate the canvas area.
+- **Test.** CSS values; no direct unit test. Verified at three target resolutions during the manual review.
+- **Lesson.** **`clamp(min, preferred, max)` is the right tool for a control panel that needs to be readable on both 1080p and 4K.** Fixed pixels are wrong; pure percentages are wrong (panels would be huge on ultrawide); clamp expresses the actual UX constraint ("at least readable, at most one-fifth of the screen").
+
+### Fragility 4 — ExportDialog defaulted scale to 1× regardless of DPR
+- **Root cause.** `ExportDialog.tsx:scale` defaulted to `1`. On a 4K monitor at 200% Windows scaling, `window.devicePixelRatio` is `2` — the canvas the user SEES is internally rendered at 2× — and yet the default PNG export was half the size of what they saw on screen. They had to remember to bump scale to 2× or 3× every time.
+- **Fix.** New pure `defaultExportScale(dpr)` helper returns 1× for DPR<1.75, 2× for 1.75-2.49, 3× for ≥2.5. Wired into `useState` initial value. The picker still lets the user override.
+- **Test.** `ExportDialog.test.ts` — 5 cases covering the three DPR bands plus invalid input fallback.
+- **Lesson.** **A "scale" picker that defaults to "1×" is asking the user to remember what their monitor is.** The system already knows via `devicePixelRatio`; use it. The picker remains for the cases where the user wants explicit control (e.g., exporting a 2K canvas at 1× to keep the file small).
+
+### Fragility 5 — Compositor webcam margin fixed at 32 px
+- **Root cause.** `compositor.ts` defaulted `marginPx` to 32. On a 720p recording that's a sensible inset; on a 4K recording it's pinned-to-the-edge.
+- **Fix.** Margin defaults to `Math.max(16, canvasW * 0.01)` — ~13 px at 720p, ~19 px at 1080p, ~26 px at 1440p, ~38 px at 4K. Caller can still override.
+- **Test.** Existing `computeCornerRect` tests already cover margin behavior; the new computation lives in the caller path, verified by reading.
+- **Lesson.** **Any "looks fine at the resolution I tested it at" margin is suspect.** Express margins as a function of the surface they're inset from, not as a constant. (Twitch's overlay margin recommendations are also expressed as percentages, which validates the choice of constant.)
+
+### Fragility 6 — Templates and asset catalog targeted only 1080p
+- **Root cause.** `templates.ts` had 1280×720 thumbnails and 1920×1080 overlays only. `assetCatalog.ts` had 1920×1080 only. Streamers with 1440p or 4K capture pipelines had to manually resize after picking a preset.
+- **Fix.** Added 2K + 4K variants of the two most-used templates (Bold thumbnail, Streamer overlay) and the most-used asset (Clean corner frame). 4 new template entries + 2 new asset entries. All layer dimensions scale proportionally to the new canvas size so the look matches across resolutions.
+- **Test.** Visual; the templates render through existing code paths covered by `templates.test.ts` style tests.
+- **Lesson.** **A preset catalog that targets one resolution forces every user with a different resolution to do the conversion math themselves.** Offering 2K + 4K variants of the most-popular presets is cheap (the layout math is just multiplication) and removes friction for the streamers who'd otherwise tab out to a sizing chart.
+
+### Things deliberately NOT changed
+- **Konva default pixelRatio** — Konva already auto-uses `window.devicePixelRatio` for layer rendering. No explicit override needed; the canvas is sharp on 4K out of the box.
+- **CSS pixel sizing throughout the renderer** — Chromium handles `1px` = 1 CSS pixel correctly at any DPR. The "fix CSS for HiDPI" instinct is misapplied here.
+- **Recording resolution** — `screenStream.videoWidth/Height` is already the screen's natural resolution. Adapts automatically.
+
+---
+
 ## 2026-05-11 — Bug sweep round 8 (compositor + assertDefined leaks)
 
 ### Bug — Screen MediaStream leaked when recording with webcam composited in

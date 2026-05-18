@@ -172,7 +172,12 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       >
         <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
           <h2 className="text-lg font-semibold">Thumbnail variants</h2>
-          <button className="text-ink-dim hover:text-ink-base" onClick={onClose}>
+          <button
+            className="text-ink-dim hover:text-ink-base"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>

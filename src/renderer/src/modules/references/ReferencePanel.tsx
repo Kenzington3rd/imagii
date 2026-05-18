@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { SearchResult } from '@shared/search'
 import { useReferencesStore } from './state/referencesStore'
+import { Icon } from '../../components/Icon'
 
 export function ReferencePanel(): JSX.Element {
   const search = useReferencesStore((s) => s.search)
@@ -57,9 +58,12 @@ export function ReferencePanel(): JSX.Element {
         </button>
       </div>
 
-      <p className="text-xs text-ink-dim">
-        🛡 SafeSearch is permanently on. All thumbnails are screened locally before display.
-        Powered by DuckDuckGo image search.
+      <p className="text-xs text-ink-dim inline-flex items-start gap-1.5">
+        <Icon name="shield" size={13} className="mt-0.5 flex-shrink-0" />
+        <span>
+          SafeSearch is permanently on. All thumbnails are screened locally before
+          display. Powered by DuckDuckGo image search.
+        </span>
       </p>
 
       {error ? (
@@ -93,11 +97,11 @@ export function ReferencePanel(): JSX.Element {
                 <span className="text-xs text-ink-base line-clamp-2">{result.title}</span>
                 <span className="text-xs text-ink-dim">{result.source}</span>
                 <button
-                  className="btn-primary px-3 py-1 text-xs disabled:opacity-50"
+                  className="btn-primary px-3 py-1 text-xs disabled:opacity-50 inline-flex items-center gap-1.5"
                   onClick={() => saveResult(result)}
                   disabled={collections.length === 0 && !selectedCollectionId}
                 >
-                  ★ Save
+                  <Icon name="star" size={13} /> Save
                 </button>
               </div>
             </div>

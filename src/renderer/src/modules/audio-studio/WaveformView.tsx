@@ -3,6 +3,7 @@ import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js'
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
+import { Icon } from '../../components/Icon'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -126,8 +127,14 @@ export function WaveformView(): JSX.Element | null {
     <div className="card p-4 flex flex-col gap-3">
       <div ref={containerRef} className="bg-bg-base rounded-md overflow-hidden" />
       <div className="flex items-center gap-3 text-sm">
-        <button className="btn-ghost px-3 py-2" onClick={togglePlay} disabled={!ready}>
-          {playing ? '⏸' : '▶'}
+        <button
+          className="btn-ghost px-3 py-2"
+          onClick={togglePlay}
+          disabled={!ready}
+          title={playing ? 'Pause' : 'Play'}
+          aria-label={playing ? 'Pause' : 'Play'}
+        >
+          <Icon name={playing ? 'pause' : 'play'} size={16} />
         </button>
         <div className="font-mono text-ink-muted">
           {formatTime(time)} / {formatTime(source.probe.duration)}

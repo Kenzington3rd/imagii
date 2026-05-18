@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface JobState {
   jobId: string
@@ -85,9 +86,7 @@ export function ExportDialog(): JSX.Element | null {
 
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-        Export
-      </h3>
+      <PanelHeader icon="download">Export</PanelHeader>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1.5">

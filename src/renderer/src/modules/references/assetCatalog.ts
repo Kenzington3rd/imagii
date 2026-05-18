@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import type { CanvasDocument, CanvasLayer } from '@shared/canvas'
+import type { IconName } from '../../components/Icon'
 
 /**
  * Curated catalog of CC0 / public-domain assets shipped with imagii.
@@ -205,6 +206,44 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     }
   },
 
+  // ---- HiDPI overlay variants (2K + 4K for high-res streams) ----
+  {
+    id: 'frame-clean-corner-2k',
+    name: 'Clean corner frame (2K)',
+    description: '2560×1440 transparent — same as the 1080p version, sharper for 1440p streams.',
+    category: 'overlay-frame',
+    license: 'CC0 (imagii-authored)',
+    doc: {
+      width: 2560,
+      height: 1440,
+      background: 'transparent',
+      layers: [
+        rect('Top bar', 0, 0, 2560, 11, '#a78bfa'),
+        rect('Bottom bar', 0, 1429, 2560, 11, '#a78bfa'),
+        rect('Handle slot', 64, 1307, 427, 96, 'rgba(11,11,15,0.78)', '#a78bfa', 3, 14),
+        txt('Handle', 85, 1333, '@yourhandle', 42, '#ffffff')
+      ]
+    }
+  },
+  {
+    id: 'frame-clean-corner-4k',
+    name: 'Clean corner frame (4K)',
+    description: '3840×2160 transparent — for 4K capture pipelines / YouTube re-uploads.',
+    category: 'overlay-frame',
+    license: 'CC0 (imagii-authored)',
+    doc: {
+      width: 3840,
+      height: 2160,
+      background: 'transparent',
+      layers: [
+        rect('Top bar', 0, 0, 3840, 16, '#a78bfa'),
+        rect('Bottom bar', 0, 2144, 3840, 16, '#a78bfa'),
+        rect('Handle slot', 96, 1960, 640, 144, 'rgba(11,11,15,0.78)', '#a78bfa', 4, 20),
+        txt('Handle', 128, 2000, '@yourhandle', 64, '#ffffff')
+      ]
+    }
+  },
+
   // ---- Social cards (1080×1080 square for IG/Twitter previews) ----
   {
     id: 'social-square-clip',
@@ -238,8 +277,21 @@ export function getAssetsByCategory(): Record<AssetCategory, CatalogAsset[]> {
 }
 
 export const ASSET_CATEGORY_LABELS: Record<AssetCategory, string> = {
-  'overlay-frame': '🎮 Overlay frames',
-  'lower-third': '📺 Lower thirds',
-  'scene-card': '📢 Scene cards',
-  'social-card': '🟦 Social cards'
+  'overlay-frame': 'Overlay frames',
+  'lower-third': 'Lower thirds',
+  'scene-card': 'Scene cards',
+  'social-card': 'Social cards'
+}
+
+/**
+ * Icon name per asset category. Kept parallel to ASSET_CATEGORY_LABELS
+ * so the Asset Library can render `<Icon> + label` instead of an emoji
+ * baked into the label string. See docs/STYLE_GUIDE.md (no emoji rule).
+ * The values are `IconName`s from components/Icon.tsx.
+ */
+export const ASSET_CATEGORY_ICONS: Record<AssetCategory, IconName> = {
+  'overlay-frame': 'overlay-frame',
+  'lower-third': 'lower-third',
+  'scene-card': 'scene-card',
+  'social-card': 'social-card'
 }

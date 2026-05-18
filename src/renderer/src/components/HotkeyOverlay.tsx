@@ -32,16 +32,16 @@ const SHORTCUTS_BY_ROUTE: Record<string, Array<{ keys: string; description: stri
     { keys: 'Esc', description: 'Stop recording (when running)' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
-  '/ai-art': [
+  '/references': [
     { keys: 'Enter (search bar)', description: 'Run search' },
-    { keys: '★ button', description: 'Save reference to mood board' },
+    { keys: 'Save button', description: 'Save reference to mood board' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
   '/home': [
     { keys: '?', description: 'Toggle this overlay' },
     { keys: 'Click any card', description: 'Open studio' },
-    { keys: '💾 Save project', description: 'Save full app state to .imagii.json' },
-    { keys: '📂 Open project', description: 'Restore from a saved project file' }
+    { keys: 'Save project', description: 'Save full app state to .imagii.json' },
+    { keys: 'Open project', description: 'Restore from a saved project file' }
   ]
 }
 

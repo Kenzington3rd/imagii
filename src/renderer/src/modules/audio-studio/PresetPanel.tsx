@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { ChainPreset } from '@shared/workspace'
 import { useAudioStore } from './state/audioStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 export function PresetPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
@@ -43,9 +44,7 @@ export function PresetPanel(): JSX.Element {
 
   return (
     <div className="card p-3 flex flex-col gap-2 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        Cleanup presets
-      </h3>
+      <PanelHeader icon="gear">Cleanup presets</PanelHeader>
       <div className="flex items-center gap-1.5">
         <input
           type="text"
@@ -80,6 +79,8 @@ export function PresetPanel(): JSX.Element {
               <button
                 className="text-ink-dim hover:text-rose-300"
                 onClick={() => remove(p)}
+                title="Remove preset"
+                aria-label="Remove preset"
               >
                 ✕
               </button>

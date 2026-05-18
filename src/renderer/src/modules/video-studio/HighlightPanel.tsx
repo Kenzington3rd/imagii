@@ -7,6 +7,8 @@ import {
   type ScoredHighlight
 } from '@shared/highlights'
 import { useVideoStore } from './store/videoStore'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -94,7 +96,9 @@ export function HighlightPanel(): JSX.Element | null {
         reason: c.reason === 'sustained-loud' ? 'sustained-loud' : 'loud'
       }))
       setAudioCandidates(narrowed)
-      if (narrowed.length === 0) toast('No standout moments detected.', { icon: '🔍' })
+      if (narrowed.length === 0) {
+        toast('No standout moments detected.', { icon: <Icon name="search" size={18} /> })
+      }
       else toast.success(`Found ${narrowed.length} candidates`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Scan failed')
@@ -110,18 +114,20 @@ export function HighlightPanel(): JSX.Element | null {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-highlights">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-          ⚡ Smart highlight finder
-        </h3>
-        <button
-          className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
-          onClick={scan}
-          disabled={scanning}
-        >
-          {scanning ? 'Scanning…' : audioCandidates ? 'Re-scan' : 'Scan VOD'}
-        </button>
-      </div>
+      <PanelHeader
+        icon="bolt"
+        actions={
+          <button
+            className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
+            onClick={scan}
+            disabled={scanning}
+          >
+            {scanning ? 'Scanning…' : audioCandidates ? 'Re-scan' : 'Scan VOD'}
+          </button>
+        }
+      >
+        Smart highlight finder
+      </PanelHeader>
       <p className="text-xs text-ink-dim">
         Combines audio-loudness peaks with optional chat density and hype-keyword
         detection. Each candidate shows you <em>why</em> it scored — paste a chat log
@@ -131,10 +137,11 @@ export function HighlightPanel(): JSX.Element | null {
       {/* Phase 4B: optional chat log input. Collapsed by default. */}
       <div className="border-t border-ink-dim/20 pt-2">
         <button
-          className="text-xs text-accent hover:underline"
+          className="text-xs text-accent hover:underline inline-flex items-center gap-1"
           onClick={() => setShowChatInput((v) => !v)}
         >
-          {showChatInput ? '▾' : '▸'} Add chat log (optional)
+          <Icon name={showChatInput ? 'chevron-down' : 'chevron-right'} size={12} />
+          Add chat log (optional)
         </button>
         {showChatInput ? (
           <textarea

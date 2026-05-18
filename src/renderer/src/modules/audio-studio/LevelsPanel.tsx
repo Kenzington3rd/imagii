@@ -1,5 +1,6 @@
 import type { CompressorPreset } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 const COMPRESSOR_OPTIONS: Array<{ value: CompressorPreset; label: string }> = [
   { value: 'off', label: 'Off' },
@@ -14,9 +15,7 @@ export function LevelsPanel(): JSX.Element {
 
   return (
     <div className="card p-4 flex flex-col gap-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-        Levels
-      </h3>
+      <PanelHeader icon="sliders">Levels</PanelHeader>
 
       <div>
         <div className="text-xs text-ink-muted mb-1.5">Compressor preset</div>

@@ -150,9 +150,8 @@ export function CropOverlay({ videoElement }: CropOverlayProps): JSX.Element | n
                 h: ref.offsetHeight / containerSize.h
               })
             }}
-            className="pointer-events-auto"
+            className="pointer-events-auto border-2 border-accent"
             style={{
-              border: '2px solid #a78bfa',
               boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)',
               boxSizing: 'border-box'
             }}

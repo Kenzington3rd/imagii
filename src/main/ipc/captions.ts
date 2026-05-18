@@ -12,17 +12,30 @@ import {
 import { captionsOutputDir } from '../sidecars/paths'
 import type { TranscribeRequest, BurnInRequest } from '../../shared/captions'
 import {
-  assertNonEmptyString
+  assertNonEmptyString,
+  assertPlainObject
 } from '../../shared/validators'
+import { assertSafeAbsolutePath } from '../../shared/pathSafety'
 
 export function registerCaptionsIpc(): void {
   ipcMain.handle('captions:status', () => getCaptionsStatus())
 
   ipcMain.handle('captions:transcribe', async (e, req: TranscribeRequest) => {
+    // Validate the renderer-supplied request like every other IPC handler.
+    // sourcePath reaches the Whisper sidecar / ffmpeg; require a safe
+    // absolute path so a traversal path can't reach an arbitrary file.
+    assertPlainObject(req, 'captions:transcribe req')
+    assertNonEmptyString(req.jobId, 'req.jobId')
+    assertSafeAbsolutePath(req.sourcePath, 'req.sourcePath')
     return runTranscribe(req, (p) => e.sender.send('captions:progress', p))
   })
 
   ipcMain.handle('captions:burnIn', async (e, req: BurnInRequest) => {
+    assertPlainObject(req, 'captions:burnIn req')
+    assertNonEmptyString(req.jobId, 'req.jobId')
+    assertSafeAbsolutePath(req.videoPath, 'req.videoPath')
+    assertSafeAbsolutePath(req.srtPath, 'req.srtPath')
+    assertSafeAbsolutePath(req.outputPath, 'req.outputPath')
     return runBurnIn(req, (p) => e.sender.send('captions:progress', p))
   })
 

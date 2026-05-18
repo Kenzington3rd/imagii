@@ -1,4 +1,6 @@
 import { useCanvasStore } from './state/canvasStore'
+import { Icon } from '../../components/Icon'
+import { PanelHeader } from '../../components/PanelHeader'
 
 export function LayerPanel(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
@@ -32,9 +34,7 @@ export function LayerPanel(): JSX.Element {
 
   return (
     <div className="card p-3 flex flex-col gap-2" data-tutorial="image-layers">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        Layers ({layers.length})
-      </h3>
+      <PanelHeader icon="layers">Layers ({layers.length})</PanelHeader>
       {layers.length === 0 ? (
         <p className="text-xs text-ink-dim">
           Drop or paste an image, or draw with the toolbar above.
@@ -56,20 +56,25 @@ export function LayerPanel(): JSX.Element {
                   e.stopPropagation()
                   toggleVisible(layer.id)
                 }}
-                className="w-5 text-center text-ink-muted hover:text-ink-base"
+                className={`w-5 flex justify-center ${
+                  layer.visible ? 'text-ink-base' : 'text-ink-dim'
+                } hover:text-accent`}
                 title="Show/hide"
               >
-                {layer.visible ? '👁' : '·'}
+                <Icon name={layer.visible ? 'eye' : 'eye-off'} size={14} />
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   toggleLocked(layer.id)
                 }}
-                className="w-5 text-center text-ink-muted hover:text-ink-base"
-                title="Lock/unlock"
+                className={`w-5 flex justify-center ${
+                  layer.locked ? 'text-accent' : 'text-ink-dim'
+                } hover:text-accent`}
+                title={layer.locked ? 'Unlock' : 'Lock'}
+                aria-label={layer.locked ? 'Unlock layer' : 'Lock layer'}
               >
-                {layer.locked ? '🔒' : '·'}
+                <Icon name={layer.locked ? 'lock' : 'unlock'} size={14} />
               </button>
               <span className="flex-1 truncate">{layer.name}</span>
               <button
@@ -77,40 +82,44 @@ export function LayerPanel(): JSX.Element {
                   e.stopPropagation()
                   moveUp(layer.id)
                 }}
-                className="text-ink-dim hover:text-ink-base px-1"
+                className="text-ink-dim hover:text-ink-base px-1 flex"
                 title="Move up"
+                aria-label="Move layer up"
               >
-                ↑
+                <Icon name="chevron-up" size={14} />
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   moveDown(layer.id)
                 }}
-                className="text-ink-dim hover:text-ink-base px-1"
+                className="text-ink-dim hover:text-ink-base px-1 flex"
                 title="Move down"
+                aria-label="Move layer down"
               >
-                ↓
+                <Icon name="chevron-down" size={14} />
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   duplicateLayer(layer.id)
                 }}
-                className="text-ink-dim hover:text-ink-base px-1"
+                className="text-ink-dim hover:text-ink-base px-1 flex"
                 title="Duplicate"
+                aria-label="Duplicate layer"
               >
-                ⎘
+                <Icon name="copy" size={14} />
               </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   removeLayer(layer.id)
                 }}
-                className="text-ink-dim hover:text-rose-300 px-1"
+                className="text-ink-dim hover:text-rose-300 px-1 flex"
                 title="Delete"
+                aria-label="Delete layer"
               >
-                ✕
+                <Icon name="close" size={14} />
               </button>
             </li>
           )

@@ -3,6 +3,7 @@ import type { KeyboardEvent } from 'react'
 import { useVideoStore } from './store/videoStore'
 import { CropOverlay } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
+import { Icon } from '../../components/Icon'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -144,22 +145,27 @@ export function Player(): JSX.Element | null {
       </div>
 
       <div className="flex items-center gap-3 text-sm">
-        <button className="btn-ghost px-3 py-2" onClick={togglePlay}>
-          {playing ? '⏸' : '▶'}
-        </button>
         <button
           className="btn-ghost px-3 py-2"
+          onClick={togglePlay}
+          title={playing ? 'Pause (Space)' : 'Play (Space)'}
+          aria-label={playing ? 'Pause' : 'Play'}
+        >
+          <Icon name={playing ? 'pause' : 'play'} size={16} />
+        </button>
+        <button
+          className="btn-ghost px-3 py-2 inline-flex items-center gap-1.5"
           onClick={() => step(-1)}
           title="Previous frame (,)"
         >
-          ⏮ frame
+          <Icon name="step-back" size={15} /> frame
         </button>
         <button
-          className="btn-ghost px-3 py-2"
+          className="btn-ghost px-3 py-2 inline-flex items-center gap-1.5"
           onClick={() => step(1)}
           title="Next frame (.)"
         >
-          frame ⏭
+          frame <Icon name="step-forward" size={15} />
         </button>
         <div className="ml-2 font-mono text-ink-muted">
           {formatTime(time)} / {formatTime(duration)}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { SettingsKey } from '@shared/api'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface DiaryEntry {
   id: string
@@ -26,7 +27,7 @@ const HASHTAG_TEMPLATES: Record<string, string[]> = {
 
 const TITLE_PATTERNS = [
   '{verb} {subject} on {game}!',
-  'When you {verb} {subject} 😱',
+  'When you {verb} {subject}...',
   'POV: {subject} happens',
   'I {verb}d a {subject} so you don\'t have to',
   '{subject} is the hardest thing in {game}',
@@ -133,12 +134,10 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-        📋 Posting helpers
-      </h3>
+      <PanelHeader icon="clipboard">Posting helpers</PanelHeader>
 
       <div className="border-b border-ink-dim/30 pb-3 flex flex-col gap-2">
-        <div className="text-xs uppercase tracking-wide text-ink-muted">Title ideas</div>
+        <PanelHeader icon="text">Title ideas</PanelHeader>
         <div className="flex items-center gap-2">
           <button className="btn-ghost px-3 py-1 text-xs" onClick={generateTitles}>
             Suggest 4 titles
@@ -159,7 +158,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
       </div>
 
       <div className="border-b border-ink-dim/30 pb-3 flex flex-col gap-2">
-        <div className="text-xs uppercase tracking-wide text-ink-muted">Hashtag pack</div>
+        <PanelHeader icon="text">Hashtag pack</PanelHeader>
         <select
           className="bg-bg-base rounded px-2 py-1 text-xs"
           value={hashtagPick}
@@ -185,7 +184,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
       </div>
 
       <div className="flex flex-col gap-2">
-        <div className="text-xs uppercase tracking-wide text-ink-muted">Posting log</div>
+        <PanelHeader icon="clipboard">Posting log</PanelHeader>
         <div className="flex flex-col gap-1.5">
           <input
             type="text"
@@ -224,9 +223,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
 
       {diary.length > 0 ? (
         <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
-          <div className="text-xs uppercase tracking-wide text-ink-muted">
-            Diary ({diary.length})
-          </div>
+          <PanelHeader icon="clipboard">Diary ({diary.length})</PanelHeader>
           {diary.map((e) => (
             <div
               key={e.id}
@@ -238,6 +235,8 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                 <button
                   onClick={() => deleteEntry(e.id)}
                   className="text-ink-dim hover:text-rose-300"
+                  title="Delete entry"
+                  aria-label="Delete entry"
                 >
                   ✕
                 </button>

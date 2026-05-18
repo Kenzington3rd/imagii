@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
 import { applyProject } from '../modules/project/ProjectIO'
 import { suppressAutosave } from '../hooks/useAutosave'
+import { Icon } from './Icon'
 
 interface AutosaveSnapshot {
   ok: boolean
@@ -88,7 +89,7 @@ export function AutosaveRestore(): JSX.Element | null {
     setBusy(true)
     try {
       await window.api.autosave.clear()
-      toast('Autosave discarded.', { icon: '🗑' })
+      toast('Autosave discarded.', { icon: <Icon name="trash" size={18} /> })
       setDismissed(true)
     } finally {
       setBusy(false)
@@ -101,7 +102,9 @@ export function AutosaveRestore(): JSX.Element | null {
   if (!snapshot.ok) {
     return (
       <div className="card p-3 mb-4 border-rose-400/40 bg-rose-400/5 text-sm flex items-center gap-3">
-        <span className="text-rose-300">⚠️</span>
+        <span className="text-rose-300 flex-shrink-0">
+          <Icon name="warning" size={18} />
+        </span>
         <span className="flex-1">
           An autosave was found ({ageText}) but failed validation: {snapshot.reason}. It will
           not be loaded. You can clear it.
@@ -121,7 +124,9 @@ export function AutosaveRestore(): JSX.Element | null {
 
   return (
     <div className="card p-3 mb-4 border-accent/40 bg-accent/5 text-sm flex items-center gap-3">
-      <span>💾</span>
+      <span className="text-accent flex-shrink-0">
+        <Icon name="save" size={18} />
+      </span>
       <span className="flex-1">
         imagii autosaved your work {ageText}. Want to pick up where you left off?
       </span>

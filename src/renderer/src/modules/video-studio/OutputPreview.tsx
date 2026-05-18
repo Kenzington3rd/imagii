@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { PlatformId } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { PanelHeader } from '../../components/PanelHeader'
 
 interface OutputPreviewProps {
   videoElement: HTMLVideoElement | null
@@ -98,22 +99,25 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
 
   return (
     <div className="card p-3 flex flex-col gap-2 text-sm">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
-          🔎 Output preview
-        </h3>
-        <select
-          value={previewPlatform}
-          onChange={(e) => setPreviewPlatform(e.target.value as PlatformId)}
-          className="bg-bg-base rounded px-2 py-0.5 text-xs"
-        >
-          {ALL_PLATFORM_IDS.map((id) => (
-            <option key={id} value={id}>
-              {PLATFORM_INFO[id].label} ({PLATFORM_INFO[id].width}×{PLATFORM_INFO[id].height})
-            </option>
-          ))}
-        </select>
-      </div>
+      <PanelHeader
+        icon="search"
+        actions={
+          <select
+            value={previewPlatform}
+            onChange={(e) => setPreviewPlatform(e.target.value as PlatformId)}
+            className="bg-bg-base rounded px-2 py-0.5 text-xs"
+          >
+            {ALL_PLATFORM_IDS.map((id) => (
+              <option key={id} value={id}>
+                {PLATFORM_INFO[id].label} ({PLATFORM_INFO[id].width}×
+                {PLATFORM_INFO[id].height})
+              </option>
+            ))}
+          </select>
+        }
+      >
+        Output preview
+      </PanelHeader>
       <div className="flex justify-center bg-bg-base rounded p-2">
         <canvas ref={canvasRef} className="rounded shadow-md" />
       </div>

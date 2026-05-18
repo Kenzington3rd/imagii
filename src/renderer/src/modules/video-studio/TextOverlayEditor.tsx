@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useVideoStore } from './store/videoStore'
+import { PanelHeader } from '../../components/PanelHeader'
 
 const FONT_OPTIONS = ['Arial', 'Impact', 'Verdana', 'Georgia', 'Courier New', 'Comic Sans MS']
 
@@ -34,14 +35,16 @@ export function TextOverlayEditor(): JSX.Element | null {
 
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">
-          Text overlays ({clip.textOverlays.length})
-        </h3>
-        <button className="btn-ghost px-3 py-1 text-xs" onClick={addOverlay}>
-          + Add text
-        </button>
-      </div>
+      <PanelHeader
+        icon="text"
+        actions={
+          <button className="btn-ghost px-3 py-1 text-xs" onClick={addOverlay}>
+            + Add text
+          </button>
+        }
+      >
+        Text overlays ({clip.textOverlays.length})
+      </PanelHeader>
 
       {clip.textOverlays.length === 0 ? (
         <p className="text-xs text-ink-dim">
