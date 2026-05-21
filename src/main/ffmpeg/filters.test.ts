@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { __testing__ } from './filters'
+import { __testing__, even } from './filters'
 
 const { escapeDrawtext, safeOverlaySize, safeOverlayColor } = __testing__
 
@@ -63,6 +63,39 @@ describe('safeOverlaySize', () => {
     expect(safeOverlaySize(Infinity)).toBe(48)
     expect(safeOverlaySize('64; movie=secret' as unknown)).toBe(48)
     expect(safeOverlaySize(undefined as unknown)).toBe(48)
+  })
+})
+
+/**
+ * M4 fix (round 15): yuv420p chroma subsampling needs even W/H/X/Y. The
+ * previous Math.round() let odd values through which crashed libx264 in
+ * strict mode. `even()` clears the low bit.
+ */
+describe('even', () => {
+  it('rounds odd positives down to the nearest even', () => {
+    expect(even(1081)).toBe(1080)
+    expect(even(3)).toBe(2)
+    expect(even(101.7)).toBe(100)
+  })
+
+  it('passes even values through unchanged', () => {
+    expect(even(1080)).toBe(1080)
+    expect(even(0)).toBe(0)
+    expect(even(2)).toBe(2)
+  })
+
+  it('rounds negatives toward -infinity (-1 → -2)', () => {
+    // Only consumer that sees a negative is the Math.max(0, …) clamp, so
+    // the exact rule for negatives doesn't matter functionally — pin it
+    // anyway so a refactor can't drift the contract.
+    expect(even(-1)).toBe(-2)
+    expect(even(-2)).toBe(-2)
+  })
+
+  it('returns 0 for non-finite input', () => {
+    expect(even(NaN)).toBe(0)
+    expect(even(Infinity)).toBe(0)
+    expect(even(-Infinity)).toBe(0)
   })
 })
 

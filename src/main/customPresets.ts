@@ -44,7 +44,19 @@ export async function saveCustomPreset(p: Omit<CustomPreset, 'id'>): Promise<Cus
   return preset
 }
 
+/**
+ * INIT-C (round 15): the renderer-supplied `id` is concatenated into a path
+ * under userData. nanoid emits only [A-Za-z0-9_-], but a stale/crafted IPC
+ * call could send anything (including `../`). Gate every external-facing id
+ * with the same alphabet nanoid uses so a traversal can't escape the
+ * preset directory.
+ */
+const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
+
 export async function deleteCustomPreset(id: string): Promise<void> {
+  if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
+    throw new Error('deleteCustomPreset: id must match nanoid alphabet')
+  }
   const file = path.join(dir(), `${id}.json`)
   if (existsSync(file)) await unlink(file)
 }

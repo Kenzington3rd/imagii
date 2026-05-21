@@ -47,6 +47,9 @@ export function ClipList(): JSX.Element {
               value={selectedSpeed}
               onChange={(e) => setClipSpeed(selected.id, Number(e.target.value))}
               className="flex-1"
+              // M11 fix (round 15)
+              aria-label="Clip playback speed"
+              aria-valuetext={`${selectedSpeed.toFixed(2)} times normal speed`}
             />
             <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
             <button

@@ -1,4 +1,5 @@
 import type { MoodBoardCollection, MoodBoardItem } from './search'
+import { isSafeAbsolutePath } from './pathSafety'
 
 /**
  * Pure parser + normalizer for a mood-board collection JSON file.
@@ -23,6 +24,20 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function normalizeItem(v: unknown): MoodBoardItem | null {
   if (!isPlainObject(v)) return null
   if (typeof v.id !== 'string' || typeof v.fullUrl !== 'string') return null
+  // M2 fix (round 15): cachedThumbPath comes from a JSON file on disk that
+  // a hostile actor could have edited (e.g. swap to C:\Windows\System32\…).
+  // The main-process readCollection later confines the value to thumbsCacheDir,
+  // but a string failing the basic isSafeAbsolutePath gate (relative path,
+  // traversal, reserved device) should never reach that confinement step
+  // either — drop it here. Keep the rest of the item so the board still
+  // loads with the thumbnail simply unset.
+  if ('cachedThumbPath' in v) {
+    if (typeof v.cachedThumbPath !== 'string' || !isSafeAbsolutePath(v.cachedThumbPath)) {
+      const cleaned: Record<string, unknown> = { ...v }
+      delete cleaned.cachedThumbPath
+      return cleaned as unknown as MoodBoardItem
+    }
+  }
   return v as unknown as MoodBoardItem
 }
 

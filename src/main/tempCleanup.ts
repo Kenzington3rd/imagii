@@ -28,6 +28,58 @@ const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
 
 const TEMP_SUBDIRS = ['imagii-audio', 'imagii-concat'] as const
 
+/**
+ * INIT-D (round 15): a save-time crash in recording.ts could leave a 100+ MB
+ * .webm in userData/recordings/. The path is not under tmpdir() so it is
+ * NOT reaped by the OS / Storage Sense. List the directory separately so
+ * the same 6-hour threshold applies. The function only attempts the prune
+ * if `app` (electron) is available — keeps the unit test working without
+ * Electron loaded.
+ */
+function recordingsCleanupDir(): string | null {
+  try {
+    // Lazy import keeps the unit test (node-env, no electron) loading
+    // this module without crashing. app.getPath throws if invoked before
+    // whenReady; the cleanup runs after, so this is safe in production.
+    // dynamic-require avoids a top-level electron dependency for tests.
+    const { app } =
+      (eval('require') as NodeRequire)('electron') as typeof import('electron')
+    return path.join(app.getPath('userData'), 'recordings')
+  } catch {
+    return null
+  }
+}
+
+async function pruneDir(
+  dir: string,
+  now: number
+): Promise<{ scanned: number; removed: number }> {
+  if (!existsSync(dir)) return { scanned: 0, removed: 0 }
+  let scanned = 0
+  let removed = 0
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return { scanned: 0, removed: 0 }
+  }
+  for (const name of entries) {
+    scanned++
+    const full = path.join(dir, name)
+    try {
+      const s = await stat(full)
+      if (!s.isFile()) continue
+      if (now - s.mtimeMs < STALE_THRESHOLD_MS) continue
+      await unlink(full)
+      removed++
+    } catch {
+      // EBUSY, EPERM, ENOENT mid-iteration — keep going.
+      continue
+    }
+  }
+  return { scanned, removed }
+}
+
 export async function pruneStaleTempFiles(now: number = Date.now()): Promise<{
   scanned: number
   removed: number
@@ -41,32 +93,18 @@ export async function pruneStaleTempFiles(now: number = Date.now()): Promise<{
   assert(Number.isFinite(now) && now >= 0, 'pruneStaleTempFiles: `now` must be a finite non-negative ms timestamp')
   let scanned = 0
   let removed = 0
-  // Bound: 2 subdirs × N files. The directory listing acts as the upper
-  // bound on the inner loop (Power-of-Ten rule 2).
+  // Bound: TEMP_SUBDIRS + optional recordings dir × N files each.
   for (const subdir of TEMP_SUBDIRS) {
     const dir = path.join(tmpdir(), subdir)
-    if (!existsSync(dir)) continue
-    let entries: string[]
-    try {
-      entries = await readdir(dir)
-    } catch {
-      // Permissions or transient failure — skip this directory entirely.
-      continue
-    }
-    for (const name of entries) {
-      scanned++
-      const full = path.join(dir, name)
-      try {
-        const s = await stat(full)
-        if (!s.isFile()) continue
-        if (now - s.mtimeMs < STALE_THRESHOLD_MS) continue
-        await unlink(full)
-        removed++
-      } catch {
-        // EBUSY, EPERM, ENOENT mid-iteration — keep going.
-        continue
-      }
-    }
+    const { scanned: s, removed: r } = await pruneDir(dir, now)
+    scanned += s
+    removed += r
+  }
+  const recordings = recordingsCleanupDir()
+  if (recordings) {
+    const { scanned: s, removed: r } = await pruneDir(recordings, now)
+    scanned += s
+    removed += r
   }
   return { scanned, removed }
 }

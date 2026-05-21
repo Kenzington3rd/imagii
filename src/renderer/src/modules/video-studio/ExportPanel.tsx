@@ -10,6 +10,7 @@ import type {
 } from '@shared/clip'
 import { expandFilenameTemplate } from '@shared/filename'
 import { computeCropBox, findClippedSafeZones } from '@shared/safeZone'
+import { assertDefined } from '@shared/assert'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
@@ -98,6 +99,12 @@ export function ExportPanel(): JSX.Element | null {
     window.api.settings.get<string>('filenameTemplate').then((tpl) => {
       if (cancelled) return
       if (tpl) setFilenameTemplate(tpl)
+    })
+    // INIT-E (round 15): seed the output dir from the last successful export
+    // so a power user doing back-to-back batches doesn't re-pick every time.
+    window.api.settings.get<string>('export.lastOutputDir').then((dir) => {
+      if (cancelled) return
+      if (dir) setOutDir(dir)
     })
     return () => {
       cancelled = true
@@ -196,6 +203,9 @@ export function ExportPanel(): JSX.Element | null {
     try {
       await window.api.video.exportBatch(queue)
       toast.success(`Exported ${queue.length} file${queue.length === 1 ? '' : 's'}`)
+      // INIT-E (round 15): persist the choice on success so the next batch
+      // defaults to the same folder.
+      void window.api.settings.set('export.lastOutputDir', outDir)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Export failed'
       toast.error(msg)
@@ -242,6 +252,18 @@ export function ExportPanel(): JSX.Element | null {
             >
               {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
             </button>
+            {running ? (
+              // B8 fix (round 15): a long batch had no abort path. cancelAll
+              // hits every in-flight ffmpeg child registered in activeJobs.
+              <button
+                className="btn-ghost px-3 py-1.5 text-sm"
+                onClick={() => {
+                  void window.api.video.cancelAll()
+                }}
+              >
+                Cancel
+              </button>
+            ) : null}
           </div>
         }
       >
@@ -348,7 +370,13 @@ export function ExportPanel(): JSX.Element | null {
               {j.outputPath ? (
                 <button
                   className="text-xs text-accent hover:underline"
-                  onClick={() => window.api.video.revealInFolder(j.outputPath!)}
+                  // M13 fix (round 15): see audio ExportDialog — closure-time
+                  // narrowing escape; assertDefined keeps the contract explicit.
+                  onClick={() =>
+                    window.api.video.revealInFolder(
+                      assertDefined(j.outputPath, 'j.outputPath')
+                    )
+                  }
                 >
                   Show
                 </button>

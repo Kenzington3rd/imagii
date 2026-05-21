@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
+import { assertDefined } from '@shared/assert'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
 
@@ -157,7 +158,15 @@ export function ExportDialog(): JSX.Element | null {
           {job.outputPath ? (
             <button
               className="text-xs text-accent hover:underline"
-              onClick={() => window.api.audio.revealInFolder(job.outputPath!)}
+              // M13 fix (round 15): `!` was guarded by the outer `job.outputPath ?`
+              // ternary, but the inner closure runs later (click) and TS narrowing
+              // doesn't survive that gap. assertDefined makes the contract explicit
+              // and gives a clean error if the queue state ever drifts.
+              onClick={() =>
+                window.api.audio.revealInFolder(
+                  assertDefined(job.outputPath, 'job.outputPath')
+                )
+              }
             >
               Show
             </button>

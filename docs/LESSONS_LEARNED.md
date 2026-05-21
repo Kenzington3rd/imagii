@@ -14,6 +14,223 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-20 — Bug round 15: autosave wiring, mains-hum filter, faststart cascade
+
+### Bug — autosave hook existed but was never invoked (data loss on crash)
+- **Root cause.** Round 3 introduced `useAutosave()` in
+  `src/renderer/src/hooks/useAutosave.ts` and added `AutosaveRestore` to
+  the launch flow, but no component ever called the writer hook. Only
+  `suppressAutosave` was imported anywhere. `AutosaveRestore` always
+  read a missing file.
+- **Fix.** `src/renderer/src/App.tsx` now calls
+  `useAutosave({ enabled: status.phase === 'ready' })` once, gated on
+  the post-welcome `ready` state. The main-side `isSafeToAutosave`
+  guard still protects against empty-project saves.
+- **Test.** Behavioral / timer; documented here instead.
+- **Lesson.** A hook is just a function — if no component renders it,
+  it doesn't run. Add a smoke check (or a feature flag wired into a
+  visible UI affordance) when a feature lives entirely in a hook.
+
+### Bug — `hum60` filter did not touch 60 Hz mains hum
+- **Root cause.** `src/main/audio/chain.ts` pushed `highpass=f=70` and
+  `lowpass=f=10000` when `hum60` was enabled. Highpass at 70 Hz passes
+  60 Hz unchanged; lowpass at 10 kHz dulls voice without affecting
+  hum. The label said "Reduce 60 Hz hum"; the code did the opposite.
+- **Fix.** Use notches: `bandreject=f=60:width_type=h:w=2` and
+  `bandreject=f=120:width_type=h:w=2` (fundamental + first harmonic).
+- **Test.** `src/main/audio/chain.test.ts` — buildChain emits both
+  bandreject stages and neither legacy filter when hum60 is on.
+- **Lesson.** Audio filters are commutative — a chain that "feels
+  related" to a problem is not the same as a chain that addresses it.
+  When the label promises a specific outcome, pin the filter form in a
+  test.
+
+### Bug — Platform duration limits stale (TikTok 10 min, Reels 90 s)
+- **Root cause.** TikTok extended uploads to 60 minutes in late 2024
+  and Meta extended Reels to 3 minutes the same year.
+  `presets.ts` `durationHardLimit` values predated both changes;
+  perfectly valid longer-form posts were red-flagged.
+- **Fix.** TikTok hard limit → 3600 s; Reels hard limit → 180 s,
+  sweet spot max → 90 s.
+- **Lesson.** Constants tied to third-party policy decay. Cite the
+  source in a comment so the next refresh has somewhere to start.
+
+### Bug — faststart missing on three MP4 emit paths
+- **Root cause.** `runPipComposite`, `runBurnIn`, and `runAudioMux`
+  all emitted libx264 MP4 outputs without `-movflags +faststart`.
+  Round-2 audit fixed `runExportJob`/`runConcat`/`runReframe` but
+  these three regressed silently. Web players stall while the moov
+  atom is fetched from the tail.
+- **Fix.** Add `'-movflags', '+faststart'` to all three ffmpeg arg
+  lists. Match the runExportJob shape.
+- **Lesson.** A grep for `-movflags` should be part of the
+  new-encode PR checklist. The flag is invisible from runtime
+  behavior unless you test on a slow / partial network.
+
+### Bug — Export and Clip Kit batches had no Cancel button
+- **Root cause.** Main-process `cancelAllExportJobs` existed and
+  preload exposed it as `window.api.video.cancelAll`, but no UI
+  called it. A long batch couldn't be aborted.
+- **Fix.** `ExportPanel.tsx` and `ClipKitButton.tsx` render a
+  Cancel button while running that calls `cancelAll()`.
+- **Lesson.** A cancellation primitive is only as useful as its
+  furthest UI invocation. Wire it end-to-end when you add it.
+
+### Bug — `text-ink-dim` failed WCAG AA contrast (3.04:1)
+- **Root cause.** `tailwind.config.js` set `ink.dim` to `#5d5d6e` —
+  ~3.04:1 on `#0b0b0f`. Below 4.5:1 AA minimum for body text. Used
+  across FixWizard, ThumbnailVariants, AssetLibraryPanel, preset
+  copy, importer hints.
+- **Fix.** Bumped `ink.dim` to `#8b8b9c` (~6.6:1) and updated the
+  DESIGN_GUIDE token table.
+- **Lesson.** When the dim/secondary token wraps important hint text
+  (not decorative dividers), check contrast on every background it
+  lands on, not just `bg.base`.
+
+### Bug — `prefers-reduced-motion` ignored
+- **Root cause.** No global rule in
+  `src/renderer/src/styles/index.css`. Spinners, opacity transitions,
+  smooth scrolling ran regardless of the OS setting.
+- **Fix.** Bottom-of-file `@media (prefers-reduced-motion: reduce)`
+  block disables animation-duration, transition-duration, and
+  scroll-behavior app-wide.
+- **Lesson.** This is one CSS block. Add it at project setup.
+
+### Bug — Audio Studio Ctrl+Z / Ctrl+Y documented but not wired
+- **Root cause.** HotkeyOverlay advertised undo/redo for `/audio`
+  but AudioStudio had no `keydown` listener — only ImageStudio did.
+- **Fix.** `useEffect` in `AudioStudio.tsx` mirrors ImageStudio's
+  pattern (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z; skip when typing).
+- **Lesson.** Doc fields like HotkeyOverlay are claims about
+  behavior — exercise them or remove them.
+
+### Bug — Temp WebM leaked when `dialog.showSaveDialog` threw
+- **Root cause.** `src/main/ipc/recording.ts` wrote `tempPath`
+  BEFORE showing the dialog. If the dialog threw (window destroyed
+  mid-IPC), neither the cancel-branch unlink nor the conversion
+  try/finally ran — the WebM leaked.
+- **Fix.** Outer try/finally around the entire post-`writeFile`
+  block. The conversion try/finally becomes nested.
+- **Lesson.** A dialog can throw. Wrap any post-write IO that
+  depends on a dialog in try/finally that cleans up the write.
+
+### Bug — `cachedThumbPath` could point at any safe absolute path
+- **Root cause.** `parseCollection` accepted the JSON-supplied path
+  as-is and the protocol handler served any safe absolute path. A
+  crafted board JSON could point cachedThumbPath at a sensitive file.
+- **Fix.** Two layers: shared `parseCollection` drops the field if
+  it fails `isSafeAbsolutePath`; main-process `readCollection`
+  further confines the path to `thumbsCacheDir()` via
+  `path.relative`.
+- **Test.** `src/shared/moodboardParse.test.ts` — relative and
+  non-string both produce undefined cachedThumbPath; safe path
+  passes through (main confines further).
+- **Lesson.** Persisted strings that reach the filesystem need
+  validation AND confinement to a known root.
+
+### Bug — Spawn children leaked through app quit
+- **Root cause.** runPipComposite, runBurnIn, runTranscribe,
+  runConcat segments, webm→mp4 conversion: none registered in
+  cancellable maps. `window-all-closed` was the only quit hook.
+  Closing the window left orphan ffmpeg / whisper processes.
+- **Fix.** Per-module activeJobs maps + cancelAll exports plus a
+  `before-quit` handler in `src/main/index.ts` that fires every
+  cancelAll.
+- **Lesson.** Every spawn should be registered before any other
+  code awaits the child.
+
+### Bug — Odd crop dimensions slipped through to libx264
+- **Root cause.** `cropToFilter` / `autoCropForAspect` / reframe.ts
+  used `Math.round()` for crop W/H/X/Y. yuv420p needs even values;
+  libx264 strict mode refuses odd dimensions.
+- **Fix.** New `even()` helper in `src/main/ffmpeg/filters.ts`
+  (`n & ~1`) applied to every crop coordinate and to concat.ts
+  scale dims.
+- **Test.** `src/main/ffmpeg/filters.test.ts` — `even(1081)===1080`,
+  `even(0)===0`, `even(-1)===-2`, `even(NaN)===0`.
+- **Lesson.** When a codec has a divisibility constraint, snap at
+  the source-of-truth (filter graph construction), not at the
+  caller.
+
+### Bug — Secondary track at 44.1 kHz silently mismatched amix
+- **Root cause.** `runAudioExport` mixed primary (forced 48 kHz)
+  with secondary unmodified. amix requires equal SR + channel
+  layout; ffmpeg either silently auto-resampled or errored.
+- **Fix.** Prepend `aresample=48000,aformat=channel_layouts=stereo`
+  to the secondary's filter stage.
+- **Lesson.** Filter graphs that join two streams need explicit
+  format-alignment before the join.
+
+### Bug — RecordStudio save phase had no progress or abort
+- **Root cause.** Conversion can take minutes for a long screencap.
+  RecordStudio just showed a static "Finishing up…" card.
+- **Fix.** New IPC: `recording:progress` (main → renderer) and
+  `recording:cancelSave` (renderer → main). RecordStudio shows a
+  progress bar and Discard button during the saving phase; the
+  conversion child is registered so before-quit can kill it.
+- **Lesson.** A spinner without progress is acceptable for sub-
+  second ops. Multi-minute ops need visible progress AND a way out.
+
+### Bug — Range sliders had no accessible names
+- **Root cause.** Many `<input type="range">` relied on a sibling
+  `<span>` for the visible value — AT reads neither the wrap nor
+  the sibling, so a screen reader announced "slider, 0 to 100"
+  with no context.
+- **Fix.** `aria-label` on every slider plus `aria-valuetext` for
+  the formatted value. Applied across ColorGradePanel,
+  CompilationPanel, CaptionsPanel, ClipList, PropertiesPanel,
+  LevelsPanel, SecondaryTrackPanel (both helpers), image
+  ExportDialog, Toolbar grid size, CustomPresetManager name.
+- **Lesson.** A `<label>` wrap is the minimum; sliders showing a
+  formatted value in a sibling need `aria-valuetext`.
+
+### Bug — Modals had no focus management
+- **Root cause.** Every modal was a hand-rolled fixed-inset div
+  with no focus trap, no Escape handler beyond ad-hoc, and
+  TemplatesDialog lacked scrim-click-to-close.
+- **Fix.** New shared `<Modal>` in
+  `src/renderer/src/components/Modal.tsx` centralizes role /
+  aria-modal, first-focusable-on-mount, Tab trapping, Escape
+  close, scrim-click close, focus restore. TemplatesDialog
+  refactored as the first consumer.
+- **Lesson.** The seventh hand-rolled implementation is the right
+  time to write the helper.
+
+### Bug — Eight `!` non-null assertions
+- **Root cause.** Quick fixes that papered over narrowing escape
+  cases. Most were logically safe under current code but governance
+  bans `!` because future refactors drift the guards apart from the
+  assertion.
+- **Fix.** Each replaced with `assertDefined`. Special case for
+  `ReframePanel.tsx:59` — the previous `outDir!` referenced STALE
+  React state (setOutDir is async), so the picker value is captured
+  in a `resolvedOutDir` local instead. Real correctness fix.
+- **Lesson.** `!` is a TS-level lie. And `!` on React state right
+  after a setState call is almost always a bug.
+
+### Round 15 also shipped
+- audio chain: explicit `nr` values for light/medium/aggressive
+  denoise presets; FixWizard echoy surfaces a mic-placement tip
+  instead of silently discarding; amix weights `1 1` under ducking
+- streamer kit: X copy mentions Premium 3 h cap; emote template
+  name + auto-emit-3-PNG pack on 112×112 export; "Smart" reframe →
+  "Auto (centered)"; tiktok-bold caption default → bottom; Clip Kit
+  routes vertical sources to a 1080×1920 YouTube Short
+- IPC defense-in-depth: pinned `WHISPER_MODEL_SHA256` verified after
+  download; `assertSafeAbsolutePath` on every video IPC path field;
+  `captions:saveSrt` confined to the captions output dir;
+  nanoid-alphabet gate on customPresets and moodboard ids
+- resource hygiene: tempCleanup also walks
+  `userData/recordings`; `store.ts` electron-store schema with
+  `clearInvalidConfig`
+- UX polish: last-used export and Clip Kit folder persisted;
+  ImageStudio tool badge renamed (rect → Rectangle, etc.); spinning
+  loading indicator on App boot; longer + diagnostic video import
+  errors; version label sourced from `app.getVersion()` instead of
+  the hardcoded `v0.1`
+
+---
+
 ## 2026-05-18 — Bug round 14: overlay injection, preset-list crash, captions hardening
 
 ### Bug — FFmpeg filter-graph injection via unvalidated text-overlay fields

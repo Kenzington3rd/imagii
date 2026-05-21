@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 
 interface WelcomeProps {
@@ -5,6 +6,20 @@ interface WelcomeProps {
 }
 
 export function Welcome({ onContinue }: WelcomeProps): JSX.Element {
+  // M9 fix (round 15): the previous v0.1 was a hardcoded lie — package.json
+  // is at 1.0.0 already. Read the actual app version from the main process
+  // so this label is always in sync with the build.
+  const [version, setVersion] = useState<string>('')
+  useEffect(() => {
+    let cancelled = false
+    void window.api.app.getVersion().then((v) => {
+      if (!cancelled) setVersion(v)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div className="h-full flex items-center justify-center px-6">
       <div className="card max-w-xl w-full p-10 shadow-2xl text-center">
@@ -31,7 +46,7 @@ export function Welcome({ onContinue }: WelcomeProps): JSX.Element {
         >
           Let&apos;s go <Icon name="arrow-right" size={18} />
         </button>
-        <p className="text-xs text-ink-dim mt-6">imagii v0.1</p>
+        <p className="text-xs text-ink-dim mt-6">imagii v{version || '…'}</p>
       </div>
     </div>
   )

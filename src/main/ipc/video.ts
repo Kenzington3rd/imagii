@@ -25,6 +25,7 @@ import {
   assertPlainObject
 } from '../../shared/validators'
 import { assert } from '../../shared/assert'
+import { assertSafeAbsolutePath } from '../../shared/pathSafety'
 import { isValidTextOverlay } from '../../shared/projectValidation'
 
 const REFRAME_POSITIONS = ['left', 'center', 'right', 'smart'] as const
@@ -35,6 +36,10 @@ function validateExportJob(job: unknown, idx: number): asserts job is ExportJobS
   assertNonEmptyString(job.jobId, `jobs[${idx}].jobId`)
   assertNonEmptyString(job.sourcePath, `jobs[${idx}].sourcePath`)
   assertNonEmptyString(job.outDir, `jobs[${idx}].outDir`)
+  // INIT-C (round 15): every path field also needs the no-traversal gate, not
+  // just the non-empty-string check — match the captions/audio IPC style.
+  assertSafeAbsolutePath(job.sourcePath, `jobs[${idx}].sourcePath`)
+  assertSafeAbsolutePath(job.outDir, `jobs[${idx}].outDir`)
   assertPlainObject(job.clip, `jobs[${idx}].clip`)
   const clip = job.clip
   assertFiniteNonNeg(clip.startSec, `jobs[${idx}].clip.startSec`)
@@ -59,6 +64,8 @@ function validateExportJob(job: unknown, idx: number): asserts job is ExportJobS
 export function registerVideoIpc(): void {
   ipcMain.handle('video:probe', async (_e, filePath: string) => {
     assertNonEmptyString(filePath, 'video:probe filePath')
+    // INIT-C (round 15): defend the file system against traversal payloads.
+    assertSafeAbsolutePath(filePath, 'video:probe filePath')
     return probeVideo(filePath)
   })
 
@@ -120,6 +127,8 @@ export function registerVideoIpc(): void {
 
   ipcMain.handle('video:revealInFolder', (_e, filePath: string) => {
     assertNonEmptyString(filePath, 'video:revealInFolder filePath')
+    // INIT-C (round 15)
+    assertSafeAbsolutePath(filePath, 'video:revealInFolder filePath')
     shell.showItemInFolder(filePath)
   })
 
@@ -140,6 +149,9 @@ export function registerVideoIpc(): void {
       assertPlainObject(params, 'video:reframe params')
       assertNonEmptyString(params.sourcePath, 'sourcePath')
       assertNonEmptyString(params.outDir, 'outDir')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
+      assertSafeAbsolutePath(params.outDir, 'outDir')
       assertEnum(params.position, REFRAME_POSITIONS, 'position')
       assertFiniteNonNeg(params.startSec, 'startSec')
       assertFiniteNonNeg(params.endSec, 'endSec')
@@ -171,6 +183,8 @@ export function registerVideoIpc(): void {
     'video:findHighlights',
     async (e, sourcePath: string) => {
       assertNonEmptyString(sourcePath, 'video:findHighlights sourcePath')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(sourcePath, 'video:findHighlights sourcePath')
       const jobId = `highlights-${Date.now()}`
       const candidates = await findHighlights(jobId, sourcePath, (p) =>
         e.sender.send('video:highlightProgress', p)
@@ -189,6 +203,8 @@ export function registerVideoIpc(): void {
     ) => {
       assertPlainObject(params, 'video:analyzeClipHook params')
       assertNonEmptyString(params.sourcePath, 'sourcePath')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
       assertFiniteNonNeg(params.startSec, 'startSec')
       const dur = params.durationSec ?? 3
       assertRange(dur, 0.5, 30, 'durationSec')
@@ -205,6 +221,9 @@ export function registerVideoIpc(): void {
       assertNonEmptyString(params.sourcePath, 'sourcePath')
       assertFiniteNonNeg(params.timeSec, 'timeSec')
       assertNonEmptyString(params.outputPath, 'outputPath')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
+      assertSafeAbsolutePath(params.outputPath, 'outputPath')
       return extractFrame(params.sourcePath, params.timeSec, params.outputPath)
     }
   )
@@ -215,6 +234,8 @@ export function registerVideoIpc(): void {
       assertPlainObject(params, 'video:makeKitDir params')
       assertNonEmptyString(params.parentDir, 'parentDir')
       assertNonEmptyString(params.clipName, 'clipName')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.parentDir, 'parentDir')
       return makeKitDir(params.parentDir, params.clipName)
     }
   )
@@ -252,6 +273,9 @@ export function registerVideoIpc(): void {
       assertPlainObject(params, 'video:concat params')
       assertNonEmptyString(params.sourcePath, 'sourcePath')
       assertNonEmptyString(params.outDir, 'outDir')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
+      assertSafeAbsolutePath(params.outDir, 'outDir')
       assertArray(params.segments, 'segments', 500)
       assert(params.segments.length > 0, 'segments must not be empty')
       const segs = params.segments
@@ -295,6 +319,10 @@ export function registerVideoIpc(): void {
       assertNonEmptyString(params.basePath, 'basePath')
       assertNonEmptyString(params.overlayPath, 'overlayPath')
       assertNonEmptyString(params.outDir, 'outDir')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.basePath, 'basePath')
+      assertSafeAbsolutePath(params.overlayPath, 'overlayPath')
+      assertSafeAbsolutePath(params.outDir, 'outDir')
       assertRange(params.overlayWidth, 0.05, 1, 'overlayWidth')
       assertEnum(params.position, PIP_POSITIONS, 'position')
       assertFiniteNonNeg(params.margin, 'margin')
@@ -325,6 +353,9 @@ export function registerVideoIpc(): void {
       assertPlainObject(params, 'video:exportGif params')
       assertNonEmptyString(params.sourcePath, 'sourcePath')
       assertNonEmptyString(params.outDir, 'outDir')
+      // INIT-C (round 15)
+      assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
+      assertSafeAbsolutePath(params.outDir, 'outDir')
       assertFiniteNonNeg(params.startSec, 'startSec')
       assertFiniteNonNeg(params.endSec, 'endSec')
       assert(params.endSec > params.startSec, 'gif endSec must exceed startSec')

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
+import { even } from './filters'
 
 export type ReframePosition = 'left' | 'center' | 'right' | 'smart'
 
@@ -35,15 +36,18 @@ function computeCropOffset(
   cropWidth: number
 ): number {
   const margin = sourceWidth - cropWidth
+  // M4 fix (round 15): force the offset to an even integer so yuv420p
+  // accepts the crop; an odd offset shifts the chroma plane and ffmpeg
+  // refuses the encode.
   switch (position) {
     case 'left':
-      return Math.max(0, Math.round(margin * 0.15))
+      return Math.max(0, even(margin * 0.15))
     case 'right':
-      return Math.max(0, Math.round(margin * 0.85))
+      return Math.max(0, even(margin * 0.85))
     case 'center':
     case 'smart':
     default:
-      return Math.max(0, Math.round(margin / 2))
+      return Math.max(0, even(margin / 2))
   }
 }
 
@@ -59,17 +63,18 @@ export async function runReframe(
   const sourceH = probe.height
   const targetAspect = spec.outputWidth / spec.outputHeight
 
+  // M4 fix (round 15): force every crop coordinate to an even integer.
   let cropW: number
   let cropH: number
   if (sourceW / sourceH > targetAspect) {
-    cropH = sourceH
-    cropW = Math.round(cropH * targetAspect)
+    cropH = even(sourceH)
+    cropW = even(cropH * targetAspect)
   } else {
-    cropW = sourceW
-    cropH = Math.round(cropW / targetAspect)
+    cropW = even(sourceW)
+    cropH = even(cropW / targetAspect)
   }
   const cropX = computeCropOffset(spec.position, sourceW, cropW)
-  const cropY = Math.max(0, Math.round((sourceH - cropH) / 2))
+  const cropY = Math.max(0, even((sourceH - cropH) / 2))
 
   const filter = `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${spec.outputWidth}:${spec.outputHeight}:flags=lanczos`
 

@@ -7,6 +7,22 @@ export interface SourceDimensions {
 }
 
 /**
+ * M4 fix (round 15): force an integer to the nearest even value, rounding
+ * down. yuv420p chroma subsampling requires even W/H/X/Y in crop filters,
+ * and libx264 in strict mode refuses odd dimensions outright. Math.round
+ * + raw value let an odd result through before — e.g. a 1081-px crop
+ * height failed at runtime far from the source-of-truth here.
+ *
+ * Implementation: `n & ~1` clears the low bit. For negatives this rounds
+ * toward -∞ (-1 → -2), which is fine for the only consumer that sees a
+ * negative (the Math.max(0, …) clamp below) — and exported for tests.
+ */
+export function even(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.trunc(n) & ~1
+}
+
+/**
  * Escape arbitrary user text for FFmpeg's drawtext filter param.
  * Handles the well-known offenders (backslash, single-quote, colon,
  * percent) plus newlines / carriage returns — without the newline
@@ -31,10 +47,12 @@ function escapeDrawtext(text: string): string {
 export const __testing__ = { escapeDrawtext, safeOverlaySize, safeOverlayColor }
 
 function cropToFilter(crop: CropRect, source: SourceDimensions): string {
-  const w = Math.max(2, Math.round(crop.w * source.width))
-  const h = Math.max(2, Math.round(crop.h * source.height))
-  const x = Math.max(0, Math.round(crop.x * source.width))
-  const y = Math.max(0, Math.round(crop.y * source.height))
+  // M4 fix (round 15): force every crop dimension to an even integer so
+  // yuv420p subsampling and libx264 strict-mode both accept the output.
+  const w = Math.max(2, even(crop.w * source.width))
+  const h = Math.max(2, even(crop.h * source.height))
+  const x = Math.max(0, even(crop.x * source.width))
+  const y = Math.max(0, even(crop.y * source.height))
   return `crop=${w}:${h}:${x}:${y}`
 }
 
@@ -44,14 +62,18 @@ function autoCropForAspect(
 ): string {
   const sourceAspect = source.width / source.height
   if (Math.abs(sourceAspect - targetAspect) < 0.01) return ''
+  // M4 fix (round 15): even() at every assignment site. Source dims are
+  // also forced even since libx264 won't accept odd input either.
+  const evenSourceW = even(source.width)
+  const evenSourceH = even(source.height)
   if (sourceAspect > targetAspect) {
-    const cropW = Math.round(source.height * targetAspect)
-    const cropX = Math.max(0, Math.round((source.width - cropW) / 2))
-    return `crop=${cropW}:${source.height}:${cropX}:0`
+    const cropW = even(source.height * targetAspect)
+    const cropX = Math.max(0, even((source.width - cropW) / 2))
+    return `crop=${cropW}:${evenSourceH}:${cropX}:0`
   }
-  const cropH = Math.round(source.width / targetAspect)
-  const cropY = Math.max(0, Math.round((source.height - cropH) / 2))
-  return `crop=${source.width}:${cropH}:0:${cropY}`
+  const cropH = even(source.width / targetAspect)
+  const cropY = Math.max(0, even((source.height - cropH) / 2))
+  return `crop=${evenSourceW}:${cropH}:0:${cropY}`
 }
 
 function scaleFilter(preset: PlatformPreset): string {

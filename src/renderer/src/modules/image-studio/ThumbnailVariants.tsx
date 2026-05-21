@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
+import { assertDefined } from '@shared/assert'
 
 interface VariantSpec {
   id: string
@@ -137,7 +138,10 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
         const c = document.createElement('canvas')
         c.width = img.naturalWidth
         c.height = img.naturalHeight
-        const ctx = c.getContext('2d')!
+        // M13 fix (round 15): getContext('2d') returns null on an exotic
+        // browser path (canvas disabled in test runner, OOM). assertDefined
+        // surfaces a clean error instead of crashing on `null.drawImage`.
+        const ctx = assertDefined(c.getContext('2d'), '2d canvas context')
         ctx.drawImage(img, 0, 0)
         variant.apply(ctx, c.width, c.height)
         out.push({ id: variant.id, label: variant.label, dataUrl: c.toDataURL('image/png') })

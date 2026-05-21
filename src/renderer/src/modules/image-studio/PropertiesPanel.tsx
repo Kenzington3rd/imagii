@@ -81,6 +81,9 @@ export function PropertiesPanel(): JSX.Element | null {
           value={layer.opacity}
           onChange={(e) => updateLayer(layer.id, { opacity: Number(e.target.value) })}
           className="flex-1"
+          // M11 fix (round 15)
+          aria-label="Layer opacity"
+          aria-valuetext={`${Math.round(layer.opacity * 100)} percent`}
         />
         <span className="text-xs font-mono text-ink-muted w-10">
           {Math.round(layer.opacity * 100)}%

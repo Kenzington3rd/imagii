@@ -16,7 +16,12 @@ export default {
         ink: {
           base: '#e5e5ee',
           muted: '#9595a5',
-          dim: '#5d5d6e'
+          // B9 fix (round 15): #5d5d6e on #0b0b0f measures ~3.04:1, below WCAG
+          // AA's 4.5:1 minimum for body text. #8b8b9c hits ~6.6:1 (verified
+          // in https://webaim.org/resources/contrastchecker/ — 0b0b0f vs
+          // 8b8b9c). The token still reads as "dim/secondary" against the
+          // brighter ink.base #e5e5ee.
+          dim: '#8b8b9c'
         }
       },
       fontFamily: {

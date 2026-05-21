@@ -115,6 +115,16 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
             <li>· Compressor: <span className="font-mono text-accent">{answers.primaryUse}</span></li>
             <li>· Loudnorm to <span className="font-mono text-accent">−16 LUFS</span></li>
           </ul>
+          {/* INIT-A (round 15): echoy was collected but silently discarded.
+              No ffmpeg filter cleanly removes reverb after the fact, so the
+              honest answer is a mic-placement / treatment tip. */}
+          {answers.echoy === true ? (
+            <p className="text-xs text-amber-300 mb-3">
+              Tip: room reverb is hard to remove after the fact. Try moving
+              closer to the mic, talking off-axis, or adding soft furnishings
+              to the room before the next recording.
+            </p>
+          ) : null}
           <p className="text-xs text-ink-dim mb-4">
             You can still tweak any individual setting from the side panels after this applies.
           </p>

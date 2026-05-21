@@ -13,6 +13,34 @@ async function ensureDirs(): Promise<void> {
 }
 
 /**
+ * INIT-C (round 15): renderer-supplied `id` strings reach path.join() —
+ * gate with the nanoid alphabet so `../` can't escape the moodboards dir.
+ */
+const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
+function assertSafeId(id: unknown, name: string): asserts id is string {
+  if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
+    throw new Error(`${name} must match nanoid alphabet`)
+  }
+}
+
+/**
+ * Confine cachedThumbPath strings to thumbsCacheDir. The shared parser
+ * already gates on isSafeAbsolutePath, but the protocol handler would
+ * still happily serve any absolute path that survives that gate (e.g.
+ * a path under userData/recordings). M2 fix (round 15): unset the field
+ * whenever the path escapes thumbsCacheDir so the UI shows a placeholder
+ * rather than serving the wrong file. Same shape as captions:copySrtTo.
+ */
+function confineThumbPath(item: MoodBoardItem): MoodBoardItem {
+  if (!item.cachedThumbPath) return item
+  const rel = path.relative(thumbsCacheDir(), item.cachedThumbPath)
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { ...item, cachedThumbPath: undefined }
+  }
+  return item
+}
+
+/**
  * Read + parse a board JSON file into a fully-normalized collection, or
  * `null` if the file is missing, unreadable, not JSON, or structurally
  * wrong. Single choke point so every caller is guarded the same way —
@@ -22,7 +50,12 @@ async function ensureDirs(): Promise<void> {
 async function readCollection(file: string): Promise<MoodBoardCollection | null> {
   try {
     const raw = await readFile(file, 'utf8')
-    return parseCollection(raw)
+    const parsed = parseCollection(raw)
+    if (!parsed) return null
+    return {
+      ...parsed,
+      items: parsed.items.map(confineThumbPath)
+    }
   } catch {
     return null
   }
@@ -60,6 +93,7 @@ export async function createCollection(name: string): Promise<MoodBoardCollectio
 }
 
 export async function deleteCollection(id: string): Promise<void> {
+  assertSafeId(id, 'deleteCollection id')
   const file = path.join(moodboardsDir(), `${id}.json`)
   if (!existsSync(file)) return
   // Best-effort: clean up every cached thumbnail this board owns before
@@ -82,6 +116,7 @@ export async function deleteCollection(id: string): Promise<void> {
 }
 
 export async function renameCollection(id: string, name: string): Promise<MoodBoardCollection | null> {
+  assertSafeId(id, 'renameCollection id')
   const file = path.join(moodboardsDir(), `${id}.json`)
   if (!existsSync(file)) return null
   const collection = await readCollection(file)
@@ -109,6 +144,7 @@ export async function addToCollection(
   collectionId: string,
   result: SearchResult
 ): Promise<MoodBoardCollection | null> {
+  assertSafeId(collectionId, 'addToCollection collectionId')
   const file = path.join(moodboardsDir(), `${collectionId}.json`)
   if (!existsSync(file)) return null
   const collection = await readCollection(file)
@@ -134,6 +170,8 @@ export async function removeFromCollection(
   collectionId: string,
   itemId: string
 ): Promise<MoodBoardCollection | null> {
+  assertSafeId(collectionId, 'removeFromCollection collectionId')
+  assertSafeId(itemId, 'removeFromCollection itemId')
   const file = path.join(moodboardsDir(), `${collectionId}.json`)
   if (!existsSync(file)) return null
   const collection = await readCollection(file)

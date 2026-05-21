@@ -340,6 +340,9 @@ export function CaptionsPanel(): JSX.Element | null {
                 value={style.fontSize}
                 onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
                 className="flex-1"
+                // M11 fix (round 15)
+                aria-label="Caption font size in pixels"
+                aria-valuetext={`${style.fontSize} pixels`}
               />
               <span className="font-mono w-8">{style.fontSize}</span>
             </label>

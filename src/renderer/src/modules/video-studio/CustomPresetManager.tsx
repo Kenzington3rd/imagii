@@ -108,6 +108,9 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="bg-bg-base rounded px-2 py-1.5"
+                // M11 fix (round 15): the visible label "Preset name (e.g. …)"
+                // is the placeholder, which AT does not treat as a label.
+                aria-label="Custom preset name"
               />
               <label className="flex items-center gap-2 text-xs">
                 <span className="text-ink-muted w-24">Base on</span>

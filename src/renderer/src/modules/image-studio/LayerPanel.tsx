@@ -1,6 +1,7 @@
 import { useCanvasStore } from './state/canvasStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { assertDefined } from '@shared/assert'
 
 export function LayerPanel(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
@@ -12,12 +13,18 @@ export function LayerPanel(): JSX.Element {
   const reorderLayers = useCanvasStore((s) => s.reorderLayers)
   const duplicateLayer = useCanvasStore((s) => s.duplicateLayer)
 
+  // M13 fix (round 15): `!` on every array index swap. The index guards
+  // above (idx < ids.length - 1, idx > 0) make these logically safe, but
+  // the assertDefined gives a clean error if the guard ever drifts.
   function moveUp(id: string): void {
     const ids = layers.map((l) => l.id)
     const idx = ids.indexOf(id)
     if (idx < ids.length - 1) {
       const next = [...ids]
-      ;[next[idx], next[idx + 1]] = [next[idx + 1]!, next[idx]!]
+      const a = assertDefined(next[idx], `layer id at ${idx}`)
+      const b = assertDefined(next[idx + 1], `layer id at ${idx + 1}`)
+      next[idx] = b
+      next[idx + 1] = a
       reorderLayers(next)
     }
   }
@@ -27,7 +34,10 @@ export function LayerPanel(): JSX.Element {
     const idx = ids.indexOf(id)
     if (idx > 0) {
       const next = [...ids]
-      ;[next[idx], next[idx - 1]] = [next[idx - 1]!, next[idx]!]
+      const a = assertDefined(next[idx], `layer id at ${idx}`)
+      const b = assertDefined(next[idx - 1], `layer id at ${idx - 1}`)
+      next[idx] = b
+      next[idx - 1] = a
       reorderLayers(next)
     }
   }

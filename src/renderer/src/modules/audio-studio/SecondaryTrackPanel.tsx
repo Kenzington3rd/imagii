@@ -114,6 +114,9 @@ export function SecondaryTrackPanel(): JSX.Element {
               value={secondary.gainDb}
               onChange={(e) => update({ gainDb: Number(e.target.value) })}
               className="flex-1"
+              // M11 fix (round 15)
+              aria-label="Secondary track gain in decibels"
+              aria-valuetext={`${secondary.gainDb >= 0 ? '+' : ''}${secondary.gainDb.toFixed(1)} decibels`}
             />
             <span className="text-xs font-mono w-12 text-right">
               {secondary.gainDb >= 0 ? '+' : ''}
@@ -219,6 +222,9 @@ function DuckSlider(props: DuckSliderProps): JSX.Element {
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        // M11 fix (round 15)
+        aria-label={label}
+        aria-valuetext={`${value} ${unit}`}
       />
     </label>
   )

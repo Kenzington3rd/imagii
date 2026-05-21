@@ -4,6 +4,7 @@ import { useVideoStore } from './store/videoStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
+import { describeImportError } from '@shared/importDiagnostics'
 
 const ACCEPTED_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']
 
@@ -26,8 +27,11 @@ export function Importer(): JSX.Element {
       await push(filePath)
       toast.success('Video loaded')
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load video'
-      toast.error(message)
+      // M8 fix (round 15): default 4 s toast wasn't enough to read on a
+      // codec-not-supported error. Mirror AudioImporter — 8 s + the shared
+      // describeImportError which surfaces actionable hints (cloud-sync,
+      // permission, unknown codec).
+      toast.error(describeImportError(err, filePath), { duration: 8000 })
     } finally {
       setBusy(false)
     }
@@ -40,7 +44,10 @@ export function Importer(): JSX.Element {
     if (!file) return
     const filePath = (file as File & { path?: string }).path
     if (!filePath) {
-      toast.error('Could not read file path — try the file picker instead.')
+      // M8 fix (round 15): longer duration to match the rest of the error path.
+      toast.error('Could not read file path — try the file picker instead.', {
+        duration: 8000
+      })
       return
     }
     if (!looksLikeVideo(file.name)) {

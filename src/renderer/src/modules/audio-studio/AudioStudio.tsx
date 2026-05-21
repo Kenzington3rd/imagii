@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
@@ -24,6 +24,26 @@ export function AudioStudio(): JSX.Element {
   const canRedo = useAudioStore((s) => s.canRedo())
   const tutorial = useTutorial(audioTutorial)
   const [showFixWizard, setShowFixWizard] = useState(false)
+
+  // B11 fix (round 15): HotkeyOverlay documented Ctrl+Z / Ctrl+Y for Audio
+  // Studio but no listener was wired. Mirror ImageStudio's pattern: skip when
+  // typing in an input, honor both Ctrl+Y and Ctrl+Shift+Z for redo.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const ctrl = e.ctrlKey || e.metaKey
+      if (ctrl && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      } else if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">

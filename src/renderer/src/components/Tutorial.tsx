@@ -21,12 +21,16 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const [targetRect, setTargetRect] = useState<Rect | null>(null)
 
   useLayoutEffect(() => {
-    if (!step?.targetSelector) {
+    // M13 fix (round 15): capture the narrowed selector in a const so the
+    // closure doesn't need a `!` to convince TS that it survived the
+    // outer guard.
+    const selector = step?.targetSelector
+    if (!selector) {
       setTargetRect(null)
       return
     }
     const update = (): void => {
-      const el = document.querySelector(step.targetSelector!)
+      const el = document.querySelector(selector)
       if (!el) {
         setTargetRect(null)
         return

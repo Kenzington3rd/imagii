@@ -54,7 +54,7 @@ describe('buildChain — match-loudness double-pass guard (Phase 2.9)', () => {
       })
     )
     expect(result.filterPass2).toMatch(/highpass=f=80/)
-    expect(result.filterPass2).toMatch(/afftdn=nf=-25/)
+    expect(result.filterPass2).toMatch(/afftdn=nf=-30:nr=18/)
     expect(result.filterPass2).toMatch(/acompressor=/)
     expect(chainEndsWithLoudnorm(result.filterPass2)).toBe(true)
   })
@@ -78,10 +78,12 @@ describe('dB → linear conversion (Phase 3.2 ducking threshold)', () => {
 
 describe('denoiseFilter — Phase 3.3 parametric mode', () => {
   it('returns the matching preset filter for non-parametric strengths', () => {
+    // INIT-A (round 15): presets now spec an explicit nr (reduction) value
+    // so light/medium/aggressive actually differ.
     expect(denoiseFilter('off')).toBeNull()
-    expect(denoiseFilter('light')).toBe('afftdn=nf=-20')
-    expect(denoiseFilter('medium')).toBe('afftdn=nf=-25')
-    expect(denoiseFilter('aggressive')).toBe('afftdn=nf=-35')
+    expect(denoiseFilter('light')).toBe('afftdn=nf=-25:nr=12')
+    expect(denoiseFilter('medium')).toBe('afftdn=nf=-30:nr=18')
+    expect(denoiseFilter('aggressive')).toBe('afftdn=nf=-35:nr=24')
   })
 
   it('emits all 3 afftdn params in parametric mode using defaults', () => {
@@ -107,6 +109,28 @@ describe('denoiseFilter — Phase 3.3 parametric mode', () => {
     expect(
       denoiseFilter('parametric', { noiseFloorDb: 100, reductionDb: -5, sensitivity: -99 })
     ).toBe('afftdn=nf=-10:nr=0:ns=-2')
+  })
+})
+
+describe('buildChain — hum60 (Bug round 15 B2)', () => {
+  // Pre-15 the hum60 toggle pushed highpass=f=70 + lowpass=f=10000, neither
+  // of which touched 60 Hz mains hum. The fix uses notch filters at the
+  // fundamental and first harmonic.
+  it('emits bandreject notches at 60 and 120 Hz when hum60 is enabled', () => {
+    const result = buildChain(spec({ hum60: true, loudnorm: false }))
+    expect(result.filterPass2).toMatch(/bandreject=f=60/)
+    expect(result.filterPass2).toMatch(/bandreject=f=120/)
+  })
+
+  it('does NOT emit the legacy wrong filters', () => {
+    const result = buildChain(spec({ hum60: true, loudnorm: false }))
+    expect(result.filterPass2).not.toMatch(/highpass=f=70/)
+    expect(result.filterPass2).not.toMatch(/lowpass=f=10000/)
+  })
+
+  it('omits hum filters entirely when hum60 is disabled', () => {
+    const result = buildChain(spec({ hum60: false, loudnorm: false }))
+    expect(result.filterPass2).not.toMatch(/bandreject/)
   })
 })
 

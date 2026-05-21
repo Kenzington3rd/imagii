@@ -8,11 +8,18 @@ import { Image } from './routes/Image'
 import { Record } from './routes/Record'
 import { References } from './routes/References'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { Icon } from './components/Icon'
+import { useAutosave } from './hooks/useAutosave'
 
 type Status = { phase: 'loading' } | { phase: 'welcome' } | { phase: 'ready' }
 
 export function App(): JSX.Element {
   const [status, setStatus] = useState<Status>({ phase: 'loading' })
+  // B1 fix: actually wire the autosave hook. Round-3 introduced the hook but
+  // no component called it, so AutosaveRestore had nothing to read on launch.
+  // Gating on `ready` keeps the welcome screen out of the autosave stream.
+  // The empty-project skip is handled main-side via isSafeToAutosave.
+  useAutosave({ enabled: status.phase === 'ready' })
 
   useEffect(() => {
     let cancelled = false
@@ -26,8 +33,13 @@ export function App(): JSX.Element {
   }, [])
 
   if (status.phase === 'loading') {
+    // M7 fix: bare "Loading…" looked like the app hung. Pair the text with a
+    // small spinning sparkle so the user knows something is happening.
     return (
-      <div className="h-full flex items-center justify-center text-ink-muted text-sm">
+      <div className="h-full flex items-center justify-center gap-2 text-ink-muted text-sm">
+        <span className="inline-block" style={{ animation: 'imagii-spin 1.2s linear infinite' }}>
+          <Icon name="sparkle" size={16} />
+        </span>
         Loading…
       </div>
     )

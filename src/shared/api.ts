@@ -39,6 +39,10 @@ export type SettingsKey =
   | 'recentFiles.audio'
   | 'recentFiles.image'
   | 'record.webcamCorner'
+  // INIT-E (round 15): persist the last-used output folders so a user
+  // exporting many clips doesn't have to re-pick on every batch.
+  | 'export.lastOutputDir'
+  | 'clipKit.lastOutputDir'
 
 export interface VideoProbe {
   duration: number
@@ -205,6 +209,11 @@ export interface ImagiiApi {
   recording: {
     listSources(): Promise<RecordingSource[]>
     save(spec: RecordingSpec): Promise<RecordingResult | null>
+    // M6 fix (round 15): expose conversion progress + cancel to the renderer.
+    cancelSave(): Promise<boolean>
+    onProgress(
+      handler: (info: { percent: number; message?: string }) => void
+    ): Unsubscribe
   }
 }
 

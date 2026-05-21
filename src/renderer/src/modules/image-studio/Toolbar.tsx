@@ -91,6 +91,9 @@ export function Toolbar(): JSX.Element {
         onChange={(e) => setGridSize(Number(e.target.value) || 2)}
         className="bg-bg-base rounded px-2 py-1 w-16 text-sm"
         title="Grid size (px)"
+        // M11 fix (round 15): bare title doesn't show on the spinner — give AT
+        // a real accessible name.
+        aria-label="Grid size in pixels"
       />
     </div>
   )

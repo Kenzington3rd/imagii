@@ -77,6 +77,9 @@ export function CompilationPanel(): JSX.Element | null {
           value={fadeMs}
           onChange={(e) => setFadeMs(Number(e.target.value))}
           className="flex-1"
+          // M11 fix (round 15): name + formatted value for AT.
+          aria-label="Crossfade duration in milliseconds"
+          aria-valuetext={`${fadeMs} milliseconds`}
         />
         <span className="font-mono w-14 text-right">{fadeMs} ms</span>
       </label>

@@ -26,8 +26,10 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1080,
     height: 1920,
     aspectRatio: 9 / 16,
-    durationSweetSpot: { min: 15, max: 60 },
-    durationHardLimit: 90
+    // B4 fix (round 15): Meta extended Reels to 3 minutes in 2024; sweet spot
+    // bumped to 90 s to match the longer-form Reels norm.
+    durationSweetSpot: { min: 15, max: 90 },
+    durationHardLimit: 180
   },
   tiktok: {
     id: 'tiktok',
@@ -36,7 +38,9 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 1920,
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 21, max: 34 },
-    durationHardLimit: 600
+    // B3 fix (round 15): TikTok extended uploads to 60 minutes in late 2024.
+    // The previous 10-minute cap red-flagged perfectly valid longer-form posts.
+    durationHardLimit: 60 * 60
   },
   twitter: {
     id: 'twitter',
@@ -44,8 +48,12 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1280,
     height: 720,
     aspectRatio: 16 / 9,
-    durationSweetSpot: { min: 5, max: 90 },
-    durationHardLimit: 140
+    // INIT-B (round 15): free tier caps at 2:20 (140 s); Premium subscribers
+    // upload up to 3 hours. Setting the hard limit at 140 s red-flagged
+    // Premium users on perfectly valid uploads. Move the cap to 3 h and
+    // surface the free-tier cliff via the sweet-spot copy.
+    durationSweetSpot: { min: 5, max: 140 },
+    durationHardLimit: 3 * 60 * 60
   },
   facebook: {
     id: 'facebook',
@@ -93,7 +101,13 @@ export function evaluateSuccess(
     reasons.push(`Under ${platform.label} sweet spot (${platform.durationSweetSpot.min}s+)`)
     if (level === 'green') level = 'yellow'
   } else if (clipDuration > platform.durationSweetSpot.max) {
-    reasons.push(`Over ${platform.label} sweet spot (${platform.durationSweetSpot.max}s)`)
+    // INIT-B (round 15): special-case X so Premium users see honest copy
+    // instead of a red flag. Free tier cliffs at 2:20; Premium up to 3 h.
+    if (platform.id === 'twitter') {
+      reasons.push('Free tier caps at 2:20; X Premium allows up to 3 h')
+    } else {
+      reasons.push(`Over ${platform.label} sweet spot (${platform.durationSweetSpot.max}s)`)
+    }
     if (level === 'green') level = 'yellow'
   }
 

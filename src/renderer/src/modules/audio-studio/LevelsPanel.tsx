@@ -79,6 +79,9 @@ export function LevelsPanel(): JSX.Element {
           value={chain.gainDb}
           onChange={(e) => patchChain({ gainDb: Number(e.target.value) })}
           className="w-full"
+          // M11 fix (round 15)
+          aria-label="Manual gain in decibels"
+          aria-valuetext={`${chain.gainDb >= 0 ? '+' : ''}${chain.gainDb.toFixed(1)} decibels`}
         />
       </div>
     </div>

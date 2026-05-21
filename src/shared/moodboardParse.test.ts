@@ -85,4 +85,65 @@ describe('parseCollection', () => {
     expect(parseCollection(JSON.stringify({ id: 'x', name: 'y' }))).toBeNull()
     expect(parseCollection(JSON.stringify({ id: '', name: 'y', createdAt: 1 }))).toBeNull()
   })
+
+  // M2 fix (round 15): a hostile board JSON could point cachedThumbPath at
+  // a sensitive file (Windows drivers, recordings, user docs). The shared
+  // parser drops the field whenever it fails isSafeAbsolutePath; the
+  // main-process confinement to thumbsCacheDir layered on top of that.
+  it('drops a cachedThumbPath that fails isSafeAbsolutePath', () => {
+    const c = parseCollection(
+      JSON.stringify({
+        id: 'x',
+        name: 'y',
+        createdAt: 1,
+        items: [
+          {
+            id: 'ok',
+            fullUrl: 'https://e.com/a',
+            cachedThumbPath: '../../../etc/passwd' // relative — rejected
+          }
+        ]
+      })
+    )
+    expect(c?.items).toHaveLength(1)
+    expect(c?.items[0]?.cachedThumbPath).toBeUndefined()
+  })
+
+  it('drops a cachedThumbPath that is not a string', () => {
+    const c = parseCollection(
+      JSON.stringify({
+        id: 'x',
+        name: 'y',
+        createdAt: 1,
+        items: [
+          {
+            id: 'ok',
+            fullUrl: 'https://e.com/a',
+            cachedThumbPath: 42 // wrong type
+          }
+        ]
+      })
+    )
+    expect(c?.items).toHaveLength(1)
+    expect(c?.items[0]?.cachedThumbPath).toBeUndefined()
+  })
+
+  it('keeps a syntactically-safe cachedThumbPath (the main-process confines it further)', () => {
+    const c = parseCollection(
+      JSON.stringify({
+        id: 'x',
+        name: 'y',
+        createdAt: 1,
+        items: [
+          {
+            id: 'ok',
+            fullUrl: 'https://e.com/a',
+            cachedThumbPath: 'C:/Users/me/AppData/Roaming/imagii/thumbs/x.jpg'
+          }
+        ]
+      })
+    )
+    expect(c?.items).toHaveLength(1)
+    expect(c?.items[0]?.cachedThumbPath).toBe('C:/Users/me/AppData/Roaming/imagii/thumbs/x.jpg')
+  })
 })

@@ -144,14 +144,24 @@ export async function runAudioExport(
       matchLoudness && !primaryAlreadyLoudnormed
         ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
         : finalChain.filterPass2
+    // M5 fix (round 15): amix requires both inputs at the same sample rate
+    // and channel layout. The output is forced to 48 kHz stereo below, so
+    // resample + format the secondary first. Without this, a 44.1 kHz music
+    // track mixed with a 48 kHz mic either silently auto-resamples (lossy)
+    // or fails the filter graph entirely.
+    const secondaryNormalize = 'aresample=48000,aformat=channel_layouts=stereo'
     const secondaryGainOrLoud = matchLoudness
-      ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
-      : `volume=${gainDb}dB`
+      ? `${secondaryNormalize},loudnorm=I=${target}:TP=-1.5:LRA=11`
+      : `${secondaryNormalize},volume=${gainDb}dB`
     // Phase 3.2: replace hardcoded sidechain params with duckParams from
     // the SecondaryTrack (falls back to defaults that preserve previous
     // behavior). Threshold is dBFS in the UI; ffmpeg expects linear.
     const dp = secondary.duckParams ?? DEFAULT_DUCK_PARAMS
     const thresholdLinear = Math.pow(10, dp.thresholdDb / 20)
+    // INIT-A (round 15): when sidechain ducking is on, the duck already
+    // attenuates the secondary; double-attenuating with amix weights 1 0.7
+    // made the secondary inaudible during quiet primary passages too. Use
+    // even weights and let the sidechain do its job.
     const filterGraph = ducking
       ? `[0:a]${primaryStage}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
@@ -160,7 +170,7 @@ export async function runAudioExport(
         `ratio=${dp.ratio}:` +
         `attack=${dp.attackMs}:` +
         `release=${dp.releaseMs}[secondary_ducked];` +
-        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 0.7'[mix]`
+        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
       : `[0:a]${primaryStage}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +
         `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
@@ -212,6 +222,10 @@ export async function runAudioMux(
     '-b:a',
     '192k',
     '-shortest',
+    // B7 fix (round 15): muxed MP4 also needs faststart so web players
+    // (and most browser previewers) don't stall on the moov atom.
+    '-movflags',
+    '+faststart',
     '-progress',
     'pipe:1',
     '-nostats',
@@ -228,4 +242,20 @@ export function cancelAudioJob(jobId: string): boolean {
   child.kill('SIGKILL')
   activeJobs.delete(jobId)
   return true
+}
+
+/**
+ * M10 fix (round 15): take down every in-flight audio job at once. Used by
+ * the app-level before-quit handler so a half-finished long export doesn't
+ * keep an orphaned ffmpeg child alive after the window closes.
+ */
+export function cancelAllAudioJobs(): void {
+  for (const [, child] of activeJobs) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeJobs.clear()
 }

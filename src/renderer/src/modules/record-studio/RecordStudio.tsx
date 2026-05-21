@@ -41,6 +41,9 @@ export function RecordStudio(): JSX.Element {
   const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
   const [elapsed, setElapsed] = useState(0)
 
+  // M6 fix (round 15): surface webm→mp4 progress + give the user an abort button.
+  const [savePercent, setSavePercent] = useState(0)
+
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
@@ -73,6 +76,14 @@ export function RecordStudio(): JSX.Element {
       cancelled = true
       stopAllStreams()
     }
+  }, [])
+
+  // M6 fix (round 15): wire the main-side conversion progress channel.
+  useEffect(() => {
+    const off = window.api.recording.onProgress((info) => {
+      setSavePercent(info.percent)
+    })
+    return off
   }, [])
 
   // Persist the corner choice whenever it changes — survives restart.
@@ -249,6 +260,7 @@ export function RecordStudio(): JSX.Element {
   }
 
   async function finalizeRecording(): Promise<void> {
+    setSavePercent(0)
     try {
       const blob = new Blob(chunksRef.current, { type: 'video/webm' })
       const buffer = await blob.arrayBuffer()
@@ -283,6 +295,7 @@ export function RecordStudio(): JSX.Element {
       toast.error(err instanceof Error ? err.message : 'Save failed')
     } finally {
       setElapsed(0)
+      setSavePercent(0)
       setPhase('idle')
     }
   }
@@ -479,11 +492,27 @@ export function RecordStudio(): JSX.Element {
       ) : null}
 
       {phase === 'saving' ? (
-        <div className="card p-6 text-center">
-          <div className="flex justify-center mb-2 text-accent">
+        <div className="card p-6 text-center flex flex-col items-center gap-3">
+          <div className="text-accent">
             <Icon name="save" size={28} />
           </div>
           <p className="text-sm">Finishing up — converting and writing to disk…</p>
+          {/* M6 fix (round 15): show coarse progress + give the user a way
+              to abort if they realize they don't want to wait. */}
+          <div className="w-64 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent"
+              style={{ width: `${Math.max(2, Math.round(savePercent))}%` }}
+            />
+          </div>
+          <button
+            className="btn-ghost px-3 py-1.5 text-sm"
+            onClick={() => {
+              void window.api.recording.cancelSave()
+            }}
+          >
+            Discard recording
+          </button>
         </div>
       ) : null}
 

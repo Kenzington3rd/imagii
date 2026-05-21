@@ -22,7 +22,7 @@ hard-code chrome colors in `className` — use the token.
 | `accent-muted` | `#7c5cf0` | Hover state of accent elements |
 | `ink-base` | `#e5e5ee` | Primary text |
 | `ink-muted` | `#9595a5` | Secondary text, labels |
-| `ink-dim` | `#5d5d6e` | Tertiary text, borders, disabled |
+| `ink-dim` | `#8b8b9c` | Tertiary text, borders, disabled — bumped 2026-05-20 (round 15) from `#5d5d6e` after a contrast review found the prior value at ~3.04:1 on `bg-base`, below WCAG AA's 4.5:1 minimum. `#8b8b9c` measures ~6.6:1. |
 
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
 weights 400/500/600.
@@ -58,6 +58,13 @@ Buttons that pair an icon with a label use
 the one canonical heading style (`text-xs`, uppercase, an icon) and an
 optional right-aligned `actions` slot. This is the single source of
 truth for what a panel header looks like; see `STYLE_GUIDE.md`.
+
+**Modals** use the `<Modal>` helper from `components/Modal.tsx` (added
+in round 15). It centralizes `role="dialog"` / `aria-modal="true"`,
+first-focusable-on-mount, Tab trapping, Escape close, scrim-click close,
+and focus restore. New dialogs should NOT roll their own fixed-inset
+scrim — they should compose `<Modal open={…} onClose={…} title={…}>{children}</Modal>`.
+TemplatesDialog is the reference implementation.
 
 ---
 

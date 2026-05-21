@@ -42,6 +42,18 @@ export function registerCaptionsIpc(): void {
   ipcMain.handle(
     'captions:saveSrt',
     async (_e, srtPath: string, defaultName: string) => {
+      // INIT-C (round 15): mirror copySrtTo — confine srtPath to the
+      // captions output directory before any read. Without the confinement
+      // a malicious renderer could exfiltrate arbitrary files via the
+      // copy-then-show-in-folder path.
+      assertNonEmptyString(srtPath, 'srtPath')
+      assertNonEmptyString(defaultName, 'defaultName')
+      const allowedRoot = path.resolve(captionsOutputDir())
+      const resolvedSrc = path.resolve(srtPath)
+      const rel = path.relative(allowedRoot, resolvedSrc)
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error('captions:saveSrt source path outside captions directory')
+      }
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (!win) return null
       const result = await dialog.showSaveDialog(win, {
@@ -50,7 +62,7 @@ export function registerCaptionsIpc(): void {
         filters: [{ name: 'SubRip subtitle', extensions: ['srt'] }]
       })
       if (result.canceled || !result.filePath) return null
-      await copyFile(srtPath, result.filePath)
+      await copyFile(resolvedSrc, result.filePath)
       return result.filePath
     }
   )

@@ -8,10 +8,18 @@ import { registerAudioIpc } from './ipc/audio'
 import { registerSearchIpc } from './ipc/search'
 import { registerCaptionsIpc } from './ipc/captions'
 import { registerProjectIpc } from './ipc/project'
-import { registerRecordingIpc } from './ipc/recording'
+import { registerRecordingIpc, cancelRecordingConvert } from './ipc/recording'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 import { pruneStaleTempFiles } from './tempCleanup'
+import { cancelAllExportJobs } from './ffmpeg/export'
+import { cancelAllAudioJobs } from './audio/process'
+import { cancelAllConcatJobs } from './ffmpeg/concat'
+import {
+  cancelWhisperModelInstall,
+  cancelTranscribe,
+  cancelBurnIn
+} from './sidecars/whisperManager'
 
 registerPrivilegedSchemes()
 
@@ -117,4 +125,46 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// M10 fix (round 15): before quitting, hard-kill every spawned child the app
+// owns. Pre-15, child ffmpeg / whisper / install processes survived the
+// renderer-window closing — Windows Task Manager would show orphaned
+// ffmpeg.exe instances using CPU after the app icon was long gone.
+app.on('before-quit', () => {
+  try {
+    cancelAllExportJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelAllAudioJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelAllConcatJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelWhisperModelInstall()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelTranscribe()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelBurnIn()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelRecordingConvert()
+  } catch {
+    /* ignore */
+  }
 })

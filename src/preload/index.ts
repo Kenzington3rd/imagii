@@ -150,7 +150,17 @@ const api: ImagiiApi = {
   },
   recording: {
     listSources: () => ipcRenderer.invoke('recording:listSources'),
-    save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec)
+    save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec),
+    // M6 fix (round 15): renderer can show conversion progress and abort.
+    cancelSave: () => ipcRenderer.invoke('recording:cancelSave'),
+    onProgress: (handler: (info: { percent: number; message?: string }) => void) => {
+      const listener = (
+        _e: unknown,
+        info: { percent: number; message?: string }
+      ): void => handler(info)
+      ipcRenderer.on('recording:progress', listener)
+      return () => ipcRenderer.removeListener('recording:progress', listener)
+    }
   }
 }
 

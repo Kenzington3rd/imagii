@@ -37,3 +37,24 @@
     @apply bg-bg-elevated border border-ink-dim/40 rounded-xl;
   }
 }
+
+/* M7 fix (round 15): named spin keyframe used by the Loading view (and any
+   future spinners). Lives outside @layer so it isn't tree-shaken. */
+@keyframes imagii-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* B10 fix (round 15): honor the OS-level "Reduce motion" preference. Disables
+   animations, transitions and smooth scrolling across the whole app so that
+   spinners, opacity transitions and the like don't trigger vestibular issues. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

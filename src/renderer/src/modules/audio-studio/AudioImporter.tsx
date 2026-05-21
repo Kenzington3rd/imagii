@@ -9,6 +9,7 @@ import {
   examineDroppedFile,
   pathLooksLikeCloudSync
 } from '@shared/importDiagnostics'
+import { assertDefined } from '@shared/assert'
 
 const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
 
@@ -61,7 +62,14 @@ export function AudioImporter(): JSX.Element {
       toast.error(diag.hint ?? 'Could not read file path.', { duration: 10000 })
       return
     }
-    const filePath = (file as File & { path?: string }).path!
+    // M13 fix (round 15): the `no-path` branch above already returns when
+    // path is missing, so this is logically safe — but `!` skips runtime
+    // verification and tools can't see that. assertDefined keeps the
+    // type-narrowing and produces a clear error if the guard ever drifts.
+    const filePath = assertDefined(
+      (file as File & { path?: string }).path,
+      'dropped file path'
+    )
     if (diag.reason === 'cloud-placeholder') {
       toast(diag.hint ?? 'Cloud-sync path detected.', { icon: <Icon name="warning" size={18} />, duration: 6000 })
     }

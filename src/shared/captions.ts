@@ -65,10 +65,13 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
   {
     id: 'tiktok-bold',
     label: 'TikTok bold',
-    hint: 'Big white text, thick black outline, mid-frame — what dominates short-form right now.',
+    // INIT-B (round 15): the dominant TikTok caption convention sits at the
+    // bottom — mid-frame collides with the creator's face. Update the hint
+    // and default position to match.
+    hint: 'Big white text, thick black outline, lower third — current TikTok convention.',
     style: {
       fontSize: 56,
-      position: 'middle',
+      position: 'bottom',
       primaryColor: '#ffffff',
       outlineColor: '#000000'
     }
@@ -152,3 +155,21 @@ export const WHISPER_MODEL_URL =
  *  range as either incomplete or wrong-file-served. */
 export const WHISPER_MODEL_MIN_BYTES = 100 * 1024 * 1024
 export const WHISPER_MODEL_MAX_BYTES = 200 * 1024 * 1024
+
+/**
+ * INIT-C (round 15): pinned SHA-256 of the canonical ggml-base.en.bin from
+ * the Hugging Face mirror at WHISPER_MODEL_URL. Sourced from the model's
+ * file metadata at
+ *   https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base.en.bin
+ * (use the LFS pointer's `oid sha256:` line, also exposed via the
+ * Hugging Face API). Verifying this AT install time defends against:
+ *   1. An attacker who controls the mirror serving a backdoored model.
+ *   2. A subtle network corruption that gets past the size sanity-check.
+ * Mismatch deletes the .partial download and reports failure to the UI.
+ *
+ * If the upstream rotates this artifact (intentional model revision), the
+ * size-bounds check still gates the worst class of failure, and updating
+ * this constant is the explicit, auditable handoff for the new file.
+ */
+export const WHISPER_MODEL_SHA256 =
+  'a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002'

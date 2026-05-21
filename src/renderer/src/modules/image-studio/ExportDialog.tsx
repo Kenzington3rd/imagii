@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { ThumbnailVariants } from './ThumbnailVariants'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { useCanvasStore } from './state/canvasStore'
 
 type FormatOption = 'png' | 'jpg'
 
@@ -32,7 +33,13 @@ export function defaultExportScale(dpr: number): number {
   return 1
 }
 
+// INIT-B (round 15): Twitch's emote pack expects 28, 56, and 112 px PNGs of
+// the same artwork. We detect that the user is working on the emote
+// template via the canvas dimensions (112x112) and emit all three on Export.
+const EMOTE_PACK_SIZES = [28, 56, 112] as const
+
 export function ExportDialog(): JSX.Element {
+  const doc = useCanvasStore((s) => s.doc)
   const [format, setFormat] = useState<FormatOption>('png')
   const [quality, setQuality] = useState(0.92)
   // Pick a default scale based on the user's display DPR — 1× on
@@ -62,6 +69,24 @@ export function ExportDialog(): JSX.Element {
         return
       }
       const mime = format === 'png' ? 'image/png' : 'image/jpeg'
+      // INIT-B (round 15): emote pack auto-export. When the canvas is the
+      // Twitch emote template's native 112×112, emit the full 28/56/112 trio
+      // so the user gets the upload-ready pack in one click. The pixelRatio
+      // trick on a 112×112 base yields the smaller sizes (28 = 0.25, 56 =
+      // 0.5, 112 = 1).
+      if (doc.width === 112 && doc.height === 112 && format === 'png') {
+        const stamp = Date.now()
+        for (const size of EMOTE_PACK_SIZES) {
+          const dataUrl = stage.toDataURL({
+            mimeType: 'image/png',
+            quality,
+            pixelRatio: size / 112
+          })
+          downloadDataUrl(dataUrl, `imagii-emote-${size}-${stamp}.png`)
+        }
+        toast.success(`Emote pack saved (3 PNGs: 28, 56, 112)`)
+        return
+      }
       const dataUrl = stage.toDataURL({
         mimeType: mime,
         quality,
@@ -98,6 +123,9 @@ export function ExportDialog(): JSX.Element {
             value={quality}
             onChange={(e) => setQuality(Number(e.target.value))}
             className="w-24"
+            // M11 fix (round 15)
+            aria-label="JPG export quality"
+            aria-valuetext={`${Math.round(quality * 100)} percent`}
           />
           <span className="font-mono w-10 text-right">{Math.round(quality * 100)}%</span>
         </label>

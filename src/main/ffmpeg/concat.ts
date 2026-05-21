@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { writeFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { ffmpegPath } from './paths'
+import { even } from './filters'
 import { assertDefined } from '../../shared/assert'
 
 export interface ConcatJobSpec {
@@ -15,8 +16,43 @@ export interface ConcatJobSpec {
   height: number
 }
 
+// M3 fix (round 15): register every spawn so a renderer-initiated cancel or
+// app-quit can hard-kill them. Mirrors ffmpeg/export.ts activeJobs. Keys are
+// the per-spawn jobId; runConcat splits its key into "<jobId>:seg-N" and
+// "<jobId>:concat" so the segment loop can cancel one at a time, and a
+// global cancelAllConcatJobs takes the lot.
+const activeJobs = new Map<string, ChildProcess>()
+
 function escapeForConcatList(p: string): string {
   return p.replace(/'/g, "'\\''")
+}
+
+export function cancelConcatJob(jobId: string): boolean {
+  let killed = false
+  // Cancel any sub-keyed children too (segment-N, concat).
+  for (const [key, child] of activeJobs) {
+    if (key === jobId || key.startsWith(`${jobId}:`)) {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* ignore */
+      }
+      activeJobs.delete(key)
+      killed = true
+    }
+  }
+  return killed
+}
+
+export function cancelAllConcatJobs(): void {
+  for (const [, child] of activeJobs) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeJobs.clear()
 }
 
 export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: string }> {
@@ -45,8 +81,10 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     const dur = Math.max(0.1, seg.endSec - seg.startSec)
     const fadeIn = i === 0 ? 0 : fade
     const fadeOut = i === segCount - 1 ? 0 : fade
+    // M4 fix (round 15): even W/H so libx264 doesn't reject the encode.
+    // The IPC validator already enforces 16..16384 but doesn't snap to even.
     const filters: string[] = [
-      `scale=${spec.width}:${spec.height}:flags=lanczos,setsar=1`
+      `scale=${even(spec.width)}:${even(spec.height)}:flags=lanczos,setsar=1`
     ]
     if (fadeIn > 0) filters.push(`fade=t=in:st=0:d=${fadeIn}`)
     if (fadeOut > 0)
@@ -90,11 +128,17 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     segmentPaths.push(segPath)
     await new Promise<void>((resolve, reject) => {
       const child = spawn(ffmpegPath, args, { windowsHide: true })
+      const childKey = `${spec.jobId}:seg-${i}`
+      activeJobs.set(childKey, child)
       let stderr = ''
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (c: string) => (stderr += c))
-      child.on('error', reject)
+      child.on('error', (err) => {
+        activeJobs.delete(childKey)
+        reject(err)
+      })
       child.on('close', (code) => {
+        activeJobs.delete(childKey)
         if (code === 0) resolve()
         else reject(new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`))
       })
@@ -130,11 +174,17 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       ],
       { windowsHide: true }
     )
+    const childKey = `${spec.jobId}:concat`
+    activeJobs.set(childKey, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => (stderr += c))
-    child.on('error', reject)
+    child.on('error', (err) => {
+      activeJobs.delete(childKey)
+      reject(err)
+    })
     child.on('close', (code) => {
+      activeJobs.delete(childKey)
       if (code === 0) resolve()
       else reject(new Error(`concat exit ${code}: ${stderr.slice(-500)}`))
     })
@@ -163,7 +213,7 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
 }
 
 export async function runPipComposite(
-  _jobId: string,
+  jobId: string,
   basePath: string,
   overlayPath: string,
   outputPath: string,
@@ -206,15 +256,26 @@ export async function runPipComposite(
         '-b:a',
         '192k',
         '-shortest',
+        // B5 fix (round 15): PiP composite MP4 needs faststart so web players
+        // don't stall while seeking the moov atom.
+        '-movflags',
+        '+faststart',
         outputPath
       ],
       { windowsHide: true }
     )
+    // M3 fix (round 15): register the child so app-quit can SIGKILL it.
+    // The IPC layer now passes a real jobId (was `_jobId`).
+    activeJobs.set(jobId, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => (stderr += c))
-    child.on('error', reject)
+    child.on('error', (err) => {
+      activeJobs.delete(jobId)
+      reject(err)
+    })
     child.on('close', (code) => {
+      activeJobs.delete(jobId)
       if (code === 0) resolve()
       else reject(new Error(`pip exit ${code}: ${stderr.slice(-500)}`))
     })

@@ -6,11 +6,15 @@ import { PanelHeader } from '../../components/PanelHeader'
 
 type ReframePosition = 'left' | 'center' | 'right' | 'smart'
 
+// INIT-B (round 15): "Smart" implied true content-aware reframing which
+// the underlying ffmpeg code does not do — it's just a centered crop with
+// a hopeful name. Rename to match what the code actually does so users
+// aren't misled. Real face/saliency detection is a future-round item.
 const POSITIONS: Array<{ id: ReframePosition; label: string; hint: string }> = [
   { id: 'center', label: 'Center', hint: 'Middle 9:16 strip' },
   { id: 'left', label: 'Left', hint: 'Left third (action camera)' },
   { id: 'right', label: 'Right', hint: 'Right third' },
-  { id: 'smart', label: 'Smart', hint: 'Center with letterbox detection' }
+  { id: 'smart', label: 'Auto (centered)', hint: 'Centered crop (saliency detection coming later)' }
 ]
 
 export function ReframePanel(): JSX.Element | null {
@@ -45,10 +49,17 @@ export function ReframePanel(): JSX.Element | null {
 
   async function reframe(): Promise<void> {
     if (!source || !clip) return
-    if (!outDir) {
+    // M13 fix (round 15): the previous `outDir!` referenced the React state,
+    // which on the first run was still `null` AT the point of the IPC call —
+    // setOutDir() hadn't been committed yet. Capture the resolved value in a
+    // local and pass that down. This is a real correctness fix, not a
+    // cosmetic !-removal.
+    let resolvedOutDir = outDir
+    if (!resolvedOutDir) {
       const picked = await window.api.video.pickOutputDir()
       if (!picked) return
       setOutDir(picked)
+      resolvedOutDir = picked
     }
     setRunning(true)
     setProgress(0)
@@ -56,7 +67,7 @@ export function ReframePanel(): JSX.Element | null {
     try {
       const result = await window.api.video.reframe({
         sourcePath: source.filePath,
-        outDir: outDir!,
+        outDir: resolvedOutDir,
         position,
         startSec: clip.startSec,
         endSec: clip.endSec,

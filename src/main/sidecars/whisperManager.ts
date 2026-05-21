@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, writeFile, readFile, rename, unlink, stat } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
 import path from 'node:path'
@@ -27,8 +27,11 @@ import {
   WHISPER_MODEL_FILENAME,
   WHISPER_MODEL_MAX_BYTES,
   WHISPER_MODEL_MIN_BYTES,
+  WHISPER_MODEL_SHA256,
   WHISPER_MODEL_URL
 } from '../../shared/captions'
+import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { assert } from '../../shared/assert'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
@@ -96,6 +99,62 @@ function parseSrt(content: string): CaptionSegment[] {
 // captionsOutputDir.
 let transcribeInProgress = false
 
+// M3 fix (round 15): register transcribe + burn-in children so the renderer's
+// cancel path AND the app-level before-quit can SIGKILL them. Mirrors
+// ffmpeg/export.ts activeJobs pattern.
+const activeTranscribe = new Map<string, ChildProcess>()
+const activeBurnIn = new Map<string, ChildProcess>()
+
+export function cancelTranscribe(jobId?: string): boolean {
+  if (jobId) {
+    const child = activeTranscribe.get(jobId)
+    if (!child) return false
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+    activeTranscribe.delete(jobId)
+    return true
+  }
+  let any = false
+  for (const [, child] of activeTranscribe) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+    any = true
+  }
+  activeTranscribe.clear()
+  return any
+}
+
+export function cancelBurnIn(jobId?: string): boolean {
+  if (jobId) {
+    const child = activeBurnIn.get(jobId)
+    if (!child) return false
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+    activeBurnIn.delete(jobId)
+    return true
+  }
+  let any = false
+  for (const [, child] of activeBurnIn) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+    any = true
+  }
+  activeBurnIn.clear()
+  return any
+}
+
 /** Test-only access to the concurrency flag. */
 export const __whisperTranscribeTesting__ = {
   isTranscribeInProgress: (): boolean => transcribeInProgress,
@@ -161,6 +220,7 @@ async function runTranscribeBody(
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(status.exePath, args, { windowsHide: true })
+      activeTranscribe.set(req.jobId, child)
       let stderr = ''
       let stdout = ''
       child.stdout.setEncoding('utf8')
@@ -180,8 +240,12 @@ async function runTranscribeBody(
       child.stderr.on('data', (chunk: string) => {
         stderr += chunk
       })
-      child.on('error', reject)
+      child.on('error', (err) => {
+        activeTranscribe.delete(req.jobId)
+        reject(err)
+      })
       child.on('close', (code) => {
+        activeTranscribe.delete(req.jobId)
         if (code === 0) resolve()
         else reject(new Error(`whisper exit ${code}: ${stderr.slice(-500)}`))
       })
@@ -295,6 +359,10 @@ export async function runBurnIn(
     'yuv420p',
     '-c:a',
     'copy',
+    // B6 fix (round 15): the user-facing burn-in MP4 also needs faststart so
+    // web players can seek without buffering the moov atom from the tail.
+    '-movflags',
+    '+faststart',
     '-progress',
     'pipe:1',
     '-nostats',
@@ -303,6 +371,7 @@ export async function runBurnIn(
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    activeBurnIn.set(req.jobId, child)
     let stderr = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -318,8 +387,12 @@ export async function runBurnIn(
     })
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => (stderr += c))
-    child.on('error', reject)
+    child.on('error', (err) => {
+      activeBurnIn.delete(req.jobId)
+      reject(err)
+    })
     child.on('close', (code) => {
+      activeBurnIn.delete(req.jobId)
       if (code === 0) resolve()
       else reject(new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`))
     })
@@ -555,6 +628,21 @@ async function runInstall(
   })
 }
 
+/**
+ * INIT-C (round 15): compute the SHA-256 of a file on disk via a streamed
+ * read so a ~141 MB model file doesn't have to materialize in memory.
+ * Returns the hex digest or rejects on read error.
+ */
+async function sha256OfFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+    stream.on('error', reject)
+  })
+}
+
 async function verifyAndFinalize(
   partialPath: string,
   finalPath: string,
@@ -581,6 +669,35 @@ async function verifyAndFinalize(
     onProgress({ phase: 'failed', message: reason })
     return { ok: false, reason }
   }
+
+  // INIT-C (round 15): SHA-256 the downloaded artifact and compare against
+  // the pinned digest before promoting it to the final path. Defends
+  // against a compromised mirror or undetected network corruption.
+  onProgress({ phase: 'verifying', percent: 99, message: 'Verifying SHA-256…' })
+  let digest: string
+  try {
+    digest = await sha256OfFile(partialPath)
+  } catch (err) {
+    try {
+      await unlink(partialPath)
+    } catch {
+      /* ignore */
+    }
+    const reason = err instanceof Error ? err.message : 'sha256 read failed'
+    onProgress({ phase: 'failed', message: reason })
+    return { ok: false, reason }
+  }
+  if (digest.toLowerCase() !== WHISPER_MODEL_SHA256.toLowerCase()) {
+    try {
+      await unlink(partialPath)
+    } catch {
+      /* ignore */
+    }
+    const reason = `SHA-256 mismatch: expected ${WHISPER_MODEL_SHA256} got ${digest}`
+    onProgress({ phase: 'failed', message: 'Model SHA-256 mismatch — refusing to install' })
+    return { ok: false, reason }
+  }
+
   try {
     await rename(partialPath, finalPath)
   } catch (err) {

@@ -315,8 +315,12 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   },
   {
     id: 'emote-blank-112',
-    name: 'Emote · 112×112 blank',
-    description: 'Blank emote canvas. Export as Twitch emote pack for all 3 sizes.',
+    // INIT-B (round 15): explicit name so the user knows exporting this
+    // template produces the full Twitch trio (28/56/112), not just the
+    // one 112×112 PNG.
+    name: 'Emote · auto-exports 28/56/112 trio',
+    description:
+      'Blank 112×112 emote canvas. Export emits a 3-PNG Twitch pack at 28, 56, and 112 px.',
     category: 'emote',
     doc: {
       width: 112,

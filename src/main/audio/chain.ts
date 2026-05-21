@@ -13,12 +13,17 @@ export function denoiseFilter(
   switch (strength) {
     case 'off':
       return null
+    // INIT-A (round 15): the prior light/medium/aggressive presets emitted
+    // afftdn=nf=… alone — leaving the noise-reduction amount at ffmpeg's
+    // default of 12 dB regardless of strength. Spec the nr (reduction)
+    // explicitly so the user-visible "aggressive" actually behaves
+    // differently from "light".
     case 'light':
-      return 'afftdn=nf=-20'
+      return 'afftdn=nf=-25:nr=12'
     case 'medium':
-      return 'afftdn=nf=-25'
+      return 'afftdn=nf=-30:nr=18'
     case 'aggressive':
-      return 'afftdn=nf=-35'
+      return 'afftdn=nf=-35:nr=24'
     case 'parametric': {
       const p = params ?? DEFAULT_DENOISE_PARAMS
       // Clamp the user-controllable values to afftdn's accepted ranges so
@@ -54,6 +59,10 @@ function aselectForCuts(cuts: ChainSpec['cutRegions']): string | null {
 }
 
 function loudnormFilter(targetLufs: number, measured?: LoudnormMeasurement): string {
+  // INIT-A (round 15): keep -1.5 dBTP as the safe default — Spotify/YouTube
+  // recommend -1.0 dBTP but a small inter-sample peak overhead protects
+  // against codec rounding on the playback side. Users delivering ONLY to
+  // streaming targets can override via a future custom-target slider.
   const base = `loudnorm=I=${targetLufs}:TP=-1.5:LRA=11`
   if (!measured) return `${base}:print_format=json`
   return [
@@ -94,8 +103,14 @@ export function buildChain(
   if (spec.rumbleHighpass) baseFilters.push('highpass=f=80')
 
   if (spec.hum60) {
-    baseFilters.push('highpass=f=70')
-    baseFilters.push('lowpass=f=10000')
+    // B2 fix (round 15): the previous highpass+lowpass pair did NOT touch the
+    // 60 Hz mains-hum fundamental at all — the label was a lie and the
+    // lowpass dulled voice. Mains hum is a narrow tone, so a bandreject
+    // (notch) at the fundamental AND first harmonic is the correct filter.
+    // width_type=h:w=2 = 2 Hz wide, which kills hum without audibly
+    // hollowing nearby vocal content.
+    baseFilters.push('bandreject=f=60:width_type=h:w=2')
+    baseFilters.push('bandreject=f=120:width_type=h:w=2')
   }
 
   const dn = denoiseFilter(spec.denoise, spec.denoiseParams)

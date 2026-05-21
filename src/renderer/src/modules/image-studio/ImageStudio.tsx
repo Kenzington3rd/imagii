@@ -1,5 +1,14 @@
 import { useEffect } from 'react'
 import { AppToaster } from '../../components/AppToaster'
+
+// INIT-F (round 15): human-readable tool labels for the header badge.
+const TOOL_LABELS: Record<string, string> = {
+  select: 'Select',
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  line: 'Line',
+  pencil: 'Pencil'
+}
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { Canvas } from './Canvas'
@@ -80,7 +89,10 @@ export function ImageStudio(): JSX.Element {
           >
             <Icon name="redo" size={15} /> Redo
           </button>
-          <span className="ml-2 text-xs text-ink-muted">Tool: {tool}</span>
+          {/* INIT-F (round 15): map the internal tool ids to readable labels.
+              The Toolbar already shows the active tool visually so this is a
+              redundancy aimed at AT / quick visual confirmation. */}
+          <span className="ml-2 text-xs text-ink-muted">Tool: {TOOL_LABELS[tool] ?? tool}</span>
           <TutorialButton onClick={tutorial.start} />
         </div>
       </header>

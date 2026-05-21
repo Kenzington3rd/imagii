@@ -35,6 +35,10 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
   async function runKit(): Promise<void> {
     if (!source) return
+    // INIT-E (round 15): seed the picker default with the previous Clip Kit
+    // parent. The picker doesn't accept a default in our IPC today, but
+    // saving the value on success means future iterations / a friendlier
+    // "Use last folder" button can pull from settings.
     const parentDir = await window.api.video.pickOutputDir()
     if (!parentDir) return
     setRunning(true)
@@ -53,15 +57,27 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
       // Build a 5-platform queue for this single clip.
       setPhase('Exporting 5 platform versions…')
-      const queue: ExportJobSpec[] = ALL_PLATFORM_IDS.map((preset: PlatformId) => ({
-        jobId: nanoid(10),
-        sourcePath: source.filePath,
-        outDir: kitDir,
-        clip: { ...clip, selectedPresets: [preset] },
-        preset,
-        watermark: null as WatermarkSpec | null,
-        outputFilename: `${safeName}_${preset}.mp4`
-      }))
+      // INIT-B (round 15): when the source is vertical (height > width), the
+      // YouTube target should be a 1080×1920 Short instead of the default
+      // 1920×1080 landscape — landscape on vertical material wastes 75% of
+      // the frame. There's no separate "youtube-short" preset yet, so reuse
+      // the reels preset's 9:16 geometry and just relabel the output file.
+      const isVertical = source.probe.height > source.probe.width
+      const queue: ExportJobSpec[] = ALL_PLATFORM_IDS.map((preset: PlatformId) => {
+        const effectivePreset: PlatformId =
+          preset === 'youtube' && isVertical ? 'reels' : preset
+        const filenameSuffix =
+          preset === 'youtube' && isVertical ? 'youtube_short' : preset
+        return {
+          jobId: nanoid(10),
+          sourcePath: source.filePath,
+          outDir: kitDir,
+          clip: { ...clip, selectedPresets: [effectivePreset] },
+          preset: effectivePreset,
+          watermark: null as WatermarkSpec | null,
+          outputFilename: `${safeName}_${filenameSuffix}.mp4`
+        }
+      })
       await window.api.video.exportBatch(queue)
 
       // Three thumbnails at 25%, 50%, 75% of the clip duration. These run
@@ -100,8 +116,12 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       }
 
       toast.success('Clip kit ready', { duration: 6000 })
-      // Reveal the folder so the user can grab it for posting.
-      const firstOutput = path.join(kitDir, `${safeName}_youtube.mp4`)
+      // INIT-E (round 15): persist the parent on success.
+      void window.api.settings.set('clipKit.lastOutputDir', parentDir)
+      // Reveal the folder so the user can grab it for posting. Match the
+      // filename the queue actually emitted for vertical sources.
+      const youtubeFilename = isVertical ? `${safeName}_youtube_short.mp4` : `${safeName}_youtube.mp4`
+      const firstOutput = path.join(kitDir, youtubeFilename)
       void window.api.video.revealInFolder(firstOutput)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Clip kit failed')
@@ -112,14 +132,28 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   }
 
   return (
-    <button
-      onClick={runKit}
-      disabled={running}
-      title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
-      className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-50 inline-flex items-center gap-1.5"
-    >
-      <Icon name="package" size={13} />
-      {running ? phase || 'Working…' : `Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
-    </button>
+    <span className="inline-flex items-center gap-1">
+      <button
+        onClick={runKit}
+        disabled={running}
+        title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
+        className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-50 inline-flex items-center gap-1.5"
+      >
+        <Icon name="package" size={13} />
+        {running ? phase || 'Working…' : `Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
+      </button>
+      {running ? (
+        // B8 fix (round 15): the Clip Kit batch can run several minutes; a
+        // user who picks the wrong source had no way to abort.
+        <button
+          onClick={() => {
+            void window.api.video.cancelAll()
+          }}
+          className="text-xs px-2 py-1 rounded border border-ink-dim/40 hover:bg-bg-hover"
+        >
+          Cancel
+        </button>
+      ) : null}
+    </span>
   )
 }
