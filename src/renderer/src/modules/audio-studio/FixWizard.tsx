@@ -2,6 +2,7 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import type { ChainSpec, CompressorPreset, DenoiseStrength } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { Modal } from '../../components/Modal'
 
 interface Answers {
   voiceQuiet: boolean | null
@@ -91,11 +92,19 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
     onClose()
   }
 
+  // INIT-G (round 16): migrated to <Modal> for Escape + focus trap +
+  // focus restore. Two states share the wizard chrome — final summary
+  // vs. step question. Both render inside Modal; Modal close maps to
+  // `reset()` so the wizard resets state on dismissal.
   if (step >= QUESTIONS.length) {
     return (
-      <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
-        <div className="bg-bg-elevated border border-accent/40 rounded-xl shadow-2xl w-full max-w-md p-6">
-          <h2 className="text-lg font-semibold mb-2">Ready to apply</h2>
+      <Modal
+        open={open}
+        onClose={reset}
+        title="Ready to apply"
+        className="w-full max-w-md p-6 ring-1 ring-accent/40"
+      >
+        <h2 className="text-lg font-semibold mb-2">Ready to apply</h2>
           <p className="text-sm text-ink-muted mb-4">
             Based on your answers, I'll set:
           </p>
@@ -128,54 +137,56 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           <p className="text-xs text-ink-dim mb-4">
             You can still tweak any individual setting from the side panels after this applies.
           </p>
-          <div className="flex justify-between gap-2">
-            <button className="btn-ghost px-3 py-2 text-sm" onClick={reset}>
-              Start over
-            </button>
-            <button className="btn-primary px-4 py-2 text-sm" onClick={applyResult}>
-              Apply
-            </button>
-          </div>
+        <div className="flex justify-between gap-2">
+          <button className="btn-ghost px-3 py-2 text-sm" onClick={reset}>
+            Start over
+          </button>
+          <button className="btn-primary px-4 py-2 text-sm" onClick={applyResult}>
+            Apply
+          </button>
         </div>
-      </div>
+      </Modal>
     )
   }
 
   const q = QUESTIONS[step]
   if (!q) return null
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
-      <div className="bg-bg-elevated border border-accent/40 rounded-xl shadow-2xl w-full max-w-md p-6">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs uppercase tracking-wide text-accent font-semibold">
-            Quick fix · {step + 1} of {QUESTIONS.length}
-          </span>
-          <button
-            className="text-ink-dim hover:text-ink-base text-sm"
-            onClick={reset}
-            title="Close"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <h2 className="text-lg font-semibold mb-4">{q.question}</h2>
-        <div className="flex flex-col gap-2">
-          {q.options.map((opt) => (
-            <button
-              key={String(opt.value)}
-              onClick={() => {
-                if (q.id === 'noise') answer('backgroundNoise', opt.value as Answers['backgroundNoise'])
-                else if (q.id === 'echoy') answer('echoy', opt.value as Answers['echoy'])
-                else if (q.id === 'use') answer('primaryUse', opt.value as Answers['primaryUse'])
-              }}
-              className="w-full text-left px-4 py-3 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover transition-colors text-sm"
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+    <Modal
+      open={open}
+      onClose={reset}
+      title={q.question}
+      className="w-full max-w-md p-6 ring-1 ring-accent/40"
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs uppercase tracking-wide text-accent font-semibold">
+          Quick fix · {step + 1} of {QUESTIONS.length}
+        </span>
+        <button
+          className="text-ink-dim hover:text-ink-base text-sm"
+          onClick={reset}
+          title="Close"
+          aria-label="Close"
+        >
+          Close
+        </button>
       </div>
-    </div>
+      <h2 className="text-lg font-semibold mb-4">{q.question}</h2>
+      <div className="flex flex-col gap-2">
+        {q.options.map((opt) => (
+          <button
+            key={String(opt.value)}
+            onClick={() => {
+              if (q.id === 'noise') answer('backgroundNoise', opt.value as Answers['backgroundNoise'])
+              else if (q.id === 'echoy') answer('echoy', opt.value as Answers['echoy'])
+              else if (q.id === 'use') answer('primaryUse', opt.value as Answers['primaryUse'])
+            }}
+            className="w-full text-left px-4 py-3 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover transition-colors text-sm"
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </Modal>
   )
 }

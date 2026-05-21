@@ -1,9 +1,26 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
 import { assert } from '../../shared/assert'
 import { sanitizeFilename } from '../../shared/filename'
+
+// B4 fix (round 16): single-slot tracker for the in-flight extractFrame
+// process. extractFrame is sequential (Clip Kit awaits one before the next),
+// so one slot is enough. Lets before-quit and Clip Kit cancel hard-kill the
+// in-flight ffmpeg child instead of orphaning it.
+let activeFrame: ChildProcess | null = null
+
+export function cancelAllFrameJobs(): void {
+  if (activeFrame && activeFrame.exitCode === null) {
+    try {
+      activeFrame.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeFrame = null
+}
 
 /**
  * Phase 4D: extract a single JPEG frame at a given time. Used by the
@@ -42,16 +59,23 @@ export async function extractFrame(
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    activeFrame = child
     let stderr = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => {
       stderr += c
       if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
-    child.on('error', reject)
-    child.on('close', (code) => {
+    child.on('error', (err) => {
+      if (activeFrame === child) activeFrame = null
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      if (activeFrame === child) activeFrame = null
       if (code === 0) resolve()
-      else reject(new Error(`extractFrame exit ${code}: ${stderr.slice(-500)}`))
+      else if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        reject(new Error('extractFrame cancelled'))
+      } else reject(new Error(`extractFrame exit ${code}: ${stderr.slice(-500)}`))
     })
   })
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 
 interface ModalProps {
   open: boolean
@@ -55,6 +55,10 @@ export function Modal({
 }: ModalProps): JSX.Element | null {
   const contentRef = useRef<HTMLDivElement | null>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
+  // B7 fix (round 16): React 18 useId() so two titled modals stacked together
+  // (e.g. a "confirm cancel" inside ExportDialog) don't collide on a shared
+  // aria-labelledby target.
+  const generatedTitleId = useId()
 
   useEffect(() => {
     if (!open) return
@@ -125,7 +129,7 @@ export function Modal({
 
   if (!open) return null
 
-  const titleId = title ? 'imagii-modal-title' : undefined
+  const titleId = title ? generatedTitleId : undefined
   const labelProps = titleId
     ? { 'aria-labelledby': titleId }
     : ariaLabel

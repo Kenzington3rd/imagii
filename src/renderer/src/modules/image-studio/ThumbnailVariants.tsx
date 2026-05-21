@@ -2,6 +2,7 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useCanvasStore } from './state/canvasStore'
 import { assertDefined } from '@shared/assert'
+import { Modal } from '../../components/Modal'
 
 interface VariantSpec {
   id: string
@@ -165,27 +166,27 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
     toast.success(`Saving ${previews.length} variants…`)
   }
 
+  // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
+  // restore. Header chrome stays inside the modal body.
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Thumbnail variants"
+      className="w-full max-w-3xl max-h-[85vh] flex flex-col"
     >
-      <div
-        className="bg-bg-elevated border border-ink-dim/30 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
-          <h2 className="text-lg font-semibold">Thumbnail variants</h2>
-          <button
-            className="text-ink-dim hover:text-ink-base"
-            onClick={onClose}
-            title="Close"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="p-4 flex flex-col gap-4 overflow-y-auto">
+      <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
+        <h2 className="text-lg font-semibold">Thumbnail variants</h2>
+        <button
+          className="text-ink-dim hover:text-ink-base"
+          onClick={onClose}
+          title="Close"
+          aria-label="Close"
+        >
+          Close
+        </button>
+      </div>
+      <div className="p-4 flex flex-col gap-4 overflow-y-auto">
           {previews.length === 0 ? (
             <div className="text-sm text-ink-muted">
               <p className="mb-3">
@@ -240,8 +241,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
               </div>
             </>
           )}
-        </div>
       </div>
-    </div>
+    </Modal>
   )
 }

@@ -211,34 +211,49 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     }
   },
   {
-    id: 'tw-banner-channel',
-    name: 'Twitch · Channel banner',
-    description: '1920×480 channel-page banner.',
+    // B8 fix (round 16): the prior 1920×480 size did not match any real
+    // Twitch surface. Use 1200×480 — Twitch's "video-player banner" /
+    // offline-screen surface, which is the most useful target for a
+    // template featuring the wordmark + schedule. Layer coordinates
+    // scaled proportionally from the prior 1920-wide layout
+    // (width × 0.625) so the design still reads correctly.
+    id: 'tw-banner-videoplayer',
+    name: 'Twitch · Offline / video-player banner',
+    description: '1200×480 video-player banner (shown when stream is offline).',
     category: 'banner',
     doc: {
-      width: 1920,
+      width: 1200,
       height: 480,
       background: '#1f1d2e',
       layers: [
-        rectLayer('Bg accent', 0, 0, 1920, 480, '#a78bfa', 'transparent', 0, 0),
-        rectLayer('Bg dark', 0, 60, 1920, 360, '#0b0b0f', 'transparent', 0, 0),
-        textLayer('Handle', 80, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif'),
-        textLayer('Schedule', 80, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#a78bfa')
+        rectLayer('Bg accent', 0, 0, 1200, 480, '#a78bfa', 'transparent', 0, 0),
+        rectLayer('Bg dark', 0, 60, 1200, 360, '#0b0b0f', 'transparent', 0, 0),
+        textLayer('Handle', 50, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif'),
+        textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#a78bfa')
       ]
     }
   },
   {
     id: 'yt-banner-channel',
+    // B9 fix (round 16): the prior 1106×350 marker matched neither YouTube's
+    // documented all-device safe area (1546×423 centered) nor its TV-safe
+    // minimum (1235×338 centered). Render BOTH: outer all-device frame so
+    // the designer sees what definitely renders on every surface, and an
+    // inner TV-safe frame so they know where to keep load-bearing text.
     name: 'YouTube · Channel banner',
-    description: '2560×1440 with safe area for all device sizes.',
+    description: '2560×1440 with both safe-area frames (all-device + TV-safe).',
     category: 'banner',
     doc: {
       width: 2560,
       height: 1440,
       background: '#0b0b0f',
       layers: [
-        rectLayer('Safe area marker', 727, 545, 1106, 350, 'transparent', '#a78bfa', 2, 12),
-        textLayer('Safe area hint', 760, 580, 'TV-safe area — keep text inside', 24, '#a78bfa'),
+        // All-device safe area: 1546×423 centered on 2560×1440 → offset
+        // ((2560-1546)/2, (1440-423)/2) = (507, 508).
+        rectLayer('All-device safe area', 507, 508, 1546, 423, 'transparent', '#a78bfa', 2, 12),
+        // TV-safe minimum: 1235×338 centered → offset (662, 551).
+        rectLayer('TV-safe area', 662, 551, 1235, 338, 'transparent', '#fbbf24', 2, 8),
+        textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24'),
         textLayer('Channel name', 800, 700, 'YOUR\nCHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif')
       ]
     }

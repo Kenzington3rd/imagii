@@ -386,7 +386,13 @@ export async function runBurnIn(
       }
     })
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => (stderr += c))
+    // B5 fix (round 16): bound the stderr accumulator at 16KB so an
+    // hour-long burn-in at verbose ffmpeg log levels can't accumulate tens
+    // of MB. Matches every other ffmpeg spawn in the codebase.
+    child.stderr.on('data', (c: string) => {
+      stderr += c
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
+    })
     child.on('error', (err) => {
       activeBurnIn.delete(req.jobId)
       reject(err)

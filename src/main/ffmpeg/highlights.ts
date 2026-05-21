@@ -52,6 +52,13 @@ function parseEbur128(stderr: string): LoudnessSample[] {
 // exposing it through the broader module API.
 export const __testing__ = { parseEbur128, PARSE_EBUR128_MAX_ITERATIONS }
 
+// B3 fix (round 16): track every spawned ebur128 process so before-quit can
+// hard-kill them. There's only ever one of each kind at a time:
+//   - activeScan = the full-source findHighlights pass
+//   - activeHookProcess = the per-clip analyzeClipHook pass
+// cancelAllHighlightJobs() takes both.
+let activeScan: ChildProcess | null = null
+
 export async function findHighlights(
   jobId: string,
   sourcePath: string,
@@ -74,6 +81,7 @@ export async function findHighlights(
 
   const stderr = await new Promise<string>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    activeScan = child
     let buffer = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
@@ -85,10 +93,16 @@ export async function findHighlights(
         onProgress({ jobId, phase: 'scanning', percent })
       }
     })
-    child.on('error', reject)
-    child.on('close', (code) => {
+    child.on('error', (err) => {
+      if (activeScan === child) activeScan = null
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      if (activeScan === child) activeScan = null
       if (code === 0) resolve(buffer)
-      else reject(new Error(`ebur128 exit ${code}`))
+      else if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        reject(new Error('highlight scan cancelled'))
+      } else reject(new Error(`ebur128 exit ${code}`))
     })
   })
 
@@ -264,4 +278,26 @@ export async function analyzeClipHook(
     if (Number.isFinite(v) && v > maxDb) maxDb = v
   }
   return { audioEnergyDb: maxDb }
+}
+
+// B3 fix (round 16): hard-kill any in-flight highlight ebur128 process on
+// app quit. Covers both findHighlights (full source pass) and analyzeClipHook
+// (per-clip window pass). Pre-16, a long source scan survived app quit.
+export function cancelAllHighlightJobs(): void {
+  if (activeScan && activeScan.exitCode === null) {
+    try {
+      activeScan.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeScan = null
+  if (activeHookProcess && activeHookProcess.exitCode === null) {
+    try {
+      activeHookProcess.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeHookProcess = null
 }

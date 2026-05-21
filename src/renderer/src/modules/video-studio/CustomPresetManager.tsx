@@ -4,6 +4,7 @@ import type { CustomPreset } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
+import { Modal } from '../../components/Modal'
 
 interface CustomPresetManagerProps {
   open: boolean
@@ -70,26 +71,27 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
     await refresh()
   }
 
+  // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
+  // restore. The form-input dialog was the worst offender — re-opening it
+  // used to drop focus back to the page root, losing the user's place.
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
-      onClick={onClose}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Custom export presets"
+      className="w-full max-w-2xl max-h-[80vh] flex flex-col"
     >
-      <div
-        className="bg-bg-elevated border border-ink-dim/30 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
-          <h2 className="text-lg font-semibold">Custom export presets</h2>
-          <button
-            className="text-ink-dim hover:text-ink-base"
-            onClick={onClose}
-            title="Close"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
+      <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
+        <h2 className="text-lg font-semibold">Custom export presets</h2>
+        <button
+          className="text-ink-dim hover:text-ink-base"
+          onClick={onClose}
+          title="Close"
+          aria-label="Close"
+        >
+          Close
+        </button>
+      </div>
 
         <div className="p-4 flex flex-col gap-4 overflow-y-auto">
           <section>
@@ -215,13 +217,12 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
           </section>
         </div>
 
-        <div className="p-3 border-t border-ink-dim/30 flex justify-between items-center text-xs text-ink-dim">
-          <span>Custom presets currently scaffold metadata only — exports use the base platform's encoder settings.</span>
-          <button className="text-accent hover:underline" onClick={onClose}>
-            Done
-          </button>
-        </div>
+      <div className="p-3 border-t border-ink-dim/30 flex justify-between items-center text-xs text-ink-dim">
+        <span>Custom presets currently scaffold metadata only — exports use the base platform's encoder settings.</span>
+        <button className="text-accent hover:underline" onClick={onClose}>
+          Done
+        </button>
       </div>
-    </div>
+    </Modal>
   )
 }

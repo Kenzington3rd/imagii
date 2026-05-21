@@ -36,7 +36,10 @@ function validateChainSpec(chain: unknown): asserts chain is ChainSpec {
 
 export function registerAudioIpc(): void {
   ipcMain.handle('audio:probe', async (_e, filePath: string) => {
-    assertNonEmptyString(filePath, 'audio:probe filePath')
+    // B6 fix (round 16): tighten path validators on every audio IPC handler
+    // so a traversal path can't reach ffmpeg -i or shell.showItemInFolder.
+    // Mirrors the video IPC pass from round 15.
+    assertSafeAbsolutePath(filePath, 'audio:probe filePath')
     return probeAudio(filePath)
   })
 
@@ -77,7 +80,7 @@ export function registerAudioIpc(): void {
   )
 
   ipcMain.handle('audio:extractFromVideo', async (_e, videoPath: string) => {
-    assertNonEmptyString(videoPath, 'audio:extractFromVideo videoPath')
+    assertSafeAbsolutePath(videoPath, 'audio:extractFromVideo videoPath')
     const result = await extractAudioFromVideo(videoPath)
     return result.wavPath
   })
@@ -85,8 +88,8 @@ export function registerAudioIpc(): void {
   ipcMain.handle('audio:export', async (e, spec: AudioExportSpec) => {
     assertPlainObject(spec, 'audio:export spec')
     assertNonEmptyString(spec.jobId, 'spec.jobId')
-    assertNonEmptyString(spec.sourcePath, 'spec.sourcePath')
-    assertNonEmptyString(spec.outputPath, 'spec.outputPath')
+    assertSafeAbsolutePath(spec.sourcePath, 'spec.sourcePath')
+    assertSafeAbsolutePath(spec.outputPath, 'spec.outputPath')
     assertEnum(spec.format, AUDIO_FORMATS, 'spec.format')
     validateChainSpec(spec.chain)
     return runAudioExport(spec, (p) => e.sender.send('audio:progress', p))
@@ -95,9 +98,9 @@ export function registerAudioIpc(): void {
   ipcMain.handle('audio:mux', async (e, spec: AudioMuxSpec) => {
     assertPlainObject(spec, 'audio:mux spec')
     assertNonEmptyString(spec.jobId, 'spec.jobId')
-    assertNonEmptyString(spec.videoPath, 'spec.videoPath')
-    assertNonEmptyString(spec.audioPath, 'spec.audioPath')
-    assertNonEmptyString(spec.outputPath, 'spec.outputPath')
+    assertSafeAbsolutePath(spec.videoPath, 'spec.videoPath')
+    assertSafeAbsolutePath(spec.audioPath, 'spec.audioPath')
+    assertSafeAbsolutePath(spec.outputPath, 'spec.outputPath')
     return runAudioMux(spec.jobId, spec.videoPath, spec.audioPath, spec.outputPath, (p) =>
       e.sender.send('audio:progress', p)
     )
@@ -109,14 +112,14 @@ export function registerAudioIpc(): void {
   })
 
   ipcMain.handle('audio:revealInFolder', (_e, filePath: string) => {
-    assertNonEmptyString(filePath, 'audio:revealInFolder filePath')
+    assertSafeAbsolutePath(filePath, 'audio:revealInFolder filePath')
     shell.showItemInFolder(filePath)
   })
 
   ipcMain.handle(
     'audio:suggestOutputName',
     (_e, sourcePath: string, format: string) => {
-      assertNonEmptyString(sourcePath, 'sourcePath')
+      assertSafeAbsolutePath(sourcePath, 'sourcePath')
       assertEnum(format, AUDIO_FORMATS, 'format')
       const base = path.parse(sourcePath).name
       return `${base}-cleaned.${format}`

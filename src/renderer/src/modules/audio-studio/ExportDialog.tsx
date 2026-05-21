@@ -85,6 +85,22 @@ export function ExportDialog(): JSX.Element | null {
     }
   }
 
+  // B10 fix (round 16): audio export+mux passes can run for minutes on a
+  // long source. Round 15 wired Cancel into video export / ClipKit /
+  // RecordStudio but the audio dialog was missed. Backend cancelAudioJob
+  // already exists.
+  async function cancelExport(): Promise<void> {
+    if (!job) return
+    try {
+      await window.api.audio.cancel(job.jobId)
+      toast('Audio export cancelled')
+    } catch {
+      /* the renderer Promise rejecting on kill is fine */
+    } finally {
+      setRunning(false)
+    }
+  }
+
   return (
     <div className="card p-4 flex flex-col gap-3">
       <PanelHeader icon="download">Export</PanelHeader>
@@ -139,6 +155,15 @@ export function ExportDialog(): JSX.Element | null {
         >
           {running ? 'Exporting…' : 'Export'}
         </button>
+        {running && job ? (
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm rounded bg-bg-hover hover:bg-bg-elevated text-ink-base"
+            onClick={cancelExport}
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
 
       {job ? (

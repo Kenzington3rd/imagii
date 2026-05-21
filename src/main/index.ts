@@ -15,6 +15,10 @@ import { pruneStaleTempFiles } from './tempCleanup'
 import { cancelAllExportJobs } from './ffmpeg/export'
 import { cancelAllAudioJobs } from './audio/process'
 import { cancelAllConcatJobs } from './ffmpeg/concat'
+import { cancelAllReframeJobs } from './ffmpeg/reframe'
+import { cancelAllGifJobs } from './ffmpeg/gif'
+import { cancelAllHighlightJobs } from './ffmpeg/highlights'
+import { cancelAllFrameJobs } from './ffmpeg/frame'
 import {
   cancelWhisperModelInstall,
   cancelTranscribe,
@@ -144,6 +148,27 @@ app.on('before-quit', () => {
   }
   try {
     cancelAllConcatJobs()
+  } catch {
+    /* ignore */
+  }
+  // Round 16: cover the spawn sites round 15 missed.
+  try {
+    cancelAllReframeJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelAllGifJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelAllHighlightJobs()
+  } catch {
+    /* ignore */
+  }
+  try {
+    cancelAllFrameJobs()
   } catch {
     /* ignore */
   }

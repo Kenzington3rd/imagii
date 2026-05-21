@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { Modal } from './Modal'
 
 const SHORTCUTS_BY_ROUTE: Record<string, Array<{ keys: string; description: string }>> = {
   '/video': [
@@ -50,55 +51,51 @@ export function HotkeyOverlay(): JSX.Element | null {
   const location = useLocation()
 
   useEffect(() => {
+    // INIT-G (round 16): keep the `?` toggle handler. Modal owns Escape,
+    // scrim click, and focus restore now, so we no longer need our own
+    // Escape branch here.
     function onKey(e: KeyboardEvent): void {
       if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
         const tag = (e.target as HTMLElement).tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA') return
         e.preventDefault()
         setOpen((v) => !v)
-      } else if (e.key === 'Escape' && open) {
-        setOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open])
-
-  if (!open) return null
+  }, [])
 
   const path = location.pathname
   const shortcuts = SHORTCUTS_BY_ROUTE[path] ?? SHORTCUTS_BY_ROUTE['/home']
 
   return (
-    <div
-      className="fixed inset-0 z-[900] bg-black/70 flex items-center justify-center p-6"
-      onClick={() => setOpen(false)}
+    <Modal
+      open={open}
+      onClose={() => setOpen(false)}
+      title="Keyboard shortcuts"
+      className="max-w-md w-full p-6 ring-1 ring-accent/40"
     >
-      <div
-        className="bg-bg-elevated border border-accent/40 rounded-xl shadow-2xl max-w-md w-full p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Keyboard shortcuts</h2>
-          <button
-            onClick={() => setOpen(false)}
-            className="text-ink-dim hover:text-ink-base text-sm"
-          >
-            Esc
-          </button>
-        </div>
-        <ul className="flex flex-col gap-1.5 text-sm">
-          {(shortcuts ?? []).map((s, i) => (
-            <li key={i} className="flex items-center gap-3">
-              <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center">
-                {s.keys}
-              </kbd>
-              <span className="text-ink-base">{s.description}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="text-xs text-ink-dim mt-4">Press ? again to close.</p>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">Keyboard shortcuts</h2>
+        <button
+          onClick={() => setOpen(false)}
+          className="text-ink-dim hover:text-ink-base text-sm"
+        >
+          Esc
+        </button>
       </div>
-    </div>
+      <ul className="flex flex-col gap-1.5 text-sm">
+        {(shortcuts ?? []).map((s, i) => (
+          <li key={i} className="flex items-center gap-3">
+            <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center">
+              {s.keys}
+            </kbd>
+            <span className="text-ink-base">{s.description}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-ink-dim mt-4">Press ? again to close.</p>
+    </Modal>
   )
 }

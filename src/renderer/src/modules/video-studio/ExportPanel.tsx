@@ -19,6 +19,7 @@ import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { Modal } from '../../components/Modal'
 
 interface SafeZoneRow {
   clipName: string
@@ -89,6 +90,9 @@ export function ExportPanel(): JSX.Element | null {
   const [filenameTemplate, setFilenameTemplate] = useState('{source}_{clip}_{preset}')
   const [showPresetManager, setShowPresetManager] = useState(false)
   const [pendingSafeZoneRows, setPendingSafeZoneRows] = useState<SafeZoneRow[] | null>(null)
+  // INIT-I (round 16): show a confirm before cancelling when >=2 jobs are
+  // running. The 20-clip mistake-click scenario is the motivator.
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -219,6 +223,8 @@ export function ExportPanel(): JSX.Element | null {
 
   const totalQueued = clips.reduce((acc, c) => acc + c.selectedPresets.length, 0)
 
+  const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
+
   return (
     <>
     <SafeZoneWarningModal
@@ -230,6 +236,35 @@ export function ExportPanel(): JSX.Element | null {
         void runExportQueue()
       }}
     />
+    {/* INIT-I (round 16): confirm before cancelling a multi-job batch. */}
+    <Modal
+      open={showCancelConfirm}
+      onClose={() => setShowCancelConfirm(false)}
+      title="Cancel running jobs"
+      className="max-w-sm w-full p-5"
+    >
+      <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
+      <p className="text-sm text-ink-base mb-4">
+        Cancel {remainingJobCount} running jobs?
+      </p>
+      <div className="flex justify-end gap-2">
+        <button
+          className="btn-ghost px-3 py-1.5 text-sm"
+          onClick={() => setShowCancelConfirm(false)}
+        >
+          Keep running
+        </button>
+        <button
+          className="btn-primary px-3 py-1.5 text-sm"
+          onClick={() => {
+            setShowCancelConfirm(false)
+            void window.api.video.cancelAll()
+          }}
+        >
+          Cancel jobs
+        </button>
+      </div>
+    </Modal>
     <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
       <PanelHeader
         icon="download"
@@ -253,12 +288,19 @@ export function ExportPanel(): JSX.Element | null {
               {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
             </button>
             {running ? (
-              // B8 fix (round 15): a long batch had no abort path. cancelAll
-              // hits every in-flight ffmpeg child registered in activeJobs.
+              // B8 fix (round 15) + INIT-I (round 16): a long batch had no
+              // abort path. Cancel calls cancelAll, but a misclick during a
+              // 20-clip batch was too costly — confirm before nuking >=2
+              // running jobs.
               <button
                 className="btn-ghost px-3 py-1.5 text-sm"
                 onClick={() => {
-                  void window.api.video.cancelAll()
+                  const remaining = jobs.filter((j) => j.percent < 100 && !j.error).length
+                  if (remaining >= 2) {
+                    setShowCancelConfirm(true)
+                  } else {
+                    void window.api.video.cancelAll()
+                  }
                 }}
               >
                 Cancel

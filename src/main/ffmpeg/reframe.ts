@@ -24,6 +24,20 @@ export interface ReframeProgress {
 
 const activeJobs = new Map<string, ChildProcess>()
 
+// B1 fix (round 16): mirror cancelAllConcatJobs so before-quit can hard-kill
+// any in-flight reframe encode. Pre-16, a long reframe survived app quit and
+// kept ffmpeg.exe on the CPU after the app icon was gone.
+export function cancelAllReframeJobs(): void {
+  for (const [, child] of activeJobs) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeJobs.clear()
+}
+
 function durationFromTimemark(t: string): number {
   const m = t.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/)
   if (!m) return 0

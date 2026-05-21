@@ -473,7 +473,11 @@ export function RecordStudio(): JSX.Element {
       ) : null}
 
       {phase === 'recording' ? (
-        <div className="flex flex-col gap-4">
+        // B11 fix (round 16): the cam preview is `absolute`, but without a
+        // positioned ancestor it climbed to the page root, which on a tall
+        // window made the thumbnail drift far below the main preview. Mark
+        // this wrapper `relative` so the cam thumbnail anchors inside it.
+        <div className="relative flex flex-col gap-4">
           <video
             ref={previewRef}
             className="w-full max-h-[60vh] bg-black rounded"

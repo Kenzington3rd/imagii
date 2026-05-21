@@ -62,9 +62,17 @@ truth for what a panel header looks like; see `STYLE_GUIDE.md`.
 **Modals** use the `<Modal>` helper from `components/Modal.tsx` (added
 in round 15). It centralizes `role="dialog"` / `aria-modal="true"`,
 first-focusable-on-mount, Tab trapping, Escape close, scrim-click close,
-and focus restore. New dialogs should NOT roll their own fixed-inset
-scrim — they should compose `<Modal open={…} onClose={…} title={…}>{children}</Modal>`.
-TemplatesDialog is the reference implementation.
+and focus restore (and as of round 16, a `useId()`-generated
+`aria-labelledby` so stacked modals don't collide). New dialogs should
+NOT roll their own fixed-inset scrim — they should compose
+`<Modal open={…} onClose={…} title={…}>{children}</Modal>`.
+
+Adoption is now project-wide as of round 16: TemplatesDialog,
+SafeZoneWarningModal, FixWizard, ThumbnailVariants, CustomPresetManager,
+and HotkeyOverlay all use `<Modal>`. The only "modal-shaped" UIs that
+DON'T use it are the image-studio and audio-studio export bars, which
+are inline panels, not dialogs. If you find yourself writing
+`fixed inset-0 bg-black/70` again, stop — that's a bug.
 
 ---
 

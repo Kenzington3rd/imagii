@@ -7,6 +7,7 @@ import { sanitizeFilename } from '@shared/filename'
 import { ALL_PLATFORM_IDS } from './presets'
 import { useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
+import { Modal } from '../../components/Modal'
 
 interface ClipKitButtonProps {
   clip: Clip
@@ -28,6 +29,9 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   const srtPath = useVideoStore((s) => s.srtPath)
   const [running, setRunning] = useState(false)
   const [phase, setPhase] = useState<string>('')
+  // INIT-I (round 16): confirm before cancelling. Clip Kit always has at
+  // least 5 platform exports + 3 thumbs queued, so we always confirm here.
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
 
   if (!source) return null
 
@@ -143,17 +147,45 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         {running ? phase || 'Working…' : `Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
       </button>
       {running ? (
-        // B8 fix (round 15): the Clip Kit batch can run several minutes; a
-        // user who picks the wrong source had no way to abort.
+        // B8 fix (round 15) + INIT-I (round 16): the Clip Kit batch can run
+        // several minutes; users who pick the wrong source need an abort,
+        // and the multi-job confirm prevents a misclick from torching the
+        // batch silently.
         <button
-          onClick={() => {
-            void window.api.video.cancelAll()
-          }}
+          onClick={() => setShowCancelConfirm(true)}
           className="text-xs px-2 py-1 rounded border border-ink-dim/40 hover:bg-bg-hover"
         >
           Cancel
         </button>
       ) : null}
+      <Modal
+        open={showCancelConfirm}
+        onClose={() => setShowCancelConfirm(false)}
+        title="Cancel Clip Kit"
+        className="max-w-sm w-full p-5"
+      >
+        <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
+        <p className="text-sm text-ink-base mb-4">
+          Cancel the Clip Kit batch ({ALL_PLATFORM_IDS.length} exports + thumbnails)?
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            className="btn-ghost px-3 py-1.5 text-sm"
+            onClick={() => setShowCancelConfirm(false)}
+          >
+            Keep running
+          </button>
+          <button
+            className="btn-primary px-3 py-1.5 text-sm"
+            onClick={() => {
+              setShowCancelConfirm(false)
+              void window.api.video.cancelAll()
+            }}
+          >
+            Cancel jobs
+          </button>
+        </div>
+      </Modal>
     </span>
   )
 }

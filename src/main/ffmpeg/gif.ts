@@ -72,3 +72,16 @@ export function cancelGifJob(jobId: string): boolean {
   activeJobs.delete(jobId)
   return true
 }
+
+// B2 fix (round 16): kill all in-flight gif jobs on app quit so an orphan
+// ffmpeg.exe can't keep encoding palette+gif after the window is gone.
+export function cancelAllGifJobs(): void {
+  for (const [, child] of activeJobs) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* ignore */
+    }
+  }
+  activeJobs.clear()
+}

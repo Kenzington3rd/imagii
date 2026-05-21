@@ -14,6 +14,172 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-20 — Bug round 16: round-15 follow-up (uniform cancel coverage, Modal rollout, banner geometry)
+
+Round 15's 11-lens review surfaced a clean pattern: most of round 15's
+fixes were narrow, not project-wide. The `activeJobs` + `before-quit`
+contract was added to 3 ffmpeg modules; 4 more spawned children that
+never got the same treatment. The `<Modal>` helper was built and
+adopted by one dialog (TemplatesDialog); 6 other dialogs that motivated
+the helper kept their hand-rolled scrims. The audio IPC missed the
+path-safety pass video IPC got. Round 16 closes those gaps.
+
+### Bug — runReframe / runGifExport / extractFrame / ebur128 children survived app quit
+- **Root cause.** `src/main/ffmpeg/reframe.ts`, `gif.ts`, `frame.ts`,
+  and `highlights.ts` each spawned ffmpeg without a `cancelAll*` export
+  the before-quit hook could call. Round 15 added the contract to
+  `export.ts`, `concat.ts`, and `audio/process.ts` but stopped there.
+  On Windows, Task Manager showed orphaned `ffmpeg.exe` instances
+  burning CPU after the app icon was gone.
+- **Fix.** Each module now exports a no-arg `cancelAll*Jobs()` that
+  SIGKILLs every tracked child. `src/main/index.ts` `before-quit`
+  calls all four. `frame.ts` and `highlights.ts` gained single-slot
+  trackers (only one extract / scan runs at a time); `reframe.ts` and
+  `gif.ts` already had multi-slot maps and just needed the cancelAll
+  export.
+- **Test.** `src/main/ffmpeg/cancelAll.test.ts` — each cancelAll is
+  safe to call with no in-flight children and is idempotent (a stress
+  before-quit may call it twice).
+- **Lesson.** When you establish a contract like "every spawn site
+  registers with a map and exports a cancelAll", finish the pass
+  across every spawn site in one PR. A "we'll do the rest next round"
+  comment ages into a real orphan-process bug.
+
+### Bug — runBurnIn stderr accumulator was uncapped (memory growth on long burn-ins)
+- **Root cause.** `src/main/sidecars/whisperManager.ts:389` did
+  `stderr += c` with no size cap. Every other ffmpeg spawn in the
+  codebase caps at 16KB but burn-in was missed. An hour-long burn-in
+  at verbose ffmpeg log levels could accumulate tens of MB of stderr
+  that only the last 500 chars get used from.
+- **Fix.** Cap the accumulator at 16KB by slicing the tail inside
+  the data handler. Same idiom as every other spawn.
+- **Test.** Behavioral / runtime; documented here.
+- **Lesson.** Stderr accumulators need an upper bound. Audit them
+  alongside any "spawn ffmpeg" pattern — even a one-shot can run for
+  hours in the burn-in case.
+
+### Bug — Audio IPC handlers accepted traversal paths
+- **Root cause.** Round 15 brought every video IPC handler under
+  `assertSafeAbsolutePath`, but audio IPC (six handlers in
+  `src/main/ipc/audio.ts`) still used `assertNonEmptyString` on path
+  fields that flow into `ffmpeg -i`, `shell.showItemInFolder`, and
+  `path.parse`. A `../../etc/secret` filePath in `audio:probe` would
+  reach `ffprobe`.
+- **Fix.** Replace `assertNonEmptyString` with `assertSafeAbsolutePath`
+  on `audio:probe`, `audio:extractFromVideo`, `audio:export`'s
+  `sourcePath`/`outputPath`, `audio:mux`'s three paths,
+  `audio:revealInFolder`, and `audio:suggestOutputName`. JobId / preset
+  name / preset id keep `assertNonEmptyString` since they're not paths.
+- **Test.** Existing `src/shared/pathSafety.test.ts` pins the
+  validator; the handler-level change is enforced at the type level.
+- **Lesson.** Path validation is a project-wide contract. When you
+  upgrade one IPC surface, mirror the change across every adjacent
+  surface in the same PR. "We'll get to audio next" leaves a hole.
+
+### Bug — Modal aria-labelledby id collided when two modals stacked
+- **Root cause.** `src/renderer/src/components/Modal.tsx` used a
+  hardcoded `id="imagii-modal-title"`. Two titled modals open at once
+  (e.g. a confirm-on-cancel layered inside ExportDialog) both rendered
+  the same id, making AT-labels ambiguous.
+- **Fix.** React 18 `useId()` so each instance gets a unique id.
+- **Test.** No isolated test (would require jsdom for `useId`);
+  documented here. The INIT-I cancel-confirm modal exercises the
+  stacking case at runtime.
+- **Lesson.** A "single instance at a time" assumption breaks the
+  moment you nest dialogs. Use `useId()` for any ARIA pointer
+  generated inside a reusable component.
+
+### Bug — Twitch / YouTube banner templates used wrong dimensions
+- **Root cause.** `templates.ts` shipped `tw-banner-channel` at
+  1920×480 (not a real Twitch surface) and `yt-banner-channel` with a
+  safe-area marker at 1106×350 (neither YouTube's all-device safe area
+  1546×423 nor its TV-safe minimum 1235×338).
+- **Fix.** Renamed the Twitch template to `tw-banner-videoplayer`
+  at 1200×480 (the video-player / offline-screen banner — the most
+  useful target for a wordmark + schedule design). The YouTube banner
+  now renders BOTH safe-area frames: outer 1546×423 all-device and
+  inner 1235×338 TV-safe.
+- **Test.** `src/renderer/src/modules/image-studio/templates.test.ts`
+  pins the corrected dimensions and confirms the stale id is gone.
+- **Lesson.** Platform geometry is a spec, not a guess. Cite the
+  documented values in a code comment and lock them in a test —
+  vendor specs change rarely enough that the test is cheap insurance.
+
+### Bug — audio ExportDialog had no Cancel button
+- **Root cause.** Round 15 added Cancel to ExportPanel, ClipKit, and
+  RecordStudio but the audio dialog was missed. Audio export+mux can
+  run for minutes on a long source; the backend `audio:cancel` IPC
+  already existed and went unused.
+- **Fix.** Add a Cancel button next to the running progress UI in
+  `src/renderer/src/modules/audio-studio/ExportDialog.tsx`.
+- **Test.** Behavioral; documented here.
+- **Lesson.** When you ship a "Cancel" pattern, run the audit across
+  every long-running surface in one pass. The audio export surface
+  hadn't gotten quieter; we just hadn't checked.
+
+### Bug — RecordStudio cam preview overlay had no positioned ancestor
+- **Root cause.** `RecordStudio.tsx` used `absolute bottom-8 right-8`
+  for the cam preview thumbnail, but the wrapping `<div>` was
+  `flex flex-col` without `relative`. The overlay anchored against
+  the page root, so on a tall window the thumbnail drifted far below
+  the main preview.
+- **Fix.** Add `relative` to the wrapping div so `absolute` is
+  contained.
+- **Test.** Behavioral; documented here.
+- **Lesson.** Every `absolute`/`fixed` child needs an explicit
+  positioned ancestor. When you copy a pattern from one component to
+  another, copy the `relative` wrapper too.
+
+### Initiative — Modal helper rollout (a11y completeness)
+- **Root cause.** Round 15 built `<Modal>` with focus trap, focus
+  restore, Escape close, and scrim click — then migrated only
+  TemplatesDialog. Six other dialogs kept their hand-rolled scrims
+  and were missing one or more of those behaviors. SafeZoneWarningModal
+  and FixWizard were the worst — blocking decision dialogs with no
+  Escape and no focus restore (WCAG 2.1.2 + 4.1.2).
+- **Fix.** Migrated `SafeZoneWarningModal`, `FixWizard`,
+  `ThumbnailVariants`, `CustomPresetManager`, and `HotkeyOverlay` to
+  the shared `<Modal>`. The image-studio and audio-studio
+  ExportDialogs are inline export bars, not modals — verified and
+  skipped per spec. DESIGN_GUIDE.md now notes that hand-rolled scrims
+  are deprecated project-wide.
+- **Test.** Behavioral; documented here.
+- **Lesson.** When you build a reusable a11y helper, the migration
+  PR has to ship in the same round — or every dialog you didn't
+  migrate continues to ship the regression the helper was meant to
+  fix. Don't separate the helper from its callers.
+
+### Initiative — Loudness platform presets in LevelsPanel
+- **Root cause.** The plumbing for `loudnormTargetLufs` already
+  shipped end-to-end, but the UI gave the user only a numeric input
+  with the hint "podcast standard −16". A streamer aiming for
+  YouTube/TikTok had no idea to type −14, or for Broadcast −23.
+- **Fix.** Added a small `<select>` above the LUFS number input in
+  `LevelsPanel.tsx`: Podcast (−16), YouTube/Spotify (−14),
+  TikTok/Reels (−14), Broadcast EBU R128 (−23), Custom. Picking a
+  platform patches `loudnormTargetLufs`; typing into the numeric input
+  flips the picker to 'custom'. TP ceiling stays hardcoded at −1.5
+  this round with an inline note about the asymmetry.
+- **Test.** `src/renderer/src/modules/audio-studio/LevelsPanel.test.ts`
+  pins the numeric→preset mapping including 'custom' fallback.
+- **Lesson.** When a feature's data path is plumbed but only a power
+  user knows the values, that's a UX gap, not a feature win. Wrap the
+  common cases in a picker.
+
+### Initiative — Confirm before cancelling a multi-job batch
+- **Root cause.** ExportPanel and ClipKit Cancel buttons hit
+  `cancelAll` immediately. A misclick during a 20-clip / 5-platform
+  ClipKit batch torched the entire batch with no recovery.
+- **Fix.** When ≥ 2 jobs are running, the Cancel button opens a
+  Modal confirm — "Cancel N running jobs?" with `Keep running` /
+  `Cancel jobs`. Single-job cancels still go through immediately.
+- **Test.** Behavioral; documented here.
+- **Lesson.** Destructive actions whose cost scales with batch size
+  deserve a confirm — graduated friction proportional to the cost of
+  the mistake.
+
+---
+
 ## 2026-05-20 — Bug round 15: autosave wiring, mains-hum filter, faststart cascade
 
 ### Bug — autosave hook existed but was never invoked (data loss on crash)
