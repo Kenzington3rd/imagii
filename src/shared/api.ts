@@ -78,6 +78,7 @@ export interface ImagiiApi {
     onProgress(handler: (p: ExportProgress) => void): Unsubscribe
     onJobComplete(handler: (info: { jobId: string; outputPath: string }) => void): Unsubscribe
     reframe(params: {
+      jobId?: string
       sourcePath: string
       outDir: string
       position: 'left' | 'center' | 'right' | 'smart'
@@ -86,6 +87,12 @@ export interface ImagiiApi {
       targetWidth: number
       targetHeight: number
     }): Promise<{ outputPath: string }>
+    // Round 17 B1-B5: per-job cancel buttons in each long-running panel.
+    cancelReframe(jobId: string): Promise<boolean>
+    cancelGif(jobId: string): Promise<boolean>
+    cancelConcat(jobId: string): Promise<boolean>
+    cancelPip(jobId: string): Promise<boolean>
+    cancelHighlight(): Promise<boolean>
     onReframeProgress(
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe
@@ -107,6 +114,7 @@ export interface ImagiiApi {
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe
     exportGif(params: {
+      jobId?: string
       sourcePath: string
       outDir: string
       startSec: number
@@ -119,6 +127,7 @@ export interface ImagiiApi {
     saveCustomPreset(preset: Omit<CustomPreset, 'id'>): Promise<CustomPreset>
     deleteCustomPreset(id: string): Promise<void>
     concat(params: {
+      jobId?: string
       sourcePath: string
       outDir: string
       segments: Array<{ startSec: number; endSec: number; name: string }>
@@ -127,6 +136,7 @@ export interface ImagiiApi {
       height: number
     }): Promise<{ outputPath: string }>
     pipComposite(params: {
+      jobId?: string
       basePath: string
       overlayPath: string
       outDir: string
@@ -165,6 +175,8 @@ export interface ImagiiApi {
     pickBurnInOutput(defaultName: string): Promise<string | null>
     openBinFolder(): Promise<void>
     openModelsFolder(): Promise<void>
+    // Round 17 B6
+    cancelBurnIn(): Promise<boolean>
     onProgress(handler: (p: CaptionsProgress) => void): Unsubscribe
     installModel(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
     cancelInstall(): Promise<boolean>

@@ -58,6 +58,13 @@ Drop a video in (or use the file picker), then:
   The first use downloads a transcription model (~141 MB, one time).
 - **Color & motion**, **GIF export**, **compilation**, and
   **picture-in-picture** panels handle the rest.
+- **Cancel any long render.** Reframe, GIF, Compile, PiP, highlight
+  scan, and caption burn-in all show a **Cancel** button next to the
+  progress bar while they're running. Click it to abort cleanly — the
+  background ffmpeg/whisper process is killed and the panel returns to
+  its idle state.
+- **References — Mood Boards** has a **Clear thumbnail cache** button
+  to drop the on-disk image cache when boards have grown large.
 
 ---
 

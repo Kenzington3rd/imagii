@@ -2,10 +2,14 @@ import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { probeVideo } from '../ffmpeg/probe'
 import { runExportJob, cancelExportJob, cancelAllExportJobs } from '../ffmpeg/export'
-import { runReframe, type ReframeJobSpec } from '../ffmpeg/reframe'
-import { analyzeClipHook, findHighlights } from '../ffmpeg/highlights'
-import { runGifExport } from '../ffmpeg/gif'
-import { runConcat, runPipComposite } from '../ffmpeg/concat'
+import { runReframe, cancelReframeJob, type ReframeJobSpec } from '../ffmpeg/reframe'
+import {
+  analyzeClipHook,
+  findHighlights,
+  cancelActiveHighlightScan
+} from '../ffmpeg/highlights'
+import { runGifExport, cancelGifJob } from '../ffmpeg/gif'
+import { runConcat, runPipComposite, cancelConcatJob } from '../ffmpeg/concat'
 import { extractFrame, makeKitDir } from '../ffmpeg/frame'
 import { ALL_PRESET_IDS } from '../ffmpeg/presets'
 import {
@@ -30,6 +34,19 @@ import { isValidTextOverlay } from '../../shared/projectValidation'
 
 const REFRAME_POSITIONS = ['left', 'center', 'right', 'smart'] as const
 const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
+
+// Round 17 B2/B4/B5: validate a renderer-supplied job id (same alphabet as
+// nanoid) and fall back to a freshly-minted id when the renderer didn't
+// pass one. Keeps the IPC API safe for callers older than round 17.
+const SAFE_JOB_ID_RE = /^[A-Za-z0-9_-]+$/
+function pickJobId(provided: unknown): string {
+  if (typeof provided === 'string' && provided.length > 0) {
+    assert(SAFE_JOB_ID_RE.test(provided), 'jobId must match nanoid alphabet')
+    assert(provided.length <= 64, 'jobId too long')
+    return provided
+  }
+  return nanoid(10)
+}
 
 function validateExportJob(job: unknown, idx: number): asserts job is ExportJobSpec {
   assertPlainObject(job, `jobs[${idx}]`)
@@ -137,6 +154,7 @@ export function registerVideoIpc(): void {
     async (
       e,
       params: {
+        jobId?: string
         sourcePath: string
         outDir: string
         position: 'left' | 'center' | 'right' | 'smart'
@@ -161,7 +179,12 @@ export function registerVideoIpc(): void {
       const base = path.parse(params.sourcePath).name
       const outputName = `${base}_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`
       const outputPath = path.join(params.outDir, outputName)
-      const jobId = `reframe-${Date.now()}`
+      // Round 17 B1: accept a renderer-supplied jobId so the panel's Cancel
+      // button has something to identify the in-flight job. Fall back to the
+      // legacy timestamped id when the renderer hasn't been updated.
+      const jobId = params.jobId && params.jobId.length > 0
+        ? params.jobId
+        : `reframe-${Date.now()}`
       const spec: ReframeJobSpec = {
         jobId,
         sourcePath: params.sourcePath,
@@ -262,6 +285,7 @@ export function registerVideoIpc(): void {
     async (
       _e,
       params: {
+        jobId?: string
         sourcePath: string
         outDir: string
         segments: Array<{ startSec: number; endSec: number; name: string }>
@@ -291,7 +315,9 @@ export function registerVideoIpc(): void {
       assertRange(params.width, 16, 16384, 'width')
       assertRange(params.height, 16, 16384, 'height')
       return runConcat({
-        jobId: nanoid(10),
+        // Round 17 B4: accept a renderer-supplied jobId so per-job cancel
+        // from CompilationPanel can target this specific stitch.
+        jobId: pickJobId(params.jobId),
         sourcePath: params.sourcePath,
         outDir: params.outDir,
         segments: params.segments,
@@ -307,6 +333,7 @@ export function registerVideoIpc(): void {
     async (
       _e,
       params: {
+        jobId?: string
         basePath: string
         overlayPath: string
         outDir: string
@@ -328,7 +355,9 @@ export function registerVideoIpc(): void {
       assertFiniteNonNeg(params.margin, 'margin')
       const base = path.parse(params.basePath).name
       const outputPath = path.join(params.outDir, `${base}_pip.mp4`)
-      return runPipComposite(nanoid(10), params.basePath, params.overlayPath, outputPath, {
+      // Round 17 B5: PiP shares concat's activeJobs map, so a renderer-supplied
+      // jobId lets cancelConcatJob target this pip job directly.
+      return runPipComposite(pickJobId(params.jobId), params.basePath, params.overlayPath, outputPath, {
         overlayWidth: params.overlayWidth,
         position: params.position,
         margin: params.margin
@@ -341,6 +370,7 @@ export function registerVideoIpc(): void {
     async (
       _e,
       params: {
+        jobId?: string
         sourcePath: string
         outDir: string
         startSec: number
@@ -363,7 +393,8 @@ export function registerVideoIpc(): void {
       assertRange(params.fps, 1, 60, 'fps')
       assertRange(params.speed, 0.1, 10, 'speed')
       return runGifExport({
-        jobId: nanoid(10),
+        // Round 17 B2: per-job cancel from GifPanel needs a renderer-known id.
+        jobId: pickJobId(params.jobId),
         sourcePath: params.sourcePath,
         outDir: params.outDir,
         startSec: params.startSec,
@@ -374,4 +405,32 @@ export function registerVideoIpc(): void {
       })
     }
   )
+
+  // Round 17 B1/B2/B3/B4/B5: per-job cancel handlers. Each module already
+  // tracks an activeJobs map (or a single slot for highlights). The panel-
+  // level Cancel button calls the matching channel; the IPC promise rejects
+  // when the ffmpeg child dies, and the panel's existing catch shows a toast.
+  ipcMain.handle('video:cancelReframe', (_e, jobId: string) => {
+    assertNonEmptyString(jobId, 'video:cancelReframe jobId')
+    assert(SAFE_JOB_ID_RE.test(jobId), 'video:cancelReframe jobId malformed')
+    return cancelReframeJob(jobId)
+  })
+  ipcMain.handle('video:cancelGif', (_e, jobId: string) => {
+    assertNonEmptyString(jobId, 'video:cancelGif jobId')
+    assert(SAFE_JOB_ID_RE.test(jobId), 'video:cancelGif jobId malformed')
+    return cancelGifJob(jobId)
+  })
+  ipcMain.handle('video:cancelConcat', (_e, jobId: string) => {
+    assertNonEmptyString(jobId, 'video:cancelConcat jobId')
+    assert(SAFE_JOB_ID_RE.test(jobId), 'video:cancelConcat jobId malformed')
+    return cancelConcatJob(jobId)
+  })
+  // PiP shares concat's activeJobs map (M3 fix round 15).
+  ipcMain.handle('video:cancelPip', (_e, jobId: string) => {
+    assertNonEmptyString(jobId, 'video:cancelPip jobId')
+    assert(SAFE_JOB_ID_RE.test(jobId), 'video:cancelPip jobId malformed')
+    return cancelConcatJob(jobId)
+  })
+  // Single-slot — no jobId required.
+  ipcMain.handle('video:cancelHighlight', () => cancelActiveHighlightScan())
 }

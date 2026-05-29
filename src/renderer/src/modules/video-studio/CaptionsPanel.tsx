@@ -229,6 +229,15 @@ export function CaptionsPanel(): JSX.Element | null {
                 manually and place at:
               </div>
               <div className="font-mono break-all">{status?.modelPath}</div>
+              {/* Round 17 B9: surface the models-folder shortcut next to the
+                  binaries link so a power user can drop a different .bin in
+                  alongside the auto-installed one. */}
+              <button
+                className="text-accent hover:underline self-start text-xs"
+                onClick={() => window.api.captions.openModelsFolder()}
+              >
+                Show models folder
+              </button>
               {/* Phase 4E: in-app model auto-install. Visible whenever the
                   model is missing (regardless of whisper.exe state) so the
                   download can run while the user grabs the exe in parallel. */}
@@ -295,6 +304,18 @@ export function CaptionsPanel(): JSX.Element | null {
           <span className="font-mono w-10 text-right">
             {Math.round(progress.percent)}%
           </span>
+          {/* Round 17 B6: burn-in is the only phase the user can usefully
+              abort (transcribe is short). Show Cancel while the burn-in
+              phase is in flight. */}
+          {progress.phase === 'burning-in' ? (
+            <button
+              className="text-ink-dim hover:text-rose-300 px-1"
+              onClick={() => void window.api.captions.cancelBurnIn()}
+              title="Cancel burn-in"
+            >
+              Cancel
+            </button>
+          ) : null}
         </div>
       ) : null}
 

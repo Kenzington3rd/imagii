@@ -19,6 +19,8 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:build": "npm run build && playwright test",
     "check:emoji": "node scripts/check-emoji.mjs",
     "verify": "npm run check:emoji && npm run typecheck && npm run test"
   },
@@ -44,6 +46,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^20.14.0",
     "@types/path-browserify": "^1.0.3",
@@ -54,6 +57,7 @@
     "electron": "^31.3.0",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
+    "playwright": "^1.60.0",
     "png-to-ico": "^2.1.8",
     "postcss": "^8.4.39",
     "sharp": "^0.34.5",

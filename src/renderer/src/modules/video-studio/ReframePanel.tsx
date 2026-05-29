@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
@@ -26,6 +27,8 @@ export function ReframePanel(): JSX.Element | null {
   const [progress, setProgress] = useState(0)
   const [phase, setPhase] = useState<string>('')
   const [outDir, setOutDir] = useState<string | null>(null)
+  // Round 17 B1: hold the in-flight jobId so the Cancel button can target it.
+  const jobIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     const off = window.api.video.onReframeProgress((p) => {
@@ -64,8 +67,11 @@ export function ReframePanel(): JSX.Element | null {
     setRunning(true)
     setProgress(0)
     setPhase('starting')
+    const jobId = nanoid(10)
+    jobIdRef.current = jobId
     try {
       const result = await window.api.video.reframe({
+        jobId,
         sourcePath: source.filePath,
         outDir: resolvedOutDir,
         position,
@@ -89,7 +95,14 @@ export function ReframePanel(): JSX.Element | null {
       toast.error(err instanceof Error ? err.message : 'Reframe failed')
     } finally {
       setRunning(false)
+      jobIdRef.current = null
     }
+  }
+
+  async function cancel(): Promise<void> {
+    const id = jobIdRef.current
+    if (!id) return
+    await window.api.video.cancelReframe(id)
   }
 
   return (
@@ -142,6 +155,14 @@ export function ReframePanel(): JSX.Element | null {
             <div className="h-full bg-accent" style={{ width: `${Math.round(progress)}%` }} />
           </div>
           <span className="font-mono w-10 text-right">{Math.round(progress)}%</span>
+          {/* Round 17 B1 */}
+          <button
+            className="text-ink-dim hover:text-rose-300 px-1"
+            onClick={cancel}
+            title="Cancel reframe"
+          >
+            Cancel
+          </button>
         </div>
       ) : null}
     </div>

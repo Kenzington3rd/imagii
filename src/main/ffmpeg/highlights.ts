@@ -280,6 +280,20 @@ export async function analyzeClipHook(
   return { audioEnergyDb: maxDb }
 }
 
+// Round 17 B3: per-user cancel for the panel-level "Cancel scan" button.
+// Single-slot — only one full-source scan runs at a time. Returns true if
+// a scan was actually killed.
+export function cancelActiveHighlightScan(): boolean {
+  if (!activeScan || activeScan.exitCode !== null) return false
+  try {
+    activeScan.kill('SIGKILL')
+  } catch {
+    /* ignore */
+  }
+  activeScan = null
+  return true
+}
+
 // B3 fix (round 16): hard-kill any in-flight highlight ebur128 process on
 // app quit. Covers both findHighlights (full source pass) and analyzeClipHook
 // (per-clip window pass). Pre-16, a long source scan survived app quit.

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
@@ -13,6 +14,8 @@ export function GifPanel(): JSX.Element | null {
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
   const [outDir, setOutDir] = useState<string | null>(null)
+  // Round 17 B2: jobId for the Cancel button.
+  const jobIdRef = useRef<string | null>(null)
 
   if (!source) return null
   const clip = clips.find((c) => c.id === selectedClipId)
@@ -35,8 +38,11 @@ export function GifPanel(): JSX.Element | null {
       setOutDir(dir)
     }
     setBusy(true)
+    const jobId = nanoid(10)
+    jobIdRef.current = jobId
     try {
       const result = await window.api.video.exportGif({
+        jobId,
         sourcePath: source.filePath,
         outDir: dir,
         startSec: clip.startSec,
@@ -60,7 +66,14 @@ export function GifPanel(): JSX.Element | null {
       toast.error(err instanceof Error ? err.message : 'GIF export failed')
     } finally {
       setBusy(false)
+      jobIdRef.current = null
     }
+  }
+
+  async function cancel(): Promise<void> {
+    const id = jobIdRef.current
+    if (!id) return
+    await window.api.video.cancelGif(id)
   }
 
   return (
@@ -127,6 +140,16 @@ export function GifPanel(): JSX.Element | null {
         >
           {busy ? 'Exporting…' : 'Export GIF'}
         </button>
+        {/* Round 17 B2 */}
+        {busy ? (
+          <button
+            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            onClick={cancel}
+            title="Cancel GIF export"
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
     </div>
   )

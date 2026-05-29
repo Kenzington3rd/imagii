@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -13,6 +14,8 @@ export function PipPanel(): JSX.Element {
   const [margin, setMargin] = useState(32)
   const [outDir, setOutDir] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Round 17 B5
+  const jobIdRef = useRef<string | null>(null)
 
   async function pick(setter: (path: string | null) => void): Promise<void> {
     const f = await window.api.video.pickFile()
@@ -36,8 +39,11 @@ export function PipPanel(): JSX.Element {
       setOutDir(dir)
     }
     setBusy(true)
+    const jobId = nanoid(10)
+    jobIdRef.current = jobId
     try {
       const result = await window.api.video.pipComposite({
+        jobId,
         basePath,
         overlayPath,
         outDir: dir,
@@ -60,7 +66,14 @@ export function PipPanel(): JSX.Element {
       toast.error(err instanceof Error ? err.message : 'PiP failed')
     } finally {
       setBusy(false)
+      jobIdRef.current = null
     }
+  }
+
+  async function cancel(): Promise<void> {
+    const id = jobIdRef.current
+    if (!id) return
+    await window.api.video.cancelPip(id)
   }
 
   function nameOf(path: string | null): string {
@@ -142,6 +155,16 @@ export function PipPanel(): JSX.Element {
         >
           {busy ? 'Compositing…' : 'Composite'}
         </button>
+        {/* Round 17 B5 */}
+        {busy ? (
+          <button
+            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            onClick={cancel}
+            title="Cancel PiP composite"
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
     </div>
   )

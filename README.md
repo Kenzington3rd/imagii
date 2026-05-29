@@ -43,9 +43,20 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 git clone <this repo>
 cd imagii
 npm install
-npm test           # 28 tests covering autosave validation + atomic write
+npm run verify     # emoji guard + typecheck + 360+ vitest unit tests
 npm run dist       # produces dist/imagii-for-mike.exe (~166 MB)
 ```
+
+### Running tests
+
+| Command | What it does | When to run |
+|---|---|---|
+| `npm run verify` | Emoji guard + node + web typecheck + all vitest unit tests | Every change. Required before commit. |
+| `npm test` | Vitest unit suite only (`src/**/*.test.ts`) | Iterating on a unit test. |
+| `npm run test:e2e` | Playwright launches the built app and walks every studio | After a build, before release. Requires `out/` from `npm run build`. |
+| `npm run test:e2e:build` | Build then E2E | Local one-shot before tagging a release. |
+
+Layer-by-layer detail lives in [docs/TESTING.md](docs/TESTING.md).
 
 Output goes to `dist/`. The `.exe` is portable and runs from any folder.
 

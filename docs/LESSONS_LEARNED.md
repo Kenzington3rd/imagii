@@ -14,6 +14,132 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-05-20 — Bug round 17: per-job cancel buttons, moodboard IPC validation, dead-bridge wiring, settings allowlist, E2E smoke
+
+Round 16 closed the *app-quit* orphan-process gap — every spawn site now
+has a `cancelAll*` the before-quit hook calls. Round 17 closes the
+*user-time* gap: every long-running panel now has a Cancel button that
+SIGKILLs the in-flight ffmpeg/whisper child via a per-job IPC. Three
+dead IPC bridges (`autosave:info`, `moodboard:prune`,
+`captions:openModelsFolder`) were wired into the UI rather than removed.
+A path-traversal-style hole in moodboard IPC was closed with the same
+validator surface every other channel already uses. A new Playwright
+smoke layer launches the built app and walks every studio.
+
+### Bug — six long-running panels had no in-UI Cancel button
+- **Root cause.** Round 16's pass added `cancelAll*` for app-quit but
+  none of `ReframePanel`, `GifPanel`, `HighlightPanel`, `CompilationPanel`,
+  `PipPanel`, or `CaptionsPanel` (burn-in phase) exposed a way to cancel
+  a *single* in-flight job from the UI. A user who hit "Reframe" on a
+  90-minute VOD then realized they wanted center instead of left had to
+  let it run or quit the app entirely.
+- **Fix.** Each module gained either a `cancelXxx(jobId)` or
+  single-slot `cancelActiveXxx()` export. New IPC channels
+  (`video:cancelReframe/Gif/Concat/Pip/Highlight`,
+  `captions:cancelBurnIn`) route panel clicks to those exports. The
+  three IPC handlers that previously minted their own internal jobIds
+  (concat, pip, gif) now accept an optional renderer-supplied jobId so
+  the panel's Cancel button has something to match on. Renderer-supplied
+  jobIds are gated by the nanoid alphabet so a hostile string can't
+  collide with sub-keys like `${jobId}:seg-N`.
+- **Test.** `src/main/ffmpeg/perJobCancel.test.ts` covers every cancel
+  helper's no-op-when-empty path; the per-IPC handler signature changes
+  are covered by typecheck.
+- **Lesson.** "App-quit will clean it up" is not the same as "the user
+  can cancel". Every long-running action needs both. If a panel renders
+  a progress bar, the panel needs a Cancel button next to it.
+
+### Bug — six moodboard IPC handlers accepted any input
+- **Root cause.** `src/main/ipc/search.ts` registered six moodboard
+  handlers (`create`, `delete`, `rename`, `addItem`, `removeItem`, list)
+  that passed `name: string`, `id: string`, `result: SearchResult`
+  straight to the store with zero validators. Every other IPC handler
+  in the codebase passes inputs through `assertNonEmptyString` /
+  `assertPlainObject` / id-shape gates first. A compromised renderer
+  could ship `""` ids, non-string names, or hostile SearchResult fields
+  that get persisted to moodboard JSON and re-served as cached thumbs.
+- **Fix.** Each handler now validates: ids match the nanoid alphabet
+  and a length cap; names are non-empty and ≤200 chars;
+  `addItem.result` goes through a new `validateSearchResult` in
+  `src/shared/search.ts` that requires `fullUrl`, `thumbnail`, `source`
+  to be non-empty strings under a 4KB ceiling; `addItem` strips any
+  renderer-supplied `cachedThumbPath` so the store rebuilds it.
+- **Test.** `src/shared/searchValidate.test.ts` covers the validator
+  positively + every rejection class; `src/main/ipc/round17Coverage.test.ts`
+  covers the store CRUD over a tempdir-mocked userData.
+- **Lesson.** Every IPC handler is a security boundary. When a new
+  module adds handlers, run a checklist against the validator pattern
+  before merging — not after a round-17-style audit catches the gap.
+
+### Bug — three IPC bridges were exposed but never called
+- **Root cause.** `autosave:info`, `moodboard:prune`,
+  `captions:openModelsFolder` shipped in preload + handler with no
+  caller in the renderer. Dead code rots — either it gets removed
+  silently (losing a useful feature) or the contract drifts.
+- **Fix.** Wired each into the UI: `AutosaveRestore` now uses
+  `autosave.info()` to render a lightweight "Last autosave: 5 min ago"
+  status line even after the user dismisses the restore prompt;
+  `MoodBoardPanel` adds a "Clear thumbnail cache" button;
+  `CaptionsPanel` adds a "Show models folder" link next to the existing
+  "open folder" for binaries.
+- **Test.** Behavioral, covered by the E2E smoke walking every studio.
+- **Lesson.** Either wire the bridge or remove it. A preload export
+  with no caller is a maintenance liability — every refactor pays for
+  its presence with extra type updates.
+
+### Bug — settings:set accepted arbitrary keys
+- **Root cause.** `src/main/ipc/settings.ts` passed the renderer-supplied
+  `key` straight to electron-store. The store happily creates whatever
+  top-level field it's handed. A hostile renderer could pollute the
+  store with hundreds of junk keys or shadow future legitimate ones.
+- **Fix.** Both `settings:get` and `settings:set` now validate the key
+  against the `SettingsKey` union via `KNOWN_SETTINGS_KEYS`. Per-key
+  value shape stays loose — electron-store's schema validation
+  (round-15 INIT-D) catches malformed values.
+- **Test.** `src/main/ipc/settingsKnownKeys.test.ts` covers every known
+  key plus the rejection classes (unknown string, non-string, `__proto__`,
+  traversal).
+- **Lesson.** "We control the renderer so it's fine" is not a security
+  argument once the codebase is open-sourced or accepting third-party
+  plugins. Allowlist every IPC boundary.
+
+### Initiative — dead code removal in sidecars/paths.ts
+- **What.** `logsDir()` and `aiOutputDir()` were defined but unreferenced
+  anywhere in main or renderer.
+- **Fix.** Removed. Replaced with a one-line comment explaining the
+  intentional absence so a future reader doesn't recreate them.
+- **Lesson.** Audit unreferenced exports periodically. Each one is a
+  promise the codebase makes ("there's a logs directory") that the rest
+  of the code doesn't honor.
+
+### Initiative — Playwright Electron smoke layer
+- **What.** A new `tests/e2e/smoke.spec.ts` driven by
+  `@playwright/test`'s Electron driver launches the built app, asserts
+  Home renders with all five NavCards, then walks each studio,
+  screenshotting each into `tests/e2e/screenshots/`. The test runs in
+  ~6 seconds against a hermetic `userDataDir` pre-seeded with
+  `welcomeSeen` so it never collides with the developer's real data.
+- **Why not bake into `npm run verify`.** E2E requires the `out/` build
+  artifact. `verify` is the fast unit + typecheck pass that runs on
+  every save; the E2E layer lives behind `npm run test:e2e:build` for
+  release smoke.
+- **Lesson.** A node-only test suite catches contract bugs but not
+  "does the app actually launch and reach Home". One smoke that touches
+  every route is cheap insurance against shipping a broken bundle.
+
+### Initiative — IPC handler test coverage round-out
+- **What.** Phase-6 of round 17 added ~50 new tests across
+  `src/main/audio/presets.test.ts`, `src/main/customPresets.test.ts`,
+  `src/main/ipc/recordingCancel.test.ts`, and
+  `src/main/ipc/round17Coverage.test.ts`. The pattern: mock
+  `electron.app.getPath` to a per-test `mkdtempSync`, exercise the real
+  CRUD against real disk, assert the validation rejections.
+- **Lesson.** A handler that imports `electron` can still be tested —
+  mock the surface, drive the store-backed body. Don't let "needs
+  electron" be a reason to leave a handler untested.
+
+---
+
 ## 2026-05-20 — Bug round 16: round-15 follow-up (uniform cancel coverage, Modal rollout, banner geometry)
 
 Round 15's 11-lens review surfaced a clean pattern: most of round 15's

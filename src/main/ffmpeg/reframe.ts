@@ -38,6 +38,20 @@ export function cancelAllReframeJobs(): void {
   activeJobs.clear()
 }
 
+// Round 17 B1: per-job cancel for the renderer's panel-level Cancel button.
+// Returns true when there was a matching in-flight reframe to kill.
+export function cancelReframeJob(jobId: string): boolean {
+  const child = activeJobs.get(jobId)
+  if (!child) return false
+  try {
+    child.kill('SIGKILL')
+  } catch {
+    /* ignore */
+  }
+  activeJobs.delete(jobId)
+  return true
+}
+
 function durationFromTimemark(t: string): number {
   const m = t.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/)
   if (!m) return 0

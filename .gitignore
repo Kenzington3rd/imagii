@@ -11,3 +11,7 @@ for-mike.zip
 .env.local
 .idea/
 .vscode/launch.json
+# Round 17 phase-7: Playwright artifacts
+playwright-report/
+test-results/
+tests/e2e/screenshots/

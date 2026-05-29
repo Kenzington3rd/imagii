@@ -55,13 +55,9 @@ export function thumbsCacheDir(): string {
   return userDataPath('cache', 'thumbs')
 }
 
-export function logsDir(): string {
-  return userDataPath('logs')
-}
-
-export function aiOutputDir(): string {
-  return userDataPath('ai-output')
-}
+// Round 17: logsDir() and aiOutputDir() removed — neither was referenced
+// anywhere in main/renderer (verified via grep). Keep the file lean so a
+// future reader doesn't think a logs/ or ai-output/ tree exists.
 
 export function whisperExePath(): BinaryStatus {
   return probe(resourcePath('bin', 'whisper.exe'))

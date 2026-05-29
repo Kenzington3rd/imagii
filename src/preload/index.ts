@@ -49,6 +49,16 @@ const api: ImagiiApi = {
       return () => ipcRenderer.removeListener('video:jobComplete', listener)
     },
     reframe: (params) => ipcRenderer.invoke('video:reframe', params),
+    // Round 17 B1-B5: per-job cancel buttons. The renderer mints the jobId
+    // (via nanoid), passes it into the kick-off call, and uses the same id
+    // for cancel. cancelHighlight is single-slot so no id is needed.
+    cancelReframe: (jobId: string) =>
+      ipcRenderer.invoke('video:cancelReframe', jobId),
+    cancelGif: (jobId: string) => ipcRenderer.invoke('video:cancelGif', jobId),
+    cancelConcat: (jobId: string) =>
+      ipcRenderer.invoke('video:cancelConcat', jobId),
+    cancelPip: (jobId: string) => ipcRenderer.invoke('video:cancelPip', jobId),
+    cancelHighlight: () => ipcRenderer.invoke('video:cancelHighlight'),
     onReframeProgress: (handler) => {
       const listener = (
         _e: unknown,
@@ -113,6 +123,8 @@ const api: ImagiiApi = {
       ipcRenderer.invoke('captions:pickBurnInOutput', defaultName),
     openBinFolder: () => ipcRenderer.invoke('captions:openBinFolder'),
     openModelsFolder: () => ipcRenderer.invoke('captions:openModelsFolder'),
+    // Round 17 B6: cancel an in-flight caption burn-in from the panel.
+    cancelBurnIn: () => ipcRenderer.invoke('captions:cancelBurnIn'),
     onProgress: (handler: (p: CaptionsProgress) => void) => {
       const listener = (_e: unknown, p: CaptionsProgress): void => handler(p)
       ipcRenderer.on('captions:progress', listener)

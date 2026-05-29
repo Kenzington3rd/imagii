@@ -31,9 +31,21 @@ export function AutosaveRestore(): JSX.Element | null {
   const [snapshot, setSnapshot] = useState<AutosaveSnapshot | null>(null)
   const [dismissed, setDismissed] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Round 17 B7: lightweight metadata (size + age) shown via `autosave.info`
+  // without loading the whole project. Lets the home page show "Last
+  // autosave: 5 min ago" even after the user dismissed the restore prompt.
+  const [info, setInfo] = useState<{ ageMs?: number; exists: boolean } | null>(
+    null
+  )
 
   useEffect(() => {
     let cancelled = false
+    // Cheap metadata probe runs in parallel with the full read so the
+    // dismissed-state status line has data even if the user never opens
+    // the restore prompt.
+    void window.api.autosave.info().then((meta) => {
+      if (!cancelled) setInfo(meta)
+    })
     void window.api.autosave.read().then((result) => {
       if (cancelled) return
       // Only offer restore if the autosave is fresh AND validates
@@ -59,7 +71,19 @@ export function AutosaveRestore(): JSX.Element | null {
     }
   }, [])
 
-  if (dismissed || !snapshot || !snapshot.info) return null
+  if (dismissed || !snapshot || !snapshot.info) {
+    // Round 17 B7: even when there's no restore prompt to show, surface a
+    // single-line "Last autosave: 5 min ago" so the user knows imagii is
+    // backing them up. Driven by the cheap autosave.info() call.
+    if (info && info.exists && info.ageMs !== undefined) {
+      return (
+        <div className="text-xs text-ink-dim mb-3">
+          Last autosave: {formatAge(info.ageMs)}
+        </div>
+      )
+    }
+    return null
+  }
 
   async function restore(): Promise<void> {
     if (!snapshot?.project) return

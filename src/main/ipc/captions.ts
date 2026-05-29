@@ -3,6 +3,7 @@ import path from 'node:path'
 import { copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import {
+  cancelBurnIn,
   cancelWhisperModelInstall,
   getCaptionsStatus,
   installWhisperModel,
@@ -98,6 +99,11 @@ export function registerCaptionsIpc(): void {
 
   // Tech-debt fix: cancel an in-flight model download.
   ipcMain.handle('captions:cancelInstall', () => cancelWhisperModelInstall())
+
+  // Round 17 B6: per-job cancel for the CaptionsPanel "Cancel burn-in" button.
+  // No jobId required — only one burn-in runs at a time (the renderer's
+  // `running` flag guards re-entry); cancelBurnIn() with no arg kills the lot.
+  ipcMain.handle('captions:cancelBurnIn', () => cancelBurnIn())
 
   // Tech-debt fix: copy an SRT to a target path without prompting.
   // Used by Clip Kit to bundle the SRT alongside the per-platform mp4s.

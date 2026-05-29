@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
@@ -10,6 +11,8 @@ export function CompilationPanel(): JSX.Element | null {
   const [fadeMs, setFadeMs] = useState(300)
   const [outDir, setOutDir] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Round 17 B4: track the in-flight jobId for the Cancel button.
+  const jobIdRef = useRef<string | null>(null)
 
   if (!source || clips.length < 2) return null
 
@@ -27,10 +30,13 @@ export function CompilationPanel(): JSX.Element | null {
       setOutDir(dir)
     }
     setBusy(true)
+    const jobId = nanoid(10)
+    jobIdRef.current = jobId
     try {
       const targetW = 1920
       const targetH = 1080
       const result = await window.api.video.concat({
+        jobId,
         sourcePath: source.filePath,
         outDir: dir,
         segments: clips.map((c) => ({
@@ -57,7 +63,14 @@ export function CompilationPanel(): JSX.Element | null {
       toast.error(err instanceof Error ? err.message : 'Compilation failed')
     } finally {
       setBusy(false)
+      jobIdRef.current = null
     }
+  }
+
+  async function cancel(): Promise<void> {
+    const id = jobIdRef.current
+    if (!id) return
+    await window.api.video.cancelConcat(id)
   }
 
   return (
@@ -94,6 +107,16 @@ export function CompilationPanel(): JSX.Element | null {
         >
           {busy ? 'Stitching…' : 'Compile'}
         </button>
+        {/* Round 17 B4 */}
+        {busy ? (
+          <button
+            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            onClick={cancel}
+            title="Cancel compilation"
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
     </div>
   )
