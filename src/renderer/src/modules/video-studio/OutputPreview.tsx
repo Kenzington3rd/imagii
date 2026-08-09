@@ -106,6 +106,7 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
             value={previewPlatform}
             onChange={(e) => setPreviewPlatform(e.target.value as PlatformId)}
             className="bg-bg-base rounded px-2 py-0.5 text-xs"
+            aria-label="Preview platform"
           >
             {ALL_PLATFORM_IDS.map((id) => (
               <option key={id} value={id}>

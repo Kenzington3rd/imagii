@@ -137,6 +137,10 @@ export function GifPanel(): JSX.Element | null {
           className="btn-primary px-4 py-1.5 ml-auto disabled:opacity-50"
           disabled={busy}
           onClick={exportGif}
+          // The GIF job has no percent feed — this button label IS the
+          // progress line. aria-live announces the Exporting…/done flip to
+          // screen readers (role="status" would clobber the button role).
+          aria-live="polite"
         >
           {busy ? 'Exporting…' : 'Export GIF'}
         </button>

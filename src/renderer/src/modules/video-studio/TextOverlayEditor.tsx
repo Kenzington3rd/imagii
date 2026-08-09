@@ -172,6 +172,7 @@ export function TextOverlayEditor(): JSX.Element | null {
                   onClick={() => removeTextOverlay(clip.id, overlay.id)}
                   className="ml-auto text-ink-dim hover:text-rose-300 px-2"
                   title="Remove"
+                  aria-label="Remove overlay"
                 >
                   ✕
                 </button>

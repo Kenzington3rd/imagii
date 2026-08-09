@@ -157,7 +157,7 @@ export function ReframePanel(): JSX.Element | null {
           <span className="font-mono w-10 text-right">{Math.round(progress)}%</span>
           {/* Round 17 B1 */}
           <button
-            className="text-ink-dim hover:text-rose-300 px-1"
+            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
             onClick={cancel}
             title="Cancel reframe"
           >

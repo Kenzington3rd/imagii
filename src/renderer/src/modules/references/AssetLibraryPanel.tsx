@@ -86,7 +86,7 @@ export function AssetLibraryPanel(): JSX.Element {
                   <div className="text-xs text-ink-dim mt-1 font-mono">
                     {asset.doc.width} × {asset.doc.height}
                   </div>
-                  <div className="text-[10px] text-ink-dim mt-1 italic">{asset.license}</div>
+                  <div className="text-xs text-ink-dim mt-1 italic">{asset.license}</div>
                 </button>
               ))}
             </div>

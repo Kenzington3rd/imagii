@@ -21,7 +21,7 @@ import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 
-interface SafeZoneRow {
+export interface SafeZoneRow {
   clipName: string
   clippedZones: string[]
 }
@@ -31,8 +31,11 @@ interface SafeZoneRow {
  * the chosen preset's centered crop would lose the safe zone of any
  * other selected preset. The bound is `clips.length × presets.length`,
  * with hard caps in the validators.
+ *
+ * Exported so ClipKitButton can run the same pre-flight before its
+ * 5-platform batch.
  */
-function findSafeZoneIssues(
+export function findSafeZoneIssues(
   clips: ReadonlyArray<Clip>,
   sourceWidth: number,
   sourceHeight: number
@@ -326,6 +329,7 @@ export function ExportPanel(): JSX.Element | null {
           className="bg-bg-base rounded px-2 py-1"
           value={watermarkPosition}
           onChange={(e) => setWatermarkPosition(e.target.value as WatermarkSpec['position'])}
+          aria-label="Watermark position"
         >
           <option value="bottom-right">Bottom right</option>
           <option value="bottom-left">Bottom left</option>
@@ -406,7 +410,11 @@ export function ExportPanel(): JSX.Element | null {
                   style={{ width: `${Math.round(j.percent)}%` }}
                 />
               </div>
-              <span className="font-mono text-xs text-ink-muted w-10 text-right">
+              <span
+                className="font-mono text-xs text-ink-muted w-10 text-right"
+                role="status"
+                aria-live="polite"
+              >
                 {Math.round(j.percent)}%
               </span>
               {j.outputPath ? (

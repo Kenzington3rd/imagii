@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
 import { Icon } from './Icon'
 
@@ -19,6 +19,14 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const step: TutorialStep | undefined = def.steps[stepIndex]
 
   const [targetRect, setTargetRect] = useState<Rect | null>(null)
+
+  // A11y: the coachmark is a dialog, so keyboard/AT users need focus to
+  // land inside it. Move focus to the Next button on mount and on every
+  // step change.
+  const nextBtnRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    nextBtnRef.current?.focus()
+  }, [stepIndex])
 
   useLayoutEffect(() => {
     // M13 fix (round 15): capture the narrowed selector in a const so the
@@ -54,8 +62,13 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
+      // Focus lives on the coachmark's buttons; Enter there already fires
+      // the button's own click. Let the native activation win so a single
+      // keypress doesn't advance twice.
+      const onButton =
+        e.target instanceof HTMLElement && e.target.tagName === 'BUTTON'
       if (e.key === 'Escape') onClose(false)
-      else if (e.key === 'ArrowRight' || e.key === 'Enter') next()
+      else if (e.key === 'ArrowRight' || (e.key === 'Enter' && !onButton)) next()
       else if (e.key === 'ArrowLeft') prev()
     }
     window.addEventListener('keydown', onKey)
@@ -124,6 +137,9 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       <div
         className="absolute pointer-events-auto bg-bg-elevated border border-accent/60 rounded-xl shadow-2xl p-5 max-w-md"
         style={tooltipStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${def.title} tutorial — step ${stepIndex + 1} of ${def.steps.length}: ${step.title}`}
       >
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs uppercase tracking-wide text-accent font-semibold">
@@ -150,6 +166,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           ) : null}
           <div className="flex-1" />
           <button
+            ref={nextBtnRef}
             className="btn-primary px-4 py-1.5 text-sm inline-flex items-center gap-1.5"
             onClick={next}
           >

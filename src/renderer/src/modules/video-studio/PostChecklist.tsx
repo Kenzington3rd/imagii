@@ -163,6 +163,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
           className="bg-bg-base rounded px-2 py-1 text-xs"
           value={hashtagPick}
           onChange={(e) => setHashtagPick(e.target.value as keyof typeof HASHTAG_TEMPLATES)}
+          aria-label="Hashtag pack"
         >
           {Object.keys(HASHTAG_TEMPLATES).map((k) => (
             <option key={k} value={k}>

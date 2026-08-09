@@ -186,6 +186,7 @@ export function MoodBoardPanel(): JSX.Element {
                         className="absolute top-1 right-1 bg-bg-base/80 hover:bg-rose-500 text-xs rounded-full w-6 h-6 flex items-center justify-center"
                         onClick={() => removeFromCollection(collection.id, item.id)}
                         title="Remove"
+                        aria-label="Remove item"
                       >
                         ✕
                       </button>
