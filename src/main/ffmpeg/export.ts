@@ -29,7 +29,12 @@ export async function runExportJob(
   const probe = await probeVideo(job.sourcePath)
   const source = { width: probe.width, height: probe.height }
   const filterChain = buildVideoFilter(job.clip, preset, source, job.watermark)
-  const clipDuration = Math.max(0.1, job.clip.endSec - job.clip.startSec)
+  const speedForDuration =
+    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
+  // Progress is measured against OUTPUT time (ffmpeg's out_time), and a
+  // 2x-speed clip produces half as much output — divide by the speed or
+  // the bar stalls at 50% until the job completes (round 18).
+  const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speedForDuration)
 
   const sourceBase = path.parse(job.sourcePath).name
   const outputName =

@@ -180,11 +180,10 @@ export function registerVideoIpc(): void {
       const outputName = `${base}_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`
       const outputPath = path.join(params.outDir, outputName)
       // Round 17 B1: accept a renderer-supplied jobId so the panel's Cancel
-      // button has something to identify the in-flight job. Fall back to the
-      // legacy timestamped id when the renderer hasn't been updated.
-      const jobId = params.jobId && params.jobId.length > 0
-        ? params.jobId
-        : `reframe-${Date.now()}`
+      // button has something to identify the in-flight job. Round 18: route
+      // it through pickJobId like every sibling per-job endpoint, so this
+      // handler gets the same charset/length gate.
+      const jobId = pickJobId(params.jobId)
       const spec: ReframeJobSpec = {
         jobId,
         sourcePath: params.sourcePath,
@@ -350,7 +349,11 @@ export function registerVideoIpc(): void {
       assertSafeAbsolutePath(params.basePath, 'basePath')
       assertSafeAbsolutePath(params.overlayPath, 'overlayPath')
       assertSafeAbsolutePath(params.outDir, 'outDir')
-      assertRange(params.overlayWidth, 0.05, 1, 'overlayWidth')
+      // Round 18: overlayWidth is PIXELS (the PIP panel sends 120-960 and
+      // concat.ts scales the overlay to `${overlayWidth}:-1`). The prior
+      // [0.05, 1] range — written as if this were a fraction — rejected
+      // every real call, so PIP composite never produced output.
+      assertRange(params.overlayWidth, 16, 3840, 'overlayWidth')
       assertEnum(params.position, PIP_POSITIONS, 'position')
       assertFiniteNonNeg(params.margin, 'margin')
       const base = path.parse(params.basePath).name

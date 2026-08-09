@@ -49,11 +49,12 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     height: 720,
     aspectRatio: 16 / 9,
     // INIT-B (round 15): free tier caps at 2:20 (140 s); Premium subscribers
-    // upload up to 3 hours. Setting the hard limit at 140 s red-flagged
-    // Premium users on perfectly valid uploads. Move the cap to 3 h and
-    // surface the free-tier cliff via the sweet-spot copy.
+    // upload longer. Setting the hard limit at 140 s red-flagged Premium
+    // users on perfectly valid uploads. Round 18: verified against
+    // help.x.com/en/using-x/premium-longer-videos — Premium allows up to
+    // 4 hours (web/iOS), not the 3 h round 15 recorded.
     durationSweetSpot: { min: 5, max: 140 },
-    durationHardLimit: 3 * 60 * 60
+    durationHardLimit: 4 * 60 * 60
   },
   facebook: {
     id: 'facebook',
@@ -104,7 +105,7 @@ export function evaluateSuccess(
     // INIT-B (round 15): special-case X so Premium users see honest copy
     // instead of a red flag. Free tier cliffs at 2:20; Premium up to 3 h.
     if (platform.id === 'twitter') {
-      reasons.push('Free tier caps at 2:20; X Premium allows up to 3 h')
+      reasons.push('Free tier caps at 2:20; X Premium allows up to 4 h')
     } else {
       reasons.push(`Over ${platform.label} sweet spot (${platform.durationSweetSpot.max}s)`)
     }

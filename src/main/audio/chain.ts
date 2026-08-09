@@ -26,12 +26,17 @@ export function denoiseFilter(
       return 'afftdn=nf=-35:nr=24'
     case 'parametric': {
       const p = params ?? DEFAULT_DENOISE_PARAMS
-      // Clamp the user-controllable values to afftdn's accepted ranges so
-      // a slider edge case can't produce a malformed filter string.
-      const nf = Math.max(-80, Math.min(-10, p.noiseFloorDb))
-      const nr = Math.max(0, Math.min(50, p.reductionDb))
-      const ns = Math.max(-2, Math.min(2, p.sensitivity))
-      return `afftdn=nf=${nf}:nr=${nr}:ns=${ns}`
+      // Clamp the user-controllable values to afftdn's REAL accepted ranges
+      // (verified against `ffmpeg -h filter=afftdn`): nf is -80..-20 (the
+      // prior -10 ceiling let a third of the slider produce an out-of-range
+      // value ffmpeg rejects), and nr's floor is 0.01, not 0. The prior
+      // string also appended `ns=…` — afftdn has never had an `ns` option,
+      // so every parametric export failed at graph-parse time. The
+      // DenoiseParams.sensitivity field is retained for stored-preset
+      // compatibility but no longer emitted.
+      const nf = Math.max(-80, Math.min(-20, p.noiseFloorDb))
+      const nr = Math.max(0.01, Math.min(50, p.reductionDb))
+      return `afftdn=nf=${nf}:nr=${nr}`
     }
   }
 }
@@ -117,7 +122,13 @@ export function buildChain(
   if (dn) baseFilters.push(dn)
 
   if (spec.deEss) {
-    baseFilters.push('equalizer=f=6500:t=q:w=1.5:g=-6')
+    // Round 18: use ffmpeg's dedicated dynamic de-esser instead of a
+    // permanent -6 dB EQ notch at 6.5 kHz. The static cut dulled voice
+    // during non-sibilant passages while letting loud esses through —
+    // the same "related-sounding filter isn't the right filter" failure
+    // the round-15 hum60 fix called out. deesser's i/m/f are normalized
+    // 0..1: intensity 0.15 with max 0.5 tames esses without lisping.
+    baseFilters.push('deesser=i=0.15:m=0.5:f=0.5')
   }
 
   const comp = compressorFilter(spec.compressor)

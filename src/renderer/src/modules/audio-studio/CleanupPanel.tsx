@@ -11,7 +11,7 @@ const DENOISE_OPTIONS: Array<{ value: DenoiseStrength; label: string; descriptio
   {
     value: 'parametric',
     label: 'Custom',
-    description: 'Tune noise floor / reduction / sensitivity by hand'
+    description: 'Tune noise floor / reduction by hand'
   }
 ]
 
@@ -49,38 +49,33 @@ export function CleanupPanel(): JSX.Element {
         </div>
       </div>
 
-      {/* Phase 3.3: parametric controls only when "Custom" is selected. */}
+      {/* Phase 3.3: parametric controls only when "Custom" is selected.
+          Round 18: ranges now match afftdn's REAL accepted values (nf is
+          -80..-20, nr floors at 1) — the old -10 ceiling let a third of
+          the noise-floor slider produce values ffmpeg rejects. The
+          "Sensitivity" slider is gone: it mapped to an `ns` option afftdn
+          has never had, which made every Custom export fail. */}
       {chain.denoise === 'parametric' ? (
         <div className="flex flex-col gap-2 text-xs border-l-2 border-accent/30 pl-3 ml-1">
           <ParamSlider
             label="Noise floor"
             unit="dB"
             min={-80}
-            max={-10}
+            max={-20}
             step={1}
-            value={params.noiseFloorDb}
+            value={Math.min(-20, params.noiseFloorDb)}
             onChange={(noiseFloorDb) => updateParam({ noiseFloorDb })}
             hint="Set the level below which signal is treated as noise. -25 ≈ medium preset."
           />
           <ParamSlider
             label="Reduction"
             unit="dB"
-            min={0}
+            min={1}
             max={50}
             step={1}
-            value={params.reductionDb}
+            value={Math.max(1, params.reductionDb)}
             onChange={(reductionDb) => updateParam({ reductionDb })}
             hint="How much noise to actually remove. Higher = harsher but quieter result."
-          />
-          <ParamSlider
-            label="Sensitivity"
-            unit=""
-            min={-2}
-            max={2}
-            step={0.1}
-            value={params.sensitivity}
-            onChange={(sensitivity) => updateParam({ sensitivity })}
-            hint="How aggressively the detector triggers on quiet noise. 0 = neutral."
           />
         </div>
       ) : null}
@@ -108,7 +103,7 @@ export function CleanupPanel(): JSX.Element {
             checked={chain.deEss}
             onChange={(e) => patchChain({ deEss: e.target.checked })}
           />
-          <span>De-ess sibilance (~6.5 kHz)</span>
+          <span>De-ess sibilance (dynamic)</span>
         </label>
       </div>
     </div>
@@ -139,6 +134,8 @@ function ParamSlider(props: ParamSliderProps): JSX.Element {
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="flex-1"
+        aria-label={label}
+        aria-valuetext={`${value.toFixed(step < 1 ? 1 : 0)}${unit ? ` ${unit}` : ''}`}
       />
       <span className="font-mono w-14 text-right">
         {value.toFixed(step < 1 ? 1 : 0)}

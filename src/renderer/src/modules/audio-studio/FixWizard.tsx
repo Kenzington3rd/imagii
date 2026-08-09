@@ -4,8 +4,10 @@ import type { ChainSpec, CompressorPreset, DenoiseStrength } from '@shared/audio
 import { useAudioStore } from './state/audioStore'
 import { Modal } from '../../components/Modal'
 
+// Round 18: the vestigial `voiceQuiet` field is gone — no question ever
+// set it and applyResult never read it (loudnorm at -16 LUFS already
+// levels a too-quiet voice regardless).
 interface Answers {
-  voiceQuiet: boolean | null
   backgroundNoise: 'none' | 'mild' | 'loud' | null
   echoy: boolean | null
   primaryUse: 'voice' | 'music' | 'mixed' | null
@@ -48,7 +50,6 @@ interface FixWizardProps {
 export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null {
   const patchChain = useAudioStore((s) => s.patchChain)
   const [answers, setAnswers] = useState<Answers>({
-    voiceQuiet: null,
     backgroundNoise: null,
     echoy: null,
     primaryUse: null
@@ -83,12 +84,12 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
     toast.success('Cleanup configured. Tweak from the side panels if needed.')
     onClose()
     setStep(0)
-    setAnswers({ voiceQuiet: null, backgroundNoise: null, echoy: null, primaryUse: null })
+    setAnswers({ backgroundNoise: null, echoy: null, primaryUse: null })
   }
 
   function reset(): void {
     setStep(0)
-    setAnswers({ voiceQuiet: null, backgroundNoise: null, echoy: null, primaryUse: null })
+    setAnswers({ backgroundNoise: null, echoy: null, primaryUse: null })
     onClose()
   }
 

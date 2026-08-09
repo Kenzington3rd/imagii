@@ -31,17 +31,10 @@ function probe(p: string): BinaryStatus {
   }
 }
 
-export function sdExePath(): BinaryStatus {
-  return probe(resourcePath('bin', 'sd.exe'))
-}
-
-export function nudenetOnnxPath(): BinaryStatus {
-  return probe(resourcePath('bin', 'nudenet.onnx'))
-}
-
-export function sdModelPath(modelFile = 'v1-5-pruned-emaonly.safetensors'): BinaryStatus {
-  return probe(userDataPath('models', modelFile))
-}
+// Round 18: sdExePath()/nudenetOnnxPath()/sdModelPath() removed — vestiges
+// of a pulled AI-generation feature with zero callers (and PRODUCT_GUIDE
+// explicitly scopes generation out). Same unreferenced-export sweep that
+// removed logsDir()/aiOutputDir() in round 17.
 
 export function modelsDir(): string {
   return userDataPath('models')

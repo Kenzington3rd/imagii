@@ -1,8 +1,9 @@
 # imagii — Testing Guide
 
-imagii ships four complementary test layers. Each catches a different
+imagii ships five complementary test layers. Each catches a different
 class of regression; together they make a clean `npm run verify`
-followed by `npm run test:e2e:build` enough confidence to tag a release.
+followed by `npm run test:e2e:build` and `npm run test:media` enough
+confidence to tag a release.
 
 ---
 
@@ -78,6 +79,36 @@ the E2E layer lives behind `npm run test:e2e:build` for release smoke
 **Adding an E2E case.** Drop `*.spec.ts` into `tests/e2e/`. Keep the
 launch hermetic (`os.tmpdir()` userDataDir + cleanup in a `finally`)
 so concurrent runs don't collide.
+
+---
+
+## Layer 2.5: real-media integration (`tests/integration/media.spec.ts`)
+
+**Run with:** `npm run test:media` (~30-60 seconds).
+
+**Environment.** node + the real bundled ffmpeg/ffprobe binaries. No
+Electron, no DOM. Configured by `vitest.integration.config.ts` so it
+stays out of the fast `verify` pass.
+
+**What it covers.** The layer every other layer stops short of: it
+drives the actual production job runners (`runExportJob`,
+`runAudioExport`, `runGifExport`, `runAudioMux`) against tiny generated
+sources and asserts on the bytes that come out — dimensions, codecs,
+faststart atom order, two-pass loudnorm accuracy (±1 LU), sidechain
+ducking depth (measured through a bandpass isolate), cut-region
+durations, and subtitle-path escaping against ffmpeg's real filtergraph
+parser.
+
+**Why it exists.** Round 18 proved the gap: three shipped features
+(autoZoom, sidechain ducking, parametric denoise) had filter strings
+that passed every string-shape unit test and were rejected by ffmpeg at
+runtime, 100% of the time. A unit test can pin what we *think* the
+filter should say; only real ffmpeg can pin that it *parses and runs*.
+
+**Adding a case.** Generate sources in `beforeAll` with lavfi
+(`testsrc2`, `sine`, `anoisesrc`), drive the real exported function, and
+assert with `ffprobeJson`/`measureLufs`/`bandMeanVolume` helpers already
+in the spec.
 
 ---
 

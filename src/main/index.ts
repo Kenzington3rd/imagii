@@ -80,7 +80,12 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    // Only hand well-formed web URLs to the OS. Today the only reachable
+    // links are hardcoded https hrefs, but a future feature rendering
+    // search-result URLs must not be able to launch file:/protocol handlers.
+    if (details.url.startsWith('https://') || details.url.startsWith('http://')) {
+      shell.openExternal(details.url)
+    }
     return { action: 'deny' }
   })
 
@@ -100,13 +105,24 @@ app.whenReady().then(async () => {
   registerCaptionsIpc()
   registerProjectIpc()
   registerRecordingIpc()
-  const smoke = await smokeTestFfmpeg()
-  if (smoke.ffmpegOk) {
-    console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)
-    console.log(`[ffprobe] ${smoke.ffprobeVersion}`)
-  } else {
-    console.error('[ffmpeg] smoke test failed:', smoke.error)
-  }
+  // Fire-and-forget (round 18): the smoke result is only logged, but the
+  // old `await` serialized two child-process spawns before createWindow()
+  // even ran — on a cold Windows start with AV scanning the bundled
+  // binaries, that delay gated first paint. Same pattern as
+  // pruneStaleTempFiles below.
+  smokeTestFfmpeg().then(
+    (smoke) => {
+      if (smoke.ffmpegOk) {
+        console.log(`[ffmpeg] ${smoke.ffmpegVersion}`)
+        console.log(`[ffprobe] ${smoke.ffprobeVersion}`)
+      } else {
+        console.error('[ffmpeg] smoke test failed:', smoke.error)
+      }
+    },
+    (err) => {
+      console.error('[ffmpeg] smoke test failed:', err)
+    }
+  )
   // Tech-debt fix: prune temp files left behind by prior crashed sessions
   // (audio:extractFromVideo wavs + any leftover concat segments). Async
   // and best-effort — never block app startup on a slow/locked tempdir.

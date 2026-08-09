@@ -86,29 +86,33 @@ describe('denoiseFilter — Phase 3.3 parametric mode', () => {
     expect(denoiseFilter('aggressive')).toBe('afftdn=nf=-35:nr=24')
   })
 
-  it('emits all 3 afftdn params in parametric mode using defaults', () => {
+  // Round 18: afftdn has never had an `ns` option — the old strings that
+  // pinned `ns=…` were pinning a filter ffmpeg rejects outright. The real
+  // ranges (per `ffmpeg -h filter=afftdn`) are nf -80..-20 and nr 0.01..97.
+  it('emits only real afftdn params in parametric mode using defaults', () => {
     const filter = denoiseFilter('parametric')
     expect(filter).toBe(
-      `afftdn=nf=${DEFAULT_DENOISE_PARAMS.noiseFloorDb}:nr=${DEFAULT_DENOISE_PARAMS.reductionDb}:ns=${DEFAULT_DENOISE_PARAMS.sensitivity}`
+      `afftdn=nf=${DEFAULT_DENOISE_PARAMS.noiseFloorDb}:nr=${DEFAULT_DENOISE_PARAMS.reductionDb}`
     )
   })
 
-  it('honors custom params', () => {
+  it('honors custom params and never emits the nonexistent ns option', () => {
     const filter = denoiseFilter('parametric', {
       noiseFloorDb: -40,
       reductionDb: 25,
       sensitivity: 1.5
     })
-    expect(filter).toBe('afftdn=nf=-40:nr=25:ns=1.5')
+    expect(filter).toBe('afftdn=nf=-40:nr=25')
+    expect(filter).not.toContain('ns=')
   })
 
   it('clamps params to afftdn-accepted ranges', () => {
     expect(
       denoiseFilter('parametric', { noiseFloorDb: -200, reductionDb: 999, sensitivity: 99 })
-    ).toBe('afftdn=nf=-80:nr=50:ns=2')
+    ).toBe('afftdn=nf=-80:nr=50')
     expect(
       denoiseFilter('parametric', { noiseFloorDb: 100, reductionDb: -5, sensitivity: -99 })
-    ).toBe('afftdn=nf=-10:nr=0:ns=-2')
+    ).toBe('afftdn=nf=-20:nr=0.01')
   })
 })
 

@@ -14,6 +14,34 @@ async function ensureDir(): Promise<void> {
   await mkdir(presetsDir(), { recursive: true })
 }
 
+/**
+ * Round 18: structural gate for a preset file read back off disk. Round 14
+ * fixed this exact crash shape in customPresets.ts ("any
+ * read-directory-of-user-JSON path needs a parse-and-normalize choke
+ * point") but the audio twin never got the same treatment — a valid-JSON
+ * file missing `name` reached `.sort()` and threw, permanently breaking
+ * the Cleanup presets panel until the file was hand-deleted.
+ */
+export function parseChainPreset(raw: string): ChainPreset | null {
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const p = data as Record<string, unknown>
+  if (typeof p.id !== 'string' || p.id.length === 0) return null
+  if (typeof p.name !== 'string' || p.name.length === 0) return null
+  if (typeof p.chain !== 'object' || p.chain === null) return null
+  return {
+    id: p.id,
+    name: p.name,
+    chain: p.chain as ChainSpec,
+    createdAt: typeof p.createdAt === 'number' ? p.createdAt : 0
+  }
+}
+
 export async function listPresets(): Promise<ChainPreset[]> {
   await ensureDir()
   const dir = presetsDir()
@@ -24,7 +52,8 @@ export async function listPresets(): Promise<ChainPreset[]> {
     if (!f.endsWith('.json')) continue
     try {
       const raw = await readFile(path.join(dir, f), 'utf8')
-      presets.push(JSON.parse(raw) as ChainPreset)
+      const parsed = parseChainPreset(raw)
+      if (parsed) presets.push(parsed)
     } catch {
       continue
     }

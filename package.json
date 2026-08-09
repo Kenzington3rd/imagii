@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:build": "npm run build && playwright test",
+    "test:media": "vitest run --config vitest.integration.config.ts",
     "check:emoji": "node scripts/check-emoji.mjs",
     "verify": "npm run check:emoji && npm run typecheck && npm run test"
   },

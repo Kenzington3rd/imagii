@@ -12,12 +12,16 @@ export type DenoiseStrength = 'off' | 'light' | 'medium' | 'aggressive' | 'param
 
 /** Phase 3.3: parametric denoise. Maps to ffmpeg's afftdn filter. */
 export interface DenoiseParams {
-  /** Noise floor in dB. afftdn `nf` parameter. -80..-10. */
+  /** Noise floor in dB. afftdn `nf` parameter. Real afftdn range: -80..-20. */
   noiseFloorDb: number
-  /** Reduction in dB. afftdn `nr` parameter. 0..50. */
+  /** Reduction in dB. afftdn `nr` parameter. Real afftdn floor is 0.01; UI uses 1..50. */
   reductionDb: number
-  /** Sensitivity. afftdn `ns` parameter. -2..2 in afftdn; 0 is default. */
-  sensitivity: number
+  /**
+   * Round 18: no longer emitted — afftdn has no `ns` option (every export
+   * that included it failed to parse). Kept optional so presets saved by
+   * older builds still round-trip.
+   */
+  sensitivity?: number
 }
 
 export const DEFAULT_DENOISE_PARAMS: DenoiseParams = {

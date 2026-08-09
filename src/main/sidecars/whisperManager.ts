@@ -28,7 +28,8 @@ import {
   WHISPER_MODEL_MAX_BYTES,
   WHISPER_MODEL_MIN_BYTES,
   WHISPER_MODEL_SHA256,
-  WHISPER_MODEL_URL
+  WHISPER_MODEL_URL,
+  escapeSubtitlesPath
 } from '../../shared/captions'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -222,11 +223,12 @@ async function runTranscribeBody(
       const child = spawn(status.exePath, args, { windowsHide: true })
       activeTranscribe.set(req.jobId, child)
       let stderr = ''
-      let stdout = ''
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
+      // Round 18: progress parsing is per-chunk — the old `stdout +=` here
+      // accumulated the entire transcription output of a multi-hour VOD
+      // without ever reading it back. Pure unbounded memory growth.
       child.stdout.on('data', (chunk: string) => {
-        stdout += chunk
         const m = chunk.match(/(\d+):(\d+):(\d+)[.,](\d+)/g)
         if (m && m.length > 0) {
           onProgress({
@@ -239,6 +241,8 @@ async function runTranscribeBody(
       })
       child.stderr.on('data', (chunk: string) => {
         stderr += chunk
+        // Round 16's 16KB cap, applied to the transcribe path too (round 18).
+        if (stderr.length > 16384) stderr = stderr.slice(-16384)
       })
       child.on('error', (err) => {
         activeTranscribe.delete(req.jobId)
@@ -329,10 +333,13 @@ export async function runBurnIn(
 ): Promise<{ outputPath: string }> {
   onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 5 })
 
-  const escapedSrt = req.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:')
+  // Round 18: full two-level escaping, unquoted. The old single-quoted form
+  // broke on any SRT path containing an apostrophe (source filenames flow
+  // into the SRT name untouched), killing the burn-in with a parse error.
+  const escapedSrt = escapeSubtitlesPath(req.srtPath)
   const style = req.style ?? DEFAULT_CAPTION_STYLE
   const forceStyle = buildForceStyle(style, req.fontSizePct)
-  const filter = `subtitles='${escapedSrt}':force_style='${forceStyle}'`
+  const filter = `subtitles=${escapedSrt}:force_style='${forceStyle}'`
 
   // Phase 3.1: when the renderer asks to burn over a trimmed range, use
   // -ss/-to on the input so the output covers only that span. Same trick
