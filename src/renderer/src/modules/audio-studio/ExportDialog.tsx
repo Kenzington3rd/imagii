@@ -109,7 +109,7 @@ export function ExportDialog(): JSX.Element | null {
         <label className="flex items-center gap-1.5">
           <span className="text-ink-muted text-xs">Format</span>
           <select
-            className="bg-bg-base rounded px-2 py-1"
+            className="bg-bg-base rounded px-2 py-1 disabled:opacity-50"
             value={format}
             onChange={(e) => setFormat(e.target.value as AudioOutputFormat)}
             disabled={Boolean(source.fromVideo && muxBack)}

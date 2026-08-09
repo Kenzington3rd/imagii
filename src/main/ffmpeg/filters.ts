@@ -141,9 +141,17 @@ function colorGradeFilter(g: ColorGrade): string | null {
   return parts.length > 0 ? parts.join(',') : null
 }
 
-function autoZoomFilter(): string {
+function autoZoomFilter(preset: PlatformPreset): string {
   // Subtle 1.05× zoom that pulses gently — purely a streamer aesthetic.
-  return `zoompan=z='1.0+0.05*abs(sin(t*0.6))':d=1:s=hd1080`
+  //
+  // Round 18: two bugs fixed here, both caught by the real-ffmpeg
+  // integration layer. (1) zoompan's expression evaluator has no `t`
+  // variable — the correct name is `time` — so every autoZoom export
+  // failed with an encoder error. (2) `s` was hardcoded to hd1080,
+  // which would have resized portrait (TikTok/Reels) output back to
+  // 1920x1080 landscape. zoompan defaults its output size to hd720
+  // when `s` is omitted, so it must always be set to the preset dims.
+  return `zoompan=z='1.0+0.05*abs(sin(time*0.6))':d=1:s=${preset.width}x${preset.height}`
 }
 
 function hypeShakeFilter(): string {
@@ -202,7 +210,7 @@ export function buildVideoFilter(
     const cg = colorGradeFilter(clip.colorGrade)
     if (cg) parts.push(cg)
   }
-  if (clip.autoZoom) parts.push(autoZoomFilter())
+  if (clip.autoZoom) parts.push(autoZoomFilter(preset))
   for (const overlay of clip.textOverlays) {
     parts.push(drawTextFilter(overlay, preset))
   }

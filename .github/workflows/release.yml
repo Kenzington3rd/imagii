@@ -1,0 +1,59 @@
+# Builds the standalone Windows portable exe and attaches it to a GitHub
+# Release, so the app can be downloaded/shared as a file — no build tools
+# needed by anyone.
+#
+# COST NOTE: this workflow runs ONLY on manual dispatch (never on push/PR),
+# and this repository is public, so runs consume no paid Actions minutes.
+name: Release standalone exe
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.0.0)
+        required: true
+        default: v1.0.0
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (emoji guard + typecheck + unit tests)
+        run: npm run verify
+
+      - name: Build portable exe
+        run: npm run dist
+
+      - name: Create release with exe attached
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: imagii ${{ inputs.tag || github.ref_name }}
+          files: dist/imagii-for-mike.exe
+          body: |
+            Standalone Windows app — no install needed.
+
+            **Download `imagii-for-mike.exe` below**, put it anywhere, and
+            double-click. Windows SmartScreen will warn on first run because
+            the file is unsigned: click **More info → Run anyway**.

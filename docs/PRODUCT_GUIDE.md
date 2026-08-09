@@ -47,7 +47,11 @@ and round-trips through Save / Open and autosave.
    cloud spend. If a feature would cost money to run, it doesn't ship.
 2. **Local-first.** Everything runs on the user's machine. No accounts,
    no telemetry, no upload. FFmpeg and Whisper.cpp run as local
-   sidecars.
+   sidecars. The only network traffic is user-triggered: References
+   searches (DuckDuckGo), the search-result thumbnails those return
+   (loaded over https, no referrer), saving a result to a mood board
+   (caches its thumbnail locally), and the one-click Whisper model
+   download (SHA-256 verified).
 3. **Streamer-shaped.** Features, presets, and defaults target the
    streaming workflow. Generic "image editor" features lose to
    "thumbnail maker" features.

@@ -124,6 +124,10 @@ export function registerCaptionsIpc(): void {
     ): Promise<{ ok: true } | { ok: false; reason: string }> => {
       assertNonEmptyString(params.srcPath, 'srcPath')
       assertNonEmptyString(params.destPath, 'destPath')
+      // Round 18: the write target gets the same no-traversal gate every
+      // other IPC output-path field has — srcPath was confined but destPath
+      // could have been aimed anywhere the app can write.
+      assertSafeAbsolutePath(params.destPath, 'destPath')
       const allowedRoot = path.resolve(captionsOutputDir())
       const resolvedSrc = path.resolve(params.srcPath)
       // path.relative returns a path that starts with `..` if the source

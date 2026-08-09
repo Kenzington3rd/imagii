@@ -65,11 +65,14 @@ corporation, not a hype machine.
 
 ## Color identity
 
-imagii's signature color is **accent purple `#a78bfa`** on a near-black
-ground (`#0b0b0f`). The purple is the brand — it carries primary
-actions, focus states, and the app icon. Don't introduce a competing
-brand color; per-studio accent washes (on the Home cards) are tints,
-not new brand colors.
+imagii's signature palette is **obsidian volcano** (round 19): neon magma
+red `#ff3131` on an obsidian-black ground (`#120c0c`, warm undertone),
+with ember `#fbbf24` as the secondary highlight. The lava accent is the
+brand — it carries primary actions, focus states, and the app icon.
+Don't introduce a competing brand color; per-studio accent washes (on
+the Home cards) are warm-family tints, not new brand colors. The
+canonical values live in `tailwind.config.js` +
+`src/renderer/src/styles/tokens.ts` (see `DESIGN_GUIDE.md`).
 
 ---
 

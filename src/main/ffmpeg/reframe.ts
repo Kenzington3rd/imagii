@@ -104,7 +104,12 @@ export async function runReframe(
   const cropX = computeCropOffset(spec.position, sourceW, cropW)
   const cropY = Math.max(0, even((sourceH - cropH) / 2))
 
-  const filter = `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${spec.outputWidth}:${spec.outputHeight}:flags=lanczos`
+  // Round 18: force the scale target even too — the crop coords already
+  // were, but an odd outputWidth/outputHeight from a future caller would
+  // make yuv420p+libx264 reject the encode (UI hardcodes 1080x1920 today).
+  const outW = Math.max(2, even(spec.outputWidth))
+  const outH = Math.max(2, even(spec.outputHeight))
+  const filter = `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${outW}:${outH}:flags=lanczos`
 
   const args = [
     '-y',

@@ -64,16 +64,14 @@ export function useGlobalUndo(): UseGlobalUndoResult {
     if (!last) return false
     if (last.store === 'image') return useCanvasStore.getState().canUndo()
     if (last.store === 'audio') return useAudioStore.getState().canUndo()
-    // Video store has its own multi-faceted state but no global undo;
-    // treat the most recent change as undoable only if it was canvas or audio.
-    return false
+    return useVideoStore.getState().canUndo()
   })()
 
   const canRedo = (() => {
     if (!last) return false
     if (last.store === 'image') return useCanvasStore.getState().canRedo()
     if (last.store === 'audio') return useAudioStore.getState().canRedo()
-    return false
+    return useVideoStore.getState().canRedo()
   })()
 
   const lastLabel = last ? STORE_LABEL[last.store] : 'no recent change'
@@ -91,6 +89,7 @@ export function useGlobalUndo(): UseGlobalUndoResult {
     try {
       if (last.store === 'image') useCanvasStore.getState().undo()
       else if (last.store === 'audio') useAudioStore.getState().undo()
+      else useVideoStore.getState().undo()
     } finally {
       undoingRef.current = false
     }
@@ -102,6 +101,7 @@ export function useGlobalUndo(): UseGlobalUndoResult {
     try {
       if (last.store === 'image') useCanvasStore.getState().redo()
       else if (last.store === 'audio') useAudioStore.getState().redo()
+      else useVideoStore.getState().redo()
     } finally {
       undoingRef.current = false
     }

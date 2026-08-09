@@ -42,22 +42,31 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
     function loop(): void {
       const analyser = analyserRef.current
       if (!analyser) return
+      // Bars stay frequency-based — they're a spectrum visual, not a level.
       const data = new Uint8Array(analyser.frequencyBinCount)
       analyser.getByteFrequencyData(data)
       const segments = NUM_BARS
       const segLen = Math.floor(data.length / segments)
       const next: number[] = []
-      let maxAmp = 0
       for (let i = 0; i < segments; i++) {
         let sum = 0
         for (let j = 0; j < segLen; j++) sum += data[i * segLen + j] ?? 0
-        const avg = sum / segLen / 255
-        next.push(avg)
-        maxAmp = Math.max(maxAmp, avg)
+        next.push(sum / segLen / 255)
       }
       setLevels(next)
-      const db = maxAmp > 0 ? 20 * Math.log10(maxAmp) : -60
-      setPeakDb(Math.max(-60, db))
+      // Round 18: the dB readout now comes from TIME-domain samples.
+      // getByteFrequencyData bytes are already dB-scaled (min..maxDecibels),
+      // so running them through 20*log10 again double-logged the value —
+      // the old "peak dB" and clip flag never corresponded to real dBFS.
+      const wave = new Float32Array(analyser.fftSize)
+      analyser.getFloatTimeDomainData(wave)
+      let peak = 0
+      for (let i = 0; i < wave.length; i++) {
+        const abs = Math.abs(wave[i] ?? 0)
+        if (abs > peak) peak = abs
+      }
+      const db = peak > 0 ? 20 * Math.log10(peak) : -60
+      setPeakDb(Math.max(-60, Math.min(0, db)))
       rafRef.current = requestAnimationFrame(loop)
     }
 

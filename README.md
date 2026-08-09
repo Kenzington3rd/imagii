@@ -31,10 +31,17 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 
 ### Option 1: Use the prebuilt .exe (easiest)
 
-1. **Get the file.** You should have received either `imagii-for-mike.exe` (~166 MB) on its own, or `for-mike.zip` (~165 MB) containing the .exe plus a quick-start text file.
-2. **If it's a zip**, right-click → **Extract All…** to unzip it anywhere you like.
-3. **Save the .exe anywhere on your computer.** Desktop, `Downloads`, `Documents` — wherever. There's no installer; the file *is* the app.
-4. **Skip to "First launch" below.**
+1. **Get the file.** Download `imagii-for-mike.exe` (~169 MB) from the
+   [Releases page](https://github.com/Kenzington3rd/imagii/releases) —
+   or use a copy someone sent you directly (possibly inside a
+   `for-mike.zip` with a quick-start text file; right-click →
+   **Extract All…** if so).
+2. **Save the .exe anywhere on your computer.** Desktop, `Downloads`, `Documents` — wherever. There's no installer; the file *is* the app.
+3. **Skip to "First launch" below.**
+
+> Maintainer note: a new release is published from the Actions tab →
+> "Release standalone exe" → Run workflow (manual only — it never runs on
+> pushes, and Actions is free on this public repo).
 
 ### Option 2: Build it yourself from source
 

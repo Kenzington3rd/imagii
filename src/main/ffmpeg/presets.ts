@@ -43,8 +43,12 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     videoCodec: 'libx264',
     audioCodec: 'aac',
     pixFmt: 'yuv420p',
-    durationSweetSpot: { min: 15, max: 60 },
-    durationHardLimit: 90,
+    // Round 18: synced with the renderer's PLATFORM_INFO — the round-15
+    // duration updates (Reels 3 min, TikTok 60 min, X Premium 3 h) only
+    // landed in the renderer copy of this table. A cross-table test now
+    // pins the two against each other (presetTablesInSync.test.ts).
+    durationSweetSpot: { min: 15, max: 90 },
+    durationHardLimit: 180,
     aspectRatio: 9 / 16
   },
   tiktok: {
@@ -59,7 +63,7 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     audioCodec: 'aac',
     pixFmt: 'yuv420p',
     durationSweetSpot: { min: 21, max: 34 },
-    durationHardLimit: 600,
+    durationHardLimit: 60 * 60,
     aspectRatio: 9 / 16
   },
   twitter: {
@@ -73,8 +77,8 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     videoCodec: 'libx264',
     audioCodec: 'aac',
     pixFmt: 'yuv420p',
-    durationSweetSpot: { min: 5, max: 90 },
-    durationHardLimit: 140,
+    durationSweetSpot: { min: 5, max: 140 },
+    durationHardLimit: 4 * 60 * 60,
     aspectRatio: 16 / 9
   },
   facebook: {

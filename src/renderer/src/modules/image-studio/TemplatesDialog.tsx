@@ -11,6 +11,7 @@ import {
 import { useCanvasStore } from './state/canvasStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
+import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
 interface TemplatesDialogProps {
   open: boolean
@@ -81,7 +82,7 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
                       aspectRatio: `${t.doc.width} / ${t.doc.height}`,
                       background:
                         t.doc.background === 'transparent'
-                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
                           : t.doc.background
                     }}
                   />

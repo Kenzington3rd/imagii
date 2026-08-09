@@ -250,8 +250,8 @@ export function makeRectLayer(x: number, y: number, w = 200, h = 120): RectLayer
     opacity: 1,
     width: w,
     height: h,
-    fill: 'rgba(167,139,250,0.4)',
-    stroke: '#a78bfa',
+    fill: 'rgba(255,49,49,0.4)',
+    stroke: '#ff3131',
     strokeWidth: 2,
     cornerRadius: 8
   }
@@ -272,8 +272,8 @@ export function makeEllipseLayer(x: number, y: number, rx = 80, ry = 60): Ellips
     opacity: 1,
     radiusX: rx,
     radiusY: ry,
-    fill: 'rgba(96,165,250,0.4)',
-    stroke: '#60a5fa',
+    fill: 'rgba(244,63,94,0.4)',
+    stroke: '#f43f5e',
     strokeWidth: 2
   }
 }
@@ -292,7 +292,7 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
     scaleY: 1,
     opacity: 1,
     points,
-    stroke: '#f472b6',
+    stroke: '#fbbf24',
     strokeWidth: 3,
     closed
   }
@@ -314,6 +314,6 @@ export function makeTextLayer(x: number, y: number, text = 'Text'): TextLayer {
     text,
     fontSize: 32,
     fontFamily: 'Inter, sans-serif',
-    fill: '#0b0b0f'
+    fill: '#120c0c'
   }
 }

@@ -132,7 +132,12 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       activeJobs.set(childKey, child)
       let stderr = ''
       child.stderr.setEncoding('utf8')
-      child.stderr.on('data', (c: string) => (stderr += c))
+      child.stderr.on('data', (c: string) => {
+        stderr += c
+        // Round 18: cap like every other spawn site (round-16 lesson) — a
+        // long many-segment compilation otherwise grows this unboundedly.
+        if (stderr.length > 16384) stderr = stderr.slice(-16384)
+      })
       child.on('error', (err) => {
         activeJobs.delete(childKey)
         reject(err)
@@ -178,7 +183,11 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     activeJobs.set(childKey, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => (stderr += c))
+    child.stderr.on('data', (c: string) => {
+      stderr += c
+      // Round 18: cap like every other spawn site (round-16 lesson).
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
+    })
     child.on('error', (err) => {
       activeJobs.delete(childKey)
       reject(err)
@@ -269,7 +278,11 @@ export async function runPipComposite(
     activeJobs.set(jobId, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => (stderr += c))
+    child.stderr.on('data', (c: string) => {
+      stderr += c
+      // Round 18: cap like every other spawn site (round-16 lesson).
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
+    })
     child.on('error', (err) => {
       activeJobs.delete(jobId)
       reject(err)

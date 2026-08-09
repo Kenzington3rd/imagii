@@ -15,14 +15,22 @@ hard-code chrome colors in `className` — use the token.
 
 | Token | Value | Use |
 |---|---|---|
-| `bg-base` | `#0b0b0f` | App background, deepest layer |
-| `bg-elevated` | `#16161e` | Cards, panels, modals |
-| `bg-hover` | `#20202c` | Hover state for interactive surfaces |
-| `accent` | `#a78bfa` | Primary actions, focus rings, active states |
-| `accent-muted` | `#7c5cf0` | Hover state of accent elements |
-| `ink-base` | `#e5e5ee` | Primary text |
-| `ink-muted` | `#9595a5` | Secondary text, labels |
-| `ink-dim` | `#8b8b9c` | Tertiary text, borders, disabled — bumped 2026-05-20 (round 15) from `#5d5d6e` after a contrast review found the prior value at ~3.04:1 on `bg-base`, below WCAG AA's 4.5:1 minimum. `#8b8b9c` measures ~6.6:1. |
+| `bg-base` | `#120c0c` | App background, deepest layer — obsidian black, warm undertone |
+| `bg-elevated` | `#1c1313` | Cards, panels, modals |
+| `bg-hover` | `#2a1a18` | Hover state for interactive surfaces |
+| `accent` | `#ff3131` | Primary actions, focus rings, active states — neon magma red (5.29:1 on `bg-base`, 4.55:1 on `bg-hover`) |
+| `accent-muted` | `#f52e2e` | Hover state of accent elements |
+| `ink-base` | `#ece4e2` | Primary text (15.5:1) |
+| `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
+| `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). |
+
+The palette (round 19, "obsidian volcano") lives in TWO files by
+necessity: `tailwind.config.js` (for classNames) and
+`src/renderer/src/styles/tokens.ts` (for JS contexts — Konva strokes,
+wavesurfer options, inline SVG, the toaster). Never write a raw chrome
+hex anywhere else; import from `tokens.ts`.
+`tests/unit/designTokensInSync.test.ts` fails the build if the two files
+drift, and also pins the contrast claims above. |
 
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
 weights 400/500/600.

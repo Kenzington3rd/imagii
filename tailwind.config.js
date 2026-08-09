@@ -1,27 +1,28 @@
 /** @type {import('tailwindcss').Config} */
+// Round 19: obsidian-volcano palette. These values MIRROR
+// src/renderer/src/styles/tokens.ts (this file can't import TS);
+// tests/unit/designTokensInSync.test.ts fails the build if they drift.
 export default {
   content: ['./src/renderer/index.html', './src/renderer/src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
         bg: {
-          base: '#0b0b0f',
-          elevated: '#16161e',
-          hover: '#20202c'
+          base: '#120c0c',
+          elevated: '#1c1313',
+          hover: '#2a1a18'
         },
         accent: {
-          DEFAULT: '#a78bfa',
-          muted: '#7c5cf0'
+          DEFAULT: '#ff3131',
+          muted: '#f52e2e'
         },
         ink: {
-          base: '#e5e5ee',
-          muted: '#9595a5',
-          // B9 fix (round 15): #5d5d6e on #0b0b0f measures ~3.04:1, below WCAG
-          // AA's 4.5:1 minimum for body text. #8b8b9c hits ~6.6:1 (verified
-          // in https://webaim.org/resources/contrastchecker/ — 0b0b0f vs
-          // 8b8b9c). The token still reads as "dim/secondary" against the
-          // brighter ink.base #e5e5ee.
-          dim: '#8b8b9c'
+          base: '#ece4e2',
+          muted: '#a59a97',
+          // Contrast note (carries the round-15 B9 lesson forward): dim
+          // text must clear WCAG AA 4.5:1 on BOTH bg-base and bg-elevated.
+          // #9c8f8b measures ~6.2:1 on #120c0c and ~5.8:1 on #1c1313.
+          dim: '#9c8f8b'
         }
       },
       fontFamily: {

@@ -13,6 +13,27 @@ async function ensureDirs(): Promise<void> {
 }
 
 /**
+ * Round 18: serialize every read-modify-write against a board file.
+ * ipcMain.handle invocations are NOT serialized per channel, so two quick
+ * "Save" clicks fired two concurrent addToCollection calls that both read
+ * the same pre-write JSON — the second write clobbered the first and one
+ * item silently vanished (its success toast still showed). Chain each
+ * mutation on the previous one, keyed by collection id.
+ */
+const collectionLocks = new Map<string, Promise<unknown>>()
+
+function withCollectionLock<T>(collectionId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = collectionLocks.get(collectionId) ?? Promise.resolve()
+  const next = prev.then(fn, fn)
+  collectionLocks.set(collectionId, next)
+  // Drop the map entry once the chain drains so the map can't grow forever.
+  void next.finally(() => {
+    if (collectionLocks.get(collectionId) === next) collectionLocks.delete(collectionId)
+  })
+  return next
+}
+
+/**
  * INIT-C (round 15): renderer-supplied `id` strings reach path.join() —
  * gate with the nanoid alphabet so `../` can't escape the moodboards dir.
  */
@@ -94,36 +115,40 @@ export async function createCollection(name: string): Promise<MoodBoardCollectio
 
 export async function deleteCollection(id: string): Promise<void> {
   assertSafeId(id, 'deleteCollection id')
-  const file = path.join(moodboardsDir(), `${id}.json`)
-  if (!existsSync(file)) return
-  // Best-effort: clean up every cached thumbnail this board owns before
-  // unlinking the JSON, mirroring removeFromCollection's per-item cleanup.
-  // A corrupt/missing JSON yields a null collection — the JSON unlink
-  // still proceeds.
-  const collection = await readCollection(file)
-  if (collection) {
-    for (const item of collection.items) {
-      if (item.cachedThumbPath && existsSync(item.cachedThumbPath)) {
-        try {
-          await unlink(item.cachedThumbPath)
-        } catch {
-          /* ignore */
+  return withCollectionLock(id, async () => {
+    const file = path.join(moodboardsDir(), `${id}.json`)
+    if (!existsSync(file)) return
+    // Best-effort: clean up every cached thumbnail this board owns before
+    // unlinking the JSON, mirroring removeFromCollection's per-item cleanup.
+    // A corrupt/missing JSON yields a null collection — the JSON unlink
+    // still proceeds.
+    const collection = await readCollection(file)
+    if (collection) {
+      for (const item of collection.items) {
+        if (item.cachedThumbPath && existsSync(item.cachedThumbPath)) {
+          try {
+            await unlink(item.cachedThumbPath)
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
-  }
-  await unlink(file)
+    await unlink(file)
+  })
 }
 
 export async function renameCollection(id: string, name: string): Promise<MoodBoardCollection | null> {
   assertSafeId(id, 'renameCollection id')
-  const file = path.join(moodboardsDir(), `${id}.json`)
-  if (!existsSync(file)) return null
-  const collection = await readCollection(file)
-  if (!collection) return null
-  collection.name = name.trim() || collection.name
-  await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
-  return collection
+  return withCollectionLock(id, async () => {
+    const file = path.join(moodboardsDir(), `${id}.json`)
+    if (!existsSync(file)) return null
+    const collection = await readCollection(file)
+    if (!collection) return null
+    collection.name = name.trim() || collection.name
+    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    return collection
+  })
 }
 
 async function cacheThumb(thumbnailUrl: string): Promise<string | undefined> {
@@ -145,25 +170,27 @@ export async function addToCollection(
   result: SearchResult
 ): Promise<MoodBoardCollection | null> {
   assertSafeId(collectionId, 'addToCollection collectionId')
-  const file = path.join(moodboardsDir(), `${collectionId}.json`)
-  if (!existsSync(file)) return null
-  const collection = await readCollection(file)
-  if (!collection) return null
-  if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return collection
-  const cachedThumbPath = await cacheThumb(result.thumbnail)
-  const item: MoodBoardItem = {
-    id: nanoid(10),
-    collectionId,
-    thumbnail: result.thumbnail,
-    fullUrl: result.fullUrl,
-    source: result.source,
-    title: result.title,
-    cachedThumbPath,
-    addedAt: Date.now()
-  }
-  collection.items.push(item)
-  await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
-  return collection
+  return withCollectionLock(collectionId, async () => {
+    const file = path.join(moodboardsDir(), `${collectionId}.json`)
+    if (!existsSync(file)) return null
+    const collection = await readCollection(file)
+    if (!collection) return null
+    if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return collection
+    const cachedThumbPath = await cacheThumb(result.thumbnail)
+    const item: MoodBoardItem = {
+      id: nanoid(10),
+      collectionId,
+      thumbnail: result.thumbnail,
+      fullUrl: result.fullUrl,
+      source: result.source,
+      title: result.title,
+      cachedThumbPath,
+      addedAt: Date.now()
+    }
+    collection.items.push(item)
+    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    return collection
+  })
 }
 
 export async function removeFromCollection(
@@ -172,21 +199,23 @@ export async function removeFromCollection(
 ): Promise<MoodBoardCollection | null> {
   assertSafeId(collectionId, 'removeFromCollection collectionId')
   assertSafeId(itemId, 'removeFromCollection itemId')
-  const file = path.join(moodboardsDir(), `${collectionId}.json`)
-  if (!existsSync(file)) return null
-  const collection = await readCollection(file)
-  if (!collection) return null
-  const removed = collection.items.find((i) => i.id === itemId)
-  collection.items = collection.items.filter((i) => i.id !== itemId)
-  if (removed?.cachedThumbPath && existsSync(removed.cachedThumbPath)) {
-    try {
-      await unlink(removed.cachedThumbPath)
-    } catch {
-      /* ignore */
+  return withCollectionLock(collectionId, async () => {
+    const file = path.join(moodboardsDir(), `${collectionId}.json`)
+    if (!existsSync(file)) return null
+    const collection = await readCollection(file)
+    if (!collection) return null
+    const removed = collection.items.find((i) => i.id === itemId)
+    collection.items = collection.items.filter((i) => i.id !== itemId)
+    if (removed?.cachedThumbPath && existsSync(removed.cachedThumbPath)) {
+      try {
+        await unlink(removed.cachedThumbPath)
+      } catch {
+        /* ignore */
+      }
     }
-  }
-  await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
-  return collection
+    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    return collection
+  })
 }
 
 export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<void> {

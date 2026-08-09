@@ -101,28 +101,28 @@ export function Home(): JSX.Element {
           title="Video Studio"
           description="Trim and clip video, then export for TikTok, Reels, YouTube, X, or Facebook."
           icon={<Icon name="video" size={26} />}
-          accent="rgba(244, 114, 182, 0.18)"
+          accent="rgba(255, 49, 49, 0.18)"
         />
         <NavCard
           to="/audio"
           title="Audio Studio"
           description="Clean noise, level volume, and polish audio to podcast quality."
           icon={<Icon name="audio" size={26} />}
-          accent="rgba(96, 165, 250, 0.18)"
+          accent="rgba(168, 162, 158, 0.18)"
         />
         <NavCard
           to="/image"
           title="Stream Graphics"
           description="Templates for thumbnails, Twitch overlays, banners, and emotes — start from a preset or import your own image."
           icon={<Icon name="image" size={26} />}
-          accent="rgba(52, 211, 153, 0.18)"
+          accent="rgba(220, 38, 38, 0.18)"
         />
         <NavCard
           to="/references"
           title="References"
           description="Search inspiration, save mood boards, and drop them onto the canvas as reference layers."
           icon={<Icon name="sparkle" size={26} />}
-          accent="rgba(251, 191, 36, 0.18)"
+          accent="rgba(168, 162, 158, 0.18)"
         />
       </div>
 

@@ -74,7 +74,7 @@ export function LevelsPanel(): JSX.Element {
               patchChain({ loudnormTargetLufs: Number(e.target.value) || -16 })
             }
             onClick={(e) => e.stopPropagation()}
-            className="bg-bg-base rounded px-1 py-0.5 w-16 text-center font-mono"
+            className="bg-bg-base rounded px-1 py-0.5 w-16 text-center font-mono disabled:opacity-50"
             disabled={!chain.loudnorm}
             aria-label="Loudness target in LUFS"
           />{' '}

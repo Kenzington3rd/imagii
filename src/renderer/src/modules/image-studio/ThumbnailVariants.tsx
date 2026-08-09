@@ -225,14 +225,18 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                           )
                         }
                       >
-                        save
+                        Save
                       </button>
                     </div>
                   </div>
                 ))}
               </div>
               <div className="flex items-center gap-2 text-sm">
-                <button className="btn-ghost px-3 py-1.5" onClick={generate} disabled={busy}>
+                <button
+                  className="btn-ghost px-3 py-1.5 disabled:opacity-50"
+                  onClick={generate}
+                  disabled={busy}
+                >
                   {busy ? 'Generating…' : 'Regenerate'}
                 </button>
                 <button className="btn-primary px-4 py-1.5 ml-auto" onClick={downloadAll}>

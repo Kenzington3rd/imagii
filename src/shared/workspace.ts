@@ -54,6 +54,18 @@ export interface RecordingSpec {
   convertToMp4: boolean
 }
 
+/**
+ * Round 18 H1: options for `recording:finalize` in the streaming save
+ * protocol (begin → appendChunk* → finalize). Same fields the legacy
+ * one-shot RecordingSpec carries, minus the giant webmBytes payload —
+ * bytes travel per-chunk via `recording:appendChunk` instead.
+ */
+export interface RecordingFinalizeSpec {
+  filename: string
+  durationMs?: number
+  convertToMp4: boolean
+}
+
 export interface RecordingResult {
   outputPath: string
   sizeBytes: number

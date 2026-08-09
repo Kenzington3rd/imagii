@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
+import { useNavigate } from 'react-router-dom'
 import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { useRecentFiles } from '../../hooks/useRecentFiles'
+import { useVideoStore } from '../video-studio/store/videoStore'
 import type { RecordingSource } from '@shared/workspace'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
@@ -44,8 +47,23 @@ export function RecordStudio(): JSX.Element {
   // M6 fix (round 15): surface webm→mp4 progress + give the user an abort button.
   const [savePercent, setSavePercent] = useState(0)
 
+  // Round 18 D: record → clip handoff. The saved file is pushed into the
+  // shared recentFiles.video bucket (same one Video Studio's Importer
+  // reads) and "Edit in Video Studio" mirrors VideoStudio.cleanAudioFlow:
+  // load into the studio's store, then navigate.
+  const navigate = useNavigate()
+  const loadVideoSource = useVideoStore((s) => s.loadSource)
+  const { push: pushRecentVideo } = useRecentFiles('video')
+
   const recorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
+  // Round 18 A: streaming save. `sessionIdRef` names the main-process
+  // write-stream session; `appendQueueRef` is a strict promise chain that
+  // serializes appendChunk sends so bytes land in capture order;
+  // `streamErrorRef` latches the first append failure so we stop early
+  // and abandon instead of recording minutes of data going nowhere.
+  const sessionIdRef = useRef<string | null>(null)
+  const appendQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const streamErrorRef = useRef<Error | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const camStreamRef = useRef<MediaStream | null>(null)
   // Raw screen capture stream from desktopCapturer. Tracked separately
@@ -90,6 +108,20 @@ export function RecordStudio(): JSX.Element {
   useEffect(() => {
     void window.api.settings.set('record.webcamCorner', webcamCorner)
   }, [webcamCorner])
+
+  // Round 18 C: the `?` HotkeyOverlay has documented "Esc: Stop recording"
+  // for /record since round 15 but nothing ever wired it. Listener exists
+  // only while recording and is removed on phase change and unmount.
+  useEffect(() => {
+    if (phase !== 'recording') return
+    function onKey(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      stopRecording()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [phase])
 
   async function refreshDevices(): Promise<void> {
     try {
@@ -226,14 +258,44 @@ export function RecordStudio(): JSX.Element {
       const mimePref = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
       const mime = mimePref.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
       const recorder = new MediaRecorder(combined, mime ? { mimeType: mime } : undefined)
-      chunksRef.current = []
+
+      // Round 18 A: open the main-process streaming session BEFORE the
+      // recorder starts so the first chunk always has somewhere to go.
+      // Chunks used to pile up in renderer memory (chunksRef) and cross
+      // the IPC bridge as one recording-sized ArrayBuffer at stop time —
+      // an OOM/freeze risk on long recordings. Now each ~1 s timeslice
+      // chunk is appended to a temp .webm as it arrives.
+      const { id: sessionId } = await window.api.recording.begin()
+      sessionIdRef.current = sessionId
+      appendQueueRef.current = Promise.resolve()
+      streamErrorRef.current = null
+
       recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data)
+        if (!e.data || e.data.size === 0) return
+        if (streamErrorRef.current) return
+        // Strict promise chain: each link converts its blob and awaits its
+        // appendChunk only after the previous link settled, so append order
+        // (and therefore byte order in the temp file) matches capture order.
+        appendQueueRef.current = appendQueueRef.current
+          .then(async () => {
+            if (streamErrorRef.current) return
+            const buf = await e.data.arrayBuffer()
+            await window.api.recording.appendChunk(sessionId, buf)
+          })
+          .catch((err) => {
+            if (streamErrorRef.current) return
+            streamErrorRef.current =
+              err instanceof Error ? err : new Error(String(err))
+            // Stop immediately rather than let the user record minutes of
+            // data going nowhere. onstop → finalizeRecording sees the
+            // latched error, abandons the session, and shows the toast.
+            stopRecording()
+          })
       }
       recorder.onstop = () => {
         void finalizeRecording()
       }
-      recorder.start(500)
+      recorder.start(1000)
       recorderRef.current = recorder
       startTimeRef.current = Date.now()
       elapsedTimerRef.current = window.setInterval(() => {
@@ -247,6 +309,13 @@ export function RecordStudio(): JSX.Element {
       // loop would leak until navigation. Release everything before the
       // toast — every startRecording exit path must end ownership.
       stopAllStreams()
+      // Round 18 A: if begin() succeeded but start() then threw, reap the
+      // just-opened session's empty temp file. abandon is idempotent.
+      const sid = sessionIdRef.current
+      if (sid) {
+        sessionIdRef.current = null
+        void window.api.recording.abandon(sid).catch(() => undefined)
+      }
       toast.error(err instanceof Error ? err.message : 'Could not start recording')
     }
   }
@@ -259,20 +328,43 @@ export function RecordStudio(): JSX.Element {
     setPhase('saving')
   }
 
+  // Round 18 D: mirror VideoStudio.cleanAudioFlow's cross-studio bridge —
+  // load the path into the target studio's store first, then navigate.
+  async function editInVideoStudio(outputPath: string): Promise<void> {
+    try {
+      await loadVideoSource(outputPath)
+      navigate('/video')
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Could not open in Video Studio'
+      )
+    }
+  }
+
   async function finalizeRecording(): Promise<void> {
     setSavePercent(0)
+    const sessionId = sessionIdRef.current
+    const durationMs = Date.now() - startTimeRef.current
+    stopAllStreams()
     try {
-      const blob = new Blob(chunksRef.current, { type: 'video/webm' })
-      const buffer = await blob.arrayBuffer()
-      const durationMs = Date.now() - startTimeRef.current
-      stopAllStreams()
-      const result = await window.api.recording.save({
-        webmBytes: buffer,
+      // All chunks were queued by ondataavailable before onstop fired, so
+      // awaiting the queue's tail awaits every pending appendChunk. Each
+      // link routes its own failure into streamErrorRef (never rethrows),
+      // so this await cannot itself reject.
+      await appendQueueRef.current
+      if (streamErrorRef.current) throw streamErrorRef.current
+      if (!sessionId) throw new Error('Recording session was never started')
+      const result = await window.api.recording.finalize(sessionId, {
         filename: `recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${convertToMp4 ? 'mp4' : 'webm'}`,
         durationMs,
         convertToMp4
       })
+      // finalize reaped the session (success or not) — never abandon it too.
+      sessionIdRef.current = null
       if (result) {
+        // Round 18 D: recordings join the same recent-videos bucket the
+        // Video Studio Importer reads, closing the record → clip loop.
+        void pushRecentVideo(result.outputPath)
         toast.success(
           <span>
             Saved {(result.sizeBytes / 1e6).toFixed(1)} MB.{' '}
@@ -285,6 +377,14 @@ export function RecordStudio(): JSX.Element {
               }}
             >
               Show
+            </button>{' '}
+            <button
+              className="underline"
+              onClick={() => {
+                void editInVideoStudio(result.outputPath)
+              }}
+            >
+              Edit in Video Studio
             </button>
           </span>
         )
@@ -293,6 +393,13 @@ export function RecordStudio(): JSX.Element {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
+      // Failure path: reap the partial temp file. Reached when an append
+      // failed mid-recording or finalize itself threw; in the latter case
+      // main already deleted the session and abandon is a false no-op.
+      if (sessionId) {
+        sessionIdRef.current = null
+        void window.api.recording.abandon(sessionId).catch(() => undefined)
+      }
     } finally {
       setElapsed(0)
       setSavePercent(0)
@@ -311,7 +418,28 @@ export function RecordStudio(): JSX.Element {
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
       <header className="flex items-center justify-between">
         <div>
-          <HomeLink />
+          {/* Round 18 B: leaving mid-recording used to silently kill the
+              media tracks (unmount → stopAllStreams) and lose the take.
+              Capture-phase intercept swallows the router Link's click
+              before it can navigate; confirming stops the recorder and
+              runs the NORMAL save flow (dialog + convert) right here, so
+              the take is kept — the user can leave once it's saved.
+              Wrapping locally keeps the shared HomeLink untouched for the
+              other studios. */}
+          <span
+            onClickCapture={(e) => {
+              if (phase !== 'recording') return
+              e.preventDefault()
+              e.stopPropagation()
+              const stopFirst = window.confirm(
+                'A recording is in progress. Stop and save it before leaving? ' +
+                  '(Cancel keeps recording.)'
+              )
+              if (stopFirst) stopRecording()
+            }}
+          >
+            <HomeLink />
+          </span>
           <h1 className="text-2xl font-semibold mt-1">Record</h1>
           <p className="text-xs text-ink-muted mt-1">
             Capture a screen, window, or webcam — saved locally as MP4 (or WebM).
@@ -384,6 +512,7 @@ export function RecordStudio(): JSX.Element {
               {includeMic && mics.length > 0 ? (
                 <select
                   className="bg-bg-base rounded px-2 py-1 text-sm"
+                  aria-label="Microphone"
                   value={selectedMicId ?? mics[0]?.deviceId ?? ''}
                   onChange={(e) => setSelectedMicId(e.target.value)}
                 >
@@ -413,6 +542,7 @@ export function RecordStudio(): JSX.Element {
               {showCam && cams.length > 0 ? (
                 <select
                   className="bg-bg-base rounded px-2 py-1 text-sm"
+                  aria-label="Webcam"
                   value={selectedCamId ?? cams[0]?.deviceId ?? ''}
                   onChange={(e) => setSelectedCamId(e.target.value)}
                 >

@@ -6,6 +6,9 @@ import type { Clip, ExportJobSpec, PlatformId, WatermarkSpec } from '@shared/cli
 import { sanitizeFilename } from '@shared/filename'
 import { ALL_PLATFORM_IDS } from './presets'
 import { useVideoStore } from './store/videoStore'
+import { findSafeZoneIssues } from './ExportPanel'
+import type { SafeZoneRow } from './ExportPanel'
+import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 
@@ -32,10 +35,36 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   // INIT-I (round 16): confirm before cancelling. Clip Kit always has at
   // least 5 platform exports + 3 thumbs queued, so we always confirm here.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // Same Phase 3.4 pre-flight as ExportPanel: if the kit's platform mix
+  // has safe-zone collisions, warn first and defer the run to the modal's
+  // "Continue anyway".
+  const [pendingSafeZoneRows, setPendingSafeZoneRows] = useState<SafeZoneRow[] | null>(null)
 
   if (!source) return null
 
   const clipDuration = Math.max(0.1, clip.endSec - clip.startSec)
+
+  function startKit(): void {
+    if (!source) return
+    // Mirror the queue below: on vertical sources the YouTube slot exports
+    // reels geometry (INIT-B), so check the effective preset set.
+    const isVertical = source.probe.height > source.probe.width
+    const effectivePresets: PlatformId[] = Array.from(
+      new Set(
+        ALL_PLATFORM_IDS.map((p) => (p === 'youtube' && isVertical ? 'reels' : p))
+      )
+    )
+    const issues = findSafeZoneIssues(
+      [{ ...clip, selectedPresets: effectivePresets }],
+      source.probe.width,
+      source.probe.height
+    )
+    if (issues.length > 0) {
+      setPendingSafeZoneRows(issues)
+      return
+    }
+    void runKit()
+  }
 
   async function runKit(): Promise<void> {
     if (!source) return
@@ -138,7 +167,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   return (
     <span className="inline-flex items-center gap-1">
       <button
-        onClick={runKit}
+        onClick={startKit}
         disabled={running}
         title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
         className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-50 inline-flex items-center gap-1.5"
@@ -158,6 +187,15 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           Cancel
         </button>
       ) : null}
+      <SafeZoneWarningModal
+        open={pendingSafeZoneRows !== null}
+        affectedClips={pendingSafeZoneRows ?? []}
+        onCancel={() => setPendingSafeZoneRows(null)}
+        onContinue={() => {
+          setPendingSafeZoneRows(null)
+          void runKit()
+        }}
+      />
       <Modal
         open={showCancelConfirm}
         onClose={() => setShowCancelConfirm(false)}

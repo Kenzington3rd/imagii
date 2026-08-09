@@ -173,3 +173,20 @@ export const WHISPER_MODEL_MAX_BYTES = 200 * 1024 * 1024
  */
 export const WHISPER_MODEL_SHA256 =
   'a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002'
+
+/**
+ * Round 18: escape a filesystem path for use as the UNQUOTED value of
+ * `subtitles=` in an ffmpeg filter graph. The path passes through TWO
+ * parsers — the filtergraph parser (splits on , ; and honors '…'/\x) and
+ * then the filter-option parser (splits on : and honors \x) — so every
+ * special character needs two rounds of backslash-escaping. The prior
+ * single-quote-wrapping approach broke on any filename containing an
+ * apostrophe ("Sam's Highlight.mp4"-derived SRTs failed to burn in);
+ * verified against real ffmpeg for apostrophes, spaces, commas,
+ * semicolons, brackets, and Windows drive colons.
+ */
+export function escapeSubtitlesPath(p: string): string {
+  const normalized = p.replace(/\\/g, '/')
+  const optionLevel = normalized.replace(/([\\':,;[\]])/g, '\\$1')
+  return optionLevel.replace(/([\\':,;[\] ])/g, '\\$1')
+}

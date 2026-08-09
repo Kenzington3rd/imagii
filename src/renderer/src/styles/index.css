@@ -26,7 +26,7 @@
 
 @layer components {
   .btn-primary {
-    @apply px-5 py-2.5 rounded-md bg-accent text-bg-base font-medium hover:bg-accent-muted transition-colors focus:outline-none focus:ring-2 focus:ring-accent;
+    @apply px-5 py-2.5 rounded-md bg-accent text-bg-base font-medium hover:bg-accent-muted transition-all focus:outline-none focus:ring-2 focus:ring-accent shadow-[0_0_14px_rgba(255,49,49,0.25)] hover:shadow-[0_0_20px_rgba(255,49,49,0.4)];
   }
 
   .btn-ghost {

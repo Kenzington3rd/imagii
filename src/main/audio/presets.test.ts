@@ -75,4 +75,33 @@ describe('audio presets store (round 17 phase-6 coverage)', () => {
     const list = await m.listPresets()
     expect(list.map((p) => p.name)).toEqual(['Alpha', 'Zeta'])
   })
+
+  // Round 18: valid-JSON-wrong-shape preset files used to reach `.sort()`
+  // and throw (`a.name.localeCompare` on undefined) — the round-14
+  // customPresets lesson, finally mirrored here.
+  it('listPresets skips structurally-invalid preset files instead of crashing', async () => {
+    const m = await loadModule()
+    await m.savePreset('Zeta', DEFAULT_CHAIN_SPEC)
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const dir = path.join(TMP, 'audio-presets')
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, 'corrupt-1.json'), '{}', 'utf8')
+    await writeFile(path.join(dir, 'corrupt-2.json'), '{"name":123}', 'utf8')
+    await writeFile(path.join(dir, 'corrupt-3.json'), '[1,2,3]', 'utf8')
+    await writeFile(path.join(dir, 'corrupt-4.json'), 'not json at all', 'utf8')
+    const list = await m.listPresets()
+    expect(list.map((p) => p.name)).toEqual(['Zeta'])
+  })
+
+  it('parseChainPreset normalizes a well-formed preset and rejects bad shapes', async () => {
+    const m = await loadModule()
+    const good = m.parseChainPreset(
+      JSON.stringify({ id: 'abc', name: 'Mine', chain: DEFAULT_CHAIN_SPEC, createdAt: 5 })
+    )
+    expect(good?.name).toBe('Mine')
+    expect(good?.createdAt).toBe(5)
+    expect(m.parseChainPreset(JSON.stringify({ id: 'abc', chain: DEFAULT_CHAIN_SPEC }))).toBeNull()
+    expect(m.parseChainPreset(JSON.stringify({ id: '', name: 'x', chain: {} }))).toBeNull()
+    expect(m.parseChainPreset('null')).toBeNull()
+  })
 })

@@ -111,7 +111,7 @@ export function Player(): JSX.Element | null {
 
   return (
     <div
-      className="flex flex-col gap-3 outline-none"
+      className="flex flex-col gap-3 outline-none focus:ring-2 focus:ring-accent"
       tabIndex={0}
       onKeyDown={onKeyDown}
     >

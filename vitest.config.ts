@@ -9,7 +9,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // tests/unit hosts cross-tree tests (e.g. main vs renderer preset-table
+    // sync) that can't live inside either tsconfig project's file set.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tests/unit/**/*.test.ts'],
     globals: false
   }
 })

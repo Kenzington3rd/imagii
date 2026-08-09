@@ -11,6 +11,7 @@ import {
 } from './assetCatalog'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
+import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
 /**
  * Asset Library tab. Curated CC0 / imagii-authored assets that the user
@@ -77,7 +78,7 @@ export function AssetLibraryPanel(): JSX.Element {
                       aspectRatio: `${asset.doc.width} / ${asset.doc.height}`,
                       background:
                         asset.doc.background === 'transparent'
-                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
                           : asset.doc.background
                     }}
                   />
@@ -86,7 +87,7 @@ export function AssetLibraryPanel(): JSX.Element {
                   <div className="text-xs text-ink-dim mt-1 font-mono">
                     {asset.doc.width} × {asset.doc.height}
                   </div>
-                  <div className="text-[10px] text-ink-dim mt-1 italic">{asset.license}</div>
+                  <div className="text-xs text-ink-dim mt-1 italic">{asset.license}</div>
                 </button>
               ))}
             </div>

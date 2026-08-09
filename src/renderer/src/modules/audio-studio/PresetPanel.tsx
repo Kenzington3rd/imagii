@@ -11,8 +11,14 @@ export function PresetPanel(): JSX.Element {
   const [name, setName] = useState('')
 
   async function refresh(): Promise<void> {
-    const list = await window.api.audio.listPresets()
-    setPresets(list)
+    // Round 18: swallow-and-report instead of letting a rejection escape the
+    // unawaited effect call below as an unhandled promise rejection.
+    try {
+      const list = await window.api.audio.listPresets()
+      setPresets(list)
+    } catch {
+      toast.error('Could not load saved presets')
+    }
   }
 
   useEffect(() => {

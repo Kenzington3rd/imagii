@@ -104,9 +104,18 @@ export function ClipList(): JSX.Element {
               </button>
               {clips.length > 1 ? (
                 <button
-                  onClick={() => removeClip(clip.id)}
+                  onClick={() => {
+                    // UX round 18: destructive — confirm before removing.
+                    // (Undo can bring it back, but a confirm still beats a
+                    // surprise; same pattern as CustomPresetManager.)
+                    if (!confirm(`Remove clip "${clip.name}"?`)) return
+                    removeClip(clip.id)
+                  }}
                   className="text-xs text-ink-dim hover:text-rose-300 px-2"
                   title="Remove clip"
+                  // UX round 18: the ✕ glyph would otherwise win the
+                  // accessible-name computation over the title attribute.
+                  aria-label="Remove clip"
                 >
                   ✕
                 </button>

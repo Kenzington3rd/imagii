@@ -12,6 +12,7 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
 function cloneDoc<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj)) as T
@@ -193,7 +194,7 @@ export function ImportPanel(): JSX.Element {
                       aspectRatio: `${t.doc.width} / ${t.doc.height}`,
                       background:
                         t.doc.background === 'transparent'
-                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
                           : t.doc.background
                     }}
                   />

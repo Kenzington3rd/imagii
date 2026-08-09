@@ -162,18 +162,41 @@ export async function runAudioExport(
     // attenuates the secondary; double-attenuating with amix weights 1 0.7
     // made the secondary inaudible during quiet primary passages too. Use
     // even weights and let the sidechain do its job.
+    // Round 18: normalize the primary to the same 48 kHz stereo the
+    // secondary is forced to — the round-15 M5 fix only covered the
+    // secondary side, leaving a 44.1 kHz mono mic to hit amix mismatched.
+    const primaryNormalize = 'aresample=48000,aformat=channel_layouts=stereo'
+    // Round 18: a filtergraph label can only be consumed ONCE. The prior
+    // ducking graph fed [primary] to sidechaincompress AND amix, which
+    // ffmpeg rejects outright ("Invalid stream specifier: primary") — every
+    // duck-under-primary export failed. asplit the primary: one copy keys
+    // the sidechain, the other carries the audible mix. Caught by the
+    // real-ffmpeg integration layer.
+    // Round 18: amix's default normalization scales each input by 1/N, so
+    // two tracks match-loudnessed to the target mixed ~3 LU BELOW it
+    // (measured: two -16 LUFS sources → -19 LUFS mix). When the user asked
+    // for a loudness target, restore it with a single-pass loudnorm on the
+    // mix bus. Manual-gain mode is left un-normalized on purpose — the
+    // user is gain-staging by hand there.
+    const postMix =
+      matchLoudness || primaryAlreadyLoudnormed
+        ? `;[premix]loudnorm=I=${target}:TP=-1.5:LRA=11[mix]`
+        : ''
+    const mixLabel = postMix ? '[premix]' : '[mix]'
     const filterGraph = ducking
-      ? `[0:a]${primaryStage}[primary];` +
+      ? `[0:a]${primaryStage},${primaryNormalize},asplit=2[primary][primary_sc];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
-        `[secondary_pre][primary]sidechaincompress=` +
+        `[secondary_pre][primary_sc]sidechaincompress=` +
         `threshold=${thresholdLinear.toFixed(4)}:` +
         `ratio=${dp.ratio}:` +
         `attack=${dp.attackMs}:` +
         `release=${dp.releaseMs}[secondary_ducked];` +
-        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
-      : `[0:a]${primaryStage}[primary];` +
+        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'${mixLabel}` +
+        postMix
+      : `[0:a]${primaryStage},${primaryNormalize}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +
-        `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'[mix]`
+        `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'${mixLabel}` +
+        postMix
     args.push('-filter_complex', filterGraph, '-map', '[mix]')
   } else {
     args.push('-af', finalChain.filterPass2)
