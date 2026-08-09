@@ -21,6 +21,7 @@ import type {
   ChainPreset,
   RecordingSource,
   RecordingSpec,
+  RecordingFinalizeSpec,
   RecordingResult
 } from './workspace'
 import type { CustomPreset } from './customPresets'
@@ -221,6 +222,15 @@ export interface ImagiiApi {
   recording: {
     listSources(): Promise<RecordingSource[]>
     save(spec: RecordingSpec): Promise<RecordingResult | null>
+    // Round 18 H1: streaming save protocol. begin opens a temp-file write
+    // stream in main; appendChunk streams each MediaRecorder chunk as it
+    // arrives (call order = byte order); finalize closes the stream and
+    // runs the same dialog + convert/copy flow as save; abandon reaps a
+    // partial temp file on failure/discard paths.
+    begin(): Promise<{ id: string }>
+    appendChunk(id: string, chunk: ArrayBuffer): Promise<void>
+    finalize(id: string, spec: RecordingFinalizeSpec): Promise<RecordingResult | null>
+    abandon(id: string): Promise<boolean>
     // M6 fix (round 15): expose conversion progress + cancel to the renderer.
     cancelSave(): Promise<boolean>
     onProgress(

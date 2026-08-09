@@ -14,7 +14,11 @@ import type {
   TranscribeRequest,
   BurnInRequest
 } from '../shared/captions'
-import type { ImagiiProject, RecordingSpec } from '../shared/workspace'
+import type {
+  ImagiiProject,
+  RecordingFinalizeSpec,
+  RecordingSpec
+} from '../shared/workspace'
 
 const api: ImagiiApi = {
   settings: {
@@ -163,6 +167,14 @@ const api: ImagiiApi = {
   recording: {
     listSources: () => ipcRenderer.invoke('recording:listSources'),
     save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec),
+    // Round 18 H1: streaming save protocol — chunks cross the bridge one
+    // at a time instead of as one recording-sized ArrayBuffer.
+    begin: () => ipcRenderer.invoke('recording:begin'),
+    appendChunk: (id: string, chunk: ArrayBuffer) =>
+      ipcRenderer.invoke('recording:appendChunk', id, chunk),
+    finalize: (id: string, spec: RecordingFinalizeSpec) =>
+      ipcRenderer.invoke('recording:finalize', id, spec),
+    abandon: (id: string) => ipcRenderer.invoke('recording:abandon', id),
     // M6 fix (round 15): renderer can show conversion progress and abort.
     cancelSave: () => ipcRenderer.invoke('recording:cancelSave'),
     onProgress: (handler: (info: { percent: number; message?: string }) => void) => {

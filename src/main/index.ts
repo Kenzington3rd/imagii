@@ -8,7 +8,11 @@ import { registerAudioIpc } from './ipc/audio'
 import { registerSearchIpc } from './ipc/search'
 import { registerCaptionsIpc } from './ipc/captions'
 import { registerProjectIpc } from './ipc/project'
-import { registerRecordingIpc, cancelRecordingConvert } from './ipc/recording'
+import {
+  registerRecordingIpc,
+  cancelRecordingConvert,
+  abandonAllRecordingStreams
+} from './ipc/recording'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 import { pruneStaleTempFiles } from './tempCleanup'
@@ -205,6 +209,13 @@ app.on('before-quit', () => {
   }
   try {
     cancelRecordingConvert()
+  } catch {
+    /* ignore */
+  }
+  // Round 18: reap any open streaming-recording session and its partial
+  // temp file — quit mid-recording must not leave GB-scale .webm partials.
+  try {
+    abandonAllRecordingStreams()
   } catch {
     /* ignore */
   }
