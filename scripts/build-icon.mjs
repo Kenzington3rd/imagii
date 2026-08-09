@@ -11,14 +11,14 @@ const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
     </linearGradient>
     <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#991b1b"/>
-      <stop offset="100%" stop-color="#f25050"/>
+      <stop offset="100%" stop-color="#ff3131"/>
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)"/>
   <circle cx="180" cy="76" r="14" fill="#fbbf24"/>
   <path d="M 38 198 L 90 130 L 130 168 L 168 122 L 218 198 Z" fill="url(#accent)" opacity="0.95"/>
-  <rect x="48" y="60" width="14" height="120" rx="6" fill="#f25050" opacity="0.9"/>
-  <rect x="32" y="160" width="14" height="20" rx="3" fill="#f25050" opacity="0.5"/>
+  <rect x="48" y="60" width="14" height="120" rx="6" fill="#ff3131" opacity="0.9"/>
+  <rect x="32" y="160" width="14" height="20" rx="3" fill="#ff3131" opacity="0.5"/>
 </svg>`
 
 const sizes = [16, 24, 32, 48, 64, 128, 256]

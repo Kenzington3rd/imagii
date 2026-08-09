@@ -13,8 +13,8 @@ export default {
           hover: '#2a1a18'
         },
         accent: {
-          DEFAULT: '#f25050',
-          muted: '#e04b4b'
+          DEFAULT: '#ff3131',
+          muted: '#f52e2e'
         },
         ink: {
           base: '#ece4e2',

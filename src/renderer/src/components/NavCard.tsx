@@ -17,7 +17,7 @@ export function NavCard({ to, title, description, icon, accent }: NavCardProps):
     >
       <div
         className="w-12 h-12 rounded-lg flex items-center justify-center text-2xl"
-        style={{ background: accent ?? 'rgba(242, 80, 80, 0.15)' }}
+        style={{ background: accent ?? 'rgba(255, 49, 49, 0.15)' }}
       >
         {icon}
       </div>

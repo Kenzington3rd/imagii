@@ -65,8 +65,8 @@ corporation, not a hype machine.
 
 ## Color identity
 
-imagii's signature palette is **obsidian volcano** (round 19): molten
-lava `#f25050` on an obsidian-black ground (`#120c0c`, warm undertone),
+imagii's signature palette is **obsidian volcano** (round 19): neon magma
+red `#ff3131` on an obsidian-black ground (`#120c0c`, warm undertone),
 with ember `#fbbf24` as the secondary highlight. The lava accent is the
 brand — it carries primary actions, focus states, and the app icon.
 Don't introduce a competing brand color; per-studio accent washes (on

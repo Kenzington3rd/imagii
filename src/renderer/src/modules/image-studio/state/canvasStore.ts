@@ -250,8 +250,8 @@ export function makeRectLayer(x: number, y: number, w = 200, h = 120): RectLayer
     opacity: 1,
     width: w,
     height: h,
-    fill: 'rgba(242,80,80,0.4)',
-    stroke: '#f25050',
+    fill: 'rgba(255,49,49,0.4)',
+    stroke: '#ff3131',
     strokeWidth: 2,
     cornerRadius: 8
   }
