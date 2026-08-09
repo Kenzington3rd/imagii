@@ -9,6 +9,7 @@ import {
 import { useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ACCENT } from '../../styles/tokens'
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -196,7 +197,7 @@ export function HighlightPanel(): JSX.Element | null {
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2 mt-0.5">
-                <SignalBar label="Audio" value={h.signals.audioScore} color="#a78bfa" />
+                <SignalBar label="Audio" value={h.signals.audioScore} color={ACCENT} />
                 <SignalBar label="Chat" value={h.signals.chatDensityScore} color="#f472b6" />
                 <SignalBar label="Hype" value={h.signals.hypeWordScore} color="#fbbf24" />
               </div>

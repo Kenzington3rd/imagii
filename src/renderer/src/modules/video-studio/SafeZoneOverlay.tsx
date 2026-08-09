@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { computeCropBox } from '@shared/safeZone'
+import { ACCENT } from '../../styles/tokens'
 
 interface SafeZoneOverlayProps {
   videoElement: HTMLVideoElement | null
@@ -18,7 +19,7 @@ const RATIO_COLOR: Record<string, string> = {
   '9:16': '#f472b6',
   '1:1': '#fbbf24',
   '4:5': '#22d3ee',
-  '16:9': '#a78bfa'
+  '16:9': ACCENT
 }
 
 export function SafeZoneOverlay({
@@ -62,7 +63,7 @@ export function SafeZoneOverlay({
           const y = box.y
           const cropW = box.w
           const cropH = box.h
-          const color = RATIO_COLOR[label] ?? '#a78bfa'
+          const color = RATIO_COLOR[label] ?? ACCENT
           return (
             <g key={label}>
               <rect

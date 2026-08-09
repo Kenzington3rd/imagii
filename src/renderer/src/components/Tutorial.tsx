@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
 import { Icon } from './Icon'
+import { ACCENT } from '../styles/tokens'
 
 interface Rect {
   top: number
@@ -115,7 +116,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
         <rect
           width="100%"
           height="100%"
-          fill="rgba(8, 8, 12, 0.78)"
+          fill="rgba(12, 8, 8, 0.78)"
           mask="url(#tutorial-mask)"
           onClick={() => next()}
         />
@@ -128,7 +129,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
             rx={10}
             ry={10}
             fill="none"
-            stroke="#a78bfa"
+            stroke={ACCENT}
             strokeWidth={2}
           />
         ) : null}

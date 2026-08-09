@@ -1,4 +1,5 @@
 import { Toaster } from 'react-hot-toast'
+import { BG_ELEVATED, INK_BASE } from '../styles/tokens'
 
 /**
  * The app-wide toast surface. Extracted because all five studios
@@ -16,9 +17,9 @@ export function AppToaster(): JSX.Element {
       position="bottom-center"
       toastOptions={{
         style: {
-          background: '#16161e', // bg-elevated
-          color: '#e5e5ee', // ink-base
-          border: '1px solid rgba(149, 149, 165, 0.25)' // ink-dim wash
+          background: BG_ELEVATED,
+          color: INK_BASE,
+          border: '1px solid rgba(156, 143, 139, 0.25)' // ink-dim wash
         }
       }}
     />

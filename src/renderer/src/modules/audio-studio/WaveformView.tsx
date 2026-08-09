@@ -4,6 +4,7 @@ import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.e
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
+import { ACCENT, ACCENT_MUTED, EMBER } from '../../styles/tokens'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -34,9 +35,9 @@ export function WaveformView(): JSX.Element | null {
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url: source.url,
-      waveColor: '#7c5cf0',
-      progressColor: '#a78bfa',
-      cursorColor: '#f472b6',
+      waveColor: ACCENT_MUTED,
+      progressColor: ACCENT,
+      cursorColor: EMBER,
       cursorWidth: 2,
       height: 96,
       barWidth: 2,
@@ -71,7 +72,7 @@ export function WaveformView(): JSX.Element | null {
     const offFinish = ws.on('finish', () => setPlaying(false))
 
     let dragging = false
-    regions.enableDragSelection({ color: 'rgba(244, 114, 182, 0.25)' })
+    regions.enableDragSelection({ color: 'rgba(242, 102, 75, 0.25)' })
     const offRegionCreated = regions.on('region-created', (region: Region) => {
       dragging = true
       region.on('update-end', () => {

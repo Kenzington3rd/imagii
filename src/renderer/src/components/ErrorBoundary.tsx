@@ -49,8 +49,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         style={{
           height: '100%',
           padding: '32px',
-          color: '#e5e5ee',
-          backgroundColor: '#0b0b0f',
+          color: '#ece4e2',
+          backgroundColor: '#120c0c',
           fontFamily: 'system-ui, sans-serif',
           overflowY: 'auto'
         }}
@@ -58,7 +58,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <h1 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '8px' }}>
           imagii hit a render error
         </h1>
-        <p style={{ fontSize: '14px', color: '#9595a5', marginBottom: '16px' }}>
+        <p style={{ fontSize: '14px', color: '#a59a97', marginBottom: '16px' }}>
           The studio you were in crashed. Your autosave is intact; reloading
           to the home screen should let you recover. If this keeps happening,
           copy the message below and report it.
@@ -67,8 +67,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           style={{
             fontSize: '12px',
             padding: '12px',
-            backgroundColor: '#16161e',
-            border: '1px solid #2a2a35',
+            backgroundColor: '#1c1313',
+            border: '1px solid #352a2a',
             borderRadius: '6px',
             color: '#f87171',
             whiteSpace: 'pre-wrap',
@@ -80,17 +80,17 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         </pre>
         {this.state.componentStack ? (
           <details style={{ marginBottom: '16px' }}>
-            <summary style={{ fontSize: '12px', color: '#9595a5', cursor: 'pointer' }}>
+            <summary style={{ fontSize: '12px', color: '#a59a97', cursor: 'pointer' }}>
               Component stack
             </summary>
             <pre
               style={{
                 fontSize: '11px',
                 padding: '12px',
-                backgroundColor: '#16161e',
-                border: '1px solid #2a2a35',
+                backgroundColor: '#1c1313',
+                border: '1px solid #352a2a',
                 borderRadius: '6px',
-                color: '#9595a5',
+                color: '#a59a97',
                 whiteSpace: 'pre-wrap',
                 marginTop: '8px'
               }}
@@ -107,7 +107,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           style={{
             padding: '8px 16px',
             fontSize: '14px',
-            backgroundColor: '#a78bfa',
+            backgroundColor: '#f2664b',
             color: '#0b0b0f',
             border: 'none',
             borderRadius: '6px',

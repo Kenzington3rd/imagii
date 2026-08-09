@@ -106,9 +106,9 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 1080,
       background: 'transparent',
       layers: [
-        rect('Top bar', 0, 0, 1920, 8, '#a78bfa'),
-        rect('Bottom bar', 0, 1072, 1920, 8, '#a78bfa'),
-        rect('Handle slot', 48, 980, 320, 72, 'rgba(11,11,15,0.78)', '#a78bfa', 2, 10),
+        rect('Top bar', 0, 0, 1920, 8, '#f2664b'),
+        rect('Bottom bar', 0, 1072, 1920, 8, '#f2664b'),
+        rect('Handle slot', 48, 980, 320, 72, 'rgba(18,12,12,0.78)', '#f2664b', 2, 10),
         txt('Handle', 64, 1000, '@yourhandle', 32, '#ffffff')
       ]
     }
@@ -124,9 +124,9 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 1080,
       background: 'transparent',
       layers: [
-        rect('Webcam frame', 60, 60, 1180, 960, 'transparent', '#a78bfa', 6, 24),
-        rect('Chat strip', 1280, 60, 580, 960, 'rgba(11,11,15,0.55)', '#a78bfa', 2, 16),
-        txt('Chat hint', 1310, 100, 'CHAT', 36, '#a78bfa')
+        rect('Webcam frame', 60, 60, 1180, 960, 'transparent', '#f2664b', 6, 24),
+        rect('Chat strip', 1280, 60, 580, 960, 'rgba(18,12,12,0.55)', '#f2664b', 2, 16),
+        txt('Chat hint', 1310, 100, 'CHAT', 36, '#f2664b')
       ]
     }
   },
@@ -143,9 +143,9 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 1080,
       background: 'transparent',
       layers: [
-        rect('Plate', 80, 900, 720, 100, 'rgba(11,11,15,0.85)', '#a78bfa', 2, 14),
+        rect('Plate', 80, 900, 720, 100, 'rgba(18,12,12,0.85)', '#f2664b', 2, 14),
         txt('Name', 108, 920, 'Your Name', 38, '#ffffff'),
-        txt('Role', 108, 968, 'Your role · @handle', 18, '#a78bfa')
+        txt('Role', 108, 968, 'Your role · @handle', 18, '#f2664b')
       ]
     }
   },
@@ -160,12 +160,12 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     doc: {
       width: 1920,
       height: 1080,
-      background: '#0b0b0f',
+      background: '#120c0c',
       layers: [
-        rect('Accent', 0, 0, 12, 1080, '#a78bfa'),
+        rect('Accent', 0, 0, 12, 1080, '#f2664b'),
         txt('Brb', 200, 380, 'BE RIGHT BACK', 140, '#ffffff', 'Impact, Inter, sans-serif'),
-        txt('Sub', 200, 560, "Grabbing a coffee — back in a few.", 36, '#9595a5'),
-        txt('Handle', 200, 980, '@yourhandle', 28, '#a78bfa')
+        txt('Sub', 200, 560, "Grabbing a coffee — back in a few.", 36, '#a59a97'),
+        txt('Handle', 200, 980, '@yourhandle', 28, '#f2664b')
       ]
     }
   },
@@ -178,12 +178,12 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     doc: {
       width: 1920,
       height: 1080,
-      background: '#1f1d2e',
+      background: '#241614',
       layers: [
         txt('Title', 200, 380, 'STARTING SOON', 130, '#ffffff', 'Impact, Inter, sans-serif'),
-        txt('Sub', 200, 540, 'Stretch, grab water, settle in.', 36, '#a78bfa'),
-        rect('CountdownBg', 200, 660, 360, 120, 'rgba(167,139,250,0.18)', '#a78bfa', 2, 14),
-        txt('Countdown', 240, 690, '0:00', 80, '#a78bfa', 'Impact, Inter, sans-serif')
+        txt('Sub', 200, 540, 'Stretch, grab water, settle in.', 36, '#f2664b'),
+        rect('CountdownBg', 200, 660, 360, 120, 'rgba(242,102,75,0.18)', '#f2664b', 2, 14),
+        txt('Countdown', 240, 690, '0:00', 80, '#f2664b', 'Impact, Inter, sans-serif')
       ]
     }
   },
@@ -196,12 +196,12 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     doc: {
       width: 1920,
       height: 1080,
-      background: '#0b0b0f',
+      background: '#120c0c',
       layers: [
         txt('Thanks', 200, 360, 'THANKS FOR HANGING OUT', 100, '#ffffff', 'Impact, Inter, sans-serif'),
-        txt('Sub', 200, 500, 'See you next stream.', 36, '#9595a5'),
-        rect('Socials', 200, 720, 800, 120, 'rgba(167,139,250,0.12)', '#a78bfa', 2, 14),
-        txt('SocialsText', 232, 752, 'Twitch · YouTube · X · TikTok — @yourhandle', 28, '#a78bfa')
+        txt('Sub', 200, 500, 'See you next stream.', 36, '#a59a97'),
+        rect('Socials', 200, 720, 800, 120, 'rgba(242,102,75,0.12)', '#f2664b', 2, 14),
+        txt('SocialsText', 232, 752, 'Twitch · YouTube · X · TikTok — @yourhandle', 28, '#f2664b')
       ]
     }
   },
@@ -218,9 +218,9 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 1440,
       background: 'transparent',
       layers: [
-        rect('Top bar', 0, 0, 2560, 11, '#a78bfa'),
-        rect('Bottom bar', 0, 1429, 2560, 11, '#a78bfa'),
-        rect('Handle slot', 64, 1307, 427, 96, 'rgba(11,11,15,0.78)', '#a78bfa', 3, 14),
+        rect('Top bar', 0, 0, 2560, 11, '#f2664b'),
+        rect('Bottom bar', 0, 1429, 2560, 11, '#f2664b'),
+        rect('Handle slot', 64, 1307, 427, 96, 'rgba(18,12,12,0.78)', '#f2664b', 3, 14),
         txt('Handle', 85, 1333, '@yourhandle', 42, '#ffffff')
       ]
     }
@@ -236,9 +236,9 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 2160,
       background: 'transparent',
       layers: [
-        rect('Top bar', 0, 0, 3840, 16, '#a78bfa'),
-        rect('Bottom bar', 0, 2144, 3840, 16, '#a78bfa'),
-        rect('Handle slot', 96, 1960, 640, 144, 'rgba(11,11,15,0.78)', '#a78bfa', 4, 20),
+        rect('Top bar', 0, 0, 3840, 16, '#f2664b'),
+        rect('Bottom bar', 0, 2144, 3840, 16, '#f2664b'),
+        rect('Handle slot', 96, 1960, 640, 144, 'rgba(18,12,12,0.78)', '#f2664b', 4, 20),
         txt('Handle', 128, 2000, '@yourhandle', 64, '#ffffff')
       ]
     }
@@ -256,10 +256,10 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       height: 1080,
       background: '#16161e',
       layers: [
-        rect('Title bar', 0, 0, 1080, 140, '#a78bfa'),
-        txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#0b0b0f', 'Impact, Inter, sans-serif'),
-        rect('Video well', 280, 200, 520, 800, 'rgba(167,139,250,0.10)', '#a78bfa', 4, 16),
-        txt('Hint', 350, 580, 'Drop clip here', 32, '#a78bfa')
+        rect('Title bar', 0, 0, 1080, 140, '#f2664b'),
+        txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#120c0c', 'Impact, Inter, sans-serif'),
+        rect('Video well', 280, 200, 520, 800, 'rgba(242,102,75,0.10)', '#f2664b', 4, 16),
+        txt('Hint', 350, 580, 'Drop clip here', 32, '#f2664b')
       ]
     }
   }

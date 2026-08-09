@@ -193,7 +193,7 @@ export function ImportPanel(): JSX.Element {
                       aspectRatio: `${t.doc.width} / ${t.doc.height}`,
                       background:
                         t.doc.background === 'transparent'
-                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          ? 'repeating-conic-gradient(#221616 0% 25%, #1c1313 0% 50%) 0 0 / 16px 16px'
                           : t.doc.background
                     }}
                   />

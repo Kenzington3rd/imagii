@@ -77,7 +77,7 @@ export function AssetLibraryPanel(): JSX.Element {
                       aspectRatio: `${asset.doc.width} / ${asset.doc.height}`,
                       background:
                         asset.doc.background === 'transparent'
-                          ? 'repeating-conic-gradient(#1a1825 0% 25%, #16161e 0% 50%) 0 0 / 16px 16px'
+                          ? 'repeating-conic-gradient(#221616 0% 25%, #1c1313 0% 50%) 0 0 / 16px 16px'
                           : asset.doc.background
                     }}
                   />

@@ -67,7 +67,7 @@ function createWindow(): void {
     height: sized.height,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: '#0b0b0f',
+    backgroundColor: '#120c0c',
     show: false,
     autoHideMenuBar: true,
     icon: iconPath,

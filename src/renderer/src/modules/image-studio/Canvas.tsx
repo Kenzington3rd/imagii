@@ -19,6 +19,7 @@ import {
   makeRectLayer,
   useCanvasStore
 } from './state/canvasStore'
+import { ACCENT, EMBER } from '../../styles/tokens'
 
 interface ImageNodeProps {
   layer: ImageLayer
@@ -83,7 +84,7 @@ function GridOverlay({
       <Line
         key={`vx-${x}`}
         points={[x, 0, x, height]}
-        stroke="rgba(149,149,165,0.18)"
+        stroke="rgba(165,154,151,0.18)"
         strokeWidth={1}
         listening={false}
       />
@@ -94,7 +95,7 @@ function GridOverlay({
       <Line
         key={`vy-${y}`}
         points={[0, y, width, y]}
-        stroke="rgba(149,149,165,0.18)"
+        stroke="rgba(165,154,151,0.18)"
         strokeWidth={1}
         listening={false}
       />
@@ -387,7 +388,7 @@ export function Canvas(): JSX.Element {
             tool === 'line' ? (
               <Line
                 points={[drawing.start.x, drawing.start.y, drawing.current.x, drawing.current.y]}
-                stroke="#a78bfa"
+                stroke={ACCENT}
                 strokeWidth={2}
                 dash={[4, 4]}
               />
@@ -397,7 +398,7 @@ export function Canvas(): JSX.Element {
                 y={Math.min(drawing.start.y, drawing.current.y)}
                 width={Math.abs(drawing.current.x - drawing.start.x)}
                 height={Math.abs(drawing.current.y - drawing.start.y)}
-                stroke="#a78bfa"
+                stroke={ACCENT}
                 strokeWidth={2}
                 dash={[4, 4]}
               />
@@ -407,7 +408,7 @@ export function Canvas(): JSX.Element {
                 y={(drawing.start.y + drawing.current.y) / 2}
                 radiusX={Math.abs(drawing.current.x - drawing.start.x) / 2}
                 radiusY={Math.abs(drawing.current.y - drawing.start.y) / 2}
-                stroke="#a78bfa"
+                stroke={ACCENT}
                 strokeWidth={2}
                 dash={[4, 4]}
               />
@@ -416,7 +417,7 @@ export function Canvas(): JSX.Element {
           {pencilPoints && pencilPoints.length >= 4 ? (
             <Line
               points={pencilPoints}
-              stroke="#f472b6"
+              stroke={EMBER}
               strokeWidth={3}
               lineCap="round"
               lineJoin="round"
