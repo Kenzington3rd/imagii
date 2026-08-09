@@ -14,7 +14,175 @@ Entries are grouped by date. Most recent first.
 
 ---
 
-## 2026-05-20 — Bug round 17: per-job cancel buttons, moodboard IPC validation, dead-bridge wiring, settings allowlist, E2E smoke
+## 2026-08-09 — Bug round 18: the real-ffmpeg layer — three features that never worked, streaming recording, Video Studio undo
+
+Round 18 added the test layer rounds 1–17 never had: `npm run test:media`
+(`tests/integration/media.spec.ts`) drives the REAL production job
+runners against real ffmpeg and asserts on the output bytes. Its first
+run caught three shipped features that failed 100% of the time despite
+green unit tests, because every prior test pinned the *string we meant
+to send*, never *whether ffmpeg accepts it*.
+
+### Bug — Auto Zoom failed every export, on every preset
+- **Root cause.** Two independent bugs in one filter:
+  `zoompan=z='…sin(t*0.6)…'` used a `t` variable that zoompan's
+  expression evaluator has never had (the variable is `time`), so the
+  graph failed at runtime; and `s=hd1080` hardcoded landscape output, so
+  even with a valid expression a TikTok/Reels export would have come out
+  1920x1080.
+- **Fix.** `autoZoomFilter(preset)` — `time`-based expression,
+  `s=${preset.width}x${preset.height}`.
+- **Test.** `tests/integration/media.spec.ts` — autoZoom on tiktok
+  (portrait) and youtube (landscape) both assert output dimensions.
+- **Lesson.** A filter string that "looks like ffmpeg" is a hypothesis,
+  not a fact. Only spawning ffmpeg falsifies it. Unit tests pin
+  regressions in strings we've already proven; the integration layer is
+  what proves them the first time.
+
+### Bug — sidechain ducking failed every export
+- **Root cause.** The filter graph consumed the `[primary]` label twice
+  (sidechaincompress key input + amix input). A filtergraph label is
+  single-consumer; ffmpeg rejects the graph outright.
+- **Fix.** `asplit=2[primary][primary_sc]` — one copy keys the
+  sidechain, one carries the mix. The primary is also now resampled to
+  48 kHz stereo before amix (the round-15 M5 fix only normalized the
+  secondary — the round-10 "mirror the fix to the twin" lesson, missed
+  again).
+- **Test.** Integration test measures the 3 kHz secondary through a
+  bandpass in primary-loud vs primary-silent windows and asserts >3 dB
+  of actual ducking — not just "the export succeeded".
+- **Lesson.** Test the *effect*, not the completion. "Ducking export
+  finishes" and "ducking ducks" are different claims.
+
+### Bug — parametric ("Custom") denoise failed every export
+- **Root cause.** The filter emitted `ns=…` — afftdn has no `ns` option
+  (verified against `ffmpeg -h filter=afftdn`). Also `nf` was clamped to
+  [-80,-10] when afftdn's real ceiling is -20, and `nr` to [0,50] when
+  the real floor is 0.01 — so even without `ns`, a third of the slider
+  range produced rejected values.
+- **Fix.** Emit only `nf`/`nr` with true-range clamps; the Sensitivity
+  slider is gone (its field survives as an optional no-op so old saved
+  presets still parse).
+- **Test.** `chain.test.ts` pins the corrected strings + clamps;
+  integration test exports at both slider extremes.
+- **Lesson.** Filter options and ranges come from `ffmpeg -h
+  filter=…` output, not from memory or plausibility. Wrong-but-plausible
+  parameters survive string-shape tests indefinitely.
+
+### Bug — Picture-in-Picture never produced output
+- **Root cause.** `video:pipComposite`'s validator required
+  `overlayWidth` in [0.05, 1] — written as if a fraction — while the
+  panel sends pixels (default 360, range 120–960) and concat.ts consumes
+  pixels (`scale=${overlayWidth}:-1`). Every real call threw before
+  ffmpeg was reached.
+- **Fix.** Pixel-range validation [16, 3840].
+- **Lesson.** A validator is itself a contract claim that needs a test
+  driving it with the *values the real UI sends*. Round 17 added the
+  validators; nothing ever called one with production inputs.
+
+### Bug — References search results rendered as broken images
+- **Root cause.** The renderer loads DuckDuckGo result thumbnails via
+  `<img src="https://…">`, but the CSP's `img-src` allowlist had no
+  `https:` — Chromium silently blocks every one. Found independently by
+  the privacy and Electron review lenses.
+- **Fix.** `https:` added to img-src (kept `referrerPolicy=
+  "no-referrer"`); PRODUCT_GUIDE now names live thumbnails as one of the
+  four user-triggered network flows.
+- **Lesson.** The E2E smoke asserts panels render, not that features
+  *work* — a fully CSP-blocked feature still passes a "heading is
+  visible" test. Feature-level assertions need the feature's actual
+  output (here: a loaded image).
+
+### Bug — match-loudness mixes landed ~3 LU under target
+- **Root cause.** amix's default normalization scales each input by 1/N.
+  Two tracks individually loudnormed to -16 LUFS mix to ≈ -19 LUFS
+  (measured).
+- **Fix.** When match-loudness (or a loudnormed chain) feeds the mix, a
+  single-pass loudnorm on the mix bus restores the target. Manual-gain
+  mixes stay untouched by design.
+- **Test.** Integration test measures mix LUFS with ebur128, asserts
+  within ±2 LU of target.
+
+### Bug — recorder shipped the whole recording through one IPC call
+- **Root cause.** Chunks accumulated in renderer memory; stop built one
+  Blob → one ArrayBuffer → one `ipcRenderer.invoke` (structured clone =
+  full copy) → main copied again into a Buffer. Three simultaneous
+  copies of a potentially-GB recording.
+- **Fix.** Streaming protocol (`recording:begin/appendChunk/finalize/
+  abandon`) — 1 s MediaRecorder timeslices append to a temp .webm as
+  they arrive; peak memory is one chunk. Ordering by renderer-side
+  promise queue + single WriteStream; every failure path lands in
+  `abandon`; before-quit reaps open sessions.
+- **Test.** `src/main/ipc/recordingStream.test.ts` (14 tests: byte-order
+  across 25 chunks, every rejection class, abandon idempotency).
+- **Lesson.** IPC payload size scales with user behavior, not test
+  behavior. Anything user-recorded/user-loaded needs a streaming path
+  before it needs anything else.
+
+### Bug — Video Studio had no undo at all
+- **Root cause.** The undo system (round 15) wired audio + canvas
+  stores; videoStore was skipped with a comment and nobody returned. Its
+  most destructive actions (clip ✕, Close) also had no confirm.
+- **Fix.** Same past/future history as the other stores (50-cap),
+  gesture coalescing so a trim drag is one step, useGlobalUndo
+  delegation, confirms on remove-clip and Close.
+- **Test.** 8 new videoStore tests.
+- **Lesson.** "Undo works" is a per-store claim. A global-undo hook that
+  silently skips a store turns a missing feature into an invisible one.
+
+### Smaller fixes (each with test or typecheck pin)
+- Burn-in failed on SRT paths with apostrophes → two-level
+  `escapeSubtitlesPath`, pinned against the real filtergraph parser
+  (integration test sweeps apostrophe/space/comma/bracket names).
+- `audio:listPresets` crashed on valid-JSON-wrong-shape preset files →
+  `parseChainPreset` choke point (the round-14 customPresets lesson,
+  finally mirrored to its twin).
+- Concurrent mood-board saves clobbered each other (ipcMain.handle is
+  not serialized per channel) → per-collection write lock;
+  `moodboard.test.ts` races 8 concurrent adds.
+- Export progress divided by speedMultiplier (2× exports stalled at 50%).
+- X Premium cap corrected to 4 h per help.x.com; main/renderer platform
+  tables were two rounds out of sync → synced +
+  `tests/unit/presetTablesInSync.test.ts` pins them together.
+- concat.ts's three stderr accumulators capped at 16 KB (round-16
+  lesson applied to the sites it missed); whisper transcribe dropped a
+  never-read stdout accumulator.
+- Startup no longer awaits the ffmpeg smoke test before creating the
+  window; `shell.openExternal` gated to http(s); `captions:copySrtTo`
+  destPath + `video:reframe` jobId validated like their siblings;
+  reframe scale target forced even; dead SD/NudeNet sidecar paths and
+  onnxruntime asarUnpack removed.
+- VolumeMeter's dB readout double-logged already-dB-scaled frequency
+  bytes → real time-domain dBFS peak; static de-ess EQ notch → ffmpeg's
+  dynamic `deesser`; FixWizard's dead `voiceQuiet` field removed.
+- A11y sweep: focus ring on the Player shortcut surface, aria-labels on
+  five selects and four ✕ buttons, CleanupPanel slider aria, Esc now
+  actually stops recording (HotkeyOverlay promised it), Tutorial gained
+  dialog semantics + focus management, export progress is a live region,
+  Clip Kit runs the same safe-zone preflight as ExportPanel, all six
+  long-job Cancel buttons share one treatment.
+- Record → Video handoff: recordings land in recent files and the
+  success toast offers "Edit in Video Studio"; leaving mid-recording
+  confirms and saves in place.
+
+### Double-reviewed and REFUTED (documented so it isn't "re-found")
+- "Burned-in captions sit 40 real pixels from the edge and collide with
+  TikTok UI chrome." Rendered frames prove `force_style` values live in
+  libass's 384×288 PlayRes space and scale with the frame: MarginV=40 ≈
+  14% above the bottom edge (~270 px on a 1080×1920 export) — clear of
+  platform chrome. **Lesson:** a units claim about a rendering stack
+  needs a rendered pixel measurement, not coordinate-space reasoning.
+
+### Known-and-accepted (not bugs, recorded deliberately)
+- drawtext/watermark hardcode `C:/Windows/Fonts/arial.ttf` — fine while
+  the app ships Windows-only (`electron-builder --win portable`); bundle
+  a font before any cross-platform build.
+- `sandbox: false` in BrowserWindow — flipping it requires a CJS preload
+  (electron-vite currently emits ESM) and a real regression pass;
+  recommended as its own follow-up experiment, not a drive-by.
+- whisper transcribe progress jitters 15–25% (random) because whisper's
+  stdout has no parseable percent; the timestamp in the message is the
+  real signal.
 
 Round 16 closed the *app-quit* orphan-process gap — every spawn site now
 has a `cancelAll*` the before-quit hook calls. Round 17 closes the
