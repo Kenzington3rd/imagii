@@ -10,6 +10,20 @@ export interface VideoSource {
   probe: VideoProbe
 }
 
+/** One undo step: the clip-editing state as it was before a mutation.
+ *  selectedClipId travels with the clips so undoing a removal also
+ *  restores which clip was active — the pair is always captured
+ *  atomically, so the selection can never dangle after undo/redo. */
+interface ClipsSnapshot {
+  clips: Clip[]
+  selectedClipId: string | null
+}
+
+interface History {
+  past: ClipsSnapshot[]
+  future: ClipsSnapshot[]
+}
+
 interface VideoStudioState {
   source: VideoSource | null
   currentTime: number
@@ -19,6 +33,16 @@ interface VideoStudioState {
    *  current source. Persisted across sessions via the project schema
    *  (videoStudio.srtPath). null when no transcription has been done. */
   srtPath: string | null
+  /** Undo history for clip edits (UX round 18). Same shape and cap as
+   *  audioStore/canvasStore so useGlobalUndo can treat all three studios
+   *  uniformly. Source load/clear resets it rather than snapshotting. */
+  history: History
+  /** Coalescing marker for high-frequency actions ("<action>:<clipId>").
+   *  While consecutive mutations carry the same key (a trim drag firing
+   *  setClipRange per mousemove, a speed slider, typing a name), only the
+   *  first pushes a snapshot — so one drag equals one undo step. Discrete
+   *  actions and undo/redo reset it to null. */
+  historyKey: string | null
 
   loadSource: (filePath: string) => Promise<void>
   clearSource: () => void
@@ -43,6 +67,11 @@ interface VideoStudioState {
   addTextOverlay: (id: string, overlay: Omit<TextOverlay, 'id'>) => void
   updateTextOverlay: (clipId: string, overlayId: string, patch: Partial<TextOverlay>) => void
   removeTextOverlay: (clipId: string, overlayId: string) => void
+
+  undo: () => void
+  redo: () => void
+  canUndo: () => boolean
+  canRedo: () => boolean
 }
 
 function fileNameFromPath(p: string): string {
@@ -66,167 +95,274 @@ function makeDefaultClip(duration: number, index: number): Clip {
   }
 }
 
-export const useVideoStore = create<VideoStudioState>((set, get) => ({
-  source: null,
-  currentTime: 0,
-  clips: [],
-  selectedClipId: null,
-  srtPath: null,
+const HISTORY_LIMIT = 50
 
-  loadSource: async (filePath: string) => {
-    const probe = await window.api.video.probe(filePath)
-    const url = window.api.video.fileUrl(filePath)
-    const initial = makeDefaultClip(probe.duration, 1)
-    // Loading a new source invalidates any prior SRT — captions belong
-    // to the previous video, not this one.
-    set({
-      source: {
-        filePath,
-        fileName: fileNameFromPath(filePath),
-        url,
-        probe
-      },
-      currentTime: 0,
-      clips: [initial],
-      selectedClipId: initial.id,
-      srtPath: null
-    })
-  },
-  clearSource: () =>
-    set({ source: null, currentTime: 0, clips: [], selectedClipId: null, srtPath: null }),
-  setCurrentTime: (t: number) => set({ currentTime: t }),
-  setSrtPath: (p: string | null) => set({ srtPath: p }),
+function pushHistory(history: History, snapshot: ClipsSnapshot): History {
+  const past = [...history.past, snapshot]
+  return {
+    past: past.length > HISTORY_LIMIT ? past.slice(past.length - HISTORY_LIMIT) : past,
+    future: []
+  }
+}
 
-  addClip: () => {
-    const { source, clips } = get()
-    if (!source) return
-    const next = makeDefaultClip(source.probe.duration, clips.length + 1)
-    set({ clips: [...clips, next], selectedClipId: next.id })
-  },
-  addClipFromRange: (name, startSec, endSec) => {
-    const { source, clips } = get()
-    if (!source) return
-    // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
-    // panel, future scripts) sometimes hand us a reversed range. Reject
-    // outright rather than producing a clip with negative duration that
-    // breaks export math downstream.
-    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return
-    if (endSec <= startSec) return
-    const duration = source.probe.duration
-    const safeStart = Math.max(0, Math.min(startSec, duration))
-    const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
-    const base = makeDefaultClip(duration, clips.length + 1)
-    const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
-    set({ clips: [...clips, next], selectedClipId: next.id })
-  },
-  removeClip: (id) => {
-    const { clips, selectedClipId } = get()
-    const filtered = clips.filter((c) => c.id !== id)
-    set({
-      clips: filtered,
-      selectedClipId:
-        selectedClipId === id ? (filtered[0]?.id ?? null) : selectedClipId
-    })
-  },
-  selectClip: (id) => set({ selectedClipId: id }),
-  renameClip: (id, name) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, name } : c))
-    })),
-  setClipRange: (id, startSec, endSec) => {
+const EMPTY_HISTORY: History = { past: [], future: [] }
+
+export const useVideoStore = create<VideoStudioState>((set, get) => {
+  /** Snapshot the current clip state into history before a mutation.
+   *  Returns the state fields to spread into the mutating set() call.
+   *  `key` null = discrete action (always pushes, resets coalescing);
+   *  non-null = coalescible action (skips the push while the previous
+   *  mutation carried the same key — the first event of the gesture
+   *  already captured the pre-gesture state). */
+  function snapshot(key: string | null): Partial<VideoStudioState> {
+    const { history, historyKey, clips, selectedClipId } = get()
+    if (key !== null && key === historyKey) return {}
+    return {
+      history: pushHistory(history, { clips, selectedClipId }),
+      historyKey: key
+    }
+  }
+
+  function applyRange(id: string, startSec: number, endSec: number, key: string): void {
     const duration = get().source?.probe.duration ?? endSec
     const safeStart = clamp(startSec, 0, duration)
     const safeEnd = clamp(endSec, safeStart, duration)
-    set((state) => ({
-      clips: state.clips.map((c) =>
+    set({
+      ...snapshot(key),
+      clips: get().clips.map((c) =>
         c.id === id ? { ...c, startSec: safeStart, endSec: safeEnd } : c
       )
-    }))
-  },
-  setClipStart: (id, startSec) => {
-    const clip = get().clips.find((c) => c.id === id)
-    if (!clip) return
-    get().setClipRange(id, startSec, Math.max(clip.endSec, startSec + 0.1))
-  },
-  setClipEnd: (id, endSec) => {
-    const clip = get().clips.find((c) => c.id === id)
-    if (!clip) return
-    get().setClipRange(id, Math.min(clip.startSec, endSec - 0.1), endSec)
-  },
-  togglePreset: (id, preset) =>
-    set((state) => ({
-      clips: state.clips.map((c) => {
-        if (c.id !== id) return c
-        const has = c.selectedPresets.includes(preset)
-        return {
-          ...c,
-          selectedPresets: has
-            ? c.selectedPresets.filter((p) => p !== preset)
-            : [...c.selectedPresets, preset]
-        }
+    })
+  }
+
+  return {
+    source: null,
+    currentTime: 0,
+    clips: [],
+    selectedClipId: null,
+    srtPath: null,
+    history: EMPTY_HISTORY,
+    historyKey: null,
+
+    loadSource: async (filePath: string) => {
+      const probe = await window.api.video.probe(filePath)
+      const url = window.api.video.fileUrl(filePath)
+      const initial = makeDefaultClip(probe.duration, 1)
+      // Loading a new source invalidates any prior SRT — captions belong
+      // to the previous video, not this one. It also resets undo history:
+      // steps recorded against the old source's duration make no sense here.
+      set({
+        source: {
+          filePath,
+          fileName: fileNameFromPath(filePath),
+          url,
+          probe
+        },
+        currentTime: 0,
+        clips: [initial],
+        selectedClipId: initial.id,
+        srtPath: null,
+        history: EMPTY_HISTORY,
+        historyKey: null
       })
-    })),
-  setSelectedPresets: (id, presets) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, selectedPresets: presets } : c))
-    })),
-  setClipSpeed: (id, speedMultiplier) =>
-    set((state) => ({
-      clips: state.clips.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              speedMultiplier:
-                Number.isFinite(speedMultiplier) && speedMultiplier > 0
-                  ? speedMultiplier
-                  : 1
-            }
-          : c
-      )
-    })),
-  setClipColorGrade: (id, grade) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, colorGrade: grade } : c))
-    })),
-  setClipAutoZoom: (id, on) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, autoZoom: on } : c))
-    })),
-  setClipHypeShake: (id, on) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, hypeShake: on } : c))
-    })),
-  setClipCrop: (id, cropRect) =>
-    set((state) => ({
-      clips: state.clips.map((c) => (c.id === id ? { ...c, cropRect } : c))
-    })),
-  addTextOverlay: (id, overlay) =>
-    set((state) => ({
-      clips: state.clips.map((c) =>
-        c.id === id
-          ? { ...c, textOverlays: [...c.textOverlays, { ...overlay, id: nanoid(8) }] }
-          : c
-      )
-    })),
-  updateTextOverlay: (clipId, overlayId, patch) =>
-    set((state) => ({
-      clips: state.clips.map((c) =>
-        c.id === clipId
-          ? {
-              ...c,
-              textOverlays: c.textOverlays.map((o) =>
-                o.id === overlayId ? { ...o, ...patch } : o
-              )
-            }
-          : c
-      )
-    })),
-  removeTextOverlay: (clipId, overlayId) =>
-    set((state) => ({
-      clips: state.clips.map((c) =>
-        c.id === clipId
-          ? { ...c, textOverlays: c.textOverlays.filter((o) => o.id !== overlayId) }
-          : c
-      )
-    }))
-}))
+    },
+    clearSource: () =>
+      set({
+        source: null,
+        currentTime: 0,
+        clips: [],
+        selectedClipId: null,
+        srtPath: null,
+        history: EMPTY_HISTORY,
+        historyKey: null
+      }),
+    setCurrentTime: (t: number) => set({ currentTime: t }),
+    setSrtPath: (p: string | null) => set({ srtPath: p }),
+
+    addClip: () => {
+      const { source, clips } = get()
+      if (!source) return
+      const next = makeDefaultClip(source.probe.duration, clips.length + 1)
+      set({
+        ...snapshot(null),
+        clips: [...clips, next],
+        selectedClipId: next.id
+      })
+    },
+    addClipFromRange: (name, startSec, endSec) => {
+      const { source, clips } = get()
+      if (!source) return
+      // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
+      // panel, future scripts) sometimes hand us a reversed range. Reject
+      // outright rather than producing a clip with negative duration that
+      // breaks export math downstream.
+      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return
+      if (endSec <= startSec) return
+      const duration = source.probe.duration
+      const safeStart = Math.max(0, Math.min(startSec, duration))
+      const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
+      const base = makeDefaultClip(duration, clips.length + 1)
+      const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
+      set({
+        ...snapshot(null),
+        clips: [...clips, next],
+        selectedClipId: next.id
+      })
+    },
+    removeClip: (id) => {
+      const { clips, selectedClipId } = get()
+      const filtered = clips.filter((c) => c.id !== id)
+      // Unknown id: nothing mutates, so don't record a phantom undo step.
+      if (filtered.length === clips.length) return
+      set({
+        ...snapshot(null),
+        clips: filtered,
+        selectedClipId:
+          selectedClipId === id ? (filtered[0]?.id ?? null) : selectedClipId
+      })
+    },
+    // Selection is not undoable on its own, but it breaks a coalescing
+    // run: after switching clips, the next gesture starts a fresh step.
+    selectClip: (id) => set({ selectedClipId: id, historyKey: null }),
+    renameClip: (id, name) =>
+      // Fired per keystroke by the inline name input — coalesce.
+      set({
+        ...snapshot(`rename:${id}`),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, name } : c))
+      }),
+    // Fired per mousemove while dragging a timeline handle — coalesce so
+    // one drag equals one undo step.
+    setClipRange: (id, startSec, endSec) => applyRange(id, startSec, endSec, `range:${id}`),
+    setClipStart: (id, startSec) => {
+      const clip = get().clips.find((c) => c.id === id)
+      if (!clip) return
+      applyRange(id, startSec, Math.max(clip.endSec, startSec + 0.1), `start:${id}`)
+    },
+    setClipEnd: (id, endSec) => {
+      const clip = get().clips.find((c) => c.id === id)
+      if (!clip) return
+      applyRange(id, Math.min(clip.startSec, endSec - 0.1), endSec, `end:${id}`)
+    },
+    togglePreset: (id, preset) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) => {
+          if (c.id !== id) return c
+          const has = c.selectedPresets.includes(preset)
+          return {
+            ...c,
+            selectedPresets: has
+              ? c.selectedPresets.filter((p) => p !== preset)
+              : [...c.selectedPresets, preset]
+          }
+        })
+      }),
+    setSelectedPresets: (id, presets) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, selectedPresets: presets } : c))
+      }),
+    setClipSpeed: (id, speedMultiplier) =>
+      // Fired continuously by the speed slider — coalesce.
+      set({
+        ...snapshot(`speed:${id}`),
+        clips: get().clips.map((c) =>
+          c.id === id
+            ? {
+                ...c,
+                speedMultiplier:
+                  Number.isFinite(speedMultiplier) && speedMultiplier > 0
+                    ? speedMultiplier
+                    : 1
+              }
+            : c
+        )
+      }),
+    setClipColorGrade: (id, grade) =>
+      // Fired continuously by the grade sliders — coalesce.
+      set({
+        ...snapshot(`grade:${id}`),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, colorGrade: grade } : c))
+      }),
+    setClipAutoZoom: (id, on) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, autoZoom: on } : c))
+      }),
+    setClipHypeShake: (id, on) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, hypeShake: on } : c))
+      }),
+    setClipCrop: (id, cropRect) =>
+      // Fired per mousemove while dragging the reframe rectangle — coalesce.
+      set({
+        ...snapshot(`crop:${id}`),
+        clips: get().clips.map((c) => (c.id === id ? { ...c, cropRect } : c))
+      }),
+    addTextOverlay: (id, overlay) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) =>
+          c.id === id
+            ? { ...c, textOverlays: [...c.textOverlays, { ...overlay, id: nanoid(8) }] }
+            : c
+        )
+      }),
+    updateTextOverlay: (clipId, overlayId, patch) =>
+      // Fired per keystroke / per drag-move by the overlay editor — coalesce.
+      set({
+        ...snapshot(`overlay:${clipId}:${overlayId}`),
+        clips: get().clips.map((c) =>
+          c.id === clipId
+            ? {
+                ...c,
+                textOverlays: c.textOverlays.map((o) =>
+                  o.id === overlayId ? { ...o, ...patch } : o
+                )
+              }
+            : c
+        )
+      }),
+    removeTextOverlay: (clipId, overlayId) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) =>
+          c.id === clipId
+            ? { ...c, textOverlays: c.textOverlays.filter((o) => o.id !== overlayId) }
+            : c
+        )
+      }),
+
+    undo: () => {
+      const { history, clips, selectedClipId } = get()
+      if (history.past.length === 0) return
+      const last = history.past[history.past.length - 1]!
+      set({
+        clips: last.clips,
+        selectedClipId: last.selectedClipId,
+        history: {
+          past: history.past.slice(0, -1),
+          future: [{ clips, selectedClipId }, ...history.future]
+        },
+        historyKey: null
+      })
+    },
+    redo: () => {
+      const { history, clips, selectedClipId } = get()
+      if (history.future.length === 0) return
+      const next = history.future[0]!
+      set({
+        clips: next.clips,
+        selectedClipId: next.selectedClipId,
+        history: {
+          past: [...history.past, { clips, selectedClipId }],
+          future: history.future.slice(1)
+        },
+        historyKey: null
+      })
+    },
+    canUndo: () => get().history.past.length > 0,
+    canRedo: () => get().history.future.length > 0
+  }
+})

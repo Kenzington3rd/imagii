@@ -29,11 +29,26 @@ import { videoTutorial } from '../../tutorials/videoTutorial'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
+  const clipCount = useVideoStore((s) => s.clips.length)
   const clearSource = useVideoStore((s) => s.clearSource)
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
   const [extractingAudio, setExtractingAudio] = useState(false)
   const tutorial = useTutorial(videoTutorial)
+
+  function handleClose(): void {
+    // UX round 18: clearSource() silently wiped every clip and its edits.
+    // Confirm first whenever there is anything to lose (source load always
+    // creates at least one clip, and clearSource also drops undo history,
+    // so this is unrecoverable).
+    if (clipCount > 0) {
+      const ok = confirm(
+        `Close this video? ${clipCount} clip(s) and their edits will be discarded.`
+      )
+      if (!ok) return
+    }
+    clearSource()
+  }
 
   async function cleanAudioFlow(): Promise<void> {
     if (!source) return
@@ -72,7 +87,7 @@ export function VideoStudio(): JSX.Element {
                 <Icon name="audio" size={15} /> Clean audio
               </button>
               <span className="truncate max-w-[40ch]">{source.fileName}</span>
-              <button className="btn-ghost px-3 py-1.5" onClick={clearSource}>
+              <button className="btn-ghost px-3 py-1.5" onClick={handleClose}>
                 Close
               </button>
             </>
