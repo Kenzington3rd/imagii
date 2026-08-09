@@ -254,7 +254,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     doc: {
       width: 1080,
       height: 1080,
-      background: '#16161e',
+      background: '#1c1313',
       layers: [
         rect('Title bar', 0, 0, 1080, 140, '#f2664b'),
         txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#120c0c', 'Impact, Inter, sans-serif'),

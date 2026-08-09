@@ -272,8 +272,8 @@ export function makeEllipseLayer(x: number, y: number, rx = 80, ry = 60): Ellips
     opacity: 1,
     radiusX: rx,
     radiusY: ry,
-    fill: 'rgba(96,165,250,0.4)',
-    stroke: '#60a5fa',
+    fill: 'rgba(244,63,94,0.4)',
+    stroke: '#f43f5e',
     strokeWidth: 2
   }
 }
