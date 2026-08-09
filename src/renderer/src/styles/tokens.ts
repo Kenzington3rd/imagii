@@ -8,8 +8,9 @@
  * pins the two against each other so they cannot drift.
  *
  * Contrast (WCAG AA needs 4.5:1 for body text):
- *   ACCENT on BG_BASE            6.25:1
- *   BG_BASE text on ACCENT       6.25:1  (filled buttons)
+ *   ACCENT on BG_BASE            5.57:1  (4.79:1 even on BG_HOVER)
+ *   BG_BASE text on ACCENT       5.57:1  (filled buttons; 4.87:1 on
+ *                                         ACCENT_MUTED hover fills)
  *   INK_BASE on BG_BASE         15.5:1
  *   INK_MUTED on BG_BASE         7.1:1
  *   INK_DIM on BG_BASE           6.2:1  (5.8:1 on BG_ELEVATED)
@@ -23,10 +24,10 @@ export const BG_ELEVATED = '#1c1313'
 /** Hover state for interactive surfaces. */
 export const BG_HOVER = '#2a1a18'
 
-/** Primary actions, focus rings, active states — molten lava. */
-export const ACCENT = '#f2664b'
-/** Hover/pressed state of accent elements — cooling lava. */
-export const ACCENT_MUTED = '#d94f35'
+/** Primary actions, focus rings, active states — molten-core red. */
+export const ACCENT = '#f25050'
+/** Hover/pressed state of accent elements — deeper red. */
+export const ACCENT_MUTED = '#e04b4b'
 
 /** Primary text — warm off-white. */
 export const INK_BASE = '#ece4e2'

@@ -72,7 +72,7 @@ export function WaveformView(): JSX.Element | null {
     const offFinish = ws.on('finish', () => setPlaying(false))
 
     let dragging = false
-    regions.enableDragSelection({ color: 'rgba(242, 102, 75, 0.25)' })
+    regions.enableDragSelection({ color: 'rgba(242, 80, 80, 0.25)' })
     const offRegionCreated = regions.on('region-created', (region: Region) => {
       dragging = true
       region.on('update-end', () => {

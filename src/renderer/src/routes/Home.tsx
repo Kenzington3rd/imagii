@@ -101,7 +101,7 @@ export function Home(): JSX.Element {
           title="Video Studio"
           description="Trim and clip video, then export for TikTok, Reels, YouTube, X, or Facebook."
           icon={<Icon name="video" size={26} />}
-          accent="rgba(242, 102, 75, 0.18)"
+          accent="rgba(242, 80, 80, 0.18)"
         />
         <NavCard
           to="/audio"

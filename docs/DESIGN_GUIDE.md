@@ -18,8 +18,8 @@ hard-code chrome colors in `className` — use the token.
 | `bg-base` | `#120c0c` | App background, deepest layer — obsidian black, warm undertone |
 | `bg-elevated` | `#1c1313` | Cards, panels, modals |
 | `bg-hover` | `#2a1a18` | Hover state for interactive surfaces |
-| `accent` | `#f2664b` | Primary actions, focus rings, active states — molten lava (6.25:1 on `bg-base`) |
-| `accent-muted` | `#d94f35` | Hover state of accent elements |
+| `accent` | `#f25050` | Primary actions, focus rings, active states — molten-core red (5.57:1 on `bg-base`, 4.79:1 on `bg-hover`) |
+| `accent-muted` | `#e04b4b` | Hover state of accent elements |
 | `ink-base` | `#ece4e2` | Primary text (15.5:1) |
 | `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
 | `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). |

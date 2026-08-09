@@ -133,10 +133,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 720,
       background: '#241614',
       layers: [
-        rectLayer('Accent bar', 0, 540, 1280, 180, '#f2664b'),
+        rectLayer('Accent bar', 0, 540, 1280, 180, '#f25050'),
         textLayer('Title', 60, 60, 'YOUR TITLE\nHERE', 130, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 760, 110, 460, 460, 'rgba(242,102,75,0.18)', '#f2664b', 4, 24),
-        textLayer('Face hint', 880, 320, 'Drop face here', 36, '#f2664b')
+        rectLayer('Face placeholder', 760, 110, 460, 460, 'rgba(242,80,80,0.18)', '#f25050', 4, 24),
+        textLayer('Face hint', 880, 320, 'Drop face here', 36, '#f25050')
       ]
     }
   },
@@ -150,8 +150,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 720,
       background: '#120c0c',
       layers: [
-        rectLayer('Accent stripe', 0, 0, 12, 720, '#f2664b'),
-        textLayer('Eyebrow', 80, 80, 'TUTORIAL', 36, '#f2664b'),
+        rectLayer('Accent stripe', 0, 0, 12, 720, '#f25050'),
+        textLayer('Eyebrow', 80, 80, 'TUTORIAL', 36, '#f25050'),
         textLayer('Title', 80, 160, 'How to do\nthe thing', 110, '#ffffff'),
         textLayer('Subtitle', 80, 580, 'in 3 minutes', 48, '#a59a97')
       ]
@@ -173,15 +173,15 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
           800,
           400,
           240,
-          'rgba(242,102,75,0.10)',
-          '#f2664b',
+          'rgba(242,80,80,0.10)',
+          '#f25050',
           4,
           16
         ),
-        textLayer('Facecam hint', 1560, 900, 'Facecam goes here', 22, '#f2664b'),
-        rectLayer('Lower third', 60, 980, 700, 80, 'rgba(18,12,12,0.85)', '#f2664b', 2, 12),
+        textLayer('Facecam hint', 1560, 900, 'Facecam goes here', 22, '#f25050'),
+        rectLayer('Lower third', 60, 980, 700, 80, 'rgba(18,12,12,0.85)', '#f25050', 2, 12),
         textLayer('Handle', 84, 1000, '@yourhandle', 36, '#ffffff'),
-        textLayer('Now playing', 84, 1044, 'NOW PLAYING · Game name', 18, '#f2664b')
+        textLayer('Now playing', 84, 1044, 'NOW PLAYING · Game name', 18, '#f25050')
       ]
     }
   },
@@ -202,11 +202,11 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
           360,
           200,
           'transparent',
-          '#f2664b',
+          '#f25050',
           5,
           12
         ),
-        textLayer('Handle corner', 60, 256, '@yourhandle', 24, '#f2664b')
+        textLayer('Handle corner', 60, 256, '@yourhandle', 24, '#f25050')
       ]
     }
   },
@@ -226,10 +226,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 480,
       background: '#241614',
       layers: [
-        rectLayer('Bg accent', 0, 0, 1200, 480, '#f2664b', 'transparent', 0, 0),
+        rectLayer('Bg accent', 0, 0, 1200, 480, '#f25050', 'transparent', 0, 0),
         rectLayer('Bg dark', 0, 60, 1200, 360, '#120c0c', 'transparent', 0, 0),
         textLayer('Handle', 50, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif'),
-        textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#f2664b')
+        textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#f25050')
       ]
     }
   },
@@ -250,7 +250,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         // All-device safe area: 1546×423 centered on 2560×1440 → offset
         // ((2560-1546)/2, (1440-423)/2) = (507, 508).
-        rectLayer('All-device safe area', 507, 508, 1546, 423, 'transparent', '#f2664b', 2, 12),
+        rectLayer('All-device safe area', 507, 508, 1546, 423, 'transparent', '#f25050', 2, 12),
         // TV-safe minimum: 1235×338 centered → offset (662, 551).
         rectLayer('TV-safe area', 662, 551, 1235, 338, 'transparent', '#fbbf24', 2, 8),
         textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24'),
@@ -268,10 +268,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 1440,
       background: '#241614',
       layers: [
-        rectLayer('Accent bar', 0, 1080, 2560, 360, '#f2664b'),
+        rectLayer('Accent bar', 0, 1080, 2560, 360, '#f25050'),
         textLayer('Title', 120, 120, 'YOUR TITLE\nHERE', 260, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 1520, 220, 920, 920, 'rgba(242,102,75,0.18)', '#f2664b', 6, 36),
-        textLayer('Face hint', 1760, 640, 'Drop face here', 56, '#f2664b')
+        rectLayer('Face placeholder', 1520, 220, 920, 920, 'rgba(242,80,80,0.18)', '#f25050', 6, 36),
+        textLayer('Face hint', 1760, 640, 'Drop face here', 56, '#f25050')
       ]
     }
   },
@@ -285,10 +285,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 2160,
       background: '#241614',
       layers: [
-        rectLayer('Accent bar', 0, 1620, 3840, 540, '#f2664b'),
+        rectLayer('Accent bar', 0, 1620, 3840, 540, '#f25050'),
         textLayer('Title', 180, 180, 'YOUR TITLE\nHERE', 390, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 2280, 330, 1380, 1380, 'rgba(242,102,75,0.18)', '#f2664b', 8, 54),
-        textLayer('Face hint', 2640, 960, 'Drop face here', 84, '#f2664b')
+        rectLayer('Face placeholder', 2280, 330, 1380, 1380, 'rgba(242,80,80,0.18)', '#f25050', 8, 54),
+        textLayer('Face hint', 2640, 960, 'Drop face here', 84, '#f25050')
       ]
     }
   },
@@ -302,11 +302,11 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 1440,
       background: 'transparent',
       layers: [
-        rectLayer('Facecam hole', 2000, 1067, 533, 320, 'rgba(242,102,75,0.10)', '#f2664b', 5, 21),
-        textLayer('Facecam hint', 2080, 1200, 'Facecam goes here', 29, '#f2664b'),
-        rectLayer('Lower third', 80, 1307, 933, 107, 'rgba(18,12,12,0.85)', '#f2664b', 3, 16),
+        rectLayer('Facecam hole', 2000, 1067, 533, 320, 'rgba(242,80,80,0.10)', '#f25050', 5, 21),
+        textLayer('Facecam hint', 2080, 1200, 'Facecam goes here', 29, '#f25050'),
+        rectLayer('Lower third', 80, 1307, 933, 107, 'rgba(18,12,12,0.85)', '#f25050', 3, 16),
         textLayer('Handle', 112, 1333, '@yourhandle', 48, '#ffffff'),
-        textLayer('Now playing', 112, 1392, 'NOW PLAYING · Game name', 24, '#f2664b')
+        textLayer('Now playing', 112, 1392, 'NOW PLAYING · Game name', 24, '#f25050')
       ]
     }
   },
@@ -320,11 +320,11 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 2160,
       background: 'transparent',
       layers: [
-        rectLayer('Facecam hole', 3000, 1600, 800, 480, 'rgba(242,102,75,0.10)', '#f2664b', 8, 32),
-        textLayer('Facecam hint', 3120, 1800, 'Facecam goes here', 44, '#f2664b'),
-        rectLayer('Lower third', 120, 1960, 1400, 160, 'rgba(18,12,12,0.85)', '#f2664b', 4, 24),
+        rectLayer('Facecam hole', 3000, 1600, 800, 480, 'rgba(242,80,80,0.10)', '#f25050', 8, 32),
+        textLayer('Facecam hint', 3120, 1800, 'Facecam goes here', 44, '#f25050'),
+        rectLayer('Lower third', 120, 1960, 1400, 160, 'rgba(18,12,12,0.85)', '#f25050', 4, 24),
         textLayer('Handle', 168, 2000, '@yourhandle', 72, '#ffffff'),
-        textLayer('Now playing', 168, 2088, 'NOW PLAYING · Game name', 36, '#f2664b')
+        textLayer('Now playing', 168, 2088, 'NOW PLAYING · Game name', 36, '#f25050')
       ]
     }
   },
@@ -342,7 +342,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 112,
       background: 'transparent',
       layers: [
-        ellipseLayer('Base circle', 56, 56, 50, 50, '#f2664b', '#d94f35', 2)
+        ellipseLayer('Base circle', 56, 56, 50, 50, '#f25050', '#e04b4b', 2)
       ]
     }
   },
