@@ -53,8 +53,10 @@ finished.
   build if they drift. New pairings must clear WCAG AA (4.5:1).
 - **Local-first is a product promise, not a default.** No network calls,
   no telemetry, no analytics, no phone-home. A single one is a bug.
-- **No authorship attribution** in the product, the docs, or commit
-  messages — see Attribution in `docs/BRANDING_GUIDE.md`.
+- **No authorship attribution** in the product, the docs, or the commit
+  subject and body. Agent-runtime commit trailers (`Co-Authored-By`,
+  session links) are exempt — see Attribution in
+  `docs/BRANDING_GUIDE.md`.
 - **Panel headers are the `PanelHeader` component**, never a hand-written
   heading. Same for icons: add a path to `Icon.tsx`, never inline a
   one-off SVG.
