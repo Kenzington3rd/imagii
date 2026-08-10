@@ -63,13 +63,51 @@ finished.
 
 ---
 
+## Build the smallest thing that works
+
+The best code is the code never written. Before writing any, stop at the
+first rung that holds:
+
+1. **Does this need to exist?** Speculative need is not need. Say so in
+   one line and move on.
+2. **Does it already exist here?** `src/shared/` is full of tested
+   helpers; the renderer has `Icon`, `PanelHeader`, `tokens.ts`, and the
+   `.btn-primary` / `.btn-ghost` / `.card` classes. Reusing one of these
+   is not just shorter, it is the documented convention — see
+   `docs/STYLE_GUIDE.md`.
+3. **Does the platform do it?** A native input, a CSS rule, or an
+   existing Electron/Node API beats a hand-rolled equivalent.
+4. **Does an installed dependency do it?** Check `package.json` before
+   adding anything. A new dependency in a local-first app is weight the
+   user downloads forever.
+5. **Only then:** the minimum code that works.
+
+Rules that follow from the ladder:
+
+- No abstraction nobody asked for: no interface with one implementation,
+  no config for a value that never changes, no scaffolding "for later".
+- Deletion over addition. Boring over clever. Fewest files possible.
+- A bug fix targets the root cause, not the reported symptom. Grep the
+  callers before editing; one guard in the shared function is both the
+  smaller diff and the real fix.
+- Understanding is never what gets shortened. The ladder shortens the
+  solution. A small change in the wrong place is a second bug.
+- Mark a deliberate simplification that cuts a real corner with a
+  `// simplification:` comment naming the ceiling and the upgrade path.
+
+Never simplify away: input validation at trust boundaries, error
+handling that prevents data loss, accessibility, the local-first
+promise, or anything explicitly requested — including everything in the
+next section.
+
+---
+
 ## Testing conventions are explicitly requested
 
-This section exists because minimalism skills (ponytail and similar) are
-used on this repo. Such skills reduce scope by default but defer to
-anything explicitly requested. **Everything below is explicitly
-requested, standing, and applies to every change.** Reducing test
-coverage is not a valid simplification here.
+The section above is a rule about product code. It is not a licence to
+cut tests, and neither is any external minimalism skill. **Everything
+below is explicitly requested, standing, and applies to every change.**
+Reducing test coverage is not a valid simplification here.
 
 - Every pure helper in `src/shared/` gets a vitest unit test, placed
   beside it as `foo.ts` -> `foo.test.ts`.
