@@ -24,23 +24,31 @@ export const NATIVE_VIDEO_EXTENSIONS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v
 
 /**
  * Containers ffmpeg reads but Chromium cannot preview — converted to an
- * mp4 working copy on import. flv is the classic OBS/stream-dump
- * format; the rest are the long tail of "a friend sent me this".
+ * mp4 working copy on import. flv/ts/m2ts are the OBS-and-stream-dump
+ * family; the rest are the long tail of "a friend sent me this".
+ *
+ * PER-PLATFORM CAVEAT (ts/m2ts/mts): ffmpeg-static ships binaries from
+ * DIFFERENT upstream builders per platform. The linux x64 binary
+ * (johnvansickle 7.0.2-static) SIGSEGVs on any muxed output from an
+ * mpegts input; the win32 x64 binary (gyan.dev 6.1.1) — the one that
+ * ships in the product — handles the whole family cleanly, proven by
+ * running the exact repro under wine (2026-08-14: transcode from
+ * mpeg2-in-ts and h264-in-ts, m2ts, and wav extraction all exit 0).
+ * Consequence: importing a .ts works in the shipped Windows app but
+ * crashes the convert child in linux dev runs. The Layer 5 matrix gates
+ * these entries by platform, and a linux-only test pins the segfault so
+ * an ffmpeg-static upgrade that fixes it surfaces loudly.
  */
-export const CONVERT_VIDEO_EXTENSIONS = ['flv', 'wmv', 'mpg', 'mpeg', '3gp'] as const
-
-/**
- * KNOWN-UNSUPPORTED: ts / m2ts / mts (MPEG-TS stream dumps).
- * The bundled ffmpeg-static build (avformat 61.1.100, 2026-08) SIGSEGVs
- * on ANY muxed output from an mpegts input — mp4/mov/mkv, remux or
- * transcode alike (`ffmpeg -i in.ts -c copy out.mp4` crashes; decode to
- * `-f null` is fine). Caught by the Layer 5 container matrix before it
- * shipped. Re-add to CONVERT_VIDEO_EXTENSIONS when a fixed ffmpeg-static
- * lands — the Layer 5 tests to re-enable are in
- * tests/integration/media.spec.ts. Until then OBS users can remux
- * ts -> mp4 in OBS (File > Remux Recordings).
- */
-export const KNOWN_UNSUPPORTED_VIDEO_EXTENSIONS = ['ts', 'm2ts', 'mts'] as const
+export const CONVERT_VIDEO_EXTENSIONS = [
+  'flv',
+  'ts',
+  'm2ts',
+  'mts',
+  'wmv',
+  'mpg',
+  'mpeg',
+  '3gp'
+] as const
 
 export const VIDEO_EXTENSIONS: readonly string[] = [
   ...NATIVE_VIDEO_EXTENSIONS,

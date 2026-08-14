@@ -22,27 +22,34 @@ all five hand-rolled extension lists replaced by `shared/mediaFormats.ts`
 — they had already drifted (the audio picker's video filter was missing
 m4v). Two findings worth recording:
 
-### Bug — the bundled ffmpeg SIGSEGVs on any muxed output from an mpegts input
-- **Root cause.** Upstream: ffmpeg-static's linux x64 build (avformat
-  61.1.100) crashes with SIGSEGV whenever an mpegts input (`.ts`,
-  `.m2ts`) is written to ANY muxed output — mp4, mov, mkv; remux
-  (`-c copy`) and transcode alike. Decode to `-f null` is fine, which is
-  why nothing short of the real conversion command surfaced it.
-- **Fix.** ts/m2ts/mts are excluded from the accepted import lists and
-  parked in `KNOWN_UNSUPPORTED_VIDEO_EXTENSIONS` with the repro
-  documented. Re-add when a fixed ffmpeg-static lands. (OBS users:
-  File > Remux Recordings converts ts to mp4 losslessly.)
-- **Test.** `mediaFormats.test.ts` pins the exclusion; the Layer 5
-  container matrix in `tests/integration/media.spec.ts` is what caught
-  it, and is where re-enabling starts.
-- **Lesson.** **"ffmpeg reads it" is a per-binary, per-path claim, not a
-  general truth.** The matrix also caught a second fixture bug the same
-  hour: MPEG-1/2 encoders reject frame rates outside the legacy
-  broadcast set, so a 15 fps test fixture failed to encode (.mpg) and
-  produced a stream whose decode crashed (.ts). Every container an
-  import list claims gets a generate-convert-probe test against the
-  bundled binary — the fourth time Layer 5 has caught something green
-  unit tests blessed.
+### Bug — the bundled ffmpeg SIGSEGVs on any muxed output from an mpegts input (linux binary only — resolved same day)
+- **Root cause.** ffmpeg-static ships binaries from DIFFERENT upstream
+  builders per platform: linux x64 is johnvansickle 7.0.2-static,
+  win32 x64 is gyan.dev 6.1.1. The johnvansickle build crashes with
+  SIGSEGV whenever an mpegts input (`.ts`, `.m2ts`) is written to ANY
+  muxed output — mp4/mov/mkv, remux (`-c copy`), transcode, and pipe
+  input alike. Decode to `-f null` is fine, which is why nothing short
+  of the real conversion command surfaced it.
+- **Fix.** Initially excluded the family outright — wrong call for the
+  product, discovered by running the exact repro against the win32
+  binary (the one that actually ships in the exe) under wine: every
+  shape passes (mpeg2-in-ts and h264-in-ts transcode, m2ts, wav
+  extraction). ts/m2ts/mts are ENABLED; the per-platform caveat is
+  documented in `shared/mediaFormats.ts`. Linux dev runs still crash on
+  ts import — known, pinned, harmless to the product.
+- **Test.** Layer 5 matrix entries for ts/m2ts run where the shipping
+  builder runs (`skipIf` non-win32); a linux-only test pins the
+  segfault itself, worded so that an ffmpeg-static upgrade that fixes
+  the linux build FAILS the pin and prompts un-gating the matrix.
+- **Lesson.** Two lessons. **(1) "ffmpeg reads it" is a per-binary,
+  per-path claim, not a general truth** — the matrix also caught MPEG-1/2
+  encoders rejecting non-broadcast frame rates the same hour. **(2) Test
+  evidence is per-platform when the binaries are per-platform.** The dev
+  environment's binary and the shipped binary were entirely different
+  programs from different maintainers; a crash in one said nothing about
+  the other. Before cutting a feature over a binary bug, check which
+  binary the USER runs — wine made that testable without a Windows
+  machine.
 
 ### Bug — five duplicated extension lists, one already drifted
 - **Root cause.** Picker filters (ipc/video, ipc/audio), two drop zones,

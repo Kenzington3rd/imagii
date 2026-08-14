@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   NATIVE_VIDEO_EXTENSIONS,
-  KNOWN_UNSUPPORTED_VIDEO_EXTENSIONS,
   CONVERT_VIDEO_EXTENSIONS,
   VIDEO_EXTENSIONS,
   WEB_AUDIO_EXTENSIONS,
@@ -19,7 +18,7 @@ import {
 
 describe('mediaFormats lists', () => {
   it('video includes the streamer set (OBS/stream-dump containers)', () => {
-    for (const ext of ['mp4', 'mov', 'mkv', 'webm', 'flv', 'wmv', '3gp']) {
+    for (const ext of ['mp4', 'mov', 'mkv', 'webm', 'flv', 'ts', 'm2ts', 'wmv', '3gp']) {
       expect(VIDEO_EXTENSIONS, ext).toContain(ext)
     }
   })
@@ -31,13 +30,14 @@ describe('mediaFormats lists', () => {
     expect(VIDEO_EXTENSIONS).toContain('m4v')
   })
 
-  // Layer 5 caught the bundled ffmpeg SIGSEGVing on any muxed output
-  // from an mpegts input. The ts family must stay OUT of the accepted
-  // lists until ffmpeg-static ships a fix — importing one would crash
-  // the conversion child on every attempt.
-  it('the mpegts family stays excluded while ffmpeg-static segfaults on it', () => {
-    for (const ext of KNOWN_UNSUPPORTED_VIDEO_EXTENSIONS) {
-      expect(VIDEO_EXTENSIONS).not.toContain(ext)
+  // The ts family was briefly excluded when the linux dev binary was
+  // found SIGSEGVing on mpegts input. The SHIPPED binary (win32,
+  // gyan.dev build) was then proven clean under wine, so the family is
+  // supported product-wide. See the per-platform caveat in
+  // mediaFormats.ts and the platform-gated Layer 5 matrix.
+  it('the mpegts stream-dump family is supported', () => {
+    for (const ext of ['ts', 'm2ts', 'mts']) {
+      expect(VIDEO_EXTENSIONS).toContain(ext)
     }
   })
 
@@ -86,6 +86,7 @@ describe('filename classification', () => {
     expect(videoNeedsConversion('a.mp4')).toBe(false)
     expect(videoNeedsConversion('a.mkv')).toBe(false)
     expect(videoNeedsConversion('a.flv')).toBe(true)
+    expect(videoNeedsConversion('a.TS')).toBe(true)
     expect(videoNeedsConversion('a.wmv')).toBe(true)
   })
 
