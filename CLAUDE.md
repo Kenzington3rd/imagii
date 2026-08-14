@@ -138,7 +138,28 @@ that prove it works.
 
 ---
 
-## Specialist reviewers
+## Model routing — owner's standing workflow (2026-08-14)
+
+Makenah's directive for how agent work on this repo is organized:
+
+- **Fable (`claude-fable-5`) is the planner and expediter.** The main
+  session runs on Fable. It reads the specs (the guides above +
+  `docs/PRODUCT_GUIDE.md`), writes tickets into `docs/TICKETS.md`
+  (format defined there: ID, spec reference, acceptance criteria), and
+  owns the definition of done.
+- **Opus (`claude-opus-5`) implements.** Each ticket is delegated to an
+  Opus worker — an `Agent` call with `model: "opus"`, or a child
+  session on `claude-opus-5` for large tickets. Workers get the ticket
+  text verbatim, including acceptance criteria.
+- **Fable expedites before anything merges.** The Fable session checks
+  the implementation against the ticket's acceptance criteria, runs
+  `npm run verify` (and `test:media` when IMG-PREC requires it), and
+  either accepts — marking the ticket done with the commit hash — or
+  sends it back with what's missing. Implementation output is not
+  trusted on its own report; the expediter re-runs the checks.
+
+If a session finds itself on the wrong model for its role, say so and
+ask the owner to switch (`/model`) rather than silently proceeding.
 
 `.claude/agents/` holds nine review agents — QA, ffmpeg pipeline,
 Electron, audio engineering, UX, accessibility, privacy, streamer
