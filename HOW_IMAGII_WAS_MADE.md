@@ -232,7 +232,7 @@ Two rounds catching bugs surfaced after the feature work:
 - **5 studios**: Record, Video, Audio, Image Canvas, References.
 - **163 passing tests** across 14 test files covering autosave, validation, audio chain, highlights scoring, geometry, project schema migration, filename sanitization, tempdir cleanup, more.
 - **Both typechecks clean** — `tsconfig.node.json` and `tsconfig.web.json`, both with full strict flags.
-- **`dist/imagii-for-mike.exe`** — ~173 MB portable Windows binary, built via `npm run dist`.
+- **`dist/imagii.exe`** — ~173 MB portable Windows binary, built via `npm run dist`.
 - **Crash-safe autosave** with atomic write + rolling backup.
 - **Power of Ten governance** applied to every new function.
 
