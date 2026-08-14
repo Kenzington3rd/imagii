@@ -60,6 +60,12 @@ finished.
 - **Panel headers are the `PanelHeader` component**, never a hand-written
   heading. Same for icons: add a path to `Icon.tsx`, never inline a
   one-off SVG.
+- **A CI trigger is a standing financial commitment.** Any new workflow
+  limits `push` to `main` (`pull_request` already covers branches —
+  listening to both bills twice for one commit), sets `paths-ignore` for
+  `docs/**` and `**/*.md`, and takes a `concurrency` group with
+  `cancel-in-progress`. Anything that publishes stays dispatch- or
+  tag-triggered. See the 2026-08-14 entry in `docs/LESSONS_LEARNED.md`.
 
 ---
 
@@ -102,12 +108,18 @@ next section.
 
 ---
 
-## Testing conventions are explicitly requested
+## IMG-PREC — testing conventions win any precedence conflict
+
+Named `IMG-PREC` so it can be cited unambiguously, and so a parallel
+session working in another repository can hold a different policy
+without the two being confused. Do not add a second, generically-titled
+precedence section here; amend this one.
 
 The section above is a rule about product code. It is not a licence to
-cut tests, and neither is any external minimalism skill. **Everything
-below is explicitly requested, standing, and applies to every change.**
-Reducing test coverage is not a valid simplification here.
+cut tests, and neither is any external minimalism skill or plugin
+(ponytail and similar). **Everything below is explicitly requested,
+standing, and applies to every change.** Reducing test coverage is not a
+valid simplification here.
 
 - Every pure helper in `src/shared/` gets a vitest unit test, placed
   beside it as `foo.ts` -> `foo.test.ts`.
