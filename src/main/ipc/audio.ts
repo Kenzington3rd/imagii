@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { probeAudio } from '../audio/probe'
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../shared/mediaFormats'
 import { extractAudioFromVideo } from '../audio/extract'
 import { runAudioExport, runAudioMux, cancelAudioJob } from '../audio/process'
 import {
@@ -52,9 +53,9 @@ export function registerAudioIpc(): void {
       filters: [
         {
           name: 'Audio',
-          extensions: ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus']
+          extensions: [...AUDIO_EXTENSIONS]
         },
-        { name: 'Video (extract audio)', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm'] },
+        { name: 'Video (extract audio)', extensions: [...VIDEO_EXTENSIONS] },
         { name: 'All files', extensions: ['*'] }
       ]
     })

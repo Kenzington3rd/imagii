@@ -5,13 +5,15 @@ import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { describeImportError } from '@shared/importDiagnostics'
+import {
+  VIDEO_EXTENSIONS,
+  isVideoFilename,
+  videoNeedsConversion,
+  formatHint
+} from '@shared/mediaFormats'
 
-const ACCEPTED_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']
-
-function looksLikeVideo(name: string): boolean {
-  const lower = name.toLowerCase()
-  return ACCEPTED_EXTENSIONS.some((ext) => lower.endsWith(ext))
-}
+// Round 20: lists + hint come from shared/mediaFormats — see that module
+// for the native-vs-convert tiering rationale.
 
 export function Importer(): JSX.Element {
   const loadSource = useVideoStore((s) => s.loadSource)
@@ -23,10 +25,20 @@ export function Importer(): JSX.Element {
     if (!filePath) return
     setBusy(true)
     try {
-      await loadSource(filePath)
+      let sourcePath = filePath
+      // Round 20: stream-dump containers (flv/ts/wmv/mpg/3gp) can't play
+      // in Chromium's <video> element — transcode to an mp4 working copy
+      // first. Proven per-container in the Layer 5 suite.
+      if (videoNeedsConversion(filePath)) {
+        toast.loading('Converting for editing\u2026', { id: 'convert' })
+        sourcePath = await window.api.video.convertForImport(filePath)
+        toast.dismiss('convert')
+      }
+      await loadSource(sourcePath)
       await push(filePath)
       toast.success('Video loaded')
     } catch (err) {
+      toast.dismiss('convert')
       // M8 fix (round 15): default 4 s toast wasn't enough to read on a
       // codec-not-supported error. Mirror AudioImporter — 8 s + the shared
       // describeImportError which surfaces actionable hints (cloud-sync,
@@ -50,7 +62,7 @@ export function Importer(): JSX.Element {
       })
       return
     }
-    if (!looksLikeVideo(file.name)) {
+    if (!isVideoFilename(file.name)) {
       toast(`${file.name} may not be a supported video — trying anyway.`, {
         icon: <Icon name="warning" size={18} />
       })
@@ -80,7 +92,7 @@ export function Importer(): JSX.Element {
       </div>
       <h2 className="text-2xl font-semibold mb-2">Drop a video here</h2>
       <p className="text-ink-muted text-sm mb-6">
-        MP4, MOV, AVI, MKV, WEBM, M4V. {busy ? 'Loading…' : 'Or use the file picker.'}
+        {formatHint(VIDEO_EXTENSIONS)}. {busy ? 'Loading…' : 'Or use the file picker.'}
       </p>
       <div className="flex items-center gap-2">
         <button className="btn-primary" onClick={onPickFile} disabled={busy}>

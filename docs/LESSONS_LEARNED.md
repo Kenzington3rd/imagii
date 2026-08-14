@@ -14,6 +14,49 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-14 — Round 20 format widening: the Layer 5 matrix caught a bundled-ffmpeg segfault before it shipped
+
+Import format support widened (flv/wmv/mpg/mpeg/3gp video via
+convert-on-import, aiff/wma audio via extract-to-wav, avif images), with
+all five hand-rolled extension lists replaced by `shared/mediaFormats.ts`
+— they had already drifted (the audio picker's video filter was missing
+m4v). Two findings worth recording:
+
+### Bug — the bundled ffmpeg SIGSEGVs on any muxed output from an mpegts input
+- **Root cause.** Upstream: ffmpeg-static's linux x64 build (avformat
+  61.1.100) crashes with SIGSEGV whenever an mpegts input (`.ts`,
+  `.m2ts`) is written to ANY muxed output — mp4, mov, mkv; remux
+  (`-c copy`) and transcode alike. Decode to `-f null` is fine, which is
+  why nothing short of the real conversion command surfaced it.
+- **Fix.** ts/m2ts/mts are excluded from the accepted import lists and
+  parked in `KNOWN_UNSUPPORTED_VIDEO_EXTENSIONS` with the repro
+  documented. Re-add when a fixed ffmpeg-static lands. (OBS users:
+  File > Remux Recordings converts ts to mp4 losslessly.)
+- **Test.** `mediaFormats.test.ts` pins the exclusion; the Layer 5
+  container matrix in `tests/integration/media.spec.ts` is what caught
+  it, and is where re-enabling starts.
+- **Lesson.** **"ffmpeg reads it" is a per-binary, per-path claim, not a
+  general truth.** The matrix also caught a second fixture bug the same
+  hour: MPEG-1/2 encoders reject frame rates outside the legacy
+  broadcast set, so a 15 fps test fixture failed to encode (.mpg) and
+  produced a stream whose decode crashed (.ts). Every container an
+  import list claims gets a generate-convert-probe test against the
+  bundled binary — the fourth time Layer 5 has caught something green
+  unit tests blessed.
+
+### Bug — five duplicated extension lists, one already drifted
+- **Root cause.** Picker filters (ipc/video, ipc/audio), two drop zones,
+  and the image import panel each carried their own inline list; the
+  audio picker's video filter lacked m4v.
+- **Fix.** `shared/mediaFormats.ts` is the single source; every filter,
+  drop-zone check, and hint string derives from it.
+- **Test.** `mediaFormats.test.ts` (m4v pinned, tier-overlap guards,
+  hint format).
+- **Lesson.** Same as the fileUrl bug one entry down, generalized: **two
+  copies that must agree are one module that hasn't been written yet.**
+
+---
+
 ## 2026-08-14 — Media never loaded in the shipped app: the imagii-file:// round-trip was lossy
 
 The first real user report ("files don't load, nothing usable") turned

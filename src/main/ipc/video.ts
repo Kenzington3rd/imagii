@@ -1,5 +1,7 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
+import { VIDEO_EXTENSIONS } from '../../shared/mediaFormats'
+import { convertForImport } from '../ffmpeg/convert'
 import { probeVideo } from '../ffmpeg/probe'
 import { runExportJob, cancelExportJob, cancelAllExportJobs } from '../ffmpeg/export'
 import { runReframe, cancelReframeJob, type ReframeJobSpec } from '../ffmpeg/reframe'
@@ -86,6 +88,12 @@ export function registerVideoIpc(): void {
     return probeVideo(filePath)
   })
 
+  ipcMain.handle('video:convertForImport', async (_e, filePath: string) => {
+    assertNonEmptyString(filePath, 'video:convertForImport filePath')
+    assertSafeAbsolutePath(filePath, 'video:convertForImport filePath')
+    return convertForImport(filePath)
+  })
+
   ipcMain.handle('video:pickFile', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     if (!win) return null
@@ -95,7 +103,7 @@ export function registerVideoIpc(): void {
       filters: [
         {
           name: 'Video',
-          extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
+          extensions: [...VIDEO_EXTENSIONS]
         },
         { name: 'All files', extensions: ['*'] }
       ]
