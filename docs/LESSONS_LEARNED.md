@@ -14,6 +14,51 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-14 — Media never loaded in the shipped app: the imagii-file:// round-trip was lossy
+
+The first real user report ("files don't load, nothing usable") turned
+out to be a 100% failure of media loading in the packaged app, on every
+platform, present since the Video Studio MVP. Eighteen review rounds
+missed it because no automated test ever loaded a file through the real
+protocol, and agent rounds run headless on Linux without real media.
+
+### Bug — every imagii-file:// request returned 403, so no video, audio, or thumbnail ever loaded
+- **Root cause.** The URL builder (inlined in the preload's `fileUrl`)
+  embedded the filesystem path into the URL authority + path, and the
+  protocol handler reassembled it from `url.hostname + url.pathname`.
+  URL parsing is lossy there in three independent ways: a Windows drive
+  colon (`C:`) parses as a port delimiter and vanishes, the POSIX
+  leading slash the builder stripped was never restored, and `#` in a
+  filename (unescaped by `encodeURI`) truncated the path as a fragment.
+  Every corrupted path then failed `isSafeAbsolutePath` and the handler
+  403'd. A second copy of the builder in `protocol.ts` — dead code the
+  renderer never used — made the preload/handler disagreement invisible.
+- **Fix.** `src/shared/fileUrl.ts` — one tested module owning both
+  directions. The whole absolute path is percent-encoded as a single
+  URL path segment under a fixed dummy host
+  (`imagii-file://local/<encodeURIComponent(path)>`), so URL structure
+  can never touch path bytes. The preload builder and the protocol
+  handler both import it; the duplicate builders are gone.
+- **Test.** `src/shared/fileUrl.test.ts` — round-trip identity matrix
+  (drive letters, spaces, `#`, `?`, `%`, unicode, UNC, POSIX) plus the
+  three corruptions pinned individually; and `tests/e2e/smoke.spec.ts`
+  now fetches a real file through the protocol inside real Chromium
+  (200 + exact byte count, 403 for traversal) — the test that would
+  have caught this on day one.
+- **Lesson.** **A filesystem path is not URL material.** Never place
+  path bytes where a URL parser assigns meaning (authority, port,
+  fragment); encode the whole path as one opaque segment and decode it
+  with the mirror of the same module. And when a builder and a parser
+  must agree byte-for-byte across a process boundary, they are ONE
+  function pair in ONE file with a round-trip test — two inline copies
+  agreeing by luck is how this shipped broken for months. Finally:
+  string-shape confidence strikes again — unit tests asserted what the
+  URL looked like; only fetching through the real protocol stack proves
+  the app can read a file. That is the same lesson as the round-18
+  ffmpeg layer, one boundary over.
+
+---
+
 ## 2026-08-14 — Account-wide GitHub Actions budget exhausted
 
 Not an imagii bug — imagii is public, so its Actions runs are free and

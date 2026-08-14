@@ -7,7 +7,7 @@ import { assert } from './assert'
  *
  * Threat model: a malicious .imagii.json carries `sourcePath: "../../etc/passwd"`
  * or an absolute path to a sensitive file. When opened, the renderer
- * happily passes that path to `pathToImagiiFileUrl`; the protocol handler
+ * happily passes that path to `pathToImagiiFileUrl` (src/shared/fileUrl.ts); the protocol handler
  * reads whatever was requested. Arbitrary file read on import.
  *
  * Mitigation: reject paths that contain unresolved `..` segments, that

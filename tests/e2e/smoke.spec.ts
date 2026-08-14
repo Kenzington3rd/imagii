@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -131,6 +132,34 @@ test.describe('imagii Electron smoke', () => {
           timeout: 10_000
         })
       }
+
+      // ── imagii-file:// protocol round-trip (2026-08-14 regression) ──
+      // Media loading was 100% broken in the shipped app because the URL
+      // builder and the protocol handler disagreed about where the path
+      // lived inside the URL; every request 403'd. Unit tests pin the
+      // pure round-trip; THIS block proves it inside real Chromium —
+      // its URL canonicalization, the privileged scheme registration,
+      // CSP (connect-src includes imagii-file:), the handler, and
+      // net.fetch — by fetching a real file and checking the bytes.
+      // A filename with spaces + '#' covers the fragment-truncation bug.
+      const mediaFixture = path.join(userDataDir, 'protocol fixture #1.bin')
+      const fixtureBytes = Buffer.from('imagii-protocol-roundtrip-fixture-2026')
+      writeFileSync(mediaFixture, fixtureBytes)
+      const fetched = await window.evaluate(async (url: string) => {
+        const res = await fetch(url)
+        const buf = await res.arrayBuffer()
+        return { status: res.status, bytes: buf.byteLength }
+      }, pathToImagiiFileUrl(mediaFixture))
+      expect(fetched.status).toBe(200)
+      expect(fetched.bytes).toBe(fixtureBytes.byteLength)
+
+      // And the safety guard still holds: a traversal path the builder
+      // would never produce must be refused, not fetched.
+      const traversal = await window.evaluate(async (url: string) => {
+        const res = await fetch(url)
+        return res.status
+      }, `imagii-file://local/${encodeURIComponent('/etc/../etc/passwd')}`)
+      expect(traversal).toBe(403)
     } finally {
       await app.close()
       // Clean up the hermetic userData directory.
