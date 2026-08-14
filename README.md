@@ -31,7 +31,7 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 
 ### Option 1: Use the prebuilt .exe (easiest)
 
-1. **Get the file.** Download `imagii-for-mike.exe` (~169 MB) from the
+1. **Get the file.** Download `imagii.exe` (~169 MB) from the
    [Releases page](https://github.com/Kenzington3rd/imagii/releases) —
    or use a copy someone sent you directly (possibly inside a
    `for-mike.zip` with a quick-start text file; right-click →
@@ -51,7 +51,7 @@ git clone <this repo>
 cd imagii
 npm install
 npm run verify     # emoji guard + typecheck + 360+ vitest unit tests
-npm run dist       # produces dist/imagii-for-mike.exe (~166 MB)
+npm run dist       # produces dist/imagii.exe (~166 MB)
 ```
 
 ### Running tests

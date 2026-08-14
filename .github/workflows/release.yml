@@ -50,10 +50,10 @@ jobs:
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           name: imagii ${{ inputs.tag || github.ref_name }}
-          files: dist/imagii-for-mike.exe
+          files: dist/imagii.exe
           body: |
             Standalone Windows app — no install needed.
 
-            **Download `imagii-for-mike.exe` below**, put it anywhere, and
+            **Download `imagii.exe` below**, put it anywhere, and
             double-click. Windows SmartScreen will warn on first run because
             the file is unsigned: click **More info → Run anyway**.

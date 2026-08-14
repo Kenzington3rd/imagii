@@ -53,7 +53,7 @@ is Windows portable .exe; macOS / Linux are out of scope.
 
 - Read `src/main/index.ts`, `src/main/ipc/**`, `src/preload/**`,
   `electron-builder.yml`, `package.json`.
-- Run `ls -la dist/imagii-for-mike.exe` if you need size baseline.
+- Run `ls -la dist/imagii.exe` if you need size baseline.
 - Cite exact line numbers.
 
 ## Report
