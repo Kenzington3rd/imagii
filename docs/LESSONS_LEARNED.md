@@ -14,6 +14,49 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-14 — Account-wide GitHub Actions budget exhausted
+
+Not an imagii bug — imagii is public, so its Actions runs are free and
+its single workflow has run once, ever. Recorded here because the
+account-level consequence lands on this repo too, and because the cause
+is a mistake any repo here could repeat.
+
+### Bug — the account's 2,000 included Actions minutes hit 100% mid-cycle
+- **Root cause.** In a sibling repo, `ci.yml` listened to `push` on all
+  branches **and** `pull_request`. Both events fire for a branch that
+  has an open PR, so every PR commit ran two identical jobs — double
+  the spend for zero extra signal. Docs-only commits ran the full suite
+  as well.
+- **Fix.** The house pattern, established in `wubwub` and adopted here
+  for any future workflow:
+  - `push` restricted to `main`; every other branch is already covered
+    by `pull_request`.
+  - `paths-ignore: ["docs/**", "**/*.md"]` — skips a run only when
+    *every* changed file matches, so mixed code+docs commits still run.
+  - `concurrency: { group: <name>-${{ github.ref }}, cancel-in-progress: true }`
+    so a newer commit cancels the in-flight run.
+  - Anything that publishes (release, deploy) stays `workflow_dispatch`
+    plus an explicit tag trigger, never ordinary pushes.
+  imagii's `release.yml` already satisfied the last rule and adds
+  `timeout-minutes: 30`, which caps the blast radius of a hung run.
+- **Test.** None possible — workflow triggers are only exercised by
+  GitHub. The compensating control is that `npm run verify` runs
+  locally and is the real pre-push gate; CI is confirmation, not the
+  first line of defence.
+- **Lesson.** **`push` and `pull_request` overlap; listening to both
+  bills twice for one commit.** More generally: a CI trigger is a
+  standing financial commitment, so read it like one. Cost review
+  belongs at the moment a workflow is added, not at the moment the
+  budget page turns red — by then the spend is already made, and the
+  freeze lands on every repo in the account, including the ones that
+  never cost anything.
+
+**Status:** a $0 Actions budget is set account-wide and the cycle resets
+**2026-09-01** (resume 09-02). Until then, treat all workflow activity
+as frozen. Local verification costs nothing and is unaffected.
+
+---
+
 ## 2026-08-09 — Bug round 18: the real-ffmpeg layer — three features that never worked, streaming recording, Video Studio undo
 
 Round 18 added the test layer rounds 1–17 never had: `npm run test:media`

@@ -89,9 +89,20 @@ the app icon.
 
 imagii ships without authorship attribution in the product, the
 commits, or the docs. Do not add "made with" tags, generator credits,
-or co-author lines to any artifact. The only exception is a license
-term from a third-party dependency that legally requires a specific
-disclosure — and that is flagged and discussed before it is added.
+or co-author lines to any artifact.
+
+Two exceptions:
+
+- **A license term** from a third-party dependency that legally
+  requires a specific disclosure — flagged and discussed before it is
+  added.
+- **Agent-runtime commit trailers.** Coding agents run under harnesses
+  that mandate a `Co-Authored-By` / session trailer on every commit;
+  the agent cannot suppress it. Those trailers are exempt. The rule
+  still binds everywhere the reader sees it — the product UI, the docs,
+  release notes, and the commit *subject and body*. Attribution belongs
+  nowhere a user looks; a machine-generated trailer in git metadata is
+  not that place.
 
 ---
 
