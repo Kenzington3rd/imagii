@@ -13,6 +13,10 @@ import { probeVideo } from '../../src/main/ffmpeg/probe'
 import { probeAudio } from '../../src/main/audio/probe'
 import { convertForImport } from '../../src/main/ffmpeg/convert'
 import { extractAudioFromVideo } from '../../src/main/audio/extract'
+import { runReframe } from '../../src/main/ffmpeg/reframe'
+import { runConcat, runPipComposite } from '../../src/main/ffmpeg/concat'
+import { analyzeClipHook, findHighlights } from '../../src/main/ffmpeg/highlights'
+import { runBurnIn } from '../../src/main/sidecars/whisperManager'
 import type { Clip, ExportJobSpec, PlatformId } from '../../src/shared/clip'
 import { DEFAULT_CHAIN_SPEC, type AudioExportSpec, type ChainSpec } from '../../src/shared/audio'
 import { escapeSubtitlesPath } from '../../src/shared/captions'
@@ -39,6 +43,15 @@ let portraitSrc = '' // 1080x1920 + audio
 let noAudioSrc = '' // 1280x720, video only
 let voiceWav = '' // 8s mono 44.1k tone bursts (speech stand-in)
 let musicWav = '' // 8s stereo 44.1k constant 3 kHz tone (secondary stand-in)
+// 640x480 @ 24fps, 20s. Every frame is a flat gray whose value encodes its
+// own timestamp (luma = 12 * t), so any cut/concat output can be checked for
+// "does this frame come from the second we asked for". Audio is a quiet
+// 440 Hz bed with one unmistakable 1.5s burst at 10.0-11.5s.
+let rampSrc = ''
+// Flat green 640x360, video only — the PiP overlay fixture. A single flat
+// color makes "is the overlay actually in the output" a pixel readback.
+let pipOverlaySrc = ''
+const PIP_OVERLAY_RGB: readonly [number, number, number] = [30, 223, 74]
 
 function ff(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -147,6 +160,129 @@ async function bandMeanVolume(
   return Number(m[1])
 }
 
+/**
+ * Raw pixel bytes of `crop` (an ffmpeg crop= argument) at `timeSec`, decoded
+ * to `pixFmt`. Written to a scratch file rather than piped, because the `ff`
+ * helper accumulates stdout as a string and would mangle binary.
+ */
+let pixelSampleSeq = 0
+async function samplePixels(
+  file: string,
+  timeSec: number,
+  crop: string,
+  pixFmt: 'gray' | 'rgb24'
+): Promise<Buffer> {
+  const raw = path.join(workDir, `sample-${pixelSampleSeq++}.raw`)
+  await ff([
+    '-y',
+    '-ss', String(timeSec),
+    '-i', file,
+    '-vf', `${crop},format=${pixFmt}`,
+    '-frames:v', '1',
+    '-f', 'rawvideo',
+    raw
+  ])
+  return readFile(raw)
+}
+
+/** Mean luma (0-255) of a centered 8x8 patch — reads the ramp fixture's clock. */
+async function meanLuma(file: string, timeSec: number): Promise<number> {
+  const buf = await samplePixels(file, timeSec, 'crop=8:8:(iw-8)/2:(ih-8)/2', 'gray')
+  let sum = 0
+  for (const b of buf) sum += b
+  return sum / buf.length
+}
+
+/** Mean R/G/B of the 2x2 patch whose top-left corner is (x, y). */
+async function meanRgb(
+  file: string,
+  timeSec: number,
+  x: number,
+  y: number
+): Promise<[number, number, number]> {
+  const buf = await samplePixels(file, timeSec, `crop=2:2:${x}:${y}`, 'rgb24')
+  const acc = [0, 0, 0]
+  for (let i = 0; i < buf.length; i += 3) {
+    acc[0] += buf[i] ?? 0
+    acc[1] += buf[i + 1] ?? 0
+    acc[2] += buf[i + 2] ?? 0
+  }
+  const n = buf.length / 3
+  return [acc[0] / n, acc[1] / n, acc[2] / n] as [number, number, number]
+}
+
+/** Largest per-channel absolute difference between two RGB samples. */
+function rgbDelta(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number]
+): number {
+  return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+}
+
+/**
+ * Average PSNR (dB) between the same `crop` region of two same-size videos.
+ * Identical regions report `inf`, normalized here to 99. Low PSNR means the
+ * region genuinely differs; high means it is untouched.
+ */
+async function regionPsnr(fileA: string, fileB: string, crop: string): Promise<number> {
+  const { stderr } = await ff([
+    '-hide_banner',
+    '-i', fileA,
+    '-i', fileB,
+    '-lavfi', `[0:v]${crop}[a];[1:v]${crop}[b];[a][b]psnr`,
+    '-f', 'null',
+    '-'
+  ])
+  const m = stderr.match(/average:\s*(inf|[\d.]+)/)
+  if (!m) throw new Error(`no psnr summary for ${path.basename(fileA)}`)
+  return m[1] === 'inf' ? 99 : Number(m[1])
+}
+
+/**
+ * Decode every stream of `file` to /dev/null and report how much raw output
+ * each produced. `-xerror` turns any decode error into a non-zero exit, so
+ * `ff` rejects; a non-zero audio figure proves the audio stream really
+ * decoded rather than merely being listed by ffprobe.
+ */
+async function decodeSizes(file: string): Promise<{ videoKiB: number; audioKiB: number }> {
+  const { stderr } = await ff(['-hide_banner', '-xerror', '-i', file, '-f', 'null', '-'])
+  const v = stderr.match(/video:\s*(\d+)\s*KiB/)
+  const a = stderr.match(/audio:\s*(\d+)\s*KiB/)
+  if (!v || !a) throw new Error(`no decode summary for ${path.basename(file)}`)
+  return { videoKiB: Number(v[1]), audioKiB: Number(a[1]) }
+}
+
+/**
+ * Count the ebur128 momentary-loudness samples ffmpeg prints for a window,
+ * using `framelog=info` — the setting that actually reaches stderr at the
+ * default log level. Used to prove the highlight fixtures carry a real
+ * loudness contrast independent of what highlights.ts manages to parse.
+ */
+async function momentaryLoudness(
+  file: string,
+  startSec: number,
+  lenSec: number
+): Promise<number[]> {
+  const { stderr } = await ff([
+    '-hide_banner',
+    '-ss', String(startSec),
+    '-t', String(lenSec),
+    '-i', file,
+    '-vn',
+    '-af', 'ebur128=metadata=1:framelog=info:peak=true',
+    '-f', 'null',
+    '-'
+  ])
+  const out: number[] = []
+  const re = /M:\s*(-?[\d.]+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(stderr)) !== null) {
+    const v = Number(m[1])
+    if (Number.isFinite(v)) out.push(v)
+  }
+  return out
+}
+
 function makeClip(overrides: Partial<Clip> = {}): Clip {
   return {
     id: 'clip1',
@@ -227,7 +363,35 @@ beforeAll(async () => {
     '-f', 'lavfi', '-i', 'sine=frequency=3000:sample_rate=44100:duration=8',
     '-ac', '2', musicWav
   ])
-}, 180_000)
+
+  // Self-timestamping source: geq paints every frame a flat gray equal to
+  // 12 * T, so meanLuma(file, t) reads back the second that frame came from.
+  // That turns "did the cut/concat start where we asked" into an arithmetic
+  // assertion instead of an eyeball. Deliberately 640x480 @ 24 fps mono
+  // 44.1k — every property differs from the 1280x720 @ 30 fps stereo 48k
+  // shape the concat runner normalizes to.
+  rampSrc = path.join(workDir, 'ramp.mp4')
+  await ff([
+    '-y',
+    '-f', 'lavfi',
+    '-i', "color=c=black:s=640x480:r=24:d=20,format=gray,geq=lum='clip(12*T,0,255)'",
+    '-f', 'lavfi',
+    '-i',
+    "sine=frequency=440:sample_rate=44100:duration=20,volume='if(between(t,10,11.5),1,0.02)':eval=frame",
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-ac', '1', '-shortest', rampSrc
+  ])
+
+  // PiP overlay: flat green, no audio (a real webcam feed is a separate
+  // file; the composite maps audio from input 0 only).
+  pipOverlaySrc = path.join(workDir, 'pip-overlay.mp4')
+  await ff([
+    '-y',
+    '-f', 'lavfi', '-i', 'color=c=0x1fe04a:size=640x360:rate=30:duration=6',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    pipOverlaySrc
+  ])
+}, 240_000)
 
 afterAll(async () => {
   if (workDir) await rm(workDir, { recursive: true, force: true })
@@ -716,4 +880,677 @@ describe('audio extraction for non-WebAudio formats (real ffmpeg)', () => {
       }
     }, 60_000)
   }
+})
+
+// ---------------------------------------------------------------------------
+// T-01 — vertical reframe + PiP composite
+// ---------------------------------------------------------------------------
+
+describe('vertical reframe (real ffmpeg)', () => {
+  // reframe.ts had zero real-binary coverage: every crop coordinate is
+  // computed by even()-snapping arithmetic that a string-shape unit test
+  // cannot falsify, and the whole graph is one filter string libx264 either
+  // accepts or rejects. These drive runReframe exactly as ipc/video.ts does.
+
+  it('crops a landscape source to a 1080x1920 vertical clip', async () => {
+    const outputPath = path.join(workDir, 'reframe-center.mp4')
+    const res = await runReframe(
+      {
+        jobId: 'reframe-center',
+        sourcePath: landscapeSrc,
+        outputPath,
+        position: 'center',
+        startSec: 1,
+        endSec: 3,
+        outputWidth: 1080,
+        outputHeight: 1920
+      },
+      () => {}
+    )
+    expect(res.outputPath).toBe(outputPath)
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(v?.codec_name).toBe('h264')
+    expect(v?.pix_fmt).toBe('yuv420p')
+    expect(v?.width).toBe(1080)
+    expect(v?.height).toBe(1920)
+    expect(v?.avg_frame_rate).toBe('30/1')
+    expect(a?.codec_name).toBe('aac')
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(1.7)
+    expect(dur).toBeLessThan(2.3)
+    await assertFaststart(outputPath)
+  })
+
+  it('snaps an odd requested output size down to even (1081x1921 -> 1080x1920)', async () => {
+    // Round 18 forced the scale target even. The UI only ever sends
+    // 1080x1920 today, so a regression here is invisible until some future
+    // caller passes an odd size and libx264 refuses the whole encode.
+    const outputPath = path.join(workDir, 'reframe-odd.mp4')
+    await runReframe(
+      {
+        jobId: 'reframe-odd',
+        sourcePath: landscapeSrc,
+        outputPath,
+        position: 'center',
+        startSec: 1,
+        endSec: 2,
+        outputWidth: 1081,
+        outputHeight: 1921
+      },
+      () => {}
+    )
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1080)
+    expect(v?.height).toBe(1920)
+  })
+
+  it('left and right positions keep different parts of the frame', async () => {
+    // Dimensions alone cannot tell a working computeCropOffset from one that
+    // always returns 0 — both produce a 1080x1920 file. Compare the pixels:
+    // on a 1920-wide source the two crops are ~920 px apart, so the same
+    // output coordinate must land on visibly different source content.
+    const leftPath = path.join(workDir, 'reframe-left.mp4')
+    const rightPath = path.join(workDir, 'reframe-right.mp4')
+    for (const [position, outputPath] of [
+      ['left', leftPath],
+      ['right', rightPath]
+    ] as const) {
+      await runReframe(
+        {
+          jobId: `reframe-${position}`,
+          sourcePath: landscapeSrc,
+          outputPath,
+          position,
+          startSec: 1,
+          endSec: 1.6,
+          outputWidth: 1080,
+          outputHeight: 1920
+        },
+        () => {}
+      )
+    }
+    const left = await meanRgb(leftPath, 0.2, 540, 960)
+    const right = await meanRgb(rightPath, 0.2, 540, 960)
+    expect(
+      rgbDelta(left, right),
+      `left ${left.join(',')} vs right ${right.join(',')} must differ`
+    ).toBeGreaterThan(40)
+  })
+
+  it('rejects a missing source with the probe stage error, before spawning an encode', async () => {
+    await expect(
+      runReframe(
+        {
+          jobId: 'reframe-ghost',
+          sourcePath: path.join(workDir, 'does-not-exist.mp4'),
+          outputPath: path.join(workDir, 'reframe-ghost.mp4'),
+          position: 'center',
+          startSec: 0,
+          endSec: 1,
+          outputWidth: 1080,
+          outputHeight: 1920
+        },
+        () => {}
+      )
+    ).rejects.toThrow(/^ffprobe exit 1: .*No such file or directory/s)
+    expect(existsSync(path.join(workDir, 'reframe-ghost.mp4'))).toBe(false)
+  })
+})
+
+describe('PiP composite (real ffmpeg)', () => {
+  // PiP is the feature whose IPC validator rejected every call until round
+  // 18 (overlayWidth was range-checked as a fraction while concat.ts scales
+  // it as pixels), so the composite itself had never been proven to run.
+  // The overlay fixture is flat green: "did the overlay land at the right
+  // place and size" becomes a pixel readback, and the base source doubles
+  // as the no-overlay control at identical coordinates.
+  const OVERLAY_TIME = 1
+
+  it('composites a 480px overlay into the top-left corner', async () => {
+    const outputPath = path.join(workDir, 'pip-topleft.mp4')
+    const res = await runPipComposite(
+      'pip-topleft',
+      landscapeSrc,
+      pipOverlaySrc,
+      outputPath,
+      { overlayWidth: 480, position: 'top-left', margin: 20 }
+    )
+    expect(res.outputPath).toBe(outputPath)
+
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1920)
+    expect(v?.height).toBe(1080)
+    expect(v?.pix_fmt).toBe('yuv420p')
+    // -map 0:a? must carry the base track through; the overlay has none.
+    expect(info.streams.filter((s) => s.codec_type === 'audio')).toHaveLength(1)
+    const sizes = await decodeSizes(outputPath)
+    expect(sizes.videoKiB).toBeGreaterThan(0)
+    expect(sizes.audioKiB).toBeGreaterThan(0)
+    await assertFaststart(outputPath)
+
+    // scale=480:-1 on a 640x360 overlay is 480x270, placed at (20, 20):
+    // it covers x 20..500, y 20..290.
+    const inside = await meanRgb(outputPath, OVERLAY_TIME, 250, 150)
+    expect(
+      rgbDelta(inside, PIP_OVERLAY_RGB),
+      `overlay centre ${inside.join(',')} must be the overlay colour`
+    ).toBeLessThan(25)
+
+    // Same coordinate in the base source is not the overlay colour, so the
+    // reading above cannot be the base leaking through.
+    const baseUnder = await meanRgb(landscapeSrc, OVERLAY_TIME, 250, 150)
+    expect(
+      rgbDelta(baseUnder, PIP_OVERLAY_RGB),
+      `base ${baseUnder.join(',')} must differ from the overlay colour`
+    ).toBeGreaterThan(80)
+
+    // The requested 480px width is real: x=420 is inside a 480-wide overlay
+    // and outside a 240-wide one.
+    const nearRightEdge = await meanRgb(outputPath, OVERLAY_TIME, 420, 150)
+    expect(rgbDelta(nearRightEdge, PIP_OVERLAY_RGB)).toBeLessThan(25)
+
+    // Far from the overlay the base must survive untouched.
+    const untouched = await meanRgb(outputPath, OVERLAY_TIME, 960, 700)
+    const baseThere = await meanRgb(landscapeSrc, OVERLAY_TIME, 960, 700)
+    expect(
+      rgbDelta(untouched, baseThere),
+      `outside the overlay box the base must pass through unchanged`
+    ).toBeLessThan(30)
+  })
+
+  it('composites a 240px overlay into the bottom-right corner', async () => {
+    const outputPath = path.join(workDir, 'pip-bottomright.mp4')
+    await runPipComposite('pip-bottomright', landscapeSrc, pipOverlaySrc, outputPath, {
+      overlayWidth: 240,
+      position: 'bottom-right',
+      margin: 40
+    })
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1920)
+    expect(v?.height).toBe(1080)
+
+    // scale=240:-1 is 240x135; main_w-overlay_w-40 = 1640, main_h-overlay_h-40
+    // = 905, so the box is x 1640..1880, y 905..1040.
+    const inside = await meanRgb(outputPath, OVERLAY_TIME, 1760, 970)
+    expect(
+      rgbDelta(inside, PIP_OVERLAY_RGB),
+      `overlay centre ${inside.join(',')} must be the overlay colour`
+    ).toBeLessThan(25)
+
+    // Just left of the box the base shows through — proves the smaller
+    // overlayWidth was honoured rather than reused from the 480px case.
+    const outsideLeft = await meanRgb(outputPath, OVERLAY_TIME, 1560, 970)
+    expect(
+      rgbDelta(outsideLeft, PIP_OVERLAY_RGB),
+      `x=1560 is outside a 240-wide overlay and must not be green`
+    ).toBeGreaterThan(80)
+
+    // Top-left corner is where the previous case put its overlay; here it
+    // must still be untouched base.
+    const topLeft = await meanRgb(outputPath, OVERLAY_TIME, 250, 150)
+    const baseTopLeft = await meanRgb(landscapeSrc, OVERLAY_TIME, 250, 150)
+    expect(rgbDelta(topLeft, baseTopLeft)).toBeLessThan(30)
+  })
+
+  it('rejects a missing overlay file with the pip runner error', async () => {
+    const outputPath = path.join(workDir, 'pip-missing.mp4')
+    await expect(
+      runPipComposite('pip-missing', landscapeSrc, path.join(workDir, 'no-overlay.mp4'), outputPath, {
+        overlayWidth: 240,
+        position: 'top-left',
+        margin: 10
+      })
+    ).rejects.toThrow(/^pip exit \d+: .*No such file or directory/s)
+    expect(existsSync(outputPath)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T-02 — multi-clip concat
+// ---------------------------------------------------------------------------
+
+describe('multi-clip concat (real ffmpeg)', () => {
+  // runConcat is a two-stage job: re-encode each segment to a normalized
+  // shape, then stream-copy them together through the concat demuxer. The
+  // classic failure is silent — mismatched timebase/SAR between segments
+  // makes the demuxer drop or desync one of them while still exiting 0, so
+  // duration alone is not enough. The ramp fixture lets us read back which
+  // second of the source each part of the output actually came from.
+  //
+  // Note on shape: runConcat takes ONE sourcePath plus N ranges, so "two
+  // clips with different properties" means two ranges of a source whose
+  // resolution (640x480), frame rate (24) and audio layout (mono 44.1k) all
+  // differ from the 1280x720 @ 30fps target it normalizes to.
+
+  it('joins two ranges of a mismatched-property source into one compilation', async () => {
+    const { outputPath } = await runConcat({
+      jobId: 'concat-ramp',
+      sourcePath: rampSrc,
+      outDir: workDir,
+      segments: [
+        { startSec: 2, endSec: 4, name: 'first' },
+        { startSec: 12, endSec: 14, name: 'second' }
+      ],
+      fadeMs: 0,
+      width: 1280,
+      height: 720
+    })
+    expect(existsSync(outputPath)).toBe(true)
+
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(v?.codec_name).toBe('h264')
+    expect(v?.width).toBe(1280)
+    expect(v?.height).toBe(720)
+    expect(v?.avg_frame_rate).toBe('30/1')
+    expect(a?.codec_name).toBe('aac')
+
+    // Duration is the sum of the two ranges (2s + 2s), within half a second.
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(3.5)
+    expect(dur).toBeLessThan(4.5)
+
+    // Both streams decode end-to-end, not merely appear in ffprobe.
+    const sizes = await decodeSizes(outputPath)
+    expect(sizes.videoKiB).toBeGreaterThan(0)
+    expect(sizes.audioKiB).toBeGreaterThan(0)
+
+    // Content order: output t=0.5 is 0.5s into the first range (source
+    // t=2.5, luma 30); output t=2.5 is 0.5s into the second (source t=12.5,
+    // luma 150). A dropped or reordered segment fails here while duration
+    // and stream counts stay perfectly plausible.
+    const firstPart = await meanLuma(outputPath, 0.5)
+    const secondPart = await meanLuma(outputPath, 2.5)
+    expect(Math.abs(firstPart - 30), `first segment luma ${firstPart}`).toBeLessThan(12)
+    expect(Math.abs(secondPart - 150), `second segment luma ${secondPart}`).toBeLessThan(12)
+    expect(secondPart - firstPart).toBeGreaterThan(100)
+
+    await assertFaststart(outputPath)
+  })
+
+  it('joins portrait ranges with cross-fades applied to both video and audio', async () => {
+    // The fade/afade branch only fires with fadeMs > 0 and more than one
+    // segment, and its `st=` value is computed from the segment duration —
+    // exactly the sort of expression a unit test pins as a string and
+    // ffmpeg rejects at runtime.
+    const { outputPath } = await runConcat({
+      jobId: 'concat-fade',
+      sourcePath: portraitSrc,
+      outDir: workDir,
+      segments: [
+        { startSec: 0, endSec: 1.5, name: 'a' },
+        { startSec: 2, endSec: 3.5, name: 'b' }
+      ],
+      fadeMs: 250,
+      width: 720,
+      height: 1280
+    })
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(720)
+    expect(v?.height).toBe(1280)
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(2.5)
+    expect(dur).toBeLessThan(3.5)
+    const sizes = await decodeSizes(outputPath)
+    expect(sizes.videoKiB).toBeGreaterThan(0)
+    expect(sizes.audioKiB).toBeGreaterThan(0)
+  })
+
+  it('PINNED: a source with no audio stream yields a video-only compilation, not an error', async () => {
+    // concat.ts has no audio guard: it always passes -c:a aac (and -af
+    // afade when fading), and ffmpeg's stream selection simply finds no
+    // audio to map. The defined outcome is success with a single video
+    // stream — pinned here so a future change to defaults (an explicit
+    // -map, an anullsrc pad, or a hard rejection) has to be deliberate.
+    const { outputPath } = await runConcat({
+      jobId: 'concat-noaudio',
+      sourcePath: noAudioSrc,
+      outDir: workDir,
+      segments: [
+        { startSec: 0, endSec: 1, name: 'a' },
+        { startSec: 2, endSec: 3.5, name: 'b' }
+      ],
+      fadeMs: 300,
+      width: 1280,
+      height: 720
+    })
+    const info = await ffprobeJson(outputPath)
+    expect(info.streams).toHaveLength(1)
+    expect(info.streams.filter((s) => s.codec_type === 'audio')).toHaveLength(0)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1280)
+    expect(v?.height).toBe(720)
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(2)
+    expect(dur).toBeLessThan(3)
+    const sizes = await decodeSizes(outputPath)
+    expect(sizes.videoKiB).toBeGreaterThan(0)
+    expect(sizes.audioKiB).toBe(0)
+  })
+
+  it('rejects a reversed segment range with its own named guard', async () => {
+    // Defense in depth: the IPC validator checks this too, but runConcat
+    // repeats the check so non-IPC callers cannot produce a -ss > -to
+    // invocation. The message names the offending index.
+    await expect(
+      runConcat({
+        jobId: 'concat-reversed',
+        sourcePath: rampSrc,
+        outDir: workDir,
+        segments: [
+          { startSec: 0, endSec: 1, name: 'ok' },
+          { startSec: 3, endSec: 2, name: 'reversed' }
+        ],
+        fadeMs: 0,
+        width: 1280,
+        height: 720
+      })
+    ).rejects.toThrow(/^segments\[1\] range invalid \(endSec must exceed startSec\)$/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T-04 — highlight discovery and clip cutting
+// ---------------------------------------------------------------------------
+
+describe('highlight clip cutting (real ffmpeg)', () => {
+  // The seek/cut boundary had never run against ffmpeg. "Exit 0 with the
+  // right duration" is satisfied by a cut that silently starts at t=0, so
+  // every case here also reads the ramp fixture's per-frame clock back out
+  // of the output.
+
+  it('cuts at a known timestamp with the right duration AND the right start frame', async () => {
+    const clip = makeClip({ name: 'cut-at-8', startSec: 8, endSec: 11 })
+    const res = await runExportJob(
+      makeJob(rampSrc, 'youtube', clip, 'cut-at-8'),
+      () => {}
+    )
+    const info = await ffprobeJson(res.outputPath)
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(2.6)
+    expect(dur).toBeLessThan(3.4)
+
+    const cutStart = await meanLuma(res.outputPath, 0)
+    const sourceAtCut = await meanLuma(rampSrc, 8)
+    const sourceAtZero = await meanLuma(rampSrc, 0)
+    // The first output frame is the source frame at 8s...
+    expect(
+      Math.abs(cutStart - sourceAtCut),
+      `cut starts at ${cutStart}, source@8s is ${sourceAtCut}`
+    ).toBeLessThan(8)
+    // ...and emphatically not the source's own first frame.
+    expect(cutStart - sourceAtZero).toBeGreaterThan(50)
+
+    // Two seconds in, the output tracks source t=10 — the cut is a window,
+    // not a single seek followed by arbitrary content.
+    const cutMid = await meanLuma(res.outputPath, 2)
+    const sourceAtTen = await meanLuma(rampSrc, 10)
+    expect(Math.abs(cutMid - sourceAtTen)).toBeLessThan(8)
+  })
+
+  it('a cut at a different timestamp starts on different content', async () => {
+    // Guards the degenerate pass where every cut starts at 0: this output
+    // must differ from the 8s cut by the ramp's own arithmetic.
+    const clip = makeClip({ name: 'cut-at-2', startSec: 2, endSec: 4 })
+    const res = await runExportJob(
+      makeJob(rampSrc, 'youtube', clip, 'cut-at-2'),
+      () => {}
+    )
+    const cutStart = await meanLuma(res.outputPath, 0)
+    const sourceAtTwo = await meanLuma(rampSrc, 2)
+    const sourceAtEight = await meanLuma(rampSrc, 8)
+    expect(Math.abs(cutStart - sourceAtTwo)).toBeLessThan(8)
+    expect(sourceAtEight - cutStart).toBeGreaterThan(50)
+  })
+
+  it('KNOWN BUG: findHighlights returns zero candidates on an unmistakable loud burst', async () => {
+    // If this test FAILS, highlights.ts was fixed — delete the pin and
+    // assert real detection instead.
+    //
+    // findHighlights scans with `ebur128=metadata=1:framelog=quiet`, then
+    // parses the per-frame "t: … M: …" lines out of stderr. framelog=quiet
+    // (and, with metadata=1, the default too) demotes those lines to debug
+    // level, so they never reach stderr at ffmpeg's default log level:
+    // parseEbur128 always sees zero samples and the `samples.length < 5`
+    // early-out returns []. The fixture is not the problem — the same
+    // ebur128 pass with framelog=info reports a >20 LU gap between the
+    // burst and the quiet bed.
+    const candidates = await findHighlights('highlights-scan', rampSrc, () => {})
+    expect(candidates).toEqual([])
+
+    const loud = await momentaryLoudness(rampSrc, 10, 1.5)
+    const quiet = await momentaryLoudness(rampSrc, 2, 1.5)
+    expect(loud.length, 'framelog=info yields parseable frames').toBeGreaterThan(4)
+    expect(quiet.length).toBeGreaterThan(4)
+    const loudPeak = Math.max(...loud)
+    const quietPeak = Math.max(...quiet)
+    expect(
+      loudPeak - quietPeak,
+      `burst ${loudPeak} LUFS vs bed ${quietPeak} LUFS is a detectable highlight`
+    ).toBeGreaterThan(20)
+  }, 120_000)
+
+  it('KNOWN BUG: analyzeClipHook reports the -70 LUFS floor for every window', async () => {
+    // If this test FAILS, highlights.ts was fixed — delete the pin and
+    // assert a real loud/quiet spread instead.
+    //
+    // Same root cause as above: `ebur128=metadata=1:peak=true` leaves
+    // framelog at its default, which ffmpeg demotes to debug level when
+    // metadata is on. No "M:" line ever reaches stderr, so the parser falls
+    // through to its -70 floor and the hook indicator scores every clip
+    // identically no matter what the audio does.
+    const loudWindow = await analyzeClipHook(rampSrc, 10, 1.5)
+    const quietWindow = await analyzeClipHook(rampSrc, 2, 1.5)
+    expect(loudWindow.audioEnergyDb).toBe(-70)
+    expect(quietWindow.audioEnergyDb).toBe(-70)
+    expect(loudWindow.audioEnergyDb).toBe(quietWindow.audioEnergyDb)
+  })
+
+  it('analyzeClipHook rejects a window longer than its 30s cap', async () => {
+    await expect(analyzeClipHook(rampSrc, 0, 31)).rejects.toThrow(
+      /^Assertion failed: durationSec must be in \(0, 30\]$/
+    )
+  })
+
+  it('analyzeClipHook rejects a zero-length window', async () => {
+    await expect(analyzeClipHook(rampSrc, 0, 0)).rejects.toThrow(
+      /^Assertion failed: durationSec must be in \(0, 30\]$/
+    )
+  })
+
+  it('analyzeClipHook rejects a negative start time', async () => {
+    await expect(analyzeClipHook(rampSrc, -1, 3)).rejects.toThrow(
+      /^Assertion failed: startSec must be finite >= 0$/
+    )
+  })
+
+  it('analyzeClipHook rejects an empty source path', async () => {
+    await expect(analyzeClipHook('', 0, 3)).rejects.toThrow(
+      /^Assertion failed: sourcePath required$/
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T-05 — caption burn-in
+// ---------------------------------------------------------------------------
+
+describe('caption burn-in (real ffmpeg)', () => {
+  // Burn-in is ffmpeg-only — no whisper.exe, no model — so it runs
+  // everywhere the rest of this suite runs. Subtitle *path* escaping is
+  // already covered above; what was never proven is that runBurnIn's
+  // filter (escaped path + force_style from buildForceStyle) actually
+  // paints pixels.
+  //
+  // The control is another runBurnIn through the identical pipeline whose
+  // only cue sits a minute past the end of the render. Comparing against
+  // that instead of a plain no-filter encode isolates the rendered text:
+  // both files went through libass and the same encoder settings, so any
+  // difference is the caption itself rather than filter-chain colour drift.
+  const CAPTION_BAND = 'crop=1920:200:0:860'
+  const TOP_BAND = 'crop=1920:200:0:0'
+  let captionedSrt = ''
+  let controlSrt = ''
+  let controlOut = ''
+
+  beforeAll(async () => {
+    captionedSrt = path.join(workDir, 'two-line.srt')
+    await writeFile(
+      captionedSrt,
+      '1\n00:00:00,200 --> 00:00:01,500\nFIRST LINE OF CAPTION\n\n' +
+        '2\n00:00:01,600 --> 00:00:02,900\nSECOND LINE OF CAPTION\n',
+      'utf8'
+    )
+    controlSrt = path.join(workDir, 'control.srt')
+    await writeFile(
+      controlSrt,
+      '1\n00:01:00,000 --> 00:01:02,000\nNEVER VISIBLE IN THIS RANGE\n',
+      'utf8'
+    )
+    controlOut = path.join(workDir, 'burnin-control.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-control',
+        videoPath: landscapeSrc,
+        srtPath: controlSrt,
+        outputPath: controlOut,
+        fontSizePct: 4,
+        startSec: 0,
+        endSec: 3
+      },
+      () => {}
+    )
+  }, 120_000)
+
+  it('burns a 2-line SRT into the caption band and leaves the rest of the frame alone', async () => {
+    const outputPath = path.join(workDir, 'burnin-bottom.mp4')
+    const phases: string[] = []
+    const res = await runBurnIn(
+      {
+        jobId: 'burnin-bottom',
+        videoPath: landscapeSrc,
+        srtPath: captionedSrt,
+        outputPath,
+        fontSizePct: 4,
+        startSec: 0,
+        endSec: 3
+      },
+      (p) => phases.push(p.phase)
+    )
+    expect(res.outputPath).toBe(outputPath)
+    expect(phases[0]).toBe('burning-in')
+    expect(phases[phases.length - 1]).toBe('done')
+
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(v?.codec_name).toBe('h264')
+    expect(v?.width).toBe(1920)
+    expect(v?.height).toBe(1080)
+    // -c:a copy: the source's aac track rides along untouched.
+    expect(a?.codec_name).toBe('aac')
+    const dur = Number(info.format.duration)
+    expect(dur).toBeGreaterThan(2.7)
+    expect(dur).toBeLessThan(3.3)
+    await assertFaststart(outputPath)
+
+    // The caption band genuinely differs from the control...
+    const bandPsnr = await regionPsnr(outputPath, controlOut, CAPTION_BAND)
+    expect(bandPsnr, `caption band PSNR ${bandPsnr} dB vs control`).toBeLessThan(30)
+    // ...and the difference is the text, not global re-encode drift: the
+    // top of the frame stays effectively identical.
+    const topPsnr = await regionPsnr(outputPath, controlOut, TOP_BAND)
+    expect(topPsnr, `untouched top band PSNR ${topPsnr} dB`).toBeGreaterThan(40)
+    expect(topPsnr - bandPsnr).toBeGreaterThan(15)
+  }, 120_000)
+
+  it('KNOWN BUG: caption position "top" renders mid-frame and "middle" renders at the top', async () => {
+    // If this test FAILS, alignmentForPosition was fixed — delete the pin
+    // and assert that each position renders where it says.
+    //
+    // buildForceStyle emits ASS numpad alignments (top=8, middle=5,
+    // bottom=2). libass's force_style path writes that number straight into
+    // its INTERNAL alignment representation — HALIGN_LEFT/CENTRE/RIGHT =
+    // 1/2/3 OR-ed with VALIGN_SUB/TOP/CENTER = 0/4/8 — without running the
+    // numpad conversion the normal v4+ style parser applies. So:
+    //   2  -> 2 | 0  = centre + bottom  (right by coincidence)
+    //   8  -> 0 | 8  = left + middle    (asked for top-centre)
+    //   5  -> 1 | 4  = left + top       (asked for middle-centre)
+    // Both non-default positions therefore land on the wrong third of the
+    // frame AND lose their centring. The correct internal values would be 6
+    // (centre+top) and 10 (centre+middle). Unit tests on
+    // alignmentForPosition cannot see any of this; only a real libass
+    // render can.
+    const MID_BAND = 'crop=1920:200:0:440'
+    const RIGHT_THIRD_OF_MID = 'crop=640:200:1280:440'
+    const RIGHT_THIRD_OF_TOP = 'crop=640:200:1280:0'
+
+    const topPath = path.join(workDir, 'burnin-position-top.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-position-top',
+        videoPath: landscapeSrc,
+        srtPath: captionedSrt,
+        outputPath: topPath,
+        fontSizePct: 4,
+        style: { fontSize: 48, position: 'top', primaryColor: '#ffffff', outlineColor: '#000000' },
+        startSec: 0,
+        endSec: 3
+      },
+      () => {}
+    )
+    const topStyleAtTop = await regionPsnr(topPath, controlOut, TOP_BAND)
+    const topStyleAtMid = await regionPsnr(topPath, controlOut, MID_BAND)
+    expect(topStyleAtMid, `position "top" paints the middle band (${topStyleAtMid} dB)`).toBeLessThan(30)
+    expect(topStyleAtTop, `position "top" leaves the top band clean (${topStyleAtTop} dB)`).toBeGreaterThan(40)
+    const topStyleRight = await regionPsnr(topPath, controlOut, RIGHT_THIRD_OF_MID)
+    expect(topStyleRight, 'position "top" is left-aligned, not centred').toBeGreaterThan(40)
+
+    const middlePath = path.join(workDir, 'burnin-position-middle.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-position-middle',
+        videoPath: landscapeSrc,
+        srtPath: captionedSrt,
+        outputPath: middlePath,
+        fontSizePct: 4,
+        style: { fontSize: 48, position: 'middle', primaryColor: '#ffffff', outlineColor: '#000000' },
+        startSec: 0,
+        endSec: 3
+      },
+      () => {}
+    )
+    const midStyleAtTop = await regionPsnr(middlePath, controlOut, TOP_BAND)
+    const midStyleAtMid = await regionPsnr(middlePath, controlOut, MID_BAND)
+    expect(midStyleAtTop, `position "middle" paints the top band (${midStyleAtTop} dB)`).toBeLessThan(30)
+    expect(midStyleAtMid, `position "middle" leaves the middle band clean (${midStyleAtMid} dB)`).toBeGreaterThan(40)
+    const midStyleRight = await regionPsnr(middlePath, controlOut, RIGHT_THIRD_OF_TOP)
+    expect(midStyleRight, 'position "middle" is left-aligned, not centred').toBeGreaterThan(40)
+  }, 180_000)
+
+  it('rejects a missing SRT with the burn-in runner error', async () => {
+    const outputPath = path.join(workDir, 'burnin-missing.mp4')
+    await expect(
+      runBurnIn(
+        {
+          jobId: 'burnin-missing',
+          videoPath: landscapeSrc,
+          srtPath: path.join(workDir, 'no-such-file.srt'),
+          outputPath,
+          fontSizePct: 4,
+          startSec: 0,
+          endSec: 1
+        },
+        () => {}
+      )
+    ).rejects.toThrow(/^burn-in exit \d+: .*Unable to open .*no-such-file\.srt/s)
+    expect(existsSync(outputPath)).toBe(false)
+  })
 })
