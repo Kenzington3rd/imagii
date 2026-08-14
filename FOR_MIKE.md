@@ -4,7 +4,7 @@ A creative studio built for you. Free, runs on your computer, no accounts, no su
 
 ## How to run it
 
-1. Double-click `imagii-for-mike.exe`.
+1. Double-click `imagii.exe`.
 2. Windows SmartScreen will warn you ("Windows protected your PC"). Click **More info** → **Run anyway**. This is normal for unsigned apps; the file is safe.
 3. Read the welcome (yes, it says hi to you), then click "Let's go →".
 

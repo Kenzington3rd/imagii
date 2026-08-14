@@ -22,5 +22,5 @@ win:
   artifactName: imagii-${version}.exe
   icon: resources/icon.ico
 portable:
-  artifactName: imagii-for-mike.exe
+  artifactName: imagii.exe
 electronVersion: 31.3.0
