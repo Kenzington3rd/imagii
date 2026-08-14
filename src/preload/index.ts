@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { pathToImagiiFileUrl } from '../shared/fileUrl'
 import type { ImagiiApi, SettingsKey } from '../shared/api'
 import type { ExportJobSpec, ExportProgress } from '../shared/clip'
 import type {
@@ -33,10 +34,10 @@ const api: ImagiiApi = {
     probe: (filePath: string) => ipcRenderer.invoke('video:probe', filePath),
     pickFile: () => ipcRenderer.invoke('video:pickFile'),
     pickOutputDir: () => ipcRenderer.invoke('video:pickOutputDir'),
-    fileUrl: (filePath: string) => {
-      const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '')
-      return `imagii-file://${encodeURI(normalized)}`
-    },
+    // Bug-fix (2026-08-14): must be the SAME builder the protocol
+    // handler's parser mirrors. The old inline copy here disagreed with
+    // the handler and no media ever loaded — see src/shared/fileUrl.ts.
+    fileUrl: (filePath: string) => pathToImagiiFileUrl(filePath),
     exportBatch: (jobs: ExportJobSpec[]) => ipcRenderer.invoke('video:exportBatch', jobs),
     cancel: (jobId: string) => ipcRenderer.invoke('video:cancel', jobId),
     cancelAll: () => ipcRenderer.invoke('video:cancelAll'),
