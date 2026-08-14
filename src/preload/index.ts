@@ -33,6 +33,7 @@ const api: ImagiiApi = {
   video: {
     probe: (filePath: string) => ipcRenderer.invoke('video:probe', filePath),
     pickFile: () => ipcRenderer.invoke('video:pickFile'),
+    convertForImport: (filePath: string) => ipcRenderer.invoke('video:convertForImport', filePath),
     pickOutputDir: () => ipcRenderer.invoke('video:pickOutputDir'),
     // Bug-fix (2026-08-14): must be the SAME builder the protocol
     // handler's parser mirrors. The old inline copy here disagreed with

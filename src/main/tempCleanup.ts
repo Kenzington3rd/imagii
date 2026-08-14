@@ -26,7 +26,7 @@ import { assert } from '../shared/assert'
 
 const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
 
-const TEMP_SUBDIRS = ['imagii-audio', 'imagii-concat'] as const
+const TEMP_SUBDIRS = ['imagii-audio', 'imagii-concat', 'imagii-import'] as const
 
 /**
  * INIT-D (round 15): a save-time crash in recording.ts could leave a 100+ MB

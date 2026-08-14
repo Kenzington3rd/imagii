@@ -1,10 +1,9 @@
 import { ipcMain, desktopCapturer, dialog, BrowserWindow, app } from 'electron'
-import { spawn, type ChildProcess } from 'node:child_process'
 import { writeFile, mkdir, unlink } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
-import { ffmpegPath } from '../ffmpeg/paths'
+import { convertToMp4, cancelActiveConvert } from '../ffmpeg/convert'
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
@@ -123,7 +122,7 @@ async function promoteTempWebm(
 
     const outputPath = result.filePath
     if (spec.convertToMp4) {
-      await convertWebmToMp4(tempPath, outputPath, (info) => {
+      await convertToMp4(tempPath, outputPath, (info) => {
         win.webContents.send('recording:progress', info)
       })
     } else {
@@ -152,99 +151,23 @@ async function promoteTempWebm(
   }
 }
 
-// M6 fix (round 15): track the webm→mp4 conversion child so the renderer can
-// abort a slow save mid-flight, and so before-quit can take it down with the
-// rest of the active job maps. Single-slot because only one save runs at a
-// time (the renderer's `phase === 'saving'` state guards reentry).
-let activeConvert: ChildProcess | null = null
+// M6 fix (round 15) / round 20: the conversion child lives in
+// ffmpeg/convert.ts now (generalized so imported flv/ts/wmv containers
+// use the same transcode). Cancellation semantics are unchanged:
+// single-slot, killable by the renderer's "Discard recording" and by
+// app-level before-quit cleanup.
 
 export type RecordingProgressListener = (info: {
   percent: number
   message?: string
 }) => void
 
-async function convertWebmToMp4(
-  webmPath: string,
-  mp4Path: string,
-  onProgress: RecordingProgressListener
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      ffmpegPath,
-      [
-        '-y',
-        '-i',
-        webmPath,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'fast',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '192k',
-        '-movflags',
-        '+faststart',
-        '-progress',
-        'pipe:1',
-        '-nostats',
-        mp4Path
-      ],
-      { windowsHide: true }
-    )
-    activeConvert = child
-    let stderr = ''
-    let durationSec = 0
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      for (const line of chunk.split(/\r?\n/)) {
-        const [k, v] = line.split('=')
-        if (k === 'out_time' && v) {
-          const m = v.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/)
-          if (m) {
-            const elapsed = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
-            // No prior probe of duration — emit a coarse 1% per second so the
-            // UI knows something is happening. The renderer caps the bar.
-            durationSec = elapsed
-            onProgress({ percent: Math.min(99, durationSec * 2) })
-          }
-        }
-      }
-    })
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (c: string) => {
-      stderr += c
-      if (stderr.length > 16384) stderr = stderr.slice(-16384)
-    })
-    child.on('error', (err) => {
-      activeConvert = null
-      reject(err)
-    })
-    child.on('close', (code) => {
-      activeConvert = null
-      if (code === 0) resolve()
-      else reject(new Error(`webm→mp4 exit ${code}: ${stderr.slice(-500)}`))
-    })
-  })
-}
-
 /**
- * M6 + M10 (round 15): abort the in-flight conversion child if any. Returns
- * true when there was something to cancel. Used by both the renderer
- * "Discard recording" button and the app-level before-quit cleanup.
+ * Abort the in-flight conversion child if any. Returns true when there
+ * was something to cancel.
  */
 export function cancelRecordingConvert(): boolean {
-  const child = activeConvert
-  if (!child) return false
-  try {
-    child.kill('SIGKILL')
-  } catch {
-    /* already gone */
-  }
-  activeConvert = null
-  return true
+  return cancelActiveConvert()
 }
 
 export function registerRecordingIpc(): void {

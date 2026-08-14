@@ -14,15 +14,14 @@ import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
+import { isImageFilename } from '@shared/mediaFormats'
+
 function cloneDoc<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj)) as T
 }
 
-const ACCEPTED_EXT = ['.png', '.jpg', '.jpeg', '.bmp', '.svg', '.webp', '.gif']
-
 function isImage(name: string): boolean {
-  const lower = name.toLowerCase()
-  return ACCEPTED_EXT.some((ext) => lower.endsWith(ext))
+  return isImageFilename(name)
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {

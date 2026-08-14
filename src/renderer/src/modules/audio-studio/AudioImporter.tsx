@@ -10,13 +10,10 @@ import {
   pathLooksLikeCloudSync
 } from '@shared/importDiagnostics'
 import { assertDefined } from '@shared/assert'
+import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/mediaFormats'
 
-const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
-
-function isVideoExt(name: string): boolean {
-  const lower = name.toLowerCase()
-  return VIDEO_EXTS.some((ext) => lower.endsWith(ext))
-}
+// Round 20: classification comes from shared/mediaFormats; extraction now
+// also covers audio formats WebAudio can't decode (aiff/wma).
 
 export function AudioImporter(): JSX.Element {
   const loadSource = useAudioStore((s) => s.loadSource)
@@ -28,7 +25,7 @@ export function AudioImporter(): JSX.Element {
     setBusy(true)
     try {
       console.info('[audio-import] loading', filePath)
-      if (isVideoExt(filePath)) {
+      if (audioNeedsExtraction(filePath)) {
         toast.loading('Extracting audio…', { id: 'extract' })
         const wavPath = await window.api.audio.extractFromVideo(filePath)
         toast.dismiss('extract')
@@ -105,7 +102,7 @@ export function AudioImporter(): JSX.Element {
       </div>
       <h2 className="text-2xl font-semibold mb-2">Drop audio or video here</h2>
       <p className="text-ink-muted text-sm mb-6">
-        MP3, WAV, FLAC, AAC, M4A, OGG, OPUS — or any video to extract its audio.
+        {formatHint(AUDIO_EXTENSIONS)} — or any video to extract its audio.
       </p>
       <div className="flex items-center gap-2">
         <button className="btn-primary" onClick={onPickFile} disabled={busy}>

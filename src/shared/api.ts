@@ -70,6 +70,8 @@ export interface ImagiiApi {
   video: {
     probe(filePath: string): Promise<VideoProbe>
     pickFile(): Promise<string | null>
+    /** Round 20: transcode a non-native container to an mp4 working copy. */
+    convertForImport(filePath: string): Promise<string>
     pickOutputDir(): Promise<string | null>
     fileUrl(filePath: string): string
     exportBatch(jobs: ExportJobSpec[]): Promise<ExportResult[]>
