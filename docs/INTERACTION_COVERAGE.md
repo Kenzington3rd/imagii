@@ -322,3 +322,59 @@ HotkeyOverlay's `?` binding and Esc button, PresetPanel's input/Enter/
 save/apply/remove — are all mounted (T-13, T-14). A control that becomes
 unreachable again belongs in this section with the ticket that will
 mount it.
+
+
+---
+
+## Dispositions — round 25 (Wave A)
+
+Recorded by the expediter from the four worker reports; test names are
+in tests/e2e/{home-chrome,video-core,audio,references}.spec.ts and the
+unit files named inline. Defect-pinned rows cite their ticket.
+
+### Welcome + Home + Shared (T-21)
+"Let's go" -> welcomeSeen E2E. Global Undo/readout -> restored-canvas
+E2E; Redo -> defect pin [T-32]. Open/Save project -> HL-dialog (deepest:
+ProjectIO + projectValidation units). AutosaveRestore: Restore/Discard/
+Later -> E2E; Clear/Dismiss -> corrupt-offers-nothing pin + unit
+[T-33, unreachable today]. Modal contract (scrim/stop/Escape/trap/
+restore) -> Templates + FixWizard E2E. Tutorial: full-run/Back/arrows/
+scrim-advance/Skip-no-persist -> E2E; Enter -> pin [T-34 double-step].
+RecentFilesMenu (toggle/item/clear/Escape/click-outside) -> E2E;
+mouse-leave -> unit policy. HotkeyOverlay ?/Esc -> E2E. AppToaster ->
+E2E on studios; absent on Home [T-31]. ErrorBoundary -> OPEN [T-35].
+
+### Video core (T-22)
+Chrome: Undo/Redo buttons + Ctrl+Z/Y -> trim-drag E2E (Ctrl+Shift+Z
+unit); Clean audio -> extract-handoff E2E; Close both branches -> E2E;
+TutorialButton -> E2E. Importer: drop -> export.spec + every launch;
+picker -> HL-dialog. Player: transport/Space/safe-zones/events -> E2E;
+nudges + frame steps + ,/. -> seek-request E2E, end-state blocked by
+[T-37 BUG-SEEK]; I/O -> E2E. CropOverlay: all 10 rows -> E2E incl.
+uncheck-clears-store proof. Timeline: both drags -> E2E + undo. ClipList:
+all 6 rows -> E2E incl. confirm both branches. OutputPreview select ->
+dataURL-delta E2E. ColorGrade: all 7 rows -> E2E. TextOverlayEditor:
+all 10 rows -> E2E.
+
+### Audio (T-24)
+Import drop/hover -> E2E; .txt negative -> exact-toast E2E; video
+extract -> real-ffmpeg E2E; recents + Choose-file -> E2E with
+main-process dialog stub (OS chooser itself HL); waveform seek/play/
+pause -> E2E; region-drag -> defect tripwire [T-36] + chip lifecycle
+E2E; all Cleanup/Levels/gain controls -> E2E with readout assertions;
+undo/redo + INPUT guard -> E2E; FixWizard all paths -> E2E; PresetPanel
+save/apply/delete both branches -> E2E + on-disk JSON; secondary track
+full subtree -> E2E via dialog stub; Export/Cancel/Show -> HL around a
+live job (deepest: Layer 5 runAudioExport/Mux + round17 cancel units);
+Close untouched/edited/cuts variants -> E2E with dialog spy.
+
+### References + parser (T-26)
+Tabs/tutorial-coachmark-geometry -> E2E. Board CRUD incl. blank-name
+refusal, delete both branches -> E2E + on-disk JSON. Item lifecycle ->
+E2E (imagii-file:// thumb served for real; ->Canvas bridge to layer at
+0.4 opacity; remove unlinks thumb). Asset cards x2 categories ->
+replace-not-append E2E. Search: input/Enter/button/in-flight/error-card
+-> proxy-hermetic E2E; live search + result Save + remote thumbs ->
+HL-network (deepest: duckduckgo.test.ts 27 units + validator
+composition). Rename + first-save prompt -> defect pins [T-28]. Clear
+thumb cache -> defect pin both directions [T-29].
