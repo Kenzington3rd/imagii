@@ -664,3 +664,34 @@ Seeking works, so the seek rows stop being request-level:
   from BOTH halves: worker dropped the grid tag (exactly the two grid
   cases red), expediter dropped the overlay tag (exactly the two
   selected cases red).
+
+## Dispositions — round 30 (fix wave batch 4: T-52)
+
+Timeline (2 -> 6 elements) plus one Player upgrade; test names in
+tests/e2e/video-core.spec.ts and tests/unit/hotkeyTable.test.ts.
+
+- **Track click (scrub surface, role="slider" aria-label="Playhead"):**
+  "timeline: clicking the track scrubs there, dragging scrubs
+  continuously, and the trim handles keep priority (T-52)" — landed
+  playhead at 25%, drawn marker 24-26%, still paused.
+- **Track drag (continuous scrub):** same test — three positions in one
+  gesture, each landed; mouseup ends the gesture (a later move scrubs
+  nothing).
+- **Slider keys Left/Right (0.1 s) + Home/End:** "timeline: the track
+  is a keyboard scrubber — arrows nudge, Home and End jump (T-52)" —
+  incl. the floor-at-0 negative and aria-valuenow tracking. Expediter
+  mutation: End -> 0 flips exactly this test red.
+- **Negative — trim-handle priority:** the click/drag test proves a
+  drag starting on a handle moves the Out point with the playhead
+  unmoved.
+- **State honesty:** "timeline: the playhead never lies — store churn
+  keeps it, leaving and returning resets it (T-52)" — the marker and
+  the media element cannot disagree (pre-fix red: marker at 60% over a
+  video at 0).
+- **Player tail nudge (row upgrade):** "player: a tail nudge reaches
+  the media element own duration, not ffprobe rounded one (T-52)".
+- **HotkeyOverlay /video table:** +Home/End, +Click timeline (mouse
+  hint), pinned by the hotkey checker (32 -> 35 cases).
+- Residue ticketed [T-56]: playhead marker color is raw pink-400 (not
+  a token); the track's coordinate space ends at the probe duration,
+  ~20 ms shy of the element's.

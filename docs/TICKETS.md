@@ -874,7 +874,7 @@ IMG-PREC.
   - [ ] Tail nudge reaches the media element's own duration; unit or
         E2E pin.
   - [ ] Ledger rows for the new interactive surface in the same PR.
-- **Status:** open
+- **Status:** done (round 30 — see Done)
 
 ## T-53 — P1: selection handles and the grid are baked into image exports
 
@@ -937,6 +937,26 @@ IMG-PREC.
         specific failing gestures hardened with evidence of the race.
 - **Status:** open
 
+## T-56 — Timeline playhead is a raw palette color; track space stops at the probe duration
+
+- **Spec:** T-52 worker findings. (a) The playhead marker is
+  `bg-pink-400` — a raw Tailwind palette color, violating the
+  colors-from-tokens non-negotiable; predates round 19's retheme, and
+  several E2E locators key on the class, so the swap needs its own
+  change with locator updates. (b) The track's coordinate space is the
+  ffprobe duration, so its right edge sits ~20 ms short of the media
+  element's real end — the last frames are unreachable by click or the
+  End key (the Player's own nudge already reaches them post-T-52);
+  upgrade path is publishing the element's duration into the store on
+  `durationchange`.
+- **Acceptance criteria:**
+  - [ ] Playhead color comes from tokens.ts/tailwind.config.js (WCAG
+        AA against the track); all dependent locators updated; the
+        designTokensInSync check stays green.
+  - [ ] Track space (click, drag, End, aria-valuemax) reaches the
+        element's duration; the T-52 tail pin extended to the track.
+- **Status:** open
+
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
 
 - **Spec:** T-23 finding 5 — a per-platform capability gap, same class
@@ -962,6 +982,35 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 30 — fix wave batch 4: T-52 (timeline click-to-scrub + two seek
+edges). The Timeline gains a dedicated scrub surface — its own
+`role="slider"` layer under the trim handles (slider children are
+presentational, so the role on the track itself would have hidden the
+handle buttons from assistive tech; sibling paint order gives handles
+drag priority with no stopPropagation) — click seeks, drag scrubs
+continuously through the existing window-level gesture loop, ←/→
+nudge 0.1 s, Home/End jump, full ARIA value wiring, focus ring from
+tokens. Scrub-while-paused stays paused; scrub-while-playing keeps
+playing (both asserted). Seeks flow through one new store channel
+(`requestSeek`, fresh-object identity so repeat seeks to the same
+second still fire; clamped, NaN-rejected, optimistic currentTime).
+Edge (b): the Player's reset effect now keys on the actual file path
+and clamps instead of zeroing — store churn/remounts with the same
+file no longer rewind (pinned by "the playhead never lies", whose
+remount half was red pre-fix at a 60% marker over a 0s video). Edge
+(c): tail nudges clamp to the media element's duration, not ffprobe's
+(pinned — was 20 ms short). Tutorial trim step corrected ("purple
+handles" survived the round-19 retheme; it now teaches the scrub the
+copy already promised). HotkeyOverlay gains Home/End + Click timeline
+rows, pinned by the 35-case hotkey checker. Red-green on all four new
+tests; two worker mutation proofs (proportion math, reset dep array)
+plus the expediter's own (End key -> 0: exactly the keyboard-scrubber
+test red, restore, green). Gates: 799 unit / 104 E2E green twice, no
+T-55 flake; the worker also killed a flake-in-waiting by polling for
+Chromium's refined duration instead of reading it once. Findings
+ticketed T-56 (raw pink-400 playhead + track space ends at probe
+duration); Player ref-callback churn left to T-38's neighborhood.
 
 Round 29 — fix wave batch 3: T-53 (P1 editor chrome in exports).
 Canvas.tsx names its two editor-only stage layers with Konva's

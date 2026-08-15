@@ -22,11 +22,39 @@ export function Player(): JSX.Element | null {
   const [time, setTime] = useState(0)
   const [showSafeZones, setShowSafeZones] = useState(false)
 
+  // T-52: a genuinely different FILE resets the transport readout and the
+  // shared playhead. Keyed on the path, not the `imagii-file://` url derived
+  // from it — the url is a projection of the path, and re-deriving one must
+  // never rewind a user's playhead. The media element is not touched: setting
+  // `src` already rewinds it, and this effect writing `currentTime = 0` is
+  // exactly how a re-run would move a playhead the user placed.
+  // The store's currentTime is reset here too. It has to be: this runs on
+  // mount as well, and a remounted Player attaches a NEW <video> that starts
+  // at 0 while the store still holds the position from before the studio was
+  // left — the Timeline would draw a playhead the video is nowhere near.
   useEffect(() => {
     setPlaying(false)
     setTime(0)
-    if (videoRef.current) videoRef.current.currentTime = 0
-  }, [source?.url])
+    setCurrentTime(0)
+  }, [source?.filePath, setCurrentTime])
+
+  // The Timeline scrubs by asking the store; the Player owns the <video>, so
+  // it is the one that applies the request. Subscribed imperatively rather
+  // than read as state: a seek is an effect on the media element, not
+  // something the render depends on. Object identity is the signal, so two
+  // requests for the same second both land (see videoStore.seekRequest).
+  useEffect(
+    () =>
+      useVideoStore.subscribe((state, prev) => {
+        const request = state.seekRequest
+        if (request === null || request === prev.seekRequest) return
+        const v = videoRef.current
+        // The element clamps to its own duration, which is the authority —
+        // see `nudge` below for why that is not the probe's number.
+        if (v) v.currentTime = request.seconds
+      }),
+    []
+  )
 
   if (!source) return null
 
@@ -48,7 +76,12 @@ export function Player(): JSX.Element | null {
   function nudge(deltaSec: number): void {
     const v = videoRef.current
     if (!v) return
-    const next = Math.min(Math.max(0, v.currentTime + deltaSec), duration || v.duration || 0)
+    // T-52: the media element's own duration is the ceiling, not ffprobe's.
+    // They are not the same number — the fixture probes at 2.000 s and
+    // decodes 2.020136 s — and clamping to the probe stopped every tail nudge
+    // ~20 ms short of the real end of the file.
+    const limit = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration
+    const next = Math.min(Math.max(0, v.currentTime + deltaSec), limit)
     v.currentTime = next
   }
 

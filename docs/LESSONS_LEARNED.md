@@ -14,6 +14,75 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-52: the Timeline drew a playhead the video was nowhere near
+
+### Bug — leave Video Studio, come back, and the marker lied
+- **Root cause.** Two objects can answer "where is the playhead", and
+  only one direction between them was wired. The `<video>` is owned by
+  `Player` and is destroyed and recreated every time the studio is
+  mounted; `videoStore.currentTime` is module-level and survives route
+  changes. The sync was `timeupdate` -> store, which covers playback and
+  seeks — but a freshly mounted element sits at 0 and fires NO
+  `timeupdate` for it (the media load algorithm only queues one if the
+  position actually changed, and a new element's position is already 0).
+  So park the playhead at 1.2 s, click Home, click Video Studio: the
+  video restarts at 0, the store still says 1.2, and the Timeline draws
+  its marker at 60% of a track whose video is at the very start. The
+  Player's source-change effect looked like the place that handled this
+  — it reset `time` and `playing` — but it only ever touched Player's
+  own React state and the media element, never the store, and it was
+  keyed on `source.url`, a string DERIVED from the path rather than the
+  file's own identity. With click-to-scrub landing in the same ticket,
+  the lie got worse: the track now invites a click, and a click lands
+  the playhead somewhere the marker disagreed with.
+- **Fix.** The effect resets the shared playhead (`setCurrentTime(0)`)
+  alongside the local readout, and is keyed on `source.filePath`. It no
+  longer writes `video.currentTime = 0`: setting `src` already rewinds
+  the element, and that write was the only way this effect could ever
+  move a playhead the user placed. The new scrub path goes the other
+  way through one channel — `videoStore.requestSeek(seconds)` clamps
+  into the source, moves `currentTime` optimistically so the marker
+  stays under the cursor on a slow file, and hands the Player a fresh
+  `seekRequest` object it applies to the element it owns.
+- **Test.** `tests/e2e/video-core.spec.ts` — "timeline: the playhead
+  never lies — store churn keeps it, leaving and returning resets it
+  (T-52)": parks at 1.2 s, churns the store with an unrelated clip add
+  and a grade slider (the playhead must NOT move), then walks Home and
+  back and asserts the element is at 0 AND the drawn marker is under 1%.
+  Red on the pre-fix build at 60%. Mutation: dropping the effect's
+  dependency array (so it re-runs on every render) flips it red at the
+  first park instead, proving the assertion reads the real playhead.
+- **Lesson.** When a durable store mirrors a DOM object that gets
+  recreated — a media element, a canvas, a worker — an event-driven sync
+  only covers the directions that fire events. The mount itself is a
+  state change nobody emits, so the component that recreates the object
+  has to re-seed the store there. And prefer the identity the user
+  thinks in (the file path) over a value derived from it (the url) as
+  the key for "is this a different thing now".
+
+### Also fixed here — "the duration" is two different numbers
+- **Root cause.** `nudge()` clamped to `source.probe.duration`, the
+  duration ffprobe reads out of the container. The media element reports
+  its own, decoded, duration — 2.000 vs 2.020136 s on the E2E fixture —
+  so every tail nudge stopped ~20 ms short of the real end of the file,
+  and the last frames were unreachable from the keyboard.
+- **Fix.** `nudge()` clamps to `v.duration` when it is finite, falling
+  back to the probe's number only before metadata arrives.
+- **Test.** `tests/e2e/video-core.spec.ts` — "player: a tail nudge
+  reaches the media element own duration, not ffprobe rounded one
+  (T-52)" asserts the REQUESTED seek equals `v.duration` to 5 decimals
+  and that the playhead lands past `FIXTURE_SECONDS`. The exactness is
+  the point: a 20 ms error is smaller than the half-frame landing
+  tolerance, so a landing assertion alone cannot see this class of bug.
+- **Lesson.** Anything handed back to the media element must be clamped
+  by the media element's numbers, not by a probe of the same file. Two
+  measurements of "the same" quantity that disagree in the third decimal
+  will always eventually meet an assertion that cares — and the test for
+  that gap has to be written at a precision that can see it. (Chromium
+  also refines `v.duration` from the container's rounded value to the
+  decoder's once it has parsed the file, so a test reading it must poll
+  for the refined value rather than read it once.)
+
 ## 2026-08-15 — T-53: selection handles and the grid were baked into image exports
 
 ### Bug — the export contained the editor, not just the artwork

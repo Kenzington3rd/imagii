@@ -19,7 +19,9 @@ export interface Shortcut {
 export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/video': [
     { keys: 'Space', description: 'Play / pause (player focused)' },
-    { keys: '← / →', description: 'Nudge 0.1s' },
+    { keys: '← / →', description: 'Nudge 0.1s (player or timeline focused)' },
+    { keys: 'Home / End', description: 'Jump to start / end (timeline focused)' },
+    { keys: 'Click timeline', description: 'Scrub the playhead to that point' },
     { keys: ', / .', description: 'Frame step back / forward' },
     { keys: 'I / O', description: 'Set in / out point at playhead' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo clip edits' },

@@ -27,6 +27,12 @@ interface History {
 interface VideoStudioState {
   source: VideoSource | null
   currentTime: number
+  /** A seek asked for by a scrubbing surface (the Timeline track's click,
+   *  drag, and arrow keys). The Player owns the `<video>`, so it is the one
+   *  that applies it — this is the only channel between them. A FRESH object
+   *  every call: identity is the signal, so two requests for the same second
+   *  both reach the media element. null until something scrubs. */
+  seekRequest: { seconds: number } | null
   clips: Clip[]
   selectedClipId: string | null
   /** Path to a transcribed SRT file from a prior captions run for the
@@ -47,6 +53,7 @@ interface VideoStudioState {
   loadSource: (filePath: string) => Promise<void>
   clearSource: () => void
   setCurrentTime: (t: number) => void
+  requestSeek: (seconds: number) => void
   setSrtPath: (p: string | null) => void
 
   addClip: () => void
@@ -138,6 +145,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
   return {
     source: null,
     currentTime: 0,
+    seekRequest: null,
     clips: [],
     selectedClipId: null,
     srtPath: null,
@@ -159,6 +167,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
           probe
         },
         currentTime: 0,
+        seekRequest: null,
         clips: [initial],
         selectedClipId: initial.id,
         srtPath: null,
@@ -170,6 +179,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({
         source: null,
         currentTime: 0,
+        seekRequest: null,
         clips: [],
         selectedClipId: null,
         srtPath: null,
@@ -177,6 +187,20 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         historyKey: null
       }),
     setCurrentTime: (t: number) => set({ currentTime: t }),
+    requestSeek: (seconds: number) => {
+      // Trust boundary: `seconds` comes from pointer geometry (a click x
+      // against a track width that can be 0 mid-layout) and from key handlers
+      // doing arithmetic on it, so NaN is reachable — never hand one to a
+      // media element.
+      if (!Number.isFinite(seconds)) return
+      const duration = get().source?.probe.duration ?? 0
+      const target = clamp(seconds, 0, duration)
+      // currentTime moves with the request rather than waiting for the media
+      // element's `timeupdate`: on a long recording a seek can take a moment,
+      // and the marker has to stay under the cursor while it does. The next
+      // timeupdate reconciles it with where the element actually landed.
+      set({ currentTime: target, seekRequest: { seconds: target } })
+    },
     setSrtPath: (p: string | null) => set({ srtPath: p }),
 
     addClip: () => {

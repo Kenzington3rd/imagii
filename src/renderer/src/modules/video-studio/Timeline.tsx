@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { useVideoStore } from './store/videoStore'
 
 function formatShort(seconds: number): string {
@@ -9,7 +10,10 @@ function formatShort(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}.${t}`
 }
 
-type DragMode = 'start' | 'end' | null
+type DragMode = 'start' | 'end' | 'scrub' | null
+
+/** Arrow-key step on the track, matching the Player's own ←/→ nudge. */
+const NUDGE_SEC = 0.1
 
 export function Timeline(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -17,6 +21,7 @@ export function Timeline(): JSX.Element | null {
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const currentTime = useVideoStore((s) => s.currentTime)
   const setClipRange = useVideoStore((s) => s.setClipRange)
+  const requestSeek = useVideoStore((s) => s.requestSeek)
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragMode>(null)
 
@@ -37,12 +42,19 @@ export function Timeline(): JSX.Element | null {
     [duration]
   )
 
+  // One gesture loop for all three drags. The listeners live on `window`, not
+  // the track, so a drag that leaves the element keeps scrubbing until the
+  // button comes up — the same capture a pointer-capture call would buy.
   useEffect(() => {
-    if (!drag || !clip) return
+    if (!drag) return
 
     function onMove(e: MouseEvent): void {
-      if (!clip) return
       const t = positionToSeconds(e.clientX)
+      if (drag === 'scrub') {
+        requestSeek(t)
+        return
+      }
+      if (!clip) return
       if (drag === 'start') {
         setClipRange(clip.id, Math.min(t, clip.endSec - 0.1), clip.endSec)
       } else if (drag === 'end') {
@@ -60,7 +72,38 @@ export function Timeline(): JSX.Element | null {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [drag, clip, positionToSeconds, setClipRange])
+  }, [drag, clip, positionToSeconds, setClipRange, requestSeek])
+
+  /** Click or drag anywhere on the track: seek to that point in the source. */
+  function startScrub(e: ReactMouseEvent<HTMLDivElement>): void {
+    // No preventDefault: the surface is a focusable slider, and mousedown is
+    // how a pointer user hands it the keyboard. The track is `select-none`,
+    // so nothing is dragged into a text selection either.
+    setDrag('scrub')
+    requestSeek(positionToSeconds(e.clientX))
+  }
+
+  function onScrubKey(e: ReactKeyboardEvent<HTMLDivElement>): void {
+    let next: number
+    switch (e.key) {
+      case 'ArrowLeft':
+        next = currentTime - NUDGE_SEC
+        break
+      case 'ArrowRight':
+        next = currentTime + NUDGE_SEC
+        break
+      case 'Home':
+        next = 0
+        break
+      case 'End':
+        next = duration
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    requestSeek(next)
+  }
 
   if (!source || !clip || duration <= 0) return null
 
@@ -83,12 +126,31 @@ export function Timeline(): JSX.Element | null {
         </span>
       </div>
       <div ref={trackRef} className="relative h-12 bg-bg-hover rounded-md select-none">
+        {/* The scrub surface. Its own element rather than the track itself for
+            two reasons: `role="slider"` makes its DOM children presentational,
+            which would hide the trim handles from assistive tech, and keeping
+            it BELOW the handles in paint order is what gives their drags
+            priority over a scrub. */}
         <div
-          className="absolute top-0 bottom-0 bg-accent/25 border-x-2 border-accent"
+          role="slider"
+          tabIndex={0}
+          aria-label="Playhead"
+          aria-valuemin={0}
+          aria-valuemax={Number(duration.toFixed(2))}
+          aria-valuenow={Number(currentTime.toFixed(2))}
+          aria-valuetext={formatShort(currentTime)}
+          onMouseDown={startScrub}
+          onKeyDown={onScrubKey}
+          className="absolute inset-0 rounded-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+        {/* Indicators only — `pointer-events-none` so the clip range and the
+            playhead never swallow a click meant for the track under them. */}
+        <div
+          className="absolute top-0 bottom-0 bg-accent/25 border-x-2 border-accent pointer-events-none"
           style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
         />
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-pink-400"
+          className="absolute top-0 bottom-0 w-0.5 bg-pink-400 pointer-events-none"
           style={{ left: `calc(${playheadPct}% - 1px)` }}
         />
         <button
@@ -111,7 +173,8 @@ export function Timeline(): JSX.Element | null {
         />
       </div>
       <p className="text-xs text-ink-dim">
-        Drag the handles, or press <kbd className="px-1 bg-bg-hover rounded">I</kbd> /{' '}
+        Click or drag the track to scrub. Drag the handles, or press{' '}
+        <kbd className="px-1 bg-bg-hover rounded">I</kbd> /{' '}
         <kbd className="px-1 bg-bg-hover rounded">O</kbd> to set in/out at the playhead.
       </p>
     </div>
