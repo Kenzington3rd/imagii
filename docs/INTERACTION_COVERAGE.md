@@ -6,12 +6,13 @@ disposition row here naming the OS boundary that stops it and the
 deepest layer covered instead. An element missing from this ledger is a
 bug.
 
-**State: inventory edition (2026-08-15), defect rows updated after
-T-13..T-20.** Complete element inventory from the round-22 renderer
-sweep; dispositions and test names are being filled by the coverage
-campaign (see `docs/TICKETS.md` T-13 onward). Counts at sweep time: ~343
-interactive elements; ~11 E2E-covered (~3%); 58 headless-limited; 8
-native confirm/prompt dialogs; 6 orphaned (unreachable) controls.
+**State: round-26 edition (2026-08-15) — the coverage fleet is
+complete.** Element inventory from the round-22 renderer sweep;
+dispositions for every group are recorded in the round-25 (Wave A) and
+round-26 (Wave B) sections below. Gates at round 26: 757 unit / 97 E2E
+green. Counts at sweep time (historical baseline): ~343 interactive
+elements; ~11 E2E-covered (~3%); 58 headless-limited; 8 native
+confirm/prompt dialogs; 6 orphaned (unreachable) controls.
 
 **Changed by T-13..T-20 (round 23):** the 6 orphaned controls are now
 mounted and reachable (0 orphaned, so PresetPanel's delete confirm is a
@@ -160,17 +161,22 @@ imports.
 | prompt("Rename mood board", name) | MoodBoardPanel.tsx:68 |
 | confirm("Delete \"X\" and all N item(s)?") | MoodBoardPanel.tsx:75 |
 
-## Headless-limited categories (58 elements)
+## Headless-limited categories
+
+58 elements at sweep time; rounds 25-26 shrank this hard. Three rows
+were WRONG and are corrected below — the boundary either did not exist
+under xvfb or had a deeper crossing than the sweep assumed. Verify a
+boundary by probing before dispositioning against it.
 
 | Boundary | Elements | Deepest coverable layer |
 |---|---|---|
-| Native open/save/dir dialogs | picker buttons across all studios, project save/load, ClipKit, reframe/gif/compile/pip output dirs, srt save, burn-in output, audio export | IPC handler unit tests + seeded-settings E2E bypass (export.spec pattern) |
-| shell.showItemInFolder / openExternal / openPath | every "Show" toast action + reveal button, whisper doc links, bin/models folder buttons | assert the IPC call fires (button wiring); the OS side is untestable headless |
-| desktopCapturer + MediaRecorder + media devices | the entire Record capture pipeline (13 elements) | UI-state E2E (checkbox/select wiring, phase transitions with stubs where possible); real capture needs a Windows hand-test |
+| Native open/save/dir dialogs | the OS chooser itself, everywhere | **Crossed in-house (rounds 25-26):** stub `dialog.show*Dialog` in the MAIN process via `app.evaluate` (queue variant `stubDialogs` for multi-ask flows) — click, IPC, validators, job, and bytes on disk all stay real. Only the OS chrome is untestable. |
+| shell.showItemInFolder / openExternal / openPath | every "Show" toast action + reveal button, whisper doc links, bin/models folder buttons | the IPC call recorded in main with its exact argument (round 26); the OS side is untestable headless |
+| ~~desktopCapturer + MediaRecorder + media devices (13 elements)~~ | **CORRECTED (T-27): only the mic/webcam `<select>`s (2 elements).** desktopCapturer, `getUserMedia({chromeMediaSource:'desktop'})` and MediaRecorder all work under xvfb; the other 11 elements are real E2E now. Only `enumerateDevices()` is empty in a container, and `--use-fake-device-for-media-capture` does not survive Electron's command line | reveal-gates driven both ways + zero-device branches asserted; real devices need HAND-TEST 2-3 |
 | whisper.exe + 141 MB model download | transcribe, model install/cancel | not-ready branch E2E (setup panel), burn-in already Layer 5 |
 | Live DuckDuckGo network | search input/button, result Save, remote thumbnails | duckduckgo.ts parser unit tests on fixture HTML + error-path E2E |
-| Clipboard | PostChecklist copy buttons, Image paste | grant clipboard permissions in Playwright context where possible |
-| Browser download (a[download]) | Image export, variants save | page.waitForEvent('download') — coverable, different mechanism |
+| ~~Clipboard~~ | **RETIRED (T-23 + T-25).** Both directions covered for real: main-process `clipboard.readText()` after the copy buttons; main-process `clipboard.writeImage` + a real Ctrl+V for paste | — |
+| Browser download (a[download]) | Image export, variants save | **Crossed (T-25):** `session.will-download` in the main process — page `'download'` events NEVER fire under `_electron.launch` (probed on page and context). House pattern for every `a[download]` row; asserts real files on disk |
 
 ---
 
@@ -378,3 +384,211 @@ replace-not-append E2E. Search: input/Enter/button/in-flight/error-card
 HL-network (deepest: duckduckgo.test.ts 27 units + validator
 composition). Rename + first-save prompt -> defect pins [T-28]. Clear
 thumb cache -> defect pin both directions [T-29].
+
+## Dispositions — round 26 (Wave B)
+
+Recorded by the expediter from the three worker reports; test names are
+in tests/e2e/{record,image,video-pipelines}.spec.ts and
+src/renderer/src/modules/record-studio/compositor.corner.test.ts.
+Expediter gates: 757 unit / 97 E2E green; discrimination re-executed
+personally on record.spec.ts (bundle mutation of the "Recording
+discarded." copy -> the named dialog-cancel test failed showing the
+mutated string arriving in the live toast log -> byte-identical restore
+verified by md5 -> green).
+
+### Record (T-27) — the 13-element HL block was wrong; it is 2
+
+Probed before writing: under Linux/xvfb, `desktopCapturer.getSources`,
+`getUserMedia({chromeMediaSource:'desktop'})` and MediaRecorder ALL
+work. Only `enumerateDevices()` is empty (no mic/cam exists in a
+container, and Chromium's fake-device switch does not survive
+Electron's command line). The screen half of the pipeline is real E2E.
+
+Covered (15/17): Refresh sources + thumbnails + auto-select + Start
+enablement -> E2E against the real screen source; zero-sources branch
+via a main-side getSources stub, pinned [T-41: both branches render
+identically]. Start refusal (mic on, no device) -> E2E, no orphaned
+temp. Stop -> real WebM on disk (ffprobe: webm container, video stream,
+no audio stream) + `Saved N.N MB.` toast. Esc -> real MP4 (ffprobe:
+mp4/h264) through the convert phase. Mic checkbox both branches
+(zero-device warning asserted, select asserted absent). Webcam checkbox
+-> Corner select with its four exact labels [T-42 pin: no zero-camera
+hint, PiP silently dropped]. Corner select -> `record.webcamCorner` on
+disk AND restored by a second launch on the same userData; the
+mount-write is pinned [T-43]. MP4 checkbox -> toggles, resets on
+revisit, writes nothing [T-43 pin]. Save dialog both branches
+(main-process stub): chosen path -> ffprobed file + recents entry;
+cancel -> exact "Recording discarded." + temp reaped + no recents.
+Discard mid-convert -> real SIGKILL of a live convert [T-44 pin: raw
+IPC error text + stranded half-written .mp4]. Show ->
+`shell.showItemInFolder` recorded in main with the exact output path.
+Edit in Video Studio -> navigation + `take.mp4` loaded and visible.
+HomeLink idle (navigates silently) + capture-phase confirm (exact copy
+pinned from the live dialog; dismiss branch keeps the take rolling).
+Streaming save proven: exactly one session `.webm` under
+`userData/recordings` while recording.
+
+Still HL (2): Microphone `<select>` and Webcam `<select>` — no
+audioinput/videoinput device exists in a container. Deepest: both
+reveal gates driven both ways; zero-device branches asserted.
+HAND-TEST steps 2-3.
+
+Adjacent row added to the inventory: the live compositor path
+(`startCompositor` with a real cam stream — offscreen videos, rAF loop,
+`canvas.captureStream`) has no E2E anywhere; its pure geometry is
+unit-covered incl. the new corner.test.ts branches (camRatio arm + dy
+centering, `readyState < 2` guard, zero-dimension fallback, portrait
+canvas, 64px clamp edges — with a pin that `computeCornerRect` does NOT
+clamp into bounds on tiny canvases). HAND-TEST steps 3-5. The
+resolution-adaptive margin is inline in `startCompositor` and
+unexported — hand-test only.
+
+### Image (T-25) — no HL rows remain in Image(66)
+
+Templates (12 empty-state cards under 4 headers + dialog + all four
+dismissals proven non-applying) -> E2E derived from `CANVAS_TEMPLATES`,
+not transcribed. Tools x5 via buttons AND keys (both letter cases) +
+`+ More` + Tool badge + Ctrl+V-is-not-Select -> E2E. Draw-commit x4
+tools + the sub-4px floor -> E2E via `__imagiiStage` (rect incl. a
+backwards drag; ellipse centre+radii; line 4 points; pencil >4).
+Grid/snap/grid-size -> E2E: grid is a real third Konva layer with exact
+line counts; snapped coords asserted exactly, mutation-proven.
+Selection/Transformer -> E2E; the corner-anchor drag IS drivable
+(`getAbsolutePosition()`), proven to reach the store by Undo->Redo
+round-tripping scaleX — no disposition needed. Delete/Backspace + the
+in-field INPUT guard -> E2E, guard mutation-proven; no confirm dialog
+asserted via dialog spy. LayerPanel all six row controls -> E2E
+(invisible layer stops rendering; locked drag refused with byte-equal
+x/y, mutation-proven; both reorder no-op ends; duplicate +20/+20 on
+top). PropertiesPanel every field incl. 7 rotation presets, opacity
+readout, and the text subtree; line layer offers none -> E2E. Import:
+drop in both states + `.txt` exact-copy refusal + `+ Import image` via
+Playwright's filechooser (real input path, NOT HL) + `+ Add text` +
+paste via a real Electron clipboard image and Ctrl+V -> E2E. Export
+PNG/JPG/scale/quality/filename patterns -> E2E on real bytes (PNG
+header dims; JPG >=10% smaller at 50%) via `session.will-download`;
+export dims pinned [T-45 P1: renders at screen zoom — 1280x720 exports
+as 956x537; emote pack 112/224/448 vs labeled 28/56/112, tripwire flips
+on fix]. Emote pack -> three downloads, three names, 1:2:4 ratio, three
+distinct payloads; JPG takes the single-file path. Variants
+generate/save/regenerate/save-all/Close -> E2E incl. a
+re-reads-the-canvas proof; stale previews pinned [T-46]. Undo/redo
+buttons + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z + redo-branch drop -> E2E.
+
+### Video pipelines (T-23) — Video 4g, 4j-4p, 4r-4t
+
+4g ChatHighlightPanel (5/5) -> E2E: spike found in an
+arithmetic-designed log, `+ clip` lands the padded range, bucket/pad
+inputs re-derive the peak, both exact-copy negatives; the silent
+`+ clip` no-op pinned [T-48]. 4j HighlightPanel (5/5) -> E2E: real
+ebur128 scan of a generated burst fixture, SignalBars, `+ Clip`,
+debounced chat rescore moving all three signals 0->100, Cancel kills a
+live scan on a ~20-min `-stream_loop -c copy` fixture. 4k Reframe: 4
+positions + output dir + real run (ffprobed incl. SAR 1:1 for T-12) ->
+E2E; cancel -> HL-timing (a 2 s clip reframes faster than a click can
+land; deepest: round-17 cancelReframe unit + the same cancel pattern
+driven live in PiP); toast Show -> HL-shell. 4l Gif (3 selects + dir +
+real run, frame count proving fps+speed) -> E2E; cancel HL-timing;
+Show HL-shell. 4m Compilation (fade slider + dir + real run with
+duration = sum of ranges + panel-absent-with-one-clip) -> E2E; cancel
+HL-timing; Show HL-shell. 4n PiP (9/9) -> E2E: both file pickers via
+the queued dialog stub, all 3 geometry controls, composite ffprobed,
+negative, real cancel of a 20-min job. 4o Captions (18): setup toggle,
+refresh status, both doc links, both folder buttons, model-download
+button, Transcribe-opens-setup, ALL style controls via a
+project-file-restored srtPath (the only whisper-free route in), trim,
+and Save .srt writing through the main-process confinement check ->
+E2E; transcribe execution HL-whisper; model download/cancel HL-network
+(141 MB, local-first — deliberately not clicked); burn-in + its cancel
+HL-dialog + Layer 5 (`runBurnIn`); the folder buttons' OS side
+HL-shell. 4p ClipKit (6/6) -> E2E: full kit run (5 platform MP4s + 3
+thumbnails, ffprobed) + `clipKit.lastOutputDir`; safe-zone and cancel
+modals both branches, no jpg leak; `copySrtTo` not exercised (needs
+srtPath + a kit in one session; deepest: `captions:copySrtTo` IPC
+unit). 4r PostChecklist (10/10) -> E2E: title ideas + all 6 hashtag
+packs reach the REAL system clipboard (read back in main), all 6
+platform toggles, diary -> `settings.postingDiary` on disk with
+localStorage proven empty, perf inputs, delete. 4s CustomPresetManager
+(12): 11/12 E2E — full CRUD to on-disk JSON, both confirm branches,
+both exact validation toasts, Escape/Done/Close; scrim-click owned by
+the T-21 Modal contract; custom presets never become export targets,
+pinned in both directions [T-50]. 4t ExportPanel (13): 12/13 E2E — 2
+clips x 2 presets -> 4 template-named ffprobed files + persisted
+settings; watermark reaches the filter graph, its handle persisted,
+its position NOT [T-49]; the dead "No presets selected on any clip"
+path [T-49]; safe-zone modal both branches; cancel modal both branches
+(real SIGKILL); refusals without an output folder / selection; per-row
+Show HL-shell. Watermark PIXELS are platform-pinned: linux
+ffmpeg-static has no `drawtext`, so nothing anywhere renders a
+watermark or text overlay — win32-gated Layer 5 coverage is [T-51].
+
+---
+
+## HAND-TEST — Windows, real hardware (T-27; the only manual residue)
+
+The two HL elements above plus the live compositor are the entire
+manual surface of the app. Run on the portable exe from `npm run dist`,
+on a machine with a working mic and webcam. Each step names its
+expected end state; anything else is a regression (or the named open
+ticket).
+
+1. **Sources grid.** Open Record, click "Pick a screen or window". ->
+   Grid fills with one card per monitor AND one per open window, each
+   with a live thumbnail, correct title, and `screen`/`window` under
+   it. The first card is already ringed and "Start recording" is
+   enabled. Click a WINDOW card — ring moves, Start stays enabled.
+   (E2E only ever sees one `screen` source; per-window enumeration and
+   titles are Windows-only.)
+2. **Mic select.** Tick "Record microphone". -> A `<select>` appears
+   (not the "No microphone found." warning) listing real device names.
+   Pick a non-default device. Record 10 s of speech, save, play back.
+   -> Audio present, from THE DEVICE YOU PICKED, in sync.
+3. **Webcam select + PiP corner.** Tick "Include webcam in recording".
+   -> A camera `<select>` appears alongside the Corner picker. Set
+   Corner to Top-left, record 10 s, save, play back. -> Webcam
+   composited at the top-left, correct aspect (face not stretched),
+   margin scaled to resolution (~19 px at 1080p, ~38 px at 4K). Repeat
+   for the other three corners. (Covers what only `computeCornerRect`
+   geometry covers today.)
+4. **Webcam without touching the dropdown.** Tick the webcam box and
+   Start WITHOUT opening the camera select. -> The saved file still
+   contains the webcam (`effectiveCamId ?? cams[0]` fallback). If it
+   is screen-only, that is a regression.
+5. **Mic + cam + screen together.** All three on, record 30 s, save.
+   -> One file: screen video, webcam corner, mic audio, all in sync,
+   no drift at the 30 s mark.
+6. **Esc stop.** Start a recording, press Esc (focus anywhere, not on
+   a button). -> Stops immediately, saving card appears. Esc again
+   while idle -> nothing happens.
+7. **Convert on.** Leave "Convert to MP4" ticked, record 30 s, save.
+   -> Save dialog defaults to `.mp4` with an MP4 filter; progress bar
+   advances; result opens in Windows Media Player / Photos.
+8. **Convert off.** Untick it, record 30 s, save. -> Dialog offers
+   `.webm`, save is near-instant with no progress phase, file plays in
+   a browser.
+9. **Discard mid-save.** Record 60 s with convert ON, Stop, click
+   "Discard recording" while the bar is moving. -> Expected TODAY: an
+   error toast with raw IPC/ffmpeg text and a stranded unplayable
+   `.mp4` at the chosen path [T-44]. After T-44: a calm
+   "Recording discarded."-style message and no file left. Either way
+   `%APPDATA%/imagii/recordings` must be empty afterwards.
+10. **Cancel the save dialog.** Record, Stop, Cancel in the native
+    dialog. -> "Recording discarded." toast, no file written,
+    recordings dir empty, nothing in Video Studio's recents.
+11. **Toast actions.** Complete a save. -> Toast reads `Saved N.N MB.`
+    with Show and Edit in Video Studio. Show -> Explorer opens with
+    the file selected. Redo, Edit in Video Studio -> lands in Video
+    Studio with the recording loaded, correct duration, scrubbable.
+12. **Leave mid-recording.** Start recording, click Home. -> Native
+    confirm: "A recording is in progress. Stop and save it before
+    leaving? (Cancel keeps recording.)" Cancel -> still recording,
+    clock running. Again, OK -> stops and runs the normal save flow;
+    the take is kept. (E2E covers the copy and the Cancel branch; OK
+    needs the native dialog.)
+13. **Quit mid-recording.** Start recording, close with the X. -> App
+    exits, no orphaned `ffmpeg.exe` in Task Manager, no multi-GB
+    `.webm` partials under `%APPDATA%/imagii/recordings`.
+14. **OS capture indicator.** Record with the webcam on, Stop. -> The
+    Windows "screen is being shared" / camera-in-use indicator clears
+    within a second or two. If it lingers, `screenStreamRef` /
+    compositor teardown regressed.
