@@ -148,28 +148,38 @@ describe('imagii-file handler refuses hostile requests (403, no fetch)', () => {
   })
 })
 
+// pathToFileURL is platform-dependent: on win32 a rootless POSIX path
+// resolves against the current drive (file:///D:/home/...). The v1.3.0
+// release run — the only place `npm run verify` executes on Windows —
+// caught these three assertions as linux-only. Fixtures pin exact URLs
+// per platform; building expectations with pathToFileURL itself would
+// be tautological against protocol.ts's own builder.
+const WIN = process.platform === 'win32'
+const VIDEOS = WIN ? 'C:/Users/streamer/Videos' : '/home/user/Videos'
+const VIDEOS_URL = WIN ? 'file:///C:/Users/streamer/Videos' : 'file:///home/user/Videos'
+
 describe('imagii-file handler resolves legitimate requests', () => {
   it('fetches the exact file:// URL for a safe absolute path', async () => {
     const handler = await loadHandler()
-    const res = await handler({ url: pathToImagiiFileUrl('/home/user/Videos/clip.mp4') })
+    const res = await handler({ url: pathToImagiiFileUrl(`${VIDEOS}/clip.mp4`) })
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('media-bytes')
-    expect(fetchedUrls).toEqual(['file:///home/user/Videos/clip.mp4'])
+    expect(fetchedUrls).toEqual([`${VIDEOS_URL}/clip.mp4`])
   })
 
   it('round-trips a filename with #, space and % through to net.fetch', async () => {
     const handler = await loadHandler()
     const res = await handler({
-      url: pathToImagiiFileUrl('/home/user/Videos/vod #4 100%.mp4')
+      url: pathToImagiiFileUrl(`${VIDEOS}/vod #4 100%.mp4`)
     })
     expect(res.status).toBe(200)
-    expect(fetchedUrls).toEqual(['file:///home/user/Videos/vod%20%234%20100%25.mp4'])
+    expect(fetchedUrls).toEqual([`${VIDEOS_URL}/vod%20%234%20100%25.mp4`])
   })
 
   it('allows a filename containing dots that are not a .. segment', async () => {
     const handler = await loadHandler()
-    const res = await handler({ url: pathToImagiiFileUrl('/home/user/Videos/vod..final.mp4') })
+    const res = await handler({ url: pathToImagiiFileUrl(`${VIDEOS}/vod..final.mp4`) })
     expect(res.status).toBe(200)
-    expect(fetchedUrls).toEqual(['file:///home/user/Videos/vod..final.mp4'])
+    expect(fetchedUrls).toEqual([`${VIDEOS_URL}/vod..final.mp4`])
   })
 })

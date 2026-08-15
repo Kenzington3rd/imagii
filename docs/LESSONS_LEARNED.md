@@ -14,6 +14,31 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — the release runner is the only Windows execution of the test suite
+
+### Bug — v1.3.0 release run failed: three protocol tests pinned linux-only URLs
+- **Root cause.** `pathToFileURL('/home/user/x')` is platform-dependent:
+  on win32 a rootless POSIX path resolves against the current drive
+  (`file:///D:/home/user/x`). The round-21 protocol positives pinned the
+  POSIX form. Every local and CI execution of `npm run verify` happens
+  on linux — the Windows release workflow is the only place the suite
+  runs on the shipping platform, and it caught them.
+- **Fix.** Platform-aware fixtures (win32 uses `C:/Users/...` and
+  expects `file:///C:/...`), keeping exact-URL pinning rather than
+  building expectations with `pathToFileURL` itself, which would be
+  tautological against the handler's own builder.
+- **Test.** `src/main/protocol.test.ts` positives, now green on both
+  platforms (linux verified locally; win32 verified by the re-run
+  release workflow).
+- **Lesson.** Extends the round-23 rule: **test evidence is
+  per-platform when the RUNTIME is per-platform** — not just the
+  binaries. Anything pinning paths, URLs, or path-derived strings must
+  either be platform-aware or run on both platforms. The release
+  workflow doubles as the de facto Windows CI; treat its verify step as
+  load-bearing, not ceremonial.
+
+---
+
 ## 2026-08-15 — Round 22: the four bugs round 21's own tests had already found
 
 Round 21 built the Layer 5 and E2E coverage the tickets asked for, and that
