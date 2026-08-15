@@ -87,20 +87,26 @@ export function ClipList(): JSX.Element {
                   : 'border-ink-dim/30 hover:bg-bg-hover'
               }`}
             >
+              {/* T-17: the rename input used to sit INSIDE the row-select
+                  button, which made the row an ambiguous activation target
+                  and needed an onClick stopPropagation to keep typing from
+                  selecting. Siblings instead: the input handles its own
+                  clicks (no ancestor handler left to stop), and the select
+                  button keeps the whole timecode column as its hit area. */}
+              <input
+                type="text"
+                value={clip.name}
+                onChange={(e) => renameClip(clip.id, e.target.value)}
+                className="bg-transparent flex-1 min-w-0 outline-none focus:bg-bg-base px-1 rounded text-sm"
+                aria-label={`Rename clip ${clip.name}`}
+              />
               <button
                 onClick={() => selectClip(clip.id)}
-                className="flex-1 text-left flex items-center gap-3"
+                className="text-left flex items-center gap-3 text-xs text-ink-muted font-mono hover:text-ink-base"
+                title="Select clip"
+                aria-label={`Select clip ${clip.name}`}
               >
-                <input
-                  type="text"
-                  value={clip.name}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => renameClip(clip.id, e.target.value)}
-                  className="bg-transparent flex-1 outline-none focus:bg-bg-base px-1 rounded text-sm"
-                />
-                <span className="text-xs text-ink-muted font-mono">
-                  {formatShort(clip.startSec)} → {formatShort(clip.endSec)}
-                </span>
+                {formatShort(clip.startSec)} → {formatShort(clip.endSec)}
               </button>
               {clips.length > 1 ? (
                 <button

@@ -25,16 +25,26 @@ import { ChatHighlightPanel } from './ChatHighlightPanel'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
+import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { videoTutorial } from '../../tutorials/videoTutorial'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
   const clipCount = useVideoStore((s) => s.clips.length)
   const clearSource = useVideoStore((s) => s.clearSource)
+  const undo = useVideoStore((s) => s.undo)
+  const redo = useVideoStore((s) => s.redo)
+  const canUndo = useVideoStore((s) => s.canUndo())
+  const canRedo = useVideoStore((s) => s.canRedo())
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
   const [extractingAudio, setExtractingAudio] = useState(false)
   const tutorial = useTutorial(videoTutorial)
+
+  // T-15: videoStore has had full history since round 18, but the studio
+  // exposed no way to reach it — trims, clip removal, and color grades were
+  // un-undoable in place. Same binding as Audio Studio and Image Canvas.
+  useUndoRedoHotkeys(undo, redo)
 
   function handleClose(): void {
     // UX round 18: clearSource() silently wiped every clip and its edits.
@@ -78,6 +88,22 @@ export function VideoStudio(): JSX.Element {
         <div className="flex items-center gap-3 text-sm text-ink-muted">
           {source ? (
             <>
+              <button
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                disabled={!canUndo}
+                onClick={undo}
+                title="Undo (Ctrl+Z)"
+              >
+                <Icon name="undo" size={15} /> Undo
+              </button>
+              <button
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                disabled={!canRedo}
+                onClick={redo}
+                title="Redo (Ctrl+Y)"
+              >
+                <Icon name="redo" size={15} /> Redo
+              </button>
               <button
                 className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
                 onClick={cleanAudioFlow}

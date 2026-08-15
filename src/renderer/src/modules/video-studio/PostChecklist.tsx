@@ -1,20 +1,8 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import type { SettingsKey } from '@shared/api'
+import type { DiaryEntry } from '@shared/postingDiary'
+import { DIARY_LEGACY_KEY, DIARY_MAX_ENTRIES, migrateDiary } from '@shared/postingDiary'
 import { PanelHeader } from '../../components/PanelHeader'
-
-interface DiaryEntry {
-  id: string
-  outputName: string
-  platforms: string[]
-  notes: string
-  performance?: { views?: number; likes?: number; comments?: number }
-  postedAt?: number
-  createdAt: number
-}
-
-const STORAGE: SettingsKey = 'streamerHandle' // reused only for handle
-const DIARY_KEY = 'imagii.postingDiary'
 
 const HASHTAG_TEMPLATES: Record<string, string[]> = {
   twitch_clip: ['#Twitch', '#TwitchClip', '#StreamHighlight', '#GamingClip'],
@@ -55,23 +43,40 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     void load()
   }, [])
 
+  /**
+   * T-20: the diary reads from the settings store, with a one-time carry-over
+   * of the pre-round-23 localStorage blob. The legacy key is cleared as soon
+   * as its contents are safe in settings — including when it was unparseable,
+   * so a corrupt value can't make every mount retry the same failure.
+   */
   async function load(): Promise<void> {
+    let legacyRaw: string | null = null
     try {
-      const raw = localStorage.getItem(DIARY_KEY)
-      if (raw) setDiary(JSON.parse(raw) as DiaryEntry[])
+      legacyRaw = localStorage.getItem(DIARY_LEGACY_KEY)
     } catch {
-      /* ignore */
+      /* localStorage can be unavailable; migration is then simply skipped */
     }
-    void STORAGE
+    try {
+      const stored = await window.api.settings.get<unknown>('postingDiary')
+      const result = migrateDiary({ stored, legacyRaw })
+      setDiary(result.entries)
+      if (!result.migrated) return
+      await window.api.settings.set('postingDiary', result.entries)
+      try {
+        localStorage.removeItem(DIARY_LEGACY_KEY)
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      toast.error('Could not load your posting diary')
+    }
   }
 
   function save(next: DiaryEntry[]): void {
     setDiary(next)
-    try {
-      localStorage.setItem(DIARY_KEY, JSON.stringify(next))
-    } catch {
-      /* ignore */
-    }
+    void window.api.settings.set('postingDiary', next).catch(() => {
+      toast.error('Could not save your posting diary')
+    })
   }
 
   function add(): void {
@@ -86,7 +91,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
       notes: notes.trim(),
       createdAt: Date.now()
     }
-    save([entry, ...diary].slice(0, 100))
+    save([entry, ...diary].slice(0, DIARY_MAX_ENTRIES))
     setOutputName('')
     setPlatforms([])
     setNotes('')

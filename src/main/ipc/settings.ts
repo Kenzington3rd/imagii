@@ -23,7 +23,8 @@ const KNOWN_SETTINGS_KEYS: readonly SettingsKey[] = [
   'recentFiles.image',
   'record.webcamCorner',
   'export.lastOutputDir',
-  'clipKit.lastOutputDir'
+  'clipKit.lastOutputDir',
+  'postingDiary'
 ]
 const KNOWN_KEYS_SET = new Set<string>(KNOWN_SETTINGS_KEYS)
 function assertKnownKey(key: unknown): asserts key is SettingsKey {

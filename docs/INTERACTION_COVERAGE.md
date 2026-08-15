@@ -6,12 +6,20 @@ disposition row here naming the OS boundary that stops it and the
 deepest layer covered instead. An element missing from this ledger is a
 bug.
 
-**State: inventory edition (2026-08-15).** Complete element inventory
-from the round-22 renderer sweep; dispositions and test names are being
-filled by the coverage campaign (see `docs/TICKETS.md` T-13 onward).
-Counts: ~343 interactive elements; ~11 E2E-covered at sweep time (~3%);
-58 headless-limited; 8 native confirm/prompt dialogs; 6 orphaned
-(unreachable) controls.
+**State: inventory edition (2026-08-15), defect rows updated after
+T-13..T-20.** Complete element inventory from the round-22 renderer
+sweep; dispositions and test names are being filled by the coverage
+campaign (see `docs/TICKETS.md` T-13 onward). Counts at sweep time: ~343
+interactive elements; ~11 E2E-covered (~3%); 58 headless-limited; 8
+native confirm/prompt dialogs; 6 orphaned (unreachable) controls.
+
+**Changed by T-13..T-20 (round 23):** the 6 orphaned controls are now
+mounted and reachable (0 orphaned, so PresetPanel's delete confirm is a
+live dialog rather than a dead one); the native-dialog inventory grows
+from 8 to 9 with Audio Studio's new Close confirm; Video Studio gains
+Undo/Redo buttons plus a Ctrl+Z/Y/Shift+Z binding. Every element added
+or altered carries unit-level coverage in this round and is named below
+with the fleet ticket that will drive its end state.
 
 Flags: `HL` = headless-limited (reason given) · `COV` = E2E-covered at
 sweep time · `NAT` = native confirm/prompt (needs a Playwright dialog
@@ -29,44 +37,105 @@ Global test hooks: `window.__imagiiStage` (Konva Stage, Canvas.tsx:360),
 | Welcome | 1 | 0 (bypassed by seeding) | 0 | 0 |
 | Home | 15 | 5 (NavCards) | 2 | 0 |
 | Record | 17 | 1 | 13 | 1 |
-| Video | 149 | 4 + 2 render-only | 27 | 3 |
-| Audio | 48 | 1 | 5 | 1 (orphaned) |
+| Video | 151 (149 + 2 undo/redo, T-15) | 4 + 2 render-only | 27 | 3 |
+| Audio | 48 (4 of them un-orphaned by T-14) | 1 | 5 | 2 (Close, T-19) |
 | Image | 66 | 1 | 6 | 0 |
 | References | 20 | 1 | 5 | 3 |
-| Shared | 21 | 2 | 0 | 0 |
-| Orphaned | 6 | 0 | 0 | 1 |
-| **Total** | **~343** | **~11 (~3%)** | **58** | **8** |
+| Shared | 23 (21 + HotkeyOverlay x2, T-13) | 2 | 0 | 0 |
+| Orphaned | 0 (was 6) | — | — | — |
+| **Total** | **~345** | **~11 (~3%)** | **58** | **9** |
 
 ---
 
 ## Defects found by the sweep (ticketed)
 
+All eight are FIXED in round 23. Each row keeps the original finding and
+adds what landed, the unit-level coverage that ships with it, and the
+fleet ticket that will drive its end state.
+
 1. **HotkeyOverlay never mounted** (`components/HotkeyOverlay.tsx`) —
-   the `?` shortcut it owns is advertised in Player.tsx:188 hint copy
+   the `?` shortcut it owns is advertised in Player.tsx hint copy
    and its SHORTCUTS_BY_ROUTE table is the only shortcut documentation.
-   Two dead interactions. → T-13
+   Two dead interactions. → T-13 **FIXED**: mounted app-wide in
+   `App.tsx` outside `<Routes>`; `?` toggles on every route (INPUT/
+   TEXTAREA guarded), Escape and the "Esc" close button both dismiss via
+   `Modal`. Table drift corrected in the same change (Audio's phantom
+   Space row removed, Video's Ctrl+Z added, Delete row now says Delete /
+   Backspace). Covered: `HotkeyOverlay.test.ts` (toggle predicate, route
+   lookup), `tests/unit/hotkeyTable.test.ts` (every row is either a real
+   binding found in that route's component tree or a listed mouse hint),
+   `tests/unit/interactionWiring.test.ts` (mount + close control).
+   E2E: T-21.
 2. **PresetPanel (audio cleanup presets) never mounted** — four dead
    controls; `audio:listPresets/savePreset/deletePreset` IPC channels
-   live in main with no reachable UI. → T-14
+   live in main with no reachable UI. → T-14 **FIXED**: rendered in
+   Audio Studio's right column between Levels and Add-a-second-track
+   (card + `PanelHeader icon="gear"`, per DESIGN_GUIDE). Markup already
+   matched current conventions; unchanged. Covered:
+   `interactionWiring.test.ts` (mounted, reachable from `/audio`, all
+   four controls still reach the IPC, delete still behind a confirm) +
+   the existing main-side `audio/presets.test.ts`. E2E: T-24.
 3. **Video Studio has no undo affordance** — no header buttons, no
-   Ctrl+Z listener (Audio has one at AudioStudio.tsx:31, Image at
-   ImageStudio.tsx:38). videoStore.undo/redo only reachable from Home's
-   global button. → T-15
+   Ctrl+Z listener (Audio has one, Image has one).
+   videoStore.undo/redo only reachable from Home's global button.
+   → T-15 **FIXED**: header Undo/Redo buttons (disabled off
+   `canUndo`/`canRedo`) + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z. The branch all
+   three studios had copied is now one hook,
+   `hooks/useUndoRedoHotkeys.ts`. Covered:
+   `useUndoRedoHotkeys.test.ts` (10 cases incl. the INPUT/TEXTAREA
+   guard), `interactionWiring.test.ts` (buttons + hook in all three
+   studios, no fourth copy). E2E: T-22.
 4. **Tutorial coachmarks target nonexistent selectors** —
-   `[data-tutorial="video-crop"]` (videoTutorial.ts:53) and
-   `[data-tutorial="audio-multitrack"]` (audioTutorial.ts:60) highlight
-   nothing. → T-16
+   `[data-tutorial="video-crop"]` and `[data-tutorial="audio-multitrack"]`
+   highlight nothing. → T-16 **FIXED**: `video-crop` on CropOverlay's
+   control row; `audio-multitrack` on the SecondaryTrackPanel host
+   wrapper in AudioStudio (the panel root already carries `audio-music`
+   for the ducking step). Covered: `tests/unit/tutorialTargets.test.ts`
+   walks EVERY step of ALL FOUR tutorials and resolves each selector
+   against the components that route can actually render, so the next
+   coachmark added without its host fails the build. E2E: T-21.
 5. **Invalid interactive nesting** — text input inside a button
-   (ClipList.tsx:90-100), remove button inside a label wrapping inputs
-   (TextOverlayEditor.tsx:171). Ambiguous roles, testability hazard.
-   → T-17
+   (ClipList), remove button inside a label wrapping inputs
+   (TextOverlayEditor). Ambiguous roles, testability hazard.
+   → T-17 **FIXED**: ClipList's row is a flex row with the rename input
+   and the select button as siblings (the input's `stopPropagation` is
+   gone with the ancestor handler that needed it; both controls gained
+   their own `aria-label`). TextOverlayEditor's label now wraps only its
+   own field, with the remove button as a sibling. A third instance the
+   sweep missed — seven rotation presets inside PropertiesPanel's
+   Rotation label — is fixed with them. Covered:
+   `tests/unit/interactiveNesting.test.ts` parses every renderer `.tsx`
+   with the TypeScript TSX parser and fails on any control nested in
+   another (repo-wide, not just these three), plus
+   `interactionWiring.test.ts` for behavior preservation. No existing
+   E2E selector changed — `smoke.spec` and `export.spec` both pass
+   unmodified. E2E: T-22.
 6. **RecentFilesMenu dismisses only on mouse-leave** (no click-outside,
-   no Escape) — hover-dependent, flaky headless. → T-18
+   no Escape) — hover-dependent, flaky headless. → T-18 **FIXED**:
+   Escape (window keydown) and click-outside (document mousedown,
+   measured against the wrapper so the toggle button still closes what
+   it opened) added; mouse-leave retained. Covered:
+   `RecentFilesMenu.test.ts` (pure dismissal policy, all four cases),
+   `interactionWiring.test.ts` (listeners registered and removed).
+   E2E: T-21.
 7. **Audio Studio Close has no confirm** while Video Studio's does;
-   both drop unexported work. → T-19
+   both drop unexported work. → T-19 **FIXED**: `confirmAudioClose`
+   asks before `clearSource()` whenever the chain differs from
+   `DEFAULT_CHAIN_SPEC`, cut regions exist, or a second track is loaded;
+   an untouched chain still closes with no nag. Copy mirrors
+   VideoStudio's. Covered: `AudioStudio.test.ts` (17 cases: message per
+   edit kind, and the declined branch asserted separately).
+   E2E: T-24.
 8. **PostChecklist diary lives in localStorage** (`imagii.postingDiary`)
    — excluded from project save/load and autosave, unlike all other
-   studio state; wiped with the Chromium profile. → T-20
+   studio state; wiped with the Chromium profile. → T-20 **FIXED**:
+   moved to the settings store under the new `postingDiary` key (added
+   to `SettingsKey`, the IPC allowlist, and the electron-store schema),
+   with a one-time localStorage migration that also retires a corrupt
+   legacy blob. Covered: `src/shared/postingDiary.test.ts` (23 cases:
+   parse/normalize, round trip, migration, corrupt-JSON path),
+   `settingsKnownKeys.test.ts` (new key accepted; allowlist and store
+   schema pinned against each other). E2E: T-23.
 
 Also noted, not ticketed: Tutorial's scrim click ADVANCES rather than
 dismisses (Tutorial.tsx:121) — by design, but tests must not click the
@@ -85,7 +154,8 @@ imports.
 | confirm("Close this video? N clip(s)…") | VideoStudio.tsx:45 |
 | confirm("Remove clip \"X\"?") | ClipList.tsx:111 |
 | confirm("Delete preset \"X\"?") | CustomPresetManager.tsx:69 |
-| confirm("Delete preset \"X\"?") | PresetPanel.tsx:46 (orphaned) |
+| confirm("Delete preset \"X\"?") | PresetPanel.tsx:46 (reachable since T-14) |
+| confirm("Close this audio? … will be discarded.") | AudioStudio.tsx (T-19) |
 | prompt("Name your first mood board:") | ReferencePanel.tsx:31 |
 | prompt("Rename mood board", name) | MoodBoardPanel.tsx:68 |
 | confirm("Delete \"X\" and all N item(s)?") | MoodBoardPanel.tsx:75 |
@@ -143,17 +213,21 @@ format. HomeLink COV.
 
 ### Video (149) — by panel
 
-- **Chrome (4):** HomeLink (COV), Clean audio (extract->wav->Audio
-  Studio->navigate), Close (NAT confirm), TutorialButton.
+- **Chrome (6):** HomeLink (COV), Undo + Redo buttons and the
+  Ctrl+Z/Y/Shift+Z binding (T-15; `useUndoRedoHotkeys.test.ts` +
+  `interactionWiring.test.ts`, E2E T-22), Clean audio (extract->wav->
+  Audio Studio->navigate), Close (NAT confirm), TutorialButton.
 - **Importer (6):** dragover/leave/drop (COV export.spec both paths),
   Choose file (HL dialog), RecentFilesMenu pick/clear.
 - **Player (13):** play/pause, frame step x2, safe-zones checkbox,
   video events, keyboard Space/arrows/,/./I/O (7 bindings).
 - **CropOverlay (5):** enable checkbox, aspect presets x5, reset, Rnd
-  drag, Rnd resize.
+  drag, Rnd resize. Control row hosts `data-tutorial="video-crop"`
+  since T-16.
 - **Timeline (2):** trim-start drag, trim-end drag (mousedown/move/up).
-- **ClipList (6):** add clip, speed slider, speed reset, row select,
-  name input (nested in button — T-17), remove (NAT).
+- **ClipList (6):** add clip, speed slider, speed reset, row select
+  (button, `aria-label="Select clip …"`), name input (sibling of the
+  select button since T-17, `aria-label="Rename clip …"`), remove (NAT).
 - **ClipKit (6):** start (HL dir dialog+shell), cancel, keep-running,
   cancel-jobs, safe-zone modal cancel/continue.
 - **OutputPreview (1):** platform select (canvas redraw).
@@ -176,7 +250,8 @@ format. HomeLink COV.
   burn-in cancel, style presets, font slider, position select, color
   inputs x2, trim checkbox, save .srt (HL dialog), burn (HL dialog).
 - **TextOverlayEditor (10):** add, text/font/size/color/x/y/start/end
-  fields, remove (nested in label — T-17).
+  fields (start/end gained aria-labels in T-17), remove (sibling of the
+  time label since T-17).
 - **ExportPanel (13):** presets gear, output dir (HL; label COV
   render-only), Export N (COV export.spec end-to-end), cancel + modal
   keep/cancel-jobs, watermark input+position, filename template,
@@ -186,12 +261,15 @@ format. HomeLink COV.
   bitrates x2, save, delete (NAT), done, Escape/scrim.
 - **PostChecklist (10):** suggest titles, copy x2 (HL clipboard),
   hashtag select, name input, platform toggles x6, notes, log post
-  (localStorage — T-20), delete entry, perf inputs x3.
+  (writes `settings.postingDiary` since T-20), delete entry, perf
+  inputs x3. Persistence covered by `shared/postingDiary.test.ts`;
+  E2E T-23.
 
 ### Audio (48)
 
-HomeLink (COV), undo/redo buttons + Ctrl+Z/Y/Shift+Z bindings, Close
-(no confirm — T-19), TutorialButton, FixWizard trigger + 8 option
+HomeLink (COV), undo/redo buttons + Ctrl+Z/Y/Shift+Z bindings (shared
+`useUndoRedoHotkeys` since T-15), Close (NAT confirm since T-19),
+TutorialButton, FixWizard trigger + 8 option
 buttons + close/start-over/apply + modal escape/scrim, drop zone
 (dragover/leave/drop), Choose file (HL), RecentFilesMenu, waveform
 region-drag -> cut region, click-seek, play/pause, cut chip removal,
@@ -200,7 +278,8 @@ compressor x4, loudnorm box + LUFS number + platform select, gain
 slider, secondary role buttons x3 (HL dialog), remove, gain slider,
 match-loudness + duck boxes, duck sliders x4, format/bitrate selects,
 mux-back box, Export (HL dialog), cancel, Show (HL shell).
-Orphaned: PresetPanel x4 (T-14).
+PresetPanel x4 (name input + Enter, Save current, Apply per row, remove
+per row with NAT confirm) — mounted and reachable since T-14.
 
 ### Image (66)
 
@@ -231,11 +310,15 @@ bridge), item remove, asset cards (headless-safe canvas replacement).
 Modal scrim/stopPropagation/Escape/focus-trap, Tutorial scrim-advance /
 Skip (no persist) / Back / Next-Done (persists tutorialSeen) + 4 key
 bindings (Esc COV partial), RecentFilesMenu toggle/mouse-leave/item/
-clear, TutorialButton x4, HomeLink x5 (COV), ErrorBoundary reload +
-details disclosure, AppToaster surface (MutationObserver pattern from
-export.spec).
+clear **+ Escape and click-outside (T-18)**, TutorialButton x4,
+HomeLink x5 (COV), ErrorBoundary reload + details disclosure,
+AppToaster surface (MutationObserver pattern from export.spec),
+HotkeyOverlay `?` binding + Esc button (app-wide since T-13).
 
-### Orphaned (6) — dead until T-13/T-14 land
+### Orphaned (0)
 
-HotkeyOverlay `?` binding + Esc button; PresetPanel input/Enter/save/
-apply/remove.
+Empty since round 23. The six controls listed here at sweep time —
+HotkeyOverlay's `?` binding and Esc button, PresetPanel's input/Enter/
+save/apply/remove — are all mounted (T-13, T-14). A control that becomes
+unreachable again belongs in this section with the ticket that will
+mount it.

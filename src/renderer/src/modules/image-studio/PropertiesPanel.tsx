@@ -48,15 +48,21 @@ export function PropertiesPanel(): JSX.Element | null {
         </label>
       </div>
 
-      <label className="flex items-center gap-2">
-        <span className="text-xs text-ink-muted w-16">Rotation</span>
-        <input
-          type="number"
-          step={0.5}
-          value={Number(layer.rotation.toFixed(2))}
-          onChange={(e) => setRotation(layer.id, Number(e.target.value) || 0)}
-          className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
-        />
+      {/* T-17: the seven rotation presets used to live inside this label, so
+          every preset click also targeted the rotation field. Same defect
+          class the sweep flagged in ClipList / TextOverlayEditor; the label
+          now wraps only its own input. */}
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-2">
+          <span className="text-xs text-ink-muted w-16">Rotation</span>
+          <input
+            type="number"
+            step={0.5}
+            value={Number(layer.rotation.toFixed(2))}
+            onChange={(e) => setRotation(layer.id, Number(e.target.value) || 0)}
+            className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
+          />
+        </label>
         <span className="text-ink-dim">°</span>
         <div className="flex gap-1 ml-1">
           {ROTATION_PRESETS.map((r) => (
@@ -69,7 +75,7 @@ export function PropertiesPanel(): JSX.Element | null {
             </button>
           ))}
         </div>
-      </label>
+      </div>
 
       <label className="flex items-center gap-2">
         <span className="text-xs text-ink-muted w-16">Opacity</span>

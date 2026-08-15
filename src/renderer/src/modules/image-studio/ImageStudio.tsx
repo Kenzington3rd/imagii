@@ -21,6 +21,7 @@ import { useCanvasStore } from './state/canvasStore'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
+import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { imageTutorial } from '../../tutorials/imageTutorial'
 
 export function ImageStudio(): JSX.Element {
@@ -35,18 +36,16 @@ export function ImageStudio(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
   const tutorial = useTutorial(imageTutorial)
 
+  // T-15: undo/redo moved to the shared hook; this listener keeps the
+  // canvas-only bindings (delete + tool switching).
+  useUndoRedoHotkeys(undo, redo)
+
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const ctrl = e.ctrlKey || e.metaKey
-      if (ctrl && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        undo()
-      } else if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault()
-        redo()
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLayerId) {
           e.preventDefault()
           removeLayer(selectedLayerId)
@@ -65,7 +64,7 @@ export function ImageStudio(): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo, selectedLayerId, removeLayer, setTool])
+  }, [selectedLayerId, removeLayer, setTool])
 
   return (
     <div className="h-full overflow-hidden px-6 py-5 flex flex-col gap-4">

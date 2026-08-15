@@ -84,7 +84,9 @@ export function CropOverlay({ videoElement }: CropOverlayProps): JSX.Element | n
 
   return (
     <>
-      <div className="flex items-center gap-2 text-xs">
+      {/* T-16: the tutorial's crop step highlighted nothing — this control
+          row is what its copy describes ("tick 'Crop' above the player"). */}
+      <div className="flex items-center gap-2 text-xs" data-tutorial="video-crop">
         <label className="flex items-center gap-1.5 text-ink-muted">
           <input
             type="checkbox"

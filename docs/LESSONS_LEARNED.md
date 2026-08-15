@@ -39,6 +39,153 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — Round 23b: the eight defects an interaction inventory found (T-13..T-20)
+
+The round-22 sweep walked all ~343 interactive elements instead of testing
+the ones we thought mattered. Six controls turned out to be coded, shipped,
+and impossible to reach; two more were reachable but wrong. None of it
+failed a test, because none of it had one. Every fix below ships with
+coverage that fails if the element goes dark again.
+
+### Bug — coded, shipped, unreachable: the shortcut overlay and the preset panel (T-13, T-14)
+- **Root cause.** `HotkeyOverlay` was never mounted by any component, and
+  `PresetPanel` was never rendered by Audio Studio. Both had complete
+  implementations, both were imported by nothing. The overlay's `?` was
+  advertised in Player's hint copy and its table was the app's only
+  shortcut documentation; the preset panel's `audio:listPresets/savePreset/
+  deletePreset` handlers, their validation, and their unit tests all
+  existed in main with no UI on the other end. Typecheck is happy with an
+  unrendered component; so is every unit test that imports the module
+  directly.
+- **Fix.** `<HotkeyOverlay />` in `App.tsx` outside `<Routes>` (one
+  instance, reads the route via `useLocation`); `<PresetPanel />` in Audio
+  Studio's right column under Levels.
+- **Test.** `tests/unit/interactionWiring.test.ts` — asserts the mount
+  points and that the panel is reachable from `/audio` by walking the
+  route's real import graph (`tests/unit/routeSources.ts`). Behavior is
+  covered beside each component (`HotkeyOverlay.test.ts`).
+- **Lesson.** **An unmounted component is invisible to every layer we
+  had.** Unit tests import the module, the typechecker only sees the file,
+  and E2E never looks for a control nobody told it about. Reachability is
+  its own assertion: for any control that matters, something must prove a
+  route can render it.
+
+### Bug — the app's only shortcut documentation had drifted from the app (T-13)
+- **Root cause.** `SHORTCUTS_BY_ROUTE` advertised a Space play/pause
+  binding for Audio Studio that never existed (the waveform has a play
+  *button*), and after T-15 wired Ctrl+Z into Video Studio the table said
+  nothing about it. Documentation stored as data still rots — it just rots
+  silently, because a wrong row renders exactly as convincingly as a right
+  one.
+- **Fix.** Table corrected; every row now must be classifiable.
+- **Test.** `tests/unit/hotkeyTable.test.ts` — each row is either a
+  keyboard claim whose evidence pattern must appear in that route's own
+  component tree, or a listed mouse hint. A new unclassifiable row fails
+  the suite. Discrimination is proven in the same file: the removed Space
+  claim is shown absent from `/audio` and present in `/video`.
+- **Lesson.** **In-app documentation is code and needs a test that reads
+  the code.** If a doc table can name a binding, a test can go looking for
+  it.
+
+### Bug — coachmarks pointing at nothing, in a tour that reported success (T-16)
+- **Root cause.** Two tutorial steps targeted `[data-tutorial="video-crop"]`
+  and `[data-tutorial="audio-multitrack"]`; no component declared either.
+  The Tutorial renders a full-screen step when a target is missing, which
+  is also a legitimate design — so a broken step and a deliberate one are
+  indistinguishable at runtime.
+- **Fix.** `video-crop` on CropOverlay's control row; `audio-multitrack` on
+  the SecondaryTrackPanel host wrapper (its root already carried
+  `audio-music`).
+- **Test.** `tests/unit/tutorialTargets.test.ts` — every step of all four
+  tutorials, checked against the components its route can render, plus
+  "a step with no target must be a `center` step" so a dropped selector
+  can't hide as a design choice. **The first version of this test passed
+  with both attributes deleted**: the tutorial definition files are
+  reachable from every studio (a studio imports its own tour) and they
+  contain the selector strings, so each step proved its own existence. The
+  scanner now skips `tutorials/` and ignores `data-tutorial` preceded by
+  `[`. Mutation proof: with the attributes removed the suite reports "no
+  component reachable from /video declares data-tutorial=video-crop".
+- **Lesson.** **A test that reads source text can accidentally read the
+  spec instead of the implementation.** Always run a static check against
+  the broken state before trusting a green one.
+
+### Bug — controls nested inside other controls (T-17)
+- **Root cause.** ClipList put the rename `<input>` inside the row-select
+  `<button>` (and needed an `onClick` `stopPropagation` to stop typing from
+  selecting); TextOverlayEditor put the remove `<button>` inside the
+  `<label>` that wrapped the time fields; PropertiesPanel — which the sweep
+  missed — put seven rotation presets inside the Rotation label. Ambiguous
+  accessible roles, an unpredictable activation target, and a locator that
+  resolves to two overlapping controls.
+- **Fix.** Siblings in a flex row in all three; the workaround
+  `stopPropagation` deleted with the nesting that needed it; `aria-label`s
+  added where the restructure split an accessible name.
+- **Test.** `tests/unit/interactiveNesting.test.ts` parses every renderer
+  `.tsx` with the TypeScript compiler's own TSX parser and fails on any
+  interactive element inside another — repo-wide, so it pins components
+  nobody has written yet. Red-green: it failed on exactly three files
+  before the fix (including the one the human sweep missed) and passes
+  after.
+- **Lesson.** **When a sweep finds two instances of a defect, write the
+  check that finds the third.** A parser-based structural test costs about
+  as much as fixing the two by hand and covers the whole tree forever.
+
+### Bug — a popover only a mouse could close, and a Close button that asked nothing (T-18, T-19)
+- **Root cause.** `RecentFilesMenu` dismissed on `onMouseLeave` alone — no
+  Escape, no click-outside. Audio Studio's Close called `clearSource()`
+  directly, discarding the cleanup chain, every cut region, a loaded second
+  track, and the undo history that could have restored them; Video Studio
+  had confirmed the same action since round 18.
+- **Fix.** Escape + click-outside on the menu (mouse-leave kept), measured
+  against the wrapper so the toggle button can still close what it opened.
+  `confirmAudioClose` asks first whenever there is anything to lose, and
+  stays silent on an untouched chain.
+- **Test.** `RecentFilesMenu.test.ts` (dismissal policy, including
+  "inside" not dismissing) and `AudioStudio.test.ts` — where the declined
+  branch gets its own assertion, because that is the branch that saves the
+  work.
+- **Lesson.** **Parity between two studios is a testable claim.** When one
+  surface guards a destructive action and its twin doesn't, the gap is a
+  bug report waiting to be written by a user who lost work.
+
+### Bug — the posting diary lived outside the app's state (T-20)
+- **Root cause.** `PostChecklist` persisted to `localStorage` under
+  `imagii.postingDiary`, i.e. inside the Chromium profile: wiped by a
+  profile reset, absent from project save/load and autosave, invisible to
+  every other persistence path in the app. Every other studio's state went
+  through the settings store or the project file.
+- **Fix.** New `postingDiary` settings key (union + IPC allowlist + store
+  schema) with a one-time localStorage migration. A corrupt legacy blob
+  yields an empty diary and still retires the key, so a broken value can't
+  make every mount re-fail.
+- **Test.** `src/shared/postingDiary.test.ts` — parse/normalize, JSON round
+  trip, migration precedence (settings always wins, `[]` is a real value),
+  and the corrupt-JSON path; `settingsKnownKeys.test.ts` now also pins the
+  IPC allowlist and the electron-store schema against each other.
+- **Lesson.** **"It persists" is not "it is saved."** Ask which of the
+  app's storage layers a value belongs to; a lone `localStorage` call in a
+  local-first app is state the user cannot back up, move, or restore.
+
+### Bug — the same keyboard branch copied into three studios (T-15)
+- **Root cause.** Audio Studio and Image Canvas each carried their own
+  Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z listener; Video Studio — the studio with
+  the most undoable actions, and full history in its store since round 18 —
+  carried none, so its undo was reachable only from Home's global button.
+  Nothing tested any of the three, because a window listener needs a DOM.
+- **Fix.** `hooks/useUndoRedoHotkeys.ts`: one hook, one pure
+  `undoRedoIntent` decision, used by all three; header Undo/Redo buttons
+  added to Video Studio.
+- **Test.** `useUndoRedoHotkeys.test.ts` (10 cases including the
+  INPUT/TEXTAREA guard and the `key: 'Z'` Chromium reports under Shift);
+  `interactionWiring.test.ts` asserts all three studios use the hook and
+  that no fourth hand-rolled copy exists.
+- **Lesson.** **Extracting the third copy is also how the untested branch
+  gets tested.** The pure decision function is the part a node-env unit
+  test can drive; the copies that stayed inline never could be.
+
+---
+
 ## 2026-08-15 — Round 22: the four bugs round 21's own tests had already found
 
 Round 21 built the Layer 5 and E2E coverage the tickets asked for, and that
