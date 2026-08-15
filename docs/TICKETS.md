@@ -553,6 +553,26 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Ledger row updated from NOT COVERED.
 - **Status:** open
 
+## T-36 — waveform drag-to-cut needs two gestures instead of one
+
+- **Spec:** T-24 finding. WaveformView subscribes to the new region's
+  update-end inside the plugin's region-created handler, but wavesurfer
+  7.12 emits region-created at drag END — so the first gesture leaves a
+  region and no cut; only manipulating that region afterwards commits
+  one. The panel copy promises a single gesture. Pinned as a tripwire
+  (toHaveCount(0) after gesture 1) in audio.spec.ts, with the fixer's
+  trap documented in place: store-driven cut regions also emit
+  region-created and their __cut marker is set after addRegion returns,
+  so the guard must key on the cut- id prefix.
+- **Acceptance criteria:**
+  - [ ] One drag gesture creates the cut (commit on region-created, or
+        equivalent), store-rendered cut regions still don't
+        self-duplicate.
+  - [ ] Flip the tripwire: chip count 1 after gesture 1; delete the
+        second gesture from the test's dragCut helper.
+  - [ ] LESSONS entry.
+- **Status:** open
+
 ---
 
 ## Done
