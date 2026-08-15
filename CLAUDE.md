@@ -138,6 +138,33 @@ that prove it works.
 
 ---
 
+## Full interaction coverage — owner's standing bar (2026-08-14)
+
+Every interactive element ships tested. Not most, not the important
+ones — every button, clickable surface, drop zone, canvas tool,
+keyboard shortcut, and drag interaction is driven to its real end state
+(file on disk, verified media, visible state change) by an automated
+test, or carries an explicit disposition in
+`docs/INTERACTION_COVERAGE.md` naming the OS boundary that stops it
+(native dialogs, screen capture, shell integration, model download,
+live network) and the deepest layer that IS covered instead.
+
+Rules that follow:
+
+- A change that adds or alters an interactive element is not done until
+  its coverage exists in the same PR and the ledger row is updated.
+  Ticket acceptance criteria for UI work must say which tests cover the
+  element's end state.
+- Silent gaps are the failure mode this bar exists to kill. An untested
+  element with no ledger row is a bug, whoever finds it files a ticket.
+- Negative paths count: refusal states assert the specific visible
+  error, and new negative tests prove they discriminate (break the
+  guard, watch the test fail, restore) per the round-21 protocol.
+- `/guide-sync` checks the ledger against the renderer the same way it
+  checks the guides against the code.
+
+---
+
 ## Model routing — owner's standing workflow (2026-08-14)
 
 Makenah's directive for how agent work on this repo is organized:
