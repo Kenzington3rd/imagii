@@ -78,6 +78,8 @@ function ffprobeJson(file: string): Promise<{
     sample_rate?: string
     channels?: number
     avg_frame_rate?: string
+    sample_aspect_ratio?: string
+    display_aspect_ratio?: string
   }>
   format: { duration?: string; format_name?: string }
 }> {
@@ -765,6 +767,29 @@ describe('probe error contract (real ffprobe)', () => {
     expect(p.duration).toBeLessThan(6.5)
     expect(p.audioCodec).toBe('aac')
   })
+
+  it('probeVideo refuses a text file that the ansi demuxer claims as video', async () => {
+    // T-08. ffprobe itself is perfectly happy here: its `tty` demuxer
+    // registers the `.txt` extension and synthesizes a 640x400 pal8 "video"
+    // stream in the `ansi` (ASCII/ANSI art) decoder out of ANY text, exit 0
+    // and a non-zero duration. So every check probeVideo had — a video
+    // stream exists, duration > 0 — passed, and a streamer's notes file
+    // imported with a full export panel behind it. Only a codec floor can
+    // refuse this, and only a real ffprobe run can prove the floor fires:
+    // the first two assertions are here to show that ffprobe still hands
+    // back the bogus stream, so the third is testing the guard and not a
+    // change of heart in the binary.
+    const notes = path.join(workDir, 'stream-notes.txt')
+    await writeFile(notes, 'this is not a video, it is a text file\n', 'utf8')
+
+    const raw = await ffprobeJson(notes)
+    expect(raw.format.format_name).toBe('tty')
+    expect(raw.streams.find((s) => s.codec_type === 'video')?.codec_name).toBe('ansi')
+
+    await expect(probeVideo(notes)).rejects.toThrow(
+      /^This file is text, not a video — pick a video file such as MP4, MOV, or MKV\.$/
+    )
+  })
 })
 
 describe('import conversion for non-native containers (real ffmpeg)', () => {
@@ -916,6 +941,12 @@ describe('vertical reframe (real ffmpeg)', () => {
     expect(v?.width).toBe(1080)
     expect(v?.height).toBe(1920)
     expect(v?.avg_frame_rate).toBe('30/1')
+    // T-12: square pixels. `scale` alone preserves the SOURCE display
+    // aspect, so the crop-then-scale graph used to emit SAR 404:405 —
+    // a 1080x1920 file that every player stretches to DAR 101:180
+    // instead of 9:16. Only a real probe of a real encode can see it.
+    expect(v?.sample_aspect_ratio).toBe('1:1')
+    expect(v?.display_aspect_ratio).toBe('9:16')
     expect(a?.codec_name).toBe('aac')
     const dur = Number(info.format.duration)
     expect(dur).toBeGreaterThan(1.7)
@@ -945,6 +976,10 @@ describe('vertical reframe (real ffmpeg)', () => {
     const v = info.streams.find((s) => s.codec_type === 'video')
     expect(v?.width).toBe(1080)
     expect(v?.height).toBe(1920)
+    // T-12: the even-snap path carries square pixels too — snapping 1081
+    // down to 1080 changes the scale target, which is exactly where a
+    // source-derived SAR would leak back in.
+    expect(v?.sample_aspect_ratio).toBe('1:1')
   })
 
   it('left and right positions keep different parts of the frame', async () => {
@@ -1310,20 +1345,37 @@ describe('highlight clip cutting (real ffmpeg)', () => {
     expect(sourceAtEight - cutStart).toBeGreaterThan(50)
   })
 
-  it('KNOWN BUG: findHighlights returns zero candidates on an unmistakable loud burst', async () => {
-    // If this test FAILS, highlights.ts was fixed — delete the pin and
-    // assert real detection instead.
+  it('findHighlights finds the burst the fixture actually contains', async () => {
+    // T-09, the flip of the round-21 KNOWN BUG pin. Until framelog=info,
+    // the scan asked ebur128 for `framelog=quiet` and then parsed the
+    // per-frame "t: … M: …" lines that setting suppresses: parseEbur128 saw
+    // zero samples, the `samples.length < 5` early-out fired, and every VOD
+    // ever scanned returned []. The old pin asserted exactly that empty
+    // array, so this test IS the regression test — it cannot pass on the
+    // pre-fix command.
     //
-    // findHighlights scans with `ebur128=metadata=1:framelog=quiet`, then
-    // parses the per-frame "t: … M: …" lines out of stderr. framelog=quiet
-    // (and, with metadata=1, the default too) demotes those lines to debug
-    // level, so they never reach stderr at ffmpeg's default log level:
-    // parseEbur128 always sees zero samples and the `samples.length < 5`
-    // early-out returns []. The fixture is not the problem — the same
-    // ebur128 pass with framelog=info reports a >20 LU gap between the
-    // burst and the quiet bed.
+    // The fixture's audio is a quiet 440 Hz bed with one 1.5 s full-scale
+    // burst at 10.0-11.5 s, so a working scan has to (a) return something,
+    // (b) put it over the burst, and (c) not simply flag the whole file.
     const candidates = await findHighlights('highlights-scan', rampSrc, () => {})
-    expect(candidates).toEqual([])
+    expect(candidates.length, 'a scan of a file with an obvious burst is not empty')
+      .toBeGreaterThan(0)
+
+    // Candidates are padded ±5 s around the detected peak, so the burst
+    // window must sit inside one of them.
+    const hit = candidates.find((c) => c.startSec <= 10 && c.endSec >= 11.5)
+    expect(
+      hit,
+      `no candidate covers the 10.0-11.5s burst: ${JSON.stringify(candidates)}`
+    ).toBeTruthy()
+    // Its measured peak is the burst's real loudness, not the -70 floor or
+    // the ~-55 LUFS bed either side of it.
+    expect(hit?.peakDb).toBeGreaterThan(-35)
+    expect(hit?.peakDb).toBeLessThan(0)
+    // And it is a detection, not a shrug that returns the whole 20 s source:
+    // the padding alone cannot reach past 16.9 s.
+    expect(hit?.startSec).toBeGreaterThan(1)
+    expect(hit?.endSec).toBeLessThan(19)
 
     const loud = await momentaryLoudness(rampSrc, 10, 1.5)
     const quiet = await momentaryLoudness(rampSrc, 2, 1.5)
@@ -1337,20 +1389,31 @@ describe('highlight clip cutting (real ffmpeg)', () => {
     ).toBeGreaterThan(20)
   }, 120_000)
 
-  it('KNOWN BUG: analyzeClipHook reports the -70 LUFS floor for every window', async () => {
-    // If this test FAILS, highlights.ts was fixed — delete the pin and
-    // assert a real loud/quiet spread instead.
-    //
-    // Same root cause as above: `ebur128=metadata=1:peak=true` leaves
-    // framelog at its default, which ffmpeg demotes to debug level when
-    // metadata is on. No "M:" line ever reaches stderr, so the parser falls
-    // through to its -70 floor and the hook indicator scores every clip
-    // identically no matter what the audio does.
+  it('analyzeClipHook tells a loud window from a quiet one', async () => {
+    // T-10, the flip of the second round-21 pin. Same root cause as T-09 in
+    // the per-clip pass: `ebur128=metadata=1:peak=true` left framelog at a
+    // default ffmpeg demotes below stderr once metadata is on, no "M:" line
+    // ever arrived, and the parser's -70 LUFS floor became the score for
+    // every clip in the app. The old pin asserted both windows read exactly
+    // -70, so nothing below can pass on the pre-fix command.
     const loudWindow = await analyzeClipHook(rampSrc, 10, 1.5)
     const quietWindow = await analyzeClipHook(rampSrc, 2, 1.5)
-    expect(loudWindow.audioEnergyDb).toBe(-70)
-    expect(quietWindow.audioEnergyDb).toBe(-70)
-    expect(loudWindow.audioEnergyDb).toBe(quietWindow.audioEnergyDb)
+
+    // Neither window is the parser's give-up value...
+    expect(loudWindow.audioEnergyDb).not.toBe(-70)
+    expect(quietWindow.audioEnergyDb).not.toBe(-70)
+    // ...both are plausible momentary-loudness readings...
+    expect(loudWindow.audioEnergyDb).toBeGreaterThan(-30)
+    expect(loudWindow.audioEnergyDb).toBeLessThan(0)
+    expect(quietWindow.audioEnergyDb).toBeGreaterThan(-70)
+    expect(quietWindow.audioEnergyDb).toBeLessThan(-40)
+    // ...and the hook indicator can actually tell them apart. The fixture's
+    // burst-to-bed gap is ~34 LU; 20 leaves room for encoder variance while
+    // still being far more than any parser artefact could produce.
+    expect(
+      loudWindow.audioEnergyDb - quietWindow.audioEnergyDb,
+      `loud ${loudWindow.audioEnergyDb} vs quiet ${quietWindow.audioEnergyDb} LUFS`
+    ).toBeGreaterThan(20)
   })
 
   it('analyzeClipHook rejects a window longer than its 30s cap', async () => {
@@ -1471,69 +1534,89 @@ describe('caption burn-in (real ffmpeg)', () => {
     expect(topPsnr - bandPsnr).toBeGreaterThan(15)
   }, 120_000)
 
-  it('KNOWN BUG: caption position "top" renders mid-frame and "middle" renders at the top', async () => {
-    // If this test FAILS, alignmentForPosition was fixed — delete the pin
-    // and assert that each position renders where it says.
+  it('renders every caption position centred in the third it names', async () => {
+    // T-11, the flip of the round-21 KNOWN BUG pin. buildForceStyle used to
+    // emit ASS numpad alignments (top=8, middle=5, bottom=2), but libass's
+    // force_style path writes the number straight into its INTERNAL
+    // representation — HALIGN_LEFT/CENTRE/RIGHT = 1/2/3 OR-ed with
+    // VALIGN_SUB/TOP/CENTER = 0/4/8 — skipping the numpad conversion its
+    // v4+ style parser applies. So 8 became left+middle and 5 became
+    // left+top: both non-default positions landed on the wrong third AND
+    // lost their centring, while bottom (2 -> centre+bottom) was right by
+    // coincidence. The pin asserted those wrong bands; the bands below are
+    // the mirror image, so this test cannot pass on the old values.
     //
-    // buildForceStyle emits ASS numpad alignments (top=8, middle=5,
-    // bottom=2). libass's force_style path writes that number straight into
-    // its INTERNAL alignment representation — HALIGN_LEFT/CENTRE/RIGHT =
-    // 1/2/3 OR-ed with VALIGN_SUB/TOP/CENTER = 0/4/8 — without running the
-    // numpad conversion the normal v4+ style parser applies. So:
-    //   2  -> 2 | 0  = centre + bottom  (right by coincidence)
-    //   8  -> 0 | 8  = left + middle    (asked for top-centre)
-    //   5  -> 1 | 4  = left + top       (asked for middle-centre)
-    // Both non-default positions therefore land on the wrong third of the
-    // frame AND lose their centring. The correct internal values would be 6
-    // (centre+top) and 10 (centre+middle). Unit tests on
-    // alignmentForPosition cannot see any of this; only a real libass
-    // render can.
-    const MID_BAND = 'crop=1920:200:0:440'
-    const RIGHT_THIRD_OF_MID = 'crop=640:200:1280:440'
-    const RIGHT_THIRD_OF_TOP = 'crop=640:200:1280:0'
+    // Technique unchanged from the pin: PSNR of a region against the control
+    // render (identical pipeline, cue pushed a minute past the range), so a
+    // low number means "text is painted here" and a high one means
+    // "untouched".
+    //
+    // Geometry, measured rather than assumed: libass scales force_style's
+    // FontSize by PlayResY (288 by default), so a nominal 24 renders ~90 px
+    // tall on this 1080p source and the caption occupies ~70 rows. Each
+    // position therefore lands wholly inside a 360-row third — top at rows
+    // 160-230, middle at 505-575, bottom at 849-920 — which is what makes
+    // "in the right third" a clean assertion. The clean-band floor is 35 dB,
+    // not 40: an untouched third measures ~40-56 dB against the control
+    // because re-encoding a frame with different text elsewhere shifts
+    // x264's rate decisions slightly. The painted third sits at ~18 dB, so
+    // the two populations are 20+ dB apart; the separation is asserted too.
+    const bands = {
+      top: 'crop=1920:360:0:0',
+      middle: 'crop=1920:360:0:360',
+      bottom: 'crop=1920:360:0:720'
+    }
+    const bandY = { top: 0, middle: 360, bottom: 720 }
+    const POSITIONS = ['top', 'middle', 'bottom'] as const
 
-    const topPath = path.join(workDir, 'burnin-position-top.mp4')
-    await runBurnIn(
-      {
-        jobId: 'burnin-position-top',
-        videoPath: landscapeSrc,
-        srtPath: captionedSrt,
-        outputPath: topPath,
-        fontSizePct: 4,
-        style: { fontSize: 48, position: 'top', primaryColor: '#ffffff', outlineColor: '#000000' },
-        startSec: 0,
-        endSec: 3
-      },
-      () => {}
-    )
-    const topStyleAtTop = await regionPsnr(topPath, controlOut, TOP_BAND)
-    const topStyleAtMid = await regionPsnr(topPath, controlOut, MID_BAND)
-    expect(topStyleAtMid, `position "top" paints the middle band (${topStyleAtMid} dB)`).toBeLessThan(30)
-    expect(topStyleAtTop, `position "top" leaves the top band clean (${topStyleAtTop} dB)`).toBeGreaterThan(40)
-    const topStyleRight = await regionPsnr(topPath, controlOut, RIGHT_THIRD_OF_MID)
-    expect(topStyleRight, 'position "top" is left-aligned, not centred').toBeGreaterThan(40)
+    for (const position of POSITIONS) {
+      const outputPath = path.join(workDir, `burnin-position-${position}.mp4`)
+      await runBurnIn(
+        {
+          jobId: `burnin-position-${position}`,
+          videoPath: landscapeSrc,
+          srtPath: captionedSrt,
+          outputPath,
+          fontSizePct: 4,
+          style: { fontSize: 24, position, primaryColor: '#ffffff', outlineColor: '#000000' },
+          startSec: 0,
+          endSec: 3
+        },
+        () => {}
+      )
 
-    const middlePath = path.join(workDir, 'burnin-position-middle.mp4')
-    await runBurnIn(
-      {
-        jobId: 'burnin-position-middle',
-        videoPath: landscapeSrc,
-        srtPath: captionedSrt,
-        outputPath: middlePath,
-        fontSizePct: 4,
-        style: { fontSize: 48, position: 'middle', primaryColor: '#ffffff', outlineColor: '#000000' },
-        startSec: 0,
-        endSec: 3
-      },
-      () => {}
-    )
-    const midStyleAtTop = await regionPsnr(middlePath, controlOut, TOP_BAND)
-    const midStyleAtMid = await regionPsnr(middlePath, controlOut, MID_BAND)
-    expect(midStyleAtTop, `position "middle" paints the top band (${midStyleAtTop} dB)`).toBeLessThan(30)
-    expect(midStyleAtMid, `position "middle" leaves the middle band clean (${midStyleAtMid} dB)`).toBeGreaterThan(40)
-    const midStyleRight = await regionPsnr(middlePath, controlOut, RIGHT_THIRD_OF_TOP)
-    expect(midStyleRight, 'position "middle" is left-aligned, not centred').toBeGreaterThan(40)
-  }, 180_000)
+      // The third it names carries the text...
+      const own = await regionPsnr(outputPath, controlOut, bands[position])
+      expect(own, `position "${position}" paints its own third (${own} dB)`).toBeLessThan(30)
+      // ...and the other two are untouched.
+      for (const other of POSITIONS.filter((p) => p !== position)) {
+        const psnr = await regionPsnr(outputPath, controlOut, bands[other])
+        expect(
+          psnr,
+          `position "${position}" leaves the ${other} third clean (${psnr} dB)`
+        ).toBeGreaterThan(35)
+        expect(
+          psnr - own,
+          `position "${position}": ${other} third is clearly cleaner than its own`
+        ).toBeGreaterThan(15)
+      }
+
+      // Horizontal centring, read inside the third it does paint. The
+      // caption is wider than a third of the frame, so "centred" is proven
+      // by symmetry rather than by empty margins — and symmetry does not
+      // depend on the substituted font's metrics. The old left-aligned
+      // values put ~20 dB between these two.
+      const y = bandY[position]
+      const centre = await regionPsnr(outputPath, controlOut, `crop=640:360:640:${y}`)
+      const left = await regionPsnr(outputPath, controlOut, `crop=640:360:0:${y}`)
+      const right = await regionPsnr(outputPath, controlOut, `crop=640:360:1280:${y}`)
+      expect(centre, `position "${position}" paints the centre column (${centre} dB)`).toBeLessThan(30)
+      expect(
+        Math.abs(left - right),
+        `position "${position}" is centred: left ${left} dB vs right ${right} dB`
+      ).toBeLessThan(8)
+    }
+  }, 240_000)
 
   it('rejects a missing SRT with the burn-in runner error', async () => {
     const outputPath = path.join(workDir, 'burnin-missing.mp4')
