@@ -636,6 +636,49 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         flipped.
 - **Status:** open
 
+## T-47 — session continuity: close the app, reopen where you were (owner request, 2026-08-15)
+
+- **Spec:** owner directive. Closing imagii and reopening should offer
+  to continue exactly where the user was — their choice via the
+  existing restore banner, never forced. Today's autosave captures
+  project DATA (stores) but not PLACE: restore lands on Home with
+  selections lost, the last few seconds of work can miss the snapshot,
+  and the window forgets its size. Builds on T-32/T-33 (same files).
+- **Acceptance criteria:**
+  - [ ] Autosave snapshot gains a place record: active route, selected
+        clip id (video), selected layer id (canvas), references tab,
+        player currentTime — versioned in the schema, validated like
+        every other field, old snapshots without it still restore.
+  - [ ] A final autosave flush runs on quit (before-quit path, and the
+        window-close path) so the snapshot is the LAST state, not the
+        last debounce tick. Quit must never hang on a slow disk —
+        bounded, best-effort, tested both ways.
+  - [ ] Restore returns the user to the captured route with selections
+        and playhead applied (playhead lands within the T-37-fixed
+        seek behavior; if T-37 is not yet merged, park via the same
+        mechanism the player uses).
+  - [ ] Window bounds (size/position, maximized flag) persist across
+        launches independently of the banner choice — but never
+        restore a window onto a disconnected display (validate against
+        current screen geometry; center on primary as fallback).
+  - [ ] Declining the banner ("Later"/dismiss) or discarding must
+        leave a fresh-start session untouched — continuity is opt-in
+        per the owner's wording, asserted in both branches.
+  - [ ] Known non-goals documented in the ticket close: in-flight
+        exports/recordings do not survive a restart (their cancel/reap
+        behavior on quit is already covered); References search
+        results are not persisted (network state).
+  - [ ] E2E: edit in two studios -> quit via window close -> relaunch
+        on the same userData -> Restore -> assert route, selections,
+        playhead, and window bounds. Negative: corrupt place record
+        degrades to today's data-only restore, never a crash (extends
+        the T-33 contract + autosaveCorruptInfo pins).
+  - [ ] LESSONS entry if any bug is found while building; ledger rows
+        for the new/changed elements in the same PR per the standing
+        bar.
+- **Status:** open (owner-requested; schedule with T-32/T-33 in the fix
+  wave — same subsystem)
+
 ## Fix-wave plan (dispatches when Wave B lands; owner tiebreaker applies)
 
 Priority by usability impact, per the owner's 2026-08-15 ruling that
@@ -646,6 +689,9 @@ expected behavior wins every call:
 3. **T-31** Home toast surface (silent success/failure)
 4. **T-36** one-gesture waveform cut (panel copy is the promise)
 5. **T-33** corruption banner (user must be told)
+5b. **T-47** session continuity (owner request; same subsystem as
+    T-32/T-33 — place record, quit flush, route+selection restore,
+    window bounds)
 6. **T-34** tutorial clamp + Enter=one step
 7. **T-38** preview blank until first edit
 8. **T-39** overlay anchoring + crop controls above player
