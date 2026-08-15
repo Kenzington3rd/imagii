@@ -71,6 +71,13 @@ const __dirname = path.dirname(__filename)
  * JPG export real bytes…`, `emote pack…` and `the export is the document, not
  * the window…`, which is the window-resize invariance proof.
  *
+ * T-53 was raised here too and is FIXED: Konva's `Stage._toKonvaCanvas` draws
+ * every visible layer, and Canvas.tsx keeps the Transformer and the grid in
+ * stage layers, so exporting with a shape selected or Grid checked baked the
+ * editor's own chrome into the PNG. `captureDocument` now hides the layers
+ * named `chrome` for the capture; the proof is `editor chrome stays out of the
+ * file…`, which exports the same document four ways and compares bytes.
+ *
  * BUG-VARIANTS-STALE — the variants dialog keeps its previews across a close,
  * so reopening it shows renders of a canvas that may no longer exist, with no
  * Generate button in sight. Pinned in `variants: …` (open as T-46).
@@ -438,6 +445,21 @@ function gridLineCount(window: Page): Promise<number> {
     const grid = stage.children[1]
     const group = grid?.children[0]
     return group && Array.isArray(group.children) ? group.children.length : 0
+  })
+}
+
+/**
+ * Stage layers that are currently switched off. Always 0 between captures:
+ * `captureDocument` hides the chrome layers only for the duration of one
+ * synchronous `toDataURL` and restores each one's prior flag in a `finally`.
+ */
+function hiddenLayerCount(window: Page): Promise<number> {
+  return window.evaluate(() => {
+    const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+      getLayers(): Array<{ visible(): boolean }>
+    }
+    if (!stage) throw new Error('__imagiiStage is not set')
+    return stage.getLayers().filter((l) => !l.visible()).length
   })
 }
 
@@ -1489,6 +1511,89 @@ test.describe('Image Studio — export', () => {
         wide.bytes.equals(narrow.bytes),
         'same document, same pixels, regardless of window size'
       ).toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('editor chrome stays out of the file: selection and grid leave the bytes alone', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('export-chrome')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportPanel.getByLabel('Scale').selectOption('1')
+      const gridToggle = window.locator(TOOLBAR).getByLabel('Grid', { exact: true })
+      // The layer this test selects: a box well inside the document, so its
+      // Transformer border and all eight anchors would land INSIDE the exported
+      // area if they leaked — an edge shape's handles could clip out of frame
+      // and hide the bug. Derived from the template module, not transcribed.
+      const target = t.doc.layers[2]
+      if (!target) throw new Error('yt-thumb-bold lost the layer this test selects')
+
+      async function exportOnce(): Promise<Buffer> {
+        await clearDownloads(studio.app)
+        await exportButton.click()
+        const [bytes] = await waitForDownloads(studio, 1)
+        return bytes as Buffer
+      }
+
+      // ── 1. baseline: nothing selected, no grid ──
+      expect(await transformerNodeCount(window)).toBe(0)
+      expect((await stageGeom(window)).layers).toBe(2)
+      const baseline = await exportOnce()
+      expect(pngSize(baseline)).toEqual({ w: t.doc.width, h: t.doc.height })
+      // Two identical clicks already produce identical bytes. Without this,
+      // a difference further down would not prove anything about chrome.
+      expect(
+        (await exportOnce()).equals(baseline),
+        'the same canvas exports deterministically'
+      ).toBe(true)
+
+      // ── 2. Grid on — a real third Konva layer of real lines ──
+      await gridToggle.check()
+      await expect.poll(async () => (await stageGeom(window)).layers, { timeout: 10_000 }).toBe(3)
+      expect(await gridLineCount(window)).toBeGreaterThan(0)
+      const withGrid = await exportOnce()
+
+      // ── 3. Grid on AND a layer selected — handles drawn over the artwork ──
+      await layerRow(window, target.name).click()
+      await expect.poll(() => transformerNodeCount(window), { timeout: 10_000 }).toBe(1)
+      const withBoth = await exportOnce()
+
+      // The capture put every chrome layer back exactly as it found it: the
+      // grid is still drawing and the handles are still on the user's shape.
+      expect((await stageGeom(window)).layers).toBe(3)
+      expect(await gridLineCount(window)).toBeGreaterThan(0)
+      expect(await transformerNodeCount(window)).toBe(1)
+      expect(await hiddenLayerCount(window)).toBe(0)
+
+      // ── 4. selection only ──
+      await gridToggle.uncheck()
+      await expect.poll(async () => (await stageGeom(window)).layers, { timeout: 10_000 }).toBe(2)
+      expect(await transformerNodeCount(window)).toBe(1)
+      const withSelection = await exportOnce()
+
+      // T-53: the file is the document the user made. Selection handles and the
+      // grid are editor chrome — on the canvas, absent from every byte. Named
+      // and compared as one list so a red run says WHICH chrome leaked rather
+      // than stopping at the first case.
+      const leaked = (
+        [
+          ['grid on', withGrid],
+          ['grid on + selected', withBoth],
+          ['selected', withSelection]
+        ] as Array<[string, Buffer]>
+      )
+        .filter(([, bytes]) => !bytes.equals(baseline))
+        .map(([label]) => label)
+      expect(leaked, 'exports that differ from the deselected/grid-off export').toEqual([])
+      expect(await hiddenLayerCount(window)).toBe(0)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'image-11-export-chrome.png') })
     } finally {
       await closeStudio(studio)
     }

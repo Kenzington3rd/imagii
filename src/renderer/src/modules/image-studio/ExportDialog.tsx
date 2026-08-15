@@ -17,14 +17,19 @@ function downloadDataUrl(dataUrl: string, filename: string): void {
 }
 
 /**
- * Pick a sensible default export scale for the user's display. On a
- * standard 1080p monitor (DPR 1.0) we want 1× — exporting at the
- * canvas's nominal resolution. On a HiDPI screen (DPR ≥ 2.0, typical
- * for 4K monitors at 200% scaling or Retina) we want the export to
- * match what the user actually SEES on canvas, which is the canvas
- * scaled up by DPR. Konva's `toDataURL({ pixelRatio })` accepts this
- * directly. Clamps to the supported select-box options so the picker
- * stays in sync with the resolved default. Pure function for tests.
+ * Pick a sensible default export scale for the user's display.
+ *
+ * Since T-45 the export is the DOCUMENT — `1×` is one document pixel per
+ * exported pixel whatever the window is doing — so this is no longer about
+ * matching the canvas. It is about the deliverable: a HiDPI user (DPR ≥ 2,
+ * a 4K monitor at 200% or a Retina panel) reviews their own thumbnail on a
+ * screen that packs two device pixels into every CSS pixel, and a 1× file
+ * scaled up to fill that preview looks soft. Defaulting them to 2× hands
+ * them a file with the pixels their screen can actually show, at the cost
+ * of size; a DPR-1 user gains nothing from the extra bytes and stays at 1×.
+ * Konva's `toDataURL({ pixelRatio })` takes the multiplier directly. Clamps
+ * to the supported select-box options so the picker stays in sync with the
+ * resolved default, and the picker still overrides it. Pure function for tests.
  */
 export function defaultExportScale(dpr: number): number {
   if (!Number.isFinite(dpr) || dpr <= 0) return 1
@@ -38,11 +43,26 @@ export function defaultExportScale(dpr: number): number {
 // template via the canvas dimensions (112x112) and emit all three on Export.
 const EMOTE_PACK_SIZES = [28, 56, 112] as const
 
+/**
+ * The Konva name Canvas.tsx tags its editor-only stage layers with — the grid
+ * overlay and the selection/draw-preview overlay that carries the Transformer.
+ * `captureDocument` switches every layer carrying it off for the capture.
+ */
+const CHROME_LAYER = 'chrome'
+
+/** The slice of a Konva layer the export path drives. */
+interface ExportLayer {
+  hasName(name: string): boolean
+  visible(): boolean
+  visible(value: boolean): void
+}
+
 /** The slice of the Konva stage the export path drives. */
 interface ExportStage {
   scaleX(): number
   scaleY(): number
   scale(value: { x: number; y: number }): void
+  getLayers(): ExportLayer[]
   toDataURL: (opts: {
     mimeType?: string
     quality?: number
@@ -70,9 +90,24 @@ interface ExportStage {
  * (Stage._toKonvaCanvas), so 112 x 0.25 is exactly 28 instead of a float
  * quotient that can truncate a pixel away.
  *
- * Nothing the user can see is touched: Konva renders into a fresh off-screen
- * canvas, the restore is synchronous, and Konva's own redraw is rAF-deferred,
- * so it never observes the neutralised scale.
+ * T-53. The same capture drew the EDITOR over the document.
+ * `Stage._toKonvaCanvas` paints every layer whose `isVisible()` is true, and
+ * Canvas.tsx keeps the grid overlay and the Transformer (selection border and
+ * its eight anchors) in stage layers of their own — so exporting with a shape
+ * selected, or with Grid checked, wrote the app's own furniture into the PNG
+ * the user posts. Both layers are tagged `chrome`; this switches them off for
+ * the capture and puts each one's PRIOR flag back in the `finally`, because a
+ * layer may legitimately be off already and "restore" must not mean "show
+ * everything". The exclusion is enumerated rather than inferred: a future
+ * editor-only layer is chrome the moment it carries the tag, and invisible in
+ * exports from that moment.
+ *
+ * Nothing the user can see is touched. Konva renders into a fresh off-screen
+ * canvas; hide, capture and restore are one synchronous block, so the
+ * `display:none` that Konva writes onto a hidden layer's canvas element
+ * (`Layer._checkVisibility`) is reverted before the browser can paint; and
+ * Konva's own redraw is rAF-deferred (`Node._requestDraw` -> `batchDraw`), so
+ * the frame it eventually draws sees the restored scale and the restored flags.
  */
 export function captureDocument(
   stage: ExportStage,
@@ -82,10 +117,16 @@ export function captureDocument(
 ): string {
   const scaleX = stage.scaleX()
   const scaleY = stage.scaleY()
-  stage.scale({ x: 1, y: 1 })
+  const chrome = stage
+    .getLayers()
+    .filter((layer) => layer.hasName(CHROME_LAYER))
+    .map((layer) => ({ layer, visible: layer.visible() }))
   try {
+    stage.scale({ x: 1, y: 1 })
+    for (const { layer } of chrome) layer.visible(false)
     return stage.toDataURL({ ...opts, width, height })
   } finally {
+    for (const { layer, visible } of chrome) layer.visible(visible)
     stage.scale({ x: scaleX, y: scaleY })
   }
 }

@@ -14,6 +14,91 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-53: selection handles and the grid were baked into image exports
+
+### Bug — the export contained the editor, not just the artwork
+- **Root cause.** Konva's `Stage._toKonvaCanvas` walks the stage's
+  children and draws every layer whose `isVisible()` is true. Canvas.tsx
+  keeps two layers that are not the document at all: the grid overlay
+  (`showGrid`) and the overlay layer that carries the draw preview and
+  the `Transformer` — the selection border and its eight anchors. So the
+  export path faithfully rendered the app's own furniture into the
+  user's PNG. It was reachable from the default flow, not a corner: draw
+  a shape (which selects it) or click a layer row, hit Export, and the
+  handles ship. Check Grid and the gridlines ship too. `captureDocument`
+  had already taken the window's zoom out of the capture (T-45) and this
+  survived it untouched, because the two are different mistakes: T-45
+  was view state in the output MATH, T-53 was view state in the output
+  CONTENT. Nothing caught it because every export test to date asserted
+  dimensions — PNG header width and height — and chrome does not change
+  the size of the canvas it is drawn on.
+- **Fix.** Canvas.tsx tags both editor layers with the Konva name
+  `chrome` (`"grid chrome"`, `"overlay chrome"`). `captureDocument`
+  reads `stage.getLayers()`, records the prior `visible()` of every
+  layer carrying that tag, switches them off, captures, and restores
+  each one's PRIOR flag in the `finally` — restore is per-layer, never a
+  blanket show-all, so a layer that was already off stays off. The
+  exclusion is enumerated rather than inferred from layer order or from
+  "does it contain a Transformer": order is an accident of JSX, and a
+  future editor-only layer (rulers, guides, a marquee) is chrome the
+  moment someone tags it. Putting the hide inside `captureDocument`
+  rather than at the call sites means both current callers — single
+  PNG/JPG and the emote pack — and every future one inherit it. Nothing
+  on screen changes: hide, capture and restore are one synchronous
+  block, so the `display:none` Konva writes onto a hidden layer's canvas
+  element (`Layer._checkVisibility`) is reverted before the browser can
+  paint, and Konva's own redraw is rAF-deferred
+  (`Node._requestDraw` -> `batchDraw`), so the frame it eventually draws
+  sees the restored flags.
+- **Test.** `tests/e2e/image.spec.ts` — "editor chrome stays out of the
+  file: selection and grid leave the bytes alone" exports the same
+  1280x720 template four ways (deselected/grid-off, grid on, grid on +
+  selected, selected) and asserts all four PNGs are byte-identical,
+  after first proving two identical clicks already are — otherwise a
+  difference would prove nothing about chrome. The chrome is asserted to
+  be really on screen at capture time (`layers === 3`, `gridLineCount >
+  0`, `transformerNodeCount === 1`) and really back afterwards
+  (`hiddenLayerCount === 0`). The four cases are compared as one list so
+  a red run names WHICH chrome leaked.
+  `src/renderer/src/modules/image-studio/ExportDialog.test.ts` (+4, 13
+  total) pins the helper: which layers are still drawing when Konva is
+  asked, name matching by whole token (a layer named
+  `chromecast-preview` is not chrome), restore-to-prior including
+  already-off layers, restore on throw, and chrome staying up between
+  the emote pack's three captures. Red-green: on the pre-fix build the
+  E2E reported all three cases leaking; with the fix it is green;
+  dropping only the grid layer's tag flipped exactly `["grid on", "grid
+  on + selected"]` red while `"selected"` stayed green.
+- **Riders.** Deleted `Canvas.tsx`'s exported `getStageDataUrl()` —
+  zero importers (`ThumbnailVariants.tsx` has its own local function of
+  the same name), and it was the last remaining raw `stage.toDataURL()`
+  in the renderer, i.e. a ready-made way to reintroduce both this bug
+  and T-45. Rewrote `defaultExportScale`'s doc comment, which still
+  justified the HiDPI default as making the export "match what the user
+  actually SEES on canvas" — the rationale T-45 deleted. The behaviour
+  is unchanged and its unit tests pin it; the honest reason is that a
+  HiDPI user reviews the deliverable on a screen with two device pixels
+  per CSS pixel, so 2x is about the file's crispness on their own
+  monitor, not about the canvas.
+- **Lesson.** **Editor chrome living in the render tree makes WYSIWYG
+  capture a lie by default.** Any canvas app draws two things into the
+  same surface: the document, and the affordances for editing it —
+  handles, guides, grids, marquees, hover states, in-progress previews.
+  A capture API that renders "the visible scene" cannot tell them apart,
+  so the default behaviour is always to ship the furniture. The capture
+  path must therefore ENUMERATE what it excludes, in one place, with the
+  exclusion attached to the chrome itself (a tag) rather than to the
+  capture's knowledge of today's layout — order-based or
+  content-sniffing discrimination breaks the first time someone adds a
+  layer. And note what hid it: dimension assertions are blind to
+  content. A test that reads the PNG header can prove the file is
+  1280x720 while every pixel in it is wrong; only comparing bytes of the
+  same document captured under different EDITOR states can see chrome.
+  Per the usability tiebreaker: the file is what the user made, not what
+  the editor happened to be showing.
+
+---
+
 ## 2026-08-15 — T-45: image exports rendered at screen zoom, not document size
 
 ### Bug — "1×" meant "whatever size the window happens to be"

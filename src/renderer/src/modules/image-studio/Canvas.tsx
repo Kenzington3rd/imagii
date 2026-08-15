@@ -378,12 +378,20 @@ export function Canvas(): JSX.Element {
         }}
       >
         <KonvaLayer>{doc.layers.map(renderLayer)}</KonvaLayer>
+        {/*
+          T-53: the two layers below are the EDITOR's, not the document's — the
+          grid the user aligns against and the in-progress/selection chrome.
+          Konva's `Stage._toKonvaCanvas` draws every visible layer, so they are
+          tagged `chrome` for `captureDocument` (ExportDialog.tsx) to switch off
+          for the duration of a capture. A new editor-only layer needs the same
+          tag or it lands in the user's PNG.
+        */}
         {showGrid ? (
-          <KonvaLayer listening={false}>
+          <KonvaLayer name="grid chrome" listening={false}>
             <GridOverlay width={doc.width} height={doc.height} size={gridSize} />
           </KonvaLayer>
         ) : null}
-        <KonvaLayer>
+        <KonvaLayer name="overlay chrome">
           {drawing && (tool === 'rect' || tool === 'ellipse' || tool === 'line') ? (
             tool === 'line' ? (
               <Line
@@ -441,10 +449,4 @@ export function Canvas(): JSX.Element {
       </div>
     </div>
   )
-}
-
-export function getStageDataUrl(): string | null {
-  const stage = (window as unknown as { __imagiiStage?: Konva.Stage }).__imagiiStage
-  if (!stage) return null
-  return stage.toDataURL()
 }
