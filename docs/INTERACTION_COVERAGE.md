@@ -342,7 +342,9 @@ unit files named inline. Defect-pinned rows cite their ticket.
 
 ### Welcome + Home + Shared (T-21)
 "Let's go" -> welcomeSeen E2E. Global Undo/readout -> restored-canvas
-E2E; Redo -> defect pin [T-32]. Open/Save project -> HL-dialog (deepest:
+E2E; Redo -> defect pin [T-32] at round 25 — UPGRADED round 31 to
+positives (cross-route undo, Redo re-applies, newest-first ordering),
+see the round-31 section. Open/Save project -> HL-dialog (deepest:
 ProjectIO + projectValidation units). AutosaveRestore: Restore/Discard/
 Later -> E2E; Clear/Dismiss -> corrupt-offers-nothing pin + unit
 [T-33, unreachable today]. Modal contract (scrim/stop/Escape/trap/
@@ -350,7 +352,9 @@ restore) -> Templates + FixWizard E2E. Tutorial: full-run/Back/arrows/
 scrim-advance/Skip-no-persist -> E2E; Enter -> pin [T-34 double-step].
 RecentFilesMenu (toggle/item/clear/Escape/click-outside) -> E2E;
 mouse-leave -> unit policy. HotkeyOverlay ?/Esc -> E2E. AppToaster ->
-E2E on studios; absent on Home [T-31]. ErrorBoundary -> OPEN [T-35].
+E2E on studios; absent on Home [T-31] at round 25 — UPGRADED round 31:
+one app-level mount, asserted on Home and a studio route.
+ErrorBoundary -> OPEN [T-35].
 
 ### Video core (T-22)
 Chrome: Undo/Redo buttons + Ctrl+Z/Y -> trim-drag E2E (Ctrl+Shift+Z
@@ -695,3 +699,27 @@ tests/e2e/video-core.spec.ts and tests/unit/hotkeyTable.test.ts.
 - Residue ticketed [T-56]: playhead marker color is raw pink-400 (not
   a token); the track's coordinate space ends at the probe duration,
   ~20 ms shy of the element's.
+
+
+## Dispositions — round 31 (fix wave batch 5: T-31 + T-32)
+
+- **Shared - AppToaster surface:** app-level single mount (STYLE_GUIDE
+  rule; react-hot-toast renders its whole global bucket per bare
+  Toaster, so duplicates would double every toast). Covered:
+  home-chrome.spec.ts Restore-toast-visible-on-Home positive +
+  [data-rht-toaster] count = 1 on Home AND a studio route;
+  interactionWiring.test.ts "T-31" block (mounted in App.tsx outside
+  Routes, no studio copy).
+- **Home - Undo button:** cross-route and newest-first — "Home global
+  Undo walks the studios newest-first — a video edit and a canvas
+  edit". Expediter mutation: loop reversed to oldest-first flips
+  exactly that test.
+- **Home - Redo button:** defect pin retired — "Home global Redo
+  enables after an Undo and re-applies the change".
+- **Home - "last:" readout:** semantics pinned — names the studio the
+  NEXT Undo targets (flips as entries are consumed).
+- Unit: useGlobalUndo.test.ts (11) — counting reconciler, capped-push,
+  reference-identity filter, redo mirror.
+- Residue ticketed: [T-57] discard() unhandled rejection; [T-58]
+  References work invisible to global Undo (no history store — owner
+  call).

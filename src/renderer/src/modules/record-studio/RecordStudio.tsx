@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
-import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -649,8 +648,6 @@ export function RecordStudio(): JSX.Element {
           </button>
         </div>
       ) : null}
-
-      <AppToaster />
     </div>
   )
 }

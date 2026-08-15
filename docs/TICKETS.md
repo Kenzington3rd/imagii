@@ -500,7 +500,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] E2E: a Home toast (e.g. Restore) is visible; flip T-21's
         finding-A contrast into a positive.
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 31 — see Done)
 
 ## T-32 — Home global undo cannot see studio work; Redo never enables
 
@@ -515,7 +515,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Flip T-21's two defect tests into positives (cross-route undo;
         redo re-applies).
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 31 — see Done)
 
 ## T-33 — corrupt-autosave banner is dead code (info shape mismatch)
 
@@ -937,6 +937,31 @@ IMG-PREC.
         specific failing gestures hardened with evidence of the race.
 - **Status:** open
 
+## T-57 — discarding an autosave has no error path
+
+- **Spec:** T-31/T-32 worker finding. `AutosaveRestore.discard()`
+  awaits `window.api.autosave.clear()` with no catch: a failed clear
+  rejects unhandled and the user sees nothing (the "Autosave
+  discarded." toast simply never appears, and the banner state is
+  ambiguous). Now that Home renders toasts (T-31), an error toast has
+  somewhere to land.
+- **Acceptance criteria:** failed clear surfaces a specific error
+  toast and leaves the banner in a truthful state; negative test
+  proves the copy discriminates (round-21 protocol).
+- **Status:** open
+
+## T-58 — References work is invisible to Home's global Undo (owner call)
+
+- **Spec:** T-32 worker finding. The references/moodboard store has no
+  undo history at all, so Home's "Undo last action" can never target
+  reference work. The "last:" readout stays honest (it names what WILL
+  be undone), so nothing lies today — but deleting a mood board is
+  destructive-with-confirm while every other studio's destructive
+  action is undoable. Owner decision: give References a history like
+  the other studios, or document the boundary in the Home button's
+  title copy.
+- **Status:** open (needs owner ruling on scope)
+
 ## T-56 — Timeline playhead is a raw palette color; track space stops at the probe duration
 
 - **Spec:** T-52 worker findings. (a) The playhead marker is
@@ -982,6 +1007,37 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 31 — fix wave batch 5: T-31 + T-32 (Home chrome). T-31: one
+AppToaster at app level beside HotkeyOverlay, all five per-studio
+mounts deleted — react-hot-toast keeps a global store per toasterId
+and every bare Toaster renders the whole default bucket, so app-level
+plus per-studio would draw every toast twice; single-mount is now a
+STYLE_GUIDE rule pinned by an interactionWiring block and a
+container-count E2E assertion. T-32: useGlobalUndo rewritten —
+module-level undo/redo order arrays fed by store subscriptions
+registered at import (outside any component lifecycle), reconciled by
+COUNTING each store's own history lengths (handles change/undo/redo/
+reset identically, including a studio's own Ctrl+Z moving the global
+order), reference-identity test on the history object filters
+non-history mutations and coalesced trims, React bound via
+useSyncExternalStore over a version counter so enablement re-derives
+after the hook's own click. Cross-studio ordering: newest actionable
+entry first, Redo mirrors; the "last:" readout names what the next
+Undo would revert. Red-green: T-21's finding-A contrast and both B/C
+pins captured red post-fix in pinned form, flipped to positives
+(cross-route undo, Redo re-applies, newest-first ordering). Worker
+mutation proofs: toaster unmount, Home-scoped re-scope, bump no-op,
+capped-push, redoOrder reconcile; expediter's own: newest-first loop
+reversed -> exactly the ordering E2E red, restore, 13/13 + 11/11.
+Gates: 813 unit / 105 E2E (worker hit the T-55 roaming flake once,
+green standalone; expediter's full run 105/105 clean). Findings
+ticketed: T-57 (discard() unhandled rejection), T-58 (References
+invisible to global Undo — owner call); TESTING.md stale count fixed.
+T-47 note recorded: module-level tracker makes restore-to-route
+independent of undo state, but a silent continuity restore must apply
+the document through a non-history path or the app opens offering to
+undo the restore itself.
 
 Round 30 — fix wave batch 4: T-52 (timeline click-to-scrub + two seek
 edges). The Timeline gains a dedicated scrub surface — its own
