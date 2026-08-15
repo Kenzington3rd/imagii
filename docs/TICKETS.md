@@ -436,6 +436,49 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         Windows verification steps for the capture pipeline.
 - **Status:** open (blocked on T-13..T-20 merge)
 
+## T-28 — mood board rename and first-save are dead: Electron has no prompt()
+
+- **Spec:** found by T-26's coverage. MoodBoardPanel.onRename and
+  ReferencePanel.ensureCollection both call window.prompt(), which
+  Electron does not implement — the renderer throws, no dialog appears,
+  nothing is renamed, and saving a search result with no board yet is
+  impossible. Pinned by the defect tests in references.spec.ts.
+- **Acceptance criteria:**
+  - [ ] Both flows use the in-app Modal with an inline input (the
+        create-board field pattern), no window.prompt anywhere in src/
+        (add a static check or extend interactiveNesting-style scanning
+        if cheap).
+  - [ ] Flip both defect pins into positive tests (rename persists to
+        disk; first-save creates the board and saves the item).
+  - [ ] LESSONS entry per IMG-PREC.
+- **Status:** open
+
+## T-29 — "Clear thumbnail cache" only trims above a 500 MB budget
+
+- **Spec:** T-26 finding. The button calls moodboard:prune ->
+  pruneThumbCache() with the default budget — an LRU trim — while
+  toasting "Thumbnail cache cleared". Under 500 MB it deletes nothing.
+  Pinned in both directions in references.spec.ts.
+- **Acceptance criteria:**
+  - [ ] A true clear path (pruneThumbCache(0) via a dedicated channel or
+        argument), leaving the budgeted trim for the automatic path.
+  - [ ] Flip the defect pin: cache dir emptied under the budget too.
+  - [ ] LESSONS entry.
+- **Status:** open
+
+## T-30 — first-hop search failure leaks raw IPC error text
+
+- **Spec:** T-26 finding. getVqd() runs outside searchDuckduckgoImages's
+  try/catch: hop-1 failures reject the IPC and the error card shows
+  "Error invoking remote method 'search:images': ..." while hop-2
+  failures get friendly copy. Pinned by the unit test "rejects — it
+  does not notice — when the vqd page itself fails".
+- **Acceptance criteria:**
+  - [ ] Hop-1 failures produce the same friendly notice shape as hop-2.
+  - [ ] Flip the pin; E2E error-card assertion updated to the friendly
+        copy exactly.
+- **Status:** open
+
 ---
 
 ## Done
