@@ -1,4 +1,4 @@
-# imagii — for Mike
+# imagii 
 
 A creative studio built for you. Free, runs on your computer, no accounts, no subscriptions.
 
