@@ -98,6 +98,70 @@ describe('srtPath state — Phase 4 tech-debt', () => {
   })
 })
 
+describe('requestSeek — the Timeline scrub channel (T-52)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      currentTime: 0,
+      seekRequest: null,
+      clips: [],
+      selectedClipId: null
+    })
+  })
+
+  it('starts with no pending request', () => {
+    expect(useVideoStore.getState().seekRequest).toBeNull()
+  })
+
+  it('records the requested position and moves the drawn playhead with it', () => {
+    useVideoStore.getState().requestSeek(12.5)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 12.5 })
+    // The marker does not wait for the media element's timeupdate — on a long
+    // file the seek takes a moment and the playhead has to stay under the
+    // cursor.
+    expect(useVideoStore.getState().currentTime).toBe(12.5)
+  })
+
+  it('hands the Player a FRESH object every call, so a repeat seek still lands', () => {
+    useVideoStore.getState().requestSeek(3)
+    const first = useVideoStore.getState().seekRequest
+    useVideoStore.getState().requestSeek(3)
+    const second = useVideoStore.getState().seekRequest
+    expect(second).toEqual(first)
+    // Identity is the signal the Player subscribes on: same value, new object.
+    expect(second).not.toBe(first)
+  })
+
+  it('clamps into the source, so a drag past either end of the track is safe', () => {
+    useVideoStore.getState().requestSeek(-4)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 0 })
+    useVideoStore.getState().requestSeek(9999)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 60 })
+  })
+
+  it('ignores a non-finite request rather than handing NaN to the media element', () => {
+    useVideoStore.getState().requestSeek(5)
+    useVideoStore.getState().requestSeek(Number.NaN)
+    useVideoStore.getState().requestSeek(Number.POSITIVE_INFINITY)
+    // POSITIVE_INFINITY is not finite either — neither call moved anything.
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 5 })
+    expect(useVideoStore.getState().currentTime).toBe(5)
+  })
+
+  it('collapses to 0 with no source loaded', () => {
+    useVideoStore.setState({ source: null })
+    useVideoStore.getState().requestSeek(10)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 0 })
+  })
+
+  it('a pending request never survives a source change', () => {
+    useVideoStore.getState().requestSeek(30)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().seekRequest).toBeNull()
+    expect(useVideoStore.getState().currentTime).toBe(0)
+  })
+})
+
 describe('clip history — undo/redo (UX round 18)', () => {
   beforeEach(() => {
     useVideoStore.setState({

@@ -22,6 +22,8 @@ const APP_TSX = readFileSync(path.join(RENDERER_ROOT, 'App.tsx'), 'utf8')
 const KEYBOARD_EVIDENCE: Record<string, RegExp> = {
   'Space': /case ' ':/,
   '← / →': /case 'ArrowLeft':/,
+  // T-52: the Timeline track's own scrubber keys.
+  'Home / End': /case 'Home':/,
   ', / .': /case ',':/,
   'I / O': /case 'i':/,
   'Ctrl+Z / Ctrl+Y': /useUndoRedoHotkeys\(/,
@@ -38,6 +40,7 @@ const KEYBOARD_EVIDENCE: Record<string, RegExp> = {
 
 /** Rows that document a pointer affordance rather than a key binding. */
 const MOUSE_HINTS = new Set([
+  'Click timeline',
   'Drag on waveform',
   'Click cut tag',
   'Click thumbnail',

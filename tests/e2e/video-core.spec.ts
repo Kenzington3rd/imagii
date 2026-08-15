@@ -271,6 +271,58 @@ async function expectLanded(window: Page, expected: number, label: string): Prom
 }
 
 /**
+ * Wait for the playhead to SETTLE on `expected`, within the seek tolerance.
+ *
+ * The polling twin of `expectLanded`, for seeks that travel through the app
+ * rather than being assigned directly: a scrub is mouse event -> React ->
+ * store -> media element, so the first read can legitimately still show the
+ * previous position. Condition-based (never a sleep), so it cannot join the
+ * roaming mouse-timing flake roster; a scrub that never happens fails on the
+ * timeout and the final assertion prints where the playhead actually is.
+ */
+async function expectScrubbedTo(window: Page, expected: number, label: string): Promise<void> {
+  let last = Number.NaN
+  await expect
+    .poll(
+      async () => {
+        last = await settledTime(window)
+        return Math.abs(last - expected) < SEEK_TOLERANCE
+      },
+      { timeout: 10_000, message: `${label}: playhead never reached ${expected}s` }
+    )
+    .toBe(true)
+  expect(Math.abs(last - expected), `${label}: wanted ${expected}s, landed ${last}s`).toBeLessThan(
+    SEEK_TOLERANCE
+  )
+}
+
+/** The Timeline track — the same element the trim-handle drags measure. */
+function timelineTrack(window: Page): Locator {
+  return window.locator('[data-tutorial="video-timeline"] .relative.h-12')
+}
+
+/** Viewport point at `ratio` across the Timeline track. */
+async function trackPointAt(window: Page, ratio: number): Promise<{ x: number; y: number }> {
+  const box = (await timelineTrack(window).boundingBox())!
+  return { x: box.x + box.width * ratio, y: box.y + box.height / 2 }
+}
+
+/**
+ * The drawn playhead's left edge, in percent of the track. This is the marker
+ * the user reads — it comes from the STORE's currentTime, so it is the second
+ * half of every scrub assertion (the media element's own position is the
+ * first).
+ */
+async function playheadPercent(window: Page): Promise<number> {
+  const style = await window
+    .locator('[data-tutorial="video-timeline"] .bg-pink-400')
+    .getAttribute('style')
+  const match = /calc\(([\d.]+)%/.exec(style ?? '')
+  if (!match) throw new Error(`timeline playhead has no percentage: ${String(style)}`)
+  return Number(match[1])
+}
+
+/**
  * Keep every parked playhead inside the first 1.2 s of a 2 s fixture: far
  * enough from the end that a 0.5 s park cannot run off it, and far enough
  * that `nudge`'s own clamp to the source duration never truncates a
@@ -648,6 +700,55 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  test('player: a tail nudge reaches the media element own duration, not ffprobe rounded one (T-52)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('tailnudge')
+    try {
+      await expect
+        .poll(async () => (await videoState(window)).ready, { timeout: 20_000 })
+        .toBeGreaterThan(0)
+      // The gap this pin exists for: ffprobe reports the container's rounded
+      // 2.000 s, the decoder has 2.020136 s of frames. `nudge` used to clamp
+      // to the probe, so every tail nudge stopped ~20 ms short of the real end
+      // — an error far too small for the landing tolerance to see, which is
+      // why the requested seek is asserted exactly alongside it.
+      //
+      // Polled, not read once: Chromium reports the container's rounded
+      // duration at metadata time and refines it to the decoder's once it has
+      // parsed the file. Under a full-suite load that refinement lands after
+      // the import finishes, and reading it early made this the one flaky test
+      // in the file.
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, {
+          timeout: 20_000,
+          message: 'the fixture must expose the probe/element duration gap this pin exists for'
+        })
+        .toBeGreaterThan(FIXTURE_SECONDS + 0.005)
+      const { dur } = await seekableRanges(window)
+
+      const player = window.locator('[data-tutorial="video-player"] [tabindex="0"]')
+      await installSeekLog(window)
+      await seekTo(window, dur - 0.05)
+      await clearSeekLog(window)
+      await player.focus()
+      await window.keyboard.press('ArrowRight')
+
+      // The clamp is the element's own duration…
+      expect(
+        await lastSeekRequest(window),
+        'the tail nudge must clamp to the media element duration'
+      ).toBeCloseTo(dur, 5)
+      // …and the playhead really lands past where ffprobe said the file ended.
+      const landed = await settledTime(window)
+      expect(landed, `tail nudge landed at ${landed}s`).toBeGreaterThan(FIXTURE_SECONDS)
+      expect(Math.abs(landed - dur), `tail nudge wanted ${dur}s, landed ${landed}s`).toBeLessThan(
+        SEEK_TOLERANCE
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
   // ───────────────────────────── Timeline (4e) ─────────────────────────────
 
   test('timeline: both trim handles drag the clip range, and Undo reverses each drag', async () => {
@@ -713,6 +814,179 @@ test.describe('Video Studio core editing surface', () => {
       expect(await timelineReadouts(window)).toEqual([0, FIXTURE_SECONDS, FIXTURE_SECONDS])
       await window.keyboard.press('Control+y')
       expect(Math.abs((await timelineReadouts(window))[2] - endOut)).toBeLessThan(0.001)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('timeline: clicking the track scrubs there, dragging scrubs continuously, and the trim handles keep priority (T-52)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('scrub')
+    try {
+      expect(await videoState(window)).toMatchObject({ t: 0, paused: true })
+
+      // ── a plain click lands the playhead at that proportion of the source ──
+      const quarter = await trackPointAt(window, 0.25)
+      await window.mouse.click(quarter.x, quarter.y)
+      await expectScrubbedTo(window, FIXTURE_SECONDS * 0.25, 'click at 25% of the track')
+      // A scrub is a seek, not playback: nothing started rolling.
+      expect((await videoState(window)).paused).toBe(true)
+      // …and the marker the click was aimed at moved with it.
+      const clickedPct = await playheadPercent(window)
+      expect(clickedPct, 'playhead after a 25% click').toBeGreaterThan(24)
+      expect(clickedPct, 'playhead after a 25% click').toBeLessThan(26)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-03b-scrub.png') })
+
+      // ── drag: one gesture, three positions, each landing under the cursor ──
+      const grab = await trackPointAt(window, 0.6)
+      await window.mouse.move(grab.x, grab.y)
+      await window.mouse.down()
+      for (const ratio of [0.6, 0.8, 0.35]) {
+        const point = await trackPointAt(window, ratio)
+        await window.mouse.move(point.x, point.y, { steps: 5 })
+        await expectScrubbedTo(window, FIXTURE_SECONDS * ratio, `drag to ${ratio * 100}%`)
+      }
+      await window.mouse.up()
+      const released = await settledTime(window)
+
+      // ── the gesture really ended: moving on with the button up scrubs nothing ──
+      const away = await trackPointAt(window, 0.9)
+      await window.mouse.move(away.x, away.y, { steps: 4 })
+      expect(
+        Math.abs((await settledTime(window)) - released),
+        'a mouse move after mouseup must not scrub'
+      ).toBeLessThan(SEEK_TOLERANCE)
+
+      // ── a mousedown that STARTS on a trim handle drags the handle only ──
+      // The handles are the more specific gesture and they sit on top of the
+      // scrub surface; the playhead must not jump to where the drag ended.
+      const handle = window.getByRole('button', { name: 'Trim end' })
+      const handleBox = (await handle.boundingBox())!
+      await window.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+      await window.mouse.down()
+      const dropAt = await trackPointAt(window, 0.6)
+      await window.mouse.move(dropAt.x, dropAt.y, { steps: 6 })
+      await window.mouse.up()
+      await expect.poll(async () => (await timelineReadouts(window))[2]).toBeLessThan(1.5)
+      expect(
+        Math.abs((await settledTime(window)) - released),
+        'dragging a trim handle must not move the playhead'
+      ).toBeLessThan(SEEK_TOLERANCE)
+
+      // ── scrubbing during playback seeks and KEEPS PLAYING (T-52 decision) ──
+      await window.getByRole('button', { name: 'Play', exact: true }).click()
+      await expect
+        .poll(async () => (await videoState(window)).paused, { timeout: 10_000 })
+        .toBe(false)
+      const middle = await trackPointAt(window, 0.5)
+      await window.mouse.click(middle.x, middle.y)
+      const jumped = FIXTURE_SECONDS * 0.5
+      await expect
+        .poll(async () => (await videoState(window)).t, { timeout: 10_000 })
+        .toBeGreaterThan(jumped - SEEK_TOLERANCE)
+      const during = await videoState(window)
+      expect(during.paused, 'a scrub during playback must not pause').toBe(false)
+      // …and it kept rolling FORWARD from where it was dropped.
+      await expect
+        .poll(async () => (await videoState(window)).t, { timeout: 10_000 })
+        .toBeGreaterThan(jumped + 0.05)
+      await window.getByRole('button', { name: 'Pause', exact: true }).click()
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('timeline: the track is a keyboard scrubber — arrows nudge, Home and End jump (T-52)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('scrubkeys')
+    try {
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      await expect(slider).toHaveAttribute('aria-valuemin', '0')
+      await expect(slider).toHaveAttribute('aria-valuemax', String(FIXTURE_SECONDS))
+      await expect(slider).toHaveAttribute('aria-valuenow', '0')
+
+      await slider.focus()
+      await window.keyboard.press('ArrowRight')
+      await expectScrubbedTo(window, 0.1, 'ArrowRight from 0')
+      await window.keyboard.press('ArrowRight')
+      await expectScrubbedTo(window, 0.2, 'ArrowRight from 0.1')
+      await window.keyboard.press('ArrowLeft')
+      await expectScrubbedTo(window, 0.1, 'ArrowLeft from 0.2')
+
+      await window.keyboard.press('End')
+      await expectScrubbedTo(window, FIXTURE_SECONDS, 'End')
+      await expect(slider).toHaveAttribute('aria-valuenow', String(FIXTURE_SECONDS))
+      await window.keyboard.press('Home')
+      await expectScrubbedTo(window, 0, 'Home')
+      // The value a screen reader announces tracks the playhead it describes.
+      await expect(slider).toHaveAttribute('aria-valuenow', '0')
+
+      // A backwards nudge at 0 floors instead of going negative.
+      await window.keyboard.press('ArrowLeft')
+      await expectScrubbedTo(window, 0, 'ArrowLeft at the start')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('timeline: the playhead never lies — store churn keeps it, leaving and returning resets it (T-52)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('playheadsync')
+    try {
+      // Wait for metadata before the direct seek: a `currentTime` assignment
+      // at HAVE_NOTHING is stored as the element's default start position and
+      // fires no `timeupdate`, so the STORE would never hear about it and this
+      // test would be racing the decoder rather than the code under it.
+      await expect
+        .poll(async () => (await videoState(window)).ready, { timeout: 20_000 })
+        .toBeGreaterThan(0)
+      await seekTo(window, 1.2)
+      const parkedPct = await playheadPercent(window)
+      expect(parkedPct).toBeGreaterThan(55)
+      expect(parkedPct).toBeLessThan(65)
+
+      // ── store churn on the SAME file: unrelated edits re-render the studio
+      //    (and the Player with it). Nothing may rewind the playhead. ──
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      await window
+        .locator('.card')
+        .filter({ hasText: 'Color & motion' })
+        .getByRole('slider', { name: 'Brightness' })
+        .fill('0.25')
+      const afterChurn = await settledTime(window)
+      expect(Math.abs(afterChurn - 1.2), `store churn moved the playhead to ${afterChurn}s`).toBeLessThan(
+        SEEK_TOLERANCE
+      )
+      const churnedPct = await playheadPercent(window)
+      expect(churnedPct).toBeGreaterThan(55)
+      expect(churnedPct).toBeLessThan(65)
+
+      // ── leaving and returning: the studio remounts with a NEW <video> that
+      //    starts at 0, so the marker must say 0 too. The stale store value
+      //    used to draw a playhead the video was nowhere near. ──
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.locator('video')).toHaveCount(1)
+      // Two clips now, so the ExportPanel's button counts them (and it is not
+      // GifPanel's "Export GIF" — hence the exact name).
+      await expect(window.getByRole('button', { name: 'Export 2' })).toBeVisible()
+
+      expect((await videoState(window)).t, 'the remounted media element starts at 0').toBeLessThan(
+        SEEK_TOLERANCE
+      )
+      await expect
+        .poll(() => playheadPercent(window), {
+          timeout: 10_000,
+          message: 'the drawn playhead must follow the remounted element back to 0'
+        })
+        .toBeLessThan(1)
+      await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
+        '0:00.00'
+      )
     } finally {
       await app.close()
     }

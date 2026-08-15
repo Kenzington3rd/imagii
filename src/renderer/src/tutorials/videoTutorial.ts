@@ -28,7 +28,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'trim',
       title: 'Step 3: Trim',
-      body: "Drag the purple handles on the timeline to trim the clip. The pink line is your playback position.",
+      body: "Drag the red handles on the timeline to trim the clip. The pink line is your playback position — click or drag the track to move it.",
       targetSelector: '[data-tutorial="video-timeline"]',
       placement: 'top'
     },
