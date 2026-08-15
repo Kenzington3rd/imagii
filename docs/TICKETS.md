@@ -473,6 +473,10 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
 - **Status:** open
 
 ## T-30 — first-hop search failure leaks raw IPC error text
+   (Round-32 note: T-44 established the house shape for this class —
+   throw a typed sentinel at the origin, branch on it at the IPC
+   boundary, never string-match ffmpeg/IPC text in the renderer. Reuse
+   it here, and see T-59 for the recording-side remainder.)
 
 - **Spec:** T-26 finding. getVqd() runs outside searchDuckduckgoImages's
   try/catch: hop-1 failures reject the IPC and the error card shows
@@ -771,7 +775,7 @@ IMG-PREC.
 - **Acceptance criteria:** deliberate cancel yields the calm copy, no
   error styling; the partial output file is deleted; pins flipped;
   usability ruling applies (user expects a discard, not a crash).
-- **Status:** open
+- **Status:** done (round 32 — see Done)
 
 ## T-45 — P1: image exports render at screen zoom, not document size
 
@@ -819,7 +823,7 @@ IMG-PREC.
         range or is refused with honest copy — the success toast fires
         only when the clip actually appears.
   - [ ] Pin flipped red-green; LESSONS entry (silent-success class).
-- **Status:** open
+- **Status:** done (round 32 — see Done)
 
 ## T-49 — watermark position never persists; dead "No presets" error path
 
@@ -937,6 +941,37 @@ IMG-PREC.
         specific failing gestures hardened with evidence of the race.
 - **Status:** open
 
+## T-59 — a genuine convert crash still strands its partial output and toasts raw IPC text
+
+- **Spec:** T-44 findings 1+2 — T-44 fixed the DELIBERATE-cancel
+  branch only. A real ffmpeg crash mid-convert still (a) leaves the
+  half-written .mp4 at the user's chosen path (pinned as a known gap
+  in recordingCancel.test.ts so a fix flips it) and (b) surfaces in
+  the renderer as `Error invoking remote method 'recording:finalize':
+  ...` verbatim. Same class as T-30; use the T-44 sentinel shape.
+  Rider: HighlightPanel.tsx:111-114 has the same unconditional
+  toast.success — addClipFromRange now returns boolean, so the gate is
+  one line (not currently reachable as a false success, but the shape
+  is the disease).
+- **Acceptance criteria:** crash branch reaps the partial file AND
+  still reports an error, in friendly copy naming what failed; the
+  known-gap pin flips; HighlightPanel gate added; negative tests
+  discriminate per round-21 protocol.
+- **Status:** open
+
+## T-60 — the single-slot convert registry lets Discard kill an unrelated import
+
+- **Spec:** T-44 finding 3, pre-existing. cancelActiveConvert() kills
+  whatever convert child is in flight: an import transcode
+  (convertForImport — flv/ts/wmv) running while a recording finishes
+  would be killed by "Discard recording", and vice versa. Two
+  long-running converts can also race the single slot.
+- **Acceptance criteria:** cancellation is scoped to the job that
+  asked (keyed registry or per-job handle); a Layer 5 or E2E proof
+  that discarding a recording leaves a concurrent import transcode
+  running to completion.
+- **Status:** open
+
 ## T-57 — discarding an autosave has no error path
 
 - **Spec:** T-31/T-32 worker finding. `AutosaveRestore.discard()`
@@ -1007,6 +1042,35 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 32 — fix wave batch 6: T-44 + T-48 (the false-feedback pair).
+T-44: the cancelled-vs-crashed distinction is made at the origin —
+convert.ts's single-slot registry carries a `cancelled` flag set
+before the SIGKILL, and the child's close/error handlers reject with a
+typed ConvertCancelledError instead of raw stderr; promoteTempWebm
+(the tail shared by both save paths) catches exactly that class,
+unlinks the partial .mp4 at the user's chosen path, and returns the
+same null the cancelled save dialog returns — which the renderer
+already renders as the calm "Recording discarded." Zero renderer
+changes; a real crash still throws with its text intact (asserted).
+T-48: addClipFromRange returns boolean and the chat panel's success
+toast is gated on it; a peak wholly past the end refuses with honest
+copy in the panel's own register, a peak that merely overruns clamps
+and lands (both branches asserted). Worker honestly reported that the
+start clamp alone flips nothing — the store's reversed-range guard
+already refused those; the behaviour change is carried by the
+return-value gate, the clamp is defence-in-depth. Red-green on both
+pins; worker mutations (unlink dropped, toast unconditional, guard
+inverted) plus the expediter's own (sentinel instanceof disabled ->
+exactly the discard positive red, restore, green). Gates: 831 unit /
+105 E2E (one roaming T-55 flake — image draw-commit, a NEW roster
+member — green standalone; record+pipelines 34/34); test:media 61/2
+run although no command changed. New unit suites:
+convertCancel.test.ts (10), recordingCancel.test.ts rewritten (6,
+incl. the crash-still-strands gap pinned for T-59). Findings ticketed:
+T-59 (crash branch: strand + raw text, incl. HighlightPanel gate
+rider), T-60 (single-slot registry cross-kill); T-30 annotated with
+the sentinel house shape.
 
 Round 31 — fix wave batch 5: T-31 + T-32 (Home chrome). T-31: one
 AppToaster at app level beside HotkeyOverlay, all five per-studio

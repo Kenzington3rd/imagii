@@ -427,7 +427,9 @@ revisit, writes nothing [T-43 pin]. Save dialog both branches
 (main-process stub): chosen path -> ffprobed file + recents entry;
 cancel -> exact "Recording discarded." + temp reaped + no recents.
 Discard mid-convert -> real SIGKILL of a live convert [T-44 pin: raw
-IPC error text + stranded half-written .mp4]. Show ->
+IPC error text + stranded half-written .mp4] — UPGRADED round 32: calm
+"Recording discarded." toast (trash icon, no error styling), partial
+output unlinked, recordings dir empty; see the round-32 section. Show ->
 `shell.showItemInFolder` recorded in main with the exact output path.
 Edit in Video Studio -> navigation + `take.mp4` loaded and visible.
 HomeLink idle (navigates silently) + capture-phase confirm (exact copy
@@ -487,7 +489,9 @@ buttons + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z + redo-branch drop -> E2E.
 4g ChatHighlightPanel (5/5) -> E2E: spike found in an
 arithmetic-designed log, `+ clip` lands the padded range, bucket/pad
 inputs re-derive the peak, both exact-copy negatives; the silent
-`+ clip` no-op pinned [T-48]. 4j HighlightPanel (5/5) -> E2E: real
+`+ clip` no-op pinned [T-48] — UPGRADED round 32: success toast gated
+on the store's answer, past-the-end refusal copy asserted, overrun
+clamps and lands; see the round-32 section. 4j HighlightPanel (5/5) -> E2E: real
 ebur128 scan of a generated burst fixture, SignalBars, `+ Clip`,
 debounced chat rescore moving all three signals 0->100, Cancel kills a
 live scan on a ~20-min `-stream_loop -c copy` fixture. 4k Reframe: 4
@@ -574,11 +578,11 @@ ticket).
    `.webm`, save is near-instant with no progress phase, file plays in
    a browser.
 9. **Discard mid-save.** Record 60 s with convert ON, Stop, click
-   "Discard recording" while the bar is moving. -> Expected TODAY: an
-   error toast with raw IPC/ffmpeg text and a stranded unplayable
-   `.mp4` at the chosen path [T-44]. After T-44: a calm
-   "Recording discarded."-style message and no file left. Either way
-   `%APPDATA%/imagii/recordings` must be empty afterwards.
+   "Discard recording" while the bar is moving. -> A calm "Recording
+   discarded." message (no error styling) and NO file at the chosen
+   path (T-44, fixed round 32); `%APPDATA%/imagii/recordings` empty
+   afterwards. A raw IPC/ffmpeg error toast or a stranded unplayable
+   `.mp4` is a regression.
 10. **Cancel the save dialog.** Record, Stop, Cancel in the native
     dialog. -> "Recording discarded." toast, no file written,
     recordings dir empty, nothing in Video Studio's recents.
@@ -723,3 +727,25 @@ tests/e2e/video-core.spec.ts and tests/unit/hotkeyTable.test.ts.
 - Residue ticketed: [T-57] discard() unhandled rejection; [T-58]
   References work invisible to global Undo (no history store — owner
   call).
+
+
+## Dispositions — round 32 (fix wave batch 6: T-44 + T-48)
+
+- **Record - Discard recording:** end state upgraded from the T-44 pin
+  to the calm path — record.spec.ts '"Discard recording" kills the
+  running convert, says so calmly, and leaves no file behind': neutral
+  toast with the trash icon (proving toast(), not toast.error), no
+  raw-IPC/SIGKILL vocabulary anywhere in the toast log, chosen path
+  absent, recordings dir empty, recents untouched. Expediter mutation:
+  disabling the ConvertCancelledError instanceof flips exactly that
+  test. HAND-TEST step 9 updated to match. The crash branch (real
+  ffmpeg failure) still strands its partial output — pinned in
+  recordingCancel.test.ts for [T-59].
+- **Video 4g - ChatHighlightPanel + clip:** both branches driven —
+  wholly-past-the-end refuses with exact copy and no success toast
+  ('That spike is past the end of this video — check the log matches
+  this source.'), overrun clamps and lands as a real ClipList row.
+  addClipFromRange's boolean return is unit-pinned in
+  videoStore.test.ts.
+- New unit surface: convertCancel.test.ts (10 — sentinel semantics,
+  slot lifecycle, crash vocabulary preserved).

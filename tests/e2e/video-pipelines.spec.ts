@@ -79,6 +79,10 @@ const __dirname = path.dirname(__filename)
  * answers Range requests — but none of the panels here seek, so the playback-
  * only parking below is left alone. New findings this spec turned up are marked
  * `FINDING-n` at the assertion that pins them and listed in the report.
+ * FINDING-1 (chat "+ clip" toasting success for a clip it never added) was
+ * fixed on 2026-08-15 by T-48; both halves of the clamp — a peak that
+ * overruns the end lands, a peak outside the source is refused in the
+ * panel's own words — are asserted in the ChatHighlightPanel negatives.
  */
 
 const SCREENSHOTS = path.join(__dirname, 'screenshots')
@@ -456,6 +460,25 @@ function chatLogWithOneSpike(): string {
   return lines.join('\n')
 }
 
+/**
+ * Same arithmetic, spike moved to the very first bucket: a quiet bed of 2
+ * messages per 10 s bucket from 10 s to 90 s, and 9 messages inside
+ * 0:00-0:08. Median is 2 and the threshold max(4, 5) = 5, so only bucket 0
+ * qualifies; padded by 15 s it starts at max(0, 0 - 15) = 0. That is the
+ * peak whose START is inside a 2 s source while its padded END runs past
+ * it — the case that must still land as a clamped clip (T-48).
+ */
+function chatLogWithEarlySpike(): string {
+  const lines: string[] = []
+  for (const t of [12, 17, 22, 27, 32, 37, 42, 47, 52, 57, 62, 67, 72, 77, 82, 87]) {
+    lines.push(`[${mmss(t)}] viewer${t}: quiet chatter ${t}`)
+  }
+  for (let i = 0; i < 9; i++) {
+    lines.push(`[${mmss(i)}] hype${i}: POG that was insane`)
+  }
+  return lines.join('\n')
+}
+
 /** Same bed, no spike — every bucket sits under the threshold of 5. */
 function chatLogWithNoSpike(): string {
   const lines: string[] = []
@@ -565,8 +588,9 @@ test.describe('ChatHighlightPanel', () => {
   test('finds the spike a pasted log actually contains, and + clip lands the padded range in the Clips list', async () => {
     test.setTimeout(120_000)
     // longSrc (20 min) rather than the 2 s export fixture: addPeak clamps
-    // the padded range to the SOURCE duration, so a short source would
-    // silently swallow every range this panel produces (FINDING-1 below).
+    // the padded range to the SOURCE duration, so on a short source this
+    // log's peaks fall outside the video entirely and are refused (the
+    // T-48 case, covered by the next test).
     const { app, window } = await launchWithVideo('chat', longSrc)
     try {
       const card = chatCard(window)
@@ -625,10 +649,10 @@ test.describe('ChatHighlightPanel', () => {
     }
   })
 
-  test('refuses a log with no timestamps, says so in its own words, and claims a clip it never adds', async () => {
+  test('refuses a log with no timestamps, and refuses a peak this video does not contain', async () => {
     test.setTimeout(120_000)
-    // A SHORT source on purpose — the last case needs a peak whose padded
-    // range runs off the end of the video (FINDING-1).
+    // A SHORT source on purpose — the last two cases need peaks whose
+    // padded ranges run off the end of the video (T-48).
     const { app, window } = await launchWithVideo('chatneg', clipSrc)
     try {
       const card = chatCard(window)
@@ -661,21 +685,43 @@ test.describe('ChatHighlightPanel', () => {
       // Neither negative produced a clip.
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
 
-      // ── FINDING-1: "+ clip" reports success for a clip it never adds ──
-      // addPeak clamps the padded end to the SOURCE duration but not the
-      // start, so on any source shorter than the chat timestamps the range
-      // comes out reversed. addClipFromRange rejects a reversed range and
-      // returns silently — and addPeak toasts "Clip added" regardless. The
-      // user sees a success message and an unchanged Clips list.
+      // ── negative 3 (T-48): a peak this video does not contain ──
+      // addPeak clamps BOTH ends to the source now. This log's spike sits at
+      // 0:30 — past the end of a 2 s video — so the clamped range collapses
+      // and there is no clip to make. Before T-48 the end was clamped and
+      // the start was not, the range came out reversed, addClipFromRange
+      // refused it in silence, and the panel toasted "Clip added" anyway.
       await card.locator('textarea').fill(chatLogWithOneSpike())
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
       // The peak itself is real: 0:15, past the end of this 2 s source.
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:15')
       await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
-      await expectToast(window, 'Clip added')
+      const REFUSAL =
+        'That spike is past the end of this video — check the log matches this source.'
+      await expectToast(window, REFUSAL)
+      await expect(window.getByText(REFUSAL).first()).toBeVisible()
+      // No clip, and — the whole point of the ticket — no claim that there is one.
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       expect(await clipRows(window)).toEqual([{ name: 'Clip 1', range: '0:00 → 0:02' }])
+      expect((await readToastLog(window)).some((t) => t.includes('Clip added'))).toBe(false)
+
+      // ── the positive half of the same clamp: a peak that merely OVERRUNS ──
+      // Its bucket starts inside the video and its padded end runs past it,
+      // so the end clamps to the duration and the clip really lands. The
+      // pair is the discrimination proof: the refusal above is about the
+      // peak being outside the source, not about padding hitting the end.
+      await card.locator('textarea').fill(chatLogWithEarlySpike())
+      await analyze.click()
+      await expect(card.locator('li')).toHaveCount(1)
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00')
+      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await expectToast(window, 'Clip added')
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      expect((await clipRows(window))[1]).toEqual({
+        name: 'Chat hype 1',
+        range: '0:00 → 0:02'
+      })
     } finally {
       await app.close()
     }

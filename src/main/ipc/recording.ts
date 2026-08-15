@@ -3,7 +3,7 @@ import { writeFile, mkdir, unlink } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
-import { convertToMp4, cancelActiveConvert } from '../ffmpeg/convert'
+import { convertToMp4, cancelActiveConvert, ConvertCancelledError } from '../ffmpeg/convert'
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
@@ -122,9 +122,30 @@ async function promoteTempWebm(
 
     const outputPath = result.filePath
     if (spec.convertToMp4) {
-      await convertToMp4(tempPath, outputPath, (info) => {
-        win.webContents.send('recording:progress', info)
-      })
+      try {
+        await convertToMp4(tempPath, outputPath, (info) => {
+          win.webContents.send('recording:progress', info)
+        })
+      } catch (err) {
+        // T-44: "Discard recording" kills the convert child, and the kill
+        // used to travel up as a rejected IPC — the user asked to throw the
+        // take away and got a SIGKILL crash report, plus a half-written
+        // .mp4 left at the name they picked in the save dialog (ffmpeg
+        // never reached the moov atom, so no player can open it). A
+        // deliberate cancel reaps that output and returns the same "nothing
+        // was saved" null the cancelled save dialog returns, which the
+        // renderer already renders as the calm "Recording discarded."
+        // Everything else is a real failure and still throws.
+        if (err instanceof ConvertCancelledError) {
+          try {
+            await unlink(outputPath)
+          } catch {
+            /* never created, or already gone */
+          }
+          return null
+        }
+        throw err
+      }
     } else {
       const fs = await import('node:fs/promises')
       await fs.copyFile(tempPath, outputPath)

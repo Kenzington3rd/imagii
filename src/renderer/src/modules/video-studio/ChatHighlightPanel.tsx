@@ -82,9 +82,21 @@ export function ChatHighlightPanel(): JSX.Element | null {
 
   function addPeak(p: ChatPeak, i: number): void {
     if (!source) return
-    const start = Math.max(0, p.bucketStart)
-    const end = Math.min(source.probe.duration, p.bucketStart + bucketSec + padSec * 2)
-    addClipFromRange(`Chat hype ${i + 1}`, start, end)
+    const duration = source.probe.duration
+    // T-48: BOTH ends are clamped to the source. A chat log routinely runs
+    // past the video it is pasted against (a trimmed VOD, a clip of one
+    // segment, the wrong file), and clamping only the end turned those
+    // peaks into a reversed range — which addClipFromRange refuses in
+    // silence while the toast below claimed a clip that never existed.
+    const start = Math.min(Math.max(0, p.bucketStart), duration)
+    const end = Math.min(duration, p.bucketStart + bucketSec + padSec * 2)
+    // Success is reported from what the store actually did, never assumed.
+    if (!addClipFromRange(`Chat hype ${i + 1}`, start, end)) {
+      toast.error(
+        'That spike is past the end of this video — check the log matches this source.'
+      )
+      return
+    }
     toast.success('Clip added')
   }
 

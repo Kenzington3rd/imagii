@@ -22,10 +22,31 @@ export interface ConvertProgress {
   percent: number
 }
 
+/**
+ * Rejection reason for a convert that `cancelActiveConvert` killed — the
+ * user pressing "Discard recording", or the before-quit sweep. T-44: a
+ * SIGKILL we asked for is not a crash, and the difference has to be made
+ * here, at the point of origin. Callers string-matching ffmpeg's exit
+ * message would be guessing; this is the fact.
+ */
+export class ConvertCancelledError extends Error {
+  constructor() {
+    super('convert cancelled')
+    this.name = 'ConvertCancelledError'
+  }
+}
+
 // Single in-flight registry, same M10 discipline as every other spawn
 // site: before-quit and explicit cancel must be able to kill the child
-// so no orphaned ffmpeg.exe survives the app.
-let activeConvert: ChildProcess | null = null
+// so no orphaned ffmpeg.exe survives the app. The `cancelled` flag rides
+// along with the child so the close handler still sees it after the slot
+// has been cleared.
+interface ActiveConvert {
+  child: ChildProcess
+  cancelled: boolean
+}
+
+let activeConvert: ActiveConvert | null = null
 
 export function convertToMp4(
   inputPath: string,
@@ -58,7 +79,8 @@ export function convertToMp4(
       ],
       { windowsHide: true }
     )
-    activeConvert = child
+    const active: ActiveConvert = { child, cancelled: false }
+    activeConvert = active
     let stderr = ''
     let durationSec = 0
     child.stdout.setEncoding('utf8')
@@ -84,11 +106,14 @@ export function convertToMp4(
     })
     child.on('error', (err) => {
       activeConvert = null
-      reject(err)
+      reject(active.cancelled ? new ConvertCancelledError() : err)
     })
     child.on('close', (code, signal) => {
       activeConvert = null
-      if (code === 0) resolve()
+      // A cancel we asked for wins over whatever exit code the kill
+      // produced — SIGKILL mid-encode looks exactly like a crash otherwise.
+      if (active.cancelled) reject(new ConvertCancelledError())
+      else if (code === 0) resolve()
       else
         reject(
           new Error(
@@ -119,13 +144,16 @@ export async function convertForImport(
 /**
  * Abort the in-flight conversion child if any. Returns true when there
  * was something to cancel. Used by the recorder's "Discard recording"
- * path and app-level before-quit cleanup.
+ * path and app-level before-quit cleanup. The convert's promise then
+ * rejects with `ConvertCancelledError` rather than an exit-code error, so
+ * callers can tell a deliberate discard from a real failure (T-44).
  */
 export function cancelActiveConvert(): boolean {
-  const child = activeConvert
-  if (!child) return false
+  const active = activeConvert
+  if (!active) return false
+  active.cancelled = true
   try {
-    child.kill('SIGKILL')
+    active.child.kill('SIGKILL')
   } catch {
     /* already gone */
   }
