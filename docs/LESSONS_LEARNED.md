@@ -14,6 +14,53 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — Round 26 (coverage Wave B): a disposition is a claim, and claims get probed
+
+No product code changed this round, but three findings generalize.
+
+### The ledger wrote off 13 Record elements as "headless-impossible"; 11 of them weren't
+- **What happened.** The round-22 sweep dispositioned the entire
+  capture pipeline as HL on the assumption that `desktopCapturer`,
+  `getUserMedia`, and `MediaRecorder` cannot run in a container. The
+  T-27 worker probed before writing: all three work under xvfb. Only
+  `enumerateDevices()` is empty (no mic/cam device exists), and
+  Chromium's `--use-fake-device-for-media-capture` does not survive
+  Electron's command line. Result: real recordings, real WebM/MP4
+  bytes, real ffprobe verification — and five shipped defects
+  (T-41..T-44) found in a studio the ledger said was untestable.
+- **Lesson.** **A disposition is a testable claim about a boundary,
+  and the claim gets probed before it gets recorded.** Ten minutes of
+  probe script beats a permanent hole in the coverage map. The ledger's
+  HL table now records the probe result alongside each boundary.
+
+### `page.on('download')` never fires under `_electron.launch`
+- **What happened.** T-25 needed the Image export downloads. The
+  Playwright download event — the documented mechanism — simply never
+  fires for `a[download]` clicks in an Electron window (probed on both
+  page and context). The crossing that works is Electron's own
+  `session.will-download` in the main process, which is also a deeper
+  end state: real files on disk instead of a download event object.
+- **Test.** `tests/e2e/image.spec.ts` export/emote/variants tests.
+- **Lesson.** House pattern for every `a[download]` surface. When a
+  framework event is silent, drop a level: the main process sees what
+  the page wrapper doesn't.
+
+### Watermark/text-overlay pixels are proven on NO platform (drawtext)
+- **What happened.** The linux ffmpeg-static build has no `drawtext`
+  filter — any export carrying a watermark or text overlay dies at
+  graph init on every dev/CI box, so all existing coverage asserts the
+  command string at most. The shipped win32 build has the filter, but
+  nothing executes it under test. Third instance of the per-platform
+  class (mpegts segfault, pathToFileURL drive letters) — ticketed
+  T-51 for a win32-gated Layer 5 test that runs where the release
+  workflow runs.
+- **Lesson.** Per-platform evidence applies to FILTER AVAILABILITY,
+  not just binaries and runtimes. When a feature's only executions all
+  happen on a platform that can't run it, its coverage is a unit-level
+  string assertion wearing an integration test's name.
+
+---
+
 ## 2026-08-15 — the release runner is the only Windows execution of the test suite
 
 ### Bug — v1.3.0 release run failed: three protocol tests pinned linux-only URLs

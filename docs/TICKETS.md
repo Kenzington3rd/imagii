@@ -345,7 +345,8 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         entry, perf inputs; copy buttons via granted clipboard
         permission or dispositioned.
   - [ ] Ledger dispositions filled for every row in scope.
-- **Status:** done (round 25 — see Done)
+- **Status:** done (round 26 — see Done; a round-25 edit marked this
+  ticket done by mistake where T-26 was meant — both corrected here)
 
 ## T-24 — coverage: Audio Studio full surface
 
@@ -393,7 +394,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         four tiles -> save one + save-all download counts.
   - [ ] Undo/redo restores canvas doc across a draw + a delete.
   - [ ] Ledger dispositions filled.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 26 — see Done)
 
 ## T-26 — coverage: References + search parser
 
@@ -413,7 +414,8 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Search UI: error-path E2E (network blocked) asserting the
         error card copy; live search dispositioned HL-network.
   - [ ] Ledger dispositions filled.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 25 — see Done; this ticket shipped in Wave A
+  but a round-25 edit marked T-23 instead)
 
 ## T-27 — coverage: Record Studio reachable subset + dispositions
 
@@ -434,7 +436,11 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         checklist with exact steps.
   - [ ] Ledger dispositions filled; a docs section lists the manual
         Windows verification steps for the capture pipeline.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 26 — see Done). Note: the ticket's premise
+  was wrong in the right direction — the capture pipeline DOES run
+  headless (only device enumeration doesn't), so 15/17 elements got
+  real E2E instead of dispositions, and the hand-test shrank to a
+  14-step checklist (ledger HAND-TEST section).
 
 ## T-28 — mood board rename and first-save are dead: Electron has no prompt()
 
@@ -701,6 +707,19 @@ expected behavior wins every call:
 12. **T-30** friendly first-hop search errors
 13. **T-35** ErrorBoundary coverage
 
+Wave B findings slot in by the same usability ruling:
+
+- **T-45** (P1: exports lie about their size, Twitch rejects the emote
+  pack) runs immediately after T-37 — the two P1s first.
+- **T-44** (discard reports as a crash + strands a broken file) and
+  **T-48** (silent false "Clip added") join the top half — silent or
+  alarming wrong feedback is the same class as T-31/T-33.
+- **T-50** (custom presets are a dead end) and **T-42** (webcam
+  silently dropped) follow — features that promise and don't deliver.
+- **T-41, T-43, T-46, T-49** ride the tail with the polish tickets.
+- **T-51** (win32-gated drawtext pixels) is test infrastructure — pair
+  it with the first release-workflow run after the fix waves.
+
 Every fix flips its pin; every flip is red-green evidenced; LESSONS per
 IMG-PREC.
 
@@ -771,9 +790,104 @@ IMG-PREC.
   visible); stale pin flipped.
 - **Status:** open
 
+## T-48 — chat highlight "+ clip" reports success for a clip it never adds
+
+- **Spec:** T-23 FINDING-1. `addPeak` clamps the padded END to the
+  source duration but never the START
+  (`ChatHighlightPanel.tsx:83-89`), so when the chat log's timestamps
+  run past the loaded source the range comes out reversed;
+  `addClipFromRange` rejects it silently and `toast.success('Clip
+  added')` fires anyway. Pinned in video-pipelines.spec.ts (toast
+  fires, `Clips (1)` unchanged).
+- **Acceptance criteria:**
+  - [ ] A peak outside the source either lands as a valid clamped
+        range or is refused with honest copy — the success toast fires
+        only when the clip actually appears.
+  - [ ] Pin flipped red-green; LESSONS entry (silent-success class).
+- **Status:** open
+
+## T-49 — watermark position never persists; dead "No presets" error path
+
+- **Spec:** T-23 FINDINGS 2+3, same panel. `runExportQueue` persists
+  `streamerHandle` + `filenameTemplate` only (`ExportPanel.tsx:177-178`)
+  — a user who picks "top left" gets bottom-right back next launch.
+  And `"No presets selected on any clip"` (`ExportPanel.tsx:204-207`)
+  is unreachable: the Export button is disabled at `totalQueued === 0`
+  and the queue is built from the same sum. Both pinned in
+  video-pipelines.spec.ts.
+- **Acceptance criteria:**
+  - [ ] Watermark position persists and restores like the handle.
+  - [ ] The dead path is removed (or made genuinely reachable and
+        tested); no unreachable user-facing copy remains in the panel.
+  - [ ] Pins flipped red-green.
+- **Status:** open
+
+## T-50 — custom presets can never be used for an export
+
+- **Spec:** T-23 FINDING-4. A saved custom preset round-trips to disk
+  but never becomes an export target — the per-clip preset grid maps
+  `ALL_PLATFORM_IDS` only (`ExportPanel.tsx:357`), and the manager
+  modal's own footer admits it. The whole feature is a dead end.
+  Pinned in both directions (5 platform checkboxes, no custom entry).
+- **Acceptance criteria:**
+  - [ ] Saved custom presets appear alongside the platform presets in
+        the per-clip grid and export at their stored dimensions
+        (ffprobe-verified E2E).
+  - [ ] Deleting a custom preset that clips have queued degrades
+        safely (unqueue, never a crash or a ghost row).
+  - [ ] Pins flipped red-green; usability ruling applies (saving a
+        preset promises it can be used).
+- **Status:** open
+
+## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
+
+- **Spec:** T-23 finding 5 — a per-platform capability gap, same class
+  as the round-20 mpegts segfault. The linux ffmpeg-static build has
+  NO `drawtext` filter: any export carrying a watermark or a text
+  overlay dies at graph init on dev boxes, so every dev/CI execution
+  asserts drawtext's command string at most — its pixels are proven on
+  no platform. The shipped win32 (gyan.dev) build has the filter, and
+  the release workflow is the de facto Windows CI (LESSONS 2026-08-15).
+- **Acceptance criteria:**
+  - [ ] Layer 5 test gated `it.skipIf(process.platform !== 'win32')`
+        proving watermark/text-overlay pixels land (diff vs a clean
+        render of the same source — nonzero where the text sits, zero
+        elsewhere; the caption burn-in PSNR-band technique applies).
+  - [ ] A linux pin that FAILS when ffmpeg-static gains drawtext, so
+        the gate gets lifted instead of rotting (mirror the mpegts
+        segfault pin).
+  - [ ] Runs in the release workflow's verify step; documented in
+        mediaFormats-style per-platform caveat comment where the
+        watermark graph is built.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 26 — Wave B of the coverage fleet (T-23, T-25, T-27; expedited
+by Fable: 757 unit / 97 E2E full-suite green under the expediter's own
+runs in 2.2m; "Recording discarded." bundle-mutation discrimination
+re-executed personally on record.spec.ts — named red with the mutated
+copy visible in the live toast log, md5-verified byte-identical
+restore, green). 50 E2E tests (record 13, image 16, video-pipelines
+21) + 10 compositor corner-math unit tests added. The coverage
+campaign's interactive-surface pass is COMPLETE: every element is
+either driven to its real end state or dispositioned in the ledger,
+and the manual residue is a single 14-step Windows hand-test (ledger
+HAND-TEST section). Wave B found 8 more shipped defects, ticketed:
+T-41..T-44 (Record: indistinguishable zero-sources, silent webcam
+drop, inconsistent persistence, discard-reports-as-crash),
+T-45..T-46 (Image: P1 exports at screen zoom with a mislabeled emote
+pack, stale variants), T-48..T-50 (Video export: silent false "Clip
+added", unpersisted watermark position + dead error path, custom
+presets unreachable as export targets) — plus T-51 (drawtext pixels
+proven on no platform; win32-gated Layer 5). T-27 also disproved the
+sweep's 13-element headless assumption by probing: the capture
+pipeline runs under xvfb, only device enumeration doesn't. Techniques
+now house patterns (ledger HL table): queued main-process dialog
+stubs, session.will-download, main-process clipboard both directions,
+project-file seeding, -stream_loop long fixtures.
 
 Round 25 — Wave A of the coverage fleet (T-21, T-22, T-24, T-26;
 expedited by Fable: 747 unit / 47 E2E full-suite green under the

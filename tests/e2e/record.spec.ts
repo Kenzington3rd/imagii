@@ -1,0 +1,1027 @@
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { fileURLToPath } from 'node:url'
+import { ffprobePath } from '../../src/main/ffmpeg/paths'
+
+// ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+/**
+ * T-27: Record Studio — everything the ledger marked headless-limited,
+ * driven for real.
+ *
+ * The ledger's Record row (17 elements, 13 HL) assumed desktopCapturer,
+ * MediaRecorder and the media devices are all absent headless. A probe run
+ * before this spec was written found that only ONE of those three is true
+ * on this Linux/xvfb Electron 31 box:
+ *
+ *   - `desktopCapturer.getSources()` returns a real "Entire screen" source
+ *     with a non-empty thumbnail.
+ *   - `getUserMedia({ chromeMediaSource: 'desktop' })` returns a live
+ *     1280x1024@30 video track for that source id.
+ *   - `MediaRecorder` exists and produces real vp9/vp8 webm bytes from a
+ *     canvas captureStream.
+ *   - `enumerateDevices()` returns NOTHING — there is no microphone and no
+ *     camera in the container, and Chromium's
+ *     `--use-fake-device-for-media-capture` switch does not take through
+ *     Electron's command line (probed both before and after the app path).
+ *
+ * So the screen-capture half of the pipeline is covered here end to end —
+ * sources grid, selection, Start, elapsed timer, Stop, Esc, the native
+ * save dialog (stubbed in MAIN, not in the renderer), the ffmpeg convert,
+ * the bytes on disk, the toast and both of its actions. The mic/webcam
+ * half stays a Windows hand-test (see the T-27 report's HAND-TEST block),
+ * and its zero-device UI branches are pinned here because that IS the
+ * state a user with no mic/cam plugged in sees.
+ *
+ * House patterns are export.spec's and home-chrome.spec's: a hermetic
+ * per-test userData dir seeded on disk BEFORE launch, a MutationObserver
+ * toast log installed before the action that raises the toast, and
+ * assertions that land on the FILE the interaction wrote (config.json, the
+ * saved recording, userData/recordings) rather than on renderer state
+ * alone.
+ *
+ * Product defects found while writing this spec. None is fixed here (T-27
+ * is a coverage ticket and touches no `src/`); each is asserted at the
+ * boundary where it actually bites and carries a `T-27 FINDING` comment
+ * at that assertion:
+ *   A. Zero sources is indistinguishable from never-searched. When
+ *      desktopCapturer returns [], `chooseSource` sets phase 'choosing'
+ *      but the idle and choosing branches render identically, so the user
+ *      gets the same "Pick a screen or window" button back with no "no
+ *      screens found" message, no error toast, and no spinner. Clicking
+ *      Refresh sources on a box with nothing to capture looks like a dead
+ *      button. (RecordStudio.tsx:473-478)
+ *   B. "Include webcam in recording" has no zero-camera hint. The Audio
+ *      card renders "No microphone found." when `mics` is empty; the
+ *      Webcam card renders nothing at all when `cams` is empty — the
+ *      checkbox stays ticked, the Corner select appears, and recording
+ *      then silently produces screen-only video because
+ *      `effectiveCamId` is null and the compositor branch is skipped
+ *      without a toast. (RecordStudio.tsx:542-555 vs 526-530, and
+ *      RecordStudio.tsx:216-217)
+ *   C. The MP4 checkbox is the only Record preference that does not
+ *      persist. `record.webcamCorner` is written to config.json on every
+ *      change; `convertToMp4` is component-local `useState(true)`, so a
+ *      user who wants WebM re-ticks it on every single visit to the
+ *      route — including after a mid-session trip to Home.
+ *   E. "Discard recording" reports as a crash and strands a broken file.
+ *      Cancelling the save SIGKILLs the ffmpeg child, whose rejection
+ *      travels up as a rejected IPC, so the toast reads "Error invoking
+ *      remote method 'recording:finalize': ... convert-to-mp4 exit signal
+ *      SIGKILL" with a tail of ffmpeg stderr — the same raw-IPC-text leak
+ *      T-30 files against search. And the half-written .mp4 stays at the
+ *      path the user chose in the save dialog: promoteTempWebm's finally
+ *      reaps its own temp .webm but never the output it asked ffmpeg for.
+ *      (RecordStudio.tsx:394-395, recording.ts:97-146)
+ *   D. Visiting /record writes to config.json with no user action. The
+ *      corner-persist effect has no "did the user touch it" guard, so
+ *      mounting the route stamps `record.webcamCorner: "bottom-right"`
+ *      over an absent key. Harmless today (the value equals the default)
+ *      but it means the settings file is written by navigation alone.
+ */
+
+const SCREENSHOTS = path.join(__dirname, 'screenshots')
+
+/** All four tutorial flags — the seed that keeps a coachmark off the page. */
+const ALL_TUTORIALS_SEEN = { video: true, audio: true, image: true, ai: true }
+
+interface SeedConfig {
+  welcomeSeen?: boolean
+  tutorialSeen?: Partial<Record<'video' | 'audio' | 'image' | 'ai', boolean>>
+  record?: { webcamCorner?: string }
+  recentFiles?: Partial<Record<'video' | 'audio' | 'image', string[]>>
+}
+
+interface StoredConfig {
+  welcomeSeen?: boolean
+  record?: { webcamCorner?: string }
+  recentFiles?: Record<string, string[]>
+}
+
+/**
+ * electron-store nests dotted keys (accessPropertiesByDotNotation defaults to
+ * true), so `record.webcamCorner` lands on disk as `{ record: { webcamCorner } }`
+ * — the same shape smoke.spec, export.spec and home-chrome.spec write.
+ */
+function seedUserData(userDataDir: string, config: SeedConfig): void {
+  mkdirSync(userDataDir, { recursive: true })
+  writeFileSync(path.join(userDataDir, 'config.json'), JSON.stringify(config, null, 2), 'utf8')
+}
+
+/** The settings file exactly as the next launch would read it. */
+function readConfig(userDataDir: string): StoredConfig {
+  const file = path.join(userDataDir, 'config.json')
+  if (!existsSync(file)) return {}
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as StoredConfig
+  } catch {
+    // A read landing mid-write reads as "not yet" rather than throwing; every
+    // caller is inside expect.poll or a settled-state assertion.
+    return {}
+  }
+}
+
+/** The main-process temp dir every streaming session writes its .webm into. */
+function recordingsDir(userDataDir: string): string {
+  return path.join(userDataDir, 'recordings')
+}
+
+/** Partial .webm files left behind by begin/appendChunk with no finalize. */
+function leftoverTemps(userDataDir: string): string[] {
+  const dir = recordingsDir(userDataDir)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((f) => f.endsWith('.webm'))
+}
+
+function runBinary(bin: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args)
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (b) => (stdout += String(b)))
+    child.stderr.on('data', (b) => (stderr += String(b)))
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+  })
+}
+
+interface ProbeStream {
+  codec_type: string
+  codec_name?: string
+  width?: number
+  height?: number
+}
+
+interface ProbeJson {
+  streams?: ProbeStream[]
+  format?: { format_name?: string; duration?: string }
+}
+
+/** Read the saved recording back with the repo's own bundled ffprobe. */
+async function probeFile(filePath: string): Promise<ProbeJson> {
+  const result = await runBinary(ffprobePath, [
+    '-v',
+    'error',
+    '-print_format',
+    'json',
+    '-show_streams',
+    '-show_format',
+    filePath
+  ])
+  if (result.code !== 0) {
+    throw new Error(`ffprobe exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+  return JSON.parse(result.stdout) as ProbeJson
+}
+
+async function launchApp(userDataDir: string): Promise<ElectronApplication> {
+  const mainEntry = path.resolve(__dirname, '../../out/main/index.js')
+  if (!existsSync(mainEntry)) {
+    throw new Error(
+      `out/main/index.js missing. Run \`npm run build\` before \`npm run test:e2e\`. Checked: ${mainEntry}`
+    )
+  }
+  return electron.launch({
+    args: [mainEntry, `--user-data-dir=${userDataDir}`],
+    env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
+  })
+}
+
+/** export.spec's toast recorder: toasts auto-dismiss, so a poll would race them. */
+async function installToastLog(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const log: string[] = []
+    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
+    new MutationObserver((records) => {
+      for (const record of records) {
+        record.addedNodes.forEach((node) => {
+          if (node.nodeType !== 1) return
+          const text = (node as HTMLElement).textContent ?? ''
+          if (text.trim()) log.push(text.trim())
+        })
+      }
+    }).observe(document.body, { childList: true, subtree: true })
+  })
+}
+
+function readToastLog(window: Page): Promise<string[]> {
+  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
+}
+
+/**
+ * Replace `dialog.showSaveDialog` in the MAIN process. The renderer half is
+ * untouchable (contextBridge objects are frozen), and the save dialog is the
+ * one thing standing between `recording:finalize` and a real file, so it is
+ * stubbed exactly where Electron owns it. `filePath: null` stubs the Cancel
+ * branch. Every other byte of the save path — the write stream, the
+ * temp-file promotion, the ffmpeg convert, the stat — runs for real.
+ */
+async function stubSaveDialog(app: ElectronApplication, filePath: string | null): Promise<void> {
+  await app.evaluate(async ({ dialog }, chosen) => {
+    const target = dialog as unknown as { showSaveDialog: unknown }
+    target.showSaveDialog = async () =>
+      chosen === null ? { canceled: true, filePath: undefined } : { canceled: false, filePath: chosen }
+  }, filePath)
+}
+
+/**
+ * Record every `shell.showItemInFolder` call in main. The OS file manager is
+ * genuinely untestable, but "the Show button reached the shell with the right
+ * path" is not — that is the deepest layer this element has.
+ */
+async function stubShellReveal(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async ({ shell }) => {
+    const g = globalThis as unknown as { __revealCalls: string[] }
+    g.__revealCalls = []
+    const target = shell as unknown as { showItemInFolder: unknown }
+    target.showItemInFolder = (p: string) => {
+      g.__revealCalls.push(p)
+    }
+  })
+}
+
+function readRevealCalls(app: ElectronApplication): Promise<string[]> {
+  return app.evaluate(
+    async () => (globalThis as unknown as { __revealCalls?: string[] }).__revealCalls ?? []
+  )
+}
+
+/**
+ * Force `desktopCapturer.getSources` to return an empty list. The xvfb box
+ * always has exactly one screen, so the zero-sources branch — a real state on
+ * a locked workstation or a permissions-denied macOS/Wayland session — can
+ * only be reached by making main answer the way those systems answer.
+ */
+async function stubEmptySources(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async ({ desktopCapturer }) => {
+    const target = desktopCapturer as unknown as { getSources: unknown }
+    target.getSources = async () => []
+  })
+}
+
+async function waitForHome(window: Page): Promise<void> {
+  await window.waitForLoadState('domcontentloaded')
+  await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+}
+
+/** Home -> Record through the NavCard the user actually clicks. */
+async function gotoRecordFromHome(window: Page): Promise<void> {
+  await waitForHome(window)
+  await window.getByRole('link', { name: /Record/ }).first().click()
+  await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+}
+
+/** Per-test scratch root; every test owns its own userData directory. */
+function makeRoot(label: string): string {
+  return path.join(os.tmpdir(), `imagii-e2e-rec-${label}-${Date.now().toString(36)}`)
+}
+
+function cleanup(root: string): void {
+  try {
+    rmSync(root, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+function ensureScreenshots(): void {
+  if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
+}
+
+const SEED: SeedConfig = { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN }
+
+test.describe('T-27 Record Studio', () => {
+  // ------------------------------------------------------------------
+  // 1. Route + option wiring (no capture involved)
+  // ------------------------------------------------------------------
+
+  test('Home NavCard opens Record and the option cards render their defaults', async () => {
+    test.setTimeout(120_000)
+    ensureScreenshots()
+    const root = makeRoot('route')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      // The route's own copy, so a silent swap of the NavCard target fails here.
+      await expect(
+        window.getByText('Capture a screen, window, or webcam — saved locally as MP4 (or WebM).')
+      ).toBeVisible()
+      // All four panels of the idle layout.
+      await expect(window.getByText('What to record')).toBeVisible()
+      await expect(window.getByText('Audio', { exact: true })).toBeVisible()
+      await expect(window.getByText('Webcam', { exact: true })).toBeVisible()
+      await expect(window.getByText('Output', { exact: true })).toBeVisible()
+
+      // Defaults: mic on, webcam off, MP4 on.
+      await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
+      await expect(window.getByRole('checkbox').nth(1)).not.toBeChecked()
+      await expect(window.getByRole('checkbox').nth(2)).toBeChecked()
+
+      // Start is disabled until a source is chosen — nothing is selected yet.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeDisabled()
+      // Idle shows neither the REC header nor the saving card.
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect(window.getByText('Finishing up — converting and writing to disk…')).toHaveCount(0)
+
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-01-idle.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('mic checkbox toggles the microphone row; with no device it is the warning, not a select', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('mic')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      const micBox = window.getByRole('checkbox').nth(0)
+      const micWarning = window.getByText('No microphone found. Click "Refresh sources" after granting permission.')
+      const micSelect = window.locator('select[aria-label="Microphone"]')
+
+      // Checked by default -> the mic row is revealed. There is no audio input
+      // device in this container, so the revealed row is the warning branch.
+      // A machine WITH a mic gets the <select> instead; that fork is the
+      // Windows hand-test's first step.
+      await expect(micBox).toBeChecked()
+      await expect(micWarning).toBeVisible()
+      await expect(micSelect).toHaveCount(0)
+
+      // Unchecking hides the whole row — both branches are gated on includeMic.
+      await micBox.uncheck()
+      await expect(micBox).not.toBeChecked()
+      await expect(micWarning).toHaveCount(0)
+      await expect(micSelect).toHaveCount(0)
+
+      // And re-checking brings it back, so this is a live toggle rather than
+      // a one-way reveal.
+      await micBox.check()
+      await expect(micWarning).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('webcam checkbox reveals the Corner select; zero cameras get no hint at all', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('cam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      const camBox = window.getByRole('checkbox').nth(1)
+      const camSelect = window.locator('select[aria-label="Webcam"]')
+      const cornerRow = window.getByText('Corner', { exact: true })
+
+      // Off by default: neither the camera select nor the Corner row exists.
+      await expect(camBox).not.toBeChecked()
+      await expect(camSelect).toHaveCount(0)
+      await expect(cornerRow).toHaveCount(0)
+
+      await camBox.check()
+
+      // Corner appears — it is gated on showCam alone, so it is visible even
+      // with no camera attached.
+      await expect(cornerRow).toBeVisible()
+      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      await expect(corner).toBeVisible()
+      // Exactly the four corners, in the order and with the labels the module
+      // declares. A renamed option is a user-visible change and fails here.
+      await expect(corner.locator('option')).toHaveText([
+        'Top-left',
+        'Top-right',
+        'Bottom-left',
+        'Bottom-right'
+      ])
+
+      // T-27 FINDING B: with `cams` empty the camera <select> is simply absent
+      // and NOTHING replaces it. The Audio card next door renders "No
+      // microphone found." in the same situation. So the user ticks "Include
+      // webcam in recording", sees a Corner picker appear, and gets a
+      // screen-only recording with no warning at any point — startRecording's
+      // `effectiveCamId` is null, so the compositor branch is skipped without
+      // the toast the webcam-failure path would otherwise raise.
+      await expect(camSelect).toHaveCount(0)
+      await expect(window.getByText(/No (camera|webcam) found/i)).toHaveCount(0)
+
+      // Unchecking removes the Corner row again.
+      await camBox.uncheck()
+      await expect(cornerRow).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Corner select writes record.webcamCorner to config.json and a relaunch restores it', async () => {
+    test.setTimeout(150_000)
+    ensureScreenshots()
+    const root = makeRoot('corner')
+    const userDataDir = path.join(root, 'userData')
+    // Deliberately seeded WITHOUT record.webcamCorner so the first write is
+    // observable as a key appearing on disk.
+    seedUserData(userDataDir, SEED)
+    expect(readConfig(userDataDir).record).toBeUndefined()
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      // T-27 FINDING D: the persist effect runs on mount with no
+      // user-touched guard, so simply arriving on /record stamps the default
+      // corner into config.json. Pinned rather than fixed: it is the current
+      // contract, and a fix that adds the guard has to update this assertion.
+      await expect
+        .poll(() => readConfig(userDataDir).record?.webcamCorner, { timeout: 15_000, intervals: [200] })
+        .toBe('bottom-right')
+
+      await window.getByRole('checkbox').nth(1).check()
+      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      await corner.selectOption('top-left')
+      await expect(corner).toHaveValue('top-left')
+
+      // The choice is on DISK, not just in React state.
+      await expect
+        .poll(() => readConfig(userDataDir).record?.webcamCorner, { timeout: 15_000, intervals: [200] })
+        .toBe('top-left')
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-02-corner.png') })
+    } finally {
+      await app.close()
+    }
+
+    // Second launch on the SAME userData: the restore effect reads the stored
+    // key back and the select comes up on the user's corner, not the default.
+    const app2 = await launchApp(userDataDir)
+    try {
+      const window = await app2.firstWindow()
+      await gotoRecordFromHome(window)
+      await window.getByRole('checkbox').nth(1).check()
+      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      await expect(corner).toHaveValue('top-left')
+      // Restoring must not rewrite a different value over the stored one.
+      expect(readConfig(userDataDir).record?.webcamCorner).toBe('top-left')
+    } finally {
+      await app2.close()
+      cleanup(root)
+    }
+  })
+
+  test('MP4 checkbox toggles but is component-local — it resets on every visit', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('mp4')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      const mp4Box = window.getByRole('checkbox').nth(2)
+      await expect(mp4Box).toBeChecked()
+      await expect(
+        window.getByText("Off = save as WebM (instant, but some apps don't accept WebM).")
+      ).toBeVisible()
+
+      await mp4Box.uncheck()
+      await expect(mp4Box).not.toBeChecked()
+
+      // T-27 FINDING C: `convertToMp4` is component-local useState, so a
+      // round trip to Home and back throws the choice away. Nothing is
+      // written to config.json either — contrast the corner select, which
+      // persists on every change. Asserted in BOTH directions so a future
+      // fix that makes it settings-backed fails this test loudly rather than
+      // silently changing behavior.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('checkbox').nth(2)).toBeChecked()
+
+      const stored = readConfig(userDataDir) as Record<string, unknown>
+      expect(Object.keys(stored)).not.toContain('convertToMp4')
+      expect(JSON.stringify(stored)).not.toContain('convertToMp4')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // ------------------------------------------------------------------
+  // 2. Source discovery — the empty branch and the real one
+  // ------------------------------------------------------------------
+
+  test('zero capture sources: no crash, but also no message — the button just comes back', async () => {
+    test.setTimeout(120_000)
+    ensureScreenshots()
+    const root = makeRoot('nosources')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubEmptySources(app)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      const pick = window.getByRole('button', { name: 'Pick a screen or window' })
+      await expect(pick).toBeVisible()
+      await pick.click()
+
+      // The IPC really ran and really answered []: nothing throws, the page
+      // is still mounted, and the header survives.
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+
+      // T-27 FINDING A: this is the entire user-visible outcome of a search
+      // that found nothing. `chooseSource` moved phase idle -> 'choosing',
+      // but the two branches render the same markup, so the placeholder card
+      // reappears verbatim. There is no "no screens found" line, no error
+      // toast, no disabled state, no spinner — a user on a system where
+      // capture is blocked (Wayland without a portal, macOS screen-recording
+      // permission denied) sees a button that appears to do nothing at all.
+      await expect(pick).toBeVisible()
+      await expect(window.locator('img[alt]')).toHaveCount(0)
+      await expect(window.getByText(/no (screens|sources|windows) found/i)).toHaveCount(0)
+      expect(await readToastLog(window)).toEqual([])
+
+      // Refresh sources takes the same path and lands in the same place.
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(pick).toBeVisible()
+      expect(await readToastLog(window)).toEqual([])
+
+      // And Start is still correctly refused: no source id was ever set.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeDisabled()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-03-no-sources.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Refresh sources lists the real screen, auto-selects the first, and enables Start', async () => {
+    test.setTimeout(120_000)
+    ensureScreenshots()
+    const root = makeRoot('sources')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeDisabled()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+
+      // A real desktopCapturer source, with a real thumbnail: the grid
+      // replaces the placeholder and the card carries the source's own name
+      // and type straight from main.
+      const cards = window.locator('img[alt]')
+      await expect(cards.first()).toBeVisible({ timeout: 20_000 })
+      const alt = await cards.first().getAttribute('alt')
+      expect(alt && alt.length > 0).toBe(true)
+      const src = await cards.first().getAttribute('src')
+      expect(src?.startsWith('data:image/png;base64,')).toBe(true)
+      // A non-empty thumbnail, not a 1-px placeholder.
+      expect((src ?? '').length).toBeGreaterThan(500)
+      await expect(window.getByText('screen', { exact: true }).first()).toBeVisible()
+
+      // chooseSource auto-selects the first entry when nothing is selected,
+      // which is what un-disables Start.
+      const sourceButton = window.locator('button.card').filter({ has: cards.first() })
+      await expect(sourceButton).toHaveClass(/border-accent/)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled()
+
+      // Clicking the thumbnail keeps it selected (the selection handler is
+      // the only thing that writes selectedSourceId after the auto-pick).
+      await sourceButton.click()
+      await expect(sourceButton).toHaveClass(/ring-accent/)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-04-sources.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // ------------------------------------------------------------------
+  // 3. Negative: Start with a microphone that is not there
+  // ------------------------------------------------------------------
+
+  test('Start with mic enabled and no microphone refuses, names the fault, and leaves no temp file', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('nomic')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+
+      // Mic checkbox stays ON. The screen grab succeeds; the mic getUserMedia
+      // is what throws.
+      await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      // The specific device error reaches the user verbatim, not a generic
+      // "Could not start recording".
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 20_000,
+          intervals: [200]
+        })
+        .toMatch(/Requested device not found|NotFoundError|Could not start recording/)
+
+      // And the app stayed idle: no REC header, no Stop button, the option
+      // cards are still on screen.
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect(window.getByText(/REC \d\d:\d\d/)).toHaveCount(0)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible()
+
+      // stopAllStreams + abandon ran on the failure path, so no partial
+      // session file is orphaned under userData/recordings. (This failure
+      // happens before recording:begin, so the directory is not even created;
+      // either way the assertion is "nothing left behind".)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // ------------------------------------------------------------------
+  // 4. The full capture loop
+  // ------------------------------------------------------------------
+
+  test('record -> Stop -> save as WebM writes real bytes, toasts, and joins recent videos', async () => {
+    test.setTimeout(180_000)
+    ensureScreenshots()
+    const root = makeRoot('webm')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'take.webm')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await stubShellReveal(app)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      // Screen-only: no mic in this container, and WebM so the assertion
+      // lands on the recorder's own output rather than on ffmpeg's.
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('checkbox').nth(2).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      // Recording phase: the header swaps in, the elapsed clock runs, and the
+      // live preview element is mounted.
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:00/)).toBeVisible()
+      await expect(window.locator('video')).toHaveCount(1)
+      // The option cards are gone — the layout really switched phase.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toHaveCount(0)
+      // The clock is driven by a real interval, not a static render.
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-05-recording.png') })
+
+      // A session temp file exists WHILE recording — the streaming save path
+      // is writing chunks as they arrive rather than buffering in the renderer.
+      expect(leftoverTemps(userDataDir).length).toBe(1)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // The saved file is the end state, not the toast.
+      await expect
+        .poll(() => (existsSync(outPath) ? statSync(outPath).size : 0), {
+          timeout: 60_000,
+          intervals: [250]
+        })
+        .toBeGreaterThan(1000)
+
+      const probe = await probeFile(outPath)
+      expect(probe.format?.format_name).toContain('webm')
+      const video = probe.streams?.find((s) => s.codec_type === 'video')
+      expect(video).toBeDefined()
+      expect(video?.width).toBeGreaterThan(0)
+      // Screen-only was requested, so there must be no audio stream.
+      expect(probe.streams?.some((s) => s.codec_type === 'audio')).toBe(false)
+
+      // Toast names the size and offers both actions.
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 30_000, intervals: [200] })
+        .toMatch(/Saved \d+\.\d MB\./)
+
+      // The Show action reaches the shell with the file that was just written.
+      await window.getByRole('button', { name: 'Show', exact: true }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([outPath])
+
+      // Back to idle, and the recording is in the same recent-videos bucket
+      // the Video Studio importer reads.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 20_000 })
+      await expect
+        .poll(() => readConfig(userDataDir).recentFiles?.video ?? [], {
+          timeout: 15_000,
+          intervals: [200]
+        })
+        .toContain(outPath)
+
+      // The streaming session's temp file was reaped by finalize.
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('record -> Esc -> save as MP4 runs the real convert and "Edit in Video Studio" hands the file over', async () => {
+    test.setTimeout(240_000)
+    ensureScreenshots()
+    const root = makeRoot('mp4save')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'take.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      // MP4 stays checked — this run exercises the ffmpeg conversion branch.
+      await expect(window.getByRole('checkbox').nth(2)).toBeChecked()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+
+      // Round 18 C's Esc binding — the only way the documented "Esc: Stop
+      // recording" hotkey is proven to be wired.
+      await window.keyboard.press('Escape')
+
+      // The saving card is the conversion's own UI: progress bar + abort.
+      await expect(window.getByText('Finishing up — converting and writing to disk…')).toBeVisible({
+        timeout: 20_000
+      })
+      await expect(window.getByRole('button', { name: 'Discard recording' })).toBeVisible()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-06-saving.png') })
+
+      await expect
+        .poll(() => (existsSync(outPath) ? statSync(outPath).size : 0), {
+          timeout: 120_000,
+          intervals: [500]
+        })
+        .toBeGreaterThan(1000)
+
+      // ffmpeg really ran: h264 in an mp4 container, not a renamed webm.
+      const probe = await probeFile(outPath)
+      expect(probe.format?.format_name).toContain('mp4')
+      const video = probe.streams?.find((s) => s.codec_type === 'video')
+      expect(video?.codec_name).toBe('h264')
+
+      // Edit in Video Studio: load into the video store, then navigate. The
+      // record -> clip handoff is the whole point of the button.
+      await window.getByRole('button', { name: 'Edit in Video Studio' }).click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText('take.mp4').first()).toBeVisible({ timeout: 20_000 })
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-07-handoff.png') })
+
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('"Discard recording" kills the running convert, but the user is shown raw IPC error text', async () => {
+    test.setTimeout(240_000)
+    ensureScreenshots()
+    const root = makeRoot('abortsave')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'aborted.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+
+      // Long enough that the h264 encode of it is still running when the
+      // Discard click lands. A 1 s take converts faster than Playwright can
+      // click, which would make this test a coin flip.
+      await expect(window.getByText(/REC 00:0[89]/)).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      const bar = window.locator('div.bg-accent').first()
+      await expect(window.getByText('Finishing up — converting and writing to disk…')).toBeVisible({
+        timeout: 20_000
+      })
+
+      // Wait for the progress bar to leave its 2% floor. ffmpeg only emits
+      // `out_time` while it is actually encoding, so a moving bar is proof
+      // the child process is alive and there is something to cancel — that
+      // is what makes the click deterministic rather than a race.
+      await expect
+        .poll(
+          async () => {
+            const style = (await bar.getAttribute('style')) ?? ''
+            const m = /width:\s*(\d+)%/.exec(style)
+            return m?.[1] ? Number(m[1]) : 0
+          },
+          { timeout: 60_000, intervals: [100] }
+        )
+        .toBeGreaterThan(2)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-08-discard.png') })
+
+      await window.getByRole('button', { name: 'Discard recording' }).click()
+
+      // The convert really died: no mp4 was produced, the phase returns to
+      // idle, the streaming temp file is reaped, and nothing joins recents.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
+        timeout: 60_000
+      })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+      expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
+
+      // T-27 FINDING E1: the cancel really killed ffmpeg mid-encode, and the
+      // half-written mp4 is STILL SITTING at the path the user picked in the
+      // save dialog. `promoteTempWebm` reaps its own temp .webm in the
+      // finally block but never unlinks the output it asked ffmpeg to
+      // produce, so "Discard recording" leaves a file with the user's chosen
+      // name that no player can open (killed before the moov atom is
+      // written). Asserted as "present and unplayable" rather than "absent"
+      // so a future fix that unlinks it fails here and gets read.
+      expect(existsSync(outPath)).toBe(true)
+      let playable = false
+      try {
+        const partial = await probeFile(outPath)
+        playable = Number(partial.format?.duration ?? 0) > 0
+      } catch {
+        playable = false
+      }
+      expect(playable).toBe(false)
+
+      // T-27 FINDING E: the user asked to discard, and what they get is the
+      // rejected IPC's raw text — "Error invoking remote method
+      // 'recording:finalize': ... convert-to-mp4 exit signal SIGKILL: ..."
+      // with a tail of ffmpeg stderr. finalizeRecording's catch toasts
+      // `err.message` verbatim, and nothing on the way up recognises "the
+      // user cancelled this on purpose" as distinct from a real failure.
+      // Same defect shape as T-30's first-hop search error. Pinned in both
+      // halves: the leak is asserted, and so is the absence of the calm
+      // copy the discard-at-dialog branch next door already has.
+      const toasts = (await readToastLog(window)).join(' | ')
+      expect(toasts).toMatch(/Error invoking remote method|convert-to-mp4 exit|SIGKILL/)
+      expect(toasts).not.toContain('Recording discarded.')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('cancelling the save dialog discards the take, says so, and reaps the temp file', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('cancel')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, null)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('checkbox').nth(2).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // The discard branch has its own copy — it must not read as a failure.
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 60_000, intervals: [200] })
+        .toContain('Recording discarded.')
+
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 20_000 })
+      // Nothing was pushed to recents, and the partial webm is gone.
+      expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // ------------------------------------------------------------------
+  // 5. The capture-phase HomeLink intercept
+  // ------------------------------------------------------------------
+
+  test('leaving mid-recording is intercepted: dismissing the confirm keeps the take rolling', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('homelink')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, null)
+      await gotoRecordFromHome(window)
+
+      // Capture the confirm's own copy AND answer it. Playwright auto-dismisses
+      // when no handler is registered, which is the "Cancel keeps recording"
+      // branch — registering explicitly makes the copy assertable.
+      const dialogMessages: string[] = []
+      window.on('dialog', (d) => {
+        dialogMessages.push(d.message())
+        void d.dismiss()
+      })
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('checkbox').nth(2).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+
+      // Click Home WHILE recording. The capture-phase handler must swallow the
+      // router Link's click before it navigates.
+      await window.getByRole('link', { name: 'Home' }).click()
+
+      await expect
+        .poll(() => dialogMessages.join(' | '), { timeout: 15_000, intervals: [200] })
+        .toBe(
+          'A recording is in progress. Stop and save it before leaving? (Cancel keeps recording.)'
+        )
+
+      // Dismissed -> still on /record, still recording, take intact.
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible()
+      await expect(window.getByText(/REC \d\d:\d\d/)).toBeVisible()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toHaveCount(0)
+
+      // Stop it properly so the app closes cleanly.
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+
+      // And the intercept is recording-phase only: back at idle the same link
+      // navigates without a confirm.
+      const before = dialogMessages.length
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      expect(dialogMessages.length).toBe(before)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
