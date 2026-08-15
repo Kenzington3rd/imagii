@@ -267,17 +267,174 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Unit test for migration + persistence round trip.
 - **Status:** open
 
-## T-21..T-27 — full interaction coverage fleet (written after fixes land)
+## T-21 — coverage: Home, Welcome, and shared chrome
 
-- **Spec:** docs/INTERACTION_COVERAGE.md inventory edition; the standing
-  bar in CLAUDE.md. Per-studio E2E tickets driving every non-HL element
-  to its end state, plus unit-layer coverage for HL boundaries
-  (duckduckgo parser on fixture HTML, dialog-dependent IPC handlers),
-  dialog-handler tests for all 8 native confirms/prompts, download-event
-  tests for Image exports incl. the 3-file emote pack, and ledger
-  dispositions for every row. Detailed tickets are cut by the expediter
-  once T-08..T-20 land (selectors must be stable first).
-- **Status:** blocked on T-08..T-20
+- **Spec:** ledger rows Welcome(1), Home(15), Shared(21). All
+  headless-safe except project save/load (native dialogs).
+- **Acceptance criteria:**
+  - [ ] Welcome "Let's go" clicked for real once (no welcomeSeen seed in
+        that test): asserts settings write + Home renders.
+  - [ ] Global Undo/Redo buttons round-trip a change from each studio;
+        "last:" readout asserted.
+  - [ ] AutosaveRestore all five buttons: seeded good autosave ->
+        Restore rehydrates stores; Discard deletes file; Later dismisses;
+        seeded corrupt autosave -> Clear/Dismiss variants.
+  - [ ] Modal contract on at least two dialogs: Escape, scrim click,
+        focus trap (activeElement stays inside), focus restore to opener.
+  - [ ] Tutorial full run: Next-to-Done persists tutorialSeen; Skip does
+        NOT persist; Back works; scrim click ADVANCES (asserted as
+        designed); all four key bindings.
+  - [ ] RecentFilesMenu: toggle, pick loads file, clear empties setting,
+        Escape + click-outside dismiss (post-T-18).
+  - [ ] Project save/load dispositioned: IPC-layer tests + ledger rows
+        marked HL-dialog.
+  - [ ] Every touched ledger row gets its disposition filled.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-22 — coverage: Video Studio core editing surface
+
+- **Spec:** ledger Video 4a-4f, 4h, 4i, 4q. Post-T-15 (undo affordance)
+  and post-T-17 (nesting fixes) selectors.
+- **Acceptance criteria:**
+  - [ ] Player: play/pause, frame steps, safe-zones toggle, all seven
+        keyboard bindings incl. I/O markers moving Timeline handles.
+  - [ ] Timeline: both trim drags via mouse down/move/up; In/Length
+        readouts + store range asserted; undo reverses the drag
+        (post-T-15, in-studio).
+  - [ ] ClipList: add, select, rename (post-T-17 structure), speed
+        slider + reset, remove with confirm handler both branches.
+  - [ ] CropOverlay: enable, all five aspect presets, Rnd drag + resize
+        (store rect asserted), reset, uncheck-clears.
+  - [ ] ColorGrade: four sliders + reset + both checkboxes asserted in
+        store; OutputPreview platform select redraws (screenshot or
+        canvas hash delta).
+  - [ ] TextOverlayEditor: add, every field, remove (post-T-17).
+  - [ ] Studio chrome: Clean audio handoff (wav extract -> Audio Studio
+        navigation), Close confirm both branches, tutorial button.
+  - [ ] Ledger dispositions filled for every row in scope.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-23 — coverage: Video Studio pipelines and export surface
+
+- **Spec:** ledger Video 4g, 4j-4p, 4r-4t. Post-T-09/T-10 (working
+  highlights) and post-T-20 (diary in settings).
+- **Acceptance criteria:**
+  - [ ] ChatHighlightPanel: find spikes -> +clip -> ClipList row (pure
+        renderer path); parse-error negative with exact toast.
+  - [ ] HighlightPanel: scan a generated burst fixture -> candidates
+        rendered -> +Clip; chat-log rescoring; cancel mid-scan.
+  - [ ] CaptionsPanel not-ready branch (setup panel, refresh status);
+        with a seeded srtPath: style presets, font slider, position
+        select, color inputs, trim checkbox all asserted in store; save
+        .srt and burn-in dispositioned HL-dialog (burn-in itself is
+        Layer 5 covered).
+  - [ ] ExportPanel: multi-preset queue (2+ clips x presets), cancel
+        modal both branches, watermark + template inputs persisted,
+        safe-zone warning modal both branches (fixture that trips it),
+        per-row Show dispositioned HL-shell.
+  - [ ] CustomPresetManager: full CRUD with confirm handler; validation
+        toasts (negative: bad width) asserted exactly.
+  - [ ] ClipKit: cancel-confirm modal branches; run dispositioned
+        HL-dialog with IPC-layer coverage of makeKitDir/copySrtTo.
+  - [ ] Reframe/Gif/Compilation/PiP panels: all parameter controls
+        asserted in state; jobs dispositioned (Layer 5 covers the
+        runners; dir pickers HL) — cancel buttons E2E via seeded dirs
+        where feasible.
+  - [ ] PostChecklist: titles, hashtag pack select, platform toggles,
+        log post -> diary row (settings-backed post-T-20), delete
+        entry, perf inputs; copy buttons via granted clipboard
+        permission or dispositioned.
+  - [ ] Ledger dispositions filled for every row in scope.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-24 — coverage: Audio Studio full surface
+
+- **Spec:** ledger Audio(48) + PresetPanel post-T-14 + close-confirm
+  post-T-19.
+- **Acceptance criteria:**
+  - [ ] Import: drop wav (real load, waveform ready), recents, extract
+        path from a video drop; picker dispositioned HL.
+  - [ ] Waveform: play/pause, click-seek, region drag creates cut
+        (chip + store), chip removal, multiple cuts.
+  - [ ] Every chain control asserted in audioStore: denoise x5 +
+        parametric sliders, rumble/hum/de-ess, compressor x4, loudnorm
+        + LUFS + platform select interplay (custom detection), gain.
+  - [ ] Secondary track: role add via... pickers are HL — seed via
+        store or disposition; gain/match/duck + four duck sliders.
+  - [ ] FixWizard: full three-question run -> Apply reconfigures
+        Cleanup+Levels visibly; Start over; Escape resets.
+  - [ ] PresetPanel (post-T-14): save/apply/delete with confirm
+        handler; Enter-to-save.
+  - [ ] Undo/redo keys + buttons; Close confirm both branches
+        (post-T-19). Export dispositioned HL-dialog (Layer 5 covers
+        runAudioExport/mux).
+  - [ ] Ledger dispositions filled.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-25 — coverage: Image Studio full surface
+
+- **Spec:** ledger Image(66).
+- **Acceptance criteria:**
+  - [ ] Templates: empty-state card apply, dialog open/apply/cancel/
+        close/Escape/scrim.
+  - [ ] Tools: all five via buttons AND keyboard (V/R/O/L/P), +More
+        disclosure; draw-commit on the Konva stage for rect, ellipse,
+        line, pencil (layer count + LayerPanel row asserted via
+        __imagiiStage); grid/snap/grid-size affecting draw coords.
+  - [ ] Selection: shape click -> Transformer attaches; drag-end and
+        transform-end persist geometry; Delete/Backspace keys.
+  - [ ] LayerPanel: all six per-row buttons; PropertiesPanel: every
+        field incl. rotation presets x7 and text-layer fields.
+  - [ ] Import: drop (both states), Playwright filechooser for +Import,
+        +Add text; paste dispositioned HL-clipboard.
+  - [ ] Export: PNG and JPG via download events; emote-pack branch
+        asserts THREE downloads from one click; scale select affects
+        pixel dimensions of downloaded file; Variants generate ->
+        four tiles -> save one + save-all download counts.
+  - [ ] Undo/redo restores canvas doc across a draw + a delete.
+  - [ ] Ledger dispositions filled.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-26 — coverage: References + search parser
+
+- **Spec:** ledger References(20). Live DuckDuckGo is HL — the parser
+  gets unit coverage on fixture HTML instead.
+- **Acceptance criteria:**
+  - [ ] Tabs x3 switch panels; tutorial targets resolve (post-T-16).
+  - [ ] Mood boards: create (button + Enter), select, rename + delete
+        with prompt/confirm handlers, item remove, clear thumb cache
+        (store emptied on disk), ->Canvas bridge asserts navigation +
+        overlay layer at 0.4 opacity in canvasStore.
+  - [ ] Asset Library: card click replaces canvas doc + navigates;
+        at least two categories exercised.
+  - [ ] duckduckgo.ts: unit tests on saved fixture HTML — happy parse,
+        malformed HTML, vqd-missing, empty results; searchValidate
+        rejection paths asserted by exact reason.
+  - [ ] Search UI: error-path E2E (network blocked) asserting the
+        error card copy; live search dispositioned HL-network.
+  - [ ] Ledger dispositions filled.
+- **Status:** open (blocked on T-13..T-20 merge)
+
+## T-27 — coverage: Record Studio reachable subset + dispositions
+
+- **Spec:** ledger Record(17), 13 HL. The capture pipeline cannot run
+  headless; everything around it can.
+- **Acceptance criteria:**
+  - [ ] UI wiring: mic/webcam checkboxes reveal selects; corner select
+        persists record.webcamCorner; convert checkbox state; refresh
+        sources button surfaces the empty-sources state gracefully
+        (assert no crash + user-visible message).
+  - [ ] compositor.ts already unit-tested — extend if corner math
+        uncovered branches exist.
+  - [ ] HomeLink capture-phase confirm: dispositioned (requires
+        recording phase) with the confirm copy pinned in a unit test if
+        extractable.
+  - [ ] Every HL row dispositioned: desktopCapturer/MediaRecorder/
+        devices/save-dialog/shell marked for the Windows hand-test
+        checklist with exact steps.
+  - [ ] Ledger dispositions filled; a docs section lists the manual
+        Windows verification steps for the capture pipeline.
+- **Status:** open (blocked on T-13..T-20 merge)
 
 ---
 
