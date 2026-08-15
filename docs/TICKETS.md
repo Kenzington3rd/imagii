@@ -700,6 +700,31 @@ IMG-PREC.
   usability ruling applies (user expects a discard, not a crash).
 - **Status:** open
 
+## T-45 — P1: image exports render at screen zoom, not document size
+
+- **Spec:** T-25 findings BUG-EXPORT-ZOOM + BUG-EMOTE-SIZES (same root).
+  ExportDialog captures stage.width() = doc.width x fit-to-container
+  zoom, so a 1280x720 template exports at 956x537 at "1x" and the size
+  varies with the window. The emote pack inherits it and hits the 4x
+  zoom cap: labeled 28/56/112, actually 112/224/448 — Twitch rejects.
+  Pinned in image.spec.ts (dimension pin + emote tripwire).
+- **Acceptance criteria:**
+  - [ ] Export pixelRatio computed against doc dimensions (independent
+        of window size); "1x" emits exactly doc.width x doc.height.
+  - [ ] Emote pack emits exactly 28/56/112; tripwire flipped.
+  - [ ] Window-resize invariance asserted (two sizes, same bytes-dims).
+  - [ ] LESSONS entry. Usability ruling: the labels are the promise.
+- **Status:** open (P1)
+
+## T-46 — variants dialog shows stale previews of a dead canvas
+
+- **Spec:** T-25 BUG-VARIANTS-STALE. previews state survives close, so
+  reopening after canvas changes shows renders of a canvas that no
+  longer exists and hides the Generate button.
+- **Acceptance criteria:** reopen regenerates or clears (Generate
+  visible); stale pin flipped.
+- **Status:** open
+
 ---
 
 ## Done
