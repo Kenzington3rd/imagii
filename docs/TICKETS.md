@@ -897,7 +897,7 @@ IMG-PREC.
         `defaultExportScale`'s doc comment, whose "match what the user
         sees" rationale described the bug T-45 removed.
   - [ ] LESSONS entry.
-- **Status:** open (P1)
+- **Status:** done (round 29 — see Done)
 
 ## T-54 — exports drop the document background
 
@@ -962,6 +962,29 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 29 — fix wave batch 3: T-53 (P1 editor chrome in exports).
+Canvas.tsx names its two editor-only stage layers with Konva's
+whole-token tag (`grid chrome`, `overlay chrome`); captureDocument
+hides every `hasName('chrome')` layer for the capture and restores
+each layer's PRIOR visibility in the finally (never a blanket
+show-all), with the scale mutation moved inside the try so a throw
+can't strand a neutralised stage. Exclusion is enumerated, not
+inferred: a future editor layer becomes export-invisible the moment it
+carries the tag. No-flicker argued from Konva source (hide/capture/
+restore is one synchronous block; redraw is rAF-deferred) and asserted
+observably in E2E. Red-green: the new four-way byte-comparison test
+failed on the unfixed build with all three chrome states leaking, green
+after. Riders: dead getStageDataUrl deleted (grep-verified zero
+importers — it was the last raw stage.toDataURL() outside
+ThumbnailVariants); defaultExportScale's comment rewritten in
+post-T-45 terms. Expedited by Fable: 790 unit / 100 E2E (one T-55
+roaming flake — same audio drag test, green standalone, image suite
+18/18); overlay-tag mutation re-executed personally (exactly the two
+"selected" cases red — the inverse half of the worker's grid-tag
+proof), byte-level restore verified by diff stat and green re-run.
+T-54 confirmed from the render tree side (background is CSS, not a
+node — needs an explicit fill, not visibility work).
 
 Round 28 — fix wave batch 2: T-45 (P1 image exports). Exports now
 render at DOCUMENT resolution via `captureDocument` (neutralise the

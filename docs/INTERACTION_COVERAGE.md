@@ -142,8 +142,10 @@ Also noted, not ticketed: Tutorial's scrim click ADVANCES rather than
 dismisses (Tutorial.tsx:121) — by design, but tests must not click the
 scrim to escape; Image emote-pack export (112x112 + PNG) silently emits
 three files from one click (ExportDialog.tsx:77-89) — intended feature,
-needs coverage; Canvas.tsx:446 exports getStageDataUrl() that nothing
-imports.
+covered by T-25 (round 26). The orphaned getStageDataUrl() this note
+used to flag was deleted in round 29 (T-53 rider) — it was the last raw
+stage.toDataURL() outside ThumbnailVariants, i.e. a ready-made way to
+reintroduce T-45/T-53.
 
 ---
 
@@ -640,6 +642,25 @@ Seeking works, so the seek rows stop being request-level:
   the dimension tests stay green — dimensions alone cannot catch zoom
   leaking into content, which is why this row exists.
 - Known remaining capture defects, ticketed: [T-53 P1] Transformer
-  handles + grid layers bake into export bytes; [T-54] doc background
-  dropped (transparent PNG / black JPG); [T-46 extended] variants save
-  path still captures at screen zoom, unpinned today.
+  handles + grid layers bake into export bytes — FIXED round 29, see
+  below; [T-54] doc background dropped (transparent PNG / black JPG);
+  [T-46 extended] variants save path still captures at screen zoom,
+  unpinned today.
+
+## Dispositions — round 29 (fix wave batch 3: T-53)
+
+- **Image · Export button + Scale select:** end state extends from
+  document-SIZE bytes (round 28) to document-CONTENT bytes — the PNG is
+  identical whatever the selection or grid state. Canvas.tsx tags its
+  two editor layers `chrome` (grid, overlay/Transformer);
+  captureDocument switches them off for the capture and restores each
+  layer's PRIOR flag in the finally.
+- **Image · Grid checkbox / Selection + Transformer:** each gains an
+  export-side end state — visible on canvas, absent from the file.
+- **New row:** image.spec.ts "editor chrome stays out of the file:
+  selection and grid leave the bytes alone" — four-way byte comparison
+  (baseline / selected / grid on / both) with a determinism guard, plus
+  chrome-restored assertions after every capture. Discrimination proven
+  from BOTH halves: worker dropped the grid tag (exactly the two grid
+  cases red), expediter dropped the overlay tag (exactly the two
+  selected cases red).
