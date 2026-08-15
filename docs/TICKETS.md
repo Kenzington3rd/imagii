@@ -479,6 +479,80 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         copy exactly.
 - **Status:** open
 
+## T-31 — Home never mounts the toast surface
+
+- **Spec:** T-21 finding A. Every studio mounts AppToaster; Home does
+  not, so "Project saved/loaded", "Restored from autosave", "Autosave
+  discarded." and all four error toasts on Home are dispatched into a
+  page that never renders them.
+- **Acceptance criteria:**
+  - [ ] AppToaster mounted once at the app level (App.tsx) and the
+        per-studio duplicates removed, or Home gains it — whichever the
+        ladder favors after reading why it was per-studio.
+  - [ ] E2E: a Home toast (e.g. Restore) is visible; flip T-21's
+        finding-A contrast into a positive.
+  - [ ] LESSONS entry.
+- **Status:** open
+
+## T-32 — Home global undo cannot see studio work; Redo never enables
+
+- **Spec:** T-21 findings B+C. useGlobalUndo's tracker only arms on
+  store mutations while Home is mounted, and its own undo() suppresses
+  the re-render that would refresh canUndo/canRedo — Redo is unreachable
+  through the UI.
+- **Acceptance criteria:**
+  - [ ] Tracker survives route changes (module-level or store-level
+        last-change record) so edits in any studio arm Home's Undo.
+  - [ ] Enablement refreshes after undo/redo clicks; Redo reachable.
+  - [ ] Flip T-21's two defect tests into positives (cross-route undo;
+        redo re-applies).
+  - [ ] LESSONS entry.
+- **Status:** open
+
+## T-33 — corrupt-autosave banner is dead code (info shape mismatch)
+
+- **Spec:** T-21 finding D. AutosaveRestore gates the corruption UI on
+  info.ageMs, which main/autosave.ts omits exactly when validation
+  fails — so a corrupt autosave renders nothing: no banner, no Clear,
+  no "Last autosave:" line.
+- **Acceptance criteria:**
+  - [ ] Corrupt autosave surfaces the corruption banner with working
+        Clear + Dismiss (pick the field contract deliberately and pin
+        it in tests/unit/autosaveCorruptInfo.test.ts, which currently
+        pins the mismatch).
+  - [ ] Flip T-21's "offers nothing" defect test into the positive
+        banner path.
+  - [ ] LESSONS entry.
+- **Status:** open
+
+## T-34 — tutorial tooltips overflow the window; Enter double-advances
+
+- **Spec:** T-21 findings E+F. Tooltip clamping exists only for
+  top/bottom placements — left/right can render offscreen (Video step 2
+  buttons unclickable at 1280px; 8 steps across the four tutorials use
+  left/right). Enter's keydown advances, then focus lands on Next and
+  the default action advances again.
+- **Acceptance criteria:**
+  - [ ] Clamp all placements into the viewport; E2E asserts the
+        coachmark's buttons are clickable on a left/right step at
+        1280x800.
+  - [ ] Enter advances exactly one step (preventDefault or focus
+        sequencing); T-21's counter-based test updated to pin one-step.
+  - [ ] LESSONS entry.
+- **Status:** open
+
+## T-35 — ErrorBoundary coverage (forced renderer crash)
+
+- **Spec:** T-21 dispositioned ErrorBoundary as NOT COVERED — needs a
+  deliberately induced render throw.
+- **Acceptance criteria:**
+  - [ ] A test route/flag or component-level unit harness that forces a
+        render error; asserts the fallback renders (raw-hex exception
+        styling intact), details disclosure expands, "Reload to Home"
+        recovers to a working Home.
+  - [ ] Ledger row updated from NOT COVERED.
+- **Status:** open
+
 ---
 
 ## Done
