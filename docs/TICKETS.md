@@ -722,6 +722,11 @@ Wave B findings slot in by the same usability ruling:
 - **T-52** (timeline click-to-scrub + seek edges, filed round 27) runs
   right after T-45: with seeking fixed, the un-clickable timeline is
   the most visible affordance gap in the app.
+- **T-53** (P1, filed round 28: selection handles and grid baked into
+  export bytes) joins the P1 tier — wrong pixels in the deliverable
+  beat every polish item. **T-54** (background dropped from exports)
+  follows it; **T-55** (suite contention flake) is test infrastructure
+  and can run any time a worker is otherwise idle.
 
 Every fix flips its pin; every flip is red-green evidenced; LESSONS per
 IMG-PREC.
@@ -782,15 +787,22 @@ IMG-PREC.
   - [ ] Emote pack emits exactly 28/56/112; tripwire flipped.
   - [ ] Window-resize invariance asserted (two sizes, same bytes-dims).
   - [ ] LESSONS entry. Usability ruling: the labels are the promise.
-- **Status:** open (P1)
+- **Status:** done (round 28 — see Done)
 
-## T-46 — variants dialog shows stale previews of a dead canvas
+## T-46 — variants dialog shows stale previews of a dead canvas, and saves at screen zoom
 
 - **Spec:** T-25 BUG-VARIANTS-STALE. previews state survives close, so
   reopening after canvas changes shows renders of a canvas that no
-  longer exists and hides the Generate button.
+  longer exists and hides the Generate button. EXTENDED round 28: the
+  T-45 worker probed that `ThumbnailVariants.tsx:118` has the same
+  screen-zoom capture bug T-45 just fixed in ExportDialog — saving the
+  "Warm" variant of a 1280x720 template writes 956x537, and the
+  existing variants test only asserts `w > 0`, so nothing pins it.
+  `captureDocument` is exported from ExportDialog.tsx and fixes it in
+  one line.
 - **Acceptance criteria:** reopen regenerates or clears (Generate
-  visible); stale pin flipped.
+  visible); stale pin flipped; variant saves go through
+  `captureDocument` and a dimension pin asserts doc-size bytes.
 - **Status:** open
 
 ## T-48 — chat highlight "+ clip" reports success for a clip it never adds
@@ -864,6 +876,67 @@ IMG-PREC.
   - [ ] Ledger rows for the new interactive surface in the same PR.
 - **Status:** open
 
+## T-53 — P1: selection handles and the grid are baked into image exports
+
+- **Spec:** T-45 worker finding, probed on the fixed build. Konva's
+  `Stage._toKonvaCanvas` draws ALL visible layers, and Canvas.tsx puts
+  the Transformer (selection handles/border) and the grid overlay in
+  stage layers — so exporting with a layer selected, or with Grid
+  checked, writes them into the PNG/JPG bytes. Reachable from the
+  default flow: select a shape, hit Export. The canvas-vs-export bytes
+  differ exactly by the chrome.
+- **Acceptance criteria:**
+  - [ ] Exports (single, emote pack, and variants once T-46 routes
+        them through `captureDocument`) exclude the Transformer and
+        grid layers — hide-for-capture inside `captureDocument` (same
+        neutralise-and-restore pattern, `finally`-guarded).
+  - [ ] E2E: export with a selection and with Grid on produces bytes
+        identical to the deselected/grid-off export of the same doc.
+  - [ ] Riders (same files, deletion over addition): remove the dead
+        `Canvas.tsx:446 getStageDataUrl()` (zero callers); refresh
+        `defaultExportScale`'s doc comment, whose "match what the user
+        sees" rationale described the bug T-45 removed.
+  - [ ] LESSONS entry.
+- **Status:** open (P1)
+
+## T-54 — exports drop the document background
+
+- **Spec:** T-45 worker finding. `doc.background` is a CSS style on
+  the stage element, not a Konva layer, so no export captures it: PNGs
+  come out transparent and JPGs composite onto black, while the canvas
+  shows the template's background (e.g. the thumbnail templates'
+  dark fill). Usability ruling: the user expects what the canvas
+  shows. Nuance: the emote pack and overlay-style docs WANT
+  transparency — that is the point of an emote.
+- **Acceptance criteria:**
+  - [ ] Exports paint `doc.background` behind the layers (PNG and
+        JPG); the emote-pack path stays transparent; if a per-export
+        "transparent background" choice is added, it defaults to
+        matching the canvas.
+  - [ ] E2E samples a background pixel from the exported bytes both
+        ways.
+- **Status:** open
+
+## T-55 — full-suite E2E runs drop one roaming test under runner contention
+
+- **Spec:** observed across rounds 27-28: full-suite runs (99 tests,
+  ~2.3m) intermittently fail exactly one mouse-timing test — a
+  different one each run (video-core trim drag, audio waveform drag,
+  references tabs) — and every one is green standalone and in-file,
+  across two workers' runs and the expediter's. The runner hosts
+  several concurrent agent sessions; video-pipelines.spec.ts's header
+  documents observed 50-100x slowdowns. Cost: every expedite now burns
+  a re-run to discriminate flake from regression.
+- **Acceptance criteria:**
+  - [ ] Identify the shared timing assumption in the drag/gesture
+        helpers (likely fixed-step mouse moves racing rAF-driven
+        layout) and replace with condition-based waits, matching the
+        deterministic-wait house style — no bare retries that would
+        mask real regressions, no sleeps.
+  - [ ] Ten consecutive full-suite runs green on a loaded box, or the
+        specific failing gestures hardened with evidence of the race.
+- **Status:** open
+
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
 
 - **Spec:** T-23 finding 5 — a per-platform capability gap, same class
@@ -889,6 +962,30 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 28 — fix wave batch 2: T-45 (P1 image exports). Exports now
+render at DOCUMENT resolution via `captureDocument` (neutralise the
+fit-to-container stage scale, pass the doc box explicitly, restore in
+a `finally`) — chosen over ratio compensation because Konva sizes the
+output canvas `width x pixelRatio`, so 112 x 0.25 is exactly 28 while
+the compensated quotient can truncate a pixel. Both export paths
+(single PNG/JPG, emote pack) go through it; on-screen rendering is
+untouched. Red-green: both round-26 pins went red with the exact
+pre-fix numbers after the rebuild (1280x720 delivered where 956x537
+was pinned; 28/56/112 where 112/224/448 was pinned; the emote
+tripwire's own named red captured), then flipped to positive
+assertions. New E2E: same doc exported at two window sizes is
+byte-identical. Unit 782 -> 786 (capture-at-scale-1, restore-on-throw,
+exact trio arithmetic). Expedited by Fable: 786 unit green; full suite
+run twice — each dropped ONE roaming mouse-timing test (audio drag,
+then references tabs), both green standalone and unreachable by this
+image-only diff, matching the contention signature two workers
+independently hit -> accepted as flake and ticketed T-55 rather than
+waved off. Worker findings verified and ticketed: T-53 (P1: Transformer
+handles + grid bake into export bytes — probed real), T-54 (background
+dropped from exports), T-46 extended (variants share the screen-zoom
+root cause, unpinned today). LESSONS: screen state leaking into
+deliverable bytes; the labels are the promise.
 
 Round 27 — fix wave batch 1: T-37 (P1 seeking). The protocol handler
 now serves bytes itself (streamed fs read, RFC 9110 Range semantics:

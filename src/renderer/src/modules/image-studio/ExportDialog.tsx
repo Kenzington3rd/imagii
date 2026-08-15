@@ -38,6 +38,58 @@ export function defaultExportScale(dpr: number): number {
 // template via the canvas dimensions (112x112) and emit all three on Export.
 const EMOTE_PACK_SIZES = [28, 56, 112] as const
 
+/** The slice of the Konva stage the export path drives. */
+interface ExportStage {
+  scaleX(): number
+  scaleY(): number
+  scale(value: { x: number; y: number }): void
+  toDataURL: (opts: {
+    mimeType?: string
+    quality?: number
+    pixelRatio?: number
+    width?: number
+    height?: number
+  }) => string
+}
+
+/**
+ * Render the stage at DOCUMENT resolution: exactly `width * pixelRatio` by
+ * `height * pixelRatio` pixels, whatever size the window happens to be.
+ *
+ * T-45. The on-screen stage is scaled to fit its container (Canvas.tsx:168),
+ * so a bare `stage.toDataURL({ pixelRatio })` renders `stage.width()` — which
+ * is `doc.width * fitZoom` — and every export came out the size of the
+ * viewport instead of the size of the document: a 1280x720 template landed at
+ * 956x537 at "1x" and changed with the window, and the 112x112 emote doc,
+ * pinned to the 4x zoom cap, wrote 112/224/448 under filenames promising
+ * 28/56/112. The labels are the promise; this is what makes them true.
+ *
+ * Neutralising the stage scale for the capture and passing the document box
+ * explicitly takes the zoom out of the arithmetic rather than compensating
+ * for it: Konva sizes the output canvas `width * pixelRatio`
+ * (Stage._toKonvaCanvas), so 112 x 0.25 is exactly 28 instead of a float
+ * quotient that can truncate a pixel away.
+ *
+ * Nothing the user can see is touched: Konva renders into a fresh off-screen
+ * canvas, the restore is synchronous, and Konva's own redraw is rAF-deferred,
+ * so it never observes the neutralised scale.
+ */
+export function captureDocument(
+  stage: ExportStage,
+  width: number,
+  height: number,
+  opts: { mimeType: string; quality: number; pixelRatio: number }
+): string {
+  const scaleX = stage.scaleX()
+  const scaleY = stage.scaleY()
+  stage.scale({ x: 1, y: 1 })
+  try {
+    return stage.toDataURL({ ...opts, width, height })
+  } finally {
+    stage.scale({ x: scaleX, y: scaleY })
+  }
+}
+
 export function ExportDialog(): JSX.Element {
   const doc = useCanvasStore((s) => s.doc)
   const [format, setFormat] = useState<FormatOption>('png')
@@ -53,17 +105,7 @@ export function ExportDialog(): JSX.Element {
   async function exportImage(): Promise<void> {
     setBusy(true)
     try {
-      const stage = (
-        window as unknown as {
-          __imagiiStage?: {
-            toDataURL: (opts: {
-              mimeType?: string
-              quality?: number
-              pixelRatio?: number
-            }) => string
-          }
-        }
-      ).__imagiiStage
+      const stage = (window as unknown as { __imagiiStage?: ExportStage }).__imagiiStage
       if (!stage) {
         toast.error('Canvas not ready')
         return
@@ -71,23 +113,23 @@ export function ExportDialog(): JSX.Element {
       const mime = format === 'png' ? 'image/png' : 'image/jpeg'
       // INIT-B (round 15): emote pack auto-export. When the canvas is the
       // Twitch emote template's native 112×112, emit the full 28/56/112 trio
-      // so the user gets the upload-ready pack in one click. The pixelRatio
-      // trick on a 112×112 base yields the smaller sizes (28 = 0.25, 56 =
-      // 0.5, 112 = 1).
+      // so the user gets the upload-ready pack in one click. Against the
+      // document box (T-45) the pixelRatio is exact: 28 = 0.25, 56 = 0.5,
+      // 112 = 1, so the bytes carry the sizes the filenames promise.
       if (doc.width === 112 && doc.height === 112 && format === 'png') {
         const stamp = Date.now()
         for (const size of EMOTE_PACK_SIZES) {
-          const dataUrl = stage.toDataURL({
+          const dataUrl = captureDocument(stage, doc.width, doc.height, {
             mimeType: 'image/png',
             quality,
-            pixelRatio: size / 112
+            pixelRatio: size / doc.width
           })
           downloadDataUrl(dataUrl, `imagii-emote-${size}-${stamp}.png`)
         }
         toast.success(`Emote pack saved (3 PNGs: 28, 56, 112)`)
         return
       }
-      const dataUrl = stage.toDataURL({
+      const dataUrl = captureDocument(stage, doc.width, doc.height, {
         mimeType: mime,
         quality,
         pixelRatio: scale

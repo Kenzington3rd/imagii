@@ -60,23 +60,20 @@ const __dirname = path.dirname(__filename)
  *    item to a temp dir, so every export assertion below lands on real bytes —
  *    a deeper end state than a download event object.
  *
- * ── Product findings (each asserted where it bites, none fixed here) ────
+ * ── Product findings ───────────────────────────────────────────────────
  *
- * BUG-EXPORT-ZOOM — exports are the size of the on-screen stage, not the
- * document. `Stage.toDataURL({pixelRatio})` renders the stage at its own
- * width/height, and the stage is `doc.width * stageScale` where stageScale is
- * a fit-to-container zoom. A 1280x720 template exported at "1x" therefore
- * lands as 956x537 in this window, and would land as something else in a
- * window of a different width. Pinned in `png export writes real bytes…`.
- *
- * BUG-EMOTE-SIZES — the emote pack inherits BUG-EXPORT-ZOOM and multiplies it:
- * a 112x112 emote hits the 4x zoom cap, so the "28 / 56 / 112" trio the toast
- * promises is written as 112 / 224 / 448. One click still emits three files.
- * Pinned in `emote pack…` with a tripwire that fails when the sizes are fixed.
+ * BUG-EXPORT-ZOOM and BUG-EMOTE-SIZES were raised here as defect pins —
+ * exports came out at the size of the on-screen stage (`doc.width *
+ * fit-to-container zoom`), so a 1280x720 template wrote 956x537 at "1x" and
+ * the 112x112 emote doc, pinned to the 4x zoom cap, wrote 112/224/448 under
+ * filenames promising 28/56/112. FIXED in T-45 (ExportDialog.tsx
+ * `captureDocument`); the pins are now the positive assertions in `PNG and
+ * JPG export real bytes…`, `emote pack…` and `the export is the document, not
+ * the window…`, which is the window-resize invariance proof.
  *
  * BUG-VARIANTS-STALE — the variants dialog keeps its previews across a close,
  * so reopening it shows renders of a canvas that may no longer exist, with no
- * Generate button in sight. Pinned in `variants: …`.
+ * Generate button in sight. Pinned in `variants: …` (open as T-46).
  *
  * ── Mutation proofs (run by hand, restored byte-identical afterwards) ───
  *
@@ -243,6 +240,24 @@ async function installDownloadCapture(app: ElectronApplication, dir: string): Pr
       })
     })
   }, dir)
+}
+
+/**
+ * Resize the REAL OS window. Playwright's viewport controls do nothing to an
+ * Electron window, so this goes through `BrowserWindow` in the main process —
+ * the same resize a user dragging the window corner performs, which is what
+ * moves Canvas.tsx's fit-to-container zoom.
+ */
+async function setWindowSize(
+  app: ElectronApplication,
+  width: number,
+  height: number
+): Promise<void> {
+  await app.evaluate(({ BrowserWindow }, size) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) throw new Error('no BrowserWindow to resize')
+    win.setSize(size.width, size.height)
+  }, { width, height })
 }
 
 function completedDownloads(app: ElectronApplication): Promise<string[]> {
@@ -1317,36 +1332,30 @@ test.describe('Image Studio — export', () => {
         .toContain('PNG saved')
       expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-\d+\.png$/)
 
-      // T-25 FINDING (BUG-EXPORT-ZOOM): the PNG is the size of the on-screen
-      // stage, not of the document. `Stage.toDataURL` renders `stage.width()`,
-      // which is `doc.width * fit-to-container zoom` (Canvas.tsx:168-174), so
-      // the same click in a wider window writes a bigger file. A user
-      // exporting the 1280x720 "YouTube · Bold thumbnail" gets neither 1280
-      // wide nor a stable size across window sizes.
-      expect(size1).toEqual({
-        w: Math.trunc(geom.stageW),
-        h: Math.trunc(geom.stageH)
-      })
-      expect(size1.w).not.toBe(t.doc.width)
+      // T-45: "1×" means one document pixel per exported pixel. The on-screen
+      // stage is a fit-to-container render (Canvas.tsx:168-174) and is NOT the
+      // document size here — asserted first, so every dimension below is a
+      // claim about the export math and not an accident of this window.
+      expect(geom.stageW, 'the stage is zoomed, not 1:1').not.toBe(t.doc.width)
+      expect(size1).toEqual({ w: t.doc.width, h: t.doc.height })
 
-      // ── scale 2x: same click, exactly twice the pixels ──
+      // ── scale 2x: same click, exactly twice the document ──
       await clearDownloads(studio.app)
       await exportPanel.getByLabel('Scale').selectOption('2')
       await exportButton.click()
       const [png2] = await waitForDownloads(studio, 1)
       const size2 = pngSize(png2 as Buffer)
-      expect(size2).toEqual({
-        w: Math.trunc(geom.stageW * 2),
-        h: Math.trunc(geom.stageH * 2)
-      })
-      expect(size2.w).toBeGreaterThan(size1.w)
+      expect(size2).toEqual({ w: t.doc.width * 2, h: t.doc.height * 2 })
 
       // ── scale 0.5x, the other end of the picker ──
       await clearDownloads(studio.app)
       await exportPanel.getByLabel('Scale').selectOption('0.5')
       await exportButton.click()
       const [pngHalf] = await waitForDownloads(studio, 1)
-      expect(pngSize(pngHalf as Buffer).w).toBe(Math.trunc(geom.stageW * 0.5))
+      expect(pngSize(pngHalf as Buffer)).toEqual({
+        w: t.doc.width * 0.5,
+        h: t.doc.height * 0.5
+      })
 
       // ── JPG: format select swaps the encoder and reveals the quality slider ──
       await clearDownloads(studio.app)
@@ -1407,22 +1416,16 @@ test.describe('Image Studio — export', () => {
       ])
       const sizes = files.map((f) => pngSize(f as Buffer))
 
-      // T-25 FINDING (BUG-EMOTE-SIZES): the pixel sizes are wrong. Each file is
-      // rendered at `pixelRatio = size/112` off a stage that is already zoomed
-      // to fit (here the 4x cap, Canvas.tsx:167), so the pack lands at
-      // 112/224/448 instead of 28/56/112 — the filenames and the toast both
-      // promise sizes the bytes do not have. Twitch rejects the upload.
-      expect(sizes.map((s) => s.w)).toEqual([
-        Math.trunc((geom.stageW * 28) / 112),
-        Math.trunc((geom.stageW * 56) / 112),
-        Math.trunc((geom.stageW * 112) / 112)
-      ])
-      // Tripwire: fixing BUG-EXPORT-ZOOM makes this line fail, which is the
-      // point — the pack should be exactly [28, 56, 112] and today is not.
-      expect(sizes.map((s) => s.w)).not.toEqual([28, 56, 112])
-      // What IS right today: three distinct files in the 1:2:4 ratio.
-      expect(sizes[1]!.w).toBe(sizes[0]!.w * 2)
-      expect(sizes[2]!.w).toBe(sizes[0]!.w * 4)
+      // T-45: the bytes carry the sizes the filenames and the toast promise.
+      // This doc sits at the 4x zoom cap (Canvas.tsx:167) — 112 document px
+      // are drawn as 448 screen px — which is exactly the zoom that used to
+      // leak into the capture and write 112/224/448. Asserting the cap is
+      // really engaged first is what makes the trio below a claim about the
+      // export math rather than a coincidence of window size.
+      expect(geom.stageW, 'the on-screen stage really is magnified').toBeGreaterThan(t.doc.width)
+      expect(sizes.map((s) => s.w)).toEqual([28, 56, 112])
+      expect(sizes.map((s) => s.h)).toEqual([28, 56, 112])
+      // Three distinct renders, not one file written three times.
       expect(new Set(files.map((f) => (f as Buffer).length)).size).toBe(3)
 
       // JPG on the same doc takes the ordinary single-file path.
@@ -1433,6 +1436,59 @@ test.describe('Image Studio — export', () => {
       expect(single).toHaveLength(1)
       expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-\d+\.jpg$/)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-09-emote.png') })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the export is the document, not the window: two window sizes, same bytes', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('export-resize')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportPanel.getByLabel('Scale').selectOption('1')
+
+      /** Resize, wait for the stage to re-fit, export, return bytes + zoom. */
+      async function exportAtWindowSize(
+        w: number,
+        h: number
+      ): Promise<{ bytes: Buffer; stageW: number }> {
+        const previous = (await stageGeom(window)).stageW
+        await setWindowSize(studio.app, w, h)
+        // The ResizeObserver in Canvas.tsx re-fits the stage asynchronously;
+        // waiting for the zoom to actually MOVE is what makes this a real
+        // second window size rather than the same one measured twice.
+        await expect
+          .poll(async () => (await stageGeom(window)).stageW, { timeout: 20_000, intervals: [100] })
+          .not.toBe(previous)
+        await clearDownloads(studio.app)
+        await exportButton.click()
+        const [bytes] = await waitForDownloads(studio, 1)
+        return { bytes: bytes as Buffer, stageW: (await stageGeom(window)).stageW }
+      }
+
+      // Both sizes clear the 1024x640 window minimum (src/main/index.ts:68).
+      const narrow = await exportAtWindowSize(1100, 700)
+      const wide = await exportAtWindowSize(1560, 980)
+
+      // The window really is showing the canvas at two different zooms…
+      expect(wide.stageW).toBeGreaterThan(narrow.stageW)
+      expect(narrow.stageW).not.toBe(t.doc.width)
+      expect(wide.stageW).not.toBe(t.doc.width)
+
+      // …and neither zoom reaches the file. Same dimensions, byte for byte
+      // the same PNG: the capture never sees the on-screen scale at all.
+      expect(pngSize(narrow.bytes)).toEqual({ w: t.doc.width, h: t.doc.height })
+      expect(pngSize(wide.bytes)).toEqual({ w: t.doc.width, h: t.doc.height })
+      expect(
+        wide.bytes.equals(narrow.bytes),
+        'same document, same pixels, regardless of window size'
+      ).toBe(true)
     } finally {
       await closeStudio(studio)
     }

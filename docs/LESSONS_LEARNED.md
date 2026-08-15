@@ -14,6 +14,78 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-45: image exports rendered at screen zoom, not document size
+
+### Bug — "1×" meant "whatever size the window happens to be"
+- **Root cause.** `ExportDialog` captured the canvas with
+  `stage.toDataURL({ pixelRatio })`. Konva renders a stage at its own
+  `width()`/`height()`, and Canvas.tsx sizes the stage to
+  `doc.width * stageScale` where `stageScale` is a fit-to-container
+  zoom capped at 4×. The document was never in the export arithmetic at
+  all — only the viewport was. A 1280×720 template exported at "1×"
+  landed as 956×537 in one window and 711×400 in a narrower one, so the
+  same click produced a different file depending on how the user had
+  dragged the window corner. The emote pack inherited it and multiplied
+  it: a 112×112 document sits pinned to the 4× cap, so
+  `pixelRatio = size/112` off a 448 px stage wrote 112/224/448 under the
+  filenames `imagii-emote-28/56/112` and a toast reading
+  "Emote pack saved (3 PNGs: 28, 56, 112)". Twitch rejects those
+  uploads. Both shipped green: the unit tests covered
+  `defaultExportScale`, which is a different question entirely, and the
+  export path had no test that looked at the bytes.
+- **Fix.** One helper, `captureDocument` in `ExportDialog.tsx`: read the
+  stage's scale, set it to 1, capture with the document box passed
+  explicitly (`width: doc.width, height: doc.height`), restore the scale
+  in a `finally`. Konva sizes the output canvas `width * pixelRatio`
+  (`Stage._toKonvaCanvas`), so the export is exactly
+  `doc.width × doc.height` at 1×, and the emote trio is exactly
+  28/56/112 — `112 × 0.25` rather than a quotient of two floats that can
+  truncate a pixel away. Both export paths (single PNG/JPG and the emote
+  pack) go through it. Neutralising the zoom rather than compensating for
+  it was the deciding detail: the compensating form,
+  `pixelRatio × (doc.width / stage.width())`, is arithmetically right and
+  numerically fragile, and "exactly 28" is the whole acceptance
+  criterion. Nothing on screen is touched — Konva renders into a fresh
+  off-screen canvas, the restore is synchronous, and Konva's own redraw
+  is `requestAnimationFrame`-deferred, so it never observes the
+  neutralised scale.
+- **Test.** `tests/e2e/image.spec.ts` — the two T-25 defect pins flipped
+  to positive assertions on PNG header dimensions read off bytes on
+  disk: "PNG and JPG export real bytes…" now asserts
+  `1280×720 / 2560×1440 / 640×360` for 1×/2×/0.5× (and the JPG path
+  matching), "emote pack…" asserts `[28, 56, 112]` on both axes, and
+  each first asserts the stage IS zoomed so the claim cannot pass by
+  coincidence. New: "the export is the document, not the window: two
+  window sizes, same bytes" resizes the real `BrowserWindow` to
+  1100×700 and 1560×980, waits for the fit-to-container zoom to move,
+  and asserts the two PNGs are byte-identical.
+  `src/renderer/src/modules/image-studio/ExportDialog.test.ts` covers
+  the helper's contract: the document box is what Konva is asked for,
+  the capture happens at scale 1, the on-screen zoom is restored even
+  when `toDataURL` throws. Red-green both ways: on the pre-fix build the
+  pins passed as pinned and the tripwire read "Expected: not
+  [28, 56, 112]" once the fix landed; dropping the explicit box put
+  956×537 and 112/224/448 straight back, and dropping only the scale
+  neutralisation kept the dimensions right while the two windows'
+  payloads diverged — which is what the byte-equality assertion is for.
+- **Lesson.** **View state must not appear in output math.** A zoom, a
+  scroll offset, a device pixel ratio and a preview size are properties
+  of the window the user happens to have open; a file's dimensions are a
+  property of the document. When a capture API renders "the thing on
+  screen", the export path's job is to take the screen back out of it —
+  neutralise the view transform and state the output box explicitly,
+  rather than multiplying by a correction factor and hoping the floats
+  land. And per the owner's usability tiebreaker: a control labelled
+  "1×", a filename reading `-28-`, and a toast promising "28, 56, 112"
+  are the product's promise. When the bytes disagree with the label, the
+  bytes are the bug — the label does not get quietly redefined to
+  whatever the code already did. What made this invisible for so long is
+  that string-shape and pure-helper tests cannot see it: only a test
+  that reads the PNG header off a downloaded file can tell 1280 from
+  956.
+
+---
+
 ## 2026-08-15 — T-37: `net.fetch(file://…)` made every video unseekable
 
 ### Bug — the playhead could only ever be at 0

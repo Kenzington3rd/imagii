@@ -623,3 +623,23 @@ Seeking works, so the seek rows stop being request-level:
   playhead but takes no click — click-to-scrub does not exist; plus two
   seek edges (source-change playhead reset, tail nudge clamping to the
   ffprobe duration ~20 ms short of the element's).
+
+## Dispositions — round 28 (fix wave batch 2: T-45)
+
+- **Image · Export button (PNG/JPG) + Scale select:** end state upgraded
+  from screen-zoom bytes to DOCUMENT-size bytes — 0.5x/1x/2x now assert
+  exact document multiples (640x360 / 1280x720 / 2560x1440 from the
+  1280x720 template), PNG-header verified.
+- **Image · emote-pack branch:** asserts exactly 28/56/112 on both
+  axes — the labels' promise, Twitch-acceptable.
+- **New row — export window-invariance:** image.spec.ts "the export is
+  the document, not the window: two window sizes, same bytes" resizes
+  the real BrowserWindow (1100x700 -> 1560x980, fit-zoom observed
+  moving) and asserts byte-identical PNGs. Expediter mutation re-run:
+  removing the scale neutralisation flips exactly this test red while
+  the dimension tests stay green — dimensions alone cannot catch zoom
+  leaking into content, which is why this row exists.
+- Known remaining capture defects, ticketed: [T-53 P1] Transformer
+  handles + grid layers bake into export bytes; [T-54] doc background
+  dropped (transparent PNG / black JPG); [T-46 extended] variants save
+  path still captures at screen zoom, unpinned today.
