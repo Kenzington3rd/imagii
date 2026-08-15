@@ -57,7 +57,12 @@ interface VideoStudioState {
   setSrtPath: (p: string | null) => void
 
   addClip: () => void
-  addClipFromRange: (name: string, startSec: number, endSec: number) => void
+  /** True when a clip was actually added, false when the range was refused
+   *  (no source, non-finite, reversed, or collapsed after clamping). The
+   *  panels that call it report success from this answer rather than
+   *  assuming one — a refusal used to be silent while the caller toasted
+   *  "Clip added" anyway (T-48). */
+  addClipFromRange: (name: string, startSec: number, endSec: number) => boolean
   removeClip: (id: string) => void
   selectClip: (id: string) => void
   renameClip: (id: string, name: string) => void
@@ -215,13 +220,13 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     },
     addClipFromRange: (name, startSec, endSec) => {
       const { source, clips } = get()
-      if (!source) return
+      if (!source) return false
       // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
       // panel, future scripts) sometimes hand us a reversed range. Reject
       // outright rather than producing a clip with negative duration that
       // breaks export math downstream.
-      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return
-      if (endSec <= startSec) return
+      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return false
+      if (endSec <= startSec) return false
       const duration = source.probe.duration
       const safeStart = Math.max(0, Math.min(startSec, duration))
       const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
@@ -232,6 +237,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         clips: [...clips, next],
         selectedClipId: next.id
       })
+      return true
     },
     removeClip: (id) => {
       const { clips, selectedClipId } = get()

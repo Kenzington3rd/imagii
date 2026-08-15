@@ -66,6 +66,55 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
   })
 })
 
+// T-48 regression: the guards above reject in silence, and every caller
+// used to toast "Clip added" regardless — a success message for a clip
+// that was never added. The answer is now the return value, and it has to
+// track the clips list exactly, in both directions.
+describe('addClipFromRange — return value reports what actually happened (T-48)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null
+    })
+  })
+
+  it('returns true only when a clip really joined the list', () => {
+    expect(useVideoStore.getState().addClipFromRange('valid', 5, 15)).toBe(true)
+    expect(useVideoStore.getState().clips).toHaveLength(1)
+  })
+
+  it('returns false for every refusal, and adds nothing', () => {
+    const add = (name: string, a: number, b: number): boolean =>
+      useVideoStore.getState().addClipFromRange(name, a, b)
+    expect(add('reversed', 15, 5)).toBe(false)
+    expect(add('zero-length', 5, 5)).toBe(false)
+    expect(add('nan', NaN, 5)).toBe(false)
+    expect(add('inf', 0, Infinity)).toBe(false)
+    expect(useVideoStore.getState().clips).toHaveLength(0)
+  })
+
+  it('returns false with no source loaded', () => {
+    useVideoStore.setState({ source: null, clips: [] })
+    expect(useVideoStore.getState().addClipFromRange('orphan', 5, 15)).toBe(false)
+  })
+
+  it('returns false for the collapsed range a past-the-end chat peak clamps to', () => {
+    // ChatHighlightPanel clamps both ends to the duration, so a peak whose
+    // bucket starts after the video ends arrives here as duration→duration.
+    const { duration } = FAKE_SOURCE.probe
+    expect(useVideoStore.getState().addClipFromRange('past the end', duration, duration)).toBe(
+      false
+    )
+    expect(useVideoStore.getState().clips).toHaveLength(0)
+    // …while a peak that merely runs OVER the end still lands, clamped.
+    expect(useVideoStore.getState().addClipFromRange('overruns', duration - 5, duration)).toBe(
+      true
+    )
+    expect(useVideoStore.getState().clips).toHaveLength(1)
+  })
+})
+
 describe('srtPath state — Phase 4 tech-debt', () => {
   beforeEach(() => {
     useVideoStore.setState({

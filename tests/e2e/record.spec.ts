@@ -69,15 +69,15 @@ const __dirname = path.dirname(__filename)
  *      change; `convertToMp4` is component-local `useState(true)`, so a
  *      user who wants WebM re-ticks it on every single visit to the
  *      route — including after a mid-session trip to Home.
- *   E. "Discard recording" reports as a crash and strands a broken file.
- *      Cancelling the save SIGKILLs the ffmpeg child, whose rejection
- *      travels up as a rejected IPC, so the toast reads "Error invoking
- *      remote method 'recording:finalize': ... convert-to-mp4 exit signal
- *      SIGKILL" with a tail of ffmpeg stderr — the same raw-IPC-text leak
- *      T-30 files against search. And the half-written .mp4 stays at the
- *      path the user chose in the save dialog: promoteTempWebm's finally
- *      reaps its own temp .webm but never the output it asked ffmpeg for.
- *      (RecordStudio.tsx:394-395, recording.ts:97-146)
+ *   E. "Discard recording" reported as a crash and stranded a broken file.
+ *      FIXED 2026-08-15 by T-44, and this spec's discard test is now the
+ *      positive: cancelActiveConvert marks the child as user-cancelled, so
+ *      convertToMp4 rejects with ConvertCancelledError instead of an exit
+ *      -signal error, promoteTempWebm reaps the half-written .mp4 at the
+ *      user's chosen path, and finalize resolves null — the same "nothing
+ *      was saved" answer the cancelled save dialog gives, which the
+ *      renderer already renders as the calm "Recording discarded."
+ *      A real convert failure still rejects with its error text.
  *   D. Visiting /record writes to config.json with no user action. The
  *      corner-persist effect has no "did the user touch it" guard, so
  *      mounting the route stamps `record.webcamCorner: "bottom-right"`
@@ -829,7 +829,7 @@ test.describe('T-27 Record Studio', () => {
     }
   })
 
-  test('"Discard recording" kills the running convert, but the user is shown raw IPC error text', async () => {
+  test('"Discard recording" kills the running convert, says so calmly, and leaves no file behind', async () => {
     test.setTimeout(240_000)
     ensureScreenshots()
     const root = makeRoot('abortsave')
@@ -880,44 +880,41 @@ test.describe('T-27 Record Studio', () => {
 
       await window.getByRole('button', { name: 'Discard recording' }).click()
 
-      // The convert really died: no mp4 was produced, the phase returns to
-      // idle, the streaming temp file is reaped, and nothing joins recents.
+      // T-44: the calm copy, and the trash icon that proves it came through
+      // the neutral `toast(...)` branch rather than `toast.error` — the
+      // error variant renders react-hot-toast's own <div> icon, never this
+      // path. Asserted live, before the toast auto-dismisses.
+      await expect(
+        window
+          .locator('div:has(> [role="status"])')
+          .filter({ hasText: 'Recording discarded.' })
+          .locator('path[d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"]')
+      ).toBeVisible({ timeout: 60_000 })
+
+      // The convert really died: the phase returns to idle, the streaming
+      // temp file is reaped, and nothing joins recents.
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
         timeout: 60_000
       })
       expect(leftoverTemps(userDataDir)).toEqual([])
       expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
 
-      // T-27 FINDING E1: the cancel really killed ffmpeg mid-encode, and the
-      // half-written mp4 is STILL SITTING at the path the user picked in the
-      // save dialog. `promoteTempWebm` reaps its own temp .webm in the
-      // finally block but never unlinks the output it asked ffmpeg to
-      // produce, so "Discard recording" leaves a file with the user's chosen
-      // name that no player can open (killed before the moov atom is
-      // written). Asserted as "present and unplayable" rather than "absent"
-      // so a future fix that unlinks it fails here and gets read.
-      expect(existsSync(outPath)).toBe(true)
-      let playable = false
-      try {
-        const partial = await probeFile(outPath)
-        playable = Number(partial.format?.duration ?? 0) > 0
-      } catch {
-        playable = false
-      }
-      expect(playable).toBe(false)
+      // T-44: the half-written mp4 ffmpeg was killed midway through is GONE
+      // from the path the user picked in the save dialog. It was never
+      // playable — the kill lands long before the moov atom — so leaving it
+      // there handed the user a file with their chosen name that no player
+      // could open.
+      expect(existsSync(outPath)).toBe(false)
 
-      // T-27 FINDING E: the user asked to discard, and what they get is the
-      // rejected IPC's raw text — "Error invoking remote method
-      // 'recording:finalize': ... convert-to-mp4 exit signal SIGKILL: ..."
-      // with a tail of ffmpeg stderr. finalizeRecording's catch toasts
-      // `err.message` verbatim, and nothing on the way up recognises "the
-      // user cancelled this on purpose" as distinct from a real failure.
-      // Same defect shape as T-30's first-hop search error. Pinned in both
-      // halves: the leak is asserted, and so is the absence of the calm
-      // copy the discard-at-dialog branch next door already has.
+      // And the message is the discard branch's own copy, with none of the
+      // raw IPC / ffmpeg vocabulary the rejected invoke used to leak
+      // ("Error invoking remote method 'recording:finalize': ...
+      // convert-to-mp4 exit signal SIGKILL: <stderr tail>"). A deliberate
+      // cancel is not a crash, and it must not read like one.
       const toasts = (await readToastLog(window)).join(' | ')
-      expect(toasts).toMatch(/Error invoking remote method|convert-to-mp4 exit|SIGKILL/)
-      expect(toasts).not.toContain('Recording discarded.')
+      expect(toasts).toContain('Recording discarded.')
+      expect(toasts).not.toMatch(/Error invoking remote method|convert-to-mp4 exit|SIGKILL/)
+      expect(toasts).not.toMatch(/Save failed/)
     } finally {
       await app.close()
       cleanup(root)

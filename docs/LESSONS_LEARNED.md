@@ -14,6 +14,102 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-44 + T-48: the message and the outcome were computed separately
+
+Two tickets, one root lesson, so one entry. Both are the same class: the
+feedback the user sees was decided by *which line of code ran*, not by
+*what actually happened to their file*. In one the app called a
+deliberate discard a crash; in the other it called a refusal a success.
+Neither is a rendering bug — in both, the code that knew the truth threw
+it away before the toast was chosen.
+
+### Bug — "Discard recording" reported a crash and left a broken file behind (T-44)
+- **Root cause.** `cancelActiveConvert` SIGKILLs the ffmpeg child, and
+  `convertToMp4`'s `close` handler saw only `(code=null,
+  signal='SIGKILL')` — indistinguishable from a crash — so it rejected
+  with `convert-to-mp4 exit signal SIGKILL: <stderr tail>`. That
+  rejection travelled up through `recording:finalize` as a rejected IPC
+  and `finalizeRecording`'s catch toasted `err.message` verbatim, so
+  asking to throw a take away produced "Error invoking remote method
+  'recording:finalize': …" in error styling. The calm "Recording
+  discarded." copy existed the whole time — the cancelled-save-dialog
+  branch used it — but the discard button could never reach it. And
+  because `promoteTempWebm`'s `finally` reaps only its own temp `.webm`,
+  the half-written `.mp4` ffmpeg had already started writing at the
+  user's chosen path stayed there: a file with the name they picked
+  that no player can open, because the kill lands long before the moov
+  atom.
+- **Fix.** The cancel is recorded where it is known. `cancelActiveConvert`
+  marks its child `cancelled` before killing it, and the close/error
+  handlers reject with a `ConvertCancelledError` sentinel instead of an
+  exit-code error. `promoteTempWebm` catches that one class, unlinks the
+  partial output, and returns `null` — the same "nothing was saved"
+  answer a cancelled save dialog gives, which the renderer already
+  renders as the calm discard toast. No renderer change, no string
+  matching on ffmpeg output, and both save paths (legacy `recording:save`
+  and streaming `recording:finalize`) are fixed by the one guard because
+  they share that tail. A genuine convert failure still rejects with its
+  text intact.
+- **Test.** `src/main/ffmpeg/convertCancel.test.ts` (10 cases: clean
+  exit, non-zero exit keeps its stderr tail, cancel rejects as
+  cancelled and NOT as SIGKILL, cancel-then-error, slot cleared, and a
+  later failure is still a failure); `src/main/ipc/recordingCancel.test.ts`
+  (finalize returns null and the partial mp4 is gone on cancel, rejects
+  with the ffmpeg text on a crash); `tests/e2e/record.spec.ts` "Discard
+  recording kills the running convert, says so calmly, and leaves no
+  file behind" drives the real ffmpeg kill and asserts the trash-icon
+  toast, the absent file, an empty recordings dir and untouched recents.
+- **Lesson.** **A process you killed on purpose cannot be identified by
+  how it died.** Exit code and signal describe the corpse, not the
+  intent; every cancel path must record "this was us" at the moment it
+  fires, and callers must branch on that fact rather than pattern-match
+  the failure text downstream. The renderer is the wrong place to guess:
+  by then the only evidence left is a string.
+
+### Bug — chat highlight "+ clip" claimed a clip it never added (T-48)
+- **Root cause.** `ChatHighlightPanel.addPeak` clamped the padded END of
+  a peak to the source duration but never the START, so a chat log whose
+  timestamps run past the loaded video (a trimmed VOD, a clip of one
+  segment, the wrong file) produced a reversed range — start 15 s, end
+  2 s. `addClipFromRange` rejects reversed ranges by design (Phase 2.12)
+  and returns silently, and the panel called `toast.success('Clip
+  added')` on the next line unconditionally. The user got a success
+  message and an unchanged Clips list.
+- **Fix.** Both ends clamp to the duration, and the panel reports what
+  the store did: `addClipFromRange` now returns `true`/`false`, and the
+  success toast fires only on `true`. The refusal says what is actually
+  wrong in the panel's own voice — "That spike is past the end of this
+  video — check the log matches this source." A peak that merely
+  overruns the end still clamps and lands, so the refusal is about the
+  moment being outside the video, not about padding hitting the edge.
+- **Test.** `src/renderer/src/modules/video-studio/store/videoStore.test.ts`
+  "return value reports what actually happened" (true only when the clip
+  joined the list; false for reversed, zero-length, non-finite, no
+  source, and the collapsed range a past-the-end peak clamps to);
+  `tests/e2e/video-pipelines.spec.ts` ChatHighlightPanel negatives assert
+  the refusal copy with no "Clip added" toast and no new clip, then the
+  overrunning peak landing as `0:00 → 0:02`.
+- **Lesson.** **A store action that can refuse must say so, and its
+  callers must ask.** "Validate as if any caller might be wrong" (the
+  2026-05-07 entry on this same function) is only half the contract —
+  a silent reject leaves every caller free to invent a success. Make the
+  refusal part of the return type, and gate user-facing confirmation on
+  it: `toast.success` on the line after a call that can no-op is a bug
+  waiting for the input that triggers it.
+
+### The shared lesson
+**Feedback is an assertion about the world, so derive it from the world.**
+Both bugs read the same way in review — a toast on the line after the
+work — and both were invisible until something failed. Wherever an
+outcome can vary (a cancel, a refusal, a partial write), the message must
+be computed from the outcome value, and the cleanup that outcome implies
+must run on the same branch. Also: when a path can end in a partial file
+at a path the USER named, deleting it is part of the outcome, not a
+nicety — `promoteTempWebm` had a `finally` for its own temp file and
+nothing at all for the output it asked ffmpeg to produce.
+
+---
+
 ## 2026-08-15 — T-31 + T-32: Home's chrome was mounted per-route while the promise was app-wide
 
 Two tickets, one root lesson, so one entry: both the toast surface and
