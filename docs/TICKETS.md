@@ -658,6 +658,48 @@ expected behavior wins every call:
 Every fix flips its pin; every flip is red-green evidenced; LESSONS per
 IMG-PREC.
 
+## T-41 — zero capture sources is indistinguishable from never-searched
+
+- **Spec:** T-27 finding A. chooseSource flips phase to 'choosing' but
+  both branches render the same button — no message, spinner, or
+  disabled state. On denied-permission systems the button looks dead.
+- **Acceptance criteria:** empty result renders a distinct, helpful
+  state (what happened + what to try); pin flipped in record.spec.ts.
+- **Status:** open
+
+## T-42 — webcam checkbox with zero cameras silently drops the PiP
+
+- **Spec:** T-27 finding B. No zero-camera hint (mic has one); checkbox
+  stays ticked, Corner picker appears, recording proceeds screen-only
+  with no warning — the exact UI-vs-output mismatch the effectiveCamId
+  comment says it set out to kill.
+- **Acceptance criteria:** zero-camera state mirrors the mic warning;
+  recording with a ticked-but-unavailable webcam surfaces the existing
+  webcam-failure toast; pins flipped.
+- **Status:** open
+
+## T-43 — Record settings persistence is inconsistent (MP4 checkbox; mount-writes)
+
+- **Spec:** T-27 findings C+D. convertToMp4 is component-local state
+  (the only Record preference that resets), while the corner-persist
+  effect writes config.json on mere mount with no user-touched guard.
+- **Acceptance criteria:** MP4 choice persists like the corner; no
+  settings write occurs from mounting the route untouched (relaunch
+  test asserts both); pins flipped.
+- **Status:** open
+
+## T-44 — "Discard recording" reports as a crash and strands a broken file
+
+- **Spec:** T-27 finding E. Cancel SIGKILLs ffmpeg and the rejection
+  surfaces as raw IPC text (same class as T-30); the calm "Recording
+  discarded." copy exists but is never used on this path — and the
+  half-written output .mp4 at the user's chosen path is never reaped
+  (promoteTempWebm's finally reaps only its temp .webm).
+- **Acceptance criteria:** deliberate cancel yields the calm copy, no
+  error styling; the partial output file is deleted; pins flipped;
+  usability ruling applies (user expects a discard, not a crash).
+- **Status:** open
+
 ---
 
 ## Done
