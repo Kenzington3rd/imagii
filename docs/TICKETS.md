@@ -124,7 +124,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         exact error; E2E negative in `export.spec.ts` upgraded from
         `.log` to `.txt` once refused.
   - [ ] LESSONS_LEARNED entry per IMG-PREC.
-- **Status:** open
+- **Status:** done (round 23 — see Done)
 
 ## T-09 — findHighlights is 100% non-functional (framelog=quiet)
 
@@ -140,7 +140,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Flip the `KNOWN BUG` pin in media.spec.ts into a positive test
         asserting candidate presence and rough timestamp.
   - [ ] LESSONS_LEARNED entry per IMG-PREC.
-- **Status:** open
+- **Status:** done (round 23 — see Done)
 
 ## T-10 — analyzeClipHook always reports the -70 LUFS floor
 
@@ -151,7 +151,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Loud and quiet windows produce distinct, plausible LUFS.
   - [ ] Flip the `KNOWN BUG` pin into a positive discrimination test.
   - [ ] LESSONS_LEARNED entry (may share T-09's).
-- **Status:** open
+- **Status:** done (round 23 — see Done)
 
 ## T-11 — caption positions top/middle render in the wrong place
 
@@ -165,7 +165,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] top/middle/bottom each render centred in the correct third
         (PSNR-banded Layer 5 assertions — flip the `KNOWN BUG` pin).
   - [ ] LESSONS_LEARNED entry per IMG-PREC.
-- **Status:** open
+- **Status:** done (round 23 — see Done)
 
 ## T-12 — reframe output carries non-square SAR (cosmetic)
 
@@ -186,7 +186,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Overlay mounted app-wide (App.tsx); `?` toggles it on every
         route; Esc and its close button dismiss; INPUT/TEXTAREA guarded.
   - [ ] Unit or E2E coverage driving open + close paths.
-- **Status:** open
+- **Status:** done (round 23 — see Done)
 
 ## T-14 — mount PresetPanel (audio cleanup presets unreachable)
 
@@ -439,6 +439,24 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
 ---
 
 ## Done
+
+Round 23 (T-08..T-12; expedited by Fable — gates re-run independently:
+477 unit / 61 passed + 2 platform-skipped media / 3 e2e; T-09 red-green
+re-executed personally: framelog reverted -> burst test fails ->
+restored byte-identical -> passes):
+
+- **T-08** probe codec floor — text files refused with their own
+  user-readable sentence across drop/picker/recents; E2E negative
+  upgraded to .txt.
+- **T-09/T-10** findHighlights + analyzeClipHook — framelog=info makes
+  the parser's input exist; pins flipped to positives (burst found at
+  the right timestamps; loud/quiet windows ~34 LU apart).
+- **T-11** caption alignment — ASS numpad values; render test proves
+  each position paints its own third, centred, by PSNR symmetry.
+- **T-12** reframe setsar=1 — square pixels, 9:16 DAR asserted.
+
+All four LESSONS entries written. Find Highlights and correct caption
+positioning ship for the first time.
 
 Round 21 (all seven initial tickets; expedited by Fable — gates re-run
 independently: 477 unit / 60 passed + 2 platform-skipped media / 3 e2e

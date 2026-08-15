@@ -66,10 +66,16 @@ describe('hexToAssColor — Phase 3.1 caption styling', () => {
 })
 
 describe('alignmentForPosition', () => {
-  it('maps to libass numpad alignments', () => {
+  it('maps to libass INTERNAL alignments, not the numpad values (T-11)', () => {
+    // force_style bypasses libass's numpad conversion, so these are
+    // HALIGN_CENTRE (2) OR-ed with VALIGN_SUB/TOP/CENTER (0/4/8). The
+    // numpad values 8 and 5 that shipped in round 21 decoded to left+middle
+    // and left+top. Where they actually land is proven by the Layer 5
+    // render test 'renders every caption position centred in the third it
+    // names'; this unit test only guards the constants.
     expect(alignmentForPosition('bottom')).toBe(2)
-    expect(alignmentForPosition('middle')).toBe(5)
-    expect(alignmentForPosition('top')).toBe(8)
+    expect(alignmentForPosition('middle')).toBe(10)
+    expect(alignmentForPosition('top')).toBe(6)
   })
 })
 
@@ -88,7 +94,7 @@ describe('buildForceStyle', () => {
       { ...DEFAULT_CAPTION_STYLE, position: 'middle' },
       3.5
     )
-    expect(out).toContain('Alignment=5')
+    expect(out).toContain('Alignment=10')
     expect(out).toContain('MarginV=0')
   })
 

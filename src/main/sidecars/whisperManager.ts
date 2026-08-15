@@ -293,12 +293,18 @@ function hexToAssColor(hex: string): string {
 }
 
 function alignmentForPosition(position: CaptionStyle['position']): number {
-  // libass numpad-style alignment (1..9). 2=bottom-center, 5=middle-center, 8=top-center.
+  // libass INTERNAL alignment, not the numpad values an .ass style block
+  // takes: force_style writes this number straight through, skipping the
+  // numpad conversion the v4+ style parser applies. The representation is
+  // HALIGN_LEFT/CENTRE/RIGHT = 1/2/3 OR-ed with VALIGN_SUB/TOP/CENTER =
+  // 0/4/8, so centred is 2 | 0 = 2 (bottom), 2 | 4 = 6 (top), 2 | 8 = 10
+  // (middle). Round 21 shipped the numpad values (8/5/2) here, which made
+  // top render left+middle and middle render left+top. T-11.
   switch (position) {
     case 'top':
-      return 8
+      return 6
     case 'middle':
-      return 5
+      return 10
     case 'bottom':
       return 2
   }

@@ -14,6 +14,128 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — Round 22: the four bugs round 21's own tests had already found
+
+Round 21 built the Layer 5 and E2E coverage the tickets asked for, and that
+coverage immediately turned up four real defects. They were pinned as
+`KNOWN BUG` tests (worded to fail once fixed) and filed as T-08..T-12 rather
+than fixed in the same round. This round fixes all four and flips every pin
+into a positive assertion, so each test named below fails if the bug comes
+back. Two of the four had shipped 100% non-functional behind green unit
+tests — the same shape as the round-18 autoZoom / ducking / denoise trio.
+
+### Bug — any text file imported as a 640x400 "video", with a full export panel behind it (T-08)
+- **Root cause.** ffmpeg's `tty` demuxer registers the `.txt` extension and
+  its `ansi` (ASCII/ANSI art) decoder synthesizes a video stream out of
+  arbitrary text: ffprobe exits 0 with a 640x400 pal8 stream and a real
+  duration. Every check `probeVideo` made — a video stream exists,
+  `format.duration` > 0 — was satisfied, so a streamer's notes file loaded
+  into Video Studio with a player, a clip, and an Export button. The drop
+  zone's extension hint is advisory by design ("may not be a supported
+  video — trying anyway"), so nothing upstream stopped it either.
+- **Fix.** One codec floor in `src/main/ffmpeg/probe.ts`: a video stream
+  whose `codec_name` is `ansi` is refused with "This file is text, not a
+  video — pick a video file such as MP4, MOV, or MKV." It sits in
+  `probeVideo` because drop, the file picker, and recent-files all funnel
+  through it — three entry points, one guard. The wording deliberately
+  avoids the trigger words `codec` and `no video stream`, both of which
+  `shared/importDiagnostics.describeImportError` rewrites into a different
+  message.
+- **Test.** Layer 5 `probeVideo refuses a text file that the ansi demuxer
+  claims as video` — it asserts ffprobe *still* reports `tty`/`ansi` first,
+  so a future pass proves the guard fired rather than that the binary
+  changed its mind. `tests/e2e/export.spec.ts` negative upgraded from
+  `.log` (where ffprobe itself fails, so the guard was never exercised) to
+  `.txt`, asserting the new refusal copy and no loaded state. Mutation
+  proof: with the guard's codec name altered, the E2E shows the app
+  loading "640×400 · 25.00 fps · ansi · (no audio)", a "Video loaded"
+  toast, and the entire export panel.
+- **Lesson.** **"ffprobe accepted it" is not "it is a video."** A demuxer's
+  job is to find *a* plausible reading of the bytes, not to agree with the
+  user's intent, so a format-detection layer needs a plausibility floor of
+  its own at the trust boundary. Two corollaries: an advisory warning is
+  not a guard; and when a test has to pick its fixture *around* a hole
+  (round 21 chose `.log` precisely because `.txt` passed), the hole is the
+  finding — write the failing test.
+
+### Bug — highlight discovery and the hook indicator were both 100% non-functional (T-09, T-10)
+- **Root cause.** ebur128 prints its per-frame `t: … M: …` lines at the log
+  level its `framelog` option selects, and both consumers parse exactly
+  those lines out of stderr. `findHighlights` asked for `framelog=quiet`
+  and then parsed what it had just silenced; `analyzeClipHook` left
+  `framelog` unset while passing `metadata=1`, which demotes the same lines
+  below stderr. Neither parser ever saw a sample: `findHighlights` hit its
+  `samples.length < 5` early-out and returned zero candidates for every VOD
+  ever scanned, and `analyzeClipHook` fell through to its -70 LUFS floor,
+  scoring every clip in the app identically.
+- **Fix.** An explicit `framelog=info` in both ebur128 commands in
+  `src/main/ffmpeg/highlights.ts`, with the reason recorded at both call
+  sites so nobody "tidies" it back to quiet.
+- **Test.** The two round-21 pins are now
+  `findHighlights finds the burst the fixture actually contains` (a
+  candidate covering the fixture's 10.0-11.5 s burst, peak above -35 LUFS,
+  and not a shrug spanning the whole source) and
+  `analyzeClipHook tells a loud window from a quiet one` (both windows off
+  the -70 floor, ~34 LU apart). Red-green evidence: on the pre-fix command
+  both fail on their first assertion (0 candidates; -70 == -70).
+- **Lesson.** **A filter argument that changes only what ffmpeg *prints* is
+  as load-bearing as one that changes what it renders, the moment your
+  feature parses the printout.** The unit tests here were real and passing
+  — they tested `parseEbur128` against canned stderr, which is the one
+  input the bug could never produce. Note also how the failure presented:
+  "no highlights found" and "every clip scores low" both look exactly like
+  an honest answer about a quiet VOD, which is why this survived to a
+  second round. A feature whose broken state is indistinguishable from its
+  empty state needs a fixture with a known answer.
+
+### Bug — captions positioned "top" or "middle" rendered in the wrong third and lost their centring (T-11)
+- **Root cause.** `alignmentForPosition` emitted ASS *numpad* alignments
+  (top=8, middle=5, bottom=2), but libass's `force_style` path writes that
+  number straight into its INTERNAL representation —
+  HALIGN_LEFT/CENTRE/RIGHT = 1/2/3 OR-ed with VALIGN_SUB/TOP/CENTER =
+  0/4/8 — skipping the numpad conversion its v4+ style parser applies. So 8
+  decoded as left+middle and 5 as left+top: `top` rendered mid-frame,
+  `middle` rendered at the top, both flush left. `bottom` (2 = centre+sub)
+  was correct by coincidence, which is why the feature looked fine in its
+  default configuration.
+- **Fix.** `alignmentForPosition` returns libass-internal values: top=6,
+  middle=10, bottom=2 unchanged.
+- **Test.** The pin becomes `renders every caption position centred in the
+  third it names` — each position paints its own third of the frame, leaves
+  the other two clean, and is horizontally symmetric. Mutation proof:
+  restoring 8/5 puts the top third at 55.6 dB PSNR (untouched) where the
+  fixed build measures ~18. The unit test on the constants is kept but
+  renamed to say what the numbers are, pointing at the render test for what
+  they *do*.
+- **Lesson.** **A unit test on a constant proves the constant, not the
+  contract.** `expect(alignmentForPosition('top')).toBe(8)` passed for as
+  long as the bug existed and would have "protected" it forever. When a
+  value's meaning is decided by someone else's parser, only that parser's
+  output is evidence. Second, smaller lesson from writing the replacement:
+  the assertion geometry had to be *measured*, not assumed — libass scales
+  `force_style` FontSize by PlayResY (288 by default), so a nominal 24
+  renders ~90 px tall on 1080p, and the first draft of the test failed on
+  bands that were the wrong size for the text.
+
+### Bug — every reframed vertical clip carried non-square pixels (T-12)
+- **Root cause.** `scale` preserves the *source's* display aspect ratio, so
+  cropping 1920x1080 to 9:16 and scaling to 1080x1920 emitted SAR 404:405
+  and a DAR of 101:180 instead of 9:16. Players honour SAR, so the clip was
+  stretched by ~0.2% wherever it was uploaded. Cosmetic, and invisible to
+  every test that asserted width and height.
+- **Fix.** `setsar=1` after the crop/scale in `src/main/ffmpeg/reframe.ts`.
+- **Test.** The Layer 5 reframe tests now assert
+  `sample_aspect_ratio` 1:1 and `display_aspect_ratio` 9:16 on the primary
+  case, and square pixels again on the even-snap case (where the scale
+  target changes, which is exactly where a source-derived SAR leaks back
+  in).
+- **Lesson.** **Output geometry is three facts, not two:** width, height,
+  and the pixel aspect the container carries alongside them. Any test for a
+  pipeline that crops or scales should assert SAR — dimensions alone cannot
+  see a stretched frame.
+
+---
+
 ## 2026-08-14 — Round 20 format widening: the Layer 5 matrix caught a bundled-ffmpeg segfault before it shipped
 
 Import format support widened (flv/wmv/mpg/mpeg/3gp video via

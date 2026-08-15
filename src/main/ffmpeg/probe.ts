@@ -69,6 +69,20 @@ export function probeVideo(filePath: string): Promise<ProbeResult> {
           reject(new Error('No video stream found in file'))
           return
         }
+        // T-08 (round 22): ffprobe's `tty` demuxer registers the `.txt`
+        // extension and hands back a synthetic 640x400 pal8 stream in the
+        // `ansi` (ASCII/ANSI art) decoder for ANY text file — exit 0, a
+        // real duration, every check below satisfied. A streamer's notes
+        // file therefore imported as a video with a full export panel
+        // behind it. `ansi` is only ever produced by that demuxer, so
+        // refusing it here — the one place drop, picker, and recent-files
+        // all pass through — is the whole floor.
+        if (video.codec_name === 'ansi') {
+          reject(
+            new Error('This file is text, not a video — pick a video file such as MP4, MOV, or MKV.')
+          )
+          return
+        }
         // A malformed/partial ffprobe response can carry a video stream
         // but no `format.duration`. The prior code coerced this to `0`,
         // which flowed into makeDefaultClip(0, 1) → a silent 0:00→0:00

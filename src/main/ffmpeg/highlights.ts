@@ -73,7 +73,11 @@ export async function findHighlights(
     sourcePath,
     '-vn',
     '-af',
-    'ebur128=metadata=1:framelog=quiet:peak=true',
+    // framelog=info is load-bearing: the per-frame "t: … M: …" lines this
+    // function parses are logged at that level, and `quiet` (round 21's
+    // value) suppressed them entirely — parseEbur128 saw zero samples and
+    // every scan returned no candidates. See T-09 in LESSONS_LEARNED.
+    'ebur128=metadata=1:framelog=info:peak=true',
     '-f',
     'null',
     '-'
@@ -230,7 +234,10 @@ export async function analyzeClipHook(
     sourcePath,
     '-vn',
     '-af',
-    'ebur128=metadata=1:peak=true',
+    // Same reason as findHighlights: without an explicit framelog=info the
+    // "M:" lines parsed below never reach stderr (metadata=1 demotes them),
+    // so every clip scored the -70 LUFS floor. See T-10 in LESSONS_LEARNED.
+    'ebur128=metadata=1:framelog=info:peak=true',
     '-f',
     'null',
     '-'

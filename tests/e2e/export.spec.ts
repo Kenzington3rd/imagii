@@ -290,7 +290,7 @@ test.describe('imagii Video Studio import -> export', () => {
     }
   })
 
-  test('refuses an unsupported text file drop and never enters a loaded state', async () => {
+  test('refuses a text file drop and never enters a loaded state', async () => {
     test.setTimeout(120_000)
     if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
 
@@ -300,14 +300,14 @@ test.describe('imagii Video Studio import -> export', () => {
     mkdirSync(sourceDir, { recursive: true })
     seedUserData(userDataDir)
 
-    // Plain text under an unsupported extension. NOT `.txt`: 2026-08-14,
-    // this test found that ffmpeg's `ansi` demuxer registers the `.txt`
-    // extension, so ffprobe reports ANY .txt file as a 640x400 "ansi"
-    // video and the app happily loads it. `.log` (an OBS/chat log — the
-    // file a streamer actually has lying next to a VOD) carries the same
-    // bytes and is refused, which is the behavior under test here. See the
-    // report for T-03 for the .txt hole.
-    const notes = path.join(sourceDir, 'stream-notes.log')
+    // T-08: `.txt` on purpose, and it is the hard case. ffmpeg's `tty`
+    // demuxer registers that extension, so ffprobe reports ANY text file as
+    // a 640x400 "ansi" video, exits 0, and — until the codec floor in
+    // src/main/ffmpeg/probe.ts — the app loaded a streamer's notes file
+    // with a full export panel behind it. Round 21 could only assert the
+    // refusal with a `.log` here, where ffprobe itself fails; this now
+    // drives the guard.
+    const notes = path.join(sourceDir, 'stream-notes.txt')
     writeFileSync(notes, 'this is not a video, it is a text file\n', 'utf8')
 
     const app = await launchApp(userDataDir)
@@ -316,22 +316,30 @@ test.describe('imagii Video Studio import -> export', () => {
       await openVideoStudio(window)
       await installToastLog(window)
 
-      await dropOnVideoImporter(window, notes, 'stream-notes.log')
+      await dropOnVideoImporter(window, notes, 'stream-notes.txt')
 
       // 1. The extension guard's own copy (src/renderer/src/modules/
-      //    video-studio/Importer.tsx) — the unsupported name is named back
-      //    to the user rather than silently swallowed.
+      //    video-studio/Importer.tsx) — .txt is not in VIDEO_EXTENSIONS, so
+      //    the unsupported name is named back to the user first rather than
+      //    silently swallowed. The import is still attempted ("trying
+      //    anyway"), which is what puts the probe floor under test.
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
-        .toContain('stream-notes.log may not be a supported video — trying anyway.')
+        .toContain('stream-notes.txt may not be a supported video — trying anyway.')
 
-      // 2. The refusal itself is visible, carrying the probe's own error
-      //    template from src/main/ffmpeg/probe.ts ("ffprobe exit <code>: …")
-      //    through describeImportError into the error toast.
+      // 2. Then the refusal itself, visible and specific: probeVideo's codec
+      //    floor, passed through describeImportError unchanged (it carries
+      //    no "codec"/"no video stream" trigger word, so the user reads the
+      //    sentence the guard wrote).
+      //    The toast text arrives wrapped in Electron's own IPC preamble
+      //    ("Error invoking remote method 'video:probe': Error: …"), so the
+      //    guard's sentence is asserted as a substring — the same shape the
+      //    round-21 version of this test used for the ffprobe error.
+      const REFUSAL = 'This file is text, not a video — pick a video file such as MP4, MOV, or MKV.'
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
-        .toEqual(expect.arrayContaining([expect.stringMatching(/ffprobe exit \d+:/)]))
-      await expect(window.getByText(/ffprobe exit \d+:/).first()).toBeVisible()
+        .toEqual(expect.arrayContaining([expect.stringContaining(REFUSAL)]))
+      await expect(window.getByText(REFUSAL).first()).toBeVisible()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'export-03-refused.png') })
 
       // 3. And it never entered a loaded state: no success toast, the drop
@@ -342,7 +350,7 @@ test.describe('imagii Video Studio import -> export', () => {
       await expect(window.getByText('Drop a video here')).toBeVisible()
       await expect(window.getByRole('button', { name: /^Export/ })).toHaveCount(0)
       await expect(window.locator('video')).toHaveCount(0)
-      await expect(window.getByText('stream-notes.log', { exact: true })).toHaveCount(0)
+      await expect(window.getByText('stream-notes.txt', { exact: true })).toHaveCount(0)
     } finally {
       await app.close()
       try {

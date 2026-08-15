@@ -109,7 +109,13 @@ export async function runReframe(
   // make yuv420p+libx264 reject the encode (UI hardcodes 1080x1920 today).
   const outW = Math.max(2, even(spec.outputWidth))
   const outH = Math.max(2, even(spec.outputHeight))
-  const filter = `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${outW}:${outH}:flags=lanczos`
+  // T-12: setsar=1 is not cosmetic decoration on the scale — `scale`
+  // preserves the SOURCE display aspect, so cropping 1920x1080 to 9:16 and
+  // scaling to 1080x1920 emitted SAR 404:405 and a DAR of 101:180. Players
+  // honour SAR, so the "vertical" clip was stretched by ~0.2% everywhere it
+  // was uploaded. Square pixels are asserted on real output in the Layer 5
+  // reframe tests.
+  const filter = `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${outW}:${outH}:flags=lanczos,setsar=1`
 
   const args = [
     '-y',
