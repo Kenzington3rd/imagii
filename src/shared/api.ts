@@ -44,6 +44,10 @@ export type SettingsKey =
   // exporting many clips doesn't have to re-pick on every batch.
   | 'export.lastOutputDir'
   | 'clipKit.lastOutputDir'
+  // T-20 (round 23): the posting diary used to live in renderer
+  // localStorage, so it died with the Chromium profile and never reached a
+  // project file. Settings store keeps it with the rest of the app state.
+  | 'postingDiary'
 
 export interface VideoProbe {
   duration: number

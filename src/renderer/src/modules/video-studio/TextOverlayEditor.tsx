@@ -140,20 +140,26 @@ export function TextOverlayEditor(): JSX.Element | null {
                   className="bg-bg-base rounded px-1 py-0.5 w-16"
                 />
               </label>
-              <label className="flex items-center gap-1.5 col-span-2">
-                <span className="text-ink-muted w-12">Time</span>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={overlay.startSec.toFixed(2)}
-                  onChange={(e) =>
-                    updateTextOverlay(clip.id, overlay.id, {
-                      startSec: Math.max(0, Number(e.target.value) || 0)
-                    })
-                  }
-                  className="bg-bg-base rounded px-1 py-0.5 w-20"
-                />
+              {/* T-17: the remove button used to sit inside this label, so a
+                  click on it also targeted the label's field. The label now
+                  wraps only the time fields; the button is a sibling. */}
+              <div className="flex items-center gap-1.5 col-span-2">
+                <label className="flex items-center gap-1.5">
+                  <span className="text-ink-muted w-12">Time</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={overlay.startSec.toFixed(2)}
+                    onChange={(e) =>
+                      updateTextOverlay(clip.id, overlay.id, {
+                        startSec: Math.max(0, Number(e.target.value) || 0)
+                      })
+                    }
+                    className="bg-bg-base rounded px-1 py-0.5 w-20"
+                    aria-label="Overlay start second"
+                  />
+                </label>
                 <span className="text-ink-dim">→</span>
                 <input
                   type="number"
@@ -166,6 +172,7 @@ export function TextOverlayEditor(): JSX.Element | null {
                     })
                   }
                   className="bg-bg-base rounded px-1 py-0.5 w-20"
+                  aria-label="Overlay end second"
                 />
                 <span className="text-ink-dim">sec</span>
                 <button
@@ -176,7 +183,7 @@ export function TextOverlayEditor(): JSX.Element | null {
                 >
                   ✕
                 </button>
-              </label>
+              </div>
             </div>
           </li>
         ))}

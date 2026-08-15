@@ -198,7 +198,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         conventions); save/apply/delete flows work end to end.
   - [ ] E2E: save a preset, mutate chain, apply restores it, delete
         removes it (confirm dialog handled).
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-15 — Video Studio has no undo affordance
 
@@ -210,7 +210,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Header Undo/Redo buttons + Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z listener,
         parity with AudioStudio.tsx:31 pattern (INPUT/TEXTAREA guarded).
   - [ ] E2E: make a change, undo restores prior state, redo reapplies.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-16 — tutorial coachmarks target nonexistent selectors
 
@@ -222,7 +222,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         SecondaryTrackPanel host) or steps retargeted; every tutorial
         step's selector resolves.
   - [ ] Test iterating all tutorial steps asserting each target exists.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-17 — invalid interactive nesting (input-in-button, button-in-label)
 
@@ -234,7 +234,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         select still works, rename still stops propagation).
   - [ ] a11y-reviewer agent passes the two components; existing E2E
         selectors updated if affected.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-18 — RecentFilesMenu dismisses only on mouse-leave
 
@@ -244,7 +244,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Escape and click-outside both close the menu; mouse-leave
         behavior retained.
   - [ ] Unit/E2E coverage of both new dismissal paths.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-19 — Audio Studio Close drops work without confirm
 
@@ -254,7 +254,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Confirm before clearing when a source is loaded and the chain
         differs from defaults (or cut regions/secondary track exist).
   - [ ] E2E: dialog-handler test covering accept and dismiss branches.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-20 — PostChecklist diary excluded from save/autosave (localStorage)
 
@@ -265,7 +265,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Diary migrated to the settings store (new known key, validated
         in settingsKnownKeys) with one-time localStorage migration.
   - [ ] Unit test for migration + persistence round trip.
-- **Status:** open
+- **Status:** done (round 24 — see Done)
 
 ## T-21 — coverage: Home, Welcome, and shared chrome
 
@@ -439,6 +439,36 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
 ---
 
 ## Done
+
+Round 24 (T-13..T-20; expedited by Fable — gates re-run independently:
+715 unit / build / 3 e2e; tutorial-target scanner discrimination
+re-executed personally: attribute deleted -> named failure -> restored
+-> 39/39. The worker's two beyond-ticket calls are ACCEPTED: the
+third-copy extraction of useUndoRedoHotkeys across all three studios,
+and the PropertiesPanel nesting fix its repo-wide scanner forced —
+both are the ladder and the coverage bar working as written):
+
+- **T-13** HotkeyOverlay mounted app-wide; shortcut table corrected
+  against real bindings and pinned by a 32-case checker that fails on
+  any row not backed by a real binding.
+- **T-14** PresetPanel mounted in Audio; wiring covered.
+- **T-15** Video Studio undo: header buttons + hotkeys via the new
+  shared useUndoRedoHotkeys (third copy eliminated).
+- **T-16** Coachmark targets fixed; 39-case scanner walks every step of
+  all four tutorials — and the worker caught its own first version
+  passing with the attributes deleted, rebuilt it to discriminate.
+- **T-17** Nesting fixed in ClipList, TextOverlayEditor, and a third
+  instance (PropertiesPanel) found by the new repo-wide TSX parser
+  (75 cases); no E2E selector fallout.
+- **T-18** RecentFilesMenu: Escape + click-outside, toggle-aware.
+- **T-19** Audio Close confirm with default-chain field comparison;
+  declined branch asserted separately; two mutation proofs.
+- **T-20** Diary migrated to settings (validated key, bounded parser,
+  corrupt-blob retirement); 23 tests + allowlist/schema sync check.
+
+238 new unit tests (477 -> 715), including three standing static
+checkers (nesting, tutorial targets, hotkey table). LESSONS round-23b:
+seven entries incl. the self-satisfying-test near-miss.
 
 Round 23 (T-08..T-12; expedited by Fable — gates re-run independently:
 477 unit / 61 passed + 2 platform-skipped media / 3 e2e; T-09 red-green

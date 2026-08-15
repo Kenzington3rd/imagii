@@ -17,6 +17,10 @@ interface SettingsSchema {
   'record.webcamCorner'?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   'export.lastOutputDir'?: string
   'clipKit.lastOutputDir'?: string
+  /** T-20: PostChecklist posting diary. Shape is validated renderer-side by
+   *  shared/postingDiary.parseDiaryEntries; the schema below only pins the
+   *  container so a corrupt value can't take electron-store's get() down. */
+  postingDiary?: unknown[]
 }
 
 /**
@@ -44,7 +48,8 @@ const schema = {
     enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right']
   },
   'export.lastOutputDir': { type: 'string' },
-  'clipKit.lastOutputDir': { type: 'string' }
+  'clipKit.lastOutputDir': { type: 'string' },
+  postingDiary: { type: 'array', maxItems: 100 }
 } as const
 
 export const store = new Store<SettingsSchema>({
@@ -67,3 +72,8 @@ export function getSetting<T = unknown>(key: SettingsKey): T | undefined {
 export function setSetting<T = unknown>(key: SettingsKey, value: T): void {
   store.set(key as keyof SettingsSchema, value as never)
 }
+
+// Test-only export so settingsKnownKeys.test.ts can prove the on-disk schema
+// and the IPC allowlist describe the same set of keys — a key in one but not
+// the other either bypasses validation or can never be written.
+export const __storeTesting__ = { schema }

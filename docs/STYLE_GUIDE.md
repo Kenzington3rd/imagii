@@ -63,6 +63,11 @@ Repeated UI is a component, not copy-paste:
 - **`OutputDirLabel`** — the folder-icon + basename chip in export
   panels. Its `basename()` helper is pure and unit-tested.
 - **`AppToaster`** — the app-wide toast surface.
+- **`useUndoRedoHotkeys(undo, redo)`** — the window-level
+  Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z binding for a studio's own history
+  (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, and Image all call it;
+  its pure `undoRedoIntent` half is what the unit test drives. Never
+  hand-roll a fourth copy of the branch.
 - **`PanelHeader`** — every panel section header. Renders the standard
   `<h3>` (`text-xs font-semibold uppercase tracking-wide text-ink-muted`,
   an `Icon`, `inline-flex items-center gap-1.5`). Pass an `actions`

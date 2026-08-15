@@ -2,16 +2,30 @@ import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Modal } from './Modal'
 
-const SHORTCUTS_BY_ROUTE: Record<string, Array<{ keys: string; description: string }>> = {
+export interface Shortcut {
+  keys: string
+  description: string
+}
+
+/**
+ * The app's only shortcut documentation, so it is held to the code:
+ * `tests/unit/hotkeyTable.test.ts` walks each route's real component tree and
+ * fails if a row here claims a binding the route does not register. Round 23
+ * drift the table carried: Audio Studio advertised a Space play/pause
+ * binding that never existed (the waveform has a play BUTTON — Space
+ * activates it only when it happens to be focused), and Video Studio gained
+ * Ctrl+Z / Ctrl+Y in T-15 without the table saying so.
+ */
+export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/video': [
-    { keys: 'Space', description: 'Play / pause' },
+    { keys: 'Space', description: 'Play / pause (player focused)' },
     { keys: '← / →', description: 'Nudge 0.1s' },
     { keys: ', / .', description: 'Frame step back / forward' },
     { keys: 'I / O', description: 'Set in / out point at playhead' },
+    { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo clip edits' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
   '/audio': [
-    { keys: 'Space', description: 'Play / pause' },
     { keys: 'Drag on waveform', description: 'Mark region to cut' },
     { keys: 'Click cut tag', description: 'Undo a cut' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo cleanup chain' },
@@ -25,7 +39,7 @@ const SHORTCUTS_BY_ROUTE: Record<string, Array<{ keys: string; description: stri
     { keys: 'P', description: 'Pencil tool' },
     { keys: 'Ctrl+V', description: 'Paste image from clipboard' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo' },
-    { keys: 'Delete', description: 'Remove selected layer' },
+    { keys: 'Delete / Backspace', description: 'Remove selected layer' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
   '/record': [
@@ -46,6 +60,26 @@ const SHORTCUTS_BY_ROUTE: Record<string, Array<{ keys: string; description: stri
   ]
 }
 
+/**
+ * Pure toggle predicate: `?` with no Ctrl/Meta, and never while the user is
+ * typing (a `?` belongs in the textarea, not in a modal that steals focus).
+ */
+export function isOverlayToggleKey(e: {
+  key: string
+  ctrlKey: boolean
+  metaKey: boolean
+  tagName: string
+}): boolean {
+  if (e.key !== '?') return false
+  if (e.ctrlKey || e.metaKey) return false
+  return e.tagName !== 'INPUT' && e.tagName !== 'TEXTAREA'
+}
+
+/** The route's rows, falling back to Home's for an unlisted path. */
+export function shortcutsForRoute(pathname: string): Shortcut[] {
+  return SHORTCUTS_BY_ROUTE[pathname] ?? SHORTCUTS_BY_ROUTE['/home'] ?? []
+}
+
 export function HotkeyOverlay(): JSX.Element | null {
   const [open, setOpen] = useState(false)
   const location = useLocation()
@@ -55,19 +89,24 @@ export function HotkeyOverlay(): JSX.Element | null {
     // scrim click, and focus restore now, so we no longer need our own
     // Escape branch here.
     function onKey(e: KeyboardEvent): void {
-      if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
-        const tag = (e.target as HTMLElement).tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return
-        e.preventDefault()
-        setOpen((v) => !v)
+      if (
+        !isOverlayToggleKey({
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          tagName: (e.target as HTMLElement | null)?.tagName ?? ''
+        })
+      ) {
+        return
       }
+      e.preventDefault()
+      setOpen((v) => !v)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const path = location.pathname
-  const shortcuts = SHORTCUTS_BY_ROUTE[path] ?? SHORTCUTS_BY_ROUTE['/home']
+  const shortcuts = shortcutsForRoute(location.pathname)
 
   return (
     <Modal
@@ -81,12 +120,14 @@ export function HotkeyOverlay(): JSX.Element | null {
         <button
           onClick={() => setOpen(false)}
           className="text-ink-dim hover:text-ink-base text-sm"
+          title="Close shortcuts"
+          aria-label="Close shortcuts"
         >
           Esc
         </button>
       </div>
       <ul className="flex flex-col gap-1.5 text-sm">
-        {(shortcuts ?? []).map((s, i) => (
+        {shortcuts.map((s, i) => (
           <li key={i} className="flex items-center gap-3">
             <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center">
               {s.keys}

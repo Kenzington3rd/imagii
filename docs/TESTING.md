@@ -34,9 +34,26 @@ re-run loop).
   `searchValidate.test.ts` both lock the rejection classes (unknown
   key, hostile string, oversized payload) so a future refactor that
   loosens the gate breaks the build.
+- **Structural checks over the renderer source** (round 23). No DOM
+  means a mounted component can't be rendered here — but the questions
+  the round-22 sweep found unanswered are answerable statically, and
+  four tests in `tests/unit/` now answer them: `interactiveNesting`
+  parses every `.tsx` with the TypeScript TSX parser and fails on a
+  control nested inside another; `tutorialTargets` resolves every
+  tutorial step's selector against the components its route can render;
+  `hotkeyTable` requires each HotkeyOverlay row to be a real binding
+  found in that route's tree or a listed mouse hint; `interactionWiring`
+  pins that each control the sweep found orphaned is actually mounted.
+  `routeSources.ts` (a helper, not a spec) does the import-graph walk
+  they share. Two rules for this style: it cannot see conditional
+  rendering, so a green run means "reachable", not "on screen"; and it
+  reads source text, so **always run it against the broken state first**
+  — `tutorialTargets` initially passed with both missing attributes
+  deleted, because the tutorial definition files contain the selector
+  strings and are reachable from every studio.
 
-**Count.** 360+ tests across 34 files (round 17). Fresh-run time on a
-mid-range laptop: ~8 seconds.
+**Count.** 715 tests across 52 files (round 23). Fresh-run time on a
+mid-range laptop: ~7 seconds.
 
 **Adding a test.** Drop `foo.test.ts` next to `foo.ts`. Vitest picks it
 up automatically. If the module under test imports `electron`, see

@@ -23,7 +23,22 @@ describe('settings known-keys validator', () => {
     expect(KNOWN_SETTINGS_KEYS).toContain('welcomeSeen')
     expect(KNOWN_SETTINGS_KEYS).toContain('export.lastOutputDir')
     expect(KNOWN_SETTINGS_KEYS).toContain('clipKit.lastOutputDir')
-    expect(KNOWN_SETTINGS_KEYS.length).toBeGreaterThanOrEqual(15)
+    // T-20: the posting diary moved out of localStorage into settings. A
+    // missing entry here would make every diary read and write throw at the
+    // IPC boundary instead of persisting.
+    expect(KNOWN_SETTINGS_KEYS).toContain('postingDiary')
+    expect(KNOWN_SETTINGS_KEYS.length).toBeGreaterThanOrEqual(16)
+  })
+
+  it('has no duplicate keys', () => {
+    expect(new Set(KNOWN_SETTINGS_KEYS).size).toBe(KNOWN_SETTINGS_KEYS.length)
+  })
+
+  it('validates the store schema and the allowlist against each other', async () => {
+    // The gate and the on-disk schema are two lists that must not drift: a
+    // key the gate accepts but the schema omits would round-trip unvalidated.
+    const { __storeTesting__ } = await import('../store')
+    expect(Object.keys(__storeTesting__.schema).sort()).toEqual([...KNOWN_SETTINGS_KEYS].sort())
   })
 
   it('accepts every known key', () => {

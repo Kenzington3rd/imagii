@@ -8,6 +8,7 @@ import { Image } from './routes/Image'
 import { Record } from './routes/Record'
 import { References } from './routes/References'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { HotkeyOverlay } from './components/HotkeyOverlay'
 import { Icon } from './components/Icon'
 import { useAutosave } from './hooks/useAutosave'
 
@@ -72,6 +73,11 @@ export function App(): JSX.Element {
         <Route path="/ai-art" element={<Navigate to="/references" replace />} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
+      {/* T-13: the overlay owns the app-wide `?` binding and is the only
+          shortcut documentation we ship — Player's hint copy has advertised
+          it since round 15. Mounted outside <Routes> so one instance serves
+          every route and reads the current one via useLocation. */}
+      <HotkeyOverlay />
     </ErrorBoundary>
   )
 }
