@@ -356,7 +356,8 @@ unit); Clean audio -> extract-handoff E2E; Close both branches -> E2E;
 TutorialButton -> E2E. Importer: drop -> export.spec + every launch;
 picker -> HL-dialog. Player: transport/Space/safe-zones/events -> E2E;
 nudges + frame steps + ,/. -> seek-request E2E, end-state blocked by
-[T-37 BUG-SEEK]; I/O -> E2E. CropOverlay: all 10 rows -> E2E incl.
+[T-37 BUG-SEEK] at round 25 — UPGRADED round 27 to landed-playhead
+E2E, see the round-27 section; I/O -> E2E. CropOverlay: all 10 rows -> E2E incl.
 uncheck-clears-store proof. Timeline: both drags -> E2E + undo. ClipList:
 all 6 rows -> E2E incl. confirm both branches. OutputPreview select ->
 dataURL-delta E2E. ColorGrade: all 7 rows -> E2E. TextOverlayEditor:
@@ -592,3 +593,33 @@ ticket).
     Windows "screen is being shared" / camera-in-use indicator clears
     within a second or two. If it lingers, `screenStreamRef` /
     compositor teardown regressed.
+
+---
+
+## Dispositions — round 27 (fix wave batch 1: T-37)
+
+Seeking works, so the seek rows stop being request-level:
+
+- **Player arrow nudges (2), `,`/`.` frame keys (2), frame-step buttons
+  (2):** upgraded from "seek requested" to landed-playhead E2E —
+  video-core.spec.ts "player keyboard: nudges and frame steps land the
+  playhead, I and O move the clip range" asserts both the exact
+  requested time AND `currentTime` within half a frame (0.0333 s at the
+  15 fps fixture; Chromium lands within 1 microsecond, the tolerance is
+  headroom).
+- **New row — media seekability itself:** video-core.spec.ts "player
+  seeking: the source is seekable and parks mid-file without playing
+  (T-37)" — `video.seekable` is one range spanning the duration; a park
+  at 1.5 s of a 2 s clip with Play never pressed (readout `0:01.5`,
+  timeline playhead at 70-80%, still paused, frame decoded); then a
+  backwards seek. No prior row covered the media element's own
+  capability, which is exactly where the shipped break lived.
+- **Trust boundary widened, refusals intact:** protocol.test.ts 17 ->
+  42 — Range is new input at the imagii-file:// boundary; one named
+  case per malformed form, 416 only for a valid range missing the
+  file, and every original path-safety refusal re-asserted (plus
+  hostile-path-with-Range) against the no-file-access recorder.
+- Gap that remains, now ticketed [T-52]: the Timeline track draws a
+  playhead but takes no click — click-to-scrub does not exist; plus two
+  seek edges (source-change playhead reset, tail nudge clamping to the
+  ffprobe duration ~20 ms short of the element's).

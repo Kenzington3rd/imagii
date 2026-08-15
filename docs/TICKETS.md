@@ -601,7 +601,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Layer 5 or E2E proof of a mid-file seek (e.g. park at 1.5s of a
         2s clip without playing through).
   - [ ] LESSONS entry.
-- **Status:** open (P1)
+- **Status:** done (round 27 — see Done)
 
 ## T-38 — preview canvas is blank until the first undoable edit
 
@@ -719,6 +719,9 @@ Wave B findings slot in by the same usability ruling:
 - **T-41, T-43, T-46, T-49** ride the tail with the polish tickets.
 - **T-51** (win32-gated drawtext pixels) is test infrastructure — pair
   it with the first release-workflow run after the fix waves.
+- **T-52** (timeline click-to-scrub + seek edges, filed round 27) runs
+  right after T-45: with seeking fixed, the un-clickable timeline is
+  the most visible affordance gap in the app.
 
 Every fix flips its pin; every flip is red-green evidenced; LESSONS per
 IMG-PREC.
@@ -839,6 +842,28 @@ IMG-PREC.
         preset promises it can be used).
 - **Status:** open
 
+## T-52 — timeline click-to-scrub, and two seek edges the T-37 fix exposed
+
+- **Spec:** T-37 worker findings, not fixed there. (a) Timeline renders
+  a playhead from currentTime but has NO click handler — "click the
+  timeline to scrub" is the most obvious seeking gesture and it does
+  nothing; now that seeking works this is the most visible remaining
+  gap (usability ruling: the playhead invites the click). (b)
+  `Player.tsx:28` resets `currentTime = 0` whenever `source?.url`
+  identity changes — a no-op while seeking was broken, a real playhead
+  rewind now if source identity ever churns. (c) `nudge()` clamps to
+  the ffprobe duration (2.0) rather than the media element's
+  (2.020136), so tail nudges stop ~20 ms short of the real end.
+- **Acceptance criteria:**
+  - [ ] Clicking (and dragging) on the Timeline track seeks there;
+        landed-playhead E2E like the T-37 assertions.
+  - [ ] Source-change effect only resets the playhead on a genuinely
+        different file (or is removed if redundant); regression test.
+  - [ ] Tail nudge reaches the media element's own duration; unit or
+        E2E pin.
+  - [ ] Ledger rows for the new interactive surface in the same PR.
+- **Status:** open
+
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
 
 - **Spec:** T-23 finding 5 — a per-platform capability gap, same class
@@ -864,6 +889,31 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 27 — fix wave batch 1: T-37 (P1 seeking). The protocol handler
+now serves bytes itself (streamed fs read, RFC 9110 Range semantics:
+206/Content-Range, 416 only for a valid range that misses the file,
+invalid input ignored per §14.2) instead of `net.fetch(file://…)`,
+which dropped Range and made Chromium report every video non-seekable.
+Removing `net.fetch` also removed `pathToFileURL` — the
+platform-pinned-URL class from the v1.3.0 release failure is gone from
+the handler rather than re-tested. protocol.test.ts 17 -> 42 (real
+tmpdir files, one named case per malformed-Range form, path-safety
+refusals kept verbatim + a Range-present hostile-path case, no-file-
+access teeth preserved); video-core.spec.ts seek pins upgraded from
+"requested" to "landed within half a frame", plus a new
+seekable-spans-duration + park-at-1.5s-without-playing test.
+Red-green: both E2E pins failed on the unfixed build (`seek to 0.4s
+landed at 0s`; seekable end 0) and pass rebuilt. Expedited by Fable:
+782 unit / 98 E2E green under the expediter's own runs; reversed-range
+mutation re-executed personally (exactly the named test red, restore,
+42/42; an expediter git-checkout slip during the proof was recovered
+by byte-exact reconstruction, verified by the same 42 tests and diff
+stat). Worker findings ticketed as T-52 (timeline click-to-scrub +
+two seek edges); T-38/T-40 confirmed still pinned. LESSONS entry: a
+protocol handler is an HTTP server — ignored request headers fail as
+silently missing capabilities, and "the binding requested the right
+thing" is not an end state.
 
 Round 26 — Wave B of the coverage fleet (T-23, T-25, T-27; expedited
 by Fable: 757 unit / 97 E2E full-suite green under the expediter's own

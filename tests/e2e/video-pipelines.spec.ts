@@ -74,10 +74,10 @@ const __dirname = path.dirname(__filename)
  *
  * ── Pinned defects this spec works around ─────────────────────────────
  *
- * T-37 (seeking clamps to 0), T-38 (blank preview) and T-40 (undo
- * coalescing) are all pinned by T-22. None of the panels here seek, so only
- * one consequence matters: any playhead parking is done by playback, never
- * by assigning currentTime. New findings this spec turned up are marked
+ * T-38 (blank preview) and T-40 (undo coalescing) are pinned by T-22. T-37
+ * (seeking clamped to 0) was fixed on 2026-08-15 — the protocol handler now
+ * answers Range requests — but none of the panels here seek, so the playback-
+ * only parking below is left alone. New findings this spec turned up are marked
  * `FINDING-n` at the assertion that pins them and listed in the report.
  */
 

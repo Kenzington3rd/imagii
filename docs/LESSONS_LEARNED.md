@@ -14,6 +14,63 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-37: `net.fetch(file://…)` made every video unseekable
+
+### Bug — the playhead could only ever be at 0
+- **Root cause.** `registerFileProtocol` answered every `imagii-file://`
+  request with `net.fetch(pathToFileURL(path))`. That hands back the
+  whole file, 200, no `Accept-Ranges` — the `Range` header the media
+  stack sent was dropped on the floor. Chromium treats a resource that
+  will not answer a Range request as non-seekable: `video.seekable`
+  reads `[0, 0]`, and the HTML spec clamps every assignment to
+  `currentTime` into the seekable ranges, i.e. to 0. Playback looked
+  perfect because sequential streaming never needs a seek, so the one
+  flow everybody exercised hid the break, while the arrow nudges, the
+  `,` / `.` frame steps, both frame buttons and any precise positioning
+  silently rewound the clip to the start. It shipped that way.
+- **Fix.** The handler serves the bytes itself: `stat` for the size,
+  `createReadStream(path, { start, end })` through `Readable.toWeb` for
+  the body, explicit `Accept-Ranges: bytes` / `Content-Length` /
+  `Content-Type` on every response, and `206 Partial Content` with
+  `Content-Range` when a `Range` header is present. RFC 9110 semantics
+  on the parse, because the header is untrusted input at the same trust
+  boundary as the URL: anything invalid or unsupported (garbage,
+  reversed spec, multi-range list, unknown unit, non-integer, integer
+  too large to be safe) is IGNORED and the full 200 body is served;
+  `416` is reserved for a syntactically valid range that misses the file
+  (first-byte-pos at or past EOF, zero-length suffix). Dropping
+  `net.fetch` also dropped `pathToFileURL` from the handler, and with it
+  the entire platform-pinned-URL class the entry below is about.
+- **Test.** `src/main/protocol.test.ts` (17 tests to 42, now driving
+  real files under `os.tmpdir()` instead of a mocked `net.fetch`):
+  exact bytes + `Content-Range` + `Content-Length` for leading,
+  mid-file, open-ended, suffix, clamped and `bytes=0-` probe forms, and
+  one named refusal case per malformed form. `tests/e2e/
+  video-core.spec.ts` — "player seeking: the source is seekable and
+  parks mid-file without playing (T-37)" asserts `seekable` spans the
+  duration and parks at 1.5 s of a 2 s clip having never pressed Play;
+  "player keyboard: nudges and frame steps land the playhead…" now
+  asserts where the playhead LANDS (within half a frame at 15 fps) as
+  well as what each binding requested. Both were run against the
+  pre-fix build first and failed with `seek to 0.4s landed at 0s` and a
+  `seekable` end of 0.
+- **Lesson.** **A protocol handler is an HTTP server, and a media
+  element is an HTTP client with opinions.** `net.fetch(file://…)` is
+  not a drop-in way to serve media: the request headers a custom scheme
+  receives — `Range` above all — are input the handler has to answer,
+  and a handler that ignores them does not fail, it silently loses a
+  CAPABILITY. Nothing throws, nothing logs, the feature just quietly
+  isn't there. When we hand a browser API a resource, the failure mode
+  to go looking for is the reduced capability, not the exception. The
+  test corollary is sharper: "the binding requested the right thing" is
+  not an end state. Four pins in `video-core.spec.ts` stopped at the
+  requested seek and stayed green for the entire life of a 100% broken
+  feature — the ledger even recorded the block as a disposition. A
+  disposition that says "the end state is unreachable" is a claim about
+  the product, and this one was really a bug report nobody had filed.
+
+---
+
 ## 2026-08-15 — Round 26 (coverage Wave B): a disposition is a claim, and claims get probed
 
 No product code changed this round, but three findings generalize.
