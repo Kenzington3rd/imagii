@@ -23,17 +23,21 @@ const __dirname = path.dirname(__filename)
  * renderer state alone. "Persisted" is half of nearly every criterion in this
  * ticket, and only the file proves it.
  *
- * Six product defects were found while writing this spec. None is fixed here
- * (T-21 is a coverage ticket and touches no `src/`), each is asserted at the
- * boundary where it actually bites, and each carries a `T-21 FINDING` comment
- * at that assertion:
- *   A. Home never mounts <AppToaster/>, so every toast Home raises (Restore,
- *      Discard, project save/load, and all their error paths) is invisible.
- *   B. useGlobalUndo's tracker is scoped to Home's mount, so a change made
- *      inside a studio is never undoable from Home's global Undo button.
- *   C. Home's Undo/Redo enablement is computed at render and the hook
- *      suppresses its own store event, so nothing re-renders Home after the
- *      click — Redo stays disabled after an Undo.
+ * Six product defects were found while writing this spec. Three have since
+ * been fixed and their contrast assertions here are positives now — the
+ * defect each one used to pin is named at the assertion:
+ *   A. [FIXED, T-31] Home never mounted <AppToaster/>, so every toast Home
+ *      raises (Restore, Discard, project save/load, and all their error
+ *      paths) was dispatched into a page that could not draw it. One
+ *      app-level mount now serves every route.
+ *   B. [FIXED, T-32] useGlobalUndo's tracker was scoped to Home's mount, so
+ *      a change made inside a studio was never undoable from Home's global
+ *      Undo button. The order is module-level now and survives routing.
+ *   C. [FIXED, T-32] Home's Undo/Redo enablement was computed at render and
+ *      the hook suppressed its own store event, so nothing re-rendered Home
+ *      after the click and Redo stayed disabled after an Undo.
+ * The other three are still open, each asserted at the boundary where it
+ * bites and carrying a `T-21 FINDING` comment there:
  *   D. AutosaveRestore's corruption branch requires `info.ageMs`, which the
  *      reader never returns for a file that fails validation, so the Clear /
  *      Dismiss banner cannot render (also pinned in
@@ -413,27 +417,34 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await waitForHome(window)
       await installToastLog(window)
 
+      // T-31: Home has a toast surface at all — exactly one, mounted by
+      // App.tsx. Two would draw every toast twice; react-hot-toast keeps one
+      // toast store per toaster id and every <Toaster> renders all of it.
+      await expect(window.locator('[data-rht-toaster]')).toHaveCount(1)
+
       // The banner only renders for an autosave that VALIDATES and is fresh.
       await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
       await window.screenshot({ path: path.join(SCREENSHOTS, 'home-02-autosave-banner.png') })
 
       await window.getByRole('button', { name: 'Restore' }).click()
 
+      // T-31 (was T-21 finding A): the success toast is drawn ON HOME. Asserted
+      // visible first — toasts auto-dismiss after 2 s — then read back off the
+      // durable MutationObserver log, which is what the old contrast pinned as
+      // never happening.
+      await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
+      expect(await readToastLog(window)).toContain('Restored from autosave')
+
       // The banner dismisses itself once the restore lands.
       await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0, { timeout: 20_000 })
-
-      // T-21 FINDING A (not fixed here): Home renders no <AppToaster/>, so
-      // this success toast — and every error toast Home raises — is dispatched
-      // into a page with no Toaster to draw it. The same call in Video Studio
-      // renders (see the RecentFilesMenu test's 'Video loaded' assertion), so
-      // the difference is the missing mount, not the toast.
-      await expect(window.getByText('Restored from autosave')).toHaveCount(0)
-      expect(await readToastLog(window)).not.toContain('Restored from autosave')
 
       // Video store rehydrated: the studio shows the restored source (name
       // read back off the real file) and the restored clip.
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
       await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 20_000 })
+      // T-31: the studio no longer mounts its own — still exactly one, the
+      // app-level surface following the route.
+      await expect(window.locator('[data-rht-toaster]')).toHaveCount(1)
       await expect(window.getByText('autosaved-source.mp4')).toBeVisible({ timeout: 20_000 })
       await expect(window.getByRole('button', { name: 'Select clip Restored clip' })).toBeVisible()
       await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
@@ -469,11 +480,10 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
       await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
 
-      // useGlobalUndo ignores store events for the first 250 ms after mount
-      // (it filters first-render synchronization). A human reads the banner
-      // before clicking Restore; the wait makes the test do the same rather
-      // than racing the tracker.
-      await window.waitForTimeout(700)
+      // No settling wait any more: T-32 dropped the 250 ms post-mount window
+      // the old tracker needed, because it only records real history steps —
+      // a store event that moves no undo step cannot arm the buttons, so
+      // there is nothing to race.
       await window.getByRole('button', { name: 'Restore' }).click()
 
       // The restore is a canvas mutation, so the tracker names that studio…
@@ -492,21 +502,20 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.locator('a[href="#/home"]').first().click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
 
-      // T-21 FINDING B (not fixed here): the tracker lives in Home's own
-      // useState and its subscriptions only exist while Home is mounted, so
-      // returning from a studio starts from zero — a change made inside a
-      // studio can never be reached by Home's global Undo. That is what the
-      // ledger row ("state reverts") promises and what this asserts today.
+      // T-32 (was T-21 finding B): the record is module-level now, so walking
+      // into a studio and back does not wipe it. The one step here has been
+      // undone, so Undo is spent — but the undone step is still on the redo
+      // side after the round trip, which the old Home-scoped tracker lost.
       await expect(window.getByText('last: no recent change')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
-      await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
     } finally {
       await app.close()
       cleanup(root)
     }
   })
 
-  test('Home global Redo stays disabled after an Undo (documented defect)', async () => {
+  test('Home global Redo enables after an Undo and re-applies the change', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('global-redo')
     const userDataDir = path.join(root, 'userData')
@@ -517,21 +526,125 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     try {
       const window = await app.firstWindow()
       await waitForHome(window)
-      await window.waitForTimeout(700)
       await window.getByRole('button', { name: 'Restore' }).click()
       await expect(window.getByText('last: Image Canvas')).toBeVisible({ timeout: 20_000 })
       await window.getByRole('button', { name: 'Undo' }).click()
 
-      // T-21 FINDING C (not fixed here): canUndo/canRedo are read from the
-      // stores during Home's render, and the hook deliberately swallows the
-      // store event its own undo() raises (undoingRef), so NOTHING re-renders
-      // Home after the click. canvasStore.canRedo() is true underneath, but
-      // the button is still painted from the pre-click snapshot: Redo stays
-      // disabled and Undo stays enabled with an empty past. The redo half of
-      // the ledger's Home row is unreachable through the UI until the hook
-      // re-renders on its own action.
-      await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
+      // T-32 (was T-21 finding C): the click itself re-derives enablement.
+      // The old hook read canUndo/canRedo off getState() during render and
+      // swallowed the store event its own undo() raised, so Home never
+      // re-rendered: Redo stayed dark and Undo stayed lit over an empty past.
+      await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
+      await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
+
+      // And Redo is reachable through the UI, not just enabled: the click puts
+      // the restored layer back on the canvas.
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(window.getByText('last: Image Canvas')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeEnabled()
+      await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
+
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Redoable rect')).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Home global Undo walks the studios newest-first — a video edit and a canvas edit', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('global-undo-order')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'ordered-source.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: ALL_TUTORIALS_SEEN,
+      recentFiles: { video: [fixture] }
+    })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const home = window.locator('a[href="#/home"]').first()
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const redo = window.getByRole('button', { name: 'Redo' })
+      const goHome = async (): Promise<void> => {
+        await home.click()
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      }
+      // Exact, because the export panel carries a "Compile clips (n)" header
+      // that a substring match also hits.
+      const clipList = (n: number): ReturnType<Page['getByRole']> =>
+        window.getByRole('heading', { name: `Clips (${n})`, exact: true })
+      await waitForHome(window)
+
+      // Cold Home: nothing tracked. Loading a source is not an undoable step
+      // either — it resets that studio's history — so this must still read
+      // empty after the import below is undone back to nothing.
+      await expect(window.getByText('last: no recent change')).toBeVisible({ timeout: 20_000 })
+      await expect(undo).toBeDisabled()
+
+      // ── a step made inside Video Studio, with Home unmounted ──
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Recent (1)' }).click()
+      await window.getByRole('button', { name: /ordered-source\.mp4/ }).click()
+      await expect(clipList(1)).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: '+ Add clip' }).click()
+      await expect(clipList(2)).toBeVisible()
+
+      // T-32 (was T-21 finding B): Home was never on screen while that
+      // happened, and the tracker still has it.
+      await goHome()
+      await expect(window.getByText('last: Video Studio')).toBeVisible()
+      await expect(undo).toBeEnabled()
+
+      // ── then a step made inside Stream Graphics ──
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await goHome()
+      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+
+      // ── first Undo takes the canvas step, the newest one ──
+      await undo.click()
+      await expect(window.getByText('last: Video Studio')).toBeVisible()
+      await expect(redo).toBeEnabled()
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
+      await goHome()
+      // …and left the video edit alone.
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(clipList(2)).toBeVisible({ timeout: 20_000 })
+      await goHome()
+
+      // ── second Undo takes the video step ──
+      await undo.click()
+      await expect(window.getByText('last: no recent change')).toBeVisible()
+      await expect(undo).toBeDisabled()
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(clipList(1)).toBeVisible({ timeout: 20_000 })
+      await goHome()
+
+      // ── Redo mirrors it: video first, then the canvas ──
+      await expect(redo).toBeEnabled()
+      await redo.click()
+      await expect(window.getByText('last: Video Studio')).toBeVisible()
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(clipList(2)).toBeVisible({ timeout: 20_000 })
+      await goHome()
+
+      await redo.click()
+      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+      await expect(redo).toBeDisabled()
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
     } finally {
       await app.close()
       cleanup(root)

@@ -1,4 +1,3 @@
-import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { useReferencesStore } from './state/referencesStore'
 import { ReferencePanel } from './ReferencePanel'
@@ -46,7 +45,6 @@ export function ReferencesStudio(): JSX.Element {
         )}
       </div>
 
-      <AppToaster />
       {tutorial.active ? <Tutorial def={aiTutorial} onClose={tutorial.stop} /> : null}
     </div>
   )

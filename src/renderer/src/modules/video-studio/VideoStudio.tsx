@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
-import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useVideoStore } from './store/videoStore'
@@ -148,7 +147,6 @@ export function VideoStudio(): JSX.Element {
         <div data-tutorial="video-import"><Importer /></div>
       )}
 
-      <AppToaster />
       {tutorial.active ? (
         <Tutorial def={videoTutorial} onClose={tutorial.stop} />
       ) : null}

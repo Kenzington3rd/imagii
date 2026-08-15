@@ -14,6 +14,130 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-15 — T-31 + T-32: Home's chrome was mounted per-route while the promise was app-wide
+
+Two tickets, one root lesson, so one entry: both the toast surface and
+the global-undo tracker were wired to a component's lifetime when the
+thing they promise the user is app-wide.
+
+### Bug — every toast Home raised was silently dropped (T-31)
+- **Root cause.** `<AppToaster/>` was mounted by each of the five
+  studios and by nobody else. Home is not a studio, so "Project saved",
+  "Project loaded", "Restored from autosave", "Autosave discarded." and
+  all four of Home's error toasts were dispatched into a page with no
+  Toaster to draw them. `toast.error(...)` is not a no-op when the
+  surface is missing — react-hot-toast happily writes into its global
+  store and every subscriber (there were none) renders it — so the call
+  sites looked correct and the failure was invisible from the code. The
+  worst case is the silent one: `handleLoad`'s "Couldn't load project:
+  …" is the only feedback a rejected project file ever produces, so a
+  user who picked a corrupt `.imagii.json` saw absolutely nothing
+  happen.
+- **Fix.** One `<AppToaster/>` in `App.tsx`, next to `HotkeyOverlay` and
+  outside `<Routes>` — the mount that already exists for app-wide
+  chrome — and the five per-studio copies deleted. It has to be a move,
+  not an addition: react-hot-toast keeps one toast store per `toasterId`
+  and every `<Toaster>` without one renders that store in full
+  (`node_modules/react-hot-toast/dist/index.js`, the `V`/`T` registry
+  and `oe`'s `x.map`), so an app-level mount plus a studio mount draws
+  every studio toast twice, in two stacked fixed containers. Dedup is
+  by toast id INSIDE the store, never across renderers. The previous
+  arrangement had no double-render window only because React Router
+  renders one route at a time.
+- **Test.** `tests/e2e/home-chrome.spec.ts` — "AutosaveRestore: Restore
+  rehydrates the video and image stores" now asserts the Restore toast
+  is VISIBLE on Home and lands in the MutationObserver log (it asserted
+  the opposite, as T-21 finding A), and counts `[data-rht-toaster]` as
+  exactly 1 on Home and again on the Video Studio route — the count is
+  what would catch a re-added studio mount. The studio side is a
+  positive control in the same file: "RecentFilesMenu…" still reads
+  'Video loaded' and the FixWizard test still reads 'Loaded', both
+  raised inside studios that no longer mount a Toaster of their own.
+  `tests/unit/interactionWiring.test.ts` — "T-31 — the toast surface is
+  mounted app-wide" (+3) pins the mount and that no studio has a copy.
+  Red-green: deleting the App.tsx mount fails the count assertion, and
+  with that line removed too, the visibility assertion times out.
+
+### Bug — global Undo could not see studio work, and Redo never enabled (T-32)
+- **Root cause.** Two mistakes in one hook, both from tying app state to
+  Home's mount. (1) `useGlobalUndo` kept its "which studio changed last"
+  record in Home's own `useState`, and subscribed to the three studio
+  stores from Home's `useEffect`. Home is unmounted for the entire time
+  the user is editing, so the record started empty on every return from
+  a studio: the global Undo could only ever undo something that happened
+  while Home was on screen, which in practice meant the autosave restore
+  and nothing else. (2) Enablement was read with
+  `useCanvasStore.getState().canUndo()` DURING render — a call, not a
+  subscription — while the hook set an `undoingRef` flag to suppress the
+  store event its own `undo()` raised. Suppressing the event also
+  suppressed the only thing that would have re-rendered Home, so after
+  a click the buttons stayed painted from the pre-click snapshot: Redo
+  dark although `canRedo()` was true underneath, Undo lit over an empty
+  past. Redo was unreachable through the UI.
+- **Fix.** The order lives at module level in `useGlobalUndo.ts`, next
+  to the stores whose lifetime it shares: two arrays (`undoOrder`,
+  `redoOrder`) and three subscriptions registered at import and never
+  torn down. The subscriptions no longer classify events with a flag —
+  they count. `reconcile()` makes the number of entries a store holds in
+  each array equal that store's own `history.past`/`history.future`
+  length, which covers a new change, an undo, a redo and a history reset
+  identically and, crucially, covers them whoever ran them: a Ctrl+Z
+  inside Video Studio moves the global order exactly like Home's button
+  does. `record()` returns early when the `history` object is reference-
+  identical (zustand's partial `set` keeps untouched keys), which is an
+  exact "was this a history event" test and also filters video's
+  coalesced trim drags. The React half is now `useSyncExternalStore` over
+  a version counter bumped by that same code path, so enablement is
+  re-derived after the click the hook itself made — no flag, no
+  `forceUpdate`. Cross-studio ordering falls out of the arrays: Home's
+  Undo takes the newest entry that its store can still act on, so edit
+  video then the canvas and the first Undo hits the canvas, the second
+  hits video, and Redo mirrors it. The 250 ms "let first-render
+  synchronisation settle" window is gone with the flag: only real
+  history steps arm the buttons, so there is nothing to settle.
+- **Test.** `src/renderer/src/hooks/useGlobalUndo.test.ts` (new, 11
+  tests) drives the real three stores with no React at all — which is
+  the point, since "records studio work with Home unmounted" is exactly
+  what the old design could not do: newest-first undo across video and
+  canvas, mirrored redo, a studio undoing on its own, a new change
+  retiring that studio's redo, a history reset dropping its entries,
+  non-undoable mutations (`setTool`, `selectLayer`, `setCurrentTime`,
+  `requestSeek`) not arming anything, and the 50-step cap case where
+  `past` stops growing. `tests/e2e/home-chrome.spec.ts` — "Home global
+  Undo walks the studios newest-first — a video edit and a canvas edit"
+  makes both edits INSIDE the studios (Recent-files load + "+ Add clip",
+  then "Start with text"), walks Home each time, and drives both Undos
+  and both Redos to their end states in the studios; "Home global Redo
+  enables after an Undo and re-applies the change" is T-21's finding-C
+  pin inverted; the finding-B pin's tail now asserts the record survives
+  the round trip instead of being wiped. Red-green: all three T-21 pins
+  passed on the pre-fix build and failed on the fixed one before being
+  rewritten. Mutations: re-scoping the tracker to Home's mount (a
+  `homeMounted` flag set in an effect, arrays cleared on unmount) turns
+  both cross-route positives red at `last: Video Studio` / Redo-enabled;
+  making `bump()` a no-op turns the Redo test red at the readout;
+  deleting the capped-push branch reds only the 50-step unit test;
+  dropping the `redoOrder` reconcile reds five of the eleven.
+- **Lesson.** **Chrome that promises something app-wide has to be
+  mounted app-wide — and "app-wide" includes the state behind it, not
+  just the element.** Both halves of this entry are the same mistake at
+  different depths: a toast surface that only exists on five of six
+  routes, and a change tracker whose subscriptions only exist while one
+  route is rendered. The tell in both cases is a lifetime mismatch — the
+  data (zustand stores) outlives the component, so anything derived from
+  it that lives in the component starts from zero every time the user
+  navigates. Second tell, specific to undo: a suppression flag whose job
+  is "ignore the event my own action raised" is almost always hiding a
+  classification problem. Deriving the meaning of a change from the
+  before/after state (past and future lengths) needs no flag, is correct
+  for actions taken through other doors — the studio's own Ctrl+Z — and
+  does not have to swallow the event that keeps the UI honest. And per
+  the usability tiebreaker: a disabled button that is disabled only
+  because nothing re-rendered is worse than a broken feature, because
+  the app is telling the user there is nothing to redo when there is.
+
+---
+
 ## 2026-08-15 — T-52: the Timeline drew a playhead the video was nowhere near
 
 ### Bug — leave Video Studio, come back, and the marker lied

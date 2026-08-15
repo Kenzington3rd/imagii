@@ -62,7 +62,11 @@ Repeated UI is a component, not copy-paste:
 - **`HomeLink`** — the "back to Home" link in every studio header.
 - **`OutputDirLabel`** — the folder-icon + basename chip in export
   panels. Its `basename()` helper is pure and unit-tested.
-- **`AppToaster`** — the app-wide toast surface.
+- **`AppToaster`** — the app-wide toast surface. Mounted exactly once, in
+  `App.tsx` beside `HotkeyOverlay`, so every route has it. Never mount a
+  second one in a studio: react-hot-toast keeps one toast store per
+  toaster id and each `<Toaster>` draws all of it, so two mounts render
+  every toast twice (T-31).
 - **`useUndoRedoHotkeys(undo, redo)`** — the window-level
   Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z binding for a studio's own history
   (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, and Image all call it;

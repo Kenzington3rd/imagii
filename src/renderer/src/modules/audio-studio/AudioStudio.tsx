@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { ChainSpec } from '@shared/audio'
 import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
-import { AppToaster } from '../../components/AppToaster'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
@@ -165,7 +164,6 @@ export function AudioStudio(): JSX.Element {
       )}
       <FixWizard open={showFixWizard} onClose={() => setShowFixWizard(false)} />
 
-      <AppToaster />
       {tutorial.active ? (
         <Tutorial def={audioTutorial} onClose={tutorial.stop} />
       ) : null}

@@ -44,6 +44,36 @@ describe('T-13 — the hotkey overlay is mounted app-wide', () => {
   })
 })
 
+describe('T-31 — the toast surface is mounted app-wide', () => {
+  // E2E: T-21 (shared chrome) reads a Home toast and a studio toast, and
+  // counts the toast containers on the page.
+  const app = read('App.tsx')
+
+  it('App.tsx imports and renders it', () => {
+    expect(app).toMatch(/import \{ AppToaster \} from '\.\/components\/AppToaster'/)
+    expect(app).toMatch(/<AppToaster \/>/)
+  })
+
+  it('renders it outside <Routes> so one instance serves every route', () => {
+    const closingRoutes = app.indexOf('</Routes>')
+    const mount = app.indexOf('<AppToaster />')
+    expect(closingRoutes).toBeGreaterThan(0)
+    expect(mount).toBeGreaterThan(closingRoutes)
+  })
+
+  it('leaves no per-studio copy — two Toasters draw every toast twice', () => {
+    for (const rel of [
+      'modules/video-studio/VideoStudio.tsx',
+      'modules/audio-studio/AudioStudio.tsx',
+      'modules/image-studio/ImageStudio.tsx',
+      'modules/record-studio/RecordStudio.tsx',
+      'modules/references/ReferencesStudio.tsx'
+    ]) {
+      expect(read(rel), rel).not.toMatch(/AppToaster/)
+    }
+  })
+})
+
 describe('T-14 — the cleanup preset panel is reachable', () => {
   // E2E: T-24 (Audio Studio full surface) saves, applies, and deletes a preset.
   it('Audio Studio renders PresetPanel', () => {

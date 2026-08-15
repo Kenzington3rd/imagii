@@ -7,6 +7,7 @@ import { Audio } from './routes/Audio'
 import { Image } from './routes/Image'
 import { Record } from './routes/Record'
 import { References } from './routes/References'
+import { AppToaster } from './components/AppToaster'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { HotkeyOverlay } from './components/HotkeyOverlay'
 import { Icon } from './components/Icon'
@@ -78,6 +79,15 @@ export function App(): JSX.Element {
           it since round 15. Mounted outside <Routes> so one instance serves
           every route and reads the current one via useLocation. */}
       <HotkeyOverlay />
+      {/* T-31: one toast surface for the whole app, mounted beside the
+          overlay for the same reason — every route raises toasts, and the
+          five studios that each mounted their own left Home (and any future
+          route) silently swallowing "Project saved", "Restored from
+          autosave" and every error path. react-hot-toast keeps one global
+          toast store per `toasterId`, so two <Toaster>s without one both
+          draw every toast: an app-level mount and a per-studio mount cannot
+          coexist. */}
+      <AppToaster />
     </ErrorBoundary>
   )
 }

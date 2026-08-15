@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import { AppToaster } from '../../components/AppToaster'
 
 // INIT-F (round 15): human-readable tool labels for the header badge.
 const TOOL_LABELS: Record<string, string> = {
@@ -115,7 +114,6 @@ export function ImageStudio(): JSX.Element {
         </>
       )}
 
-      <AppToaster />
       {tutorial.active ? (
         <Tutorial def={imageTutorial} onClose={tutorial.stop} />
       ) : null}
