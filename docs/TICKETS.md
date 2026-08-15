@@ -289,7 +289,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Project save/load dispositioned: IPC-layer tests + ledger rows
         marked HL-dialog.
   - [ ] Every touched ledger row gets its disposition filled.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 25 — see Done)
 
 ## T-22 — coverage: Video Studio core editing surface
 
@@ -312,7 +312,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Studio chrome: Clean audio handoff (wav extract -> Audio Studio
         navigation), Close confirm both branches, tutorial button.
   - [ ] Ledger dispositions filled for every row in scope.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 25 — see Done)
 
 ## T-23 — coverage: Video Studio pipelines and export surface
 
@@ -345,7 +345,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         entry, perf inputs; copy buttons via granted clipboard
         permission or dispositioned.
   - [ ] Ledger dispositions filled for every row in scope.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 25 — see Done)
 
 ## T-24 — coverage: Audio Studio full surface
 
@@ -369,7 +369,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         (post-T-19). Export dispositioned HL-dialog (Layer 5 covers
         runAudioExport/mux).
   - [ ] Ledger dispositions filled.
-- **Status:** open (blocked on T-13..T-20 merge)
+- **Status:** done (round 25 — see Done)
 
 ## T-25 — coverage: Image Studio full surface
 
@@ -573,9 +573,81 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] LESSONS entry.
 - **Status:** open
 
+## T-37 — P1: video seeking is broken (imagii-file:// ignores Range requests)
+
+- **Spec:** T-22 finding BUG-SEEK. protocol.ts serves media via
+  net.fetch(file://...), which ignores Range headers -> Chromium reports
+  video.seekable as [0,0] and clamps EVERY currentTime assignment to 0.
+  Frame steps, arrow nudges, and precise positioning are all broken in
+  the shipped app; playback works only because it streams sequentially.
+  Evidence pinned in video-core.spec.ts (seek-request assertions note
+  the blocked end state).
+- **Acceptance criteria:**
+  - [ ] Protocol handler answers Range requests (206 with correct
+        Content-Range from a stream/slice; also correct Content-Length
+        on full reads); seekable spans the duration.
+  - [ ] video-core.spec.ts seek assertions upgraded from
+        "seek requested" to "playhead lands there" for nudges, frame
+        steps, and both buttons.
+  - [ ] Layer 5 or E2E proof of a mid-file seek (e.g. park at 1.5s of a
+        2s clip without playing through).
+  - [ ] LESSONS entry.
+- **Status:** open (P1)
+
+## T-38 — preview canvas is blank until the first undoable edit
+
+- **Spec:** T-22 BUG-PREVIEW. PreviewWrapper reads window.__imagiiVideoEl
+  during a render that happens before Player attaches the element, and
+  VideoStudio only re-renders on source/clips.length/canUndo/canRedo.
+- **Acceptance criteria:**
+  - [ ] Freshly imported video shows the output preview immediately
+        (ref callback, effect, or store-driven attach signal).
+  - [ ] E2E asserts a non-default preview canvas right after import.
+- **Status:** open
+
+## T-39 — crop/safe-zone overlays draw over the letterbox; crop row sits inside the frame
+
+- **Spec:** T-22 findings 3+4. Both overlays anchor to the wrapper, not
+  the video box, so guides/crop draw over black bars whenever aspect
+  differs; the Crop control row renders beside the picture inside the
+  player's black box while the tutorial says "above the player".
+- **Acceptance criteria:**
+  - [ ] Overlays anchored to the rendered video rect (correct at
+        multiple window widths); E2E asserts guide geometry against the
+        video element's box, not the wrapper.
+  - [ ] Crop controls moved above the player per the tutorial copy (or
+        the copy updated — pick one deliberately).
+- **Status:** open
+
+## T-40 — undo coalescing never closes a gesture
+
+- **Spec:** T-22 finding 5. historyKey only resets on discrete actions,
+  undo/redo and selectClip — consecutive trim drags or repeated preset
+  clicks collapse into one undo step. video-core.spec.ts works around
+  it (comment marks the spot).
+- **Acceptance criteria:**
+  - [ ] Gesture end (Timeline onUp, Rnd stop, slider commit) closes the
+        coalescing window; two consecutive drags = two undo steps.
+  - [ ] Unit test on the store; E2E workaround removed with the pin
+        flipped.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 25 — Wave A of the coverage fleet (T-21, T-22, T-24, T-26;
+expedited by Fable: 747 unit / 47 E2E full-suite green under the
+expediter's own runs; confirm-copy discrimination re-executed personally
+on video-core). 44 E2E tests + 32 unit tests added across four suites;
+ledger dispositions applied (see INTERACTION_COVERAGE.md round-25
+section). The fleet found 12 more shipped defects, ticketed:
+T-28..T-30 (References: dead prompt() flows, cache-clear lie, raw IPC
+error), T-31..T-35 (Home/shared: toastless Home, mount-scoped global
+undo, dead corruption banner, offscreen/double-step tutorials,
+ErrorBoundary gap), T-36 (two-gesture waveform cut), T-37..T-40 (Video:
+P1 broken seeking, blank preview, letterboxed overlays, gesture
+coalescing). Remaining Wave B: T-23, T-25, T-27.
 
 Round 24 (T-13..T-20; expedited by Fable — gates re-run independently:
 715 unit / build / 3 e2e; tutorial-target scanner discrimination
