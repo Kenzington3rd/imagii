@@ -487,8 +487,10 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   page that never renders them.
 - **Acceptance criteria:**
   - [ ] AppToaster mounted once at the app level (App.tsx) and the
-        per-studio duplicates removed, or Home gains it — whichever the
-        ladder favors after reading why it was per-studio.
+        per-studio duplicates removed. (Usability ruling: notifications
+        are expected everywhere, including future routes — app-level is
+        the expectation-safe default; only keep per-studio if reading
+        the history reveals a hard technical reason.)
   - [ ] E2E: a Home toast (e.g. Restore) is visible; flip T-21's
         finding-A contrast into a positive.
   - [ ] LESSONS entry.
@@ -519,7 +521,8 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Corrupt autosave surfaces the corruption banner with working
         Clear + Dismiss (pick the field contract deliberately and pin
         it in tests/unit/autosaveCorruptInfo.test.ts, which currently
-        pins the mismatch).
+        pins the mismatch). (Usability ruling: a user with a corrupt
+        autosave EXPECTS to be told — silence is the worst outcome.)
   - [ ] Flip T-21's "offers nothing" defect test into the positive
         banner path.
   - [ ] LESSONS entry.
@@ -615,8 +618,9 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Overlays anchored to the rendered video rect (correct at
         multiple window widths); E2E asserts guide geometry against the
         video element's box, not the wrapper.
-  - [ ] Crop controls moved above the player per the tutorial copy (or
-        the copy updated — pick one deliberately).
+  - [ ] Crop controls moved above the player per the tutorial copy.
+        (Usability ruling 2026-08-15: the tutorial's promise defines
+        expected placement — move the controls, don't edit the copy.)
 - **Status:** open
 
 ## T-40 — undo coalescing never closes a gesture
@@ -631,6 +635,28 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Unit test on the store; E2E workaround removed with the pin
         flipped.
 - **Status:** open
+
+## Fix-wave plan (dispatches when Wave B lands; owner tiebreaker applies)
+
+Priority by usability impact, per the owner's 2026-08-15 ruling that
+expected behavior wins every call:
+
+1. **T-37** seeking (P1 — core editing is broken without it)
+2. **T-32** global undo tracker + Redo reachability
+3. **T-31** Home toast surface (silent success/failure)
+4. **T-36** one-gesture waveform cut (panel copy is the promise)
+5. **T-33** corruption banner (user must be told)
+6. **T-34** tutorial clamp + Enter=one step
+7. **T-38** preview blank until first edit
+8. **T-39** overlay anchoring + crop controls above player
+9. **T-28** mood-board rename/first-save via in-app Modal
+10. **T-29** true cache clear
+11. **T-40** undo gesture granularity
+12. **T-30** friendly first-hop search errors
+13. **T-35** ErrorBoundary coverage
+
+Every fix flips its pin; every flip is red-green evidenced; LESSONS per
+IMG-PREC.
 
 ---
 

@@ -162,6 +162,13 @@ Rules that follow:
   guard, watch the test fail, restore) per the round-21 protocol.
 - `/guide-sync` checks the ledger against the renderer the same way it
   checks the guides against the code.
+- **Tiebreaker (owner, 2026-08-15): expected usability wins.** When a
+  fix or design call could go more than one way, the option that makes
+  the app behave the way a user would expect is the right one — over
+  smaller diffs, over matching existing copy, over implementation
+  convenience. The in-app promise (a panel's copy, a tutorial step, a
+  toast) defines "expected"; if code and promise disagree, fix the code
+  to meet the promise unless the promise itself is clearly wrong.
 
 ---
 
