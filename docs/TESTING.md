@@ -45,6 +45,14 @@ pattern.
 
 ---
 
+## The interaction-coverage bar
+
+Standing owner directive (2026-08-14, see CLAUDE.md): every interactive
+element is driven to its real end state by a test, or has an explicit
+disposition row in `docs/INTERACTION_COVERAGE.md`. Layer 2 is where most
+of that lives; elements whose end state crosses an OS boundary are
+covered at the deepest reachable layer instead and the ledger says so.
+
 ## Layer 2: Playwright Electron smoke (`tests/e2e/smoke.spec.ts`)
 
 **Run with:** `npm run test:e2e` (after `npm run build`), or
