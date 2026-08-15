@@ -177,6 +177,108 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         SAR 1:1 on reframe output.
 - **Status:** open (low priority)
 
+## T-13 — mount HotkeyOverlay (dead `?` shortcut, advertised in-app)
+
+- **Spec:** round-22 inventory. `components/HotkeyOverlay.tsx` is never
+  mounted; Player.tsx:188 hint copy advertises `?`, and its
+  SHORTCUTS_BY_ROUTE table is the app's only shortcut documentation.
+- **Acceptance criteria:**
+  - [ ] Overlay mounted app-wide (App.tsx); `?` toggles it on every
+        route; Esc and its close button dismiss; INPUT/TEXTAREA guarded.
+  - [ ] Unit or E2E coverage driving open + close paths.
+- **Status:** open
+
+## T-14 — mount PresetPanel (audio cleanup presets unreachable)
+
+- **Spec:** inventory. Four dead controls; audio:listPresets/savePreset/
+  deletePreset IPC live with no reachable UI; main-process CRUD already
+  unit-tested (audio/presets.test.ts).
+- **Acceptance criteria:**
+  - [ ] Panel rendered in AudioStudio (placement per DESIGN_GUIDE panel
+        conventions); save/apply/delete flows work end to end.
+  - [ ] E2E: save a preset, mutate chain, apply restores it, delete
+        removes it (confirm dialog handled).
+- **Status:** open
+
+## T-15 — Video Studio has no undo affordance
+
+- **Spec:** inventory finding 4. videoStore has full history (round 18)
+  but the studio has no Ctrl+Z listener and no header buttons; undo only
+  reachable from Home. Timeline drags, clip removal, and color grades
+  are effectively un-undoable in place.
+- **Acceptance criteria:**
+  - [ ] Header Undo/Redo buttons + Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z listener,
+        parity with AudioStudio.tsx:31 pattern (INPUT/TEXTAREA guarded).
+  - [ ] E2E: make a change, undo restores prior state, redo reapplies.
+- **Status:** open
+
+## T-16 — tutorial coachmarks target nonexistent selectors
+
+- **Spec:** inventory. `[data-tutorial="video-crop"]`
+  (videoTutorial.ts:53) and `[data-tutorial="audio-multitrack"]`
+  (audioTutorial.ts:60) match nothing; those steps render no cutout.
+- **Acceptance criteria:**
+  - [ ] Attributes added to the intended hosts (CropOverlay container,
+        SecondaryTrackPanel host) or steps retargeted; every tutorial
+        step's selector resolves.
+  - [ ] Test iterating all tutorial steps asserting each target exists.
+- **Status:** open
+
+## T-17 — invalid interactive nesting (input-in-button, button-in-label)
+
+- **Spec:** inventory. ClipList.tsx:90-100 nests the rename input inside
+  the row select button; TextOverlayEditor.tsx:171 nests the remove
+  button inside a label wrapping inputs. Ambiguous roles; a11y hazard.
+- **Acceptance criteria:**
+  - [ ] Restructured to valid nesting with identical behavior (row
+        select still works, rename still stops propagation).
+  - [ ] a11y-reviewer agent passes the two components; existing E2E
+        selectors updated if affected.
+- **Status:** open
+
+## T-18 — RecentFilesMenu dismisses only on mouse-leave
+
+- **Spec:** inventory. No click-outside or Escape dismissal; hover-only
+  is flaky headless and unfriendly on touchpads.
+- **Acceptance criteria:**
+  - [ ] Escape and click-outside both close the menu; mouse-leave
+        behavior retained.
+  - [ ] Unit/E2E coverage of both new dismissal paths.
+- **Status:** open
+
+## T-19 — Audio Studio Close drops work without confirm
+
+- **Spec:** inventory. VideoStudio Close confirms; AudioStudio Close
+  (AudioStudio.tsx:75) discards chain edits and cut regions silently.
+- **Acceptance criteria:**
+  - [ ] Confirm before clearing when a source is loaded and the chain
+        differs from defaults (or cut regions/secondary track exist).
+  - [ ] E2E: dialog-handler test covering accept and dismiss branches.
+- **Status:** open
+
+## T-20 — PostChecklist diary excluded from save/autosave (localStorage)
+
+- **Spec:** inventory. imagii.postingDiary lives in localStorage —
+  wiped with the Chromium profile, absent from project files and
+  autosave, unlike all other studio state.
+- **Acceptance criteria:**
+  - [ ] Diary migrated to the settings store (new known key, validated
+        in settingsKnownKeys) with one-time localStorage migration.
+  - [ ] Unit test for migration + persistence round trip.
+- **Status:** open
+
+## T-21..T-27 — full interaction coverage fleet (written after fixes land)
+
+- **Spec:** docs/INTERACTION_COVERAGE.md inventory edition; the standing
+  bar in CLAUDE.md. Per-studio E2E tickets driving every non-HL element
+  to its end state, plus unit-layer coverage for HL boundaries
+  (duckduckgo parser on fixture HTML, dialog-dependent IPC handlers),
+  dialog-handler tests for all 8 native confirms/prompts, download-event
+  tests for Image exports incl. the 3-file emote pack, and ledger
+  dispositions for every row. Detailed tickets are cut by the expediter
+  once T-08..T-20 land (selectors must be stable first).
+- **Status:** blocked on T-08..T-20
+
 ---
 
 ## Done
