@@ -33,18 +33,17 @@ const __dirname = path.dirname(__filename)
  * window would create (the video store keeps clips, history, and selection
  * for the life of the window).
  *
- * ── Two product findings this spec had to work around ─────────────────
+ * ── Product findings this spec works around ───────────────────────────
  *
- * BUG-SEEK — the loaded video is NOT seekable. `imagii-file://` responses
- * come from `net.fetch(file://…)` (src/main/protocol.ts:43), which ignores
- * Range requests, so Chromium reports `video.seekable` as [0, 0] even with
- * the whole file buffered. Every assignment to `currentTime` therefore
- * clamps to 0: the arrow nudges and the `,` / `.` frame steps (and the two
- * frame buttons) reset the playhead instead of moving it. The bindings
- * themselves are proven here by recording the seek each one REQUESTS on the
- * media element (`installSeekLog`) — the request carries the exact nudge and
- * frame math — and the playhead is parked at a non-zero position the only
- * way that works today: by playing and pausing.
+ * BUG-SEEK — FIXED by T-37 (2026-08-15). `imagii-file://` used to answer
+ * every request with `net.fetch(file://…)`, which ignores Range requests, so
+ * Chromium reported `video.seekable` as [0, 0] and clamped EVERY
+ * `currentTime` assignment to 0 — the arrow nudges and the `,` / `.` frame
+ * steps reset the playhead instead of moving it. The handler now serves
+ * 206 Partial Content (src/main/protocol.ts), so the seek assertions below
+ * are on where the playhead LANDS, not merely what it requested.
+ * `installSeekLog` survives because the requested value still carries the
+ * exact nudge and frame math the landing tolerance can't resolve.
  *
  * BUG-PREVIEW — `OutputPreview` never draws until something unrelated
  * re-renders `VideoStudio`. `PreviewWrapper` (VideoStudio.tsx:159) reads
@@ -198,12 +197,77 @@ async function launchWithVideo(name: string): Promise<{ app: ElectronApplication
 /** The <video> the Player exposes on `window.__imagiiVideoEl` (ledger hook). */
 function videoState(
   window: Page
-): Promise<{ t: number; paused: boolean; ended: boolean; ready: number }> {
+): Promise<{ t: number; paused: boolean; ended: boolean; ready: number; seeking: boolean }> {
   return window.evaluate(() => {
     const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
     if (!v) throw new Error('__imagiiVideoEl is not set')
-    return { t: v.currentTime, paused: v.paused, ended: v.ended, ready: v.readyState }
+    return {
+      t: v.currentTime,
+      paused: v.paused,
+      ended: v.ended,
+      ready: v.readyState,
+      seeking: v.seeking
+    }
   })
+}
+
+/** The media element's own `seekable` TimeRanges, flattened. */
+function seekableRanges(window: Page): Promise<{ ranges: Array<[number, number]>; dur: number }> {
+  return window.evaluate(() => {
+    const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+    if (!v) throw new Error('__imagiiVideoEl is not set')
+    const ranges: Array<[number, number]> = []
+    for (let i = 0; i < v.seekable.length; i++) {
+      ranges.push([v.seekable.start(i), v.seekable.end(i)])
+    }
+    return { ranges, dur: v.duration }
+  })
+}
+
+/**
+ * Landing tolerance for a seek: half a frame at the fixture's 15 fps
+ * (0.033 s). A media element is allowed to snap a seek to the nearest frame
+ * boundary, and half a frame is the largest error that can introduce. It is
+ * also strictly SMALLER than the smallest movement any binding makes (one
+ * frame = 0.067 s), so a seek that is ignored — the T-37 clamp-to-0, or a
+ * step that never moves — still fails these assertions. Chromium in practice
+ * lands within a microsecond (it reports currentTime at µs resolution), so
+ * the tolerance is headroom, not slack.
+ */
+const SEEK_TOLERANCE = 1 / (2 * FIXTURE_FPS)
+
+/**
+ * Seek the media element and wait for the seek to complete. Returns the
+ * position it actually landed on, asserted to be the requested one.
+ *
+ * This is the end state T-37 unblocked: before the protocol handler served
+ * Range requests, every one of these assignments clamped to 0.
+ */
+async function seekTo(window: Page, target: number): Promise<number> {
+  await window.evaluate((t) => {
+    const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+    if (!v) throw new Error('__imagiiVideoEl is not set')
+    v.currentTime = t
+  }, target)
+  const landed = await settledTime(window)
+  expect(Math.abs(landed - target), `seek to ${target}s landed at ${landed}s`).toBeLessThan(
+    SEEK_TOLERANCE
+  )
+  return landed
+}
+
+/** Wait out any in-flight seek, then read the playhead. */
+async function settledTime(window: Page): Promise<number> {
+  await expect.poll(async () => (await videoState(window)).seeking, { timeout: 10_000 }).toBe(false)
+  return (await videoState(window)).t
+}
+
+/** Assert the playhead settled on `expected`, within the seek tolerance. */
+async function expectLanded(window: Page, expected: number, label: string): Promise<void> {
+  const landed = await settledTime(window)
+  expect(Math.abs(landed - expected), `${label}: wanted ${expected}s, landed ${landed}s`).toBeLessThan(
+    SEEK_TOLERANCE
+  )
 }
 
 /**
@@ -215,14 +279,17 @@ function videoState(
 const PARK_CEILING = 1.2
 
 /**
- * BUG-SEEK workaround: the only way to put the playhead anywhere but 0 is to
- * play and pause. Returns the position it parked at.
+ * Park the playhead by PLAYING for `ms` and pausing. Kept for the crop and
+ * preview tests, which need a frame actually decoded and painted rather than
+ * a particular timestamp; `seekTo` is the direct route to a position.
+ * Returns the position it parked at.
  */
 async function parkPlayhead(window: Page, ms: number): Promise<number> {
   const before = await videoState(window)
   if (!before.ended && before.t + ms / 1000 > PARK_CEILING) {
-    // Out of runway. Run the clip out instead of rewinding: play() on an
-    // ended element restarts at 0, the only reposition BUG-SEEK allows.
+    // Out of runway. Run the clip out and let play() restart it at 0 — this
+    // helper stays purely transport-driven so it exercises playback, not the
+    // seek path `seekTo` covers.
     await window.getByRole('button', { name: 'Play', exact: true }).click()
     await expect
       .poll(async () => (await videoState(window)).ended, { timeout: 20_000 })
@@ -241,10 +308,10 @@ async function parkPlayhead(window: Page, ms: number): Promise<number> {
 
 /**
  * Instrument the media element's `currentTime` setter so the seek each
- * binding REQUESTS is observable. Needed because BUG-SEEK clamps every
- * request to 0 before it can be read back — the request itself is the
- * deepest end state the renderer can reach today. Forwards to the real
- * setter, so the clamp still happens and can be asserted alongside.
+ * binding REQUESTS is observable. The playhead now lands where it was asked
+ * to (T-37), but the landing is only resolvable to half a frame, so the
+ * request is still the assertion that pins the exact nudge and frame math.
+ * Forwards to the real setter, so the landing can be asserted alongside.
  */
 async function installSeekLog(window: Page): Promise<void> {
   await window.evaluate(() => {
@@ -449,17 +516,67 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('player keyboard: nudges and frame steps issue exact seeks, I and O move the clip range', async () => {
+  test('player seeking: the source is seekable and parks mid-file without playing (T-37)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('seekable')
+    try {
+      // ── the media element considers the whole clip seekable ──
+      // This is the direct read-out of the protocol handler's Range support:
+      // before T-37 the handler answered every request with the whole file
+      // and no Accept-Ranges, and Chromium reported [0, 0] here.
+      await expect
+        .poll(async () => (await videoState(window)).ready, { timeout: 20_000 })
+        .toBeGreaterThan(0)
+      const { ranges, dur } = await seekableRanges(window)
+      expect(ranges).toHaveLength(1)
+      expect(ranges[0]?.[0]).toBe(0)
+      expect(dur).toBeGreaterThan(FIXTURE_SECONDS - 0.1)
+      expect(Math.abs((ranges[0]?.[1] ?? 0) - dur)).toBeLessThan(0.05)
+
+      // ── park at 1.5 s of a 2 s clip, never having pressed Play ──
+      const before = await videoState(window)
+      expect(before).toMatchObject({ t: 0, paused: true })
+      const landed = await seekTo(window, 1.5)
+      expect(landed).toBeGreaterThan(1.4)
+      const after = await videoState(window)
+      // Still paused: this is a seek, not playback running there.
+      expect(after.paused).toBe(true)
+      // HAVE_CURRENT_DATA or better — the frame AT 1.5 s is decoded, which is
+      // what a Range request bought us.
+      expect(after.ready).toBeGreaterThanOrEqual(2)
+
+      // ── and the position reached the UI the user reads ──
+      await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
+        '0:01.5'
+      )
+      const playheadLeft = await window
+        .locator('[data-tutorial="video-timeline"] .bg-pink-400')
+        .getAttribute('style')
+      const pct = Number(/calc\(([\d.]+)%/.exec(playheadLeft ?? '')?.[1] ?? '0')
+      expect(pct).toBeGreaterThan(70)
+      expect(pct).toBeLessThan(80)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-01b-seek.png') })
+
+      // ── a backwards seek works too (not just forward streaming) ──
+      await seekTo(window, 0.25)
+      await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
+        '0:00.2'
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('player keyboard: nudges and frame steps land the playhead, I and O move the clip range', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('keyboard')
     try {
       const player = window.locator('[data-tutorial="video-player"] [tabindex="0"]')
       await player.focus()
 
-      // ── I / O: the two bindings whose end state IS reachable ──
-      // (setMarker reads the media element's position and writes the store's
-      // clip range, so parking the playhead by playback is enough.)
-      const inPoint = await parkPlayhead(window, 400)
+      // ── I / O: setMarker reads the media element's position and writes it
+      // into the store's clip range, so a direct seek is enough to place it.
+      const inPoint = await seekTo(window, 0.4)
       await player.focus()
       await window.keyboard.press('i')
       await expect
@@ -471,7 +588,7 @@ test.describe('Video Studio core editing surface', () => {
       expect(end).toBe(FIXTURE_SECONDS)
       expect(Math.abs(length - (end - start))).toBeLessThan(0.15)
 
-      const outPoint = await parkPlayhead(window, 500)
+      const outPoint = await seekTo(window, 0.9)
       expect(outPoint).toBeGreaterThan(inPoint)
       await player.focus()
       await window.keyboard.press('o')
@@ -485,11 +602,14 @@ test.describe('Video Studio core editing surface', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-02-in-out.png') })
 
       // ── the four seek bindings ──
-      // BUG-SEEK (file header): the source is not seekable, so the playhead
-      // cannot land on the requested position. What IS assertable is the seek
-      // each binding asks the media element for — which carries the whole
-      // contract: 0.1 s for the arrows, exactly one frame for , and .
+      // Each is asserted twice: the seek it REQUESTS (exact, to 5 decimals —
+      // 0.1 s for the arrows, exactly one frame for , and .) and where the
+      // playhead LANDS (within half a frame). Before T-37 the landing was 0
+      // for all four, whatever they requested.
       const frame = 1 / FIXTURE_FPS
+      // A frame-aligned park (12 frames in) so a step lands on a boundary
+      // instead of near one, with runway for a backwards 0.1 s nudge.
+      const PARK = 12 / FIXTURE_FPS
       await installSeekLog(window)
       const cases: Array<{ key: string; delta: number }> = [
         { key: 'ArrowRight', delta: 0.1 },
@@ -498,7 +618,7 @@ test.describe('Video Studio core editing surface', () => {
         { key: ',', delta: -frame }
       ]
       for (const { key, delta } of cases) {
-        const parked = await parkPlayhead(window, 300)
+        const parked = await seekTo(window, PARK)
         // Park far enough in that a backwards nudge is not floored at 0.
         expect(parked).toBeGreaterThan(Math.abs(delta))
         await clearSeekLog(window)
@@ -509,23 +629,19 @@ test.describe('Video Studio core editing surface', () => {
           parked + delta,
           5
         )
+        await expectLanded(window, parked + delta, `${key} from ${parked}s`)
       }
 
-      // And the clamp itself, asserted once: today the playhead lands on 0
-      // instead of the requested position. When src/main/protocol.ts serves
-      // Range requests this line flips to the requested value and the ledger
-      // rows for the nudges and frame steps stop needing BUG-SEEK.
-      expect((await videoState(window)).t).toBe(0)
-
-      // ── the two frame-step buttons issue the same seeks ──
+      // ── the two frame-step buttons issue the same seeks, and land them ──
       for (const [title, delta] of [
         ['Previous frame (,)', -frame],
         ['Next frame (.)', frame]
       ] as Array<[string, number]>) {
-        const parked = await parkPlayhead(window, 300)
+        const parked = await seekTo(window, PARK)
         await clearSeekLog(window)
         await window.getByTitle(title).click()
         expect(await lastSeekRequest(window)).toBeCloseTo(parked + delta, 5)
+        await expectLanded(window, parked + delta, `${title} from ${parked}s`)
       }
     } finally {
       await app.close()
