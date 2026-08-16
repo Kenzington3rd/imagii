@@ -38,6 +38,13 @@ export function VideoStudio(): JSX.Element {
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
   const [extractingAudio, setExtractingAudio] = useState(false)
+  // T-38: the Player publishes its <video> here as it attaches, so the output
+  // preview has the element on the very next render. It used to be read off a
+  // global during the render that MOUNTS the Player — always null, and the
+  // studio re-renders only on source / clip-count / undo-availability, never
+  // on playback, so the preview stayed a blank 300x150 canvas until the first
+  // undoable edit.
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
   const tutorial = useTutorial(videoTutorial)
 
   // T-15: videoStore has had full history since round 18, but the studio
@@ -124,13 +131,13 @@ export function VideoStudio(): JSX.Element {
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">
           <div className="flex flex-col gap-4 min-w-0">
-            <div data-tutorial="video-player"><Player /></div>
+            <div data-tutorial="video-player"><Player onVideoElement={setVideoEl} /></div>
             <div data-tutorial="video-timeline"><Timeline /></div>
             <ExportPanel />
           </div>
           <div className="flex flex-col gap-4">
             <ClipList />
-            <PreviewWrapper />
+            <OutputPreview videoElement={videoEl} />
             <ColorGradePanel />
             <HighlightPanel />
             <ChatHighlightPanel />
@@ -152,11 +159,4 @@ export function VideoStudio(): JSX.Element {
       ) : null}
     </div>
   )
-}
-
-function PreviewWrapper(): JSX.Element {
-  // Picks up the video element from the global window pointer set by Player.
-  // Re-renders periodically by listening to the same events.
-  const w = window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }
-  return <OutputPreview videoElement={w.__imagiiVideoEl ?? null} />
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PlatformId } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
@@ -33,23 +33,9 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const [previewPlatform, setPreviewPlatform] = useState<PlatformId>('reels')
-  const [tick, setTick] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  useEffect(() => {
-    if (!videoElement) return
-    const handler = (): void => setTick((t) => t + 1)
-    videoElement.addEventListener('timeupdate', handler)
-    videoElement.addEventListener('seeked', handler)
-    videoElement.addEventListener('loadeddata', handler)
-    return () => {
-      videoElement.removeEventListener('timeupdate', handler)
-      videoElement.removeEventListener('seeked', handler)
-      videoElement.removeEventListener('loadeddata', handler)
-    }
-  }, [videoElement])
-
-  useEffect(() => {
+  const draw = useCallback((): void => {
     if (!videoElement || !source) return
     const canvas = canvasRef.current
     if (!canvas) return
@@ -92,8 +78,29 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
     } catch {
       /* video may not be ready */
     }
-    void tick
-  }, [videoElement, source, clips, selectedClipId, previewPlatform, tick])
+  }, [videoElement, source, clips, selectedClipId, previewPlatform])
+
+  useEffect(() => {
+    // Redraw for the current edit state (platform, crop, selected clip) even
+    // if the picture itself never changes.
+    draw()
+    if (!videoElement) return
+    // T-38: `loadeddata` promises DATA, not a painted frame. Drawing on it
+    // raced the decoder — the preview came up black about half the time and
+    // then had nothing left to redraw it, because the only other triggers
+    // were playback events. `requestVideoFrameCallback` is the platform's
+    // answer to exactly this question: it fires once a frame has been
+    // PRESENTED, so there is always something to mirror. Re-armed inside its
+    // own callback it also covers seeks and playback, which is why it is the
+    // only media subscription the preview needs. (Chromium-only, which is
+    // the app's only runtime.)
+    const video = videoElement
+    let handle = video.requestVideoFrameCallback(function onFrame() {
+      draw()
+      handle = video.requestVideoFrameCallback(onFrame)
+    })
+    return () => video.cancelVideoFrameCallback(handle)
+  }, [videoElement, draw])
 
   if (!source) return null
 

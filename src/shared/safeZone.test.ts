@@ -39,6 +39,56 @@ describe('computeCropBox', () => {
   })
 })
 
+describe('computeCropBox as the object-fit: contain fit (T-39)', () => {
+  // Player's useVideoContentRect asks this function where a <video> is
+  // actually painting inside its own box: the arguments are the ELEMENT's box
+  // and the MEDIA's intrinsic aspect, and the answer is the letterboxed
+  // picture. Same geometry, read the other way round — these cases pin the
+  // reading the overlays depend on.
+
+  it('pillarboxes a 4:3 picture in a 16:9 element box', () => {
+    const picture = computeCropBox(1600, 900, 4 / 3)
+    expect(picture.h).toBe(900)
+    expect(picture.w).toBeCloseTo(1200, 6)
+    expect(picture.x).toBeCloseTo(200, 6)
+    expect(picture.y).toBe(0)
+  })
+
+  it('letterboxes a 16:9 picture in a 4:3 element box', () => {
+    const picture = computeCropBox(800, 600, 16 / 9)
+    expect(picture.w).toBe(800)
+    expect(picture.h).toBeCloseTo(450, 6)
+    expect(picture.x).toBe(0)
+    expect(picture.y).toBeCloseTo(75, 6)
+  })
+
+  it('fills the box exactly when the element already carries the media aspect', () => {
+    // The shipped player's own case: `max-h-[60vh] w-auto` keeps the element
+    // on the media's aspect, so the picture IS the element box and the
+    // overlays must not inset themselves at all.
+    const picture = computeCropBox(320, 240, 320 / 240)
+    expect(picture).toEqual({ x: 0, y: 0, w: 320, h: 240 })
+  })
+
+  it('never reports a picture larger than the box it fits into', () => {
+    for (const [boxW, boxH, aspect] of [
+      [640, 480, 21 / 9],
+      [640, 480, 9 / 21],
+      [1000, 1000, 1],
+      [1, 10_000, 4 / 3]
+    ] as Array<[number, number, number]>) {
+      const picture = computeCropBox(boxW, boxH, aspect)
+      expect(picture.w).toBeLessThanOrEqual(boxW + 1e-9)
+      expect(picture.h).toBeLessThanOrEqual(boxH + 1e-9)
+      expect(picture.x).toBeGreaterThanOrEqual(0)
+      expect(picture.y).toBeGreaterThanOrEqual(0)
+      // Centered: the inset is the same on both sides.
+      expect(picture.x * 2 + picture.w).toBeCloseTo(boxW, 6)
+      expect(picture.y * 2 + picture.h).toBeCloseTo(boxH, 6)
+    }
+  })
+})
+
 describe('rectContains', () => {
   it('returns true when inner is inside outer', () => {
     expect(

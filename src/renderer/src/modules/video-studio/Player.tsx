@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
+import { computeCropBox, type CropBox } from '@shared/safeZone'
 import { useVideoStore } from './store/videoStore'
-import { CropOverlay } from './CropOverlay'
+import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
 
@@ -13,14 +14,106 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
 }
 
-export function Player(): JSX.Element | null {
+/**
+ * Where the PICTURE is inside the player box, in CSS pixels.
+ *
+ * Two offsets stack up, and anchoring an overlay to the box ignored both
+ * (T-39). The element is centered in a box that is wider than it, and the
+ * UA's own `object-fit: contain` letterboxes the picture INSIDE the element
+ * whenever the element's box and the media's intrinsic aspect disagree — so
+ * the crop rectangle and the safe-zone guides were drawn across black bars.
+ * The contain fit is `computeCropBox`: the centered rect of a given aspect
+ * inside a frame is the same shape whether the frame is a source image or an
+ * on-screen box.
+ *
+ * The container is observed as well as the video. A window resize moves a
+ * centered `w-auto` video WITHOUT changing its size, and a ResizeObserver on
+ * the element alone never hears about that.
+ */
+function useVideoContentRect(
+  video: HTMLVideoElement | null,
+  container: HTMLElement | null
+): CropBox | null {
+  const [rect, setRect] = useState<CropBox | null>(null)
+
+  useEffect(() => {
+    if (!video || !container) return
+    const v = video
+    const base = container
+    function measure(): void {
+      const box = v.getBoundingClientRect()
+      const outer = base.getBoundingClientRect()
+      if (box.width <= 0 || box.height <= 0) {
+        setRect(null)
+        return
+      }
+      // Before metadata there is no intrinsic size to fit to; the element's
+      // own box is both the best answer available and what it is painting.
+      const fitted =
+        v.videoWidth > 0 && v.videoHeight > 0
+          ? computeCropBox(box.width, box.height, v.videoWidth / v.videoHeight)
+          : { x: 0, y: 0, w: box.width, h: box.height }
+      const next: CropBox = {
+        x: box.left - outer.left + fitted.x,
+        y: box.top - outer.top + fitted.y,
+        w: fitted.w,
+        h: fitted.h
+      }
+      setRect((prev) =>
+        prev && prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h
+          ? prev
+          : next
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(v)
+    observer.observe(base)
+    v.addEventListener('loadedmetadata', measure)
+    return () => {
+      observer.disconnect()
+      v.removeEventListener('loadedmetadata', measure)
+    }
+  }, [video, container])
+
+  return rect
+}
+
+interface PlayerProps {
+  /** Publishes the <video> as it attaches and detaches. T-38: the output
+   *  preview used to read it off a global during a render that happens
+   *  before the element exists, so it stayed blank until something unrelated
+   *  re-rendered the studio. */
+  onVideoElement: (el: HTMLVideoElement | null) => void
+}
+
+export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const setCurrentTime = useVideoStore((s) => s.setCurrentTime)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [, setVideoEl] = useState<HTMLVideoElement | null>(null)
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
+  const [frameEl, setFrameEl] = useState<HTMLDivElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [showSafeZones, setShowSafeZones] = useState(false)
+  const [cropEnabled, setCropEnabled] = useState(false)
+  const [cropAspect, setCropAspect] = useState<AspectMode>('free')
+  const pictureRect = useVideoContentRect(videoEl, frameEl)
+
+  // Stable, so React attaches it once on mount instead of detaching and
+  // reattaching on every render — an inline arrow is a new ref each render,
+  // and each swap published null and then the element again to everything
+  // downstream.
+  const attachVideo = useCallback(
+    (el: HTMLVideoElement | null) => {
+      videoRef.current = el
+      setVideoEl(el)
+      // Kept as the E2E suite's handle on the media element.
+      ;(window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl = el
+      onVideoElement(el)
+    },
+    [onVideoElement]
+  )
 
   // T-52: a genuinely different FILE resets the transport readout and the
   // shared playhead. Keyed on the path, not the `imagii-file://` url derived
@@ -169,15 +262,19 @@ export function Player(): JSX.Element | null {
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <div className="relative bg-black rounded-xl overflow-hidden flex items-center justify-center">
+      <CropControls
+        enabled={cropEnabled}
+        onEnabledChange={setCropEnabled}
+        aspect={cropAspect}
+        onAspectChange={setCropAspect}
+      />
+
+      <div
+        ref={setFrameEl}
+        className="relative bg-black rounded-xl overflow-hidden flex items-center justify-center"
+      >
         <video
-          ref={(el) => {
-            videoRef.current = el
-            setVideoEl(el)
-            ;(
-              window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }
-            ).__imagiiVideoEl = el
-          }}
+          ref={attachVideo}
           src={source.url}
           className="max-h-[60vh] w-auto"
           onTimeUpdate={(e) => {
@@ -190,9 +287,9 @@ export function Player(): JSX.Element | null {
           onEnded={() => setPlaying(false)}
           controls={false}
         />
-        <CropOverlay videoElement={videoRef.current} />
+        {cropEnabled ? <CropOverlay rect={pictureRect} aspect={cropAspect} /> : null}
         <SafeZoneOverlay
-          videoElement={videoRef.current}
+          rect={pictureRect}
           show={showSafeZones}
           ratios={['9:16', '1:1', '4:5']}
         />
