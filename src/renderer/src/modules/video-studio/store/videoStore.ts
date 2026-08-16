@@ -71,6 +71,14 @@ interface VideoStudioState {
   setClipEnd: (id: string, endSec: number) => void
   togglePreset: (id: string, preset: PlatformId) => void
   setSelectedPresets: (id: string, presets: PlatformId[]) => void
+  /** T-50 — queue / unqueue a saved custom preset on one clip. Mirrors
+   *  `togglePreset`; the two lists are separate because one holds platform
+   *  ids and the other holds preset ids that only exist on disk. */
+  toggleCustomPreset: (id: string, presetId: string) => void
+  /** T-50 — drop every queued custom-preset id that is no longer on disk.
+   *  Called whenever the saved list is (re)read, which is what makes a
+   *  deleted preset stop being an export target on every clip at once. */
+  pruneCustomPresets: (existingIds: ReadonlyArray<string>) => void
   setClipSpeed: (id: string, speedMultiplier: number) => void
   setClipColorGrade: (id: string, grade: ColorGrade) => void
   setClipAutoZoom: (id: string, on: boolean) => void
@@ -292,6 +300,37 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         ...snapshot(null),
         clips: get().clips.map((c) => (c.id === id ? { ...c, selectedPresets: presets } : c))
       }),
+    toggleCustomPreset: (id, presetId) =>
+      set({
+        ...snapshot(null),
+        clips: get().clips.map((c) => {
+          if (c.id !== id) return c
+          const current = c.customPresetIds ?? []
+          return {
+            ...c,
+            customPresetIds: current.includes(presetId)
+              ? current.filter((p) => p !== presetId)
+              : [...current, presetId]
+          }
+        })
+      }),
+    pruneCustomPresets: (existingIds) => {
+      const alive = new Set(existingIds)
+      const { clips } = get()
+      const next = clips.map((c) =>
+        c.customPresetIds && c.customPresetIds.some((id) => !alive.has(id))
+          ? { ...c, customPresetIds: c.customPresetIds.filter((id) => alive.has(id)) }
+          : c
+      )
+      // Nothing to drop: return without touching state so the panel's
+      // refresh-on-mount cannot churn every subscriber.
+      if (next.every((c, i) => c === clips[i])) return
+      // Deliberately NOT snapshotted into history. This is a reconciliation
+      // with what is on disk, not an edit the user made — an undo step here
+      // would offer to re-queue a preset whose file is gone, which is the
+      // ghost row this prune exists to prevent.
+      set({ clips: next })
+    },
     setClipSpeed: (id, speedMultiplier) =>
       // Fired continuously by the speed slider — coalesce.
       set({

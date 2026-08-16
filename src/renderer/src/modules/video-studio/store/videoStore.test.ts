@@ -348,3 +348,100 @@ describe('clip history — undo/redo (UX round 18)', () => {
     expect(useVideoStore.getState().history.past).toHaveLength(0)
   })
 })
+
+describe('custom presets as export targets (T-50)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+    useVideoStore.getState().addClip()
+  })
+
+  const clipId = (): string => useVideoStore.getState().clips[0]?.id as string
+  const queued = (): string[] => useVideoStore.getState().clips[0]?.customPresetIds ?? []
+
+  it('a fresh clip queues no custom presets', () => {
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toBeUndefined()
+    expect(queued()).toEqual([])
+  })
+
+  it('toggleCustomPreset queues and unqueues, and is order-preserving', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-b')
+    expect(queued()).toEqual(['cp-a', 'cp-b'])
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    expect(queued()).toEqual(['cp-b'])
+  })
+
+  it('leaves the platform presets alone', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    expect(useVideoStore.getState().clips[0]?.selectedPresets).toEqual(['youtube'])
+  })
+
+  it('touches only the clip it was given', () => {
+    const first = clipId()
+    useVideoStore.getState().addClip()
+    const second = useVideoStore.getState().clips[1]?.id as string
+    useVideoStore.getState().toggleCustomPreset(first, 'cp-a')
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toEqual(['cp-a'])
+    expect(useVideoStore.getState().clips[1]?.customPresetIds ?? []).toEqual([])
+    useVideoStore.getState().toggleCustomPreset(second, 'cp-b')
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toEqual(['cp-a'])
+    expect(useVideoStore.getState().clips[1]?.customPresetIds).toEqual(['cp-b'])
+  })
+
+  it('is undoable like any other clip edit', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    expect(queued()).toEqual(['cp-a'])
+    useVideoStore.getState().undo()
+    expect(queued()).toEqual([])
+  })
+
+  it('pruneCustomPresets drops ids whose preset is gone, on every clip at once', () => {
+    const first = clipId()
+    useVideoStore.getState().addClip()
+    const second = useVideoStore.getState().clips[1]?.id as string
+    useVideoStore.getState().toggleCustomPreset(first, 'cp-a')
+    useVideoStore.getState().toggleCustomPreset(first, 'cp-b')
+    useVideoStore.getState().toggleCustomPreset(second, 'cp-b')
+
+    useVideoStore.getState().pruneCustomPresets(['cp-a'])
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toEqual(['cp-a'])
+    expect(useVideoStore.getState().clips[1]?.customPresetIds).toEqual([])
+  })
+
+  it('an empty saved list unqueues everything rather than throwing', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    useVideoStore.getState().pruneCustomPresets([])
+    expect(queued()).toEqual([])
+  })
+
+  it('a clip that never queued anything survives a prune untouched', () => {
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().pruneCustomPresets(['cp-a'])
+    // Same object identity: the no-op path must not churn subscribers, which
+    // is what makes the panel's refresh-on-mount free.
+    expect(useVideoStore.getState().clips).toBe(before)
+  })
+
+  it('a prune with nothing to drop is a no-op, identity included', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().pruneCustomPresets(['cp-a', 'cp-b'])
+    expect(useVideoStore.getState().clips).toBe(before)
+  })
+
+  it('pruning is NOT undoable — undo must never re-queue a deleted preset', () => {
+    useVideoStore.getState().toggleCustomPreset(clipId(), 'cp-a')
+    const depth = useVideoStore.getState().history.past.length
+    useVideoStore.getState().pruneCustomPresets([])
+    expect(queued()).toEqual([])
+    expect(useVideoStore.getState().history.past.length).toBe(depth)
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips[0]?.customPresetIds ?? []).toEqual([])
+  })
+})

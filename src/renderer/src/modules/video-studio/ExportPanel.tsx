@@ -1,18 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type {
   Clip,
   ExportJobSpec,
   ExportProgress,
-  PlatformId,
   WatermarkSpec
 } from '@shared/clip'
+import type { CustomPreset } from '@shared/customPresets'
 import { expandFilenameTemplate } from '@shared/filename'
 import { computeCropBox, findClippedSafeZones } from '@shared/safeZone'
 import { assertDefined } from '@shared/assert'
 import { useVideoStore } from './store/videoStore'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
 import { SafeZoneWarningModal } from './SafeZoneWarningModal'
@@ -27,36 +27,60 @@ export interface SafeZoneRow {
 }
 
 /**
+ * Every export target queued on one clip, platform presets first and the
+ * user's own custom presets after — the order the grid draws them in and
+ * the order the queue runs them in. A custom preset id with no preset
+ * behind it is dropped rather than resolved to a placeholder: the panel
+ * prunes those on every refresh, and a stale one must never become a job.
+ */
+function queuedPresets(
+  clip: Clip,
+  customPresets: ReadonlyArray<CustomPreset>
+): Array<{ key: string; info: PlatformInfo; custom: CustomPreset | null }> {
+  const out: Array<{ key: string; info: PlatformInfo; custom: CustomPreset | null }> = []
+  for (const id of clip.selectedPresets) {
+    out.push({ key: id, info: PLATFORM_INFO[id], custom: null })
+  }
+  for (const id of clip.customPresetIds ?? []) {
+    const preset = customPresets.find((p) => p.id === id)
+    if (preset) out.push({ key: preset.id, info: customPresetInfo(preset), custom: preset })
+  }
+  return out
+}
+
+/**
  * Phase 3.4: for each clip×preset pair in the export queue, ask whether
  * the chosen preset's centered crop would lose the safe zone of any
  * other selected preset. The bound is `clips.length × presets.length`,
  * with hard caps in the validators.
  *
  * Exported so ClipKitButton can run the same pre-flight before its
- * 5-platform batch.
+ * 5-platform batch. T-50: custom presets are export targets too, so they
+ * take part in the pre-flight — a 16:9 custom preset beside Reels loses
+ * the same safe zone a platform 16:9 preset would.
  */
 export function findSafeZoneIssues(
   clips: ReadonlyArray<Clip>,
   sourceWidth: number,
-  sourceHeight: number
+  sourceHeight: number,
+  customPresets: ReadonlyArray<CustomPreset> = []
 ): SafeZoneRow[] {
   const rows: SafeZoneRow[] = []
   const clipCount = clips.length
   for (let i = 0; i < clipCount; i++) {
     const clip = clips[i]
     if (!clip) continue
-    const selected = clip.selectedPresets
+    const selected = queuedPresets(clip, customPresets).map((p) => p.info)
     if (selected.length < 2) continue
-    // For each platform the user picked for this clip, compute its centered
-    // crop, then check whether any of the OTHER selected platforms' safe
+    // For each target the user picked for this clip, compute its centered
+    // crop, then check whether any of the OTHER selected targets' safe
     // zones would fall outside that crop.
     const clippedSet = new Set<string>()
-    for (const presetId of selected) {
-      const preset = PLATFORM_INFO[presetId]
+    for (const preset of selected) {
       const userCrop = computeCropBox(sourceWidth, sourceHeight, preset.aspectRatio)
       const others = selected
-        .filter((p) => p !== presetId)
-        .map((p) => ({ label: PLATFORM_INFO[p].label, aspect: PLATFORM_INFO[p].aspectRatio }))
+        .filter((p) => p !== preset)
+        .map((p) => ({ label: p.label, aspect: p.aspectRatio }))
       for (const lost of findClippedSafeZones(sourceWidth, sourceHeight, userCrop, others)) {
         clippedSet.add(`${preset.label} → ${lost}`)
       }
@@ -71,7 +95,11 @@ export function findSafeZoneIssues(
 interface JobStatus {
   jobId: string
   clipName: string
-  preset: PlatformId
+  /** What the queue row shows — a platform's label or the user's own
+   *  preset name. Carried rather than looked up, because a custom preset
+   *  deleted mid-batch would otherwise leave the row with nothing to
+   *  render (T-50). */
+  presetLabel: string
   percent: number
   outputPath?: string
   error?: string
@@ -82,7 +110,10 @@ export function ExportPanel(): JSX.Element | null {
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const togglePreset = useVideoStore((s) => s.togglePreset)
+  const toggleCustomPreset = useVideoStore((s) => s.toggleCustomPreset)
+  const pruneCustomPresets = useVideoStore((s) => s.pruneCustomPresets)
 
+  const [customPresets, setCustomPresets] = useState<CustomPreset[]>([])
   const [outDir, setOutDir] = useState<string | null>(null)
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [running, setRunning] = useState(false)
@@ -117,6 +148,20 @@ export function ExportPanel(): JSX.Element | null {
       cancelled = true
     }
   }, [])
+
+  // T-50: the panel owns the saved-preset list, because it is the surface
+  // that turns those presets into export targets. The manager edits them and
+  // calls back here; every read also prunes ids the clips still hold for a
+  // preset that is now gone, so a delete unqueues it everywhere at once.
+  const refreshCustomPresets = useCallback(async (): Promise<void> => {
+    const list = await window.api.video.listCustomPresets()
+    setCustomPresets(list)
+    pruneCustomPresets(list.map((p) => p.id))
+  }, [pruneCustomPresets])
+
+  useEffect(() => {
+    void refreshCustomPresets()
+  }, [refreshCustomPresets])
 
   useEffect(() => {
     const offProgress = window.api.video.onProgress((p: ExportProgress) => {
@@ -155,7 +200,12 @@ export function ExportPanel(): JSX.Element | null {
     // Phase 3.4: check for safe-zone collisions across the user's selected
     // platforms before kicking off the queue. If anything is flagged, defer
     // the actual run to the modal's "Continue anyway".
-    const issues = findSafeZoneIssues(clips, source.probe.width, source.probe.height)
+    const issues = findSafeZoneIssues(
+      clips,
+      source.probe.width,
+      source.probe.height,
+      customPresets
+    )
     if (issues.length > 0) {
       setPendingSafeZoneRows(issues)
       return
@@ -180,12 +230,20 @@ export function ExportPanel(): JSX.Element | null {
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []
     for (const clip of clips) {
-      for (const preset of clip.selectedPresets) {
+      // Platform presets first, then the clip's custom presets — one job per
+      // target, whichever kind it is (T-50). `target.custom` is what tells
+      // main to encode at the custom geometry; `target.info.id` stays the
+      // base platform so the advisory tables and the filter graph still have
+      // a platform row to start from.
+      for (const target of queuedPresets(clip, customPresets)) {
         const jobId = nanoid(10)
         const filename = expandFilenameTemplate(filenameTemplate, {
           source: sourceBase,
           clip: clip.name,
-          preset,
+          // {preset} reads as the user sees the target named: the platform
+          // id for a platform preset, the preset's own name for a custom one
+          // (two custom presets on the same base must not collide).
+          preset: target.custom ? target.custom.name : target.info.id,
           handle: watermark?.text,
           ext: 'mp4'
         })
@@ -194,11 +252,17 @@ export function ExportPanel(): JSX.Element | null {
           sourcePath: source.filePath,
           outDir,
           clip,
-          preset,
+          preset: target.info.id,
+          customPreset: target.custom,
           watermark,
           outputFilename: filename
         })
-        statuses.push({ jobId, clipName: clip.name, preset, percent: 0 })
+        statuses.push({
+          jobId,
+          clipName: clip.name,
+          presetLabel: target.info.label,
+          percent: 0
+        })
       }
     }
     if (queue.length === 0) {
@@ -224,7 +288,19 @@ export function ExportPanel(): JSX.Element | null {
     }
   }
 
-  const totalQueued = clips.reduce((acc, c) => acc + c.selectedPresets.length, 0)
+  // Counts custom targets too, so the button's number is the number of files
+  // the batch will actually write (T-50).
+  const totalQueued = clips.reduce(
+    (acc, c) => acc + queuedPresets(c, customPresets).length,
+    0
+  )
+
+  /** Everything the user can tick for a clip: the five platforms, then the
+   *  saved custom presets in the order the manager lists them (by name). */
+  const gridTargets: Array<{ key: string; info: PlatformInfo; custom: CustomPreset | null }> = [
+    ...ALL_PLATFORM_IDS.map((id) => ({ key: id, info: PLATFORM_INFO[id], custom: null })),
+    ...customPresets.map((p) => ({ key: p.id, info: customPresetInfo(p), custom: p }))
+  ]
 
   const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
 
@@ -354,13 +430,19 @@ export function ExportPanel(): JSX.Element | null {
 
       {selectedClip ? (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-          {ALL_PLATFORM_IDS.map((id) => {
-            const platform = PLATFORM_INFO[id]
-            const checked = selectedClip.selectedPresets.includes(id)
+          {/* T-50: the five platforms, then every saved custom preset. Same
+              checkbox, same geometry line, same success indicator — a saved
+              preset is an export target, so it looks and behaves like one.
+              The only difference is the "custom" tag that lets the eye split
+              the two groups. */}
+          {gridTargets.map((target) => {
+            const checked = target.custom
+              ? (selectedClip.customPresetIds ?? []).includes(target.key)
+              : selectedClip.selectedPresets.includes(target.info.id)
             const clipDuration = selectedClip.endSec - selectedClip.startSec
             return (
               <label
-                key={id}
+                key={target.key}
                 className={`flex items-start gap-2 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
                   checked
                     ? 'border-accent bg-accent/10'
@@ -370,19 +452,28 @@ export function ExportPanel(): JSX.Element | null {
                 <input
                   type="checkbox"
                   checked={checked}
-                  onChange={() => togglePreset(selectedClip.id, id)}
+                  onChange={() =>
+                    target.custom
+                      ? toggleCustomPreset(selectedClip.id, target.key)
+                      : togglePreset(selectedClip.id, target.info.id)
+                  }
                   className="mt-1"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium">{platform.label}</span>
+                    <span className="font-medium truncate">{target.info.label}</span>
+                    {target.custom ? (
+                      <span className="text-xs uppercase tracking-wide text-ink-dim border border-ink-dim/40 rounded px-1 shrink-0">
+                        custom
+                      </span>
+                    ) : null}
                   </div>
                   <div className="text-xs text-ink-dim mt-0.5">
-                    {platform.width}×{platform.height}
+                    {target.info.width}×{target.info.height}
                   </div>
                   <div className="mt-1">
                     <SuccessIndicator
-                      platform={platform}
+                      platform={target.info}
                       clipDuration={clipDuration}
                       sourceWidth={source.probe.width}
                       sourceHeight={source.probe.height}
@@ -402,7 +493,7 @@ export function ExportPanel(): JSX.Element | null {
           {jobs.map((j) => (
             <div key={j.jobId} className="flex items-center gap-3 text-sm">
               <span className="flex-1 truncate">
-                {j.clipName} · {PLATFORM_INFO[j.preset].label}
+                {j.clipName} · {j.presetLabel}
               </span>
               <div className="w-40 h-1.5 bg-bg-hover rounded-full overflow-hidden">
                 <div
@@ -438,6 +529,8 @@ export function ExportPanel(): JSX.Element | null {
       <CustomPresetManager
         open={showPresetManager}
         onClose={() => setShowPresetManager(false)}
+        presets={customPresets}
+        onChanged={refreshCustomPresets}
       />
     </div>
     </>

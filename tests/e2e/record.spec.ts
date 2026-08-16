@@ -56,14 +56,21 @@ const __dirname = path.dirname(__filename)
  *      screens found" message, no error toast, and no spinner. Clicking
  *      Refresh sources on a box with nothing to capture looks like a dead
  *      button. (RecordStudio.tsx:473-478)
- *   B. "Include webcam in recording" has no zero-camera hint. The Audio
+ *   B. "Include webcam in recording" had no zero-camera hint. The Audio
  *      card renders "No microphone found." when `mics` is empty; the
- *      Webcam card renders nothing at all when `cams` is empty — the
- *      checkbox stays ticked, the Corner select appears, and recording
- *      then silently produces screen-only video because
- *      `effectiveCamId` is null and the compositor branch is skipped
- *      without a toast. (RecordStudio.tsx:542-555 vs 526-530, and
- *      RecordStudio.tsx:216-217)
+ *      Webcam card rendered nothing at all when `cams` is empty — the
+ *      checkbox stayed ticked, the Corner select appeared, and recording
+ *      then silently produced screen-only video because
+ *      `effectiveCamId` is null and the compositor branch was skipped
+ *      without a toast.
+ *      FIXED 2026-08-16 by T-42, and this spec's webcam tests are now the
+ *      positives: the zero-camera branch renders the mic warning's twin,
+ *      the Corner picker is gated on there being a camera to put in a
+ *      corner, and starting a take with the box ticked raises the existing
+ *      webcam-failure toast rather than proceeding in silence. The
+ *      WITH-a-camera half is driven by stubbing `enumerateDevices` in the
+ *      renderer (see `stubCameras`), which also lifts the Webcam `<select>`
+ *      out of the HL block it sat in.
  *   C. The MP4 checkbox is the only Record preference that does not
  *      persist. `record.webcamCorner` is written to config.json on every
  *      change; `convertToMp4` is component-local `useState(true)`, so a
@@ -264,6 +271,40 @@ async function stubEmptySources(app: ElectronApplication): Promise<void> {
   })
 }
 
+/**
+ * Give the renderer some cameras. `enumerateDevices()` returns nothing in
+ * this container and Chromium's fake-device switch does not survive
+ * Electron's command line (see the header), so the WITH-a-camera half of the
+ * Webcam card — the device `<select>` and the Corner picker T-42 gates on it
+ * — is otherwise unreachable headless.
+ *
+ * Only the two `mediaDevices` calls `refreshDevices` makes are replaced, and
+ * `getUserMedia` delegates to the real implementation for anything that is
+ * not that function's own permission probe, so desktop capture still runs
+ * for real if a test that installs this later records. Install it BEFORE
+ * navigating to /record: `refreshDevices` runs on mount.
+ */
+async function stubCameras(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const md = navigator.mediaDevices as unknown as {
+      getUserMedia: (c?: MediaStreamConstraints) => Promise<MediaStream>
+      enumerateDevices: () => Promise<unknown[]>
+    }
+    const realGetUserMedia = md.getUserMedia.bind(navigator.mediaDevices)
+    md.getUserMedia = async (c?: MediaStreamConstraints) => {
+      // refreshDevices' probe: `{ audio: true, video: true }`. Anything
+      // else (the desktop-capture constraints, a specific deviceId) goes
+      // to the real API.
+      if (c && c.audio === true && c.video === true) return new MediaStream()
+      return realGetUserMedia(c)
+    }
+    md.enumerateDevices = async () => [
+      { deviceId: 'fake-cam-1', kind: 'videoinput', label: 'Fake Cam A', groupId: 'g1' },
+      { deviceId: 'fake-cam-2', kind: 'videoinput', label: 'Fake Cam B', groupId: 'g1' }
+    ]
+  })
+}
+
 async function waitForHome(window: Page): Promise<void> {
   await window.waitForLoadState('domcontentloaded')
   await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
@@ -379,7 +420,10 @@ test.describe('T-27 Record Studio', () => {
     }
   })
 
-  test('webcam checkbox reveals the Corner select; zero cameras get no hint at all', async () => {
+  const CAM_WARNING = 'No camera found. Click "Refresh sources" after granting permission.'
+  const MIC_WARNING = 'No microphone found. Click "Refresh sources" after granting permission.'
+
+  test('webcam checkbox with no camera warns exactly like the mic, and offers no Corner (T-42)', async () => {
     test.setTimeout(120_000)
     const root = makeRoot('cam')
     const userDataDir = path.join(root, 'userData')
@@ -393,41 +437,157 @@ test.describe('T-27 Record Studio', () => {
       const camBox = window.getByRole('checkbox').nth(1)
       const camSelect = window.locator('select[aria-label="Webcam"]')
       const cornerRow = window.getByText('Corner', { exact: true })
+      const camWarning = window.getByText(CAM_WARNING)
 
-      // Off by default: neither the camera select nor the Corner row exists.
+      // Off by default: no select, no Corner row, and no warning either —
+      // an unticked box makes no promise, so it needs no correction.
       await expect(camBox).not.toBeChecked()
       await expect(camSelect).toHaveCount(0)
       await expect(cornerRow).toHaveCount(0)
+      await expect(camWarning).toHaveCount(0)
 
       await camBox.check()
 
-      // Corner appears — it is gated on showCam alone, so it is visible even
-      // with no camera attached.
-      await expect(cornerRow).toBeVisible()
+      // T-42 (was T-27 FINDING B): the ticked-with-no-camera state now
+      // mirrors the Audio card's, in the same place the device <select>
+      // would have been. Both warnings are on screen at once here, which is
+      // what makes "mirrors" checkable rather than a claim.
+      await expect(camWarning).toBeVisible()
+      await expect(camWarning).toHaveClass(/text-amber-300/)
+      await expect(window.getByText(MIC_WARNING)).toBeVisible()
+
+      // No device select, and — the other half of the fix — no Corner picker
+      // for a corner nothing can be put in. The old build showed one, which
+      // is what made the ticked box read as a promise.
+      await expect(camSelect).toHaveCount(0)
+      await expect(cornerRow).toHaveCount(0)
+
+      // A live toggle in both directions, not a one-way reveal.
+      await camBox.uncheck()
+      await expect(camWarning).toHaveCount(0)
+      await camBox.check()
+      await expect(camWarning).toBeVisible()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-09-nocamera.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('with a camera attached the webcam select and the Corner picker both appear (T-42)', async () => {
+    test.setTimeout(120_000)
+    ensureScreenshots()
+    const root = makeRoot('camyes')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+
+      const camBox = window.getByRole('checkbox').nth(1)
+      const camSelect = window.locator('select[aria-label="Webcam"]')
+
+      // Still gated on the checkbox: devices alone reveal nothing.
+      await expect(camSelect).toHaveCount(0)
+      await expect(window.getByText(CAM_WARNING)).toHaveCount(0)
+
+      await camBox.check()
+
+      // The device select — the row the ledger carried as headless-limited
+      // because no videoinput exists in a container. Both devices are listed
+      // by their real labels, and the first is the value the select shows
+      // (which is the `selectedCamId ?? cams[0]` fallback startRecording
+      // uses, so what is displayed is what would be recorded).
+      await expect(camSelect).toBeVisible()
+      await expect(camSelect.locator('option')).toHaveText(['Fake Cam A', 'Fake Cam B'])
+      await expect(camSelect).toHaveValue('fake-cam-1')
+      await camSelect.selectOption('fake-cam-2')
+      await expect(camSelect).toHaveValue('fake-cam-2')
+
+      // No warning, because there IS a camera.
+      await expect(window.getByText(CAM_WARNING)).toHaveCount(0)
+
+      // ...and now the Corner picker, with its four exact labels. A renamed
+      // option is a user-visible change and fails here.
       const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
       await expect(corner).toBeVisible()
-      // Exactly the four corners, in the order and with the labels the module
-      // declares. A renamed option is a user-visible change and fails here.
       await expect(corner.locator('option')).toHaveText([
         'Top-left',
         'Top-right',
         'Bottom-left',
         'Bottom-right'
       ])
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-10-camera.png') })
 
-      // T-27 FINDING B: with `cams` empty the camera <select> is simply absent
-      // and NOTHING replaces it. The Audio card next door renders "No
-      // microphone found." in the same situation. So the user ticks "Include
-      // webcam in recording", sees a Corner picker appear, and gets a
-      // screen-only recording with no warning at any point — startRecording's
-      // `effectiveCamId` is null, so the compositor branch is skipped without
-      // the toast the webcam-failure path would otherwise raise.
-      await expect(camSelect).toHaveCount(0)
-      await expect(window.getByText(/No (camera|webcam) found/i)).toHaveCount(0)
-
-      // Unchecking removes the Corner row again.
+      // Unchecking takes both rows away again.
       await camBox.uncheck()
-      await expect(cornerRow).toHaveCount(0)
+      await expect(camSelect).toHaveCount(0)
+      await expect(window.getByText('Corner', { exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Start with the webcam ticked and no camera says so, instead of silently recording screen-only (T-42)', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('nocam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      // Cancelled save: this take exists to be started, not kept.
+      await stubSaveDialog(app, null)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      // Mic off — there is no microphone either, and its failure would abort
+      // the whole start before the webcam branch is reached.
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('checkbox').nth(1).check()
+      await expect(window.getByRole('checkbox').nth(1)).toBeChecked()
+      await expect(window.getByText(CAM_WARNING)).toBeVisible()
+
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      // T-42: the existing webcam-failure toast, raised for the case that
+      // used to raise nothing. It names the fault AND what the recording
+      // will be instead, so the ticked box and the file agree.
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 30_000,
+          intervals: [200]
+        })
+        .toMatch(/Webcam failed: No camera found\. Recording screen only\./)
+
+      // And it is a warning, not an abort: the screen half of the take is
+      // still what the user asked for, so it runs.
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:00/)).toBeVisible()
+      // Let a real second of chunks land — stopping at 00:00 finalizes an
+      // empty session, which is a different (already-covered) path.
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 60_000,
+          intervals: [200]
+        })
+        .toContain('Recording discarded.')
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
+        timeout: 30_000
+      })
+      expect(leftoverTemps(userDataDir)).toEqual([])
     } finally {
       await app.close()
       cleanup(root)
@@ -447,7 +607,13 @@ test.describe('T-27 Record Studio', () => {
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
-      await gotoRecordFromHome(window)
+      // T-42 gated the Corner picker on there being a camera to put in a
+      // corner, so this test — which is about the corner's PERSISTENCE —
+      // stubs one in rather than losing the element's coverage.
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
 
       // T-27 FINDING D: the persist effect runs on mount with no
       // user-touched guard, so simply arriving on /record stamps the default
@@ -476,7 +642,10 @@ test.describe('T-27 Record Studio', () => {
     const app2 = await launchApp(userDataDir)
     try {
       const window = await app2.firstWindow()
-      await gotoRecordFromHome(window)
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
       await window.getByRole('checkbox').nth(1).check()
       const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
       await expect(corner).toHaveValue('top-left')

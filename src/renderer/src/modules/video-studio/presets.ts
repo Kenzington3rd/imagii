@@ -1,4 +1,5 @@
 import type { PlatformId } from '@shared/clip'
+import type { CustomPreset } from '@shared/customPresets'
 
 export interface PlatformInfo {
   id: PlatformId
@@ -74,6 +75,28 @@ export const ALL_PLATFORM_IDS: PlatformId[] = [
   'twitter',
   'facebook'
 ]
+
+/**
+ * T-50 — a saved custom preset seen through the advisory table's own shape,
+ * so the export grid, the success indicator and the safe-zone pre-flight all
+ * treat it exactly like a platform preset.
+ *
+ * The renderer mirror of `resolveExportPreset` (src/main/ffmpeg/presets.ts):
+ * geometry and aspect come from the custom preset, the duration advisories
+ * from the platform it was built on. `id` stays the BASE platform id — it is
+ * the `PlatformId` the export job carries — while `label` is the user's own
+ * name, which is what the grid and the queue rows show.
+ */
+export function customPresetInfo(preset: CustomPreset): PlatformInfo {
+  const base = PLATFORM_INFO[preset.basePlatformId]
+  return {
+    ...base,
+    label: preset.name,
+    width: preset.width,
+    height: preset.height,
+    aspectRatio: preset.width / preset.height
+  }
+}
 
 export type SuccessLevel = 'green' | 'yellow' | 'red'
 

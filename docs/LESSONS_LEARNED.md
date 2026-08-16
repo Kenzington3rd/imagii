@@ -14,6 +14,143 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-50 + T-42: the UI took a choice it had no way to honour
+
+Two tickets, one root lesson, so one entry. Both are the same class — call
+it the **promised affordance**. In each, a control accepted the user's
+input, stored it, and rendered follow-on UI that only makes sense if the
+choice were going to be honoured. Neither ever honoured it. Nothing threw,
+nothing was logged, and both defects were invisible from inside the
+component that contained them, because each one's evidence lives somewhere
+else: in the file on disk, or in the panel next door.
+
+### Bug — a saved custom export preset could never be used for an export (T-50)
+- **Root cause.** `CustomPresetManager` was a complete CRUD surface: name,
+  base platform, width, height, fps, both bitrates, save, list, delete,
+  a confirm, real JSON files under `userData/export-presets`, and a parser
+  hardened in round 14 against corrupt ones. Everything except a consumer.
+  `ExportPanel`'s per-clip grid mapped `ALL_PLATFORM_IDS` and nothing else,
+  so the five built-in checkboxes were the whole set of export targets a
+  clip could have. `Clip.customPresetIds` existed in the type and was
+  written by nothing. The modal's own footer said so out loud — "Custom
+  presets currently scaffold metadata only" — which is the tell: the copy
+  had been updated to describe the gap instead of the gap being closed, and
+  once it read as documentation nobody treated it as a bug.
+- **Fix.** The grid draws targets, not platforms. `queuedPresets(clip,
+  customPresets)` returns the clip's platform presets followed by its
+  custom ones, each already resolved to the advisory table's own
+  `PlatformInfo` shape, and the grid, the `Export N` count, the safe-zone
+  pre-flight and the job queue all iterate that one list — so a custom
+  preset is not a parallel code path, it is another row. The encode side
+  gets the same treatment: `ExportJobSpec` carries the whole `CustomPreset`,
+  and `resolveExportPreset(baseId, custom)` is the single place its
+  geometry, fps and bitrates replace the base platform's. `aspectRatio` is
+  re-derived from the custom dimensions rather than inherited — a 1280x720
+  preset built on Reels would otherwise auto-crop to 9:16 and then stretch,
+  which is the wrong picture rather than merely the wrong number.
+  Deleting a preset re-reads the list and prunes its id off every clip, so
+  the checkbox, the count and the queued job disappear together; the prune
+  is deliberately NOT pushed onto the undo stack, because an undo step there
+  would offer to re-queue a preset whose file is gone. A job already handed
+  to main keeps its dimensions, so an in-flight export finishes at the size
+  it resolved. Two guards came with it, both at trust boundaries the feature
+  newly crosses: bitrates are validated with one shared `isValidBitrate`
+  (the manager refuses to SAVE a preset that could not encode; the export
+  IPC refuses to RUN one), and `parseCustomPreset` now requires
+  `basePlatformId` to be one of the five platforms instead of any non-empty
+  string — the old contract let a hand-edited file resolve to `undefined`
+  and throw on the next property read.
+- **Test.** `tests/integration/media.spec.ts` "custom export presets (real
+  ffmpeg)" (6 cases: encodes at the custom size and not the base's, honours
+  the custom fps, crops to the custom aspect with geometry identical to the
+  equivalent platform preset, survives autoZoom + hypeShake + speed, two
+  presets on one base do not overwrite each other, and a job with no custom
+  preset is still the platform path). `tests/e2e/video-pipelines.spec.ts`
+  "a custom preset exports at its stored dimensions, and deleting it
+  mid-batch leaves the running job alone (T-50)" — saves a preset through
+  the real manager, queues it beside YouTube, deletes it while the batch is
+  in flight, and ffprobes 960x540 out of the file. The CustomPresetManager
+  test carries the flipped pins (grid 5 -> 6 checkboxes; the entry that was
+  asserted absent is asserted present, tagged and tickable), the queued-then-
+  deleted degradation, and the new bitrate refusal. Units:
+  `resolveExportPreset` (7 cases), `videoStore` toggle/prune (10),
+  `isValidBitrate` (6), `parseCustomPreset`'s base-platform guard (2), and
+  `presetTablesInSync` now pins the renderer's `customPresetInfo` against
+  main's `resolveExportPreset` on every base. Mutation: making
+  `resolveExportPreset` ignore its custom argument turned five Layer 5
+  assertions red with the base platform's numbers (`expected 1280 to be
+  1080`, `expected '30/1' to be '24/1'`) and took the E2E ffprobe with it.
+- **Lesson.** **A feature is finished at its consumer, not at its store.**
+  Round-trip-to-disk is the easy half and the one that feels like progress:
+  it has a visible surface, a file you can `cat`, and tests that pass. The
+  half that makes it a feature is the place the saved thing gets USED, and
+  nothing in the storage half fails when that place does not exist. When
+  a control writes something, name the code that reads it before calling
+  the work done — and if the honest answer is "nothing yet", that is a
+  ticket, not a footer.
+
+### Bug — a ticked webcam box with no camera silently recorded screen-only (T-42)
+- **Root cause.** `startRecording` guarded the compositor with
+  `if (showCam && effectiveCamId)`, and `effectiveCamId` is
+  `selectedCamId ?? cams[0]?.deviceId ?? null`. With no camera attached
+  that is `null`, so the entire branch — including its `catch`, which owns
+  the only "webcam failed" message the studio has — was skipped. The user
+  ticked "Include webcam in recording (picture-in-picture)", got a Corner
+  picker as confirmation, recorded, and received a screen-only file with no
+  warning at any point. The comment directly above that line said the
+  fallback existed to kill "the exact UI-doesn't-match-output bug" — it
+  killed the case where the dropdown was untouched, and created the case
+  where there was no dropdown. Meanwhile the Audio card one panel over had
+  handled its own zero-device state since it was written: `includeMic &&
+  mics.length === 0` renders "No microphone found." The Webcam card had a
+  `cams.length > 0` branch for its select and no `else`.
+- **Fix.** Mirror the mic, in both places it differs. The panel renders the
+  warning's twin — same sentence bar the noun, same amber, same slot the
+  device select would have occupied — and the Corner picker is gated on
+  `cams.length > 0` like the select beside it, because a corner is only a
+  choice when there is something to put in one. In `startRecording` the
+  guard moves INSIDE the `try`: a missing camera throws `No camera found`
+  and lands in the existing catch, so the ticked box that cannot be
+  honoured raises the same "Webcam failed: … Recording screen only." toast
+  a dead camera raises. One failure path for the whole branch, not one path
+  plus a silent hole.
+- **Test.** `tests/e2e/record.spec.ts` "webcam checkbox with no camera warns
+  exactly like the mic, and offers no Corner (T-42)" (asserts both warnings
+  on screen together, so "mirrors" is checkable rather than claimed; select
+  and Corner both absent; toggled both ways), "with a camera attached the
+  webcam select and the Corner picker both appear (T-42)", and "Start with
+  the webcam ticked and no camera says so, instead of silently recording
+  screen-only (T-42)" — which drives a real take and matches the toast text
+  exactly. The with-a-camera half needed a renderer-side `enumerateDevices`
+  stub (`stubCameras`); that lifts the Webcam `<select>` out of the ledger's
+  headless-limited block and keeps the Corner select — now gated — covered.
+  Mutation: dropping the warning's render turned two named tests red.
+- **Lesson.** **When two controls promise the same kind of thing, they need
+  the same states, and the pair is the test.** The mic's zero-device branch
+  was right there, three JSX lines away, and had been for rounds. What made
+  the gap survivable was that each card was read on its own: the Webcam card
+  is internally consistent, and only looks wrong beside its sibling. Also:
+  **a guard that skips a branch skips that branch's error handling.**
+  `if (thing && thingIsPossible)` reads as defensive and is the opposite —
+  the impossible case is exactly the one the user must hear about, so the
+  possibility check belongs inside the `try`, not in front of it.
+
+### The shared lesson
+**A control that accepts input has promised something; find the promise and
+test it end to end.** Both defects passed every test that existed, because
+every test asked "did the click change the state?" and both answers were
+yes. The question that catches this class is the user's: *what did I get?* —
+a file at the size the panel showed, a recording with the camera in it. That
+question can only be answered where the artifact lands, which is why both
+fixes are pinned at ffprobe and at a toast raised by a real take, not at a
+checkbox's `checked` attribute. And when a promise cannot be met, saying so
+is not an error path bolted on afterwards; it is the feature. The copy that
+admits a gap ("scaffold metadata only") and the copy that is simply missing
+(no zero-camera hint) fail the user the same way — one lies politely, the
+other says nothing at all.
+
+---
+
 ## 2026-08-16 — T-34: the coachmark that walked off the window, and the key that pressed itself twice
 
 Both halves of the tutorial's chrome were built for the easy case and left

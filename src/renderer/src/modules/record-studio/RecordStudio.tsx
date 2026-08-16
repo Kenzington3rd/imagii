@@ -213,8 +213,14 @@ export function RecordStudio(): JSX.Element {
       // touching the dropdown silently recorded screen-only — the exact
       // UI-doesn't-match-output bug the webcam-preview fix set out to kill.
       const effectiveCamId = selectedCamId ?? cams[0]?.deviceId ?? null
-      if (showCam && effectiveCamId) {
+      if (showCam) {
         try {
+          // T-42: zero cameras used to fall out of this branch entirely —
+          // `showCam && effectiveCamId` was false, so the compositor was
+          // skipped and the take came out screen-only with no message at
+          // all. Raise it through the SAME failure path a dead camera takes,
+          // so a ticked box that cannot be honoured always says so.
+          if (!effectiveCamId) throw new Error('No camera found')
           camStream = await navigator.mediaDevices.getUserMedia({
             video: { deviceId: { exact: effectiveCamId } }
           })
@@ -552,7 +558,21 @@ export function RecordStudio(): JSX.Element {
                   ))}
                 </select>
               ) : null}
-              {showCam ? (
+              {/* T-42: mirrors the Audio card's zero-device branch exactly —
+                  same wording, same amber, same place the <select> would
+                  have been. Without it a user with no camera ticked the box,
+                  watched a Corner picker appear, and got a screen-only
+                  recording that never mentioned the webcam. */}
+              {showCam && cams.length === 0 ? (
+                <p className="text-xs text-amber-300">
+                  No camera found. Click "Refresh sources" after granting permission.
+                </p>
+              ) : null}
+              {/* The corner only means something once there is a camera to
+                  put in it, so it is gated the same way the device select
+                  is — the mic card shows a warning OR a control, never a
+                  control for a device that is not there. */}
+              {showCam && cams.length > 0 ? (
                 <label className="flex items-center gap-2 text-xs">
                   <span className="text-ink-muted w-16">Corner</span>
                   <select

@@ -1,4 +1,5 @@
 import type { CustomPreset } from './customPresets'
+import { PLATFORM_IDS, type PlatformId } from './clip'
 
 /**
  * Pure parser + validator for a custom export-preset JSON file.
@@ -29,6 +30,10 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+function isPlatformId(v: unknown): v is PlatformId {
+  return typeof v === 'string' && (PLATFORM_IDS as readonly string[]).includes(v)
+}
+
 /**
  * Parse a custom-preset JSON string. Returns the preset, or `null` if the
  * text is not JSON, not an object, or is missing/malformed any required
@@ -51,7 +56,12 @@ export function parseCustomPreset(raw: string): CustomPreset | null {
   if (!isFiniteNumber(parsed.fps)) return null
   if (!isNonEmptyString(parsed.videoBitrate)) return null
   if (!isNonEmptyString(parsed.audioBitrate)) return null
-  if (!isNonEmptyString(parsed.basePlatformId)) return null
+  // T-50: `basePlatformId` used to pass on being any non-empty string, and
+  // both the manager list and (now) the export grid look the platform table
+  // up by it — an unknown id resolved to `undefined` and the next property
+  // read threw. It must be one of the five platforms or the file is refused,
+  // the same way a missing name is.
+  if (!isPlatformId(parsed.basePlatformId)) return null
   return {
     id: parsed.id,
     name: parsed.name,
@@ -60,6 +70,6 @@ export function parseCustomPreset(raw: string): CustomPreset | null {
     fps: parsed.fps,
     videoBitrate: parsed.videoBitrate,
     audioBitrate: parsed.audioBitrate,
-    basePlatformId: parsed.basePlatformId as CustomPreset['basePlatformId']
+    basePlatformId: parsed.basePlatformId
   }
 }

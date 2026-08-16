@@ -1,4 +1,5 @@
 import type { PlatformId } from '../../shared/clip'
+import type { CustomPreset } from '../../shared/customPresets'
 
 export interface PlatformPreset {
   id: PlatformId
@@ -99,3 +100,32 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
 }
 
 export const ALL_PRESET_IDS: PlatformId[] = ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']
+
+/**
+ * T-50 — the one place a job's encoder settings are decided.
+ *
+ * Without a custom preset this is the platform row, unchanged. With one, the
+ * custom preset's own geometry, frame rate and bitrates REPLACE the base
+ * platform's, and `aspectRatio` is re-derived from those dimensions — the
+ * base row's aspect would auto-crop a 1280x720 custom preset built on Reels
+ * to 9:16 and then stretch it, which is the wrong picture, not just the
+ * wrong number. Codec, pixel format and the duration advisories stay with
+ * the base platform: those are the parts the user chose a base FOR.
+ */
+export function resolveExportPreset(
+  baseId: PlatformId,
+  custom?: CustomPreset | null
+): PlatformPreset {
+  const base = PLATFORM_PRESETS[baseId]
+  if (!custom) return base
+  return {
+    ...base,
+    label: custom.name,
+    width: custom.width,
+    height: custom.height,
+    fps: custom.fps,
+    videoBitrate: custom.videoBitrate,
+    audioBitrate: custom.audioBitrate,
+    aspectRatio: custom.width / custom.height
+  }
+}

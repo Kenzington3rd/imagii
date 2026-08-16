@@ -1128,6 +1128,97 @@ test.describe('ExportPanel', () => {
     }
   })
 
+  test('a custom preset exports at its stored dimensions, and deleting it mid-batch leaves the running job alone (T-50)', async () => {
+    test.setTimeout(600_000)
+    const studio = await launchWithVideo('customexport')
+    const { app, window, outDir, userDataDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      // Accept every confirm: the only one raised here is the preset delete.
+      window.on('dialog', (d) => void d.accept())
+      const card = exportCard(window)
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByPlaceholder('{source}_{clip}_{preset}').fill('{clip}-{preset}')
+
+      // ── save a preset through the real manager, at a size no platform has ──
+      await card.getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      await modal.getByRole('textbox', { name: 'Custom preset name' }).fill('Discord 540p')
+      const numbers = modal.getByRole('spinbutton')
+      // 16:9 like the YouTube default it is based on, so the safe-zone
+      // pre-flight stays quiet and this test is about the queue.
+      await numbers.nth(0).fill('960')
+      await numbers.nth(1).fill('540')
+      await numbers.nth(2).fill('24')
+      await modal.getByRole('button', { name: '+ Save preset' }).click()
+      await expectToast(window, 'Saved "Discord 540p"')
+      await modal.getByRole('button', { name: 'Done' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // ── queue it alongside a platform preset ──
+      await expect(card.getByRole('checkbox')).toHaveCount(6)
+      await presetBox(window, 'Discord 540p').check()
+      const exportButton = card.getByRole('button', { name: 'Export 2' })
+      await expect(exportButton).toBeEnabled()
+      await exportButton.click()
+
+      // The whole queue crosses the IPC in ONE exportBatch call, so by the
+      // time the Queue panel paints, main already holds each job's resolved
+      // dimensions. That is what makes the delete below safe by design
+      // rather than by timing.
+      await expect(card.getByText('Queue', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(card.getByText('Clip 1 · Discord 540p')).toBeVisible()
+      await expect(card.getByText('Clip 1 · YouTube')).toBeVisible()
+
+      // ── delete the preset while the batch is in flight ──
+      // Defined behavior (T-50): the in-flight job finishes at the size it
+      // already resolved. Whether the encode has finished by the time this
+      // click lands or not, the assertions below hold — the file is at the
+      // custom size either way.
+      await card.getByRole('button', { name: 'Presets' }).click()
+      await modal.getByRole('button', { name: '✕ delete' }).click()
+      await expect(modal.getByText('No custom presets yet.')).toBeVisible()
+      expect(readdirSync(presetsDir)).toEqual([])
+      await modal.getByRole('button', { name: 'Done' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // The queue row keeps the name it was queued under. It is a log of
+      // what ran, not a live lookup — a row that fell back to the BASE
+      // platform's label here would be a ghost telling the user the wrong
+      // thing about a file on disk.
+      await expect(card.getByText('Clip 1 · Discord 540p')).toBeVisible()
+
+      // ── both files land, and the custom one is at ITS dimensions ──
+      const expected = ['Clip 1-Discord 540p.mp4', 'Clip 1-youtube.mp4']
+      await expect
+        .poll(() => mp4sIn(outDir), { timeout: 540_000, intervals: [500] })
+        .toEqual(expected)
+      await expectToast(window, 'Exported 2 files')
+      const custom = videoStream(
+        await ffprobeJson(path.join(outDir, 'Clip 1-Discord 540p.mp4'))
+      )
+      expect(custom.codec_name).toBe('h264')
+      expect(custom.width).toBe(960)
+      expect(custom.height).toBe(540)
+      // ...and not the base platform's geometry, which is what a fallback
+      // to PLATFORM_PRESETS would have produced.
+      expect(custom.width).not.toBe(1920)
+      const platform = videoStream(await ffprobeJson(path.join(outDir, 'Clip 1-youtube.mp4')))
+      expect(platform.width).toBe(1920)
+      expect(platform.height).toBe(1080)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-13-custompreset.png') })
+
+      // ── the deleted preset is unqueued everywhere: no ghost row ──
+      await expect(card.getByRole('checkbox')).toHaveCount(5)
+      await expect(card.locator('label').filter({ hasText: 'Discord 540p' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
   test('the watermark reaches the filter graph and its handle is remembered; its position is not', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('watermark')
@@ -1338,7 +1429,7 @@ test.describe('ExportPanel', () => {
 // ═══════════════════════ CustomPresetManager (4s) ══════════════════════════
 
 test.describe('CustomPresetManager', () => {
-  test('saves, lists and deletes a custom preset — and refuses the two invalid ones by name', async () => {
+  test('saves, lists, queues and deletes a custom preset — and refuses the invalid ones by name', async () => {
     test.setTimeout(120_000)
     const studio = await launchWithVideo('presets')
     const { app, window, userDataDir } = studio
@@ -1388,11 +1479,28 @@ test.describe('CustomPresetManager', () => {
       await expect(numbers.nth(0)).toHaveValue('1080')
       await expect(numbers.nth(1)).toHaveValue('1920')
 
-      // ── save ──
+      // ── negative 3 (T-50): a bitrate ffmpeg cannot parse ──
+      // Presets are export targets now, so one that could never encode must
+      // not reach disk — the same "a saved preset promises it can be used"
+      // ruling the rest of T-50 rests on.
       await numbers.nth(0).fill('1280')
       await numbers.nth(1).fill('720')
       await numbers.nth(2).fill('60')
+      await modal.locator('input[type="text"]').nth(1).fill('8 Mbps')
+      await save.click()
+      await expectToast(window, 'Bitrates look like 8M or 192k')
+      await expect(modal.getByText('Saved presets (0)')).toBeVisible()
+      expect(existsSync(presetsDir) ? readdirSync(presetsDir) : []).toEqual([])
+      // The audio field is checked too, not just the video one.
       await modal.locator('input[type="text"]').nth(1).fill('5M')
+      await modal.locator('input[type="text"]').nth(2).fill('loud')
+      await save.click()
+      expect(
+        (await readToastLog(window)).filter((t) => t.includes('Bitrates look like'))
+      ).toHaveLength(2)
+      expect(existsSync(presetsDir) ? readdirSync(presetsDir) : []).toEqual([])
+
+      // ── save ──
       await modal.locator('input[type="text"]').nth(2).fill('256k')
       await save.click()
       await expectToast(window, 'Saved "Discord 1080p"')
@@ -1420,23 +1528,51 @@ test.describe('CustomPresetManager', () => {
         basePlatformId: 'reels'
       })
 
-      // FINDING-4: a saved custom preset never becomes an export target.
-      // ExportPanel's grid maps ALL_PLATFORM_IDS only, so the five built-in
-      // checkboxes are all there is — the modal's own footer admits the
-      // presets "scaffold metadata only". Pinned in both directions.
+      // ── the footer says what the presets DO, not that they do nothing ──
+      // The pre-T-50 copy admitted the dead end ("scaffold metadata only —
+      // exports use the base platform's encoder settings"). Pinned in both
+      // directions so the promise cannot quietly regress.
+      await expect(modal).toContainText(
+        'Saved presets join the platform presets in the Export panel — tick one to export a clip at its own size and bitrate.'
+      )
+      await expect(modal.getByText(/scaffold metadata only/)).toHaveCount(0)
+
+      // T-50 (was FINDING-4): a saved custom preset IS an export target now.
+      // It joins the five platform checkboxes in the per-clip grid, carrying
+      // its own name, its stored geometry and a "custom" tag — the same
+      // checkbox, one more row. Pinned in both directions: the count went
+      // 5 -> 6, and the entry that used to be absent is present.
       await modal.getByRole('button', { name: 'Done' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
-      await expect(exportCard(window).getByRole('checkbox')).toHaveCount(5)
-      await expect(exportCard(window).getByText('Discord 1080p')).toHaveCount(0)
+      const card = exportCard(window)
+      await expect(card.getByRole('checkbox')).toHaveCount(6)
+      const customTile = card.locator('label').filter({ hasText: 'Discord 1080p' })
+      await expect(customTile).toHaveCount(1)
+      await expect(customTile).toContainText('1280×720')
+      await expect(customTile).toContainText('custom')
+      // No platform tile wears the tag — it is what separates the groups.
+      await expect(card.locator('label').filter({ hasText: 'YouTube' })).not.toContainText(
+        'custom'
+      )
 
-      // ── delete, both branches ──
-      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      // ── and it is a live checkbox: the export count follows it ──
+      await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
+      await presetBox(window, 'Discord 1080p').check()
+      await expect(presetBox(window, 'Discord 1080p')).toBeChecked()
+      await expect(card.getByRole('button', { name: 'Export 2' })).toBeEnabled()
+
+      // ── delete, both branches — with the preset QUEUED on a clip ──
+      await card.getByRole('button', { name: 'Presets' }).click()
       await expect(modal.getByText('Saved presets (1)')).toBeVisible()
       await modal.getByRole('button', { name: '✕ delete' }).click()
       await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
       expect(messages[0]).toBe('Delete preset "Discord 1080p"?')
       await expect(modal.getByText('Saved presets (1)')).toBeVisible()
       expect(readdirSync(presetsDir)).toHaveLength(1)
+      // Dismissed: nothing was unqueued either.
+      await modal.getByRole('button', { name: 'Done' }).click()
+      await expect(presetBox(window, 'Discord 1080p')).toBeChecked()
+      await card.getByRole('button', { name: 'Presets' }).click()
 
       answer = 'accept'
       await modal.getByRole('button', { name: '✕ delete' }).click()
@@ -1447,6 +1583,24 @@ test.describe('CustomPresetManager', () => {
         'Delete preset "Discord 1080p"?',
         'Delete preset "Discord 1080p"?'
       ])
+
+      // T-50: deleting a preset a clip had QUEUED degrades safely. The row
+      // is gone from the grid rather than lingering as a ghost, the export
+      // count drops back to the platform presets alone, and the studio is
+      // still alive and interactive (no crash boundary, no dead panel).
+      await modal.getByRole('button', { name: 'Done' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(card.getByRole('checkbox')).toHaveCount(5)
+      await expect(card.getByText('Discord 1080p')).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible()
+      // The surviving platform checkbox still toggles, so the grid was
+      // re-rendered rather than left in a broken half-state.
+      await presetBox(window, 'YouTube').uncheck()
+      await expect(card.getByRole('button', { name: 'Export', exact: true })).toBeDisabled()
+      await presetBox(window, 'YouTube').check()
+      await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
+      await card.getByRole('button', { name: 'Presets' }).click()
 
       // ── the modal's own exits ──
       await window.keyboard.press('Escape')

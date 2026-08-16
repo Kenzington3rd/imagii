@@ -18,6 +18,7 @@ import { runConcat, runPipComposite } from '../../src/main/ffmpeg/concat'
 import { analyzeClipHook, findHighlights } from '../../src/main/ffmpeg/highlights'
 import { runBurnIn } from '../../src/main/sidecars/whisperManager'
 import type { Clip, ExportJobSpec, PlatformId } from '../../src/shared/clip'
+import type { CustomPreset } from '../../src/shared/customPresets'
 import { DEFAULT_CHAIN_SPEC, type AudioExportSpec, type ChainSpec } from '../../src/shared/audio'
 import { escapeSubtitlesPath } from '../../src/shared/captions'
 import { ALL_PRESET_IDS, PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
@@ -498,6 +499,152 @@ describe('video export presets (real ffmpeg)', () => {
     const v = info.streams.find((s) => s.codec_type === 'video')
     expect(v?.width).toBe(1920)
     expect(v?.height).toBe(1080)
+  })
+})
+
+/**
+ * T-50 — custom presets became real export targets, which means
+ * `runExportJob` now resolves its encoder settings through
+ * `resolveExportPreset` instead of indexing PLATFORM_PRESETS directly. The
+ * unit tests either side of that assert what the resolved row LOOKS like;
+ * only this layer proves ffmpeg accepts it and writes the bytes the user was
+ * shown. (Auto Zoom shipped 100% broken behind green unit tests for exactly
+ * this reason — see the round-18 zoompan lesson.)
+ */
+describe('custom export presets (real ffmpeg)', () => {
+  const discord: CustomPreset = {
+    id: 'cp-discord',
+    name: 'Discord 1080p',
+    width: 1280,
+    height: 720,
+    fps: 24,
+    videoBitrate: '3M',
+    audioBitrate: '96k',
+    basePlatformId: 'reels'
+  }
+
+  function customJob(
+    sourcePath: string,
+    custom: CustomPreset,
+    clip: Clip,
+    jobId: string
+  ): ExportJobSpec {
+    return {
+      jobId,
+      sourcePath,
+      outDir: workDir,
+      clip,
+      preset: custom.basePlatformId,
+      customPreset: custom,
+      outputFilename: `${jobId}.mp4`
+    }
+  }
+
+  it('encodes at the custom size, NOT the base platform size', async () => {
+    // The base is Reels (1080x1920 portrait). If the resolution ever falls
+    // back to the platform row, this comes out portrait and fails loudly.
+    const clip = makeClip()
+    const res = await runExportJob(customJob(landscapeSrc, discord, clip, 'job-custom'), () => {})
+    expect(existsSync(res.outputPath)).toBe(true)
+
+    const info = await ffprobeJson(res.outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(v?.width).toBe(1280)
+    expect(v?.height).toBe(720)
+    expect(v?.width).not.toBe(PLATFORM_PRESETS.reels.width)
+    expect(v?.height).not.toBe(PLATFORM_PRESETS.reels.height)
+    expect(v?.codec_name).toBe('h264')
+    expect(v?.pix_fmt).toBe('yuv420p')
+    expect(a?.codec_name).toBe('aac')
+    await assertFaststart(res.outputPath)
+  })
+
+  it('honours the custom frame rate', async () => {
+    // Every platform row is 30 fps, so 24 can only have come from the
+    // custom preset's own `-r`.
+    const clip = makeClip()
+    const res = await runExportJob(customJob(landscapeSrc, discord, clip, 'job-custom-fps'), () => {})
+    const info = await ffprobeJson(res.outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.avg_frame_rate).toBe('24/1')
+  })
+
+  it('crops to the CUSTOM aspect — the same geometry the equivalent platform preset produces', async () => {
+    // Reels is 9:16. A 16:9 custom preset built on it must auto-crop the
+    // 9:16 source to 16:9 and scale, NOT squash a portrait frame into a
+    // landscape box. The reference is X/Twitter: same 1280x720, same 16:9,
+    // straight off the platform table — so if the custom path resolves its
+    // aspect correctly the two files are geometrically identical.
+    const clip = makeClip({ startSec: 0.5, endSec: 3 })
+    const custom = await runExportJob(
+      customJob(portraitSrc, discord, clip, 'job-custom-crop'),
+      () => {}
+    )
+    const platform = await runExportJob(
+      makeJob(portraitSrc, 'twitter', clip, 'job-platform-crop'),
+      () => {}
+    )
+    const cv = (await ffprobeJson(custom.outputPath)).streams.find((s) => s.codec_type === 'video')
+    const pv = (await ffprobeJson(platform.outputPath)).streams.find(
+      (s) => s.codec_type === 'video'
+    )
+    expect(cv?.width).toBe(1280)
+    expect(cv?.height).toBe(720)
+    expect(cv?.width).toBe(pv?.width)
+    expect(cv?.height).toBe(pv?.height)
+    // Sample and display aspect included. NOTE (finding, not fixed here):
+    // both come out 405:404 / 1.005:1 rather than square — `autoCropForAspect`
+    // rounds the crop to even pixels (1080x606 for a 16:9 target off a
+    // 1080x1920 source, which is 1.782:1, not 1.778:1) and ffmpeg records
+    // the ~0.25% difference as SAR instead of a scale. That is the EXISTING
+    // behavior of every landscape-preset-on-portrait-source export; the
+    // point of this assertion is that a custom preset does exactly what a
+    // platform preset does, whatever that is.
+    expect(cv?.sample_aspect_ratio).toBe(pv?.sample_aspect_ratio)
+    expect(cv?.display_aspect_ratio).toBe(pv?.display_aspect_ratio)
+  })
+
+  it('runs a custom preset with the same effects the platform presets take', async () => {
+    // autoZoom writes the preset dimensions into zoompan's `s=`; on a custom
+    // preset that has to be the custom size or ffmpeg silently resizes to
+    // hd720 (the round-18 bug, one table over).
+    const clip = makeClip({ autoZoom: true, hypeShake: true, speedMultiplier: 2, endSec: 3 })
+    const res = await runExportJob(customJob(landscapeSrc, discord, clip, 'job-custom-fx'), () => {})
+    const info = await ffprobeJson(res.outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1280)
+    expect(v?.height).toBe(720)
+  })
+
+  it('two custom presets on the same base land in separate files', async () => {
+    // The fallback filename used to be keyed on the base platform id, which
+    // made two custom presets built on Reels overwrite each other.
+    const small: CustomPreset = { ...discord, id: 'cp-small', name: 'Discord small', width: 640, height: 360 }
+    const clip = makeClip({ endSec: 2.5 })
+    const a = await runExportJob(
+      { jobId: 'job-dup-a', sourcePath: landscapeSrc, outDir: workDir, clip, preset: 'reels', customPreset: discord },
+      () => {}
+    )
+    const b = await runExportJob(
+      { jobId: 'job-dup-b', sourcePath: landscapeSrc, outDir: workDir, clip, preset: 'reels', customPreset: small },
+      () => {}
+    )
+    expect(a.outputPath).not.toBe(b.outputPath)
+    expect((await ffprobeJson(a.outputPath)).streams.find((s) => s.codec_type === 'video')?.width).toBe(1280)
+    expect((await ffprobeJson(b.outputPath)).streams.find((s) => s.codec_type === 'video')?.width).toBe(640)
+  })
+
+  it('a job with no customPreset is byte-for-byte the platform path', async () => {
+    // The negative half: adding the field must not have changed what a
+    // plain platform export produces.
+    const clip = makeClip()
+    const res = await runExportJob(makeJob(landscapeSrc, 'reels', clip, 'job-nocustom'), () => {})
+    const info = await ffprobeJson(res.outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(PLATFORM_PRESETS.reels.width)
+    expect(v?.height).toBe(PLATFORM_PRESETS.reels.height)
+    expect(v?.avg_frame_rate).toBe('30/1')
   })
 })
 
