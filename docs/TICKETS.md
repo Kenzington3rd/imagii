@@ -756,7 +756,7 @@ IMG-PREC.
 - **Acceptance criteria:** zero-camera state mirrors the mic warning;
   recording with a ticked-but-unavailable webcam surfaces the existing
   webcam-failure toast; pins flipped.
-- **Status:** open
+- **Status:** done (round 37 — see Done)
 
 ## T-43 — Record settings persistence is inconsistent (MP4 checkbox; mount-writes)
 
@@ -859,7 +859,7 @@ IMG-PREC.
         safely (unqueue, never a crash or a ghost row).
   - [ ] Pins flipped red-green; usability ruling applies (saving a
         preset promises it can be used).
-- **Status:** open
+- **Status:** done (round 37 — see Done)
 
 ## T-52 — timeline click-to-scrub, and two seek edges the T-37 fix exposed
 
@@ -997,17 +997,34 @@ IMG-PREC.
   proves the copy discriminates (round-21 protocol).
 - **Status:** open
 
-## T-58 — References work is invisible to Home's global Undo (owner call)
+## T-58 — give References an undo history (owner ruled: yes, 2026-08-16)
 
-- **Spec:** T-32 worker finding. The references/moodboard store has no
-  undo history at all, so Home's "Undo last action" can never target
-  reference work. The "last:" readout stays honest (it names what WILL
-  be undone), so nothing lies today — but deleting a mood board is
-  destructive-with-confirm while every other studio's destructive
-  action is undoable. Owner decision: give References a history like
-  the other studios, or document the boundary in the Home button's
-  title copy.
-- **Status:** open (needs owner ruling on scope)
+- **Spec:** T-32 worker finding; the owner ruled that References gets
+  a history like the other studios rather than a documented boundary.
+  The references/moodboard store currently has none, so Home's "Undo
+  last action" can never target reference work, and deleting a mood
+  board is destructive-with-confirm while every other studio's
+  destructive action is undoable.
+- **Acceptance criteria:**
+  - [ ] referencesStore gains the same history shape the other three
+        studios use (past/future, canUndo/canRedo, the 50-step cap) —
+        reuse the existing store history pattern, no fourth variant.
+  - [ ] Undoable: board create/rename/delete (delete restores the
+        board WITH its items), item add/remove, asset-canvas bridge
+        state if it lives in this store. The delete confirm stays
+        (it guards more than the store: cached thumbs), but a
+        confirmed delete is now reversible.
+  - [ ] References joins useGlobalUndo's module-level tracker (the
+        counting reconciler picks it up from the store subscription
+        list) and Home's "last:" readout names it.
+  - [ ] Studio-level undo affordance consistent with the others
+        (useUndoRedoHotkeys + header buttons per the T-15 pattern).
+  - [ ] E2E: delete a board -> Undo restores it with items; cross-
+        studio ordering test extended to a references edit; ledger
+        rows updated.
+  - [ ] Snapshot/restore interplay: the T-47 post-restore contract
+        (Undo disabled after restore) applies to this store too.
+- **Status:** open (scheduled: next References batch, with T-30)
 
 ## T-56 — Timeline playhead is a raw palette color; track space stops at the probe duration
 
@@ -1076,6 +1093,20 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** open
 
+## T-65 — auto-cropped exports carry a non-square SAR (anamorphic by ~0.25%)
+
+- **Spec:** T-50 worker finding, pre-existing on the platform path.
+  autoCropForAspect rounds crops to even pixels (1080x606 off a
+  1080x1920 source is 1.782:1, not 1.778:1) and ffmpeg records the
+  difference as SAR 405:404 instead of scaling — T-12's square-pixel
+  rule is enforced only in runReframe. The T-50 Layer 5 suite asserts
+  custom and platform paths are geometrically identical and documents
+  this at the assertion.
+- **Acceptance criteria:** export path emits SAR 1:1 (setsar or
+  scale-after-crop, matching runReframe's approach); Layer 5 asserts
+  square pixels on an odd-aspect crop; pins updated.
+- **Status:** open
+
 ## T-62 — remaining mouse gestures still on the truncatable shape
 
 - **Spec:** T-55 follow-through. The hardened drag.ts helper (send
@@ -1086,7 +1117,12 @@ IMG-PREC.
   yet; the mechanism (pointerout mid-drag when a sibling window maps)
   applies to them identically.
 - **Acceptance criteria:** those call sites route through drag.ts (or
-  its pattern); one loaded-box roster loop green.
+  its pattern); one loaded-box roster loop green. WIDENED round 37:
+  image.spec.ts:1168 (layer-panel end-state test) asserts a
+  gesture-derived coordinate at precision 0 instead of the file's own
+  MOUSE_TOL — deterministically red at 1600x1200 Xvfb geometry, green
+  at 1920x1080 (fit-zoom changes pointer->document rounding). Fix the
+  tolerance in the same pass.
 - **Status:** open
 
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
@@ -1114,6 +1150,44 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 37 — fix wave batch 11: T-50 + T-42 (the promised-affordance
+pair; the batch survived a container restart mid-run and was resumed
+with the tree intact). T-50: custom presets are real export targets —
+one queuedPresets helper resolves platform + custom targets for the
+grid, the Export-N count, the safe-zone pre-flight and the job queue
+(a custom preset is a row, not a parallel path); resolveExportPreset
+in main swaps geometry/fps/bitrates with aspectRatio RE-DERIVED from
+the custom dimensions (inheriting the base aspect would crop-and-
+stretch); ExportJobSpec carries the whole preset so an in-flight job
+finishes at the dimensions it resolved, race-free by construction.
+Delete-while-queued: prune drops the id from every clip (deliberately
+NOT undoable — undo must never re-queue a deleted preset's file);
+JobStatus carries presetLabel so a finished row keeps its true name.
+Manager footer copy now states what presets DO; two new trust-boundary
+guards (isValidBitrate both ends — these strings reach -b:v argv;
+basePlatformId constrained to the five platforms, closing a latent
+manager crash on hand-edited files). IMG-PREC attached: the export
+resolution path changed, so Layer 5 gained a 6-case custom-preset
+suite (67/2 green, worker and expediter runs). T-42: zero-camera state
+mirrors the mic warning verbatim-but-the-noun; the Corner picker gates
+like the device select; the effectiveCamId guard moved INSIDE the try
+so a ticked-but-absent webcam lands in the EXISTING failure path
+("Webcam failed: ... Recording screen only.") — one failure path, no
+silent hole. New stubCameras E2E helper lifts the Webcam select out of
+the HL block (Record HL 2 -> 1; HAND-TEST narrows to mic + live
+compositor). All four pins flipped red-green. Worker mutations:
+resolveExportPreset ignoring its custom arg (6 Layer 5 red), warning
+render disabled (2 named E2E red). Expediter's own: pruneCustomPresets
+no-op'd — E2E stayed GREEN (queuedPresets filters dead ids at every
+consumer) while exactly the three prune unit tests went red; recorded
+as the layers discriminating different things — the prune's contract
+(stored-state hygiene, not-undoable) lives at the unit layer. Gates:
+979 unit / 67+2 Layer 5 / 117 E2E. Worker's restart note: Xvfb
+geometry changes fit-zoom rounding — a pre-existing image.spec
+assertion is deterministically geometry-dependent, folded into T-62;
+T-65 filed (anamorphic SAR on auto-crop, pre-existing platform-path
+bug the new Layer 5 test documents).
 
 Round 36 — fix wave batch 10: T-34 + T-35 (the last two items on the
 original fix-wave list). T-34: one placement pipeline for all four

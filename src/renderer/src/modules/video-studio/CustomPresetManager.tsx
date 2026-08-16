@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
+import { isValidBitrate } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -9,12 +10,23 @@ import { Modal } from '../../components/Modal'
 interface CustomPresetManagerProps {
   open: boolean
   onClose: () => void
+  /** The saved presets, owned by ExportPanel — the same list the export
+   *  grid draws from, so the modal and the grid can never disagree (T-50). */
+  presets: ReadonlyArray<CustomPreset>
+  /** Re-read the list from disk. Awaited after every save and delete so the
+   *  grid updates (and a deleted preset is unqueued) before the modal
+   *  repaints. */
+  onChanged: () => Promise<void>
 }
 
 const DEFAULT_BASE: PlatformId = 'youtube'
 
-export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps): JSX.Element | null {
-  const [presets, setPresets] = useState<CustomPreset[]>([])
+export function CustomPresetManager({
+  open,
+  onClose,
+  presets,
+  onChanged
+}: CustomPresetManagerProps): JSX.Element | null {
   const [name, setName] = useState('')
   const [width, setWidth] = useState(1920)
   const [height, setHeight] = useState(1080)
@@ -23,14 +35,13 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
   const [audioBitrate, setAudioBitrate] = useState('192k')
   const [base, setBase] = useState<PlatformId>(DEFAULT_BASE)
 
-  async function refresh(): Promise<void> {
-    const list = await window.api.video.listCustomPresets()
-    setPresets(list)
-  }
-
+  // Re-read on open, so a preset folder edited outside the app still shows
+  // up. Keyed on `open` alone deliberately: `onChanged` is a stable
+  // useCallback in the parent and listing on every render would re-read disk
+  // on each keystroke in the form below.
   useEffect(() => {
-    if (open) void refresh()
-  }, [open])
+    if (open) void onChanged()
+  }, [open, onChanged])
 
   if (!open) return null
 
@@ -51,6 +62,13 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
       toast.error('Width / height must be at least 64')
       return
     }
+    // T-50: these two strings become the encoder's `-b:v` / `-b:a`, so a
+    // preset with a bitrate ffmpeg can't read is a preset that can't export.
+    // Refuse it here rather than let the user find out at export time.
+    if (!isValidBitrate(videoBitrate) || !isValidBitrate(audioBitrate)) {
+      toast.error('Bitrates look like 8M or 192k')
+      return
+    }
     await window.api.video.saveCustomPreset({
       name: trimmed,
       width,
@@ -61,14 +79,16 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
       basePlatformId: base
     })
     setName('')
-    await refresh()
+    await onChanged()
     toast.success(`Saved "${trimmed}"`)
   }
 
   async function remove(p: CustomPreset): Promise<void> {
     if (!confirm(`Delete preset "${p.name}"?`)) return
     await window.api.video.deleteCustomPreset(p.id)
-    await refresh()
+    // The parent's refresh also prunes the deleted id off every clip, so the
+    // checkbox and its queued job disappear together (T-50).
+    await onChanged()
   }
 
   // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
@@ -218,7 +238,7 @@ export function CustomPresetManager({ open, onClose }: CustomPresetManagerProps)
         </div>
 
       <div className="p-3 border-t border-ink-dim/30 flex justify-between items-center text-xs text-ink-dim">
-        <span>Custom presets currently scaffold metadata only — exports use the base platform's encoder settings.</span>
+        <span>Saved presets join the platform presets in the Export panel — tick one to export a clip at its own size and bitrate.</span>
         <button className="text-accent hover:underline" onClick={onClose}>
           Done
         </button>

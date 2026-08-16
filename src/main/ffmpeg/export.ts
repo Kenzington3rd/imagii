@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
-import { PLATFORM_PRESETS } from './presets'
+import { resolveExportPreset } from './presets'
 import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
@@ -25,7 +25,10 @@ export async function runExportJob(
   job: ExportJobSpec,
   onProgress: ProgressListener
 ): Promise<ExportResult> {
-  const preset = PLATFORM_PRESETS[job.preset]
+  // T-50: a job that carries a custom preset encodes at ITS geometry and
+  // bitrates. The resolved preset is a full PlatformPreset, so every filter
+  // and flag below reads it exactly as it read the platform row.
+  const preset = resolveExportPreset(job.preset, job.customPreset)
   const probe = await probeVideo(job.sourcePath)
   const source = { width: probe.width, height: probe.height }
   const filterChain = buildVideoFilter(job.clip, preset, source, job.watermark)
@@ -37,10 +40,13 @@ export async function runExportJob(
   const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speedForDuration)
 
   const sourceBase = path.parse(job.sourcePath).name
+  // The fallback name has to distinguish two custom presets sharing a base
+  // platform, so it uses the preset's own name rather than `preset.id`.
+  const presetTag = job.customPreset ? safeFileBase(job.customPreset.name) : preset.id
   const outputName =
     job.outputFilename && job.outputFilename.trim()
       ? job.outputFilename
-      : `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${preset.id}.mp4`
+      : `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${presetTag}.mp4`
   const outputPath = path.join(job.outDir, outputName)
 
   const speed =

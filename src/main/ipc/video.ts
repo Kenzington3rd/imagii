@@ -22,6 +22,7 @@ import {
 import { nanoid } from 'nanoid'
 import type { ExportJobSpec, ExportResult } from '../../shared/clip'
 import type { CustomPreset } from '../../shared/customPresets'
+import { isValidBitrate } from '../../shared/customPresets'
 import {
   assertNonEmptyString,
   assertFiniteNonNeg,
@@ -78,6 +79,23 @@ function validateExportJob(job: unknown, idx: number): asserts job is ExportJobS
     }
   }
   assertEnum(job.preset, ALL_PRESET_IDS, `jobs[${idx}].preset`)
+  // T-50: a custom preset overrides the encoder's geometry and bitrates, so
+  // every field of it reaches ffmpeg's argv. The preset comes off disk in a
+  // directory the user can edit, and arrives here through the renderer —
+  // validate it at the boundary exactly like the platform id above.
+  if (job.customPreset !== undefined && job.customPreset !== null) {
+    assertCustomPreset(job.customPreset, `jobs[${idx}].customPreset`)
+  }
+}
+
+function assertCustomPreset(preset: unknown, name: string): asserts preset is CustomPreset {
+  assertPlainObject(preset, name)
+  assertNonEmptyString(preset.name, `${name}.name`)
+  assertRange(preset.width, 16, 16384, `${name}.width`)
+  assertRange(preset.height, 16, 16384, `${name}.height`)
+  assertRange(preset.fps, 1, 240, `${name}.fps`)
+  assert(isValidBitrate(preset.videoBitrate), `${name}.videoBitrate malformed`)
+  assert(isValidBitrate(preset.audioBitrate), `${name}.audioBitrate malformed`)
 }
 
 export function registerVideoIpc(): void {
@@ -279,6 +297,11 @@ export function registerVideoIpc(): void {
       assertRange(preset.width, 16, 16384, 'preset.width')
       assertRange(preset.height, 16, 16384, 'preset.height')
       assertRange(preset.fps, 1, 240, 'preset.fps')
+      // T-50: presets are export targets now, so a bitrate that ffmpeg
+      // cannot parse must never reach disk — a saved preset promises it can
+      // be used.
+      assert(isValidBitrate(preset.videoBitrate), 'preset.videoBitrate malformed')
+      assert(isValidBitrate(preset.audioBitrate), 'preset.audioBitrate malformed')
       return saveCustomPreset(preset)
     }
   )

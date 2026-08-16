@@ -867,3 +867,28 @@ New and changed elements; tests in tests/e2e/{continuity,home-chrome}
   tutorialKeyIntent unit-covered.
 - **ErrorBoundary:** see the upgraded round-25 row above; the
   production-shipping gated crash route is recorded in the hooks line.
+
+
+## Dispositions — round 37 (fix wave batch 11: T-50 + T-42)
+
+- **Video 4t ExportPanel:** preset checkboxes are x5 platform + one
+  per saved custom preset (bordered `custom` tag, existing pinned
+  token pairing). T-50's both-direction pin flipped: custom preset
+  ticks, exports at its stored dimensions (ffprobe-verified E2E +
+  6-case Layer 5), delete-while-queued degrades with no ghost row and
+  the in-flight job finishing at resolved dimensions. Store hygiene
+  (prune, not-undoable) is unit-owned: videoStore.test.ts x3 —
+  expediter's E2E-layer mutation stayed green while exactly those
+  three went red, the intended layering.
+- **Video 4s CustomPresetManager:** 12 -> 13 elements (new
+  bitrate-refusal negative); the dead-end footer clause replaced by
+  copy stating what presets do, pinned in both directions; scrim-click
+  still owned by the T-21 Modal contract.
+- **Record:** Webcam `<select>` LEAVES the HL block via the
+  stubCameras helper (labels, value, `selectedCamId ?? cams[0]`
+  default asserted). HL count 2 -> 1 (Microphone only). The T-42 pin
+  ("no zero-camera hint, PiP silently dropped") flips: "No camera
+  found." warning mirrors the mic branch, Corner gates with the
+  select, Start with a ticked-but-absent webcam raises the existing
+  "Webcam failed: ... Recording screen only." toast. HAND-TEST steps
+  2-3 narrow to the microphone select + the live compositor.

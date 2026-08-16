@@ -64,6 +64,25 @@ describe('parseCustomPreset', () => {
     ).toBeNull()
   })
 
+  it('returns null when basePlatformId is not one of the five platforms (T-50)', () => {
+    // A hand-edited file used to pass this field through as any non-empty
+    // string; the manager list and the export grid then looked the platform
+    // table up by it and read a property off `undefined`.
+    for (const bad of ['instagram', 'YouTube', 'shorts', '', 42, undefined]) {
+      expect(
+        parseCustomPreset(JSON.stringify({ ...JSON.parse(valid), basePlatformId: bad })),
+        String(bad)
+      ).toBeNull()
+    }
+  })
+
+  it('accepts every real platform as a base', () => {
+    for (const id of ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']) {
+      const p = parseCustomPreset(JSON.stringify({ ...JSON.parse(valid), basePlatformId: id }))
+      expect(p?.basePlatformId, id).toBe(id)
+    }
+  })
+
   it('returns null when a numeric field is missing or non-finite', () => {
     expect(
       parseCustomPreset(JSON.stringify({ ...JSON.parse(valid), width: 'big' }))
