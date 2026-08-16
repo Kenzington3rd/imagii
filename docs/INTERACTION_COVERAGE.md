@@ -373,8 +373,10 @@ all 10 rows -> E2E.
 Import drop/hover -> E2E; .txt negative -> exact-toast E2E; video
 extract -> real-ffmpeg E2E; recents + Choose-file -> E2E with
 main-process dialog stub (OS chooser itself HL); waveform seek/play/
-pause -> E2E; region-drag -> defect tripwire [T-36] + chip lifecycle
-E2E; all Cleanup/Levels/gain controls -> E2E with readout assertions;
+pause -> E2E; region-drag -> ONE gesture, one cut (T-36 fixed the
+two-gesture defect the tripwire pinned) + overlapping-drag and
+no-self-duplicate-on-re-render E2E + chip lifecycle E2E; all
+Cleanup/Levels/gain controls -> E2E with readout assertions;
 undo/redo + INPUT guard -> E2E; FixWizard all paths -> E2E; PresetPanel
 save/apply/delete both branches -> E2E + on-disk JSON; secondary track
 full subtree -> E2E via dialog stub; Export/Cancel/Show -> HL around a
@@ -749,3 +751,25 @@ tests/e2e/video-core.spec.ts and tests/unit/hotkeyTable.test.ts.
   videoStore.test.ts.
 - New unit surface: convertCancel.test.ts (10 — sentinel semantics,
   slot lifecycle, crash vocabulary preserved).
+
+## Dispositions — round 33 (fix wave batch 7: T-36 + T-55)
+
+- **Audio - waveform region-drag:** one gesture commits one cut (the
+  panel copy's promise); the T-24 tripwire is flipped and the second
+  gesture deleted from dragCut. New coverage: second overlapping drag
+  gets its own chip; a drag running INTO an existing cut commits;
+  store re-render never self-duplicates ([part^="region "] pinned).
+  Expediter mutation: id-prefix guard inverted -> exactly the cuts
+  test red. Known residue [T-61]: a drag STARTING inside an existing
+  cut is swallowed by that region's preventDefault.
+- **Test infrastructure (affects every mouse-gesture row):**
+  tests/e2e/drag.ts is the house gesture helper — redundant sends,
+  press+move in one wire batch, poll the app's own drawn state before
+  release. Mechanism it defeats: Playwright's CDP mouse never moves
+  the real X pointer, so a sibling window mapping mid-drag fires a
+  document-level pointerout that ends drags early (wavesurfer treats
+  pointerout as pointerup; Konva drops its cached position). A
+  truncated gesture now fails by name instead of committing a short
+  value. Converted: audio waveform drag, image draw-commit, video-core
+  trim + timeline scrub. Still on the old shape [T-62]: image
+  Transformer move/resize, video-core crop overlay.

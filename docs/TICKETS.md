@@ -584,7 +584,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Flip the tripwire: chip count 1 after gesture 1; delete the
         second gesture from the test's dragCut helper.
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 33 — see Done)
 
 ## T-37 — P1: video seeking is broken (imagii-file:// ignores Range requests)
 
@@ -939,7 +939,9 @@ IMG-PREC.
         mask real regressions, no sleeps.
   - [ ] Ten consecutive full-suite runs green on a loaded box, or the
         specific failing gestures hardened with evidence of the race.
-- **Status:** open
+- **Status:** done (round 33 — see Done; closed on the AC's second
+  branch — mechanism proven with a deterministic intruder harness,
+  helpers hardened, 0 truncations post-fix across every arm)
 
 ## T-59 — a genuine convert crash still strands its partial output and toasts raw IPC text
 
@@ -1003,7 +1005,11 @@ IMG-PREC.
   `bg-pink-400` — a raw Tailwind palette color, violating the
   colors-from-tokens non-negotiable; predates round 19's retheme, and
   several E2E locators key on the class, so the swap needs its own
-  change with locator updates. (b) The track's coordinate space is the
+  change with locator updates. WIDENED round 33: WaveformView.tsx
+  carries two raw rgba() literals in JS context (the drag-selection
+  fill and the cut-region fill rgba(244,63,94,…) — rose-500, not even
+  the accent) despite importing tokens.ts two lines up; same disease,
+  same fix pass. (b) The track's coordinate space is the
   ffprobe duration, so its right edge sits ~20 ms short of the media
   element's real end — the last frames are unreachable by click or the
   End key (the Player's own nudge already reaches them post-T-52);
@@ -1015,6 +1021,34 @@ IMG-PREC.
         designTokensInSync check stays green.
   - [ ] Track space (click, drag, End, aria-valuemax) reaches the
         element's duration; the T-52 tail pin extended to the track.
+- **Status:** open
+
+## T-61 — a cut drag that starts on top of an existing cut does nothing
+
+- **Spec:** T-36 worker finding, pre-existing. Every stored cut region
+  gets its own makeDraggable even with drag:false/resize:false, and
+  its document-level pointermove handler calls preventDefault() first;
+  enableDragSelection's handler then bails on defaultPrevented. So
+  dragging a new cut starting inside an existing one silently does
+  nothing — the exact gesture a user makes to widen a cut. Usability
+  ruling applies.
+- **Acceptance criteria:** a drag starting inside an existing cut
+  creates its own cut (or visibly extends — pick the behavior a user
+  expects and say why); E2E asserts it; the T-36 overlap test's
+  "starts in the gap" workaround note is retired.
+- **Status:** open
+
+## T-62 — remaining mouse gestures still on the truncatable shape
+
+- **Spec:** T-55 follow-through. The hardened drag.ts helper (send
+  redundantly, poll the app's drawn state before release) covers the
+  roster that actually failed; the same exposure remains in
+  image.spec.ts's Transformer move/resize drags (~3 sites) and
+  video-core.spec.ts's crop-overlay drag/resize. They have not failed
+  yet; the mechanism (pointerout mid-drag when a sibling window maps)
+  applies to them identically.
+- **Acceptance criteria:** those call sites route through drag.ts (or
+  its pattern); one loaded-box roster loop green.
 - **Status:** open
 
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
@@ -1042,6 +1076,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 33 — fix wave batch 7: T-36 + T-55 (one-gesture cuts, and the
+roaming flake mechanism). T-36: wavesurfer 7.12 emits region-created
+when the button comes up (saveRegion's last statement) and never emits
+update-end for the drag that created a region — so the old
+subscribe-inside-created shape could only commit on a second gesture.
+The commit now happens on region-created, keyed on the cut- id prefix
+(the ONLY marker that exists that early: addRegion emits the event
+synchronously before the caller can set a property — the documented
+trap, now the documented mechanism), and the __cut expando is gone so
+there is one marker, not two. Tripwire flipped (chip after ONE
+gesture, second gesture deleted from dragCut); overlap and
+no-self-duplicate coverage added. T-55: the mechanism is NOT rAF and
+NOT the app — Playwright's CDP mouse never moves the real X pointer,
+so when a sibling Electron window maps over screen centre mid-drag,
+the display server's crossing event surfaces as a document-level
+pointerout (relatedTarget null) with the button down; wavesurfer's
+makeDraggable treats pointerout as pointerup and saves the region
+short, Konva drops its cached pointer. Proven with an instrumented
+probe (region stopped to the pixel at the last move before the
+pointerout) and a deterministic intruder harness (3/3 then 5/5
+truncations on the old shape, 0/5 on the new; --workers=1 control
+25/25 green). tests/e2e/drag.ts is the house gesture helper now: send
+redundantly, press+move in one batch, poll the app's own drawn state
+until the extent lands before releasing — a truncated gesture fails by
+name instead of committing a plausible wrong value. Failure rates:
+5/60 then 2/10 truncations pre-fix; 0/30, 0/9, 0/5 post-fix; final
+suite 105/105 x2 by the worker and x2 by the expediter. Closed on the
+AC's hardened-gestures branch (ten-consecutive-loaded-runs was not
+achieved with the intermediate helper; the final shape was). Worker
+honestly flagged its M2 mutation proof failing as a livelock rather
+than a named assertion. Expediter mutation: id-prefix guard inverted
+-> exactly the cuts test red, restore, 13/13. Batch was interrupted
+mid-measurement by a session gap and resumed a day later with the
+tree intact; the worker's ledger edit (region-drag row) was deliberate
+and kept. Findings ticketed: T-61 (drag starting on an existing cut is
+swallowed), T-62 (Transformer/crop drags still on the old shape);
+T-56 widened (WaveformView raw rgba literals). workers:1 rejected as
+the fix — 2x wall time is a real cost and the helper fix removes the
+disease, not the trigger.
 
 Round 32 — fix wave batch 6: T-44 + T-48 (the false-feedback pair).
 T-44: the cancelled-vs-crashed distinction is made at the origin —

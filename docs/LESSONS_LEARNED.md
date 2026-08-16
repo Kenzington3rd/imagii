@@ -14,6 +14,108 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-36 + T-55: an event handler's name is not its timing
+
+Two tickets that met in the same 40 lines of wavesurfer. One shipped a
+gesture that needed doing twice; the other made every synthetic gesture
+in the E2E suite a coin flip. Both came from believing what an event is
+called rather than reading when it fires.
+
+### Bug — drag-to-cut needed two gestures, and the panel promised one (T-36)
+- **Root cause.** `WaveformView` subscribed to the new region's
+  `update-end` from inside the regions plugin's `region-created`
+  handler, on the reasonable-sounding theory that a region is created
+  when the drag starts and finishes updating when the drag ends. In
+  wavesurfer 7.12.6 it is the other way round.
+  `enableDragSelection` (`dist/plugins/regions.esm.js`) constructs the
+  Region on the drag's first move and appends its element directly,
+  but calls `saveRegion(region)` — the only thing that emits
+  `region-created` — from the `"end"` branch, i.e. when the button comes
+  up. And `update-end` is emitted by the region's OWN draggable, which
+  never saw the pointerdown for the gesture that created it, so it never
+  fires for that gesture at all. The first drag therefore left a
+  selection region and no cut; the cut only appeared once the user
+  grabbed that leftover region and nudged it — a second gesture the
+  panel copy ("Drag on the waveform to select a region to cut") never
+  mentions.
+- **Fix.** Commit on `region-created`, which for a user drag IS the end
+  of the drag, and remove the selection region there. The trap that made
+  the obvious fix wrong: the stored cuts are re-rendered through
+  `addRegion`, which emits the same `region-created` **synchronously,
+  from inside the call**, so any marker the caller sets on the returned
+  region is not set yet — a `__cut` boolean assigned after `addRegion`
+  returns is always `undefined` when the handler reads it, and every
+  re-render would commit the whole list again, unbounded. The id is the
+  only thing that exists that early, so `CUT_ID_PREFIX` is now both what
+  stored cuts are named and what the commit handler skips on, and the
+  `__cut` marker is deleted rather than kept as a second source of
+  truth.
+- **Test.** `tests/e2e/audio.spec.ts` "waveform drag makes cut regions,
+  and cut chips remove them" — the round-24 tripwire (`toHaveCount(0)`
+  after one gesture) is flipped to `toHaveCount(1)`, `dragCut` lost its
+  second gesture, and the test now also drives a third drag that runs
+  into an existing cut and asserts three chips / three regions / no
+  leftovers, which is what runs away if the id guard is dropped.
+- **Lesson.** **Read the emitter, not the event name.** `created` and
+  `update-end` both sound like they bracket a gesture; in this library
+  one fires at the end of it and the other never fires for it. And when
+  a library emits an event synchronously from inside a factory call, the
+  object it hands you is not yet the object you configured — any guard
+  that keys on a property you set afterwards is reading the past. Key on
+  something the constructor already knows, like the id you passed in.
+
+### Bug — one E2E test failed per full-suite run, a different one each time (T-55)
+- **Root cause.** Not load, not rAF, not the app. Playwright's
+  `page.mouse` dispatches synthetic events over CDP and never moves the
+  machine's real pointer, so the browser's pointer bookkeeping still
+  refers to wherever that pointer is parked — under a headless X server,
+  the middle of the virtual screen, which every Electron window in the
+  suite is centred over. When a second Playwright worker maps its
+  Electron window there, the display server sends a crossing event and
+  Chromium delivers a document-level `pointerout` with
+  `relatedTarget: null` while our button is still down. wavesurfer's
+  `makeDraggable` routes `pointerout`/`pointercancel` to the same
+  handler as `pointerup`: a null `relatedTarget` ends the drag, saves
+  the region at whatever width it had reached, and removes the
+  `pointermove` listener. Konva drops its cached pointer position and
+  `Canvas.tsx`'s move handler swallows the event. Everything sent after
+  that point is discarded — so a helper that spends `steps: 8` twice
+  inside the button-down window has sixteen chances to be cut off, and
+  the resulting short drag commits a plausible-looking wrong value
+  instead of failing.
+- **Fix.** `tests/e2e/drag.ts`, one contract for every synthetic drag:
+  press and move in the same wire batch, send the destination rather
+  than a staircase of intermediate positions, and — the half that makes
+  it honest — poll the app's own drawn state (the selection region's
+  right edge, the preview shape's width, the readout the handle drives)
+  until the extent has landed BEFORE releasing the button. A crossing
+  event after that point is harmless, because the gesture is already
+  where it was going. Repeats of the same destination are free at every
+  gesture layer involved (they work from absolute position or from a
+  delta against the last move they PROCESSED), so the destination is
+  sent three times: enough that one dropped event does not kill the
+  gesture, short enough that the exposure is ~50 ms instead of ~500.
+- **Test.** The helper is used by `tests/e2e/audio.spec.ts` `dragCut`,
+  `tests/e2e/image.spec.ts` `dragOnStage`, and `video-core.spec.ts`'s
+  trim-handle and timeline-scrub drags. The mechanism itself was pinned
+  by experiment, not by assertion: mapping a second Electron window
+  while the button was down truncated the waveform drag 5 times out of 5
+  with the old `steps: 8` shape and 0 times out of 5 with the new one,
+  and the pointer log showed every discarded move being delivered to the
+  document and ignored by the app.
+- **Lesson.** **A synthetic gesture is not the gesture the app sees.**
+  Injected input bypasses the pointer the browser thinks it has, so
+  anything the environment does to that pointer — another window
+  mapping, a dialog, focus moving — lands in the middle of a drag that
+  cannot notice. The defence is not more steps or a retry; it is to
+  release only once the app has shown you the state the gesture was
+  supposed to produce, so a truncated gesture fails by name instead of
+  committing something that merely looks reasonable. Corollary for the
+  runner: this needs two windows on one display to happen at all — the
+  same suite ran 25/25 green under `--workers=1` on the same loaded box.
+
+---
+
 ## 2026-08-15 — T-44 + T-48: the message and the outcome were computed separately
 
 Two tickets, one root lesson, so one entry. Both are the same class: the
