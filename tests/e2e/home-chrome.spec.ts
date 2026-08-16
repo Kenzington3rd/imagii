@@ -463,7 +463,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
-  test('Home global Undo reverts the restored canvas and the "last:" readout names the studio', async () => {
+  test('Home global Undo spares the restored canvas and reverts the real edit made after it', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('global-undo')
     const userDataDir = path.join(root, 'userData')
@@ -485,27 +485,47 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // a store event that moves no undo step cannot arm the buttons, so
       // there is nothing to race.
       await window.getByRole('button', { name: 'Restore' }).click()
+      await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
 
-      // The restore is a canvas mutation, so the tracker names that studio…
-      await expect(window.getByText('last: Image Canvas')).toBeVisible({ timeout: 20_000 })
-      // …and the button it enables really does hold an undoable step.
+      // T-47: a restore is an open-a-file, not an edit. It used to push a
+      // canvas history step, so the app came back with Undo lit over work
+      // the user never did — and one click would have thrown the whole
+      // restored session away. Nothing to undo, and nothing to redo.
+      await expect(window.getByText('last: no recent change')).toBeVisible()
+      await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
+
+      // ── a REAL edit on top of the restored canvas, made inside the studio
+      //    with Home unmounted ──
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Undoable rect')).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Duplicate layer' }).click()
+      await expect(window.getByText('Layers (2)')).toBeVisible()
+      await expect(window.getByText('Undoable rect copy')).toBeVisible()
+
+      // T-32 (was T-21 finding B): Home was never on screen while that
+      // happened, and the tracker still has it.
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByText('last: Image Canvas')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeEnabled()
       await window.getByRole('button', { name: 'Undo' }).click()
 
-      // End state: the canvas is back to its empty document — the Stream
-      // Graphics route shows the empty-state template picker, not the layer.
+      // End state: the duplicate is gone and the RESTORED layer is still
+      // there — Undo walked back the edit, not the restore.
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
-      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText('Undoable rect')).toHaveCount(0)
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Undoable rect')).toBeVisible()
+      await expect(window.getByText('Undoable rect copy')).toHaveCount(0)
 
       await window.locator('a[href="#/home"]').first().click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
 
-      // T-32 (was T-21 finding B): the record is module-level now, so walking
-      // into a studio and back does not wipe it. The one step here has been
-      // undone, so Undo is spent — but the undone step is still on the redo
-      // side after the round trip, which the old Home-scoped tracker lost.
+      // T-32: the record is module-level, so walking into a studio and back
+      // does not wipe it. The one step here has been undone, so Undo is
+      // spent — but the undone step is still on the redo side after the
+      // round trip, which the old Home-scoped tracker lost.
       await expect(window.getByText('last: no recent change')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
       await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
@@ -527,6 +547,16 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       const window = await app.firstWindow()
       await waitForHome(window)
       await window.getByRole('button', { name: 'Restore' }).click()
+      await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
+
+      // The undoable step is an edit the user makes, never the restore
+      // itself (T-47) — so this test arms the buttons the same way a user
+      // would, by changing something on the restored canvas.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Redoable rect')).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Duplicate layer' }).click()
+      await expect(window.getByText('Layers (2)')).toBeVisible()
+      await window.locator('a[href="#/home"]').first().click()
       await expect(window.getByText('last: Image Canvas')).toBeVisible({ timeout: 20_000 })
       await window.getByRole('button', { name: 'Undo' }).click()
 
@@ -537,8 +567,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
 
-      // And Redo is reachable through the UI, not just enabled: the click puts
-      // the restored layer back on the canvas.
+      // And Redo is reachable through the UI, not just enabled: the click
+      // puts the duplicated layer back on the canvas.
       await window.getByRole('button', { name: 'Redo' }).click()
       await expect(window.getByText('last: Image Canvas')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeEnabled()
@@ -546,8 +576,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
 
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText('Redoable rect')).toBeVisible()
+      await expect(window.getByText('Layers (2)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Redoable rect copy')).toBeVisible()
     } finally {
       await app.close()
       cleanup(root)
@@ -700,7 +730,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
-  test('AutosaveRestore: a corrupt autosave offers nothing and is left on disk', async () => {
+  test('AutosaveRestore: a corrupt autosave says so — Dismiss hides it, Clear deletes the file', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('autosave-corrupt')
     const userDataDir = path.join(root, 'userData')
@@ -712,35 +742,68 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     try {
       const window = await app.firstWindow()
       await waitForHome(window)
-      // Give both autosave IPC calls (read + info) time to resolve and paint.
-      await window.waitForTimeout(1500)
+      await installToastLog(window)
 
-      // No restore offer for a file that fails validation — the important
-      // half: a corrupt autosave must never be applied to the stores.
+      // T-33 (was T-21 finding D): the corruption notice renders. It used to
+      // be dead code — the branch required `info.ageMs` and main returned
+      // `{ exists, filePath, sizeBytes }` with no age for exactly the files
+      // that fail validation, so a user whose autosave was corrupt saw
+      // nothing at all: no banner, no Clear, no status line.
+      const banner = window.getByText(/An autosave was found .* but failed validation/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      // The age comes from the file's mtime (seeded seconds ago) and the
+      // reason is the validator's own, so the user learns what happened.
+      await expect(banner).toContainText('(just now)')
+      await expect(banner).toContainText('invalid JSON')
+      await expect(banner).toContainText('It will not be loaded.')
+      await expect(window.getByRole('button', { name: 'Clear' })).toBeVisible()
+      await expect(window.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+
+      // Still no restore offer, and nothing applied — a corrupt autosave
+      // must never reach the stores. That half was always true; it is the
+      // contrast that proves the banner above is the corruption branch and
+      // not the restore one.
       await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Restore' })).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Discard' })).toHaveCount(0)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
 
-      // T-21 FINDING D (not fixed here): the corruption notice — "An autosave
-      // was found (…) but failed validation: …" with its Clear / Dismiss
-      // buttons — cannot render. AutosaveRestore gates it on
-      // `result.info.ageMs !== undefined`, but main's readAndValidate returns
-      // `{ exists, filePath, sizeBytes }` with NO ageMs whenever validation
-      // fails (there is no savedAt to measure). Both controls are dead; the
-      // shape mismatch is pinned in tests/unit/autosaveCorruptInfo.test.ts.
+      // ── Dismiss: banner hidden, file untouched ──
+      await window.getByRole('button', { name: 'Dismiss' }).click()
       await expect(window.getByText(/but failed validation/)).toHaveCount(0)
-      await expect(window.getByRole('button', { name: 'Clear' })).toHaveCount(0)
-      await expect(window.getByRole('button', { name: 'Dismiss' })).toHaveCount(0)
-      // Same reason the banner is missing: info.ageMs is undefined, so even
-      // the "Last autosave: …" line stays away.
-      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
-
-      // The file is left alone — a corrupt autosave is not silently deleted,
-      // so the user can still recover it by hand.
+      // The dismissed state still reports the backup's age — the same
+      // mtime-derived number, so the status line is no longer suppressed by
+      // a corrupt file either.
+      await expect(window.getByText(/^Last autosave: /)).toBeVisible()
       expect(existsSync(autosaveFile(userDataDir))).toBe(true)
       expect(readFileSync(autosaveFile(userDataDir), 'utf8')).toBe(
         '{"schemaVersion":2,"savedAt":175534'
       )
+
+      // Dismiss is per-session, like Later: a reload brings the notice back.
+      await window.reload()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/but failed validation/)).toBeVisible({ timeout: 20_000 })
+
+      // ── Clear: the file is deleted from disk ──
+      await window.getByRole('button', { name: 'Clear' }).click()
+      await expect
+        .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
+        .toBe(false)
+      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      expect(await readToastLog(window)).toContain('Autosave discarded.')
+
+      // And it stays gone: nothing to warn about after a reload.
+      await window.reload()
+      await waitForHome(window)
+      await window.waitForTimeout(1500)
+      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+      expect(existsSync(autosaveFile(userDataDir))).toBe(false)
     } finally {
       await app.close()
       cleanup(root)

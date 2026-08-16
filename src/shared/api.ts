@@ -44,6 +44,9 @@ export type SettingsKey =
   // exporting many clips doesn't have to re-pick on every batch.
   | 'export.lastOutputDir'
   | 'clipKit.lastOutputDir'
+  // T-47: the window's own geometry, written by main on move/resize/close
+  // and validated against the connected displays on the next launch.
+  | 'windowBounds'
   // T-20 (round 23): the posting diary used to live in renderer
   // localStorage, so it died with the Chromium profile and never reached a
   // project file. Settings store keeps it with the rest of the app state.
@@ -224,6 +227,13 @@ export interface ImagiiApi {
       sizeBytes?: number
     }>
     clear(): Promise<void>
+    /**
+     * T-47: register the provider main calls for a final snapshot on quit.
+     * Return null to save nothing (a restore in flight, or an empty
+     * session). Fire-and-forget by design — the reply carries a project,
+     * never an outcome, so no IPC error text can reach a quitting UI.
+     */
+    onQuitFlush(provider: () => ImagiiProject | null): Unsubscribe
   }
   recording: {
     listSources(): Promise<RecordingSource[]>

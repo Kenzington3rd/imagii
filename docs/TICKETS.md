@@ -536,7 +536,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Flip T-21's "offers nothing" defect test into the positive
         banner path.
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 34 — see Done)
 
 ## T-34 — tutorial tooltips overflow the window; Enter double-advances
 
@@ -686,8 +686,11 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] LESSONS entry if any bug is found while building; ledger rows
         for the new/changed elements in the same PR per the standing
         bar.
-- **Status:** open (owner-requested; schedule with T-32/T-33 in the fix
-  wave — same subsystem)
+- **Status:** done (round 34 — see Done). Non-goals, as the ticket
+  required: in-flight exports/recordings do not survive a restart
+  (their quit cancel/reap behavior was already covered); References
+  SEARCH RESULTS are not persisted (network state) — only the active
+  tab is. Both documented in continuity.spec.ts's header.
 
 ## Fix-wave plan (dispatches when Wave B lands; owner tiebreaker applies)
 
@@ -976,6 +979,13 @@ IMG-PREC.
 
 ## T-57 — discarding an autosave has no error path
 
+- **SEVERITY RAISED round 34:** the corruption banner's Clear button
+  (dead code until T-33) now reaches discard() — a failing
+  autosave:clear leaves the button spinning with no message, on a
+  surface users can actually hit. Rider: the `lastRoute` settings key
+  is dead (in SettingsKey, allowlist, and schema; zero readers or
+  writers — T-47 restores route via the snapshot's place record
+  instead). Delete it in this fix.
 - **Spec:** T-31/T-32 worker finding. `AutosaveRestore.discard()`
   awaits `window.api.autosave.clear()` with no catch: a failed clear
   rejects unhandled and the user sees nothing (the "Autosave
@@ -1076,6 +1086,52 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 34 — fix wave batch 8: T-33 + T-47 (the corrupt-autosave banner,
+and the owner's session-continuity feature). T-33: the renderer's
+corruption branch gates on info.exists alone — age is decoration and
+staleness is not a gate (a corrupt autosave is never restorable, so
+hiding an old one just strands it); ageMs comes from the file's mtime
+when the in-file timestamp can't be trusted, keeping the "(5 min ago)"
+copy honest; savedAt stays undefined for corrupt files. T-21's
+"offers nothing" pin flipped to the full banner path (copy verbatim,
+Clear deletes + toasts, Dismiss keeps the file and reveals the
+Last-autosave line, reload persistence both ways). T-47: snapshot
+schema v3 adds a validated place record (route, video clip id, canvas
+layer id, references tab, playhead) with per-field degradation — a bad
+place is never fatal, and every-field-bad degrades to exactly the
+pre-T-47 data-only restore; old v1/v2 snapshots restore unchanged
+(fixture-asserted). Quit flush: 1.5 s bounded race on both paths
+(window close intercepts, before-quit backstops — they overlap by
+design since each is the only event on its path), silent-in-main on
+failure per the T-44 rule, timeout branch tested with a write that
+never settles. Window bounds: hand-rolled (no new dependency),
+getNormalBounds + maximized flag so maximizing never destroys the
+normal size, resolveWindowBounds validates against live displays and
+centers-on-primary keeping size when the display is gone; exact
+round-trip E2E + off-screen recovery E2E. Playhead parks via
+requestSeek; found and fixed a real ordering bug — the T-52 mount
+reset zeroed a park that happened before /video mounted, so
+seekRequest is now a one-reader mailbox the mount effect applies
+instead of rewinding. Post-restore Undo contract per the round-31
+note: Undo AND Redo disabled after restore in every studio
+(applyProject now resets canvas history rather than pushing a step);
+the two T-32 E2Es re-armed with a real edit and additionally prove the
+restored layer survives the Undo. Red-first discipline for a
+greenfield feature: the first continuity.spec asserted TODAY'S
+behavior green (seven gaps pinned in one transcript), then flipped.
+Worker mutations: ageMs re-omit, old renderer gate, sanitizePlace
+drop, close-flush disable, both-flush disable; expediter's own:
+off-screen visibility threshold broken -> exactly the two
+display-gone unit tests red, restore, 19/19 + continuity 5/5.
+Gates: 883 unit / 110 E2E green (worker and expediter runs). One
+mid-run drop of the T-52 scrub test in a worker intermediate run
+(green before/after + 3 isolated repeats; uses the hardened helper, so
+NOT the T-55 shape — logged, watching for recurrence). Findings:
+T-57 severity raised (Clear now reachable) + lastRoute dead key added
+as its rider; StrictMode dev-only double-mount cosmetic noted;
+USER_GUIDE updated with the continuity promise; TESTING.md count
+refreshed by the expediter.
 
 Round 33 — fix wave batch 7: T-36 + T-55 (one-gesture cuts, and the
 roaming flake mechanism). T-36: wavesurfer 7.12 emits region-created

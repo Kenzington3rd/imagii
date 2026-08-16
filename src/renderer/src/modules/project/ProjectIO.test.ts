@@ -4,15 +4,17 @@ import type { ChainSpec } from '@shared/audio'
 import type { CanvasDocument } from '@shared/canvas'
 import type { ImagiiProject } from '@shared/workspace'
 import {
+  MAX_SCHEMA_VERSION,
   validateProject,
   validateProjectJsonString,
   isSafeToAutosave
 } from '@shared/projectValidation'
 import { pathToImagiiFileUrl } from '@shared/fileUrl'
-import { captureProject, applyProject } from './ProjectIO'
+import { captureProject, applyProject, applyPlace } from './ProjectIO'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
+import { useReferencesStore } from '../references/state/referencesStore'
 
 /**
  * T-07 (a) — save -> load round trip at the logic level.
@@ -237,7 +239,7 @@ describe('captureProject -> validate -> applyProject round trip', () => {
   it('captureProject emits MAX_SCHEMA_VERSION and every studio key it has state for', async () => {
     await seedAllStudios()
     const captured = captureProject()
-    expect(captured.schemaVersion).toBe(2)
+    expect(captured.schemaVersion).toBe(MAX_SCHEMA_VERSION)
     expect(captured.savedAt).toBeGreaterThan(0)
     expect(captured.videoStudio?.sourcePath).toBe(VIDEO_PATH)
     expect(captured.videoStudio?.srtPath).toBe(SRT_PATH)
@@ -353,7 +355,7 @@ describe('a refused project file never reaches the stores', () => {
     })
     await expectRefusedWithoutClobber(
       raw,
-      'unsupported schemaVersion 99 (supported: 1, 2)'
+      'unsupported schemaVersion 99 (supported: 1, 2, 3)'
     )
   })
 
@@ -367,5 +369,108 @@ describe('a refused project file never reaches the stores', () => {
     expect(useVideoStore.getState().source?.filePath).toBe(VIDEO_PATH)
     expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
     expect(useCanvasStore.getState().doc).toEqual(DOC)
+  })
+})
+
+/**
+ * T-47 — the place record: route, selections, playhead. The rule the tests
+ * below encode is that place is a CONVENIENCE and the studio state is the
+ * work: a place that no longer makes sense degrades quietly, field by
+ * field, and never costs the user a restore.
+ */
+describe('place record: capture, restore, and per-field degradation', () => {
+  it('captures the selections and the playhead alongside the studio state', async () => {
+    await seedAllStudios()
+    useVideoStore.getState().requestSeek(42)
+    useCanvasStore.getState().selectLayer('layer-text')
+    useReferencesStore.getState().setTab('moodboards')
+
+    const captured = captureProject()
+
+    expect(captured.place?.videoClipId).toBe(CLIP_B.id)
+    expect(captured.place?.canvasLayerId).toBe('layer-text')
+    expect(captured.place?.referencesTab).toBe('moodboards')
+    expect(captured.place?.videoTimeSec).toBeCloseTo(42, 5)
+    // And the whole thing still passes both gates it has to pass.
+    expect(validateProject(captured)).toMatchObject({ ok: true })
+    expect(isSafeToAutosave(captured)).toEqual({ ok: true })
+  })
+
+  it('restores the selections and parks the playhead for the Player', async () => {
+    await seedAllStudios()
+    useVideoStore.getState().requestSeek(42)
+    useCanvasStore.getState().selectLayer('layer-text')
+    const raw = JSON.stringify(captureProject())
+    wipeAllStudios()
+    useReferencesStore.getState().setTab('reference')
+
+    expect(await loadProjectJson(raw)).toEqual({ ok: true })
+
+    expect(useVideoStore.getState().selectedClipId).toBe(CLIP_B.id)
+    expect(useCanvasStore.getState().selectedLayerId).toBe('layer-text')
+    // Parked as a seek REQUEST: the Player is the only thing that owns the
+    // media element, so a restore hands it the position rather than
+    // writing one nothing is listening to.
+    expect(useVideoStore.getState().seekRequest?.seconds).toBeCloseTo(42, 5)
+    expect(useVideoStore.getState().currentTime).toBeCloseTo(42, 5)
+  })
+
+  it('drops a selection that no longer exists instead of selecting nothing', async () => {
+    await seedAllStudios()
+    const project = captureProject()
+    wipeAllStudios()
+    await applyProject({
+      ...project,
+      place: { videoClipId: 'clip-that-was-deleted', canvasLayerId: 'layer-gone' }
+    })
+
+    // The clip selection falls back to what the studio state itself says…
+    expect(useVideoStore.getState().selectedClipId).toBe(CLIP_B.id)
+    // …and a dangling layer id selects nothing rather than a wrong layer.
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
+  })
+
+  it('applies nothing at all for a snapshot with no place (v1/v2 files)', async () => {
+    await seedAllStudios()
+    const project = captureProject()
+    wipeAllStudios()
+    useReferencesStore.getState().setTab('assets')
+
+    const { place: _dropped, ...withoutPlace } = project
+    void _dropped
+    await applyProject({ ...withoutPlace, schemaVersion: 2 })
+
+    // Exactly the pre-T-47 restore: data back, nothing else touched.
+    expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    expect(useReferencesStore.getState().tab).toBe('assets')
+    expect(useVideoStore.getState().seekRequest).toBeNull()
+  })
+
+  it('parks no playhead when the snapshot has no video source to seek in', () => {
+    wipeAllStudios()
+    applyPlace({ route: '/video', videoTimeSec: 30 })
+    expect(useVideoStore.getState().seekRequest).toBeNull()
+    expect(useVideoStore.getState().currentTime).toBe(0)
+  })
+
+  it('leaves the canvas history EMPTY, so the app never opens offering to undo the restore', async () => {
+    await seedAllStudios()
+    const raw = JSON.stringify(captureProject())
+    wipeAllStudios()
+    // A pre-existing step, to prove the restore clears rather than adds.
+    useCanvasStore.getState().addLayer({
+      ...DOC.layers[0]!,
+      id: 'pre-existing'
+    })
+    expect(useCanvasStore.getState().canUndo()).toBe(true)
+
+    expect(await loadProjectJson(raw)).toEqual({ ok: true })
+
+    // The contract: right after a restore there is nothing to undo in any
+    // studio — the same thing every editor does when it opens a file.
+    expect(useCanvasStore.getState().canUndo()).toBe(false)
+    expect(useCanvasStore.getState().canRedo()).toBe(false)
+    expect(useVideoStore.getState().canUndo()).toBe(false)
+    expect(useAudioStore.getState().canUndo()).toBe(false)
   })
 })

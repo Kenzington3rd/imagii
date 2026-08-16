@@ -32,8 +32,25 @@ export function Player(): JSX.Element | null {
   // mount as well, and a remounted Player attaches a NEW <video> that starts
   // at 0 while the store still holds the position from before the studio was
   // left — the Timeline would draw a playhead the video is nowhere near.
+  //
+  // T-47 is the one exception: an UNCONSUMED seek request means somebody
+  // asked for a position while no Player existed to serve it — a session
+  // restore parks the playhead and then navigates here. Rewinding that to 0
+  // would throw away the position the user closed the app at. Seeks made
+  // while a Player is mounted are consumed as they land (below), so a stale
+  // one can never reach this branch.
   useEffect(() => {
     setPlaying(false)
+    const parked = useVideoStore.getState().seekRequest
+    if (parked) {
+      useVideoStore.setState({ seekRequest: null, currentTime: parked.seconds })
+      setTime(parked.seconds)
+      // At HAVE_NOTHING the element stores this as its default playback
+      // start position and seeks there once metadata arrives.
+      const v = videoRef.current
+      if (v) v.currentTime = parked.seconds
+      return
+    }
     setTime(0)
     setCurrentTime(0)
   }, [source?.filePath, setCurrentTime])
@@ -52,6 +69,10 @@ export function Player(): JSX.Element | null {
         // The element clamps to its own duration, which is the authority —
         // see `nudge` below for why that is not the probe's number.
         if (v) v.currentTime = request.seconds
+        // Emptied as it lands (T-47): the request is a mailbox with one
+        // reader, and leaving a served request in it would make the next
+        // mount think it was parked for a restore.
+        useVideoStore.setState({ seekRequest: null })
       }),
     []
   )

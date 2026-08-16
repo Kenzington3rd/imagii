@@ -17,6 +17,16 @@ interface SettingsSchema {
   'record.webcamCorner'?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   'export.lastOutputDir'?: string
   'clipKit.lastOutputDir'?: string
+  /** T-47: last window geometry. Shape is re-validated on read by
+   *  shared/windowSizing.resolveWindowBounds — the schema below only keeps
+   *  a wildly wrong value from reaching it. */
+  windowBounds?: {
+    x: number
+    y: number
+    width: number
+    height: number
+    maximized: boolean
+  }
   /** T-20: PostChecklist posting diary. Shape is validated renderer-side by
    *  shared/postingDiary.parseDiaryEntries; the schema below only pins the
    *  container so a corrupt value can't take electron-store's get() down. */
@@ -49,6 +59,16 @@ const schema = {
   },
   'export.lastOutputDir': { type: 'string' },
   'clipKit.lastOutputDir': { type: 'string' },
+  windowBounds: {
+    type: 'object',
+    properties: {
+      x: { type: 'number' },
+      y: { type: 'number' },
+      width: { type: 'number' },
+      height: { type: 'number' },
+      maximized: { type: 'boolean' }
+    }
+  },
   postingDiary: { type: 'array', maxItems: 100 }
 } as const
 

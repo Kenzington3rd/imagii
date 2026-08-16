@@ -17,7 +17,16 @@ import type { ImagiiProject } from '../shared/workspace'
 export interface AutosaveInfo {
   exists: boolean
   filePath: string
+  /** The project's own `savedAt`. Present only when the file VALIDATES —
+   *  an unparseable file has no in-file timestamp worth trusting. */
   savedAt?: number
+  /**
+   * How long ago this autosave was written. Sourced from `savedAt` when the
+   * file validates and from the file's mtime when it does not (T-33): the
+   * corruption banner's copy promises an age, and the filesystem knows one
+   * even when the bytes are garbage. Absent only when the file cannot be
+   * stat'd at all.
+   */
   ageMs?: number
   sizeBytes?: number
 }
@@ -142,6 +151,12 @@ async function readAndValidate(filePath: string): Promise<AutosaveLoadResult> {
       info: {
         exists: true,
         filePath,
+        // T-33: age the file by its mtime. The renderer's corruption banner
+        // reads "An autosave was found (5 min ago) but failed validation",
+        // and withholding the age here is what left that banner — and its
+        // Clear button, the only way to get rid of the bad file — unable to
+        // render at all.
+        ageMs: Date.now() - stats.mtimeMs,
         sizeBytes: stats.size
       }
     }
@@ -183,7 +198,8 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
     const raw = await readFile(filePath, 'utf8')
     const validation = validateProjectJsonString(raw)
     if (!validation.ok) {
-      return { exists: true, filePath, sizeBytes: s.size }
+      // Same contract as readAndValidate above: no savedAt, but a real age.
+      return { exists: true, filePath, ageMs: Date.now() - s.mtimeMs, sizeBytes: s.size }
     }
     return {
       exists: true,

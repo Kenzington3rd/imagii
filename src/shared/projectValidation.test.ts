@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   MAX_SCHEMA_VERSION,
+  KNOWN_ROUTES,
   isSafeToAutosave,
   isValidTextOverlay,
+  sanitizePlace,
   validateProject,
   validateProjectJsonString
 } from './projectValidation'
@@ -93,8 +95,8 @@ describe('validateProject', () => {
   })
 })
 
-describe('schema migration v1 → v2', () => {
-  it('accepts a v1 project and bumps schemaVersion to 2 in place', () => {
+describe('schema migration v1 → v2 → v3', () => {
+  it('accepts a v1 project and migrates it up to MAX_SCHEMA_VERSION in place', () => {
     const v1 = {
       schemaVersion: 1,
       savedAt: Date.now(),
@@ -108,8 +110,10 @@ describe('schema migration v1 → v2', () => {
     const result = validateProject(v1)
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.project.schemaVersion).toBe(2)
+      expect(result.project.schemaVersion).toBe(MAX_SCHEMA_VERSION)
       expect(result.project.videoStudio?.sourcePath).toBe('C:/some/file.mp4')
+      // T-47: a pre-place snapshot restores exactly as it always did.
+      expect(result.project.place).toBeUndefined()
     }
   })
 
@@ -454,5 +458,99 @@ describe('isSafeToAutosave', () => {
     const result = isSafeToAutosave(baseProject)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toMatch(/no studio state/)
+  })
+})
+
+/**
+ * T-47 — the place record. Unlike every other field, a malformed place is
+ * NOT fatal: the user's work is the load-bearing half of a snapshot and
+ * must survive a bad route string. Each field degrades on its own, so the
+ * table below is the contract the restore path is written against.
+ */
+describe('sanitizePlace — per-field degradation', () => {
+  const fullPlace = {
+    route: '/video',
+    videoClipId: 'clip-abc',
+    canvasLayerId: 'layer-xyz',
+    referencesTab: 'assets',
+    videoTimeSec: 12.5
+  }
+
+  it('keeps a well-formed record intact', () => {
+    expect(sanitizePlace(fullPlace)).toEqual(fullPlace)
+  })
+
+  it('accepts every route the app can actually restore to', () => {
+    for (const route of KNOWN_ROUTES) {
+      expect(sanitizePlace({ route })).toEqual({ route })
+    }
+  })
+
+  it.each([
+    ['an unknown route', { route: '/evil' }, 'route'],
+    ['a non-string route', { route: 42 }, 'route'],
+    ['a non-string clip id', { videoClipId: { id: 1 } }, 'videoClipId'],
+    ['an empty clip id', { videoClipId: '' }, 'videoClipId'],
+    ['an absurdly long layer id', { canvasLayerId: 'x'.repeat(65) }, 'canvasLayerId'],
+    ['an unknown references tab', { referencesTab: 'billing' }, 'referencesTab'],
+    ['a negative playhead', { videoTimeSec: -4 }, 'videoTimeSec'],
+    ['a NaN playhead', { videoTimeSec: Number.NaN }, 'videoTimeSec'],
+    ['a playhead past the day cap', { videoTimeSec: 90_000 }, 'videoTimeSec']
+  ])('drops %s and keeps the rest of the record', (_label, bad, field) => {
+    const sanitized = sanitizePlace({ ...fullPlace, ...bad })
+    expect(sanitized?.[field as keyof typeof fullPlace]).toBeUndefined()
+    // Every sibling survives — one bad field is not a lost session.
+    for (const key of Object.keys(fullPlace)) {
+      if (key === field) continue
+      expect(sanitized?.[key as keyof typeof fullPlace]).toEqual(
+        fullPlace[key as keyof typeof fullPlace]
+      )
+    }
+  })
+
+  it.each([
+    ['a string', 'nope'],
+    ['an array', [1, 2, 3]],
+    ['null', null],
+    ['a number', 7],
+    ['an object with nothing usable', { route: '/evil', videoTimeSec: 'soon' }]
+  ])('returns undefined for %s, which reads as "no place"', (_label, input) => {
+    expect(sanitizePlace(input)).toBeUndefined()
+  })
+
+  it('accepts a playhead of exactly zero — the start of the file is a place', () => {
+    expect(sanitizePlace({ videoTimeSec: 0 })).toEqual({ videoTimeSec: 0 })
+  })
+})
+
+describe('validateProject and the place record', () => {
+  it('carries a valid place through', () => {
+    const result = validateProject({
+      ...projectWithStudios,
+      place: { route: '/image', canvasLayerId: 'layer-1' }
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.project.place).toEqual({ route: '/image', canvasLayerId: 'layer-1' })
+  })
+
+  it('ACCEPTS a project whose place is garbage, and drops the place', () => {
+    // The negative half of T-47: a corrupt place degrades to a data-only
+    // restore. Refusing the file would throw away the user's work over a
+    // field that only says which screen they were looking at.
+    const result = validateProject({ ...projectWithStudios, place: 'wherever' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.place).toBeUndefined()
+      expect(result.project.videoStudio?.sourcePath).toBe('C:/path/to/video.mp4')
+    }
+  })
+
+  it('still refuses a project whose STUDIO state is garbage — data is not optional', () => {
+    const result = validateProject({
+      ...projectWithStudios,
+      videoStudio: { sourcePath: '../../etc/passwd', clips: [], selectedClipId: null },
+      place: { route: '/video' }
+    })
+    expect(result.ok).toBe(false)
   })
 })

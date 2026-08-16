@@ -347,7 +347,8 @@ positives (cross-route undo, Redo re-applies, newest-first ordering),
 see the round-31 section. Open/Save project -> HL-dialog (deepest:
 ProjectIO + projectValidation units). AutosaveRestore: Restore/Discard/
 Later -> E2E; Clear/Dismiss -> corrupt-offers-nothing pin + unit
-[T-33, unreachable today]. Modal contract (scrim/stop/Escape/trap/
+[T-33, unreachable today] — UPGRADED round 34: the corruption banner
+renders and both buttons are driven E2E, see the round-34 section. Modal contract (scrim/stop/Escape/trap/
 restore) -> Templates + FixWizard E2E. Tutorial: full-run/Back/arrows/
 scrim-advance/Skip-no-persist -> E2E; Enter -> pin [T-34 double-step].
 RecentFilesMenu (toggle/item/clear/Escape/click-outside) -> E2E;
@@ -773,3 +774,47 @@ tests/e2e/video-core.spec.ts and tests/unit/hotkeyTable.test.ts.
   value. Converted: audio waveform drag, image draw-commit, video-core
   trim + timeline scrub. Still on the old shape [T-62]: image
   Transformer move/resize, video-core crop overlay.
+
+
+## Dispositions — round 34 (fix wave batch 8: T-33 + T-47)
+
+New and changed elements; tests in tests/e2e/{continuity,home-chrome}
+.spec.ts and the unit files named inline.
+
+- **AutosaveRestore - Restore:** now applyProject -> applyPlace ->
+  navigate: stores rehydrated, ROUTE restored, clip + layer selection
+  and playhead applied (half-frame tolerance), Undo AND Redo disabled
+  post-restore (fresh history — the open-a-file contract). COV
+  continuity "two studios..." + home-chrome.
+- **AutosaveRestore - Discard / Later:** unchanged semantics, re-proven
+  opt-in both ways (fresh-start session untouched). COV both suites.
+- **AutosaveRestore - Clear + Dismiss (corruption banner):** were
+  "unreachable [T-33]" — now COV: banner + verbatim copy + mtime age,
+  Clear deletes the file and toasts "Autosave discarded.", Dismiss
+  keeps the file byte-identical and reveals the Last-autosave line,
+  reload persistence both ways. Residue [T-57, severity raised]: a
+  FAILING clear still spins silently.
+- **Window close (X):** bounded 1.5 s autosave flush + synchronous
+  bounds persist — the snapshot is the LAST state, proven by a
+  3rd-edit-then-immediate-close E2E; timeout branch unit-tested with a
+  write that never settles. COV continuity + quitFlush.test.ts.
+- **App quit:** before-quit flush backstop (the only event when
+  windows are destroyed without the X). COV continuity "quitting the
+  APP...". The two paths overlap by design; disabling both fails the
+  E2E, disabling either alone is covered by the other.
+- **Window move/resize:** debounced windowBounds persist; exact
+  {x,y,w,h} round trip across launches asserted BEFORE any banner
+  interaction (independent of the choice); off-screen 9000,9000
+  recovers centered-on-primary with size kept. Bounds driven via
+  app.evaluate — a real title-bar drag is OS chrome, HL-dialog class.
+  Expediter mutation: visibility threshold broken -> exactly the two
+  display-gone unit tests red.
+- **Window maximize/unmaximize:** HL — xvfb runs no window manager
+  (probed: maximize() is a no-op, isMaximized() stays false). Deepest:
+  windowSizing.test.ts carries-the-maximized-flag case + the
+  non-maximized round-trip E2E. Windows hand-test: maximize, quit,
+  relaunch -> maximized with the pre-maximize size remembered on
+  un-maximize.
+- Schema surface: place record v3 per-field degradation table pinned
+  in projectValidation.test.ts + ProjectIO.test.ts (bad field drops
+  alone; all-bad degrades to data-only; v1/v2 fixtures unchanged).

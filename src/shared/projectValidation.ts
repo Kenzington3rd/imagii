@@ -1,4 +1,4 @@
-import type { ImagiiProject } from './workspace'
+import type { ImagiiProject, PlaceRecord, ReferencesTab } from './workspace'
 import { isSafeAbsolutePath } from './pathSafety'
 
 /**
@@ -7,8 +7,28 @@ import { isSafeAbsolutePath } from './pathSafety'
  * to MAX_SCHEMA_VERSION before returning. New saves always emit
  * MAX_SCHEMA_VERSION.
  */
-export const SUPPORTED_SCHEMA_VERSIONS = [1, 2] as const
-export const MAX_SCHEMA_VERSION = 2
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const
+export const MAX_SCHEMA_VERSION = 3
+
+/** Every route the app can restore to (App.tsx's <Route path> set). */
+export const KNOWN_ROUTES = [
+  '/home',
+  '/video',
+  '/audio',
+  '/image',
+  '/record',
+  '/references'
+] as const
+
+/** Mirrors the ReferencesTab union in shared/workspace.ts. */
+export const REFERENCES_TABS: readonly ReferencesTab[] = ['reference', 'moodboards', 'assets']
+
+/** Cap on a restored playhead: a day of video is already absurd, and an
+ *  unbounded number here reaches a media element's currentTime. */
+const MAX_PLAYHEAD_SEC = 24 * 60 * 60
+/** Cap on a stored id. Real ids are nanoid(8); this only stops a snapshot
+ *  from smuggling a megabyte string through a field nobody bounds later. */
+const MAX_ID_LENGTH = 64
 
 export type ValidationResult =
   | { ok: true; project: ImagiiProject }
@@ -95,6 +115,58 @@ function migrateV1ToV2(input: Record<string, unknown>): void {
 }
 
 /**
+ * Migrate a v2 project to v3. v3 added the optional `place` record; a v2
+ * snapshot simply has none, and a restore of one behaves exactly as it did
+ * before T-47 (data applied, route and selections untouched).
+ */
+function migrateV2ToV3(input: Record<string, unknown>): void {
+  input.schemaVersion = 3
+}
+
+function isBoundedId(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0 && v.length <= MAX_ID_LENGTH
+}
+
+/**
+ * T-47 — validate the place record FIELD BY FIELD, keeping what is sound
+ * and dropping what is not, rather than refusing the whole project.
+ *
+ * That asymmetry is deliberate. The studio state is the user's work; a
+ * malformed byte in it means the file cannot be trusted at all, so
+ * `validateProject` refuses outright. The place record is only where they
+ * were standing — throwing away a session's work because a route string is
+ * a number would be the worse failure by far. So a bad place degrades to
+ * exactly the pre-T-47 restore (data only, lands on Home), and a bad single
+ * field degrades to that field's default while its siblings still apply.
+ *
+ * Returns undefined when nothing survives, so `place` reads as absent —
+ * the same shape every v1/v2 snapshot has.
+ */
+export function sanitizePlace(input: unknown): PlaceRecord | undefined {
+  if (!isPlainObject(input)) return undefined
+  const place: PlaceRecord = {}
+  if (typeof input.route === 'string' && (KNOWN_ROUTES as readonly string[]).includes(input.route)) {
+    place.route = input.route
+  }
+  if (isBoundedId(input.videoClipId)) place.videoClipId = input.videoClipId
+  if (isBoundedId(input.canvasLayerId)) place.canvasLayerId = input.canvasLayerId
+  if (
+    typeof input.referencesTab === 'string' &&
+    (REFERENCES_TABS as readonly string[]).includes(input.referencesTab)
+  ) {
+    place.referencesTab = input.referencesTab as ReferencesTab
+  }
+  if (
+    isFiniteNumber(input.videoTimeSec) &&
+    input.videoTimeSec >= 0 &&
+    input.videoTimeSec <= MAX_PLAYHEAD_SEC
+  ) {
+    place.videoTimeSec = input.videoTimeSec
+  }
+  return Object.keys(place).length > 0 ? place : undefined
+}
+
+/**
  * Strict runtime validator for ImagiiProject. Returns either a typed project
  * or a reason string. Never throws. Older schema versions are migrated up
  * before structural validation.
@@ -116,6 +188,7 @@ export function validateProject(input: unknown): ValidationResult {
   // Migrate older versions up. The migration steps are linear; future
   // bumps add another `if (current === N) migrateNToN+1(input)` step.
   if (schemaVersion === 1) migrateV1ToV2(input)
+  if (schemaVersion <= 2) migrateV2ToV3(input)
 
   if (!isFiniteNumber(input.savedAt) || input.savedAt <= 0) {
     return { ok: false, reason: 'savedAt missing or invalid' }
@@ -168,6 +241,8 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isPlainObject(c)) return { ok: false, reason: 'imageCanvas not an object' }
     if (!isPlainObject(c.doc)) return { ok: false, reason: 'imageCanvas.doc missing' }
   }
+  // T-47: the place record is sanitized, never fatal — see sanitizePlace.
+  if (input.place !== undefined) input.place = sanitizePlace(input.place)
   return { ok: true, project: input as unknown as ImagiiProject }
 }
 
