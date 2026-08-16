@@ -52,7 +52,8 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 883 tests across 58 files (round 34). Fresh-run time on a
+**Count.** 948 tests across 59 files (T-34 added `Tutorial.test.ts`, the
+coachmark's placement geometry and key-intent table). Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
 last-updated marker.)

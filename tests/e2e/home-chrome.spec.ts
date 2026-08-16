@@ -23,7 +23,7 @@ const __dirname = path.dirname(__filename)
  * renderer state alone. "Persisted" is half of nearly every criterion in this
  * ticket, and only the file proves it.
  *
- * Six product defects were found while writing this spec. Three have since
+ * Six product defects were found while writing this spec. All six have since
  * been fixed and their contrast assertions here are positives now — the
  * defect each one used to pin is named at the assertion:
  *   A. [FIXED, T-31] Home never mounted <AppToaster/>, so every toast Home
@@ -36,16 +36,17 @@ const __dirname = path.dirname(__filename)
  *   C. [FIXED, T-32] Home's Undo/Redo enablement was computed at render and
  *      the hook suppressed its own store event, so nothing re-rendered Home
  *      after the click and Redo stayed disabled after an Undo.
- * The other three are still open, each asserted at the boundary where it
- * bites and carrying a `T-21 FINDING` comment there:
- *   D. AutosaveRestore's corruption branch requires `info.ageMs`, which the
- *      reader never returns for a file that fails validation, so the Clear /
- *      Dismiss banner cannot render (also pinned in
- *      tests/unit/autosaveCorruptInfo.test.ts).
- *   E. computeTooltipPosition clamps 'top'/'bottom' coachmarks to the viewport
- *      but not 'left'/'right', so the video tutorial's step 2 renders 16 px
- *      inside a 1280 px window and its buttons cannot be clicked.
- *   F. Enter (with focus off a button) advances the tutorial two steps.
+ *   D. [FIXED, T-33] AutosaveRestore's corruption branch required
+ *      `info.ageMs`, which the reader never returned for a file that fails
+ *      validation, so the Clear / Dismiss banner could not render (also
+ *      pinned in tests/unit/autosaveCorruptInfo.test.ts).
+ *   E. [FIXED, T-34] computeTooltipPosition clamped 'top'/'bottom' coachmarks
+ *      to the viewport but not 'left'/'right', so the video tutorial's step 2
+ *      rendered past the right edge of a 1280 px window and its buttons could
+ *      not be clicked. One clamp covers all four placements now, and the
+ *      dedicated clamp test below drives that step at 1280x800.
+ *   F. [FIXED, T-34] Enter (with focus off a button) advanced the tutorial
+ *      two steps; the handler preventDefaults the key it consumes.
  */
 
 const SCREENSHOTS = path.join(__dirname, 'screenshots')
@@ -183,6 +184,36 @@ async function makeFixtureWav(outPath: string): Promise<void> {
   if (result.code !== 0) {
     throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
   }
+}
+
+/**
+ * Give the renderer an exact viewport by resizing the real BrowserWindow's
+ * CONTENT area (video-core.spec.ts and image.spec.ts resize the same way; the
+ * content variant is used here because the number under test is the one
+ * `computeTooltipPosition` clamps against, `window.innerWidth`/`innerHeight`).
+ * Polled, because the resize lands as an OS event the renderer sees a beat
+ * later.
+ */
+async function setContentSize(
+  app: ElectronApplication,
+  window: Page,
+  width: number,
+  height: number
+): Promise<void> {
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (!win) throw new Error('no BrowserWindow to resize')
+      win.setContentSize(size.width, size.height)
+    },
+    { width, height }
+  )
+  await expect
+    .poll(() => window.evaluate(() => `${globalThis.innerWidth}x${globalThis.innerHeight}`), {
+      timeout: 15_000,
+      intervals: [100]
+    })
+    .toBe(`${width}x${height}`)
 }
 
 async function launchApp(userDataDir: string): Promise<ElectronApplication> {
@@ -842,13 +873,12 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // ArrowRight binding.
       await window.keyboard.press('ArrowRight')
       await expect(counter(3)).toBeVisible()
-      // Back button. Clicked from step 3 rather than step 2: step 2 is the
-      // one step whose target ([data-tutorial="video-import"]) exists in the
-      // unloaded studio, and its 'right' placement puts the whole coachmark
-      // past the right edge of the window (T-21 FINDING E — computeTooltipPosition
-      // clamps 'top'/'bottom' to the viewport but not 'left'/'right'), so its
-      // buttons cannot be clicked. Every other step here has no rendered
-      // target and centers.
+      // Back button, clicked from step 3. Step 2 is the one step whose target
+      // ([data-tutorial="video-import"]) exists in the unloaded studio; its
+      // 'right' placement used to put the whole coachmark past the right edge
+      // of the window, which is what T-34 fixed and what the clamp test below
+      // drives directly. Every other step here has no rendered target and
+      // centers.
       await window.getByRole('button', { name: 'Back' }).click()
       await expect(counter(2)).toBeVisible()
       // ArrowLeft binding.
@@ -858,31 +888,41 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // over-run: the guard is structural.
       await expect(window.getByRole('button', { name: 'Back' })).toHaveCount(0)
 
-      // Enter binding. Focus sits on Next after every step change and the
-      // handler defers to the button's own activation there, so blur first —
-      // the window-level Enter branch is the thing under test.
+      // Enter binding, off a button. Focus sits on Next after every step
+      // change and the handler defers to the button's own activation there,
+      // so blur first — the window-level Enter branch is the thing under test.
       //
-      // T-21 FINDING F (not fixed here): this advances TWO steps — observed
-      // 1 -> 3. The keydown handler runs next() on the body, React flushes and
-      // the step-change effect pulls focus onto the new Next button, and
-      // Chromium then applies Enter's default action to whatever is focused by
-      // that point, clicking Next a second time. A user pressing Enter to page
-      // through the tutorial reads every other step. Asserted as "advanced"
-      // rather than as a fixed number so the rest of the run stays valid
-      // whichever way it is resolved.
+      // T-34 (was T-21 finding F): exactly ONE step. This used to advance TWO
+      // (observed 1 -> 3): the keydown handler ran next() on the body, React
+      // flushed and the step-change effect pulled focus onto the new Next
+      // button, and Chromium then applied Enter's default action to whatever
+      // was focused by that point, clicking Next a second time — so a user
+      // paging through with Enter read every other step. The handler now
+      // preventDefaults the Enter it consumes.
       await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
       await window.keyboard.press('Enter')
-      const afterEnter = await currentStep(window)
-      expect(afterEnter).toBeGreaterThan(1)
+      await expect(counter(2)).toBeVisible()
+      expect(await currentStep(window)).toBe(2)
 
       // Scrim click ADVANCES by design (Tutorial.tsx: the masked rect's
       // onClick is next(), not close) — asserted so the behavior is pinned
       // rather than assumed, and so no other test tries to escape that way.
       await window.locator('svg rect[mask]').click({ position: { x: 8, y: 8 } })
-      await expect(counter(afterEnter + 1)).toBeVisible()
+      await expect(counter(3)).toBeVisible()
+
+      // T-34's other half: a step advanced by CLICKING Next leaves focus on
+      // the button, where the window handler defers instead of consuming the
+      // key. Enter from there must also move exactly one step — the deferral
+      // and the preventDefault can never both fire on one keypress.
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(4)).toBeVisible()
+      expect((await focusInfo(window)).label).toBe('Next')
+      await window.keyboard.press('Enter')
+      await expect(counter(5)).toBeVisible()
+      expect(await currentStep(window)).toBe(5)
 
       // Run the rest with Next until the last step offers Done.
-      for (let step = afterEnter + 1; step < total; step++) {
+      for (let step = 5; step < total; step++) {
         await window.getByRole('button', { name: 'Next' }).click()
         await expect(counter(step + 1)).toBeVisible()
       }
@@ -899,6 +939,95 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
           intervals: [200]
         })
         .toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Video tutorial: the left/right coachmark stays inside a 1280x800 window and its buttons are clickable (T-34)', async () => {
+    test.setTimeout(180_000)
+    ensureScreenshots()
+    const root = makeRoot('tutorial-clamp')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: { audio: true, image: true, ai: true }
+    })
+    const total = videoTutorial.steps.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // The size the ticket names, driven through the real OS window so the
+      // renderer's own innerWidth/innerHeight are what the geometry sees.
+      await setContentSize(app, window, 1280, 800)
+
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+
+      // Step 2 is the named offender: placement 'right' on
+      // [data-tutorial="video-import"], the widest target the unloaded studio
+      // renders. Before T-34 the coachmark was laid out at
+      // target.right + 16 with no clamp on that axis, so at 1280 px it
+      // started ~16 px from the right edge and its buttons sat off-screen.
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(2)).toBeVisible()
+      const stepDef = videoTutorial.steps[1]
+      expect(stepDef?.placement).toBe('right')
+      expect(stepDef?.targetSelector).toBe('[data-tutorial="video-import"]')
+      // The target really is too wide for its own side — otherwise this test
+      // would pass on the unclamped build for the wrong reason.
+      const targetRight = await window.evaluate(() => {
+        const el = document.querySelector('[data-tutorial="video-import"]')
+        if (!el) throw new Error('video-import target not rendered')
+        return el.getBoundingClientRect().right
+      })
+      expect(targetRight).toBeGreaterThan(1280 - 448 - 16)
+
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toBeVisible()
+      const card = await dialog.boundingBox()
+      expect(card).not.toBeNull()
+      if (!card) throw new Error('unreachable')
+      // The whole coachmark is on screen — not just the corner that used to
+      // peek in from the right edge.
+      expect(card.x).toBeGreaterThanOrEqual(0)
+      expect(card.y).toBeGreaterThanOrEqual(0)
+      expect(card.x + card.width).toBeLessThanOrEqual(1280)
+      expect(card.y + card.height).toBeLessThanOrEqual(800)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'home-07-tutorial-clamped.png') })
+
+      // Every control it owns, individually — the buttons are what the
+      // finding was actually about.
+      for (const name of ['Skip', 'Next']) {
+        const box = await window.getByRole('button', { name }).boundingBox()
+        expect(box, `${name} has no box`).not.toBeNull()
+        if (!box) throw new Error('unreachable')
+        expect(box.x, `${name} left edge`).toBeGreaterThanOrEqual(0)
+        expect(box.x + box.width, `${name} right edge`).toBeLessThanOrEqual(1280)
+        expect(box.y, `${name} top edge`).toBeGreaterThanOrEqual(0)
+        expect(box.y + box.height, `${name} bottom edge`).toBeLessThanOrEqual(800)
+        // …and the button is what the user's pointer would actually hit at
+        // that spot, not the scrim or a studio control underneath it.
+        const hit = await window.evaluate(
+          (point) => {
+            const el = document.elementFromPoint(point.x, point.y)
+            if (!el) return 'nothing at that point'
+            const button = el.closest('button')
+            return button ? (button.textContent ?? '').trim() : `${el.tagName} (not a button)`
+          },
+          { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+        )
+        expect(hit, `${name} is not the top element at its own center`).toContain(name)
+      }
+
+      // And it is clickable for real: Next advances the tour.
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(3)).toBeVisible()
     } finally {
       await app.close()
       cleanup(root)
@@ -943,6 +1072,127 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // The other three flags are untouched — the write that did not happen
       // was specific to this tutorial, not a wholesale config failure.
       expect(readConfig(userDataDir).tutorialSeen?.audio).toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('ErrorBoundary: a real render throw shows the fallback, the stack expands, and Reload to Home recovers (T-35)', async () => {
+    test.setTimeout(180_000)
+    ensureScreenshots()
+    const root = makeRoot('error-boundary')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const alert = window.getByRole('alert')
+
+      // ── the production guard, asserted first ──
+      // The harness route needs BOTH the hash and the window flag. Without
+      // the flag — i.e. in every shipped app — it is just another unknown
+      // hash and lands on Home, so this route cannot crash a user.
+      await window.evaluate(() => {
+        globalThis.location.hash = '#/__crash'
+      })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(alert).toHaveCount(0)
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+
+      // ── armed: a component throws during render, for real ──
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/home'
+      })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.evaluate(() => {
+        globalThis.location.hash = '#/__crash'
+      })
+
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      await expect(alert.getByText('imagii hit a render error')).toBeVisible()
+      await expect(
+        alert.getByText(/Your autosave is intact; reloading\s+to the home screen/)
+      ).toBeVisible()
+      // The thrown message reaches the user verbatim — that is what makes the
+      // panel worth copying into a report.
+      await expect(
+        alert.getByText('Forced render error (T-35 ErrorBoundary harness)')
+      ).toBeVisible()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'home-08-error-boundary.png') })
+
+      // ── the raw-hex styling is intact ──
+      // DESIGN_GUIDE.md lists this fallback as one of three documented
+      // raw-color exceptions: it uses inline hex on purpose, because the
+      // error may have come from layout itself and a Tailwind-classed
+      // fallback could go down with it. So these are the values to pin, and
+      // "fixing" them to tokens would be the regression.
+      const styling = await alert.evaluate((el) => {
+        const button = el.querySelector('button')
+        const code = el.querySelector('pre')
+        return {
+          alertBackground: getComputedStyle(el).backgroundColor,
+          alertColor: getComputedStyle(el).color,
+          usesClasses: el.className,
+          buttonBackground: button ? getComputedStyle(button).backgroundColor : 'no button',
+          messageColor: code ? getComputedStyle(code).color : 'no pre'
+        }
+      })
+      expect(styling).toEqual({
+        alertBackground: 'rgb(18, 12, 12)', // #120c0c
+        alertColor: 'rgb(236, 228, 226)', // #ece4e2
+        usesClasses: '',
+        buttonBackground: 'rgb(255, 49, 49)', // #ff3131
+        messageColor: 'rgb(248, 113, 113)'
+      })
+
+      // ── the details disclosure expands ──
+      const details = alert.locator('details')
+      const stack = details.locator('pre')
+      await expect(details.getByText('Component stack')).toBeVisible()
+      await expect(stack).toBeHidden()
+      await details.getByText('Component stack').click()
+      await expect(stack).toBeVisible()
+      // React's own component stack, so it is worth reading: several frames,
+      // each an "at …" line. (Names are minified in a production build, which
+      // is why this asserts the shape rather than a component name.)
+      const stackText = (await stack.textContent()) ?? ''
+      expect(stackText.split('\n').filter((line) => line.includes('at ')).length).toBeGreaterThan(2)
+
+      // ── Reload to Home recovers ──
+      // The flag is deliberately left armed: recovery has to work because the
+      // app left the crashing route, not because the crash was defused.
+      await window.getByRole('button', { name: 'Reload to Home' }).click()
+      await expect(alert).toHaveCount(0, { timeout: 15_000 })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+      expect(await window.evaluate(() => globalThis.location.hash)).toBe('#/home')
+
+      // …to a WORKING Home, not just a rendered one: routing, the app-wide
+      // chrome and a studio all still function after the recovery.
+      await expect(window.locator('[data-rht-toaster]')).toHaveCount(1)
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
+        timeout: 20_000
+      })
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+
+      // And the boundary is armed again for the NEXT crash — recovery resets
+      // it rather than spending it.
+      await window.evaluate(() => {
+        globalThis.location.hash = '#/__crash'
+      })
+      await expect(alert).toBeVisible({ timeout: 15_000 })
     } finally {
       await app.close()
       cleanup(root)

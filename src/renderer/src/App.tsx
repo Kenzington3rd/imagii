@@ -15,6 +15,33 @@ import { useAutosave } from './hooks/useAutosave'
 
 type Status = { phase: 'loading' } | { phase: 'welcome' } | { phase: 'ready' }
 
+/**
+ * T-35 — the render-error harness the ErrorBoundary's coverage needs.
+ *
+ * A boundary can only be proven by an error thrown from inside a real render,
+ * and the recovery it offers ("Reload to Home") is a navigation, so the proof
+ * has to run in the built app rather than in a component harness.
+ *
+ * TWO independent conditions gate it and both must hold:
+ *
+ *   1. the `#/__crash` hash, which nothing in the UI links to. imagii has no
+ *      address bar, and an unrecognized hash already lands on Home via the
+ *      catch-all route below.
+ *   2. `window.__imagiiCrashTest`, a flag no product code ever sets — only
+ *      tests/e2e/home-chrome.spec.ts does, through `page.evaluate`.
+ *
+ * With the flag unset — that is, always, in a shipped app — this route
+ * behaves exactly like any other unknown hash: it redirects to Home. The
+ * spec asserts that unarmed behavior first, so the guard is covered too.
+ * Same family as the `window.__imagiiStage` / `__imagiiVideoEl` test hooks
+ * the interaction ledger already records.
+ */
+function CrashTest(): JSX.Element {
+  const armed = (window as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest === true
+  if (!armed) return <Navigate to="/home" replace />
+  throw new Error('Forced render error (T-35 ErrorBoundary harness)')
+}
+
 export function App(): JSX.Element {
   const [status, setStatus] = useState<Status>({ phase: 'loading' })
   // B1 fix: actually wire the autosave hook. Round-3 introduced the hook but
@@ -72,6 +99,10 @@ export function App(): JSX.Element {
             /ai-art before the module was repurposed. Redirect so any old
             deep link still resolves. */}
         <Route path="/ai-art" element={<Navigate to="/references" replace />} />
+        {/* T-35: the ErrorBoundary below can only be proven by a render that
+            actually throws, in the built app, on a route the user could be
+            on. This is that lever. */}
+        <Route path="/__crash" element={<CrashTest />} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
       {/* T-13: the overlay owns the app-wide `?` binding and is the only

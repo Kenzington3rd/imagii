@@ -27,7 +27,11 @@ sweep time · `NAT` = native confirm/prompt (needs a Playwright dialog
 handler).
 
 Global test hooks: `window.__imagiiStage` (Konva Stage, Canvas.tsx:360),
-`window.__imagiiVideoEl` (Player.tsx:124).
+`window.__imagiiVideoEl` (Player.tsx, E2E handle only since T-38),
+`window.__imagiiCrashTest` (App.tsx — arms the #/__crash ErrorBoundary
+harness; unarmed, the route redirects to Home like any unknown hash.
+SHIPS IN THE PRODUCTION BUNDLE BY DESIGN, double-gated — do not remove
+without replacing the T-35 coverage).
 
 ---
 
@@ -350,12 +354,19 @@ Later -> E2E; Clear/Dismiss -> corrupt-offers-nothing pin + unit
 [T-33, unreachable today] — UPGRADED round 34: the corruption banner
 renders and both buttons are driven E2E, see the round-34 section. Modal contract (scrim/stop/Escape/trap/
 restore) -> Templates + FixWizard E2E. Tutorial: full-run/Back/arrows/
-scrim-advance/Skip-no-persist -> E2E; Enter -> pin [T-34 double-step].
+scrim-advance/Skip-no-persist -> E2E; Enter -> pin [T-34 double-step]
+— UPGRADED round 36: Enter exactly-one-step from both focus states;
+left/right coachmark clamped at 1280x800 with every button hit-tested
+(elementFromPoint) and clicked through; Tutorial.test.ts 61 units.
 RecentFilesMenu (toggle/item/clear/Escape/click-outside) -> E2E;
 mouse-leave -> unit policy. HotkeyOverlay ?/Esc -> E2E. AppToaster ->
 E2E on studios; absent on Home [T-31] at round 25 — UPGRADED round 31:
 one app-level mount, asserted on Home and a studio route.
-ErrorBoundary -> OPEN [T-35].
+ErrorBoundary -> OPEN [T-35] — UPGRADED round 36: real render throw
+via the gated #/__crash harness; fallback + raw-hex exception styling
+(the DESIGN_GUIDE-documented exception) + stack disclosure +
+Reload-to-Home recovery to a working Home; the unarmed guard asserted
+first. Expediter mutation: guard forced armed -> that assertion red.
 
 ### Video core (T-22)
 Chrome: Undo/Redo buttons + Ctrl+Z/Y -> trim-drag E2E (Ctrl+Shift+Z
@@ -843,3 +854,16 @@ New and changed elements; tests in tests/e2e/{continuity,home-chrome}
   canvas; revisit if a second lands.
 - Residue ticketed [T-63]: Space on a focused crop button double-fires
   (button activation + playback toggle).
+
+
+## Dispositions — round 36 (fix wave batch 10: T-34 + T-35)
+
+- **Tutorial coachmark placement:** all four placements pass one
+  pipeline (side -> opposite -> cross axis -> clamp of last resort);
+  measured-size geometry. E2E at 1280x800 on the real Video step 2
+  offender; 61 unit cases. Residue ticketed [T-64]: aria-modal without
+  a focus trap; 300 ms poll churn.
+- **Tutorial Enter:** exactly one step, both focus states, pure
+  tutorialKeyIntent unit-covered.
+- **ErrorBoundary:** see the upgraded round-25 row above; the
+  production-shipping gated crash route is recorded in the hooks line.
