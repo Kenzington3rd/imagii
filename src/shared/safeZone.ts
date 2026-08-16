@@ -6,14 +6,12 @@ import { assert } from './assert'
  * means tests can import without pulling React.
  */
 
+/** A rectangle inside a frame, in that frame's own pixel space — source
+ *  pixels for a crop, CSS pixels for the on-screen picture rect (T-39). */
 export interface CropBox {
-  /** x position of crop in source pixels. */
   x: number
-  /** y position of crop in source pixels. */
   y: number
-  /** width of crop in source pixels. */
   w: number
-  /** height of crop in source pixels. */
   h: number
 }
 
@@ -21,6 +19,11 @@ export interface CropBox {
  * Compute the centered crop rectangle that produces the given target aspect
  * ratio inside a source frame. If source is wider than target, crops left/right;
  * if narrower, crops top/bottom.
+ *
+ * This is also the `object-fit: contain` fit, which is the same geometry read
+ * the other way round: the centered rect of a given aspect inside a frame.
+ * Player's `useVideoContentRect` uses it to find where a <video> element is
+ * actually painting its picture inside its own box (T-39).
  */
 export function computeCropBox(
   sourceW: number,

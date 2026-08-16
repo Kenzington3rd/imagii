@@ -818,3 +818,28 @@ New and changed elements; tests in tests/e2e/{continuity,home-chrome}
 - Schema surface: place record v3 per-field degradation table pinned
   in projectValidation.test.ts + ProjectIO.test.ts (bad field drops
   alone; all-bad degrades to data-only; v1/v2 fixtures unchanged).
+
+
+## Dispositions — round 35 (fix wave batch 9: T-38 + T-39)
+
+- **Video - OutputPreview:** new pin "output preview: a freshly
+  imported video draws a real frame with no edit first (T-38)" —
+  canvas at the platform's 135x240 (not the undrawn 300x150 default),
+  pixels differ from a backdrop-only canvas, Undo asserted disabled on
+  both sides so the test cannot pass by editing. The platform-select
+  and crop tests no longer need playback for pixels.
+- **Video - safe zones + CropOverlay geometry:** "overlays: the crop
+  rect and the safe-zone guides sit on the picture, not the letterbox
+  (T-39)" — guide svg and crop rect match the element's own
+  contain-fit rect to the pixel at two window sizes, with the
+  letterbox first asserted 40+ px wide. Expediter mutation:
+  computeCropBox centering dropped -> three named unit tests red.
+- **Video - Crop control row:** moved above the player (tutorial
+  promise); row-clears-the-box asserted; data-tutorial="video-crop"
+  still resolves (39/39 checker). Component split CropControls /
+  CropOverlay recorded.
+- Test-hygiene note: video-core's canvasSnapshot uses a bare
+  document.querySelector('canvas') — correct while /video has one
+  canvas; revisit if a second lands.
+- Residue ticketed [T-63]: Space on a focused crop button double-fires
+  (button activation + playback toggle).

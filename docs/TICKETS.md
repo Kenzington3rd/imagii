@@ -616,7 +616,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Freshly imported video shows the output preview immediately
         (ref callback, effect, or store-driven attach signal).
   - [ ] E2E asserts a non-default preview canvas right after import.
-- **Status:** open
+- **Status:** done (round 35 — see Done)
 
 ## T-39 — crop/safe-zone overlays draw over the letterbox; crop row sits inside the frame
 
@@ -631,7 +631,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Crop controls moved above the player per the tutorial copy.
         (Usability ruling 2026-08-15: the tutorial's promise defines
         expected placement — move the controls, don't edit the copy.)
-- **Status:** open
+- **Status:** done (round 35 — see Done)
 
 ## T-40 — undo coalescing never closes a gesture
 
@@ -1033,6 +1033,19 @@ IMG-PREC.
         element's duration; the T-52 tail pin extended to the track.
 - **Status:** open
 
+## T-63 — Space on a focused crop button both clicks it and toggles playback
+
+- **Spec:** T-38/T-39 worker finding, pre-existing. Player's key
+  handler sits on the column with tabIndex=0 and exempts only
+  INPUT/TEXTAREA, so Space on a focused crop preset button activates
+  the button AND toggles playback. Now more visible with the crop row
+  above the player.
+- **Acceptance criteria:** Space on a focused button activates only
+  the button (exempt BUTTON, or scope the handler); E2E asserts no
+  playback toggle; existing Space-toggles-playback coverage still
+  green.
+- **Status:** open
+
 ## T-61 — a cut drag that starts on top of an existing cut does nothing
 
 - **Spec:** T-36 worker finding, pre-existing. Every stored cut region
@@ -1086,6 +1099,44 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 35 — fix wave batch 9: T-38 + T-39 (the video-preview pair).
+T-38: the element now reaches OutputPreview through an owned attach
+signal — Player takes onVideoElement, VideoStudio owns the state,
+PreviewWrapper is deleted, and the ref is a useCallback so the
+per-render detach/reattach churn from the T-37 report is gone
+(deliberately NOT a store field: a DOM node has no place in a
+serializable store that captureProject reads). Second independent
+defect found and fixed on the way: the preview redrew on loadeddata,
+which promises DATA, not a painted frame — instrumented drawImage off
+that event was black about half the time, which is why the old tests
+had to play the clip for pixels. One requestVideoFrameCallback,
+re-armed in its own callback, now covers first frame, seeks, and
+playback; the two tests that carried the playback workaround dropped
+it and parkPlayhead is deleted. T-39: both overlays consume one
+useVideoContentRect (element offset + the contain fit) — the fit math
+was already computeCropBox read the other way round, so no second
+copy; four unit tests pin that reading. The observer watches the
+CONTAINER as well as the element (a resize moves a centered video
+without resizing it — an element-only ResizeObserver never fires,
+which was half the bug). Crop controls split out and moved above the
+player per the tutorial's promise, coachmark still resolving (39/39);
+the crop rectangle stays inside for the shadow-clip reason documented
+in place. Rider on the same lines: applyAspectPreset normalizes
+against the SOURCE frame, fixing 1:1 presets exporting non-square
+under the old squeezed layout. Red-green: the T-22 pins flipped
+(preview 300x150 default -> real 135x240 frame with Undo asserted
+disabled both sides; guides at the box edge -> on the picture to the
+pixel at two window sizes, with the letterbox first asserted 40+ px
+wide so a box-anchored overlay cannot pass). Worker mutations: attach
+call deleted, rect anchored to the container; expediter's own:
+computeCropBox x-centering dropped -> exactly the three
+centering/pillarbox unit tests red, restore, 14/14 + video-core
+19/19. Gates: 887 unit / 112 E2E, no drops. Crop drags NOT converted
+to drag.ts (worker's edits never touched those lines — T-62 stays
+open and honest). Findings: T-63 filed (Space double-fires on focused
+crop buttons); canvasSnapshot's bare querySelector noted; preload
+note recorded.
 
 Round 34 — fix wave batch 8: T-33 + T-47 (the corrupt-autosave banner,
 and the owner's session-continuity feature). T-33: the renderer's

@@ -14,6 +14,110 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-38 + T-39: the video preview drew nothing, and the overlays drew in the wrong place
+
+Two tickets in the Video Studio player, both from taking a stand-in for
+the thing itself: a global read at the wrong moment stood in for "the
+player has a video element", `loadeddata` stood in for "there is a frame
+to draw", and the player's black box stood in for the picture inside it.
+
+### Bug — a freshly imported video showed a blank preview until the first undoable edit (T-38)
+- **Root cause.** Two independent failures, and fixing either alone
+  still left a black canvas. First, `PreviewWrapper` read
+  `window.__imagiiVideoEl` **during render** — the render that mounts
+  the Player, so the `<video>` does not exist yet and the value is
+  always null. `VideoStudio` re-renders on source / clips.length /
+  canUndo / canRedo and on nothing else, so the next chance to pick up
+  the element came with the user's first undoable edit. Second, even
+  once `OutputPreview` had the element, it redrew on `timeupdate` /
+  `seeked` / `loadeddata` — and `loadeddata` promises DATA, not a
+  painted frame. Instrumented in the real app, `drawImage` at the
+  moment the React effect ran after `loadeddata` produced an all-black
+  canvas about half the time, and nothing else was ever going to redraw
+  a paused video, which is why the E2E suite had to PLAY the clip to get
+  a frame on screen at all.
+- **Fix.** The Player publishes its element through an
+  `onVideoElement` prop as the ref attaches, and `VideoStudio` holds it
+  in state — the preview has it on the very next render, no global, no
+  render-phase read. The ref callback is a `useCallback` so React
+  attaches it once instead of detaching and re-attaching (null, then the
+  element) on every render. `OutputPreview` drops its `tick` state and
+  its three media listeners for one `requestVideoFrameCallback`,
+  re-armed inside its own callback: it fires when a frame has been
+  PRESENTED, which is the only moment there is something new to mirror,
+  and it covers the first frame, seeks, and playback with one
+  subscription.
+- **Test.** `tests/e2e/video-core.spec.ts` "output preview: a freshly
+  imported video draws a real frame with no edit first (T-38)" — asserts
+  the canvas is the platform's 135x240 rather than an undrawn canvas's
+  300x150, that its pixels differ from a same-size canvas carrying only
+  the preview's own black backdrop, and that **Undo is still disabled**
+  on both sides, so the test cannot pass by accidentally editing
+  something. The two tests that used to play the clip first now wait for
+  that first frame instead, and `parkPlayhead` is gone with them.
+  Mutation: dropping the `onVideoElement(el)` call leaves the canvas at
+  300x150 and the test fails on the size.
+- **Lesson.** **A render-phase read of a mutable global is a read of the
+  past, and an event named for data is not an event about pixels.** If a
+  component needs a DOM node another component owns, the owner has to
+  publish it (ref callback -> state), because nothing re-renders the
+  reader when a ref quietly changes. And when the question is "can I
+  draw this video yet", the platform has a callback that answers exactly
+  that; media-readiness events answer a different one.
+
+### Bug — crop and safe-zone overlays drew across the letterbox, and the crop row sat inside the player (T-39)
+- **Root cause.** Both overlays were `absolute inset-0` — pinned to the
+  player's black box — while being SIZED from the video's client box.
+  The box is the full column width and the video is centered `w-auto`,
+  so every guide and the whole crop rectangle were drawn ~190 px to the
+  left of the picture they describe. Each overlay also watched only the
+  video element with a `ResizeObserver`, and a window resize moves a
+  centered video WITHOUT changing its size, so the offset was not even
+  recomputed. Separately, `CropOverlay` returned its control row and its
+  rectangle as one fragment rendered inside the black box, so the row
+  rendered as a flex sibling of the `<video>` — beside the picture,
+  squeezing it — while the tutorial's crop step says "tick 'Crop' above
+  the player".
+- **Fix.** One `useVideoContentRect` hook in `Player.tsx` measures where
+  the picture actually is: the element's offset inside the box plus the
+  `object-fit: contain` fit of the media's intrinsic aspect inside the
+  element's box. The fit is `computeCropBox` from `@shared/safeZone` —
+  the centered rect of a given aspect inside a frame is the same
+  geometry whether the frame is a source image or an on-screen box, so
+  there is no second copy of it. The hook observes the CONTAINER as well
+  as the video, which is what makes a resize-without-a-size-change
+  reach the overlays. Both overlays became dumb: they take that rect and
+  position themselves on it, and their duplicated observers are gone.
+  `CropOverlay.tsx` now exports `CropControls` (the row, rendered above
+  the player, per the usability tiebreaker — move the controls, not the
+  copy) and `CropOverlay` (the rectangle, inside the box where the
+  black-box `overflow-hidden` still clips its dimming shadow). The
+  aspect presets normalize against the SOURCE frame instead of the
+  on-screen box, which is what the stored rect has always meant to
+  ExportPanel and OutputPreview.
+- **Test.** `tests/e2e/video-core.spec.ts` "overlays: the crop rect and
+  the safe-zone guides sit on the picture, not the letterbox (T-39)" —
+  computes the picture's viewport rect from the element itself
+  (independently of the product helper), asserts the guides' `<svg>` and
+  the crop rectangle match it to the pixel at **two window sizes**
+  driven through `BrowserWindow.setSize`, first checking each time that
+  the black box really is 40+ px wider than the picture so the
+  assertion cannot pass on a box-anchored overlay. It also asserts the
+  crop row's bottom edge clears the top of the black box. Mutation:
+  anchoring the rect at the container's own box (x: 0, w: outer.width)
+  fails with the guides at 32 px where the picture is at 222.5 px.
+- **Lesson.** **An overlay belongs to the picture, not to the element
+  that happens to contain it.** A `<video>` is centered inside its box
+  and letterboxed inside itself, so two offsets stack up before a single
+  guide is drawn; anchor to the box and the app confidently draws a
+  promise about framing over a black bar. The same measurement rule
+  follows: observe what can MOVE the thing, not only what can resize it.
+  And when a tutorial's copy and the layout disagree about where a
+  control lives, the copy is the promise the user was given — move the
+  control.
+
+---
+
 ## 2026-08-16 — T-33 + T-47: a contract nobody could see, and a session that ended at the last debounce tick
 
 Two tickets in the autosave subsystem. The first was a banner that could

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { computeCropBox } from '@shared/safeZone'
+import { computeCropBox, type CropBox } from '@shared/safeZone'
 import { ACCENT } from '../../styles/tokens'
 
 interface SafeZoneOverlayProps {
-  videoElement: HTMLVideoElement | null
+  /** The picture's rectangle inside the player box, in CSS pixels — see
+   *  Player's `useVideoContentRect`. null until it can be measured. */
+  rect: CropBox | null
   show: boolean
   ratios: Array<'9:16' | '1:1' | '4:5' | '16:9'>
 }
@@ -22,35 +23,21 @@ const RATIO_COLOR: Record<string, string> = {
   '16:9': ACCENT
 }
 
-export function SafeZoneOverlay({
-  videoElement,
-  show,
-  ratios
-}: SafeZoneOverlayProps): JSX.Element | null {
-  const [size, setSize] = useState({ w: 0, h: 0 })
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!videoElement) return
-    function update(): void {
-      if (!videoElement) return
-      setSize({ w: videoElement.clientWidth, h: videoElement.clientHeight })
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(videoElement)
-    return () => ro.disconnect()
-  }, [videoElement])
-
-  if (!show || !videoElement || size.w === 0 || size.h === 0) return null
+/**
+ * The framing guides, drawn on the PICTURE rather than on the player's black
+ * box (T-39). A guide is a promise about what a platform will keep, so one
+ * drawn across a letterbox bar is worse than no guide at all.
+ */
+export function SafeZoneOverlay({ rect, show, ratios }: SafeZoneOverlayProps): JSX.Element | null {
+  if (!show || !rect || rect.w <= 0 || rect.h <= 0) return null
+  const picture = rect
 
   return (
     <div
-      ref={ref}
-      className="absolute inset-0 pointer-events-none"
-      style={{ width: size.w, height: size.h }}
+      className="absolute pointer-events-none"
+      style={{ left: picture.x, top: picture.y, width: picture.w, height: picture.h }}
     >
-      <svg width={size.w} height={size.h} viewBox={`0 0 ${size.w} ${size.h}`}>
+      <svg width={picture.w} height={picture.h} viewBox={`0 0 ${picture.w} ${picture.h}`}>
         {ratios.map((label) => {
           const targetAspect = RATIO_VALUE[label]
           if (!targetAspect) return null
@@ -58,7 +45,7 @@ export function SafeZoneOverlay({
           // recomputing inline. SafeZoneOverlay (here) and the export
           // pre-flight modal both source from the same function so the
           // preview matches what the modal warns about.
-          const box = computeCropBox(size.w, size.h, targetAspect)
+          const box = computeCropBox(picture.w, picture.h, targetAspect)
           const x = box.x
           const y = box.y
           const cropW = box.w

@@ -46,14 +46,25 @@ const __dirname = path.dirname(__filename)
  * `installSeekLog` survives because the requested value still carries the
  * exact nudge and frame math the landing tolerance can't resolve.
  *
- * BUG-PREVIEW — `OutputPreview` never draws until something unrelated
- * re-renders `VideoStudio`. `PreviewWrapper` (VideoStudio.tsx:159) reads
- * `window.__imagiiVideoEl` during render, and on the render right after
- * import the Player has not attached its <video> yet. VideoStudio only
- * re-renders on source / clips.length / canUndo / canRedo changes — never on
- * playback — so a freshly imported video shows a blank 300x150 default
- * canvas until the first undoable edit. The preview tests below make that
- * first edit deliberately before asserting a redraw.
+ * BUG-PREVIEW — FIXED by T-38 (2026-08-16). `PreviewWrapper` used to read
+ * `window.__imagiiVideoEl` during a render that happens BEFORE the Player
+ * attaches its <video>, and VideoStudio re-renders only on source /
+ * clips.length / canUndo / canRedo — never on playback — so a freshly
+ * imported video showed a blank 300x150 canvas until the first undoable edit.
+ * The Player now publishes the element to the studio as it attaches, and the
+ * preview redraws from `requestVideoFrameCallback` (a frame that has been
+ * PRESENTED) rather than from `loadeddata` (data, which the decoder may not
+ * have turned into a drawable frame yet). The preview tests below no longer
+ * make an edit first; "a freshly imported video draws a real frame with no
+ * edit first (T-38)" is the pin.
+ *
+ * OVERLAY ANCHORING — FIXED by T-39 (2026-08-16). The crop rectangle and the
+ * safe-zone guides were positioned against the player's black box while sized
+ * to the video, so both drew across the letterbox bars, and the Crop control
+ * row rendered as a flex sibling of the <video> INSIDE that box while the
+ * tutorial's own copy says "above the player". Both overlays now anchor to
+ * the rendered picture; "the crop rect and the safe-zone guides sit on the
+ * picture, not the letterbox (T-39)" pins the geometry at two window sizes.
  */
 
 const SCREENSHOTS = path.join(__dirname, 'screenshots')
@@ -133,6 +144,28 @@ async function launchApp(userDataDir: string): Promise<ElectronApplication> {
     args: [mainEntry, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
   })
+}
+
+/**
+ * Resize the real BrowserWindow (image.spec.ts uses the same technique for
+ * T-45). Driving the OS window rather than a CSS viewport is the point: the
+ * overlay geometry below has to survive a relayout that moves the picture
+ * without changing its size, which is exactly what a window resize does to a
+ * centered `w-auto` video.
+ */
+async function setWindowSize(
+  app: ElectronApplication,
+  width: number,
+  height: number
+): Promise<void> {
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (!win) throw new Error('no BrowserWindow to resize')
+      win.setSize(size.width, size.height)
+    },
+    { width, height }
+  )
 }
 
 /**
@@ -323,41 +356,13 @@ async function playheadPercent(window: Page): Promise<number> {
   return Number(match[1])
 }
 
-/**
- * Keep every parked playhead inside the first 1.2 s of a 2 s fixture: far
- * enough from the end that a 0.5 s park cannot run off it, and far enough
- * that `nudge`'s own clamp to the source duration never truncates a
- * requested seek.
+/*
+ * `parkPlayhead` — play for N ms, then pause — lived here until T-38. Its
+ * only callers were the crop and preview tests, which played solely to get a
+ * frame decoded onto the preview canvas; the preview now carries the first
+ * frame from the moment the import finishes, so both of them wait for that
+ * instead. Transport playback itself is covered by the transport test.
  */
-const PARK_CEILING = 1.2
-
-/**
- * Park the playhead by PLAYING for `ms` and pausing. Kept for the crop and
- * preview tests, which need a frame actually decoded and painted rather than
- * a particular timestamp; `seekTo` is the direct route to a position.
- * Returns the position it parked at.
- */
-async function parkPlayhead(window: Page, ms: number): Promise<number> {
-  const before = await videoState(window)
-  if (!before.ended && before.t + ms / 1000 > PARK_CEILING) {
-    // Out of runway. Run the clip out and let play() restart it at 0 — this
-    // helper stays purely transport-driven so it exercises playback, not the
-    // seek path `seekTo` covers.
-    await window.getByRole('button', { name: 'Play', exact: true }).click()
-    await expect
-      .poll(async () => (await videoState(window)).ended, { timeout: 20_000 })
-      .toBe(true)
-  }
-  await window.getByRole('button', { name: 'Play', exact: true }).click()
-  await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(false)
-  await window.waitForTimeout(ms)
-  await window.getByRole('button', { name: 'Pause', exact: true }).click()
-  await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
-  const parked = (await videoState(window)).t
-  expect(parked).toBeGreaterThan(0.05)
-  expect(parked).toBeLessThan(PARK_CEILING + 0.5)
-  return parked
-}
 
 /**
  * Instrument the media element's `currentTime` setter so the seek each
@@ -443,6 +448,74 @@ function canvasSnapshot(window: Page): Promise<{ w: number; h: number; url: stri
     if (!c) throw new Error('OutputPreview canvas not found')
     return { w: c.width, h: c.height, url: c.toDataURL() }
   })
+}
+
+/**
+ * A canvas of the given size carrying nothing but OutputPreview's own black
+ * backdrop. Same size, same fill, same encoder — so a preview that still
+ * matches this has drawn no video frame at all.
+ */
+function blackCanvasUrl(window: Page, w: number, h: number): Promise<string> {
+  return window.evaluate(
+    ({ w, h }) => {
+      const c = document.createElement('canvas')
+      c.width = w
+      c.height = h
+      const ctx = c.getContext('2d')
+      if (!ctx) throw new Error('no 2d context')
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, w, h)
+      return c.toDataURL()
+    },
+    { w, h }
+  )
+}
+
+interface ViewportRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * Where the PICTURE is, in viewport coordinates.
+ *
+ * Two things can put it somewhere other than the player's black box: the
+ * element is centered inside a box that is wider than it (the bars T-39 is
+ * about), and the UA default `object-fit: contain` letterboxes the picture
+ * INSIDE the element whenever the element's box and the media's intrinsic
+ * aspect disagree. Both are folded in here, computed from the element itself
+ * rather than from the product's helper, so this stays a second opinion.
+ */
+function videoContentBox(window: Page): Promise<ViewportRect> {
+  return window.evaluate(() => {
+    const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+    if (!v) throw new Error('__imagiiVideoEl is not set')
+    if (!(v.videoWidth > 0 && v.videoHeight > 0)) throw new Error('video has no intrinsic size yet')
+    const box = v.getBoundingClientRect()
+    const intrinsic = v.videoWidth / v.videoHeight
+    let w = box.width
+    let h = box.height
+    if (box.width / box.height > intrinsic) w = box.height * intrinsic
+    else h = box.width / intrinsic
+    return { x: box.left + (box.width - w) / 2, y: box.top + (box.height - h) / 2, w, h }
+  })
+}
+
+/** A Playwright bounding box in the same shape as `videoContentBox`. */
+async function boxOf(locator: Locator, label: string): Promise<ViewportRect> {
+  const box = await locator.boundingBox()
+  if (!box) throw new Error(`${label} has no bounding box`)
+  return { x: box.x, y: box.y, w: box.width, h: box.height }
+}
+
+/** Assert two viewport rectangles are the same rectangle, to the pixel. */
+function expectSameRect(actual: ViewportRect, expected: ViewportRect, label: string): void {
+  expect(actual.x, `${label} left`).toBeCloseTo(expected.x, 0)
+  expect(actual.y, `${label} top`).toBeCloseTo(expected.y, 0)
+  expect(actual.w, `${label} width`).toBeCloseTo(expected.w, 0)
+  expect(actual.h, `${label} height`).toBeCloseTo(expected.h, 0)
 }
 
 /** react-rnd projects the STORE's crop rect into inline width/height/transform. */
@@ -1115,9 +1188,20 @@ test.describe('Video Studio core editing surface', () => {
       const cropRect = window.locator('[data-tutorial="video-player"] .pointer-events-auto.border-2')
       const cropToggle = window.getByRole('checkbox', { name: 'Crop' })
 
-      // Decode a frame first: OutputPreview can only prove the STORE rect
-      // cleared if it has something other than black to draw.
-      await parkPlayhead(window, 300)
+      // OutputPreview can only prove the STORE rect cleared if it has
+      // something other than black to draw. Since T-38 the first frame is
+      // already on the canvas when the import finishes, so this waits for it
+      // rather than playing to get one.
+      await expect
+        .poll(async () => (await canvasSnapshot(window)).h, { timeout: 20_000 })
+        .toBe(240)
+      const blank = await blackCanvasUrl(window, 135, 240)
+      await expect
+        .poll(async () => (await canvasSnapshot(window)).url, {
+          timeout: 20_000,
+          message: 'the preview never drew a frame to compare crops against'
+        })
+        .not.toBe(blank)
 
       // ── enable ──
       await expect(cropRect).toHaveCount(0)
@@ -1226,6 +1310,80 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  test('overlays: the crop rect and the safe-zone guides sit on the picture, not the letterbox (T-39)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('overlay-anchor')
+    try {
+      // The picture has no rectangle until the element knows its intrinsic
+      // size, so wait for metadata before measuring anything.
+      await expect
+        .poll(async () => (await videoState(window)).ready, { timeout: 20_000 })
+        .toBeGreaterThan(0)
+
+      const frame = window.locator('[data-tutorial="video-player"] .bg-black')
+      // The safe-zone SVG, pinned by the labels it draws: every Icon in the
+      // player is an <svg> too, and none of them contains a <text>.
+      const guides = window.locator('[data-tutorial="video-player"] svg:has(g > text)')
+      const cropRect = window.locator('[data-tutorial="video-player"] .pointer-events-auto.border-2')
+      const cropRow = window.locator('[data-tutorial="video-crop"]')
+
+      // ── the crop controls are ABOVE the player, which is where the
+      //    tutorial's own copy tells the user to look for them ──
+      const rowBefore = await boxOf(cropRow, 'crop row')
+      const frameBefore = await boxOf(frame, 'player frame')
+      expect(
+        rowBefore.y + rowBefore.h,
+        'the crop control row must clear the top of the player box'
+      ).toBeLessThanOrEqual(frameBefore.y + 1)
+
+      await window.getByRole('checkbox', { name: 'Safe zones' }).check()
+      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await expect(guides).toHaveCount(1)
+      await expect(cropRect).toHaveCount(1)
+
+      async function assertAnchored(label: string): Promise<ViewportRect> {
+        const picture = await videoContentBox(window)
+        const box = await boxOf(frame, 'player frame')
+        // There is a letterbox here to get wrong: the black box is far wider
+        // than the picture it centers. Without this the assertions below
+        // would pass on a wrapper-anchored overlay too.
+        expect(box.w, `${label}: the player box really does have bars`).toBeGreaterThan(
+          picture.w + 40
+        )
+        expectSameRect(await boxOf(guides, 'safe-zone svg'), picture, `${label} safe-zone guides`)
+        expectSameRect(await boxOf(cropRect, 'crop rect'), picture, `${label} crop rect`)
+        return picture
+      }
+
+      // Both sizes clear the 1024x640 window minimum (src/main/index.ts).
+      await setWindowSize(app, 1100, 700)
+      await expect
+        .poll(async () => (await boxOf(frame, 'player frame')).w, {
+          timeout: 20_000,
+          message: 'the player box never followed the window down to 1100 px'
+        })
+        .toBeLessThan(800)
+      const narrow = await assertAnchored('narrow window')
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-06-overlay-anchor.png') })
+
+      // ── a second window width moves the picture without resizing it ──
+      // The video keeps its 320x240 natural size and slides sideways, so an
+      // overlay that only watches the ELEMENT for resizes never hears about
+      // this at all.
+      await setWindowSize(app, 1560, 980)
+      await expect
+        .poll(async () => (await videoContentBox(window)).x, {
+          timeout: 20_000,
+          message: 'the window resize never moved the picture'
+        })
+        .not.toBe(narrow.x)
+      const wide = await assertAnchored('wide window')
+      expect(wide.w, 'the picture kept its size across the resize').toBeCloseTo(narrow.w, 0)
+    } finally {
+      await app.close()
+    }
+  })
+
   // ─────────────────── ColorGrade (4i) + OutputPreview (4h) ───────────────────
 
   test('color and motion: four grade sliders, reset, auto-zoom and hype shake', async () => {
@@ -1284,17 +1442,20 @@ test.describe('Video Studio core editing surface', () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('preview')
     try {
-      // Decode a frame, then make one undoable edit — BUG-PREVIEW (file
-      // header): OutputPreview does not pick up the video element until
-      // VideoStudio re-renders, and playback alone never re-renders it.
-      await parkPlayhead(window, 300)
-      const gradeCard = window.locator('.card').filter({ hasText: 'Color & motion' })
-      await gradeCard.getByRole('checkbox', { name: 'Auto-zoom (gentle pulse)' }).check()
-
+      // Straight to the select: since T-38 the preview draws itself as soon
+      // as the import finishes, so there is no edit to make first — only the
+      // decoder to wait on, and the canvas says when it has landed.
       const select = window.getByLabel('Preview platform')
       await expect(select).toHaveValue('reels')
       // Reels is 1080x1920, scaled into a 240 px box.
-      await expect.poll(async () => (await canvasSnapshot(window)).h, { timeout: 10_000 }).toBe(240)
+      await expect.poll(async () => (await canvasSnapshot(window)).h, { timeout: 20_000 }).toBe(240)
+      const blank = await blackCanvasUrl(window, 135, 240)
+      await expect
+        .poll(async () => (await canvasSnapshot(window)).url, {
+          timeout: 20_000,
+          message: 'the preview never drew a frame to compare platforms against'
+        })
+        .not.toBe(blank)
       const reels = await canvasSnapshot(window)
       expect(reels.w).toBe(135)
 
@@ -1312,6 +1473,37 @@ test.describe('Video Studio core editing surface', () => {
       // TikTok shares Reels' 9:16 frame, so the same pixels come back.
       expect(tiktok.url).toBe(reels.url)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-05-preview.png') })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('output preview: a freshly imported video draws a real frame with no edit first (T-38)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('preview-immediate')
+    try {
+      // Nothing has been clicked since the drop — this is the app exactly as
+      // it looks the moment an import finishes.
+      await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
+
+      // The canvas is sized for the default platform (Reels, 1080x1920 into a
+      // 240 px box), not the 300x150 an undrawn <canvas> defaults to.
+      await expect.poll(async () => (await canvasSnapshot(window)).h, { timeout: 20_000 }).toBe(240)
+      const shot = await canvasSnapshot(window)
+      expect(shot.w).toBe(135)
+
+      // …and it carries a decoded frame, not just the black backdrop the
+      // draw lays down first.
+      const black = await blackCanvasUrl(window, shot.w, shot.h)
+      await expect
+        .poll(async () => (await canvasSnapshot(window)).url, {
+          timeout: 20_000,
+          message: 'the preview never drew a video frame'
+        })
+        .not.toBe(black)
+
+      // Still nothing to undo: the preview did not need an edit to appear.
+      await expect(window.getByRole('button', { name: 'Undo' })).toBeDisabled()
     } finally {
       await app.close()
     }
