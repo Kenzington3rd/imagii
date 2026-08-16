@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
 import { applyProject } from '../modules/project/ProjectIO'
@@ -28,6 +29,7 @@ function formatAge(ms: number): string {
 }
 
 export function AutosaveRestore(): JSX.Element | null {
+  const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<AutosaveSnapshot | null>(null)
   const [dismissed, setDismissed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -56,13 +58,14 @@ export function AutosaveRestore(): JSX.Element | null {
         result.info.ageMs < STALE_THRESHOLD_MS
       ) {
         setSnapshot(result)
-      } else if (
-        !result.ok &&
-        result.info?.exists &&
-        result.info?.ageMs !== undefined &&
-        result.info.ageMs < STALE_THRESHOLD_MS
-      ) {
-        // Show a corruption notice (rare)
+      } else if (!result.ok && result.info?.exists) {
+        // T-33: a corruption notice, gated on nothing but the file being
+        // there. The age used to be required here and main never sent one
+        // for a file that failed validation, so this branch — and the Clear
+        // button that is the only in-app way to delete the bad file — could
+        // never render. Staleness is not a gate either: a corrupt autosave
+        // is never restorable, so hiding an old one just leaves it on disk
+        // with no way for the user to hear about it or clear it.
         setSnapshot({ ...result, project: undefined })
       }
     })
@@ -95,6 +98,12 @@ export function AutosaveRestore(): JSX.Element | null {
       restored = true
       toast.success('Restored from autosave')
       setDismissed(true)
+      // T-47: and back to the studio they were in, with the selections and
+      // the playhead applyProject just put back. Only on the user's own
+      // click — continuity is what Restore means, never something that
+      // happens to a session that said Later.
+      const route = snapshot.project.place?.route
+      if (route) navigate(route)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Restore failed')
     } finally {

@@ -164,7 +164,24 @@ const api: ImagiiApi = {
     write: (project: ImagiiProject) => ipcRenderer.invoke('autosave:write', project),
     read: () => ipcRenderer.invoke('autosave:read'),
     info: () => ipcRenderer.invoke('autosave:info'),
-    clear: () => ipcRenderer.invoke('autosave:clear')
+    clear: () => ipcRenderer.invoke('autosave:clear'),
+    // T-47: main asks for one last snapshot as the app goes down, so the
+    // file on disk is the LAST state and not the last debounce tick. The
+    // reply is one-way — main never reports back, because a quitting UI
+    // cannot show an error anyway (T-44's rule about raw IPC text).
+    onQuitFlush: (provider: () => ImagiiProject | null) => {
+      const listener = (): void => {
+        let project: ImagiiProject | null = null
+        try {
+          project = provider()
+        } catch {
+          project = null
+        }
+        ipcRenderer.send('autosave:quitSnapshot', project)
+      }
+      ipcRenderer.on('autosave:requestQuitSnapshot', listener)
+      return () => ipcRenderer.removeListener('autosave:requestQuitSnapshot', listener)
+    }
   },
   recording: {
     listSources: () => ipcRenderer.invoke('recording:listSources'),

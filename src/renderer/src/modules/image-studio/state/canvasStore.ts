@@ -45,7 +45,13 @@ interface CanvasState {
 
   setBackground: (color: string) => void
   setCanvasSize: (width: number, height: number) => void
-  resetDocument: () => void
+  /** Replace the document WITHOUT recording an undo step, clearing the
+   *  history — "open a file", not "edit the canvas". Called with no
+   *  argument it resets to an empty document. T-47: a session restore goes
+   *  through here rather than `setDocument`, so the app never opens with
+   *  Home's Undo offering to revert the work it just brought back. */
+  resetDocument: (doc?: CanvasDocument) => void
+  /** Replace the document as an undoable edit (templates, image import). */
   setDocument: (doc: CanvasDocument) => void
 
   undo: () => void
@@ -182,8 +188,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       history: pushHistory(get().history, prev)
     })
   },
-  resetDocument: () => {
-    set({ doc: defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null })
+  resetDocument: (doc) => {
+    set({ doc: doc ?? defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null })
   },
   setDocument: (doc) => {
     const prev = get().doc

@@ -52,7 +52,7 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 813 tests across 56 files (round 31). Fresh-run time on a
+**Count.** 883 tests across 58 files (round 34). Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
 last-updated marker.)

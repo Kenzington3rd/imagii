@@ -14,6 +14,134 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-33 + T-47: a contract nobody could see, and a session that ended at the last debounce tick
+
+Two tickets in the autosave subsystem. The first was a banner that could
+not render because the producer and the consumer of one field disagreed
+about when it exists. The second was the feature that disagreement was
+hiding: closing imagii and reopening it brought back the work but not the
+session.
+
+### Bug — a corrupt autosave showed the user nothing at all (T-33)
+- **Root cause.** `AutosaveRestore.tsx` gated its corruption branch on
+  `result.info.ageMs !== undefined`, and `main/autosave.ts` returned
+  `{ exists, filePath, sizeBytes }` — no `ageMs` — for exactly the files
+  that fail validation, because the age was computed from the project's
+  own `savedAt` and an unparseable file has none. Every corrupt autosave
+  therefore rendered the empty branch: no banner, no **Clear** (the only
+  in-app way to delete the bad file), and not even the "Last autosave: …"
+  status line. Both halves were individually reasonable; nothing in
+  either file said what `ageMs` promised, so neither side was wrong on
+  its own terms and the pair was dead code.
+- **Fix.** Name the field's meaning and make both sides keep it. `ageMs`
+  is now "how long ago this autosave was written", sourced from `savedAt`
+  when the file validates and from the file's **mtime** when it does not —
+  the filesystem knows when the bytes were written even when the bytes are
+  garbage. `savedAt` stays absent for a corrupt file, because that one IS
+  the in-file value and there is none to trust. The renderer's corruption
+  branch now asks only whether the file exists: age is decoration there,
+  never a gate, and staleness is not a gate either — an old corrupt
+  autosave is not restorable, so hiding it only leaves it on disk with no
+  way for the user to hear about it.
+- **Test.** `tests/unit/autosaveCorruptInfo.test.ts` — the file that used
+  to pin the mismatch now pins the contract from both ends, with the
+  corrupt file backdated ten minutes so an mtime-derived age is
+  distinguishable from `Date.now()`, and a valid file whose `savedAt` and
+  mtime disagree so it is observable which half answers.
+  `tests/e2e/home-chrome.spec.ts` "a corrupt autosave says so — Dismiss
+  hides it, Clear deletes the file" flips T-21's "offers nothing" defect
+  test into the banner path, with Clear driven to a deleted file.
+  `src/main/autosave.corruption.test.ts` carries the same shape at the
+  reader. Mutation: re-omitting `ageMs` on the corrupt branch fails the
+  unit pins and the E2E on `(just now)` -> `(unknown)`; restoring the old
+  renderer gate makes the banner disappear again.
+- **Lesson.** **An optional field is a contract, and a contract with no
+  written meaning is where two correct files meet as a bug.** When one
+  module gates on the presence of a value another module omits by
+  construction, no test on either side can see it — the mismatch only
+  exists in the gap. Write the meaning at the type (`ageMs` says what it
+  measures and where it comes from in each case), and make presence a
+  property of the data being available rather than of one particular
+  source being available.
+
+### Bug — restoring a session armed Undo with the restore itself (T-47)
+- **Root cause.** `applyProject` put the canvas back through
+  `canvasStore.setDocument`, which is the *edit* path: it pushes the
+  previous document onto the undo stack. With Home's global undo now
+  tracking every studio (T-32), the app came back from a restore with
+  Undo lit and "last: Image Canvas" showing — offering to revert work the
+  user had never done, and one click away from throwing the restored
+  session out.
+- **Fix.** `resetDocument` takes an optional document, and the restore
+  goes through it: the document is replaced and the history is cleared,
+  which is what "open a file" means everywhere else. The T-32 undo
+  tracker needed no change at all — it counts each store's history
+  lengths, so a restore that grows no history moves no entry. Contract:
+  **right after a restore there is nothing to undo in any studio.**
+- **Test.** `ProjectIO.test.ts` "leaves the canvas history EMPTY, so the
+  app never opens offering to undo the restore" (with a pre-existing step
+  proving the restore clears rather than adds);
+  `tests/e2e/continuity.spec.ts` asserts `last: no recent change` with
+  both buttons disabled immediately after Restore. The two T-32 E2E tests
+  that used to arm Undo *with* a restore now arm it with a real edit made
+  on the restored canvas and assert the restored layer survives the Undo.
+- **Lesson.** **"Load" and "edit" must not share a setter.** A function
+  that records history is a function about user intent; restoring, opening
+  and importing are not user edits, and routing them through the edit path
+  makes the app's first offer after launch a destructive one.
+
+### Bug — the restored playhead was rewound by the Player's own mount reset (T-47)
+- **Root cause.** T-52 gave `Player` an effect that zeroes the transport
+  and the store's `currentTime` on mount, because a remounted Player
+  attaches a fresh `<video>` at 0 and the stale store value would draw a
+  playhead the video was nowhere near. A session restore parks the
+  playhead *before* navigating to `/video`, so the Player mounted second
+  and its reset threw the parked position away — the seek subscription
+  only ever hears changes made after it subscribes.
+- **Fix.** Treat `seekRequest` as a one-reader mailbox. The Player empties
+  it as each seek lands, so a request still sitting there at mount can
+  only have been posted while no Player existed — which is exactly the
+  restore case — and the mount effect applies it instead of zeroing.
+  Everything else is untouched: with the request consumed on arrival, a
+  scrub followed by leaving and returning still resets to 0, which is
+  T-52's contract.
+- **Test.** `tests/e2e/continuity.spec.ts` lands the restored playhead on
+  the media element within half a frame (the suite's `SEEK_TOLERANCE`);
+  `video-core.spec.ts` "leaving and returning resets it (T-52)" is
+  unchanged and still green, which is what proves the mailbox is empty on
+  the ordinary path.
+- **Lesson.** **A reset that exists to discard stale state has to be able
+  to tell stale from pending.** Both look like "a value from before this
+  component existed". The discriminator is not age but whether anything
+  has consumed it — so consume explicitly, and the two cases separate
+  themselves.
+
+### Bug — quitting lost the last few seconds of work (T-47)
+- **Root cause.** Nothing was wrong; nothing existed. Autosave was
+  debounced at 5 s in the renderer and that was the only writer, so the
+  snapshot offered on the next launch was the last debounce tick, not the
+  last state. Editing and immediately closing the window lost the edit.
+- **Fix.** On quit, main asks the renderer for one last capture and writes
+  it. Both exits are hooked because they are not the same path: the
+  window's X fires `close` while the renderer is alive and `before-quit`
+  only after it is gone, while `app.quit()` fires `before-quit` with the
+  window still up. The whole exchange — round trip plus disk write —
+  races a single 1.5 s deadline, so a wedged renderer or a spun-down disk
+  costs the user that and no more; the previous snapshot stays intact.
+  Nothing crosses back to the renderer: an outcome a quitting UI cannot
+  show is not worth the T-44 risk of leaking raw IPC text.
+- **Test.** `src/main/quitFlush.test.ts` drives the branch a manual test
+  cannot: a write that never settles returns `'timeout'` inside the
+  budget, a silent renderer does the same, and neither leaves an IPC
+  listener behind for the next quit to resolve on.
+  `tests/e2e/continuity.spec.ts` adds a clip and closes the window
+  immediately, then reads the third clip back off the file.
+- **Lesson.** **A debounce is a promise about the steady state, not about
+  the end of one.** Any batching writer needs a flush at the lifecycle
+  edge it batches across — and the flush needs a deadline, because the
+  one moment the user is guaranteed to be watching is the moment they
+  asked the app to go away.
+
 ## 2026-08-16 — T-36 + T-55: an event handler's name is not its timing
 
 Two tickets that met in the same 40 lines of wavesurfer. One shipped a

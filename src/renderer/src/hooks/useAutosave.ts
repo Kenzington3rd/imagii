@@ -44,6 +44,26 @@ export function useAutosave(options: AutosaveOptions = {}): void {
   const lastWriteTime = useRef<number>(0)
   const lastHash = useRef<string>('')
 
+  // T-47: the quit flush. Registered independently of `enabled` so a quit
+  // from the welcome screen still gets an immediate answer — main is
+  // waiting on this reply, and silence costs the user the whole timeout.
+  // The empty project it captures there is refused by the autosave guards,
+  // which is the correct outcome and a fast one.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.api?.autosave) return
+    return window.api.autosave.onQuitFlush(() => {
+      // A restore is mid-flight: capturing now would write half an applied
+      // project over the good snapshot the user is in the middle of using.
+      if (suppressRef.current) return null
+      try {
+        return captureProject()
+      } catch (err) {
+        console.warn('[autosave] quit capture failed', err)
+        return null
+      }
+    })
+  }, [])
+
   useEffect(() => {
     if (!enabled) return
     if (typeof window === 'undefined' || !window.api?.autosave) return

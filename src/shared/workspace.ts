@@ -2,17 +2,47 @@ import type { Clip, WatermarkSpec } from './clip'
 import type { ChainSpec } from './audio'
 import type { CanvasDocument } from './canvas'
 
+/** The tabs the References studio can be sitting on. Declared here rather
+ *  than in the store because a snapshot records it — `referencesStore.ts`
+ *  re-exports this so there is exactly one list. */
+export type ReferencesTab = 'reference' | 'moodboards' | 'assets'
+
+/**
+ * T-47 — where the user WAS, as opposed to what they had. Every field is
+ * optional and independently validated: a snapshot with a malformed place
+ * still restores the user's WORK, which is the load-bearing half. See
+ * `sanitizePlace` in shared/projectValidation.ts for the per-field
+ * degradation rules.
+ */
+export interface PlaceRecord {
+  /** Active route, e.g. `/video`. One of the app's real routes or absent. */
+  route?: string
+  /** Selected clip in Video Studio. */
+  videoClipId?: string
+  /** Selected layer on the image canvas. */
+  canvasLayerId?: string
+  /** Selected References tab. */
+  referencesTab?: ReferencesTab
+  /** Player playhead, in seconds from the start of the source. */
+  videoTimeSec?: number
+}
+
 /**
  * Schema versions:
  *   1 — initial
  *   2 — adds optional videoStudio.srtPath (path to a previously-transcribed
  *       SRT file). Migration is automatic on load: v1 projects get an
  *       implicit srtPath: undefined and are bumped to v2 in memory.
+ *   3 — adds the optional `place` record (T-47: session continuity). Older
+ *       snapshots have no place and restore exactly as they always did;
+ *       migration is a version bump with no data change.
  */
 export interface ImagiiProject {
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   savedAt: number
   appVersion: string
+  /** Where the user was when this snapshot was taken (v3+). */
+  place?: PlaceRecord
   videoStudio?: {
     sourcePath: string | null
     clips: Clip[]

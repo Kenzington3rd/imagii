@@ -1,7 +1,12 @@
 import { create } from 'zustand'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
+import type { ReferencesTab } from '@shared/workspace'
 
-export type ReferencesTab = 'reference' | 'moodboards' | 'assets'
+// One definition, in shared, because a session snapshot records the tab
+// (T-47) and the validator has to know the same list. Re-exported here so
+// every existing `import { ReferencesTab } from '…/referencesStore'` still
+// resolves.
+export type { ReferencesTab }
 
 interface ReferencesStudioState {
   tab: ReferencesTab

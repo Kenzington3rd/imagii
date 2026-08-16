@@ -18,7 +18,11 @@ controls:
   across the whole app.
 - **Open project / Save project** — a *project* (`.imagii.json`) saves
   the state of every studio at once. imagii also **autosaves** — if it
-  finds a recent autosave on launch, it offers to restore it.
+  finds a recent autosave on launch, it offers to pick up where you left
+  off, and **Restore** takes you back to the studio you were in, with
+  your selections and the playhead where you left them. Choosing
+  **Later** or **Discard** starts a fresh session instead; nothing is
+  restored unless you ask for it.
 
 ---
 
@@ -115,8 +119,14 @@ Gather inspiration and grab ready-made stream assets.
 ## Saving your work
 
 - **Save project** writes a `.imagii.json` you can reopen later.
-- **Autosave** runs in the background; imagii offers to restore it on
-  launch.
+- **Autosave** runs in the background, and imagii takes one final
+  snapshot as it closes, so the last few seconds of work are in it too.
+  On the next launch it offers to restore that session — route,
+  selections and playhead included. If the autosave file is damaged,
+  imagii says so and offers to clear it rather than loading it.
+- **The window remembers its size and position** between launches, and
+  re-centres itself if the display it was on is no longer connected.
+  That happens whatever you choose in the restore banner.
 - Exports (videos, images, audio) are written wherever you choose in
   the save dialog — they are normal files on your disk.
 
