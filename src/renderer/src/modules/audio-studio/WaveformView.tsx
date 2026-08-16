@@ -6,6 +6,14 @@ import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
 import { ACCENT, ACCENT_MUTED, EMBER } from '../../styles/tokens'
 
+/**
+ * Every region this view puts on the waveform for a stored cut carries this id
+ * prefix. It is the only marker available inside the `region-created` handler:
+ * `addRegion` emits that event synchronously, from inside the call, so any
+ * property the caller sets on the returned region is not set yet.
+ */
+const CUT_ID_PREFIX = 'cut-'
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
   const m = Math.floor(seconds / 60)
@@ -71,16 +79,20 @@ export function WaveformView(): JSX.Element | null {
     const offPause = ws.on('pause', () => setPlaying(false))
     const offFinish = ws.on('finish', () => setPlaying(false))
 
-    let dragging = false
     regions.enableDragSelection({ color: 'rgba(255, 49, 49, 0.25)' })
+    // One drag is one cut, which is what the panel copy below promises.
+    // wavesurfer 7.12 emits `region-created` from `saveRegion()` in
+    // `enableDragSelection`'s "end" branch — i.e. when the button comes up —
+    // and emits no `update-end` for that gesture at all, because the region's
+    // own draggable never saw the pointerdown. Committing on `update-end`
+    // therefore needed a second gesture on the leftover region (T-36).
     const offRegionCreated = regions.on('region-created', (region: Region) => {
-      dragging = true
-      region.on('update-end', () => {
-        if (!dragging) return
-        dragging = false
-        addCutRegion({ startSec: region.start, endSec: region.end })
-        region.remove()
-      })
+      // Stored cuts are re-rendered through `addRegion` below, which emits
+      // this same event; without the id guard every re-render would commit its
+      // own regions again and the cut list would double each time.
+      if (region.id.startsWith(CUT_ID_PREFIX)) return
+      addCutRegion({ startSec: region.start, endSec: region.end })
+      region.remove()
     })
 
     return () => {
@@ -100,21 +112,18 @@ export function WaveformView(): JSX.Element | null {
   useEffect(() => {
     const regions = regionsRef.current
     if (!regions) return
-    const existing = regions.getRegions()
-    for (const r of existing) {
-      const isCut = (r as Region & { __cut?: boolean }).__cut
-      if (isCut) r.remove()
+    for (const r of regions.getRegions()) {
+      if (r.id.startsWith(CUT_ID_PREFIX)) r.remove()
     }
     cutRegions.forEach((cut, idx) => {
-      const region = regions.addRegion({
+      regions.addRegion({
         start: cut.startSec,
         end: cut.endSec,
         color: 'rgba(244, 63, 94, 0.35)',
         drag: false,
         resize: false,
-        id: `cut-${idx}`
-      }) as Region & { __cut?: boolean }
-      region.__cut = true
+        id: `${CUT_ID_PREFIX}${idx}`
+      })
     })
   }, [cutRegions])
 

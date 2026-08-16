@@ -11,6 +11,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { dragTo } from './drag'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -322,45 +323,48 @@ function parseTimestampPair(text: string): [number, number] {
   return [toSeconds(matches[0] as string), toSeconds(matches[1] as string)]
 }
 
+/** The selection region wavesurfer draws while a cut drag is in progress. */
+function selectionRegion(window: Page) {
+  return window.locator(`${WAVEFORM} [part^="region region-"]`)
+}
+
 /**
- * Make a cut region the way the UI allows one to be made today.
+ * Make a cut the way the panel copy says one is made: ONE drag on the
+ * waveform. WaveformView commits on the regions plugin's `region-created`,
+ * which wavesurfer 7.12.6 emits from `saveRegion()` when the button comes up.
+ * Before T-36 the commit rode `update-end`, which a drag-created region never
+ * emits — its own draggable never saw the pointerdown — so a second gesture on
+ * the leftover region was what actually made the cut.
  *
- * DEFECT (found by this ticket, see the report / LESSONS entry): a single
- * drag-select gesture does NOT produce a cut. WaveformView subscribes to the
- * new region's `update-end` inside the plugin's `region-created` handler, but
- * wavesurfer 7.12.6 emits `region-created` from `saveRegion()` at drag END —
- * the gesture is already over, so the first `update-end` that can arrive
- * belongs to a SECOND gesture (dragging or resizing the region that is now
- * sitting on the waveform). The panel's own copy — "Drag on the waveform to
- * select a region to cut" — promises one gesture.
- *
- * This helper therefore performs both gestures, and the test around it pins
- * the one-gesture state as a defect so a fix turns that assertion red.
+ * The button is released only once the selection region has reached the
+ * cursor; see `tests/e2e/drag.ts` for the crossing-event race that makes that
+ * wait load-bearing (T-55).
  */
 async function dragCut(window: Page, fromFraction: number, toFraction: number): Promise<void> {
   const surface = window.locator(`${WAVEFORM} .card > div`).first()
   const box = await surface.boundingBox()
   if (!box) throw new Error('waveform surface has no box')
   const y = box.y + box.height / 2
-
-  // Gesture 1: drag-select. Threshold in wavesurfer's draggable is 3px, so
-  // the move is stepped to generate real pointermove events past it.
-  await window.mouse.move(box.x + box.width * fromFraction, y)
-  await window.mouse.down()
-  await window.mouse.move(box.x + box.width * (fromFraction + toFraction) * 0.5, y, { steps: 8 })
-  await window.mouse.move(box.x + box.width * toFraction, y, { steps: 8 })
-  await window.mouse.up()
-
-  // Gesture 2: nudge the region that gesture 1 left behind. This is what
-  // actually fires `update-end` -> addCutRegion -> region.remove().
-  const region = window.locator(`${WAVEFORM} [part^="region region-"]`)
-  await expect(region).toHaveCount(1)
-  const rbox = await region.boundingBox()
-  if (!rbox) throw new Error('drag-selected region has no box')
-  await window.mouse.move(rbox.x + rbox.width / 2, rbox.y + rbox.height / 2)
-  await window.mouse.down()
-  await window.mouse.move(rbox.x + rbox.width / 2 + 12, rbox.y + rbox.height / 2, { steps: 8 })
-  await window.mouse.up()
+  const toX = box.x + box.width * toFraction
+  await dragTo(
+    window,
+    { x: box.x + box.width * fromFraction, y },
+    { x: toX, y },
+    {
+      extent: {
+        label: `waveform drag to ${Math.round(toFraction * 100)}%`,
+        read: async () => {
+          const b = await selectionRegion(window)
+            .boundingBox({ timeout: 1_000 })
+            .catch(() => null)
+          return b ? b.x + b.width : Number.NaN
+        },
+        // wavesurfer seeds a selection 5 px wide, so a fully-landed drag puts
+        // the region's right edge a hair PAST the cursor.
+        settled: (right) => right >= toX
+      }
+    }
+  )
 }
 
 test.describe('imagii Audio Studio', () => {
@@ -587,36 +591,17 @@ test.describe('imagii Audio Studio', () => {
         window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
       ).toBeVisible()
 
-      // ── DEFECT PIN ──
-      // One drag-select gesture leaves a region on the waveform but adds NO
-      // cut (see dragCut's comment for the root cause). When that is fixed,
-      // this assertion turns red — which is the point: the fixer updates it
-      // to expect a chip and deletes the second gesture from `dragCut`.
-      const surface = window.locator(`${WAVEFORM} .card > div`).first()
-      const box = await surface.boundingBox()
-      if (!box) throw new Error('waveform surface has no box')
-      const y = box.y + box.height / 2
-      await window.mouse.move(box.x + box.width * 0.2, y)
-      await window.mouse.down()
-      await window.mouse.move(box.x + box.width * 0.3, y, { steps: 8 })
-      await window.mouse.move(box.x + box.width * 0.4, y, { steps: 8 })
-      await window.mouse.up()
-      await expect(window.locator(`${WAVEFORM} [part^="region region-"]`)).toHaveCount(1)
-      await window.waitForTimeout(300)
-      await expect(cutChips(window)).toHaveCount(0)
-
-      // The second gesture is what commits the cut today.
-      const region = window.locator(`${WAVEFORM} [part^="region region-"]`)
-      const rbox = await region.boundingBox()
-      if (!rbox) throw new Error('drag-selected region has no box')
-      await window.mouse.move(rbox.x + rbox.width / 2, rbox.y + rbox.height / 2)
-      await window.mouse.down()
-      await window.mouse.move(rbox.x + rbox.width / 2 + 12, rbox.y + rbox.height / 2, { steps: 8 })
-      await window.mouse.up()
+      // ── ONE GESTURE, ONE CUT (T-36) ──
+      // This assertion is the flipped tripwire: it used to pin `toHaveCount(0)`
+      // here, because the commit rode `update-end` and a drag-created region
+      // never emits one. The panel copy above promises a single drag, and now
+      // a single drag is what delivers it.
+      await dragCut(window, 0.2, 0.4)
+      await expect(cutChips(window)).toHaveCount(1)
 
       // Chip carries the real timestamps the pixels mapped to: 20%..40% of a
-      // 3 s file, plus the 12 px nudge (~0.04 s).
-      await expect(cutChips(window)).toHaveCount(1)
+      // 3 s file (wavesurfer seeds the selection 5 px wide, so the end runs a
+      // hair past 40%).
       const [start, end] = parseTimestampPair((await cutChips(window).first().textContent()) ?? '')
       expect(start).toBeGreaterThan(0.5)
       expect(start).toBeLessThan(0.8)
@@ -624,7 +609,7 @@ test.describe('imagii Audio Studio', () => {
       expect(end).toBeLessThan(1.4)
       // The selection region is gone and the store-driven cut region replaced
       // it — rose fill, not the drag-selection red.
-      await expect(window.locator(`${WAVEFORM} [part^="region region-"]`)).toHaveCount(0)
+      await expect(selectionRegion(window)).toHaveCount(0)
       const cutRegion = window.locator(`${WAVEFORM} [part~="cut-0"]`)
       await expect(cutRegion).toHaveCount(1)
       await expect(cutRegion).toHaveCSS('background-color', 'rgba(244, 63, 94, 0.35)')
@@ -632,21 +617,50 @@ test.describe('imagii Audio Studio', () => {
         window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
       ).toHaveCount(0)
 
-      // ── a second cut ──
+      // ── a second cut, from its own single gesture ──
       await dragCut(window, 0.6, 0.8)
       await expect(cutChips(window)).toHaveCount(2)
       await expect(window.locator(`${WAVEFORM} [part~="cut-1"]`)).toHaveCount(1)
       const [secondStart] = parseTimestampPair((await cutChips(window).nth(1).textContent()) ?? '')
       expect(secondStart).toBeGreaterThan(1.7)
       expect(secondStart).toBeLessThan(2.0)
+
+      // ── a third drag, running INTO the second cut, gets its own chip ──
+      // and — the point of this block — re-rendering the stored cuts does not
+      // commit them a second time. Every stored cut goes back through
+      // `addRegion`, which emits the same `region-created` the commit listens
+      // to; without the id guard in WaveformView each re-render would add the
+      // whole list again and these counts would run away.
+      // (It starts in the 40%..60% gap on purpose: a drag that BEGINS on top
+      // of an existing cut region never reaches wavesurfer's drag-selection —
+      // the region's own draggable preventDefaults the pointermove first.)
+      await dragCut(window, 0.45, 0.65)
+      await expect(cutChips(window)).toHaveCount(3)
+      await expect(window.locator(`${WAVEFORM} [part~="cut-2"]`)).toHaveCount(1)
+      const [thirdStart, thirdEnd] = parseTimestampPair(
+        (await cutChips(window).nth(2).textContent()) ?? ''
+      )
+      expect(thirdStart).toBeGreaterThan(1.25)
+      expect(thirdStart).toBeLessThan(1.45)
+      // It really overlaps the 60%..80% cut.
+      expect(thirdEnd).toBeGreaterThan(1.85)
+      // Three stored cuts, three regions on the waveform, no leftovers.
+      await expect(window.locator(`${WAVEFORM} [part^="region "]`)).toHaveCount(3)
+      await expect(selectionRegion(window)).toHaveCount(0)
+      for (const id of ['cut-0', 'cut-1', 'cut-2']) {
+        await expect(window.locator(`${WAVEFORM} [part~="${id}"]`)).toHaveCount(1)
+      }
       await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-02-cuts.png') })
 
       // ── chip removal ──
       await cutChips(window).first().click()
-      await expect(cutChips(window)).toHaveCount(1)
-      // The one left is the SECOND cut, not a re-render of the first.
+      await expect(cutChips(window)).toHaveCount(2)
+      // The one left at the front is the SECOND cut, not a re-render of the first.
       expect(parseTimestampPair((await cutChips(window).first().textContent()) ?? '')[0]).toBeGreaterThan(1.7)
-      await expect(window.locator(`${WAVEFORM} [part~="cut-1"]`)).toHaveCount(0)
+      await expect(window.locator(`${WAVEFORM} [part~="cut-2"]`)).toHaveCount(0)
+      await expect(window.locator(`${WAVEFORM} [part^="region "]`)).toHaveCount(2)
+      await cutChips(window).first().click()
+      await expect(cutChips(window)).toHaveCount(1)
       await cutChips(window).first().click()
       await expect(cutChips(window)).toHaveCount(0)
       await expect(window.locator(`${WAVEFORM} [part~="cut-0"]`)).toHaveCount(0)

@@ -12,6 +12,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { dragThrough, dragTo } from './drag'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -765,17 +766,27 @@ test.describe('Video Studio core editing surface', () => {
       const track = window.locator('[data-tutorial="video-timeline"] .relative.h-12')
       const trackBox = (await track.boundingBox())!
 
+      /**
+       * One move, then release once the readout the handle drives has landed.
+       * See tests/e2e/drag.ts for why the button-down window is kept to a
+       * single mouse round trip (T-55).
+       */
       async function dragHandle(label: string, toRatio: number): Promise<void> {
         const handle = window.getByRole('button', { name: label })
         const box = (await handle.boundingBox())!
-        await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        await window.mouse.down()
-        await window.mouse.move(
-          trackBox.x + trackBox.width * toRatio,
-          trackBox.y + trackBox.height / 2,
-          { steps: 8 }
+        const readout = label === 'Trim start' ? 0 : 2
+        await dragTo(
+          window,
+          { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+          { x: trackBox.x + trackBox.width * toRatio, y: trackBox.y + trackBox.height / 2 },
+          {
+            extent: {
+              label: `${label} to ${Math.round(toRatio * 100)}%`,
+              read: async () => (await timelineReadouts(window))[readout],
+              settled: (v) => Math.abs(v - FIXTURE_SECONDS * toRatio) < 0.15
+            }
+          }
         )
-        await window.mouse.up()
       }
 
       // ── trim start ──
@@ -838,15 +849,18 @@ test.describe('Video Studio core editing surface', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-03b-scrub.png') })
 
       // ── drag: one gesture, three positions, each landing under the cursor ──
-      const grab = await trackPointAt(window, 0.6)
-      await window.mouse.move(grab.x, grab.y)
-      await window.mouse.down()
-      for (const ratio of [0.6, 0.8, 0.35]) {
-        const point = await trackPointAt(window, ratio)
-        await window.mouse.move(point.x, point.y, { steps: 5 })
-        await expectScrubbedTo(window, FIXTURE_SECONDS * ratio, `drag to ${ratio * 100}%`)
-      }
-      await window.mouse.up()
+      // One mouse round trip per position, and each position is confirmed
+      // before the next move (and before the release) — see tests/e2e/drag.ts.
+      const ratios = [0.6, 0.8, 0.35]
+      const points = []
+      for (const ratio of ratios) points.push(await trackPointAt(window, ratio))
+      await dragThrough(window, await trackPointAt(window, 0.6), points, async (_point, i) =>
+        expectScrubbedTo(
+          window,
+          FIXTURE_SECONDS * (ratios[i] as number),
+          `drag to ${(ratios[i] as number) * 100}%`
+        )
+      )
       const released = await settledTime(window)
 
       // ── the gesture really ended: moving on with the button up scrubs nothing ──
@@ -862,11 +876,19 @@ test.describe('Video Studio core editing surface', () => {
       // scrub surface; the playhead must not jump to where the drag ended.
       const handle = window.getByRole('button', { name: 'Trim end' })
       const handleBox = (await handle.boundingBox())!
-      await window.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
-      await window.mouse.down()
       const dropAt = await trackPointAt(window, 0.6)
-      await window.mouse.move(dropAt.x, dropAt.y, { steps: 6 })
-      await window.mouse.up()
+      await dragTo(
+        window,
+        { x: handleBox.x + handleBox.width / 2, y: handleBox.y + handleBox.height / 2 },
+        dropAt,
+        {
+          extent: {
+            label: 'Trim end to 60%',
+            read: async () => (await timelineReadouts(window))[2],
+            settled: (v) => Math.abs(v - FIXTURE_SECONDS * 0.6) < 0.15
+          }
+        }
+      )
       await expect.poll(async () => (await timelineReadouts(window))[2]).toBeLessThan(1.5)
       expect(
         Math.abs((await settledTime(window)) - released),

@@ -16,6 +16,7 @@ import {
   CANVAS_TEMPLATES,
   type CanvasTemplate
 } from '../../src/renderer/src/modules/image-studio/templates'
+import { dragThrough } from './drag'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -503,15 +504,61 @@ async function toScreen(window: Page, p: Point): Promise<Point> {
   return { x: g.left + p.x * g.scale, y: g.top + p.y * g.scale }
 }
 
-/** press-move-move-release across the stage — the draw gesture. */
-async function dragOnStage(window: Page, from: Point, to: Point): Promise<void> {
-  const a = await toScreen(window, from)
-  const b = await toScreen(window, to)
-  await window.mouse.move(a.x, a.y)
-  await window.mouse.down()
-  await window.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 6 })
-  await window.mouse.move(b.x, b.y, { steps: 6 })
-  await window.mouse.up()
+/**
+ * Width, in DOC units, of whatever the draw tools are previewing on the
+ * `overlay chrome` layer right now — 0 when nothing is being drawn. This is
+ * what `dragOnStage` waits for before releasing the button.
+ */
+function drawPreviewWidth(window: Page): Promise<number> {
+  return window.evaluate(() => {
+    const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+      scaleX(): number
+      getLayers(): Array<{
+        name(): string
+        getChildren(): Array<{ getClassName(): string; getClientRect(): { width: number } }>
+      }>
+    }
+    if (!stage) throw new Error('__imagiiStage is not set')
+    const overlay = stage.getLayers().find((l) => l.name() === 'overlay chrome')
+    const preview = overlay?.getChildren().find((c) => c.getClassName() !== 'Transformer')
+    if (!preview) return 0
+    return preview.getClientRect().width / stage.scaleX()
+  })
+}
+
+/**
+ * The draw gesture: press, one move to the far corner, release once the
+ * preview the tool draws has reached that size. One mouse round trip inside
+ * the button-down window — see tests/e2e/drag.ts for the crossing-event race
+ * that makes the extra `steps` a liability rather than insurance (T-55).
+ *
+ * `expectPreview: false` is for the deliberately sub-threshold drags, whose
+ * whole point is that nothing lands. `via` is for the pencil, whose stroke is
+ * literally one point per move — it needs intermediate positions to be a
+ * polyline rather than a segment.
+ */
+async function dragOnStage(
+  window: Page,
+  from: Point,
+  to: Point,
+  options: { expectPreview?: boolean; via?: Point[] } = {}
+): Promise<void> {
+  const docWidth = Math.abs(to.x - from.x)
+  const start = await toScreen(window, from)
+  const through = [...(options.via ?? []), to]
+  const screen: Point[] = []
+  for (const p of through) screen.push(await toScreen(window, p))
+  await dragThrough(window, start, screen, async (_point, i) => {
+    if (i !== screen.length - 1 || options.expectPreview === false) return
+    await expect
+      .poll(() => drawPreviewWidth(window), {
+        timeout: 10_000,
+        message: `draw ${from.x},${from.y} -> ${to.x},${to.y}: preview never reached ${docWidth} doc px`
+      })
+      // getClientRect() includes the 2 px dashed preview stroke, so the
+      // preview reads a hair WIDER than the drag once it has all landed.
+      .toBeGreaterThan(docWidth - MOUSE_TOL)
+  })
 }
 
 /** A click at a doc coordinate (used to hit a shape and select it). */
@@ -798,8 +845,21 @@ test.describe('Image Studio — tools and drawing', () => {
       expectNear(pts[3], 350, 'line y2')
 
       // ── pencil: a freehand polyline, one point per mousemove ──
+      // The only gesture here whose intermediate positions are the content, so
+      // it names them instead of taking the one-move path.
       await toolbar.getByRole('button', { name: 'Pencil' }).click()
-      await dragOnStage(window, { x: 500, y: 600 }, { x: 900, y: 700 })
+      await dragOnStage(
+        window,
+        { x: 500, y: 600 },
+        { x: 900, y: 700 },
+        {
+          via: [
+            { x: 600, y: 625 },
+            { x: 700, y: 650 },
+            { x: 800, y: 675 }
+          ]
+        }
+      )
       await expectLayerCount(window, 6)
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
@@ -816,7 +876,7 @@ test.describe('Image Studio — tools and drawing', () => {
 
       // ── a drag under the 4px floor commits nothing (Canvas.tsx:230) ──
       await toolbar.getByRole('button', { name: 'Rect' }).click()
-      await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 })
+      await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 }, { expectPreview: false })
       await expectLayerCount(window, 6)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-02-drawn.png') })
     } finally {
