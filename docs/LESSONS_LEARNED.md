@@ -14,6 +14,85 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-34: the coachmark that walked off the window, and the key that pressed itself twice
+
+Both halves of the tutorial's chrome were built for the easy case and left
+the hard one to chance: a clamp written for two of four placements, and a
+keyboard shortcut that shared one keypress with the browser.
+
+### Bug — a 'left'/'right' coachmark rendered past the window edge with its buttons unclickable
+- **Root cause.** `computeTooltipPosition` clamped 'top'/'bottom' cards into
+  the viewport horizontally and clamped 'left'/'right' cards only on the
+  cross axis — never along the axis they are actually placed on. A 'right'
+  step was laid out at `target.left + target.width + 16` and left there.
+  Video Studio's step 2 points at `[data-tutorial="video-import"]`, the
+  importer that spans the whole content column, so at 1280x800 the card
+  started ~1038 px in and ran to 1486 px: a 206 px overhang carrying Skip,
+  Back and Next. Eight steps across the four tutorials use left/right.
+- **Fix.** One clamp for all four placements, and a documented order that
+  MOVES the card instead of shrinking it: the requested side, else the
+  opposite side, else the cross axis (a left/right request falls back to
+  bottom then top), else the requested side clamped hard into the window.
+  Every branch ends at the same clamp, so no placement can leave the
+  viewport. The geometry takes the card's MEASURED size — a
+  `useLayoutEffect` reads the real card and re-runs the placement before
+  paint — because a guessed height decides "this does not fit below" for a
+  card that plainly does, and the user then gets a coachmark beside the
+  thing instead of under it. The measure/position loop settles in one pass
+  because the clamp guarantees the card always has more room to its right
+  than it occupies, so CSS shrink-to-fit can never squeeze it and its width
+  cannot depend on where it was put.
+- **Test.** `tests/e2e/home-chrome.spec.ts` "Video tutorial: the left/right
+  coachmark stays inside a 1280x800 window and its buttons are clickable
+  (T-34)" — drives that exact step in a real 1280x800 window, first proving
+  the target really is too wide for its own side, then asserting the card
+  and each button lie inside the viewport, that `elementFromPoint` at each
+  button's center is that button, and that clicking Next advances the tour.
+  `src/renderer/src/components/Tutorial.test.ts` covers the decisions
+  underneath at every placement (61 cases: flips in all four directions,
+  the cross-axis fallback, targets past each edge, a target that engulfs
+  the window, a window smaller than the card). Mutation: restoring the
+  pre-fix geometry (no fit test, no clamp on that axis) fails the E2E at a
+  right edge of 1486.625 px, the same number the unfixed build produced.
+- **Lesson.** **A clamp that covers some of its cases is a bug with a
+  comment on it.** The old code looked deliberate — it called `clamp` on
+  every return — but the argument it clamped was the cross axis in half the
+  branches, so the half of the placements most likely to overflow (beside a
+  full-width panel) were the half left unclamped. When geometry has N
+  variants, the escape hatch belongs at the one exit they share, not in each
+  branch. And the input that decides "does it fit" has to be the real size:
+  a reserved box big enough to be safe is big enough to be wrong.
+
+### Bug — Enter advanced the tutorial two steps
+- **Root cause.** One keypress, two advances. The window `keydown` handler
+  ran `next()`, React flushed the step change, the step-change effect pulled
+  focus onto the newly rendered Next button, and Chromium then applied that
+  same keypress's default action to whatever was focused by then — clicking
+  Next a second time. The handler already knew about the collision and tried
+  to dodge it by ignoring Enter while focus sat on a button, which fixed the
+  common case and left the "focus is anywhere else" case advancing 1 -> 3. A
+  user paging through with Enter read every other step.
+- **Fix.** `e.preventDefault()` on the key the handler consumes. The
+  deferral stays for the on-a-button case, so the two mechanisms are
+  mutually exclusive by construction: either the button activates the key or
+  the window does, never both. The decision is now a pure
+  `tutorialKeyIntent({ key, onButton })` beside the other coachmark logic.
+- **Test.** `tests/e2e/home-chrome.spec.ts` "Video tutorial: Next / Back /
+  arrows / Enter / scrim…" pins BOTH focus states — Enter with focus blurred
+  moves exactly one step, and Enter right after a mouse click on Next (focus
+  on the button) moves exactly one more. The old test asserted only "greater
+  than 1", which is what let the defect sit pinned-but-unfixed for a round.
+  `Tutorial.test.ts` covers the intent table. Mutation: dropping the
+  `preventDefault()` fails the named test, which never sees step 2.
+- **Lesson.** **If you handle a key the platform also handles, say so with
+  `preventDefault` — dodging the platform's turn only works until focus
+  moves.** The old guard reasoned about where focus IS; the default action
+  runs against where focus ENDS UP, which our own handler had just changed.
+  And a test that pins a defect should pin the number, not the direction:
+  "advanced" was true of both the bug and the fix.
+
+---
+
 ## 2026-08-16 — T-38 + T-39: the video preview drew nothing, and the overlays drew in the wrong place
 
 Two tickets in the Video Studio player, both from taking a stand-in for

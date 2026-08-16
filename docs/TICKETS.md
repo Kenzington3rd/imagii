@@ -552,7 +552,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Enter advances exactly one step (preventDefault or focus
         sequencing); T-21's counter-based test updated to pin one-step.
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 36 — see Done)
 
 ## T-35 — ErrorBoundary coverage (forced renderer crash)
 
@@ -564,7 +564,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         styling intact), details disclosure expands, "Reload to Home"
         recovers to a working Home.
   - [ ] Ledger row updated from NOT COVERED.
-- **Status:** open
+- **Status:** done (round 36 — see Done)
 
 ## T-36 — waveform drag-to-cut needs two gestures instead of one
 
@@ -1033,6 +1033,21 @@ IMG-PREC.
         element's duration; the T-52 tail pin extended to the track.
 - **Status:** open
 
+## T-64 — the tutorial coachmark is aria-modal but traps no focus
+
+- **Spec:** T-34/T-35 worker finding, pre-existing. The coachmark is
+  role="dialog" aria-modal="true" with NO Tab focus trap and no focus
+  restore on close — Tab walks out into the studio behind the scrim.
+  Modal.tsx (98-112) already does both; the tutorial predates it.
+  Rider: Tutorial polls its target every 300 ms with a fresh rect
+  object AND re-issues scrollIntoView({behavior:'smooth'}) each tick —
+  an open coachmark re-renders ~3x/s while nothing moves.
+- **Acceptance criteria:** Tab cycles inside the coachmark; focus
+  restores on close/skip (reuse Modal's mechanism per the ladder);
+  poll only updates state when the rect actually changed and
+  scrollIntoView fires once per step; E2E + unit per the standing bar.
+- **Status:** open
+
 ## T-63 — Space on a focused crop button both clicks it and toggles playback
 
 - **Spec:** T-38/T-39 worker finding, pre-existing. Player's key
@@ -1099,6 +1114,39 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 36 — fix wave batch 10: T-34 + T-35 (the last two items on the
+original fix-wave list). T-34: one placement pipeline for all four
+sides — requested side, opposite side, cross axis, then a clamp of
+last resort into the window; never shrink (harder-to-read copy loses
+under the tiebreaker); geometry runs on the card's MEASURED size via
+useLayoutEffect (the 448x320 reservation overshot by 2 px in a real
+case and wrongly bounced the card to the side), settling in one pass.
+Enter is preventDefault'd where the window handler consumes it, with
+the button-focus defer branch intact and the decision extracted pure
+(tutorialKeyIntent); pinned one-step from BOTH focus states. Red at
+HEAD: card right edge 1486.6 px in a 1280 window; Enter 1 -> 3.
+Tutorial.test.ts adds 61 unit cases; the E2E hit-tests each button
+via elementFromPoint before clicking through. Worker mutations: one
+clamp arm (14 units red, E2E green — the layers discriminate
+different things, reported honestly), full pre-T-34 geometry (the
+exact unfixed 1486.6 red), preventDefault. T-35: ErrorBoundary driven
+in the REAL app via a #/__crash route double-gated (unlinked hash +
+window.__imagiiCrashTest, same family as the __imagii* test hooks);
+unarmed it redirects like any unknown hash and the spec asserts that
+guard FIRST. Fallback copy + verbatim thrown message + the documented
+raw-hex exception styling (DESIGN_GUIDE:45-48 — deliberately not
+tokens) + stack disclosure + Reload-to-Home recovering to a WORKING
+Home (routing, toaster, hotkeys, an edit) with the boundary re-armed;
+componentDidCatch probed to fire exactly once through recovery (6/6
+incl. 5x repeat). Worker discrimination: boundary sabotaged to render
+children -> named red. Expediter's own mutation: guard forced armed ->
+exactly the T-35 test red on its unarmed-redirect assertion, restore,
+15/15. Gates: 948 unit / 114 E2E clean. The crash route ships in the
+production bundle BY DESIGN (gated, documented) — recorded in the
+ledger so it is not later cleaned up without replacing the coverage.
+Findings: T-64 filed (aria-modal coachmark traps no focus; 300 ms
+poll churn rider).
 
 Round 35 — fix wave batch 9: T-38 + T-39 (the video-preview pair).
 T-38: the element now reaches OutputPreview through an owned attach
