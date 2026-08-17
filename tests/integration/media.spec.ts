@@ -327,8 +327,15 @@ async function regionPsnr(fileA: string, fileB: string, crop: string): Promise<n
  */
 async function decodeSizes(file: string): Promise<{ videoKiB: number; audioKiB: number }> {
   const { stderr } = await ff(['-hide_banner', '-xerror', '-i', file, '-f', 'null', '-'])
-  const v = stderr.match(/video:\s*(\d+)\s*KiB/)
-  const a = stderr.match(/audio:\s*(\d+)\s*KiB/)
+  // Both unit spellings, deliberately: ffmpeg 7 prints the decode summary
+  // as `KiB` (IEC), ffmpeg 6 as `kB` — and ffmpeg-static ships 7.0.2 on
+  // linux but 6.1.1 (gyan.dev) on win32, the shipping platform. Both mean
+  // 1024 bytes here; the v1.5.0 release run (the only win32 execution of
+  // this suite) caught the 7-only regex returning "no decode summary" for
+  // every PiP/concat output. Same per-platform-builder split documented in
+  // shared/mediaFormats.ts.
+  const v = stderr.match(/video:\s*(\d+)\s*[kK]i?B/)
+  const a = stderr.match(/audio:\s*(\d+)\s*[kK]i?B/)
   if (!v || !a) throw new Error(`no decode summary for ${path.basename(file)}`)
   return { videoKiB: Number(v[1]), audioKiB: Number(a[1]) }
 }
