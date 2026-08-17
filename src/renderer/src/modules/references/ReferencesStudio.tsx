@@ -1,4 +1,5 @@
 import { HomeLink } from '../../components/HomeLink'
+import { Icon } from '../../components/Icon'
 import { useReferencesStore } from './state/referencesStore'
 import { ReferencePanel } from './ReferencePanel'
 import { MoodBoardPanel } from './MoodBoardPanel'
@@ -6,6 +7,7 @@ import { AssetLibraryPanel } from './AssetLibraryPanel'
 import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
+import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { aiTutorial } from '../../tutorials/aiTutorial'
 
 type TabId = 'reference' | 'moodboards' | 'assets'
@@ -13,7 +15,16 @@ type TabId = 'reference' | 'moodboards' | 'assets'
 export function ReferencesStudio(): JSX.Element {
   const tab = useReferencesStore((s) => s.tab)
   const setTab = useReferencesStore((s) => s.setTab)
+  const undo = useReferencesStore((s) => s.undo)
+  const redo = useReferencesStore((s) => s.redo)
+  const canUndo = useReferencesStore((s) => s.canUndo())
+  const canRedo = useReferencesStore((s) => s.canRedo())
   const tutorial = useTutorial(aiTutorial)
+
+  // T-58: the same binding the other three studios share (T-15), so a board
+  // deleted by accident comes back the way every other destructive action in
+  // the app does.
+  useUndoRedoHotkeys(undo, redo)
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-4">
@@ -26,7 +37,23 @@ export function ReferencesStudio(): JSX.Element {
             straight into Stream Graphics.
           </p>
         </div>
-        <TutorialButton onClick={tutorial.start} />
+        <div className="flex items-center gap-2 text-sm">
+          <button
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+            disabled={!canUndo}
+            onClick={undo}
+          >
+            <Icon name="undo" size={15} /> Undo
+          </button>
+          <button
+            className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+            disabled={!canRedo}
+            onClick={redo}
+          >
+            <Icon name="redo" size={15} /> Redo
+          </button>
+          <TutorialButton onClick={tutorial.start} />
+        </div>
       </header>
 
       <div data-tutorial="ai-tabs" className="flex border-b border-ink-dim/30 flex-wrap">

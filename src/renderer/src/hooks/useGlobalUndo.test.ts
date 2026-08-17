@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { globalUndo, globalRedo, globalUndoState } from './useGlobalUndo'
 import { useVideoStore } from '../modules/video-studio/store/videoStore'
 import { useAudioStore } from '../modules/audio-studio/state/audioStore'
 import { useCanvasStore, makeRectLayer } from '../modules/image-studio/state/canvasStore'
+import { useReferencesStore } from '../modules/references/state/referencesStore'
+import type { MoodBoardCollection } from '@shared/search'
 
 /**
  * T-32: the cross-studio order Home's global Undo walks. The hook's React
@@ -50,20 +52,60 @@ function editAudio(gainDb: number): void {
   useAudioStore.getState().patchChain({ gainDb })
 }
 
+/** T-58: a mood-board edit, against an in-memory stand-in for the boards
+ *  directory. The tracker never learns that this studio's undo also rewrites
+ *  files — it counts `history.past` like the other three. */
+let boards: MoodBoardCollection[] = []
+async function editReferences(name = 'Board'): Promise<void> {
+  await useReferencesStore.getState().createCollection(name)
+}
+
 const layerCount = (): number => useCanvasStore.getState().doc.layers.length
 const clipCount = (): number => useVideoStore.getState().clips.length
+const boardCount = (): number => useReferencesStore.getState().collections.length
 
 beforeEach(() => {
+  boards = []
+  vi.stubGlobal('window', {
+    api: {
+      moodboard: {
+        list: () => Promise.resolve([...boards]),
+        create: (name: string) => {
+          const created: MoodBoardCollection = {
+            id: `board-${boards.length + 1}`,
+            name,
+            items: [],
+            createdAt: 1700000000000
+          }
+          boards.push(created)
+          return Promise.resolve(created)
+        },
+        restore: (next: MoodBoardCollection[]) => {
+          boards = [...next]
+          return Promise.resolve()
+        }
+      }
+    }
+  })
   // Each store's own reset empties its history, which the tracker reads as
   // "nothing in that studio is undoable any more" and clears its entries.
   useCanvasStore.getState().resetDocument()
   useAudioStore.getState().clearSource()
   useVideoStore.getState().clearSource()
+  useReferencesStore.setState({
+    collections: [],
+    selectedCollectionId: null,
+    history: { past: [], future: [] }
+  })
   expect(globalUndoState()).toEqual({
     canUndo: false,
     canRedo: false,
     lastLabel: 'no recent change'
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('the tracker arms without Home being mounted', () => {
@@ -76,7 +118,7 @@ describe('the tracker arms without Home being mounted', () => {
     })
   })
 
-  it('names each studio it tracks', () => {
+  it('names each studio it tracks', async () => {
     giveVideoASource()
     editVideo()
     expect(globalUndoState().lastLabel).toBe('Video Studio')
@@ -84,6 +126,10 @@ describe('the tracker arms without Home being mounted', () => {
     expect(globalUndoState().lastLabel).toBe('Audio Studio')
     editCanvas()
     expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    // T-58: the fourth. Before it, work done in References was invisible
+    // here — Home's Undo could never target a mood board.
+    await editReferences()
+    expect(globalUndoState().lastLabel).toBe('References')
   })
 
   it('ignores mutations that record no undo step', () => {
@@ -136,6 +182,39 @@ describe('cross-studio ordering', () => {
     globalUndo()
     expect(clipCount()).toBe(0)
     expect(globalUndoState().canUndo).toBe(false)
+  })
+
+  it('puts a References edit in the queue with the rest, newest first', async () => {
+    giveVideoASource()
+    editVideo()
+    await editReferences('Inspiration')
+    editCanvas()
+    expect(clipCount()).toBe(1)
+    expect(boardCount()).toBe(1)
+    expect(layerCount()).toBe(1)
+
+    // Newest first: the canvas, then the board, then the clip.
+    expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    globalUndo()
+    expect(layerCount()).toBe(0)
+
+    expect(globalUndoState().lastLabel).toBe('References')
+    globalUndo()
+    expect(boardCount()).toBe(0)
+    // The video step is untouched by the two undos that went past it.
+    expect(clipCount()).toBe(1)
+
+    expect(globalUndoState().lastLabel).toBe('Video Studio')
+    globalUndo()
+    expect(clipCount()).toBe(0)
+    expect(globalUndoState().canUndo).toBe(false)
+
+    // …and the mirror puts the board back in the middle of the queue.
+    globalRedo()
+    expect(clipCount()).toBe(1)
+    globalRedo()
+    expect(boardCount()).toBe(1)
+    expect(globalUndoState().lastLabel).toBe('References')
   })
 
   it('redoes in the mirror order', () => {

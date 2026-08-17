@@ -18,6 +18,7 @@ import {
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 import { pruneStaleTempFiles } from './tempCleanup'
+import { sweepOrphanThumbs } from './search/moodboard'
 import { cancelAllExportJobs } from './ffmpeg/export'
 import { cancelAllAudioJobs } from './audio/process'
 import { cancelAllConcatJobs } from './ffmpeg/concat'
@@ -214,6 +215,18 @@ app.whenReady().then(async () => {
     },
     (err) => {
       console.warn('[tempCleanup] failed', err)
+    }
+  )
+  // T-58: a deleted board keeps its cached thumbnails so the session's undo
+  // can put it back whole. Launch is the first moment those orphans are
+  // certainly unreachable, so this is where they are reclaimed. Same
+  // fire-and-forget shape as the sweep above — never gate first paint on it.
+  sweepOrphanThumbs().then(
+    (removed) => {
+      if (removed > 0) console.log(`[moodboard] reclaimed ${removed} orphaned thumbnail(s)`)
+    },
+    (err) => {
+      console.warn('[moodboard] thumbnail sweep failed', err)
     }
   )
   createWindow()

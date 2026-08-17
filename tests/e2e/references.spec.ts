@@ -377,6 +377,116 @@ test.describe('imagii References studio', () => {
   })
 
   /**
+   * T-58 — the References studio can undo, like the other three.
+   *
+   * Every assertion here is made twice: once against the screen and once
+   * against `<userData>/moodboards`. A history that only rewinds the renderer
+   * would pass the first half and leave the user with a board that is back on
+   * screen and gone from disk — until the next `moodboard:list` quietly took
+   * it away again.
+   *
+   * The thumbnail is the other half of "the delete never happened": the
+   * delete leaves the cached file alone precisely so the undo can put a board
+   * back with its pictures rather than grey squares (`sweepOrphanThumbs`
+   * reclaims it on the next launch instead).
+   */
+  test('a deleted mood board comes back whole — items, thumbnail and file — on Undo', async () => {
+    test.setTimeout(180_000)
+    if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
+    const fx = makeFixture('refs-undo')
+
+    const thumbPath = path.join(fx.thumbsDir, 'undo-thumb.png')
+    writeFileSync(thumbPath, Buffer.from(PNG_8x6, 'base64'))
+    const boardFile = path.join(fx.boardsDir, 'undoboard.json')
+    const seeded = {
+      id: 'undoboard',
+      name: 'Undo board',
+      createdAt: 1700000000000,
+      items: [
+        {
+          id: 'undoitem',
+          collectionId: 'undoboard',
+          thumbnail: 'https://example.invalid/thumb.png',
+          fullUrl: 'https://example.invalid/full.png',
+          source: 'example.invalid',
+          title: 'Undoable reference',
+          cachedThumbPath: thumbPath,
+          addedAt: 1700000000000
+        }
+      ]
+    }
+    writeFileSync(boardFile, JSON.stringify(seeded), 'utf8')
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const redo = window.getByRole('button', { name: 'Redo' })
+      const detailTitle = window.locator('h3.text-lg')
+      const thumb = window.locator('img[alt="Undoable reference"]')
+      const decoded = (): Promise<number> =>
+        thumb.evaluate((el) => (el as HTMLImageElement).naturalWidth)
+
+      await expect(detailTitle).toHaveText('Undo board')
+      await expect.poll(decoded, { timeout: 15_000 }).toBe(8)
+      // Nothing done yet: both controls are dark.
+      await expect(undo).toBeDisabled()
+      await expect(redo).toBeDisabled()
+
+      // ── delete, confirmed ──
+      const dialogs: string[] = []
+      const accepter = (d: Dialog): void => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      }
+      window.once('dialog', accepter)
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect
+        .poll(() => dialogs)
+        .toEqual(['confirm: Delete "Undo board" and all 1 item(s)?'])
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+      // The confirm still guards a real deletion — but not the picture.
+      expect(existsSync(thumbPath)).toBe(true)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-06-board-deleted.png') })
+
+      // ── Undo: the same board, not a new one that looks like it ──
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(detailTitle).toHaveText('Undo board')
+      await expect(window.locator('li', { hasText: 'Undo board' })).toContainText('1')
+      await expect(thumb).toHaveAttribute('src', pathToImagiiFileUrl(thumbPath))
+      await expect.poll(decoded, { timeout: 15_000 }).toBe(8)
+      // Byte-for-byte the file that was deleted: same id, same createdAt,
+      // same item — restored through moodboard:restore, not re-created.
+      await expect
+        .poll(() => (existsSync(boardFile) ? readBoardsFromDisk(fx.boardsDir) : []))
+        .toEqual([seeded])
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-07-board-restored.png') })
+
+      // ── Redo takes it away again, on screen and on disk ──
+      await expect(redo).toBeEnabled()
+      await redo.click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+
+      // ── and the keyboard reaches the same history (T-15's shared hook) ──
+      await window.keyboard.press('Control+z')
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(detailTitle).toHaveText('Undo board')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([seeded])
+      await expect(undo).toBeDisabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  /**
    * DEFECT PIN — Rename is dead in Electron.
    *
    * MoodBoardPanel.onRename calls `prompt()`, which Electron does not
@@ -442,7 +552,7 @@ test.describe('imagii References studio', () => {
     }
   })
 
-  test('a saved item goes to the canvas as a 40% overlay, and Remove deletes its cached thumb', async () => {
+  test('a saved item goes to the canvas as a 40% overlay, and Remove is undoable', async () => {
     test.setTimeout(120_000)
     if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
     const fx = makeFixture('refs-item')
@@ -527,11 +637,33 @@ test.describe('imagii References studio', () => {
       ).toBeVisible()
       await expect(window.locator('img[alt="Seeded reference"]')).toHaveCount(0)
       await expect(window.locator('li', { hasText: 'Seeded board' })).toContainText('0')
-      // Removal is durable AND it reclaims the cached thumbnail file.
+      // Removal is durable in the board file…
       await expect
         .poll(() => (JSON.parse(readFileSync(boardFile, 'utf8')) as MoodBoardCollection).items)
         .toEqual([])
-      await expect.poll(() => existsSync(thumbPath)).toBe(false)
+      // …and T-58 leaves the cached thumbnail where it is, because the very
+      // next thing the user may do is take the removal back. (The orphan is
+      // reclaimed by sweepOrphanThumbs on the next launch — moodboard.test.ts
+      // pins both halves.)
+      expect(existsSync(thumbPath)).toBe(true)
+
+      // ── Undo puts the item back, picture and all ──
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect(window.locator('li', { hasText: 'Seeded board' })).toContainText('1')
+      const restoredThumb = window.locator('img[alt="Seeded reference"]')
+      await expect(restoredThumb).toHaveAttribute('src', pathToImagiiFileUrl(thumbPath))
+      await expect
+        .poll(() => restoredThumb.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+          timeout: 15_000
+        })
+        .toBe(8)
+      await expect
+        .poll(() =>
+          (JSON.parse(readFileSync(boardFile, 'utf8')) as MoodBoardCollection).items.map(
+            (i) => i.id
+          )
+        )
+        .toEqual(['seededitem'])
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
@@ -562,7 +694,10 @@ test.describe('imagii References studio', () => {
     const fx = makeFixture('refs-prune')
     const MB = 1024 * 1024
 
-    // Two ordinary small thumbs, oldest first.
+    // Two ordinary small thumbs, oldest first, owned by a board — T-58's
+    // startup sweep reclaims cached files no board refers to, so a fixture of
+    // free-floating thumbs would be gone before the first click. Owned ones
+    // are exactly what the LRU is meant to trim.
     const small = ['old-a.jpg', 'old-b.jpg']
     small.forEach((name, i) => {
       const file = path.join(fx.thumbsDir, name)
@@ -570,6 +705,25 @@ test.describe('imagii References studio', () => {
       const t = 1_700_000_000 + i
       utimesSync(file, t, t)
     })
+    writeFileSync(
+      path.join(fx.boardsDir, 'pruneboard.json'),
+      JSON.stringify({
+        id: 'pruneboard',
+        name: 'Prune board',
+        createdAt: 1700000000000,
+        items: small.map((name, i) => ({
+          id: `pruneitem${i}`,
+          collectionId: 'pruneboard',
+          thumbnail: `https://example.invalid/${name}`,
+          fullUrl: `https://example.invalid/full-${name}`,
+          source: 'example.invalid',
+          title: `Cached ${name}`,
+          cachedThumbPath: path.join(fx.thumbsDir, name),
+          addedAt: 1700000000000 + i
+        }))
+      }),
+      'utf8'
+    )
 
     const app = await launchApp(fx.userDataDir)
     try {
@@ -682,7 +836,7 @@ test.describe('imagii References studio', () => {
    * HL-network and stays dispositioned; duckduckgo.test.ts covers the
    * parser on fixtures instead.
    */
-  test('Reference Search surfaces the error card when the network is unreachable', async () => {
+  test('Reference Search surfaces the friendly notice when the network is unreachable', async () => {
     test.setTimeout(120_000)
     if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
     const fx = makeFixture('refs-search')
@@ -707,7 +861,12 @@ test.describe('imagii References studio', () => {
       const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
       // The search button is the only button in the card that holds the input.
       const searchButton = window.locator('.card', { has: input }).getByRole('button')
+      // T-30: the rose card renders `searchError` — a REJECTED invoke, i.e.
+      // Electron's raw "Error invoking remote method …" preamble. The amber
+      // card renders a `notice` carried on a normal response. A search that
+      // could not run must land on the amber one whichever hop died.
       const errorCard = window.locator('.border-rose-400\\/40')
+      const noticeCard = window.locator('.border-amber-400\\/40')
 
       await expect(searchButton).toHaveText('Search')
       await expect(searchButton).toBeEnabled()
@@ -715,6 +874,7 @@ test.describe('imagii References studio', () => {
       // An empty query never leaves the renderer (ReferencePanel.submit).
       await searchButton.click()
       await expect(errorCard).toHaveCount(0)
+      await expect(noticeCard).toHaveCount(0)
       await expect(window.getByText('No results.')).toHaveCount(0)
 
       // ── phase 1: in-flight wiring, held open by the hanging proxy ──
@@ -728,24 +888,24 @@ test.describe('imagii References studio', () => {
       await expect(input).toHaveValue('minimalist mountain photography')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-04-search-inflight.png') })
 
-      // ── phase 2: the proxy dies; the panel lands on the error card ──
+      // ── phase 2: the proxy dies; the panel lands on the notice card ──
       killProxy()
       await expect(searchButton).toHaveText('Search', { timeout: 60_000 })
       await expect(searchButton).toBeEnabled()
-      await expect(errorCard).toBeVisible()
+      await expect(noticeCard).toBeVisible()
 
-      // Exact copy: referencesStore stores `err.message` verbatim and
-      // ReferencePanel renders it as the card's whole text. Electron wraps
-      // a rejected handler in its own IPC preamble naming the channel, and
-      // Chromium supplies the net:: code — which code depends on whether
-      // the socket died mid-CONNECT or the port was already refusing, so
-      // the code itself is matched by shape.
-      const text = (await errorCard.innerText()).trim()
-      expect(text).toMatch(
-        /^Error invoking remote method 'search:images': Error: net::ERR_[A-Z0-9_]+$/
-      )
-      // An error is NOT an empty result set: no grid, no "No results.".
-      await expect(window.getByText('No results.')).toHaveCount(0)
+      // T-30: this outage kills the FIRST hop (the vqd page), which used to
+      // reject the invoke and print Electron's channel-naming preamble —
+      // "Error invoking remote method 'search:images': Error: net::ERR_…" —
+      // while the identical outage one request later produced this sentence.
+      // Chromium supplies the net:: code, and which code depends on whether
+      // the socket died mid-CONNECT or the port was already refusing, so the
+      // code alone is matched by shape.
+      const text = (await noticeCard.innerText()).trim()
+      expect(text).toMatch(/^DuckDuckGo search failed: net::ERR_[A-Z0-9_]+$/)
+      // …and nothing rejected, so the raw-IPC card never appears.
+      await expect(errorCard).toHaveCount(0)
+      // No grid: a failed search returns no results to draw.
       await expect(window.locator('img[referrerpolicy="no-referrer"]')).toHaveCount(0)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-05-search-error.png') })
 
@@ -754,9 +914,10 @@ test.describe('imagii References studio', () => {
       // is replaced rather than stacked.
       await searchButton.click()
       await expect(searchButton).toHaveText('Search', { timeout: 60_000 })
-      await expect(errorCard).toHaveCount(1)
-      expect((await errorCard.innerText()).trim()).toBe(
-        "Error invoking remote method 'search:images': Error: net::ERR_PROXY_CONNECTION_FAILED"
+      await expect(noticeCard).toHaveCount(1)
+      await expect(errorCard).toHaveCount(0)
+      expect((await noticeCard.innerText()).trim()).toBe(
+        'DuckDuckGo search failed: net::ERR_PROXY_CONNECTION_FAILED'
       )
     } finally {
       killProxy()

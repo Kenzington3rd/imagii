@@ -52,6 +52,7 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/references': [
     { keys: 'Enter (search bar)', description: 'Run search' },
     { keys: 'Save button', description: 'Save reference to mood board' },
+    { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo mood-board edits' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
   '/home': [

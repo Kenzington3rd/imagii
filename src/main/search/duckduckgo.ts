@@ -17,8 +17,55 @@ interface DdgResponse {
   next?: string
 }
 
+/**
+ * T-30 — the search never reached DuckDuckGo.
+ *
+ * Raised at the point of origin (T-44's rule) so the `search:images` channel
+ * can branch on the error's IDENTITY. Before it, the first hop's failures
+ * simply propagated: the invoke rejected and the renderer showed Electron's
+ * "Error invoking remote method 'search:images': …" preamble, while the very
+ * same outage one request later produced friendly copy. Nothing downstream
+ * string-matches this — the class IS the signal.
+ */
+export class SearchUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'SearchUnavailableError'
+  }
+}
+
+/**
+ * The one place the "we tried and it did not work" copy is written, so both
+ * hops say the same thing. `notice` (not a rejection) is what makes the
+ * renderer draw its amber card instead of an error card.
+ */
+export function searchFailureNotice(query: string, err: unknown): SearchResponse {
+  return {
+    query,
+    provider: 'duckduckgo',
+    results: [],
+    notice:
+      err instanceof Error
+        ? `DuckDuckGo search failed: ${err.message}`
+        : 'DuckDuckGo search failed'
+  }
+}
+
+/**
+ * Hop 1: the search page, for the per-session `vqd` token hop 2 needs.
+ *
+ * The guard covers the WHOLE hop, not just the fetch — building the URL runs
+ * `encodeURIComponent`, which throws a URIError on a lone surrogate before any
+ * request goes out. A missing token is not a failure and still returns null:
+ * the caller has its own copy for a page that loaded but carried no token.
+ */
 async function getVqd(query: string): Promise<string | null> {
-  const html = await fetchText(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`)
+  let html: string
+  try {
+    html = await fetchText(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`)
+  } catch (err) {
+    throw new SearchUnavailableError(err)
+  }
   const m = html.match(/vqd=['"]([^'"]+)['"]/) ?? html.match(/vqd=([\d-]+)/)
   if (!m) return null
   const captured = m[1]
@@ -75,14 +122,6 @@ export async function searchDuckduckgoImages(query: string): Promise<SearchRespo
     }))
     return { query, provider: 'duckduckgo', results }
   } catch (err) {
-    return {
-      query,
-      provider: 'duckduckgo',
-      results: [],
-      notice:
-        err instanceof Error
-          ? `DuckDuckGo search failed: ${err.message}`
-          : 'DuckDuckGo search failed'
-    }
+    return searchFailureNotice(query, err)
   }
 }

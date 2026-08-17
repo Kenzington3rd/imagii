@@ -8,7 +8,7 @@ import type {
   AudioMuxSpec,
   ChainSpec
 } from '../shared/audio'
-import type { SearchResult } from '../shared/search'
+import type { MoodBoardCollection, SearchResult } from '../shared/search'
 import type {
   CaptionsProgress,
   ModelInstallProgress,
@@ -153,6 +153,8 @@ const api: ImagiiApi = {
       ipcRenderer.invoke('moodboard:addItem', collectionId, result),
     removeItem: (collectionId: string, itemId: string) =>
       ipcRenderer.invoke('moodboard:removeItem', collectionId, itemId),
+    restore: (collections: MoodBoardCollection[]) =>
+      ipcRenderer.invoke('moodboard:restore', collections),
     prune: () => ipcRenderer.invoke('moodboard:prune')
   },
   project: {

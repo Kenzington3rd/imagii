@@ -121,11 +121,14 @@ describe('T-15 — Video Studio can undo', () => {
     expect(studio).toMatch(/useUndoRedoHotkeys\(undo, redo\)/)
   })
 
-  it('all three studios share one binding — no fourth copy of the branch', () => {
+  // T-58 made it four: References grew a history, and joined the binding
+  // rather than growing a copy of it.
+  it('all four studios share one binding — no second copy of the branch', () => {
     for (const rel of [
       'modules/video-studio/VideoStudio.tsx',
       'modules/audio-studio/AudioStudio.tsx',
-      'modules/image-studio/ImageStudio.tsx'
+      'modules/image-studio/ImageStudio.tsx',
+      'modules/references/ReferencesStudio.tsx'
     ]) {
       expect(read(rel), rel).toMatch(/useUndoRedoHotkeys\(undo, redo\)/)
       // The old hand-rolled branch must be gone from each of them.

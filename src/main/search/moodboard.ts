@@ -1,5 +1,5 @@
 import { net } from 'electron'
-import { mkdir, readFile, writeFile, readdir, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readdir, stat, unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
@@ -118,24 +118,67 @@ export async function deleteCollection(id: string): Promise<void> {
   return withCollectionLock(id, async () => {
     const file = path.join(moodboardsDir(), `${id}.json`)
     if (!existsSync(file)) return
-    // Best-effort: clean up every cached thumbnail this board owns before
-    // unlinking the JSON, mirroring removeFromCollection's per-item cleanup.
-    // A corrupt/missing JSON yields a null collection — the JSON unlink
-    // still proceeds.
-    const collection = await readCollection(file)
-    if (collection) {
-      for (const item of collection.items) {
-        if (item.cachedThumbPath && existsSync(item.cachedThumbPath)) {
-          try {
-            await unlink(item.cachedThumbPath)
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-    }
+    // T-58: the JSON goes, the board's cached thumbnails stay. A delete is
+    // undoable for the rest of the session now, and an undone delete has to
+    // look like the delete never happened — a board that comes back with
+    // dead thumbnail paths does not. Reaping them here made that impossible,
+    // so the reap moved to `sweepOrphanThumbs()` at startup, past the point
+    // any undo can reach; the LRU in `pruneThumbCache` is the second net.
+    // These files live in `cache/thumbs` and re-derive from `item.thumbnail`,
+    // which is what makes deferring them safe and deleting them eagerly not.
     await unlink(file)
   })
+}
+
+/**
+ * T-58 — write these boards to disk and delete every board that is not among
+ * them. The single inverse for the whole references history: undo and redo
+ * hand over the snapshot they just restored and the directory is made to
+ * match, so one path covers create, rename, delete, item add and item remove
+ * instead of five hand-written opposites (and a re-created board keeps its
+ * own id, items and createdAt rather than becoming a new board that merely
+ * looks similar).
+ *
+ * Untrusted input: each board is normalized through `parseCollection` — the
+ * same parser that guards the read side — and each thumbnail path is confined
+ * to the cache dir, so what we write is what we would have accepted.
+ */
+export async function restoreCollections(
+  collections: ReadonlyArray<MoodBoardCollection>
+): Promise<void> {
+  await ensureDirs()
+  const dir = moodboardsDir()
+  const keep = new Set<string>()
+
+  for (const raw of collections) {
+    const normalized = parseCollection(JSON.stringify(raw))
+    if (!normalized) continue
+    const collection: MoodBoardCollection = {
+      ...normalized,
+      items: normalized.items.map(confineThumbPath)
+    }
+    keep.add(collection.id)
+    await withCollectionLock(collection.id, () =>
+      writeFile(
+        path.join(dir, `${collection.id}.json`),
+        JSON.stringify(collection, null, 2),
+        'utf8'
+      )
+    )
+  }
+
+  for (const f of await readdir(dir)) {
+    if (!f.endsWith('.json')) continue
+    const id = f.slice(0, -'.json'.length)
+    if (keep.has(id)) continue
+    await withCollectionLock(id, async () => {
+      try {
+        await unlink(path.join(dir, f))
+      } catch {
+        /* already gone */
+      }
+    })
+  }
 }
 
 export async function renameCollection(id: string, name: string): Promise<MoodBoardCollection | null> {
@@ -204,18 +247,67 @@ export async function removeFromCollection(
     if (!existsSync(file)) return null
     const collection = await readCollection(file)
     if (!collection) return null
-    const removed = collection.items.find((i) => i.id === itemId)
+    // T-58: the item's cached thumbnail is left alone for the same reason a
+    // deleted board's are — removing an item is undoable, and an undone
+    // remove that comes back without its picture is not an undo.
+    // `sweepOrphanThumbs()` reclaims it on the next launch.
     collection.items = collection.items.filter((i) => i.id !== itemId)
-    if (removed?.cachedThumbPath && existsSync(removed.cachedThumbPath)) {
-      try {
-        await unlink(removed.cachedThumbPath)
-      } catch {
-        /* ignore */
-      }
-    }
     await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
     return collection
   })
+}
+
+/**
+ * T-58 — reclaim cached thumbnails no board refers to any more.
+ *
+ * Deleting a board or an item leaves its thumbnails behind so the undo that
+ * may follow can put the board back whole. Nothing in a running session can
+ * tell when the last undo step that could resurrect them has fallen off the
+ * 50-step cap, so the reap happens once per launch instead, before any window
+ * exists: at that moment an orphan is genuinely unreachable.
+ *
+ * Two deliberate refusals to delete:
+ *   - if any board file fails to parse, the sweep does nothing at all. A
+ *     directory we cannot read in full is a directory we must not garbage-
+ *     collect — one corrupt board would otherwise cost the user every
+ *     thumbnail it owned.
+ *   - files written after the board list was read are skipped, so a save
+ *     racing startup cannot lose its thumbnail between the two writes.
+ *
+ * Returns the number of files removed.
+ */
+export async function sweepOrphanThumbs(): Promise<number> {
+  const thumbs = thumbsCacheDir()
+  const boards = moodboardsDir()
+  if (!existsSync(thumbs) || !existsSync(boards)) return 0
+  const startedAt = Date.now()
+
+  const referenced = new Set<string>()
+  for (const f of await readdir(boards)) {
+    if (!f.endsWith('.json')) continue
+    const collection = await readCollection(path.join(boards, f))
+    if (!collection) return 0
+    for (const item of collection.items) {
+      if (item.cachedThumbPath) referenced.add(path.resolve(item.cachedThumbPath))
+    }
+  }
+
+  let removed = 0
+  for (const f of await readdir(thumbs)) {
+    const file = path.join(thumbs, f)
+    if (referenced.has(path.resolve(file))) continue
+    try {
+      // Floored: `Date.now()` is whole milliseconds while `mtimeMs` carries a
+      // fraction, so a file written moments BEFORE the sweep can otherwise
+      // read as newer than it and never be collected at all.
+      if (Math.floor((await stat(file)).mtimeMs) > startedAt) continue
+      await unlink(file)
+      removed += 1
+    } catch {
+      /* gone, or not ours to remove */
+    }
+  }
+  return removed
 }
 
 export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<void> {
@@ -224,9 +316,8 @@ export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<voi
   const files = await readdir(dir)
   const stats = await Promise.all(
     files.map(async (f) => {
-      const fs = await import('node:fs/promises')
-      const stat = await fs.stat(path.join(dir, f))
-      return { file: f, mtime: stat.mtimeMs, size: stat.size }
+      const info = await stat(path.join(dir, f))
+      return { file: f, mtime: info.mtimeMs, size: info.size }
     })
   )
   let total = stats.reduce((acc, s) => acc + s.size, 0)
