@@ -25,7 +25,7 @@ import { validateSearchResult } from '../../shared/search'
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }))
 vi.mock('electron', () => ({ net: { fetch: fetchMock } }))
 
-const { searchDuckduckgoImages } = await import('./duckduckgo')
+const { searchDuckduckgoImages, SearchUnavailableError } = await import('./duckduckgo')
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 // Trimmed but structurally faithful excerpts of what duckduckgo.com serves.
@@ -289,23 +289,47 @@ describe('searchDuckduckgoImages — empty and hostile payloads', () => {
     expect(response.notice).toMatch(/^DuckDuckGo search failed: /)
   })
 
-  it('rejects — it does not notice — when the vqd page itself fails', async () => {
-    // Asymmetry worth pinning: `getVqd` is called OUTSIDE the try/catch, so a
-    // failure on the FIRST hop propagates out of the IPC handler and reaches
-    // the user as Electron's raw "Error invoking remote method 'search:images'"
-    // string (see the error-card assertion in tests/e2e/references.spec.ts),
-    // while the identical failure on the second hop becomes friendly copy.
+  /**
+   * T-30 — the first hop used to fail differently from the second. `getVqd`
+   * ran outside the guarded region, so its rejection travelled out of the IPC
+   * handler and reached the user as Electron's raw
+   * "Error invoking remote method 'search:images': …" preamble, while the
+   * identical failure one hop later became friendly copy.
+   *
+   * It is now raised as `SearchUnavailableError` at the point of origin —
+   * T-44's rule — and `runImageSearch` turns it into the very notice hop 2
+   * produces. The typed class is the whole point: the channel branches on the
+   * error's IDENTITY, never on the shape of its text.
+   * The notice itself is pinned in `src/main/ipc/search.test.ts`.
+   */
+  it('raises the typed sentinel when the vqd page answers with an HTTP error', async () => {
     fetchMock.mockResolvedValueOnce(textResponse('', 503))
 
-    await expect(searchDuckduckgoImages('test')).rejects.toThrow('HTTP 503')
+    const raised = await searchDuckduckgoImages('test').catch((e: unknown) => e)
+
+    expect(raised).toBeInstanceOf(SearchUnavailableError)
+    expect((raised as Error).message).toBe('HTTP 503')
+    expect((raised as Error).name).toBe('SearchUnavailableError')
   })
 
-  it('rejects when the network call itself throws', async () => {
+  it('raises the typed sentinel when the network call itself throws', async () => {
     fetchMock.mockRejectedValueOnce(new Error('net::ERR_PROXY_CONNECTION_FAILED'))
 
-    await expect(searchDuckduckgoImages('test')).rejects.toThrow(
-      'net::ERR_PROXY_CONNECTION_FAILED'
-    )
+    const raised = await searchDuckduckgoImages('test').catch((e: unknown) => e)
+
+    expect(raised).toBeInstanceOf(SearchUnavailableError)
+    expect((raised as Error).message).toBe('net::ERR_PROXY_CONNECTION_FAILED')
+  })
+
+  it('raises the typed sentinel when the query cannot even be encoded', async () => {
+    // A lone surrogate makes `encodeURIComponent` throw a URIError while the
+    // request URL is still being built — same class, one line earlier than the
+    // fetch, and the reason the guard covers the whole hop rather than just
+    // the network call.
+    const raised = await searchDuckduckgoImages('\uD800').catch((e: unknown) => e)
+
+    expect(raised).toBeInstanceOf(SearchUnavailableError)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

@@ -460,6 +460,11 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
 - **Status:** open
 
 ## T-29 — "Clear thumbnail cache" only trims above a 500 MB budget
+   (Round-38 note: T-58 moved the eager per-delete thumb reap to a
+   launch-time sweepOrphanThumbs so undo can resurrect boards whole;
+   the 500 MB LRU still never runs on its own. When this ticket gives
+   the button a real clear, consider running the LRU at startup next
+   to the sweep.)
 
 - **Spec:** T-26 finding. The button calls moodboard:prune ->
   pruneThumbCache() with the default budget — an LRU trim — while
@@ -487,7 +492,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Hop-1 failures produce the same friendly notice shape as hop-2.
   - [ ] Flip the pin; E2E error-card assertion updated to the friendly
         copy exactly.
-- **Status:** open
+- **Status:** done (round 38 — see Done)
 
 ## T-31 — Home never mounts the toast surface
 
@@ -1024,7 +1029,7 @@ IMG-PREC.
         rows updated.
   - [ ] Snapshot/restore interplay: the T-47 post-restore contract
         (Undo disabled after restore) applies to this store too.
-- **Status:** open (scheduled: next References batch, with T-30)
+- **Status:** done (round 38 — see Done)
 
 ## T-56 — Timeline playhead is a raw palette color; track space stops at the probe duration
 
@@ -1093,6 +1098,19 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** open
 
+## T-66 — References polish: failure notice contradicted by "No results."; delete toast should advertise undo
+
+- **Spec:** T-58/T-30 worker findings. (a) ReferencePanel renders
+  "No results." underneath a failure notice — now the COMMON failure
+  view since hop-1 routes there too; reads as "the search ran and
+  found nothing". One condition fixes it. (b) MoodBoardPanel's delete
+  toast still says only "Deleted." — the action is reversible since
+  T-58 and the toast is where the other studios advertise it.
+- **Acceptance criteria:** no "No results." while a notice is shown
+  (both asserted); delete toast names the undo path; copy per
+  BRANDING_GUIDE.
+- **Status:** open
+
 ## T-65 — auto-cropped exports carry a non-square SAR (anamorphic by ~0.25%)
 
 - **Spec:** T-50 worker finding, pre-existing on the platform path.
@@ -1150,6 +1168,43 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 38 — fix wave batch 12: T-58 + T-30 (the References pair; T-58
+per the owner's 2026-08-16 ruling). T-58: referencesStore gains the
+house history shape copied field-for-field from videoStore (past/
+future, 50-step cap, history identity changing EXACTLY on history
+events — pinned by identity, not length; setTab/select/search never
+rebuild it). Undo reaches DISK through one inverse: moodboard:restore
+writes every board in the target snapshot and unlinks the rest, so
+create/rename/delete/item-add/item-remove all reverse through one
+gated path (assertSafeId/assertBoardName + parseCollection +
+confineThumbPath — the same trust gates as the read side) and a
+restored board keeps its id, items, and createdAt. Writes chain on a
+module promise that refreshCollections awaits, so a panel mount right
+after Ctrl+Z cannot re-read the pre-undo directory and silently put
+the change back; a failed write makes the store adopt what disk says.
+Thumbnails: the per-delete reap MOVED to a launch-time
+sweepOrphanThumbs (an undone delete showing grey squares is not an
+undo) which refuses to run if any board fails to parse and skips
+files newer than the sweep — both disk states tested. References
+joins the global tracker, the "last:" readout, and the shared
+useUndoRedoHotkeys + header buttons; hotkeyTable and
+interactionWiring extended to four studios; the T-47 post-restore
+reset applies. T-30: SearchUnavailableError thrown over the WHOLE
+first hop (including URL build — encodeURIComponent throws on a lone
+surrogate, same bug one line earlier), runImageSearch lifted out of
+ipcMain.handle for testability, one searchFailureNotice() shared with
+hop 2; exact copy asserted in the amber card with the rose card
+absent. Red-green via revert-the-product-change (md5-verified);
+worker mutations: tracker subscription dropped, history push dropped,
+getVqd re-exposed. Expediter's own: restoreCollections made a disk
+no-op — both disk-asserting E2Es red ("comes back whole" and
+"Remove is undoable") + 3 moodboard units, restore, 12/12 + 8/8 (one
+botched restore attempt was caught by the red tests and redone —
+the tests policed the expediter too). Gates: 1010 unit / 118 E2E.
+Findings: T-66 filed (notice + "No results." contradiction; delete
+toast should advertise undo), T-29 annotated (launch LRU),
+one continuity-spec load flake observed once and green on repeats.
 
 Round 37 — fix wave batch 11: T-50 + T-42 (the promised-affordance
 pair; the batch survived a container restart mid-run and was resumed

@@ -99,14 +99,16 @@ describe('the table honesty check discriminates', () => {
   })
 
   it('sees Video Studio undo only because T-15 wired it', () => {
-    for (const route of ['/video', '/audio', '/image']) {
+    // T-58 added the fourth: References keeps a history now, so it binds the
+    // shared hook and advertises the row like the other three.
+    for (const route of ['/video', '/audio', '/image', '/references']) {
       expect(
         KEYBOARD_EVIDENCE['Ctrl+Z / Ctrl+Y']?.test(sourcesByRoute.get(route) ?? ''),
         `${route} binds undo/redo`
       ).toBe(true)
     }
     // Routes with no undo stack must not claim one.
-    for (const route of ['/record', '/references', '/home']) {
+    for (const route of ['/record', '/home']) {
       expect(
         SHORTCUTS_BY_ROUTE[route]?.some((r) => r.keys.includes('Ctrl+Z')) ?? false,
         `${route} does not advertise undo`

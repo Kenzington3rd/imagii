@@ -14,6 +14,40 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-16 — T-30: one outage, two different stories
+
+### Bug — a first-hop search failure leaked raw IPC text
+- **Root cause.** `searchDuckduckgoImages` scrapes in two hops: the search
+  page for a `vqd` token, then `i.js` for the results. Only the second was
+  inside the try/catch, so an unreachable network produced friendly copy
+  ("DuckDuckGo search failed: …") when it killed the second request and
+  Electron's raw `Error invoking remote method 'search:images': Error:
+  net::ERR_…` when it killed the first — the same outage, and which
+  sentence the user got depended on which request happened to die. The
+  first hop was also where `encodeURIComponent` runs, so a query holding a
+  lone surrogate rejected the channel before any request went out.
+- **Fix.** The T-44 shape, reused: hop 1 raises a `SearchUnavailableError`
+  sentinel over its whole region (URL build included), and `runImageSearch`
+  — the channel body, lifted out of `ipcMain.handle` so it is testable —
+  branches on that class and returns `searchFailureNotice(...)`, the single
+  place the copy is written and now shared with hop 2. Anything that is not
+  the sentinel is a bug rather than a failed search and still rejects.
+- **Test.** `src/main/search/duckduckgo.test.ts` (the old "rejects — it does
+  not notice" pin flipped to three typed-sentinel cases incl. the lone
+  surrogate); `src/main/ipc/search.test.ts` (`runImageSearch`: both hops
+  yield the identical notice object, blank query still short-circuits, a
+  good search passes through); `tests/e2e/references.spec.ts` "Reference
+  Search surfaces the friendly notice when the network is unreachable" —
+  amber notice card carrying `DuckDuckGo search failed: net::ERR_…`, rose
+  error card absent.
+- **Lesson.** A guarded region that covers *some* of the steps a user thinks
+  of as one action is not a guard, it is a coin flip. When an operation has
+  several hops that fail the same way for the user, the failure has to be
+  named once, at the origin, and translated once, at the boundary — and the
+  boundary is where the shape of the answer stops being negotiable.
+
+---
+
 ## 2026-08-16 — T-50 + T-42: the UI took a choice it had no way to honour
 
 Two tickets, one root lesson, so one entry. Both are the same class — call

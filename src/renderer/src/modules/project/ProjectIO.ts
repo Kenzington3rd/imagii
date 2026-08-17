@@ -100,6 +100,12 @@ export function applyPlace(place: PlaceRecord | undefined): void {
 }
 
 export async function applyProject(project: ImagiiProject): Promise<void> {
+  // T-58 + T-47: mood boards are not carried in a project file — they are
+  // their own files on disk — so there is nothing to put back here. What the
+  // contract does require is that no studio comes out of a restore offering
+  // to undo something: a board edit from the session being replaced is not
+  // work the user did in the session they now have.
+  useReferencesStore.getState().resetHistory()
   if (project.imageCanvas) {
     // resetDocument, not setDocument: restoring a snapshot is not an edit.
     // Through setDocument the restore pushed an undo step, so the app came

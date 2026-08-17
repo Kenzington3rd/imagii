@@ -1,5 +1,9 @@
 import { ipcMain } from 'electron'
-import { searchDuckduckgoImages } from '../search/duckduckgo'
+import {
+  SearchUnavailableError,
+  searchDuckduckgoImages,
+  searchFailureNotice
+} from '../search/duckduckgo'
 import {
   addToCollection,
   createCollection,
@@ -7,9 +11,10 @@ import {
   listCollections,
   removeFromCollection,
   renameCollection,
+  restoreCollections,
   pruneThumbCache
 } from '../search/moodboard'
-import type { SearchResponse, SearchResult } from '../../shared/search'
+import type { MoodBoardCollection, SearchResponse, SearchResult } from '../../shared/search'
 import { validateSearchResult } from '../../shared/search'
 import { assertNonEmptyString } from '../../shared/validators'
 import { assert } from '../../shared/assert'
@@ -50,12 +55,32 @@ export function normalizeImageQuery(
   return { query: text }
 }
 
+/**
+ * The whole body of the `search:images` channel, lifted out of the handler so
+ * it can be driven without an Electron main process.
+ *
+ * T-30: an outage on the first hop is the same event, for the user, as an
+ * outage on the second — the search did not happen. Branching on the typed
+ * sentinel here (T-44's rule) is what makes the channel promise a RESPONSE
+ * rather than sometimes a rejection whose text the renderer would have to
+ * recognize. Anything that is not that sentinel is a bug, not a failed
+ * search, and still travels as one.
+ */
+export async function runImageSearch(query: unknown): Promise<SearchResponse> {
+  const normalized = normalizeImageQuery(query)
+  if ('empty' in normalized) return normalized.empty
+  try {
+    return await searchDuckduckgoImages(normalized.query)
+  } catch (err) {
+    if (err instanceof SearchUnavailableError) {
+      return searchFailureNotice(normalized.query, err)
+    }
+    throw err
+  }
+}
+
 export function registerSearchIpc(): void {
-  ipcMain.handle('search:images', async (_e, query: unknown) => {
-    const normalized = normalizeImageQuery(query)
-    if ('empty' in normalized) return normalized.empty
-    return searchDuckduckgoImages(normalized.query)
-  })
+  ipcMain.handle('search:images', (_e, query: unknown) => runImageSearch(query))
 
   ipcMain.handle('moodboard:list', () => listCollections())
   ipcMain.handle('moodboard:create', (_e, name: unknown) => {
@@ -99,5 +124,22 @@ export function registerSearchIpc(): void {
       return removeFromCollection(collectionId, itemId)
     }
   )
+  // T-58: the whole board list the references history just stepped back (or
+  // forward) to. Ids and names are gated here like every other moodboard
+  // argument; the items themselves are normalized by the store's own parser
+  // before anything is written.
+  ipcMain.handle('moodboard:restore', (_e, collections: unknown) => {
+    assert(Array.isArray(collections), 'moodboard.collections must be an array')
+    for (const entry of collections) {
+      assert(
+        typeof entry === 'object' && entry !== null,
+        'moodboard.collections entry must be an object'
+      )
+      const board = entry as { id?: unknown; name?: unknown }
+      assertSafeId(board.id, 'moodboard.id')
+      assertBoardName(board.name, 'moodboard.name')
+    }
+    return restoreCollections(collections as MoodBoardCollection[])
+  })
   ipcMain.handle('moodboard:prune', () => pruneThumbCache())
 }

@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -615,7 +615,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
-  test('Home global Undo walks the studios newest-first — a video edit and a canvas edit', async () => {
+  test('Home global Undo walks the studios newest-first — a video edit, a mood board, and a canvas edit', async () => {
     test.setTimeout(240_000)
     const root = makeRoot('global-undo-order')
     const userDataDir = path.join(root, 'userData')
@@ -666,6 +666,20 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.getByText('last: Video Studio')).toBeVisible()
       await expect(undo).toBeEnabled()
 
+      // ── then a mood board created inside References (T-58) ──
+      // Before T-58 this studio kept no history at all, so this step was
+      // invisible here: the readout stayed on "Video Studio" and Home's Undo
+      // could never reach a board.
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await window.getByRole('button', { name: 'Mood Boards', exact: true }).click()
+      await window.getByPlaceholder('New board name', { exact: false }).fill('Ordered board')
+      await window.getByRole('button', { name: '+', exact: true }).click()
+      await expect(
+        window.getByRole('heading', { name: 'Boards (1)', exact: true })
+      ).toBeVisible({ timeout: 20_000 })
+      await goHome()
+      await expect(window.getByText('last: References')).toBeVisible()
+
       // ── then a step made inside Stream Graphics ──
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await window.getByRole('button', { name: 'Start with text' }).click()
@@ -675,7 +689,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
 
       // ── first Undo takes the canvas step, the newest one ──
       await undo.click()
-      await expect(window.getByText('last: Video Studio')).toBeVisible()
+      await expect(window.getByText('last: References')).toBeVisible()
       await expect(redo).toBeEnabled()
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
@@ -685,7 +699,19 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(clipList(2)).toBeVisible({ timeout: 20_000 })
       await goHome()
 
-      // ── second Undo takes the video step ──
+      // ── second Undo takes the board, and it goes from the disk too ──
+      await undo.click()
+      await expect(window.getByText('last: Video Studio')).toBeVisible()
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(
+        window.getByRole('heading', { name: 'Boards (0)', exact: true })
+      ).toBeVisible({ timeout: 20_000 })
+      await expect
+        .poll(() => readdirSync(path.join(userDataDir, 'moodboards')).filter((f) => f.endsWith('.json')))
+        .toEqual([])
+      await goHome()
+
+      // ── third Undo takes the video step ──
       await undo.click()
       await expect(window.getByText('last: no recent change')).toBeVisible()
       await expect(undo).toBeDisabled()
@@ -693,12 +719,21 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(clipList(1)).toBeVisible({ timeout: 20_000 })
       await goHome()
 
-      // ── Redo mirrors it: video first, then the canvas ──
+      // ── Redo mirrors it: video, then the board, then the canvas ──
       await expect(redo).toBeEnabled()
       await redo.click()
       await expect(window.getByText('last: Video Studio')).toBeVisible()
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
       await expect(clipList(2)).toBeVisible({ timeout: 20_000 })
+      await goHome()
+
+      await redo.click()
+      await expect(window.getByText('last: References')).toBeVisible()
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(
+        window.getByRole('heading', { name: 'Boards (1)', exact: true })
+      ).toBeVisible({ timeout: 20_000 })
+      await expect(window.locator('li', { hasText: 'Ordered board' })).toHaveCount(1)
       await goHome()
 
       await redo.click()

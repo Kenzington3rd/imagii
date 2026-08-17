@@ -2,16 +2,18 @@ import { useSyncExternalStore } from 'react'
 import { useVideoStore } from '../modules/video-studio/store/videoStore'
 import { useAudioStore } from '../modules/audio-studio/state/audioStore'
 import { useCanvasStore } from '../modules/image-studio/state/canvasStore'
+import { useReferencesStore } from '../modules/references/state/referencesStore'
 
-type StoreId = 'video' | 'audio' | 'image'
+type StoreId = 'video' | 'audio' | 'image' | 'references'
 
 const STORE_LABEL: Record<StoreId, string> = {
   video: 'Video Studio',
   audio: 'Audio Studio',
-  image: 'Image Canvas'
+  image: 'Image Canvas',
+  references: 'References'
 }
 
-/** The undo-relevant slice all three studio stores share. */
+/** The undo-relevant slice all four studio stores share. */
 interface HistoryPair {
   past: unknown[]
   future: unknown[]
@@ -27,6 +29,7 @@ interface StudioActions {
 function stateOf(id: StoreId): StudioActions {
   if (id === 'image') return useCanvasStore.getState()
   if (id === 'audio') return useAudioStore.getState()
+  if (id === 'references') return useReferencesStore.getState()
   return useVideoStore.getState()
 }
 
@@ -111,7 +114,7 @@ function isCappedPush(next: unknown[], prev: unknown[]): boolean {
  */
 function record(id: StoreId, next: HistoryPair, prev: HistoryPair): void {
   // Zustand's partial set() keeps the reference of every key it does not
-  // touch, and all three stores build a fresh history object whenever they
+  // touch, and all four stores build a fresh history object whenever they
   // do touch it — so identity is an exact "was this a history event" test.
   // It also filters video's coalesced gestures, which write no history at
   // all while a trim drag is in flight.
@@ -137,6 +140,10 @@ function tracker(
 useVideoStore.subscribe(tracker('video'))
 useAudioStore.subscribe(tracker('audio'))
 useCanvasStore.subscribe(tracker('image'))
+// T-58: References keeps a history like the other three, so it is tracked
+// like the other three — the counting reconciler needs no idea that this
+// one's undo also rewrites files on disk.
+useReferencesStore.subscribe(tracker('references'))
 
 /**
  * The newest entry its store can still act on. Enablement and the click both

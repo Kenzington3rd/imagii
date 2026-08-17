@@ -457,12 +457,20 @@ describe('place record: capture, restore, and per-field degradation', () => {
     await seedAllStudios()
     const raw = JSON.stringify(captureProject())
     wipeAllStudios()
-    // A pre-existing step, to prove the restore clears rather than adds.
+    // A pre-existing step in each store that keeps one, to prove the restore
+    // clears rather than adds.
     useCanvasStore.getState().addLayer({
       ...DOC.layers[0]!,
       id: 'pre-existing'
     })
+    useReferencesStore.setState({
+      history: {
+        past: [{ collections: [], selectedCollectionId: null }],
+        future: []
+      }
+    })
     expect(useCanvasStore.getState().canUndo()).toBe(true)
+    expect(useReferencesStore.getState().canUndo()).toBe(true)
 
     expect(await loadProjectJson(raw)).toEqual({ ok: true })
 
@@ -472,5 +480,10 @@ describe('place record: capture, restore, and per-field degradation', () => {
     expect(useCanvasStore.getState().canRedo()).toBe(false)
     expect(useVideoStore.getState().canUndo()).toBe(false)
     expect(useAudioStore.getState().canUndo()).toBe(false)
+    // T-58: References keeps a history now, and a project file carries no
+    // board state to put back — so the restore's only job here is to make
+    // sure Undo does not come back pointing at the session before it.
+    expect(useReferencesStore.getState().canUndo()).toBe(false)
+    expect(useReferencesStore.getState().canRedo()).toBe(false)
   })
 })

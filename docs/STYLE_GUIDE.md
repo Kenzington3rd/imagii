@@ -69,9 +69,9 @@ Repeated UI is a component, not copy-paste:
   every toast twice (T-31).
 - **`useUndoRedoHotkeys(undo, redo)`** — the window-level
   Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z binding for a studio's own history
-  (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, and Image all call it;
-  its pure `undoRedoIntent` half is what the unit test drives. Never
-  hand-roll a fourth copy of the branch.
+  (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, Image and References all
+  call it; its pure `undoRedoIntent` half is what the unit test drives.
+  Never hand-roll another copy of the branch.
 - **`PanelHeader`** — every panel section header. Renders the standard
   `<h3>` (`text-xs font-semibold uppercase tracking-wide text-ink-muted`,
   an `Icon`, `inline-flex items-center gap-1.5`). Pass an `actions`

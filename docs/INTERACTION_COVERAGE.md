@@ -892,3 +892,32 @@ New and changed elements; tests in tests/e2e/{continuity,home-chrome}
   select, Start with a ticked-but-absent webcam raises the existing
   "Webcam failed: ... Recording screen only." toast. HAND-TEST steps
   2-3 narrow to the microphone select + the live compositor.
+
+
+## Dispositions — round 38 (fix wave batch 12: T-58 + T-30)
+
+References grows 20 -> 23 elements; tests in references.spec.ts,
+home-chrome.spec.ts, referencesStore.test.ts (13), moodboard.test.ts.
+
+- **References - header Undo button (NEW):** "a deleted mood board
+  comes back whole — items, thumbnail and file — on Undo" (board +
+  items + board JSON restored byte-identical, thumb re-decodes) and
+  "a saved item goes to the canvas as a 40% overlay, and Remove is
+  undoable". Expediter mutation: restoreCollections made a disk no-op
+  -> both E2Es red on their disk assertions.
+- **References - header Redo button (NEW):** same E2E, redo phase —
+  the board leaves screen AND disk again.
+- **References - Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z (NEW, shared hook):** same
+  E2E keyboard phase; interactionWiring asserts four studios share the
+  binding; hotkeyTable gained the /references rows.
+- **Home - "last:" readout:** also names References — the ordering E2E
+  now walks video -> mood board -> canvas.
+- **Amended:** board delete (NAT confirm stays) and item remove are
+  reversible; item-remove's end state changed from thumb-unlinked to
+  thumb-survives-for-undo, swept at next launch by sweepOrphanThumbs
+  (launch-time element, disposition: covered by moodboard.test.ts both
+  ways — reap on sweep, refusal on corrupt board).
+- **References - search error path:** upgraded from the raw-IPC pin to
+  the friendly amber notice with exact copy, rose error card asserted
+  absent ("Reference Search surfaces the friendly notice when the
+  network is unreachable").
