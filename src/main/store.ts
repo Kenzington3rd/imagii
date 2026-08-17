@@ -9,11 +9,13 @@ interface SettingsSchema {
   'tutorialSeen.image'?: boolean
   'tutorialSeen.ai'?: boolean
   streamerHandle?: string
+  watermarkPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   filenameTemplate?: string
   'recentFiles.video'?: string[]
   'recentFiles.audio'?: string[]
   'recentFiles.image'?: string[]
   'record.webcamCorner'?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+  'record.convertToMp4'?: boolean
   'export.lastOutputDir'?: string
   'clipKit.lastOutputDir'?: string
   /** T-47: last window geometry. Shape is re-validated on read by
@@ -47,6 +49,10 @@ const schema = {
   'tutorialSeen.image': { type: 'boolean' },
   'tutorialSeen.ai': { type: 'boolean' },
   streamerHandle: { type: 'string', maxLength: 80 },
+  watermarkPosition: {
+    type: 'string',
+    enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+  },
   filenameTemplate: { type: 'string', maxLength: 200 },
   'recentFiles.video': { type: 'array', items: { type: 'string' }, maxItems: 50 },
   'recentFiles.audio': { type: 'array', items: { type: 'string' }, maxItems: 50 },
@@ -55,6 +61,7 @@ const schema = {
     type: 'string',
     enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right']
   },
+  'record.convertToMp4': { type: 'boolean' },
   'export.lastOutputDir': { type: 'string' },
   'clipKit.lastOutputDir': { type: 'string' },
   windowBounds: {

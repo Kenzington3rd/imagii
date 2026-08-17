@@ -750,7 +750,7 @@ IMG-PREC.
   disabled state. On denied-permission systems the button looks dead.
 - **Acceptance criteria:** empty result renders a distinct, helpful
   state (what happened + what to try); pin flipped in record.spec.ts.
-- **Status:** open
+- **Status:** done (round 41 — see Done)
 
 ## T-42 — webcam checkbox with zero cameras silently drops the PiP
 
@@ -771,7 +771,7 @@ IMG-PREC.
 - **Acceptance criteria:** MP4 choice persists like the corner; no
   settings write occurs from mounting the route untouched (relaunch
   test asserts both); pins flipped.
-- **Status:** open
+- **Status:** done (round 41 — see Done)
 
 ## T-44 — "Discard recording" reports as a crash and strands a broken file
 
@@ -847,7 +847,7 @@ IMG-PREC.
   - [ ] The dead path is removed (or made genuinely reachable and
         tested); no unreachable user-facing copy remains in the panel.
   - [ ] Pins flipped red-green.
-- **Status:** open
+- **Status:** done (round 41 — see Done)
 
 ## T-50 — custom presets can never be used for an export
 
@@ -1098,6 +1098,32 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** open
 
+## T-69 — a stale source selection keeps Start enabled after a refresh into nothing
+
+- **Spec:** T-41/T-43 worker finding, pre-existing. selectedSourceId
+  survives a refresh that returns an empty or changed list, so a user
+  who picked a source and refreshed into nothing keeps Start recording
+  enabled, pointing at a source that no longer exists (fails later at
+  getUserMedia).
+- **Acceptance criteria:** a refresh reconciles the selection against
+  the new list (drop or reselect-first per the existing auto-select
+  behavior); E2E: select real -> stub empty -> refresh -> Start
+  disabled + the T-41 empty state shown.
+- **Status:** open
+
+## T-70 — installToastLog records every mounted element, not toasts
+
+- **Spec:** T-41 worker finding. record.spec.ts's installToastLog (the
+  export.spec pattern) logs the text of every element mounted under
+  body, so panel copy pollutes ~12 assertions in that file (it broke
+  the old T-41 pin's toEqual([]) on the fixed build).
+  references.spec.ts already has the narrowed [role="status"] version.
+- **Acceptance criteria:** the narrowed helper adopted repo-wide (one
+  shared helper file per the ladder); the polluted assertions
+  re-verified; a mutation proof that the narrow version still catches
+  a real toast.
+- **Status:** open
+
 ## T-68 — image hotkeys fire through open modals
 
 - **Spec:** T-46/T-54 worker finding, pre-existing. ImageStudio's
@@ -1199,6 +1225,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 41 — fix wave batch 15: T-49 + T-41 + T-43 (the persistence/
+honesty trio; one shared lesson — a control is a promise in both
+directions). T-49: watermarkPosition persists in the same
+if(watermark) block as the handle and restores through the same mount
+effect, guarded by a WATERMARK_POSITIONS array that also feeds the
+picker so the options and the guard cannot drift; the relaunch E2E
+reads both halves back off the live panel. The dead "No presets
+selected on any clip" path was judged genuinely unreachable (the
+button disables on the same sum the queue iterates) and DELETED, with
+source-level pins in interactionWiring (a string nothing renders is
+invisible to a DOM test) plus the toast tripwire kept. T-41: the
+ambiguous 'choosing' phase deleted rather than patched — the source
+card now models never/searching/done and renders three distinct
+states (invitation; disabled "Looking for screens and windows...";
+the amber twin of the mic/camera warnings), and making the wait real
+forced an error path into existence: a rejected listSources now
+toasts through ipcErrorMessage instead of hanging the wait forever.
+Driven off a 1.5 s-delayed stub (an instant stub cannot show
+in-flight) plus a throwing stub for the refusal. T-43: BOTH Record
+controls now write from their own onChange — the value-keyed persist
+effect is gone, so a write is a user action by construction (one
+fewer effect than a guard would cost); the byte/mtime-identical
+no-write-on-arrival assertion is snapshotted post-Home because
+electron-store legitimately stamps its theme default once per launch
+(probed first). record.convertToMp4 + watermarkPosition added to all
+four settings registries with the cross-check floor 16 -> 18.
+Red-green on all pins; worker mutations per ticket; expediter's own:
+the MP4 restore inverted -> exactly the T-43 relaunch test red
+(first mutation attempt failed to match and was caught by the test
+passing on the unmutated build — the guard against phantom
+mutations working as designed), restore, 16/16. Gates: 1055 unit /
+121 E2E clean, no flake. Findings: T-69 filed (stale selection keeps
+Start enabled), T-70 filed (installToastLog is not a toast log);
+USER_GUIDE corrected where its copy contradicted the shipped default.
 
 Round 40 — fix wave batch 14: T-46 + T-54 (the image-capture pair).
 T-54's mechanism is the standout: instead of painting the background

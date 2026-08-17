@@ -1121,8 +1121,10 @@ test.describe('ExportPanel', () => {
       const config = readConfig(userDataDir)
       expect((config.export as { lastOutputDir?: string })?.lastOutputDir).toBe(outDir)
       // An empty watermark writes nothing — the handle key is only touched
-      // when there is a handle to remember.
+      // when there is a handle to remember, and since T-49 its corner is
+      // written in the same block, so the pair is absent together.
       expect(config.streamerHandle).toBeUndefined()
+      expect(config.watermarkPosition).toBeUndefined()
     } finally {
       await app.close()
     }
@@ -1219,7 +1221,7 @@ test.describe('ExportPanel', () => {
     }
   })
 
-  test('the watermark reaches the filter graph and its handle is remembered; its position is not', async () => {
+  test('the watermark reaches the filter graph, and both halves of it survive a relaunch (T-49)', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('watermark')
     const { app, window, userDataDir, outDir } = studio
@@ -1268,15 +1270,38 @@ test.describe('ExportPanel', () => {
       // Either way the panel leaves its running state rather than sticking.
       await expect(card.getByRole('button', { name: /^Export/ })).toBeEnabled({ timeout: 30_000 })
 
-      // FINDING-2: the position is NOT persisted alongside the handle —
-      // runExportQueue writes `streamerHandle` and `filenameTemplate` only,
-      // so a user who picks "top left" gets bottom-right back next launch.
-      // Pinned in the store the panel would have to use.
+      // T-49 (was FINDING-2): the corner is written with the handle. The old
+      // build persisted `streamerHandle` + `filenameTemplate` only, so a user
+      // who picked "top left" got bottom-right back on the next launch — the
+      // export panel remembered half of one preference.
       const config = readConfig(userDataDir)
       expect(config.streamerHandle).toBe('@imagii_e2e')
-      expect(JSON.stringify(config)).not.toContain('top-left')
+      expect(config.watermarkPosition).toBe('top-left')
     } finally {
       await app.close()
+    }
+
+    // ── the next launch, on the SAME userData: both halves come back ──
+    // The panel only exists once a source is loaded, so the fixture is
+    // re-imported the way a returning user would open their footage.
+    const app2 = await launchApp(userDataDir)
+    try {
+      const window2 = await app2.firstWindow()
+      await window2.waitForLoadState('domcontentloaded')
+      await expect(window2.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      await gotoVideoStudio(window2)
+      await dropOnVideoImporter(window2, clipSrc, path.basename(clipSrc))
+      const card2 = exportCard(window2)
+      await expect(card2.getByPlaceholder('@yourhandle (leave blank for none)')).toHaveValue(
+        '@imagii_e2e',
+        { timeout: 30_000 }
+      )
+      await expect(card2.getByLabel('Watermark position')).toHaveValue('top-left')
+      // Restoring must not rewrite a different value over the stored one
+      // (record.spec's corner test makes the same check for the same reason).
+      expect(readConfig(userDataDir).watermarkPosition).toBe('top-left')
+    } finally {
+      await app2.close()
     }
   })
 
@@ -1400,9 +1425,14 @@ test.describe('ExportPanel', () => {
       await presetBox(window, 'YouTube').uncheck()
       const disabled = card.getByRole('button', { name: 'Export', exact: true })
       await expect(disabled).toBeDisabled()
-      // FINDING-3: because the button is disabled at totalQueued === 0 and
-      // the queue is built from the same sum, `runExportQueue`'s
-      // "No presets selected on any clip" toast is unreachable dead code.
+      // T-49 (was FINDING-3): the disabled button is now the WHOLE refusal.
+      // `runExportQueue` used to carry a "No presets selected on any clip"
+      // toast for a queue that is built from the same count that disables the
+      // button, so no click could ever raise it; the branch is deleted, and
+      // interactionWiring.test.ts pins the copy gone from the panel's source
+      // (a string nothing renders is invisible from here). This stays as the
+      // tripwire for the other direction: a future edit that re-adds a toast
+      // on this path is a toast the user will never see either.
       expect(await readToastLog(window)).not.toEqual(
         expect.arrayContaining([expect.stringContaining('No presets selected')])
       )

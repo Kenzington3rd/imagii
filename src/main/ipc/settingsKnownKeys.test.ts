@@ -27,7 +27,13 @@ describe('settings known-keys validator', () => {
     // missing entry here would make every diary read and write throw at the
     // IPC boundary instead of persisting.
     expect(KNOWN_SETTINGS_KEYS).toContain('postingDiary')
-    expect(KNOWN_SETTINGS_KEYS.length).toBeGreaterThanOrEqual(16)
+    // T-49 / T-43: two preferences that used to be forgotten between
+    // launches — the watermark's corner and the Record MP4 choice. A key
+    // missing here throws at the IPC boundary on both the read and the
+    // write, which reads to the user as "it just doesn't remember".
+    expect(KNOWN_SETTINGS_KEYS).toContain('watermarkPosition')
+    expect(KNOWN_SETTINGS_KEYS).toContain('record.convertToMp4')
+    expect(KNOWN_SETTINGS_KEYS.length).toBeGreaterThanOrEqual(18)
   })
 
   it('carries no key nothing reads (T-57)', () => {
