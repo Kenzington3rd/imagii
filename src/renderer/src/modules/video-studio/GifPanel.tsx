@@ -80,7 +80,7 @@ export function GifPanel(): JSX.Element | null {
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="image">Export as GIF</PanelHeader>
       {tooLong ? (
-        <p className="text-xs text-amber-300">
+        <p className="text-xs text-warn">
           GIF exports over ~10s get huge. Trim the clip first.
         </p>
       ) : null}
@@ -147,7 +147,7 @@ export function GifPanel(): JSX.Element | null {
         {/* Round 17 B2 */}
         {busy ? (
           <button
-            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
             onClick={cancel}
             title="Cancel GIF export"
           >

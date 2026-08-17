@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Modal } from './Modal'
+import { Modal, openModalCount } from './Modal'
 
 export interface Shortcut {
   keys: string
@@ -64,18 +64,34 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
 }
 
 /**
- * Pure toggle predicate: `?` with no Ctrl/Meta, and never while the user is
- * typing (a `?` belongs in the textarea, not in a modal that steals focus).
+ * Pure toggle predicate: `?` with no Ctrl/Meta, never while the user is
+ * typing (a `?` belongs in the textarea, not in a modal that steals focus),
+ * and never while a dialog that isn't this overlay owns the window.
+ *
+ * T-72: that last clause cannot be a bare `isModalOpen()`. This overlay
+ * renders its OWN Modal, so the moment it is up it is itself one of the open
+ * modals and a blanket guard would trap it open — `?` could no longer close
+ * the thing `?` opened, and the panel's own "Press ? again to close." would
+ * be a lie. So the handler passes the COUNT and its own state, and the
+ * overlay subtracts its own claim: while it is open, exactly one of the open
+ * modals is ours. Anything stacked above it wins, which is also what a user
+ * expects — the Variants dialog they opened on purpose stays the topmost
+ * thing on screen.
  */
 export function isOverlayToggleKey(e: {
   key: string
   ctrlKey: boolean
   metaKey: boolean
   tagName: string
+  /** `Modal.openModalCount()` at event time — this overlay's own included. */
+  openModals: number
+  /** Whether this overlay is currently the one rendering a Modal. */
+  overlayOpen: boolean
 }): boolean {
   if (e.key !== '?') return false
   if (e.ctrlKey || e.metaKey) return false
-  return e.tagName !== 'INPUT' && e.tagName !== 'TEXTAREA'
+  if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') return false
+  return e.openModals <= (e.overlayOpen ? 1 : 0)
 }
 
 /** The route's rows, falling back to Home's for an unlisted path. */
@@ -91,13 +107,18 @@ export function HotkeyOverlay(): JSX.Element | null {
     // INIT-G (round 16): keep the `?` toggle handler. Modal owns Escape,
     // scrim click, and focus restore now, so we no longer need our own
     // Escape branch here.
+    // T-72: `open` is a dependency because the predicate needs it — the
+    // listener re-registers on each toggle rather than reading state through
+    // a ref, which is both fewer moving parts and impossible to leave stale.
     function onKey(e: KeyboardEvent): void {
       if (
         !isOverlayToggleKey({
           key: e.key,
           ctrlKey: e.ctrlKey,
           metaKey: e.metaKey,
-          tagName: (e.target as HTMLElement | null)?.tagName ?? ''
+          tagName: (e.target as HTMLElement | null)?.tagName ?? '',
+          openModals: openModalCount(),
+          overlayOpen: open
         })
       ) {
         return
@@ -107,7 +128,7 @@ export function HotkeyOverlay(): JSX.Element | null {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [open])
 
   const shortcuts = shortcutsForRoute(location.pathname)
 

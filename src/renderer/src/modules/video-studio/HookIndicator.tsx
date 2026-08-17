@@ -21,9 +21,9 @@ interface HookIndicatorProps {
 }
 
 const TIER_COLOR: Record<HookScore['tier'], string> = {
-  high: 'bg-emerald-400/20 text-emerald-300 border-emerald-400/40',
-  medium: 'bg-amber-400/20 text-amber-300 border-amber-400/40',
-  low: 'bg-rose-400/20 text-rose-300 border-rose-400/40'
+  high: 'bg-ok-strong/20 text-ok border-ok-strong/40',
+  medium: 'bg-ember/20 text-warn border-ember/40',
+  low: 'bg-danger-strong/20 text-danger border-danger-strong/40'
 }
 
 const TIER_LABEL: Record<HookScore['tier'], string> = {

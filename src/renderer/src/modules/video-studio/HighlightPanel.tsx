@@ -170,7 +170,7 @@ export function HighlightPanel(): JSX.Element | null {
           <span className="font-mono w-10 text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
           <button
-            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
             onClick={() => void window.api.video.cancelHighlight()}
             title="Cancel scan"
           >

@@ -14,6 +14,125 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-65 + T-71 + T-72: a rule that was only ever enforced where it was found
+
+Three bugs, one shape: a rule the app genuinely holds — square pixels,
+color comes from tokens, a dialog owns the window — written down at the
+one call site where somebody hit it, and nowhere else. Each survived
+because the places it was missing looked exactly like the places it was
+present.
+
+### Bug (T-65) — auto-cropped exports were anamorphic by ~0.25%
+
+- **Root cause.** `autoCropForAspect` can only snap a crop to even
+  pixels, so a 16:9 target off a 1080x1920 source crops 1080x606 —
+  1.7822:1, not 1.7778:1. `scale` preserves the SOURCE display aspect
+  rather than forcing square pixels, so ffmpeg banked the difference as
+  `SAR 405:404` and the file every player stretched back to 1.782:1 was
+  the "1920x1080" one the user uploaded. T-12 had fixed exactly this in
+  `runReframe` and `concat.ts` already carried it, but the fix was
+  written as a fact about those two graphs instead of a rule about
+  crop-then-scale, so `filters.ts` — the graph every platform export
+  goes through — never got it.
+- **Fix.** `setsar=1` on the shared `scaleFilter`, mirroring
+  `runReframe`'s `crop,scale,setsar=1`. One line, and it covers every
+  preset, every custom preset and every effect stacked after the scale.
+- **Test.** `tests/integration/media.spec.ts` — "an auto-crop that
+  cannot land on the exact target aspect still ships square pixels"
+  exports the portrait fixture to the YouTube preset and probes the
+  real encode for `SAR 1:1` / `DAR 16:9`. Red on the unfixed build:
+  `expected '405:404' to be '1:1'`. The autoZoom test gained the same
+  SAR assertion, because `zoompan` runs AFTER the setsar and a filter
+  appended past the scale is exactly how this would come back. The
+  T-50 custom-vs-platform identity test now pins the shared value
+  absolutely as well as relatively — an equality alone passes happily
+  when both paths are wrong together.
+- **Lesson.** Square pixels are a property of any crop-then-scale
+  graph, not of the graph where the bug was reported. When a fix is a
+  one-line invariant, grep for the shape (`scale=` here, all four
+  hits) in the same pass and either fix or explicitly exempt every
+  one — the ticket that found it names one site, and the other sites
+  will not name themselves. And it is Layer 5 that can see this at
+  all: SAR is not in the command string, it is in the file ffmpeg
+  wrote.
+
+### Bug (T-71) — three meanings lived in raw Tailwind palette classes
+
+- **Root cause.** The palette had no semantic tier, so danger, warn and
+  ok were spelled `text-rose-300`, `bg-amber-300`, `bg-emerald-400`,
+  `border-amber-400/40` in a dozen files. Tailwind's defaults resolve
+  all of them, so nothing fails, nothing looks broken, and a retheme
+  walks straight past every one — the same disease as T-56's
+  `bg-pink-400` playhead, an order of magnitude wider. One of them
+  (`hover:bg-rose-500` on MoodBoardPanel's remove chip, glyph left at
+  inherited ink) had been sitting at 2.93:1 the whole time: neither
+  color was a token, so no contrast rule ever looked at the pair.
+- **Fix.** `danger` / `danger-soft` / `danger-strong`, `warn`, `ok` /
+  `ok-strong` in both palette files and the sync test, at the values
+  that were already on screen — a rename, not a redesign. Two tiers
+  because both were in use and mean different things: the readable
+  text tone, and the saturated mark tone under it. No `warn-strong`:
+  `amber-400` IS `ember`, so warning surfaces moved onto the token
+  that already claimed warnings in the guide, and a test now fails if
+  any other token is ever given the ember hex. The chip took
+  `hover:text-bg-base` (7.20:1), the same dark-on-fill answer
+  `.btn-primary` already uses against accent.
+- **Test.** `tests/unit/designTokensInSync.test.ts` — the three tier
+  tests, "has no second name for the ember hex", and the AA blocks
+  covering each tone on all three surfaces, on a wash of its own strong
+  tone, and dark-on-danger-fill. E2E locators that keyed on the old
+  class names moved with them (`references.spec.ts`,
+  `record.spec.ts` x2, `video-pipelines.spec.ts`, `image.spec.ts`) —
+  which is itself the discrimination: a class rename with no test
+  pointed at it is a rename nothing can check. Mutations: one wrong
+  hex in `tailwind.config.js` reddens the sync test; the notice card's
+  `border-ember/40` swapped for `border-danger-strong/40` reddens the
+  T-30 references test.
+- **Lesson.** "Use tokens" only holds where a test can see a token. A
+  className is invisible to typecheck and to unit tests, so the two
+  things that make the rule real are the sync test (the name exists in
+  both files) and an E2E locator or contrast assertion pointed at the
+  site. Corollary found here: the moment a token becomes a `bg-*`
+  under text it is a new pairing and needs its own AA check — the
+  bright fill tones all need `text-bg-base`, and `ink-base` on them
+  looks perfectly fine while failing.
+
+### Bug (T-72) — `?` stacked the shortcut overlay over an open dialog
+
+- **Root cause.** The `?` window listener had only the T-13
+  `INPUT`/`TEXTAREA` guard, so it never asked the second question T-68
+  had already answered for the studios: who owns the window right now.
+  It could not simply call `isModalOpen()` either — HotkeyOverlay
+  renders its OWN `Modal`, so once open it is one of the modals the
+  guard counts, and the naive version would have made `?` unable to
+  close the thing `?` opened, with the panel still promising "Press ?
+  again to close." The same shape was live on `/record`: Escape stops
+  the take, `?` opens a Modal mid-take, and one Escape reached both
+  handlers — checking the shortcut list cost the user their recording.
+- **Fix.** `Modal` exposes the count it already kept
+  (`openModalCount()`), and the overlay subtracts its own claim:
+  `openModals <= (overlayOpen ? 1 : 0)`. RecordStudio's Escape takes
+  the plain `isModalOpen()` guard, since it owns no modal.
+- **Test.** `tests/e2e/image.spec.ts` (T-68 test, extended) — `?`
+  behind the Variants dialog leaves exactly one dialog up and it is
+  the Variants one; with nothing open `?` opens AND closes the
+  overlay. `tests/e2e/home-chrome.spec.ts` — the third dismissal path.
+  `tests/e2e/record.spec.ts` — `?` mid-take, Escape closes the overlay
+  only, Stop still on screen, then Escape really does stop. Unit:
+  `HotkeyOverlay.test.ts`, the four count/self cases. Red before the
+  fix: two dialogs where the test wanted one, and `Stop` gone from the
+  recording screen. Mutation: the naive `openModals === 0` guard
+  reddens both the unit self-close case and the home-chrome `?`-close.
+- **Lesson.** A guard that a component applies to itself needs a
+  self-exemption, and the honest way to write one is to subtract your
+  own claim from a count rather than to special-case your own name.
+  Second: when a global binding is added, check it against every OTHER
+  global binding on the routes it covers — `?` and Escape were both
+  documented in the same table, on the same route, and nobody had put
+  them in a room together.
+
+---
+
 ## 2026-08-17 — T-68 + T-69: a control that answers for something that is no longer there
 
 Two bugs, one shape: a claim that stayed true after the thing it

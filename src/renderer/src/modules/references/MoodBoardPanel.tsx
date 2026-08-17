@@ -149,7 +149,7 @@ export function MoodBoardPanel(): JSX.Element {
                   Rename
                 </button>
                 <button
-                  className="btn-ghost px-3 py-1 text-rose-300 hover:text-rose-200"
+                  className="btn-ghost px-3 py-1 text-danger hover:text-danger-soft"
                   onClick={onDelete}
                 >
                   Delete
@@ -187,7 +187,13 @@ export function MoodBoardPanel(): JSX.Element {
                         </button>
                       </div>
                       <button
-                        className="absolute top-1 right-1 bg-bg-base/80 hover:bg-rose-500 text-xs rounded-full w-6 h-6 flex items-center justify-center"
+                        // T-71: the fill was a raw `rose-500` with the glyph
+                        // left at inherited ink — 2.93:1, under AA, on the
+                        // only hover state in the app that turns a token into
+                        // a background under text. Dark-on-fill is how
+                        // `.btn-primary` already answers this against accent;
+                        // here it reads 7.20:1.
+                        className="absolute top-1 right-1 bg-bg-base/80 hover:bg-danger-strong hover:text-bg-base text-xs rounded-full w-6 h-6 flex items-center justify-center"
                         onClick={() => removeFromCollection(collection.id, item.id)}
                         title="Remove"
                         aria-label="Remove item"

@@ -175,7 +175,9 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
 - **Acceptance criteria:**
   - [ ] `setsar=1` (or equivalent) in the reframe graph; Layer 5 asserts
         SAR 1:1 on reframe output.
-- **Status:** open (low priority)
+- **Status:** done (round 23 — see Done; this status line was stale
+  until round 44: the fix and its Layer 5 assertions shipped with
+  T-08..T-12, but only the Done entry was updated)
 
 ## T-13 — mount HotkeyOverlay (dead `?` shortcut, advertised in-app)
 
@@ -1098,6 +1100,19 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** done (round 42 — see Done)
 
+## T-73 — one Escape closes every stacked modal at once
+
+- **Spec:** T-72 worker finding, pre-existing. Each open Modal
+  registers its own window keydown, so with a confirm stacked inside
+  ExportDialog one Escape fires both handlers. Harmless today (the
+  inner closing the outer is usually wanted) but it is the same
+  topmost-claim gap T-72 fixed for ?; Modal now exposes
+  openModalCount, so a per-instance depth claim is cheap.
+- **Acceptance criteria:** Escape closes only the topmost modal;
+  the stacked-confirm E2E asserts the outer dialog survives one
+  Escape; existing single-modal Escape coverage green.
+- **Status:** open (backlog — post-wave)
+
 ## T-72 — HotkeyOverlay's ? toggle stacks over open dialogs
 
 - **Spec:** T-68 worker finding. The ? window listener has only the
@@ -1111,7 +1126,7 @@ IMG-PREC.
 - **Acceptance criteria:** ? is inert behind other modals but the
   overlay can still dismiss itself; E2E both ways; the Record Escape
   shape addressed or documented in place.
-- **Status:** open
+- **Status:** done (round 44 — see Done)
 
 ## T-71 — no semantic color tier: rose/amber/emerald raw palette classes repo-wide
 
@@ -1128,7 +1143,7 @@ IMG-PREC.
   + the sync test, WCAG AA shown per pairing; all semantic palette
   classes migrated with locators updated; withAlpha adopted for the
   alpha literals; owner screenshot review flagged (visual deltas).
-- **Status:** open
+- **Status:** done (round 44 — see Done)
 
 ## T-69 — a stale source selection keeps Start enabled after a refresh into nothing
 
@@ -1206,7 +1221,7 @@ IMG-PREC.
 - **Acceptance criteria:** export path emits SAR 1:1 (setsar or
   scale-after-crop, matching runReframe's approach); Layer 5 asserts
   square pixels on an odd-aspect crop; pins updated.
-- **Status:** open
+- **Status:** done (round 44 — see Done)
 
 ## T-62 — remaining mouse gestures still on the truncatable shape
 
@@ -1259,6 +1274,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 44 — fix wave batch 18: T-65 + T-71 + T-72 (the final product
+trio). T-65: scaleFilter was the only crop-then-scale graph without
+setsar=1 (runReframe and concat both had it) — one line on the shared
+filter covers every platform preset, custom preset, and stacked
+effect; Layer 5 red captured the exact 405:404, and the T-50 identity
+suite gained ABSOLUTE 1:1/16:9 pins after the mutation proved
+relative equality passes when both paths agree on the wrong value.
+T-71: the semantic tier is a RENAME, not a redesign — danger/
+danger-soft/danger-strong, warn, ok/ok-strong carry the exact palette
+values already on screen (WCAG table in the worker report, all AA);
+amber-400 IS ember to the byte so those surfaces moved onto the
+existing token with a new no-second-token-owns-this-hex test. One
+pre-existing AA failure found and fixed (MoodBoard remove chip hover
+2.93:1 -> 7.20:1, the one deliberate visible delta beyond three
+one-step tone changes — owner screenshot review flagged). withAlpha
+riders converted incl. two same-disease literals two lines away;
+templates/assetCatalog stay literal as a documented fourth
+DESIGN_GUIDE exception (artwork specs are the user's pixels, not
+chrome; the app's DEFAULT marks do follow tokens, the blank page's
+white does not — one line to overrule). T-72: the overlay's pure
+predicate now counts modal claims and subtracts its own
+(openModals <= overlayOpen ? 1 : 0) — inert behind any other dialog,
+still self-closing, yields to anything above it. The Record rider was
+REACHABLE, not speculative: /record advertises Esc and ?, one Escape
+mid-take reached both handlers (E2E red captured "Still recording:
+the phase never changed"... inverted — the take kept rolling? No: the
+overlay ate the phase change); guarded with isModalOpen. Worker
+mutations per ticket (setsar removed; hex tweak; wrong-token swap;
+naive guard -> the overlay trapped open behind its own claim exactly
+as the ticket predicted). Expediter's own: the Record Escape guard
+disabled -> exactly the extended Esc E2E red, restore, 17/17. Gates:
+1082 unit / 69+2 Layer 5 / 123 E2E at workers:1. T-12's stale status
+line corrected (fixed since round 23; only the Done entry had been
+updated). T-73 filed to backlog (Escape closes every stacked modal).
 
 Round 43 — fix wave batch 17: T-62 + T-67 + T-70 (test infra) +
 T-68 + T-69 (product). T-62: five gesture call sites converted to

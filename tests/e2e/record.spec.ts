@@ -499,7 +499,7 @@ test.describe('T-27 Record Studio', () => {
       // would have been. Both warnings are on screen at once here, which is
       // what makes "mirrors" checkable rather than a claim.
       await expect(camWarning).toBeVisible()
-      await expect(camWarning).toHaveClass(/text-amber-300/)
+      await expect(camWarning).toHaveClass(/text-warn/)
       await expect(window.getByText(MIC_WARNING)).toBeVisible()
 
       // No device select, and — the other half of the fix — no Corner picker
@@ -841,7 +841,7 @@ test.describe('T-27 Record Studio', () => {
       //    (Wayland without a portal, macOS screen recording denied) saw a
       //    button that appeared to do nothing at all. ──
       await expect(warning).toBeVisible({ timeout: 20_000 })
-      await expect(warning).toHaveClass(/text-amber-300/)
+      await expect(warning).toHaveClass(/text-warn/)
       await expect(searching).toHaveCount(0)
       await expect(pick).toBeEnabled()
       await expect(window.locator('img[alt]')).toHaveCount(0)
@@ -1164,6 +1164,20 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('button', { name: /Start recording/ }).click()
       await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
       await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+
+      // T-72 rider: Escape-to-stop is a window-level binding and so is the
+      // app-wide HotkeyOverlay's `?` — and /record's own shortcut table
+      // advertises BOTH. Opening the overlay mid-take and pressing Escape
+      // must dismiss the overlay only; on the unguarded build the same
+      // keypress also ended the recording, so a user who opened the
+      // shortcut list to check something lost the take to closing it.
+      await window.keyboard.press('?')
+      await expect(window.getByText('Press ? again to close.')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      // Still recording: the phase never changed.
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible()
+      await expect(window.getByText(/Finishing up/)).toHaveCount(0)
 
       // Round 18 C's Esc binding — the only way the documented "Esc: Stop
       // recording" hotkey is proven to be wired.

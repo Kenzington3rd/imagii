@@ -77,7 +77,14 @@ function autoCropForAspect(
 }
 
 function scaleFilter(preset: PlatformPreset): string {
-  return `scale=${preset.width}:${preset.height}:flags=lanczos`
+  // T-65: `setsar=1` is load-bearing, not decoration — same rule T-12 fixed
+  // in runReframe and concat.ts already carried. `scale` preserves the
+  // SOURCE display aspect, and `autoCropForAspect` above can only snap to
+  // even pixels (1080x606 for a 16:9 target off a 1080x1920 source is
+  // 1.782:1, not 1.778:1). Without this, ffmpeg banks that ~0.25% as
+  // SAR 405:404, and every player stretches the "1920x1080" upload back to
+  // 1.782:1. Every crop-then-scale graph in this app ends in setsar=1.
+  return `scale=${preset.width}:${preset.height}:flags=lanczos,setsar=1`
 }
 
 /** Allowed hex-color form for an overlay (`#RRGGBB` or `RRGGBB`). */

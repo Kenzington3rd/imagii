@@ -529,7 +529,7 @@ export function ExportPanel(): JSX.Element | null {
               </span>
               <div className="w-40 h-1.5 bg-bg-hover rounded-full overflow-hidden">
                 <div
-                  className={`h-full ${j.error ? 'bg-rose-400' : 'bg-accent'}`}
+                  className={`h-full ${j.error ? 'bg-danger-strong' : 'bg-accent'}`}
                   style={{ width: `${Math.round(j.percent)}%` }}
                 />
               </div>

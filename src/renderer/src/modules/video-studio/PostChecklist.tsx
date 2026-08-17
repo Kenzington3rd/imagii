@@ -240,7 +240,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                 <span className="text-ink-dim">{e.platforms.join(' · ')}</span>
                 <button
                   onClick={() => deleteEntry(e.id)}
-                  className="text-ink-dim hover:text-rose-300"
+                  className="text-ink-dim hover:text-danger"
                   title="Delete entry"
                   aria-label="Delete entry"
                 >

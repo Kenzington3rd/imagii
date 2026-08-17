@@ -28,10 +28,10 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
       open={open}
       onClose={onCancel}
       title="Safe-zone warning"
-      className="max-w-md w-full p-5 ring-1 ring-amber-400/40"
+      className="max-w-md w-full p-5 ring-1 ring-ember/40"
     >
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-amber-300">
+        <span className="text-warn">
           <Icon name="warning" size={18} />
         </span>
         <h2 className="text-lg font-semibold">Safe-zone warning</h2>

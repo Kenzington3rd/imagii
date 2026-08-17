@@ -98,7 +98,7 @@ export function SecondaryTrackPanel(): JSX.Element {
               {ROLE_OPTIONS.find((o) => o.value === secondary.role)?.label}: {secondary.fileName}
             </span>
             <button
-              className="text-ink-dim hover:text-rose-300 text-xs px-2"
+              className="text-ink-dim hover:text-danger text-xs px-2"
               onClick={() => setSecondaryTrack(null)}
             >
               ✕ Remove

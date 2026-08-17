@@ -83,7 +83,7 @@ export function PresetPanel(): JSX.Element {
                 Apply
               </button>
               <button
-                className="text-ink-dim hover:text-rose-300"
+                className="text-ink-dim hover:text-danger"
                 onClick={() => remove(p)}
                 title="Remove preset"
                 aria-label="Remove preset"

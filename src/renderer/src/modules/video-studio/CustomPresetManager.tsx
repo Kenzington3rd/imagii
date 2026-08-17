@@ -225,7 +225,7 @@ export function CustomPresetManager({
                       {PLATFORM_INFO[p.basePlatformId].label}
                     </span>
                     <button
-                      className="ml-auto text-ink-dim hover:text-rose-300 text-xs"
+                      className="ml-auto text-ink-dim hover:text-danger text-xs"
                       onClick={() => remove(p)}
                     >
                       ✕ delete

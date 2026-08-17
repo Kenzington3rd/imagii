@@ -445,6 +445,24 @@ describe('video export presets (real ffmpeg)', () => {
     expect(v?.height).toBe(1080)
   })
 
+  it('an auto-crop that cannot land on the exact target aspect still ships square pixels', async () => {
+    // T-65. `autoCropForAspect` snaps the crop to even pixels, so a 16:9
+    // target off a 1080x1920 source crops 1080x606 — 1.7822:1, not
+    // 1.7778:1. `scale` alone preserves the SOURCE display aspect, so
+    // ffmpeg banked that ~0.25% as SAR 405:404 and every player stretched
+    // the "1920x1080" upload back to 1.782:1. Same disease T-12 fixed in
+    // runReframe, one table over; only a real encode can see it, which is
+    // why it survived every string-shape unit test on this path.
+    const clip = makeClip({ startSec: 0.5, endSec: 3 })
+    const res = await runExportJob(makeJob(portraitSrc, 'youtube', clip, 'job-p2l-sar'), () => {})
+    const info = await ffprobeJson(res.outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    expect(v?.width).toBe(1920)
+    expect(v?.height).toBe(1080)
+    expect(v?.sample_aspect_ratio).toBe('1:1')
+    expect(v?.display_aspect_ratio).toBe('16:9')
+  })
+
   it('speed 2x halves output duration and keeps audio in sync', async () => {
     const clip = makeClip({ speedMultiplier: 2, startSec: 0, endSec: 4 })
     const res = await runExportJob(makeJob(landscapeSrc, 'youtube', clip, 'job-speed'), () => {})
@@ -471,6 +489,10 @@ describe('video export presets (real ffmpeg)', () => {
     const v = info.streams.find((s) => s.codec_type === 'video')
     expect(v?.width).toBe(1080)
     expect(v?.height).toBe(1920)
+    // T-65: this is the auto-crop path too (1920x1080 -> 9:16 snaps to a
+    // 606x1080 crop), and zoompan runs AFTER the setsar. Pin square pixels
+    // here so a filter appended past the scale can't undo them.
+    expect(v?.sample_aspect_ratio).toBe('1:1')
   })
 
   it('autoZoom export succeeds on a landscape preset too', async () => {
@@ -598,16 +620,19 @@ describe('custom export presets (real ffmpeg)', () => {
     expect(cv?.height).toBe(720)
     expect(cv?.width).toBe(pv?.width)
     expect(cv?.height).toBe(pv?.height)
-    // Sample and display aspect included. NOTE (finding, not fixed here):
-    // both come out 405:404 / 1.005:1 rather than square — `autoCropForAspect`
-    // rounds the crop to even pixels (1080x606 for a 16:9 target off a
-    // 1080x1920 source, which is 1.782:1, not 1.778:1) and ffmpeg records
-    // the ~0.25% difference as SAR instead of a scale. That is the EXISTING
-    // behavior of every landscape-preset-on-portrait-source export; the
-    // point of this assertion is that a custom preset does exactly what a
-    // platform preset does, whatever that is.
+    // Sample and display aspect included. The point of the equality is that
+    // a custom preset does exactly what a platform preset does, whatever
+    // that is — it holds independently of what the shared value happens to
+    // be, which is why it survived T-65 unchanged. What that value IS was
+    // the finding recorded here in round 37: both came out SAR 405:404
+    // (`autoCropForAspect` snaps the crop to even pixels and ffmpeg banked
+    // the ~0.25% as sample aspect). T-65 fixed that in the shared
+    // scaleFilter, so both now read 1:1 / 16:9 — pinned absolutely below so
+    // this test also fails if the two paths agree on the WRONG value.
     expect(cv?.sample_aspect_ratio).toBe(pv?.sample_aspect_ratio)
     expect(cv?.display_aspect_ratio).toBe(pv?.display_aspect_ratio)
+    expect(cv?.sample_aspect_ratio).toBe('1:1')
+    expect(cv?.display_aspect_ratio).toBe('16:9')
   })
 
   it('runs a custom preset with the same effects the platform presets take', async () => {

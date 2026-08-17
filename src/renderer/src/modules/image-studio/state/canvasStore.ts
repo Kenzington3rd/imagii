@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
+import { ACCENT, ACCENT_MUTED, BG_BASE, EMBER, withAlpha } from '../../../styles/tokens'
 import type {
   CanvasDocument,
   CanvasLayer,
@@ -60,6 +61,21 @@ interface CanvasState {
   canRedo: () => boolean
 }
 
+/**
+ * T-71 note on where the token line falls in this file.
+ *
+ * The four `make*Layer` defaults below were authored FROM the palette —
+ * three of them were the token hex spelled long-hand (accent, ember,
+ * bg-base) and the fourth was a raw `rose-500`, the same palette leak T-56
+ * found in WaveformView. They are the app's own default marks, so they
+ * follow the tokens: a retheme should hand the user shapes in imagii's
+ * colors, not in a colour frozen from round 19.
+ *
+ * `background` below is the exception and stays literal. A blank page is
+ * white because pages are white — it is document content, not chrome, and
+ * no token expresses it. Same reasoning keeps `templates.ts` and
+ * `assetCatalog.ts` on literals; see DESIGN_GUIDE's exception list.
+ */
 function defaultDoc(): CanvasDocument {
   return {
     width: 1200,
@@ -256,8 +272,8 @@ export function makeRectLayer(x: number, y: number, w = 200, h = 120): RectLayer
     opacity: 1,
     width: w,
     height: h,
-    fill: 'rgba(255,49,49,0.4)',
-    stroke: '#ff3131',
+    fill: withAlpha(ACCENT, 0.4),
+    stroke: ACCENT,
     strokeWidth: 2,
     cornerRadius: 8
   }
@@ -278,8 +294,8 @@ export function makeEllipseLayer(x: number, y: number, rx = 80, ry = 60): Ellips
     opacity: 1,
     radiusX: rx,
     radiusY: ry,
-    fill: 'rgba(244,63,94,0.4)',
-    stroke: '#f43f5e',
+    fill: withAlpha(ACCENT_MUTED, 0.4),
+    stroke: ACCENT_MUTED,
     strokeWidth: 2
   }
 }
@@ -298,7 +314,7 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
     scaleY: 1,
     opacity: 1,
     points,
-    stroke: '#fbbf24',
+    stroke: EMBER,
     strokeWidth: 3,
     closed
   }
@@ -320,6 +336,6 @@ export function makeTextLayer(x: number, y: number, text = 'Text'): TextLayer {
     text,
     fontSize: 32,
     fontFamily: 'Inter, sans-serif',
-    fill: '#120c0c'
+    fill: BG_BASE
   }
 }
