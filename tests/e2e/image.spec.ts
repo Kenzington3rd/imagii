@@ -79,14 +79,27 @@ const __dirname = path.dirname(__filename)
  * named `chrome` for the capture; the proof is `editor chrome stays out of the
  * file…`, which exports the same document four ways and compares bytes.
  *
- * BUG-VARIANTS-STALE — the variants dialog keeps its previews across a close,
- * so reopening it shows renders of a canvas that may no longer exist, with no
- * Generate button in sight. Pinned in `variants: …` (open as T-46).
+ * BUG-VARIANTS-STALE is FIXED in T-46: the variants dialog kept its previews
+ * across a close AND across every edit, so reopening it offered renders of a
+ * canvas that no longer existed with no Generate button in sight. The previews
+ * now belong to the document they were rendered from — `variants: …` drives
+ * both halves (untouched canvas keeps them, changed canvas offers Generate).
+ * The same ticket routed the variant capture through `captureDocument`, so a
+ * saved variant is the document (1280x720) rather than the window (956x537).
+ *
+ * T-54 is FIXED: `doc.background` was a CSS style on the stage element, which
+ * Konva cannot see, so no export carried it — PNGs came out transparent and
+ * JPGs composited onto black while the canvas showed the template's fill. It
+ * is now the first NODE of the document layer (Canvas.tsx), so screen and
+ * export are one render. `the document background lands in the bytes…` samples
+ * a real pixel out of the exported PNG and JPG, and out of an emote pack that
+ * must stay transparent.
  *
  * ── Mutation proofs (run by hand, restored byte-identical afterwards) ───
  *
- * Five assertions here could have passed vacuously. Each was proven to
- * discriminate by mutating the TEST (never `src/`) and watching it fail:
+ * Assertions here that could have passed vacuously. Each was proven to
+ * discriminate by mutating the TEST (A-E) or `src/` (F-G) and watching it fail;
+ * every mutation was reverted and the file md5-checked afterwards:
  *   A. snap: dropping `snap.check()` made the exact `x === 120` read 132.37.
  *   B. locked drag: dropping the lock click moved the shape 200 -> 260.4, so
  *      "x unchanged" is a real refusal and not a gesture that does nothing.
@@ -96,6 +109,12 @@ const __dirname = path.dirname(__filename)
  *      the derived row-name list, so `expectTemplateApplied` really compares.
  *   E. paste: dropping the `clipboard.writeImage` call left Ctrl+V adding
  *      nothing, so the pasted layer really comes from the clipboard image.
+ *   F. T-54 (src): deleting the background Rect from Canvas.tsx put the
+ *      exported PNG's probe pixel back to rgba(0,0,0,0) and the JPG's to
+ *      black — the two halves of the defect this test exists for.
+ *   G. T-46 (src): putting the raw `stage.toDataURL` back in the variants
+ *      capture wrote 956x537 again; dropping the `previews.doc === doc`
+ *      check put four tiles of the dead canvas back on the reopen.
  */
 
 const SCREENSHOTS = path.join(__dirname, 'screenshots')
@@ -157,6 +176,20 @@ function pngSize(buf: Buffer): Size {
   if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG')
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
 }
+
+/**
+ * A 6-digit hex colour as channels, so a background expectation is DERIVED
+ * from the template module rather than transcribed into this spec.
+ */
+function hexRgb(hex: string): { r: number; g: number; b: number } {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex)
+  if (!match) throw new Error(`not a 6-digit hex colour: ${hex}`)
+  const n = Number.parseInt(match[1] as string, 16)
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+
+/** JPEG is lossy; a flat area round-trips within a channel or two. */
+const JPEG_TOL = 4
 
 function jpegSize(buf: Buffer): Size {
   if (buf[0] !== 0xff || buf[1] !== 0xd8) throw new Error('not a JPEG')
@@ -288,6 +321,55 @@ async function waitForDownloads(studio: Studio, n: number): Promise<Buffer[]> {
   return names.map((name) => readFileSync(path.join(studio.downloadDir, name)))
 }
 
+/**
+ * One pixel out of exported bytes, decoded by the repo's OWN bundled ffmpeg —
+ * the same binary the fixtures come from, so no new dependency and no
+ * hand-rolled PNG/JPEG decoder. `crop=1:1:x:y` into a 4-byte `rawvideo`/`rgba`
+ * dump: a PNG round-trips exactly (probed), a JPEG lands within `JPEG_TOL`.
+ *
+ * T-54 needs this because dimensions are blind to content — the same lesson
+ * T-53 wrote down. A PNG can be exactly 1280x720 with every pixel of the
+ * document's background missing.
+ *
+ * `format=rgba` runs BEFORE the crop deliberately: a JPEG decodes to
+ * subsampled yuvj420p, and `crop` rounds a 1x1 box down to the chroma grid —
+ * i.e. to 0x0, which ffmpeg rejects outright ("positive size for width '0'").
+ * Converting first makes the frame 4:4:4 so one pixel is a legal crop, and
+ * makes both formats take the identical path.
+ */
+async function samplePixel(
+  studio: Studio,
+  bytes: Buffer,
+  ext: 'png' | 'jpg',
+  x: number,
+  y: number
+): Promise<{ r: number; g: number; b: number; a: number }> {
+  const source = path.join(studio.root, `probe.${ext}`)
+  const raw = path.join(studio.root, 'probe.raw')
+  writeFileSync(source, bytes)
+  const result = await runBinary(ffmpegPath, [
+    '-y',
+    '-i',
+    source,
+    '-vf',
+    `format=rgba,crop=1:1:${x}:${y}`,
+    '-f',
+    'rawvideo',
+    '-pix_fmt',
+    'rgba',
+    raw
+  ])
+  if (result.code !== 0) {
+    throw new Error(
+      `pixel probe exit ${result.code} on ${bytes.length} ${ext} bytes ` +
+        `(${bytes.subarray(0, 4).toString('hex')}): ${result.stderr.slice(-800)}`
+    )
+  }
+  const px = readFileSync(raw)
+  if (px.length < 4) throw new Error(`pixel probe wrote ${px.length} bytes, wanted 4`)
+  return { r: px[0] as number, g: px[1] as number, b: px[2] as number, a: px[3] as number }
+}
+
 async function openStudio(label: string): Promise<Studio> {
   if (!existsSync(SCREENSHOTS)) mkdirSync(SCREENSHOTS, { recursive: true })
   const root = path.join(os.tmpdir(), `imagii-e2e-image-${label}-${Date.now().toString(36)}`)
@@ -357,19 +439,31 @@ interface ShapeInfo {
 }
 
 /**
- * Every node in the stage's DOCUMENT layer (children[0]) — the render of
+ * Every USER node in the stage's DOCUMENT layer (children[0]) — the render of
  * `doc.layers`, in doc order. Invisible layers are absent by design
- * (Canvas.tsx:247 returns null for them).
+ * (Canvas.tsx returns null for them).
+ *
+ * T-54 put one node in that layer which is not a user layer: the background
+ * rect, drawn first and named `background`, which is how `doc.background`
+ * reaches the exported bytes. It is skipped by name — no user layer carries a
+ * Konva `name` at all (Canvas.tsx's `baseProps` never sets one), so the skip
+ * cannot swallow a real shape.
  */
 function stageShapes(window: Page): Promise<ShapeInfo[]> {
   return window.evaluate(() => {
     const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
-      | { children: Array<{ children: Array<{ getClassName(): string; attrs: object }> }> }
+      | {
+          children: Array<{
+            children: Array<{ getClassName(): string; attrs: { name?: string } }>
+          }>
+        }
       | undefined
     if (!stage) throw new Error('__imagiiStage is not set')
     const doc = stage.children[0]
     if (!doc) return []
-    return doc.children.map((n) => ({ cls: n.getClassName(), ...n.attrs })) as ShapeInfo[]
+    return doc.children
+      .filter((n) => n.attrs.name !== 'background')
+      .map((n) => ({ cls: n.getClassName(), ...n.attrs })) as ShapeInfo[]
   })
 }
 
@@ -1659,6 +1753,102 @@ test.describe('Image Studio — export', () => {
     }
   })
 
+  test('the document background lands in the bytes, and a transparent doc stays transparent', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('export-background')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      const bg = hexRgb(t.doc.background)
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      const format = exportPanel.getByRole('combobox').first()
+      await exportPanel.getByLabel('Scale').selectOption('1')
+
+      // A document point no layer covers, so whatever is there is the
+      // BACKGROUND and nothing else. Guarded against the template rather than
+      // trusted: rects are checked against their own box, and text (which
+      // renders right and down from its origin) against its origin.
+      const BG_X = 10
+      const BG_Y = 500
+      for (const layer of t.doc.layers) {
+        if (layer.type === 'rect') {
+          const hit =
+            BG_X >= layer.x &&
+            BG_X < layer.x + layer.width &&
+            BG_Y >= layer.y &&
+            BG_Y < layer.y + layer.height
+          expect(hit, `background probe must miss "${layer.name}"`).toBe(false)
+        } else if (layer.type === 'text') {
+          expect(
+            BG_X < layer.x || BG_Y < layer.y,
+            `background probe must miss "${layer.name}"`
+          ).toBe(true)
+        }
+      }
+
+      // ── PNG: the canvas shows the template's dark fill, so the file must ──
+      await exportButton.click()
+      const [png] = await waitForDownloads(studio, 1)
+      expect(pngSize(png as Buffer)).toEqual({ w: t.doc.width, h: t.doc.height })
+      expect(
+        await samplePixel(studio, png as Buffer, 'png', BG_X, BG_Y),
+        'T-54: the exported PNG carries doc.background, opaque'
+      ).toEqual({ ...bg, a: 255 })
+
+      // ── JPG: no alpha channel at all, so a dropped background is BLACK ──
+      await clearDownloads(studio.app)
+      await format.selectOption('jpg')
+      await exportButton.click()
+      const [jpg] = await waitForDownloads(studio, 1)
+      const jpgPx = await samplePixel(studio, jpg as Buffer, 'jpg', BG_X, BG_Y)
+      for (const channel of ['r', 'g', 'b'] as const) {
+        expect(
+          Math.abs(jpgPx[channel] - bg[channel]),
+          `T-54: exported JPG ${channel}=${jpgPx[channel]} near ${bg[channel]}`
+        ).toBeLessThanOrEqual(JPEG_TOL)
+      }
+
+      // ── the emote template WANTS transparency — that is the point of an
+      //    emote — and keeps it. Same click, opposite expectation. ──
+      const emote = templateById('emote-blank-112')
+      expect(emote.doc.background, 'the emote template is a transparent doc').toBe('transparent')
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await dialog
+        .locator('button.card')
+        .filter({ has: window.getByText(emote.name, { exact: true }) })
+        .click()
+      await expect(dialog).toHaveCount(0)
+      await expectTemplateApplied(window, emote)
+
+      await clearDownloads(studio.app)
+      await format.selectOption('png')
+      await exportButton.click()
+      const pack = await waitForDownloads(studio, 3)
+      const full = pack[2] as Buffer
+      expect(pngSize(full)).toEqual({ w: emote.doc.width, h: emote.doc.height })
+      // The corner: outside the base circle (centre 56,56 r 50), so the only
+      // thing that could be there is a background that should not exist.
+      expect(
+        (await samplePixel(studio, full, 'png', 2, 2)).a,
+        'T-54: an emote exports with a real alpha channel'
+      ).toBe(0)
+      // Positive control: the middle of the same PNG is the circle's fill, so
+      // "transparent corner" is a claim about the background and not about an
+      // export that came out empty.
+      const centre = await samplePixel(studio, full, 'png', emote.doc.width / 2, emote.doc.height / 2)
+      const circle = emote.doc.layers[0]
+      if (!circle || circle.type !== 'ellipse') throw new Error('emote template lost its circle')
+      expect(centre).toEqual({ ...hexRgb(circle.fill), a: 255 })
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'image-12-export-background.png') })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
   test('variants: generate four tiles, save one, regenerate, save all', async () => {
     test.setTimeout(150_000)
     const studio = await openStudio('variants')
@@ -1667,14 +1857,23 @@ test.describe('Image Studio — export', () => {
       const t = templateById('yt-thumb-bold')
       await templateCard(window, t).click()
       await expectTemplateApplied(window, t)
+      // The on-screen stage is a fit-to-container render and is NOT the
+      // document size — asserted first, so the dimension claims below are
+      // claims about the capture math and not accidents of this window (the
+      // T-45 pattern, now that variants share `captureDocument`).
+      expect((await stageGeom(window)).stageW, 'the stage is zoomed, not 1:1').not.toBe(t.doc.width)
 
-      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
+      const variantsButton = window.locator(EXPORT).getByRole('button', { name: 'Variants' })
+      await variantsButton.click()
       const dialog = window.locator('[role="dialog"]')
+      const generate = dialog.getByRole('button', { name: 'Generate 3 variants' })
+      const tiles = dialog.locator('img')
+      const tileUrls = (): Promise<string[]> =>
+        tiles.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src))
       await expect(dialog).toContainText('Generate three color-graded variants')
 
       // ── generate: original + punchy + warm + cool ──
-      await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
-      const tiles = dialog.locator('img')
+      await generate.click()
       await expect(tiles).toHaveCount(4, { timeout: 30_000 })
       for (const label of [
         'Original (unchanged)',
@@ -1685,58 +1884,67 @@ test.describe('Image Studio — export', () => {
         await expect(dialog.getByText(label, { exact: true })).toBeVisible()
       }
       // The three grades really differ from the original render.
-      const urls = await tiles.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src))
+      const urls = await tileUrls()
       expect(new Set(urls).size).toBe(4)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-10-variants.png') })
 
-      // ── save one tile ──
+      // ── save one tile: T-46, the saved bytes are the DOCUMENT ──
       await dialog.locator('.card').filter({ hasText: 'Warm' }).getByRole('button', { name: 'Save' }).click()
       const [warm] = await waitForDownloads(studio, 1)
       expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-variant-warm-\d+\.png$/)
-      expect(pngSize(warm as Buffer).w).toBeGreaterThan(0)
+      expect(
+        pngSize(warm as Buffer),
+        'T-46: a saved variant is the document, not the window'
+      ).toEqual({ w: t.doc.width, h: t.doc.height })
 
-      // ── Escape closes it; change the canvas while it is closed ──
+      // ── T-46: reopening an UNTOUCHED canvas keeps the work it just did ──
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      await variantsButton.click()
+      await expect(tiles).toHaveCount(4)
+      expect(await tileUrls(), 'nothing changed, so nothing was thrown away').toEqual(urls)
+      await expect(generate).toHaveCount(0)
+
+      // ── …but a canvas that CHANGED underneath gets the Generate button back.
+      //    T-25 finding BUG-VARIANTS-STALE, fixed in T-46: the previews used to
+      //    be plain component state that only early-returned on `!open`, so the
+      //    user reopened onto four renders of a canvas that no longer existed
+      //    with no Generate button in sight. They now belong to the document
+      //    they were rendered from. ──
       await window.keyboard.press('Escape')
       await expect(dialog).toHaveCount(0)
       await layerRow(window, 'Accent bar').getByTitle('Show/hide').click()
       await expectShapeCount(window, 3)
+      await variantsButton.click()
+      await expect(tiles).toHaveCount(0)
+      await expect(generate).toBeVisible()
+      await expect(dialog).toContainText('Generate three color-graded variants')
 
-      // T-25 FINDING (BUG-VARIANTS-STALE): reopening shows the OLD renders.
-      // `ThumbnailVariants` keeps `previews` in state and only early-returns on
-      // `!open` (ThumbnailVariants.tsx:109), so the component instance — and
-      // its previews — survive a close. The user reopens the dialog and is
-      // offered four tiles of a canvas that no longer exists, with no Generate
-      // button to be seen. Asserted here rather than fixed (T-25 is coverage).
-      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
-      await expect(tiles).toHaveCount(4)
-      await expect(dialog.getByRole('button', { name: 'Generate 3 variants' })).toHaveCount(0)
-      const stale = await tiles.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src))
-      expect(stale).toEqual(urls)
+      // ── generating now really re-reads the canvas ──
+      await generate.click()
+      await expect(tiles).toHaveCount(4, { timeout: 30_000 })
+      const withHidden = await tileUrls()
+      expect(withHidden[0]).not.toBe(urls[0])
 
-      // ── Regenerate really re-reads the canvas ──
+      // ── Regenerate: previews are current, so re-rendering the same canvas
+      //    must reproduce it byte for byte. That it re-READS the canvas is the
+      //    step above — Regenerate and Generate are literally the same handler,
+      //    pinned in tests/unit/interactionWiring.test.ts. ──
       await dialog.getByRole('button', { name: 'Regenerate' }).click()
-      await expect
-        .poll(
-          async () =>
-            (await tiles.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src)))[0],
-          { timeout: 30_000 }
-        )
-        .not.toBe(urls[0])
-      await expect(tiles).toHaveCount(4)
-      // …and the hidden layer is the reason it changed: put it back, regenerate
-      // again, and the original render returns byte for byte.
+      await expect(tiles).toHaveCount(4, { timeout: 30_000 })
+      await expect.poll(() => tileUrls(), { timeout: 30_000 }).toEqual(withHidden)
+
+      // …and the hidden layer is the reason the render changed: put it back,
+      // generate again, and the original returns byte for byte.
       await window.keyboard.press('Escape')
       await expect(dialog).toHaveCount(0)
       await layerRow(window, 'Accent bar').getByTitle('Show/hide').click()
       await expectShapeCount(window, 4)
-      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
-      await dialog.getByRole('button', { name: 'Regenerate' }).click()
+      await variantsButton.click()
+      await expect(generate).toBeVisible()
+      await generate.click()
       await expect
-        .poll(
-          async () =>
-            (await tiles.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src)))[0],
-          { timeout: 30_000 }
-        )
+        .poll(async () => (await tileUrls())[0], { timeout: 30_000 })
         .toBe(urls[0])
 
       // ── save all four ──
@@ -1752,7 +1960,9 @@ test.describe('Image Studio — export', () => {
         'imagii-variant-warm-STAMP.png',
         'imagii-variant-cool-STAMP.png'
       ])
-      for (const buf of all) expect(pngSize(buf as Buffer).w).toBeGreaterThan(0)
+      for (const buf of all) {
+        expect(pngSize(buf as Buffer)).toEqual({ w: t.doc.width, h: t.doc.height })
+      }
 
       // ── the dialog's own Close ──
       await dialog.getByRole('button', { name: 'Close' }).click()

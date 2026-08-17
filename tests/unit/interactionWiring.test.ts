@@ -281,3 +281,72 @@ describe('T-57 — discarding an autosave has an error path', () => {
     expect(corruptionBanner).toMatch(/disabled=\{busy\}/)
   })
 })
+
+describe('T-54 — the document background is a node the export can see', () => {
+  // E2E: tests/e2e/image.spec.ts "the document background lands in the bytes…"
+  // samples a background pixel out of a real exported PNG and JPG, and the
+  // transparent corner of a real emote pack. The three facts below are the
+  // ones a future edit could quietly undo, and none is reachable without a DOM.
+  const canvas = read('modules/image-studio/Canvas.tsx')
+  /** The document layer's opening tag through the first element inside it. */
+  const documentLayer = canvas.slice(
+    canvas.indexOf('<KonvaLayer>'),
+    canvas.indexOf('{doc.layers.map(renderLayer)}')
+  )
+  const backgroundRect = documentLayer.slice(
+    documentLayer.indexOf('<Rect'),
+    documentLayer.indexOf('/>', documentLayer.indexOf('<Rect'))
+  )
+
+  it('draws doc.background as the first node of the document layer', () => {
+    // `documentLayer` ends where the user's layers begin, so a background
+    // found in it is drawn BEFORE them — one painted over the artwork is not
+    // a background.
+    expect(backgroundRect).toMatch(/name="background"/)
+    expect(backgroundRect).toMatch(/fill=\{doc\.background\}/)
+    expect(backgroundRect).toMatch(/width=\{doc\.width\}/)
+    expect(backgroundRect).toMatch(/height=\{doc\.height\}/)
+    // Not a click target: the empty-canvas click is what deselects, and it
+    // only reaches the Stage while nothing is listening in front of it.
+    expect(backgroundRect).toMatch(/listening=\{false\}/)
+  })
+
+  it('no longer leaves the background as a CSS style Konva cannot see', () => {
+    expect(canvas).not.toMatch(/background: doc\.background/)
+  })
+
+  it('does not tag it chrome — that tag means "hide for the capture"', () => {
+    expect(backgroundRect).not.toMatch(/chrome/)
+    // The two layers that ARE chrome still carry the tag (T-53).
+    expect(canvas).toMatch(/name="grid chrome"/)
+    expect(canvas).toMatch(/name="overlay chrome"/)
+  })
+})
+
+describe('T-46 — the variants dialog captures the document, not the screen', () => {
+  // E2E: tests/e2e/image.spec.ts "variants: generate four tiles…" saves a
+  // variant and reads 1280x720 off the bytes, and drives the reopen both ways.
+  const variants = read('modules/image-studio/ThumbnailVariants.tsx')
+
+  it('renders its base through the shared captureDocument', () => {
+    expect(variants).toMatch(/import \{ captureDocument, type ExportStage \} from '\.\/ExportDialog'/)
+    expect(variants).toMatch(/captureDocument\(stage, doc\.width, doc\.height, \{/)
+  })
+
+  it('keeps no raw stage.toDataURL of its own', () => {
+    // The renderer's last raw stage capture was deleted in T-53; this one was
+    // the other half of it, and either is a ready-made way back to T-45/T-53.
+    expect(variants).not.toMatch(/stage\.toDataURL/)
+  })
+
+  it('ties the previews to the document they were rendered from', () => {
+    expect(variants).toMatch(/previews !== null && previews\.doc === doc \? previews\.items : \[\]/)
+    expect(variants).toMatch(/setPreviews\(\{ doc, items: out \}\)/)
+  })
+
+  it('offers Generate and Regenerate through the same handler', () => {
+    // Which is why the E2E's "generating re-reads the canvas" proof covers
+    // both buttons: Regenerate is Generate with a different label.
+    expect(variants.match(/onClick=\{generate\}/g)).toHaveLength(2)
+  })
+})

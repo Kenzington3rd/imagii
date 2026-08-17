@@ -373,11 +373,38 @@ export function Canvas(): JSX.Element {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         style={{
-          background: doc.background,
           boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
         }}
       >
-        <KonvaLayer>{doc.layers.map(renderLayer)}</KonvaLayer>
+        <KonvaLayer>
+          {/*
+            T-54: the document's background, drawn as the first NODE of the
+            document layer. It used to be a CSS `background` on the stage
+            element, which Konva cannot see — `Stage._toKonvaCanvas` draws
+            nodes — so every export dropped it: PNGs came out transparent and
+            JPGs, having no alpha, composited onto black, while the canvas
+            showed the template's fill. Drawing it here rather than painting
+            it inside the capture keeps ONE render of `doc.background`, so the
+            screen and every export (single, emote pack, variants, anything
+            added later) agree by construction instead of by two code paths
+            staying in step. It is deliberately NOT tagged `chrome`: that tag
+            means "hide for the capture", which is the opposite of why this
+            exists. `listening={false}` keeps an empty-canvas click on the
+            Stage itself, which is what deselects. A `transparent` fill (the
+            overlay and emote templates) draws nothing at all, so those
+            documents still export with a real alpha channel.
+          */}
+          <Rect
+            name="background"
+            x={0}
+            y={0}
+            width={doc.width}
+            height={doc.height}
+            fill={doc.background}
+            listening={false}
+          />
+          {doc.layers.map(renderLayer)}
+        </KonvaLayer>
         {/*
           T-53: the two layers below are the EDITOR's, not the document's — the
           grid the user aligns against and the in-progress/selection chrome.

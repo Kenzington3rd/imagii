@@ -147,9 +147,11 @@ dismisses (Tutorial.tsx:121) — by design, but tests must not click the
 scrim to escape; Image emote-pack export (112x112 + PNG) silently emits
 three files from one click (ExportDialog.tsx:77-89) — intended feature,
 covered by T-25 (round 26). The orphaned getStageDataUrl() this note
-used to flag was deleted in round 29 (T-53 rider) — it was the last raw
-stage.toDataURL() outside ThumbnailVariants, i.e. a ready-made way to
-reintroduce T-45/T-53.
+used to flag was deleted in round 29 (T-53 rider); ThumbnailVariants'
+private copy — the last raw stage.toDataURL() in the renderer, and the
+one that HAD reintroduced T-45 — went in round 40 (T-46). Every capture
+in the renderer now goes through `captureDocument`, pinned in
+interactionWiring.test.ts.
 
 ---
 
@@ -490,12 +492,14 @@ Playwright's filechooser (real input path, NOT HL) + `+ Add text` +
 paste via a real Electron clipboard image and Ctrl+V -> E2E. Export
 PNG/JPG/scale/quality/filename patterns -> E2E on real bytes (PNG
 header dims; JPG >=10% smaller at 50%) via `session.will-download`;
-export dims pinned [T-45 P1: renders at screen zoom — 1280x720 exports
-as 956x537; emote pack 112/224/448 vs labeled 28/56/112, tripwire flips
-on fix]. Emote pack -> three downloads, three names, 1:2:4 ratio, three
-distinct payloads; JPG takes the single-file path. Variants
-generate/save/regenerate/save-all/Close -> E2E incl. a
-re-reads-the-canvas proof; stale previews pinned [T-46]. Undo/redo
+export dims are document dims [T-45, fixed round 28], content is the
+document only [T-53, fixed round 29] and carries the document
+background [T-54, fixed round 40 — probe pixel out of the PNG and the
+JPG]. Emote pack -> three downloads, three names, 1:2:4 ratio, three
+distinct payloads, transparent alpha kept; JPG takes the single-file
+path. Variants generate/save/regenerate/save-all/Close -> E2E incl. a
+re-reads-the-canvas proof, saved bytes pinned at document size and the
+reopen driven both ways [T-46, fixed round 40]. Undo/redo
 buttons + Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z + redo-branch drop -> E2E.
 
 ### Video pipelines (T-23) — Video 4g, 4j-4p, 4r-4t
@@ -980,24 +984,61 @@ and the unit files named inline.
   AutosaveRestore's discard catch.
 
 
-## Dispositions — round 39 (fix wave batch 13: T-57 + T-59 + T-60)
+## Round-39 expediter addendum (dedup note, round 40)
 
-- **Record - Discard recording (scope):** cancellation is job-scoped —
-  the Layer 5 concurrency test proves a live import transcode survives
-  a recording discard (and the red transcript proved the old slot
-  killed it). Unit: convertCancel.test.ts 18.
-- **Record - convert crash:** end state upgraded from the T-59 pin —
-  partial output reaped on crash AND cancel, friendly copy ("Converting
-  the recording to MP4 failed (ffmpeg exit code N). Nothing was
-  saved...") with envelope/ffmpeg vocabulary asserted absent, real
-  detail logged in main. E2E "a convert that really crashes says so in
-  plain words and leaves nothing behind". Expediter mutation:
-  ipcErrorMessage strip disabled -> 3 units + that E2E red.
-- **Home - corruption banner Clear (failure branch):** a failed clear
-  toasts the reason + "It's still on disk", dismisses nothing (banner
-  and enabled Clear stay), and the same button then succeeds in the
-  same test so both copies read side by side. clearAutosave no longer
-  swallows unlink errors (unit x4, directory-in-place technique).
-- **Shared - ipcErrorMessage:** every renderer catch now strips the
-  invoke envelope through one tested helper (13 units) — the
-  raw-IPC-text class (T-30/T-44/T-59) is closed at a single point.
+The batch-13 worker wrote the full round-39 section above; this
+addendum keeps only what it lacked (an accidental duplicate of the
+whole section was removed in round 40): the expediter's independent
+mutation — ipcErrorMessage's envelope strip disabled -> 3 units + the
+real-crash E2E red — and one Shared row: **ipcErrorMessage** closes
+the raw-IPC-text class (T-30/T-44/T-59) at a single tested helper (13
+units); every renderer catch routes through it.
+
+
+## Dispositions — round 40 (fix wave batch 14: T-54 + T-46)
+
+The image-capture pair. No new interactive elements; four rows change
+end state, all in `tests/e2e/image.spec.ts` and
+`tests/unit/interactionWiring.test.ts`.
+
+- **Image · Export button (PNG/JPG):** end state extends a third time —
+  document SIZE (round 28, T-45), document CONTENT (round 29, T-53),
+  and now the document's BACKGROUND. New test "the document background
+  lands in the bytes, and a transparent doc stays transparent" samples
+  one document pixel out of the real exported bytes with the bundled
+  ffmpeg (`format=rgba,crop=1:1:x:y`): the PNG reads exactly the
+  template's `#241614` at alpha 255, the JPG reads it within a lossy
+  tolerance. The probe point is checked against every layer box derived
+  from `templates.ts`, so it is provably background. Pre-fix red:
+  `rgba(0,0,0,0)` for the PNG, `r=0` (black) for the JPG. Worker
+  mutation: deleting the background rect from Canvas.tsx puts both back.
+- **Image · emote-pack branch (transparency):** gains an explicit
+  negative — the corner of the 112 px pack member is asserted `a === 0`
+  after the fix, with the centre pixel asserted to be the circle's own
+  fill as a positive control (otherwise a blank export would also pass).
+  No per-export "transparent background" control was added: a
+  `transparent` fill draws nothing, so the overlay and emote templates
+  keep their alpha channel with no UI and no branch.
+- **Image · Variants Save / Save all:** end state upgraded from
+  `pngSize(w) > 0` — which every PNG satisfies — to exactly the document
+  box (1280x720) for the single Save and for all four of Save all,
+  after asserting the on-screen stage is NOT 1:1. The dialog now
+  captures through the shared `captureDocument`, so variants inherit
+  T-45's sizing, T-53's chrome exclusion and T-54's background. Pre-fix
+  red: 956x537. Worker mutation: the raw `stage.toDataURL` restored
+  writes 956x537 again.
+- **Image · Variants button (reopen semantics):** the T-46 stale pin is
+  retired and inverted. Reopening an UNTOUCHED canvas keeps the four
+  tiles (nothing was invalidated, so nothing is thrown away); reopening
+  after any document edit shows zero tiles and the Generate button. Both
+  halves are driven in one launch. Regenerate keeps its row: it is the
+  same handler as Generate (pinned in interactionWiring.test.ts), and
+  the "generating re-reads the canvas" proof runs on the changed-canvas
+  path. Worker mutation: dropping the `previews.doc === doc` check puts
+  four tiles of the dead canvas back on the reopen.
+- Unit: interactionWiring.test.ts +7 (35 in file) — background rect is
+  first in the document layer, is not tagged `chrome` (that tag means
+  "hide for the capture"), and the CSS `background` is gone; variants
+  route through `captureDocument`, keep no raw stage capture, tie
+  previews to their document, and share one handler across both buttons.
+  All seven proven to discriminate.

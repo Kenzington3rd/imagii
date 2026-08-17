@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
+import type { CanvasDocument } from '@shared/canvas'
 import { useCanvasStore } from './state/canvasStore'
 import { assertDefined } from '@shared/assert'
 import { Modal } from '../../components/Modal'
+import { captureDocument, type ExportStage } from './ExportDialog'
 
 interface VariantSpec {
   id: string
@@ -103,29 +105,42 @@ function downloadDataUrl(dataUrl: string, filename: string): void {
 
 export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JSX.Element | null {
   const doc = useCanvasStore((s) => s.doc)
-  const [previews, setPreviews] = useState<VariantPreview[]>([])
+  // T-46: previews belong to the DOCUMENT they were rendered from. This
+  // component only early-returns on `!open`, so its state survives a close —
+  // and used to survive an edit, which meant reopening after any canvas
+  // change offered four renders of a canvas that no longer existed, with the
+  // Generate button hidden because `previews` was non-empty. The store
+  // replaces `doc` on every edit (and hands the same object back on undo), so
+  // an identity check is exactly "is this still what the user is looking at".
+  // Keeping the work when nothing changed is the other half of expected: a
+  // close and reopen should not throw away a render nobody invalidated.
+  const [previews, setPreviews] = useState<{ doc: CanvasDocument; items: VariantPreview[] } | null>(
+    null
+  )
   const [busy, setBusy] = useState(false)
 
   if (!open) return null
 
-  function getStageDataUrl(): string | null {
-    const stage = (
-      window as unknown as {
-        __imagiiStage?: { toDataURL: (opts: { mimeType?: string; pixelRatio?: number }) => string }
-      }
-    ).__imagiiStage
-    if (!stage) return null
-    return stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 })
-  }
+  const items = previews !== null && previews.doc === doc ? previews.items : []
 
   async function generate(): Promise<void> {
     setBusy(true)
     try {
-      const baseUrl = getStageDataUrl()
-      if (!baseUrl) {
+      const stage = (window as unknown as { __imagiiStage?: ExportStage }).__imagiiStage
+      if (!stage) {
         toast.error('Canvas not ready — try again in a second.')
         return
       }
+      // T-46: the same capture the Export button takes — the DOCUMENT box at
+      // 1:1 with the editor's chrome switched off — in place of the raw stage
+      // capture this used to do, which rendered the fit-to-container stage and
+      // so saved a 1280x720 thumbnail's variants at whatever size the window
+      // happened to be (956x537). `quality` is ignored for PNG.
+      const baseUrl = captureDocument(stage, doc.width, doc.height, {
+        mimeType: 'image/png',
+        quality: 1,
+        pixelRatio: 1
+      })
       const img = new Image()
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve()
@@ -147,7 +162,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
         variant.apply(ctx, c.width, c.height)
         out.push({ id: variant.id, label: variant.label, dataUrl: c.toDataURL('image/png') })
       }
-      setPreviews(out)
+      setPreviews({ doc, items: out })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not generate variants')
     } finally {
@@ -156,14 +171,14 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
   }
 
   function downloadAll(): void {
-    if (previews.length === 0) return
+    if (items.length === 0) return
     const stamp = Date.now()
-    previews.forEach((p, i) => {
+    items.forEach((p, i) => {
       setTimeout(() => {
         downloadDataUrl(p.dataUrl, `imagii-variant-${p.id}-${stamp}.png`)
       }, i * 100)
     })
-    toast.success(`Saving ${previews.length} variants…`)
+    toast.success(`Saving ${items.length} variants…`)
   }
 
   // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
@@ -187,7 +202,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
         </button>
       </div>
       <div className="p-4 flex flex-col gap-4 overflow-y-auto">
-          {previews.length === 0 ? (
+          {items.length === 0 ? (
             <div className="text-sm text-ink-muted">
               <p className="mb-3">
                 Generate three color-graded variants of the current canvas: punchy, warm, and
@@ -204,7 +219,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {previews.map((p) => (
+                {items.map((p) => (
                   <div
                     key={p.id}
                     className="card p-2 flex flex-col gap-2"
@@ -240,7 +255,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                   {busy ? 'Generating…' : 'Regenerate'}
                 </button>
                 <button className="btn-primary px-4 py-1.5 ml-auto" onClick={downloadAll}>
-                  Save all {previews.length}
+                  Save all {items.length}
                 </button>
               </div>
             </>

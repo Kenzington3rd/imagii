@@ -52,8 +52,8 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1045 tests across 62 files (T-59 added `src/shared/ipcError.test.ts`
-— the invoke-envelope stripper every renderer catch now goes through). Fresh-run time on a
+**Count.** 1052 tests across 62 files (T-54/T-46 added seven capture-contract
+pins to `tests/unit/interactionWiring.test.ts`). Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
 last-updated marker.)

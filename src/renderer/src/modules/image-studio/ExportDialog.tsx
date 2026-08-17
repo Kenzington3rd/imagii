@@ -57,8 +57,12 @@ interface ExportLayer {
   visible(value: boolean): void
 }
 
-/** The slice of the Konva stage the export path drives. */
-interface ExportStage {
+/**
+ * The slice of the Konva stage the export path drives. Exported because
+ * `ThumbnailVariants` captures through the same helper (T-46) and reads the
+ * same `window.__imagiiStage` hook Canvas.tsx publishes.
+ */
+export interface ExportStage {
   scaleX(): number
   scaleY(): number
   scale(value: { x: number; y: number }): void
