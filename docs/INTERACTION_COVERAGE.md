@@ -564,9 +564,11 @@ the copy's absence pinned in `interactionWiring.test.ts` (a string
 nothing renders is invisible to a DOM test) and the E2E toast-log
 tripwire kept for the other direction. Safe-zone modal both branches; cancel modal both branches
 (real SIGKILL); refusals without an output folder / selection; per-row
-Show HL-shell. Watermark PIXELS are platform-pinned: linux
-ffmpeg-static has no `drawtext`, so nothing anywhere renders a
-watermark or text overlay — win32-gated Layer 5 coverage is [T-51].
+Show HL-shell. Watermark PIXELS: proven on win32
+since round 45 — the T-51 Layer 5 block (four corners + two overlays
+diffed against a control render) executes in the release workflow's
+test:media step; two linux pins fail loudly if ffmpeg-static ever
+gains drawtext.
 
 ---
 
@@ -1151,3 +1153,17 @@ end state, all in `tests/e2e/image.spec.ts` and
   NavCard raw accents remain inside their documented exception;
   templates/assetCatalog are now a documented exception of their own
   (artwork specs, not chrome).
+
+
+## Dispositions — round 45 (T-51 + v1.5.0)
+
+- **Video 4t - watermark / TextOverlayEditor time fields:** pixel end
+  states proven on win32 (release runner) — four corners, two
+  overlays, enable window both ways, font preflight; linux carries
+  the two capability pins. The time fields' SOURCE-vs-clip timebase
+  defect is [T-74], filed with a drawbox transcript and noted in the
+  v1.5.0 release notes.
+- Release infrastructure: release.yml runs test:media on
+  windows-latest after verify — the Layer 5 suite now executes on the
+  shipping platform every release, closing the "green on linux only"
+  gap the v1.3.0 failure exposed.
