@@ -158,18 +158,36 @@ export function RecordStudio(): JSX.Element {
     }
   }
 
+  /**
+   * T-69: point the selection at something that is actually in `list`.
+   *
+   * A refresh is how a user says "the windows have changed" — they closed the
+   * game, they opened OBS. `selectedSourceId` used to survive that
+   * unconditionally, so a refresh into nothing left Start recording enabled
+   * over the "No screens or windows found" card, aimed at a source id that no
+   * longer existed; the refusal arrived much later, from getUserMedia, in the
+   * app's least specific words. Keeping a still-listed choice is the same
+   * rule as auto-selecting the first one — the selection always names a
+   * source the user can see.
+   */
+  function reconcileSelection(list: RecordingSource[]): void {
+    setSelectedSourceId((current) =>
+      current && list.some((s) => s.id === current) ? current : (list[0]?.id ?? null)
+    )
+  }
+
   async function chooseSource(): Promise<void> {
     setSourceSearch('searching')
     try {
       const list = await window.api.recording.listSources()
       setSources(list)
-      const first = list[0]
-      if (first && !selectedSourceId) setSelectedSourceId(first.id)
+      reconcileSelection(list)
     } catch (err) {
       // A refused capture permission comes back as a rejected IPC call, not
       // an empty list. Say what happened rather than leaving the wait on
       // screen forever — the empty state below then offers the retry.
       setSources([])
+      reconcileSelection([])
       toast.error(ipcErrorMessage(err, 'Could not list screens or windows'))
     } finally {
       setSourceSearch('done')

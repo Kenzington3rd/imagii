@@ -1098,6 +1098,21 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** done (round 42 — see Done)
 
+## T-72 — HotkeyOverlay's ? toggle stacks over open dialogs
+
+- **Spec:** T-68 worker finding. The ? window listener has only the
+  tagName guard, so ? behind an open Variants/Templates dialog stacks
+  the overlay on top of it. It cannot take isModalOpen() naively — it
+  renders its own Modal and would be unable to close itself; needs a
+  topmost-modal notion or a self-exemption. Rider: RecordStudio's
+  Escape-to-stop has the same shape, harmless today only because no
+  Modal is reachable while recording — leave a guard or a comment so a
+  future modal doesn't make Escape both close it and end the take.
+- **Acceptance criteria:** ? is inert behind other modals but the
+  overlay can still dismiss itself; E2E both ways; the Record Escape
+  shape addressed or documented in place.
+- **Status:** open
+
 ## T-71 — no semantic color tier: rose/amber/emerald raw palette classes repo-wide
 
 - **Spec:** T-56 worker finding. There is no danger/warn/ok token
@@ -1126,7 +1141,7 @@ IMG-PREC.
   the new list (drop or reselect-first per the existing auto-select
   behavior); E2E: select real -> stub empty -> refresh -> Start
   disabled + the T-41 empty state shown.
-- **Status:** open
+- **Status:** done (round 43 — see Done)
 
 ## T-70 — installToastLog records every mounted element, not toasts
 
@@ -1139,7 +1154,7 @@ IMG-PREC.
   shared helper file per the ladder); the polluted assertions
   re-verified; a mutation proof that the narrow version still catches
   a real toast.
-- **Status:** open
+- **Status:** done (round 43 — see Done)
 
 ## T-68 — image hotkeys fire through open modals
 
@@ -1152,7 +1167,7 @@ IMG-PREC.
   open (shared mechanism if another studio has the same hole — grep
   first); E2E asserts Delete behind the Variants dialog removes
   nothing; existing hotkey coverage stays green.
-- **Status:** open
+- **Status:** done (round 43 — see Done)
 
 ## T-67 — tempCleanup.test.ts is polluted by other suites' temp families
 
@@ -1164,7 +1179,7 @@ IMG-PREC.
 - **Acceptance criteria:** the test isolates every family the
   function scans (clear or tempdir-scope them all); running test:media
   then npm test back-to-back is green.
-- **Status:** open
+- **Status:** done (round 43 — see Done)
 
 ## T-66 — References polish: failure notice contradicted by "No results."; delete toast should advertise undo
 
@@ -1215,7 +1230,9 @@ IMG-PREC.
   count (expediter confirmed 120/120). Harden the readiness read (poll
   a number, not a first read); `--workers=1` remains the documented
   fallback if flakes continue after conversion.
-- **Status:** open
+- **Status:** done (round 43 — see Done; closed on the fallback
+  branch: workers pinned to 1 in playwright.config.ts after the
+  residual crossing-event window was proven unpollable)
 
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
 
@@ -1242,6 +1259,51 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 43 — fix wave batch 17: T-62 + T-67 + T-70 (test infra) +
+T-68 + T-69 (product). T-62: five gesture call sites converted to
+drag.ts (Transformer move/anchor with live-node extents; the locked
+drag as the documented commit-nothing case; crop move/resize against
+the rnd box); the geometry-fragile layer-panel assertion split — the
+app's own +20 arithmetic asserted exactly, the drag-derived nominal
+under MOUSE_TOL — red at 1600x1200 before, 20/20 after; dragCut's
+readiness read is settledBox (two agreeing numeric reads). The
+residual audio flake was then cornered honestly: planning boxes
+proven byte-identical before/after settling, so the only mechanism
+left is the crossing event landing between mouse.down and the first
+processed move — a window no polled condition can wait out. CLOSED ON
+THE FALLBACK BRANCH: workers: 1 pinned in playwright.config.ts (the
+config comment carries the full why), 123/123 at 4.4m vs the 2/9
+failure rate at 2 workers under load; the expediter re-ran green.
+T-67: the clear list derives from the function's own TEMP_SUBDIRS so
+a new family is isolated on the same commit; deterministic repro red
+(a planted imagii-import partial) then green with all three families
+polluted; the acceptance sequence run (test:media -> npm test green —
+with the honest note that /tmp/imagii-import is empty after
+test:media on THIS box, so the repro, not the sequence, is the
+proof). T-70: one shared tests/e2e/toastLog.ts — selector
+[data-rht-toaster] [role="status"] (both halves load-bearing: the
+export panel renders a per-job role=status readout the wide version
+logged as a toast), de-duped by element identity not text (two
+identical refusal toasts must count as two); 197 duplicated helper
+lines deleted across 8 specs; mutation proof via selector redirect.
+T-68: Modal owns a module-level open COUNTER (dialogs stack;
+ExportDialog's confirm opens over ExportDialog) read at event time;
+the same hole was found and fixed in the shared undo hotkeys (Ctrl+Z
+behind Variants rewrote the document the dialog rendered from);
+red-first (Delete removed the layer behind the scrim), and the
+after-close half proves the fix is not hotkeys-off. Expediter
+mutation: the counter threshold made unreachable -> exactly the T-68
+E2E red (the worker had mutated the consumer check — both halves now
+proven). T-69: one reconcile subsumes the old
+first-selection-only auto-select — keep if listed, else first, else
+null; the catch branch reconciles against [] (a refused refresh has
+no claim to a stale id); three branches asserted (empty/changed/
+refused) with two branch-isolating mutations. Gates: 1070 unit /
+123 E2E x2 (+ the workers:1 rerun), test:media -> npm test sequence
+green. Findings: T-72 filed (? stacks over dialogs, Record Escape
+rider); tests/ outside the tsconfig includes noted (spec type errors
+surface only at run time).
 
 Round 42 — fix wave batch 16: T-56 + T-61 + T-63 + T-66 (UI residues).
 T-56: the playhead is bg-ember — EMBER already IS the Audio Studio's

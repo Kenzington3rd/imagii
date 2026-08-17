@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffprobePath } from '../../src/main/ffmpeg/paths'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -217,27 +218,6 @@ async function launchApp(userDataDir: string): Promise<ElectronApplication> {
   })
 }
 
-/** export.spec's toast recorder: toasts auto-dismiss, so a poll would race them. */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
-}
-
 /**
  * Replace `dialog.showSaveDialog` in the MAIN process. The renderer half is
  * untouchable (contextBridge objects are frozen), and the save dialog is the
@@ -295,6 +275,29 @@ async function stubEmptySources(app: ElectronApplication, delayMs: number): Prom
       return []
     }
   }, delayMs)
+}
+
+/**
+ * Answer `desktopCapturer.getSources` with a named list instead of the box's
+ * own screen. T-69 is about what a refresh does to a selection the user
+ * already made, which needs a SECOND, DIFFERENT list — and xvfb has exactly
+ * one screen to offer. The ids are the only fabricated part that matters
+ * (they are what `selectedSourceId` holds and what the reconcile compares);
+ * the thumbnail is a real 1x1 PNG so the cards render like any other.
+ */
+const TINY_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+async function stubSourceList(app: ElectronApplication, names: string[]): Promise<void> {
+  await app.evaluate(
+    async ({ desktopCapturer, nativeImage }, { wanted, png }) => {
+      const thumbnail = nativeImage.createFromDataURL(png)
+      const target = desktopCapturer as unknown as { getSources: unknown }
+      target.getSources = async () =>
+        wanted.map((name, i) => ({ id: `window:t69-${i}:0`, name, thumbnail }))
+    },
+    { wanted: names, png: TINY_PNG }
+  )
 }
 
 /**
@@ -920,6 +923,78 @@ test.describe('T-27 Record Studio', () => {
       await expect(sourceButton).toHaveClass(/ring-accent/)
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'record-04-sources.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('T-69: a refresh reconciles the selection — dropped when the list empties, moved when it changes', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('stale-source')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+      const start = window.getByRole('button', { name: /Start recording/ })
+      const refresh = window.getByRole('button', { name: 'Refresh sources' })
+      const cards = window.locator('img[alt]')
+      const warning = window.getByText(NO_SOURCES_WARNING)
+
+      // ── a real selection first: the box's own screen, auto-picked ──
+      await refresh.click()
+      await expect(cards.first()).toBeVisible({ timeout: 20_000 })
+      await expect(start).toBeEnabled()
+
+      // ── refresh into nothing. The selection is the id of a source that no
+      //    longer exists, so keeping it leaves Start inviting a capture that
+      //    can only fail at getUserMedia — with the card underneath saying
+      //    there is nothing to record. ──
+      await stubEmptySources(app, 0)
+      await refresh.click()
+      await expect(warning).toBeVisible({ timeout: 20_000 })
+      await expect(cards).toHaveCount(0)
+      await expect(start).toBeDisabled()
+
+      // ── a list with something in it selects the first again ──
+      await stubSourceList(app, ['Fake Window A', 'Fake Window B'])
+      await refresh.click()
+      await expect(cards).toHaveCount(2, { timeout: 20_000 })
+      await expect(warning).toHaveCount(0)
+      const cardA = window.locator('button.card').filter({ has: window.locator('img[alt="Fake Window A"]') })
+      const cardB = window.locator('button.card').filter({ has: window.locator('img[alt="Fake Window B"]') })
+      await expect(cardA).toHaveClass(/border-accent/)
+      await expect(start).toBeEnabled()
+
+      // ── the changed-list case: pick B, then refresh into a list that no
+      //    longer has it. Start stays enabled, but pointing at a source that
+      //    IS in the new list — the selection moves rather than lingering on
+      //    a window the user closed. ──
+      await cardB.click()
+      await expect(cardB).toHaveClass(/ring-accent/)
+      await stubSourceList(app, ['Fake Window A'])
+      await refresh.click()
+      await expect(cards).toHaveCount(1, { timeout: 20_000 })
+      await expect(cardA).toHaveClass(/border-accent/)
+      await expect(start).toBeEnabled()
+
+      // ── and the other way a refresh comes back with nothing usable: a
+      //    refusal. Same reconcile — the list is empty, so the selection is
+      //    too, and the error is named rather than swallowed (T-59). ──
+      await stubFailingSources(app, 'Screen recording permission denied')
+      await refresh.click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 30_000,
+          intervals: [200]
+        })
+        .toMatch(/Screen recording permission denied/)
+      await expect(cards).toHaveCount(0)
+      await expect(start).toBeDisabled()
     } finally {
       await app.close()
       cleanup(root)

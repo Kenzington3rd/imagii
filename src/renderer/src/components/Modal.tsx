@@ -43,6 +43,27 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])'
 ].join(',')
 
+/**
+ * T-68: how many Modals are open right now.
+ *
+ * A studio's window-level hotkeys (Delete, the tool letters, Ctrl+Z) guarded
+ * only INPUT/TEXTAREA, so with the Variants or Templates dialog up, Delete
+ * removed the layer BEHIND the scrim and R/O/L/P retargeted a canvas the user
+ * could not see. A modal is a claim over the whole window, and the least
+ * fragile way to state that is the component that owns the claim: a counter,
+ * not a DOM query (`[role="dialog"]` would also match a dialog rendered by
+ * something that is not a Modal, and would go stale between a render and the
+ * keydown that reads it). A counter rather than a boolean because dialogs
+ * stack — ExportDialog's "confirm cancel" opens over ExportDialog itself, and
+ * closing the inner one must not un-guard the outer.
+ */
+let openModals = 0
+
+/** Is any `<Modal>` open? Read at event time by window-level key handlers. */
+export function isModalOpen(): boolean {
+  return openModals > 0
+}
+
 export function Modal({
   open,
   onClose,
@@ -59,6 +80,14 @@ export function Modal({
   // (e.g. a "confirm cancel" inside ExportDialog) don't collide on a shared
   // aria-labelledby target.
   const generatedTitleId = useId()
+
+  useEffect(() => {
+    if (!open) return
+    openModals++
+    return () => {
+      openModals--
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return

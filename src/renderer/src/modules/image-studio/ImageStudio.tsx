@@ -10,6 +10,7 @@ const TOOL_LABELS: Record<string, string> = {
 }
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
+import { isModalOpen } from '../../components/Modal'
 import { Canvas } from './Canvas'
 import { Toolbar } from './Toolbar'
 import { LayerPanel } from './LayerPanel'
@@ -41,6 +42,10 @@ export function ImageStudio(): JSX.Element {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
+      // T-68: a dialog is a claim over the window. Without this, Delete
+      // removed the selected layer behind the Variants/Templates scrim and
+      // R/O/L/P switched the tool on a canvas the user could not see.
+      if (isModalOpen()) return
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const ctrl = e.ctrlKey || e.metaKey

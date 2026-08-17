@@ -14,6 +14,83 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-68 + T-69: a control that answers for something that is no longer there
+
+Two bugs, one shape: a claim that stayed true after the thing it
+described was gone. A window-level key binding kept answering after a
+dialog took the window; a source selection kept naming a window after
+the list stopped containing it. Both are silent — the user sees a
+control behaving normally and finds out later, from a layer that has
+vanished or an error out of `getUserMedia`.
+
+### Bug (T-68) — Delete removed the layer behind the Variants dialog
+
+- **Root cause.** ImageStudio's window `keydown` handler exempted
+  `INPUT`/`TEXTAREA` and nothing else, so "is anyone else entitled to
+  this keystroke?" was answered by the tag of the focused element
+  alone. A Modal is not an element focus happens to be inside — it is a
+  claim over the whole window — so with the Variants or Templates
+  dialog up, Delete still reached `removeLayer`, R/O/L/P still switched
+  the tool on a canvas nobody could see, and the same hole in the
+  shared `useUndoRedoHotkeys` let Ctrl+Z rewrite the very document the
+  dialog was rendered from. Nothing was visible until the dialog closed.
+- **Fix.** `Modal` counts its own open instances and exports
+  `isModalOpen()`; ImageStudio's handler and `undoRedoIntent` both
+  return early on it. A counter rather than a boolean because dialogs
+  stack (a confirm opened inside ExportDialog must not un-guard the
+  outer one), and a counter rather than a `[role="dialog"]` query
+  because the DOM answer is both wider (any dialog, Modal or not) and
+  later (a keydown re-deriving what the component already knows).
+- **Test.** `tests/e2e/image.spec.ts` — "T-68: every studio hotkey is
+  inert behind an open dialog, and works again after it closes" drives
+  Delete, Backspace, R/O/L/P and Ctrl+Z behind the Variants dialog and
+  asserts the layer list, the layer names and the tool badge are
+  untouched, then closes the dialog and drives the same keys to their
+  real end states so the fix cannot be "hotkeys off". Unit half:
+  `useUndoRedoHotkeys.test.ts` — "never fires while a Modal is open".
+  Red before the fix: `Layers (2)` where the test wanted 3. Mutation:
+  with `if (e.modalOpen) return null` deleted, the Ctrl+Z assertion is
+  the one that goes red.
+- **Lesson.** A window-level key handler needs two guards, not one:
+  who owns this KEY (T-63 — a focused button owns Space) and who owns
+  the WINDOW right now. The second question has exactly one honest
+  source, the component that took the window, which is why the answer
+  belongs in `Modal` and not in each studio's idea of what a dialog
+  looks like.
+
+### Bug (T-69) — Start recording stayed enabled over "no screens found"
+
+- **Root cause.** `chooseSource` auto-selected the first source only
+  when nothing was selected yet (`if (first && !selectedSourceId)`) and
+  never looked at the selection again. That is right exactly once — the
+  first search. Every refresh after it kept an id the new list might
+  not contain, so a user who picked a window, closed it, and hit
+  "Refresh sources" had Start recording enabled directly over the T-41
+  card telling them there was nothing to record. The refusal arrived
+  much later, from `getUserMedia`, in the app's least specific words.
+- **Fix.** One reconcile at the point the list is replaced: keep the
+  selection if the new list still has it, otherwise take the first
+  entry, otherwise null — which turns the old auto-select into a
+  special case of the same rule instead of a second one. The failure
+  path reconciles against an empty list too: a refresh that was refused
+  has no more claim to a stale id than a refresh that came back empty.
+- **Test.** `tests/e2e/record.spec.ts` — "T-69: a refresh reconciles
+  the selection — dropped when the list empties, moved when it changes"
+  walks the real screen, a stubbed-empty refresh (Start disabled, T-41
+  card up), a changed list (selection moves to a source that IS listed,
+  Start stays enabled), and a refused refresh. Red before the fix:
+  Start enabled after the empty refresh. Mutations: dropping instead of
+  reselecting kills the auto-select the first refresh depends on;
+  keeping any selection while the list is non-empty leaves the
+  surviving source unselected.
+- **Lesson.** A selection is a reference into a list, and every
+  replacement of that list is a chance for the reference to dangle.
+  Reconcile it where the list is assigned — the one place that knows
+  both the old id and the new list — rather than trusting the control
+  that reads it downstream to notice.
+
+---
+
 ## 2026-08-17 — T-56 + T-61 + T-63 + T-66: the layer on top must not eat the gesture, the number, or the sentence
 
 Four small UI residues across three studios, and three of them are the

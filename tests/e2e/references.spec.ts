@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -148,44 +149,6 @@ async function backToReferences(window: Page): Promise<void> {
   await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
   await window.locator('a', { hasText: 'References' }).first().click()
   await expect(window.locator('h1', { hasText: 'References' })).toBeVisible({ timeout: 15_000 })
-}
-
-/**
- * Record the text of every toast react-hot-toast mounts. Toasts auto-dismiss,
- * so polling for one with a locator races the timer; a MutationObserver
- * installed before the action never misses one. (Pattern from export.spec.)
- *
- * Narrowed from export.spec's version: this spec changes ROUTE mid-test, and
- * a route swap mounts one enormous subtree whose textContent happens to end
- * with the pending toast. Logging that node whole made `toContain('…')`
- * useless. react-hot-toast tags the message element with the `role="status"`
- * aria props it builds for every toast, so record exactly those.
- */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    const record = (el: Element): void => {
-      const text = (el.textContent ?? '').trim()
-      if (text && log[log.length - 1] !== text) log.push(text)
-    }
-    new MutationObserver((records) => {
-      for (const r of records) {
-        r.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const el = node as HTMLElement
-          if (el.matches('[role="status"]')) record(el)
-          el.querySelectorAll('[role="status"]').forEach(record)
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(
-    () => (window as unknown as { __toastLog?: string[] }).__toastLog ?? []
-  )
 }
 
 /** Every board JSON on disk, parsed — the store's own persistence format. */

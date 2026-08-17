@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { isModalOpen } from '../components/Modal'
 
 /** The subset of a KeyboardEvent the undo/redo decision needs. */
 export interface UndoRedoKey {
@@ -8,6 +9,8 @@ export interface UndoRedoKey {
   shiftKey: boolean
   /** `event.target`'s tagName — typing must never trigger studio undo. */
   tagName: string
+  /** Is a `<Modal>` open? A dialog is a claim over the window (T-68). */
+  modalOpen: boolean
 }
 
 /**
@@ -18,9 +21,15 @@ export interface UndoRedoKey {
  * part of a window keydown listener a node-env unit test can drive.
  */
 export function undoRedoIntent(e: UndoRedoKey): 'undo' | 'redo' | null {
-  // The guard first: a text field owns its own undo stack, and Ctrl+Z while
-  // renaming a clip must not roll back the timeline.
+  // The guards first: a text field owns its own undo stack, and Ctrl+Z while
+  // renaming a clip must not roll back the timeline. T-68 adds the other
+  // owner of a keystroke — an open dialog. Undoing behind a scrim rewrites
+  // the document the dialog is showing, with the change hidden until it
+  // closes; the same hole let Delete remove a layer behind the Variants
+  // dialog. Both are the window-level handler answering for a window it no
+  // longer owns.
   if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') return null
+  if (e.modalOpen) return null
   const ctrl = e.ctrlKey || e.metaKey
   if (!ctrl) return null
   const key = e.key.toLowerCase()
@@ -41,7 +50,8 @@ export function useUndoRedoHotkeys(undo: () => void, redo: () => void): void {
         ctrlKey: e.ctrlKey,
         metaKey: e.metaKey,
         shiftKey: e.shiftKey,
-        tagName: (e.target as HTMLElement | null)?.tagName ?? ''
+        tagName: (e.target as HTMLElement | null)?.tagName ?? '',
+        modalOpen: isModalOpen()
       })
       if (!intent) return
       e.preventDefault()

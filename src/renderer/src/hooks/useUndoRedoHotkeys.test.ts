@@ -7,7 +7,14 @@ import { undoRedoIntent } from './useUndoRedoHotkeys'
  * comes from one shared hook used by all three studios, so this pins the
  * decision every one of them makes.
  */
-const base = { key: 'z', ctrlKey: false, metaKey: false, shiftKey: false, tagName: 'DIV' }
+const base = {
+  key: 'z',
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  tagName: 'DIV',
+  modalOpen: false
+}
 
 describe('undoRedoIntent', () => {
   it('reads Ctrl+Z as undo', () => {
@@ -50,6 +57,19 @@ describe('undoRedoIntent', () => {
       expect(undoRedoIntent({ ...base, ctrlKey: true, shiftKey: true, tagName })).toBeNull()
     }
   )
+
+  // T-68 regression: the studio's document belongs to the studio, and while
+  // a dialog is up the window belongs to the dialog. Undoing behind the
+  // Variants scrim rewrote the document the dialog was showing.
+  it('never fires while a Modal is open, whichever binding is used', () => {
+    expect(undoRedoIntent({ ...base, ctrlKey: true, modalOpen: true })).toBeNull()
+    expect(undoRedoIntent({ ...base, key: 'y', ctrlKey: true, modalOpen: true })).toBeNull()
+    expect(
+      undoRedoIntent({ ...base, ctrlKey: true, shiftKey: true, modalOpen: true })
+    ).toBeNull()
+    // …and closing it hands the bindings straight back.
+    expect(undoRedoIntent({ ...base, ctrlKey: true, modalOpen: false })).toBe('undo')
+  })
 
   it('still fires from a SELECT or a button (not text entry)', () => {
     expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'SELECT' })).toBe('undo')

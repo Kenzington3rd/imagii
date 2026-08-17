@@ -6,6 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -142,33 +143,6 @@ async function launchApp(userDataDir: string): Promise<ElectronApplication> {
       ELECTRON_DISABLE_SANDBOX: '1'
     }
   })
-}
-
-/**
- * Record the text of every node react-hot-toast mounts. Toasts auto-dismiss
- * (2 s success / 4 s default), so polling for one with a locator races the
- * timer; a MutationObserver installed before the action never misses one.
- */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(
-    () => (window as unknown as { __toastLog?: string[] }).__toastLog ?? []
-  )
 }
 
 /**
