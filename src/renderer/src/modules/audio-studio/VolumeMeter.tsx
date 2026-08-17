@@ -99,7 +99,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
             <div
               key={i}
               className={`flex-1 rounded-sm transition-[height] ${
-                isHot ? 'bg-rose-400' : lvl > 0.55 ? 'bg-amber-300' : 'bg-emerald-400'
+                isHot ? 'bg-danger-strong' : lvl > 0.55 ? 'bg-warn' : 'bg-ok-strong'
               }`}
               style={{ height: `${Math.max(2, pct)}%` }}
             />
@@ -107,7 +107,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
         })}
       </div>
       <span
-        className={`font-mono w-14 text-right ${clipping ? 'text-rose-300' : 'text-ink-muted'}`}
+        className={`font-mono w-14 text-right ${clipping ? 'text-danger' : 'text-ink-muted'}`}
       >
         {peakDb.toFixed(0)} dB
       </span>

@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
+import { isModalOpen } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { useVideoStore } from '../video-studio/store/videoStore'
@@ -127,10 +128,17 @@ export function RecordStudio(): JSX.Element {
   // Round 18 C: the `?` HotkeyOverlay has documented "Esc: Stop recording"
   // for /record since round 15 but nothing ever wired it. Listener exists
   // only while recording and is removed on phase change and unmount.
+  //
+  // T-72: and the same table advertises `?` on this route, which opens the
+  // HotkeyOverlay — a Modal, reachable mid-take. Escape then reached BOTH
+  // handlers: the overlay closed and the recording ended, so checking the
+  // shortcut list cost the user their take. Escape belongs to the topmost
+  // claim on the window, and a Modal is exactly that claim (T-68).
   useEffect(() => {
     if (phase !== 'recording') return
     function onKey(e: KeyboardEvent): void {
       if (e.key !== 'Escape') return
+      if (isModalOpen()) return
       e.preventDefault()
       stopRecording()
     }
@@ -499,7 +507,7 @@ export function RecordStudio(): JSX.Element {
         </div>
         {phase === 'recording' ? (
           <div className="flex items-center gap-3">
-            <span className="font-mono text-rose-300 inline-flex items-center gap-1.5">
+            <span className="font-mono text-danger inline-flex items-center gap-1.5">
               <Icon name="record" size={15} /> REC {formatElapsed(elapsed)}
             </span>
             <button className="btn-primary px-4 py-2" onClick={stopRecording}>
@@ -533,7 +541,7 @@ export function RecordStudio(): JSX.Element {
                   <p className="text-xs">Looking for screens and windows…</p>
                 ) : null}
                 {sourceSearch === 'done' ? (
-                  <p className="text-xs text-amber-300">
+                  <p className="text-xs text-warn">
                     No screens or windows found. Click "Refresh sources" after granting
                     screen-recording permission.
                   </p>
@@ -594,7 +602,7 @@ export function RecordStudio(): JSX.Element {
                 </select>
               ) : null}
               {includeMic && mics.length === 0 ? (
-                <p className="text-xs text-amber-300">
+                <p className="text-xs text-warn">
                   No microphone found. Click "Refresh sources" after granting permission.
                 </p>
               ) : null}
@@ -629,7 +637,7 @@ export function RecordStudio(): JSX.Element {
                   watched a Corner picker appear, and got a screen-only
                   recording that never mentioned the webcam. */}
               {showCam && cams.length === 0 ? (
-                <p className="text-xs text-amber-300">
+                <p className="text-xs text-warn">
                   No camera found. Click "Refresh sources" after granting permission.
                 </p>
               ) : null}

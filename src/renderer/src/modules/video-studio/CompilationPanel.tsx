@@ -110,7 +110,7 @@ export function CompilationPanel(): JSX.Element | null {
         {/* Round 17 B4 */}
         {busy ? (
           <button
-            className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
             onClick={cancel}
             title="Cancel compilation"
           >

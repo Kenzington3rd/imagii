@@ -125,7 +125,7 @@ export function LayerPanel(): JSX.Element {
                   e.stopPropagation()
                   removeLayer(layer.id)
                 }}
-                className="text-ink-dim hover:text-rose-300 px-1 flex"
+                className="text-ink-dim hover:text-danger px-1 flex"
                 title="Delete"
                 aria-label="Delete layer"
               >

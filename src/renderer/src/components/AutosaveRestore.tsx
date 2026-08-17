@@ -144,8 +144,8 @@ export function AutosaveRestore(): JSX.Element | null {
 
   if (!snapshot.ok) {
     return (
-      <div className="card p-3 mb-4 border-rose-400/40 bg-rose-400/5 text-sm flex items-center gap-3">
-        <span className="text-rose-300 flex-shrink-0">
+      <div className="card p-3 mb-4 border-danger-strong/40 bg-danger-strong/5 text-sm flex items-center gap-3">
+        <span className="text-danger flex-shrink-0">
           <Icon name="warning" size={18} />
         </span>
         <span className="flex-1">

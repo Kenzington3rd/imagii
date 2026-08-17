@@ -103,7 +103,7 @@ export function RecentFilesMenu({
                 setOpen(false)
                 onClear()
               }}
-              className="text-xs text-ink-dim hover:text-rose-300 px-1"
+              className="text-xs text-ink-dim hover:text-danger px-1"
             >
               Clear list
             </button>

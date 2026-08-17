@@ -19,7 +19,7 @@ import {
   makeRectLayer,
   useCanvasStore
 } from './state/canvasStore'
-import { ACCENT, EMBER } from '../../styles/tokens'
+import { ACCENT, EMBER, INK_MUTED, withAlpha } from '../../styles/tokens'
 
 interface ImageNodeProps {
   layer: ImageLayer
@@ -69,6 +69,13 @@ function ImageNode({
   )
 }
 
+/**
+ * T-71: the grid was two hand-copied `rgba(165,154,151,0.18)` literals —
+ * `INK_MUTED` at 18%, spelled out, twice. `withAlpha` is the mechanical
+ * form; a literal cannot follow the token it was copied from.
+ */
+const GRID_LINE = withAlpha(INK_MUTED, 0.18)
+
 function GridOverlay({
   width,
   height,
@@ -84,7 +91,7 @@ function GridOverlay({
       <Line
         key={`vx-${x}`}
         points={[x, 0, x, height]}
-        stroke="rgba(165,154,151,0.18)"
+        stroke={GRID_LINE}
         strokeWidth={1}
         listening={false}
       />
@@ -95,7 +102,7 @@ function GridOverlay({
       <Line
         key={`vy-${y}`}
         points={[0, y, width, y]}
-        stroke="rgba(165,154,151,0.18)"
+        stroke={GRID_LINE}
         strokeWidth={1}
         listening={false}
       />

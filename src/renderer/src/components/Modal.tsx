@@ -59,9 +59,23 @@ const FOCUSABLE_SELECTOR = [
  */
 let openModals = 0
 
+/**
+ * How many `<Modal>`s are open right now.
+ *
+ * T-72: exposed alongside the boolean because HotkeyOverlay is BOTH a
+ * window-level key handler and a Modal. "Is any modal open" is the wrong
+ * question for it — once it is up, one of the open modals is its own, and a
+ * blanket guard would leave `?` unable to close the overlay it opened. The
+ * count lets a handler subtract its own claim and ask the real question:
+ * "is a modal that isn't mine open?"
+ */
+export function openModalCount(): number {
+  return openModals
+}
+
 /** Is any `<Modal>` open? Read at event time by window-level key handlers. */
 export function isModalOpen(): boolean {
-  return openModals > 0
+  return openModalCount() > 0
 }
 
 export function Modal({

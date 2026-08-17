@@ -10,6 +10,12 @@ import {
   INK_BASE,
   INK_MUTED,
   INK_DIM,
+  DANGER,
+  DANGER_SOFT,
+  DANGER_STRONG,
+  WARN,
+  OK,
+  OK_STRONG,
   withAlpha
 } from '../../src/renderer/src/styles/tokens'
 
@@ -22,6 +28,9 @@ interface ThemeColors {
   accent: { DEFAULT: string; muted: string }
   ink: { base: string; muted: string; dim: string }
   ember: string
+  danger: { DEFAULT: string; soft: string; strong: string }
+  warn: string
+  ok: { DEFAULT: string; strong: string }
 }
 
 const colors = (tailwindConfig as { theme: { extend: { colors: ThemeColors } } }).theme.extend
@@ -49,6 +58,42 @@ describe('design tokens stay in sync (tokens.ts vs tailwind.config.js)', () => {
   // className half of the ember token has to exist and has to match.
   it('the ember highlight matches', () => {
     expect(colors.ember).toBe(EMBER)
+  })
+
+  // T-71: the semantic tier is consumed almost entirely through classNames,
+  // so the tailwind half is the one that can silently vanish — a typo in a
+  // key name just makes `text-danger` resolve to nothing and the label
+  // renders in inherited ink. Pin both halves like the rest of the palette.
+  it('the danger tier matches', () => {
+    expect(colors.danger.DEFAULT).toBe(DANGER)
+    expect(colors.danger.soft).toBe(DANGER_SOFT)
+    expect(colors.danger.strong).toBe(DANGER_STRONG)
+  })
+
+  it('warn matches', () => {
+    expect(colors.warn).toBe(WARN)
+  })
+
+  it('the ok tier matches', () => {
+    expect(colors.ok.DEFAULT).toBe(OK)
+    expect(colors.ok.strong).toBe(OK_STRONG)
+  })
+
+  /**
+   * T-71's one deliberate omission. Every amber-400 surface in the app moved
+   * onto `ember` rather than a new `warn.strong`, because the two values are
+   * the same color — and two names for one hex is the drift this whole file
+   * exists to prevent. If a future retheme wants them to differ, that is a
+   * real decision: mint the token, migrate the sites, and delete this test.
+   */
+  it('has no second name for the ember hex', () => {
+    expect(WARN).not.toBe(EMBER)
+    const others = Object.entries(
+      colors as unknown as Record<string, string | Record<string, string>>
+    )
+      .filter(([name]) => name !== 'ember')
+      .flatMap(([, value]) => (typeof value === 'string' ? [value] : Object.values(value)))
+    expect(others).not.toContain(EMBER)
   })
 })
 
@@ -102,6 +147,45 @@ describe('palette contrast stays WCAG AA', () => {
   it('the playhead stays readable on the track AND on the clip range', () => {
     expect(contrast(EMBER, BG_HOVER)).toBeGreaterThan(4.5)
     expect(contrast(EMBER, over(ACCENT, BG_HOVER, 0.25))).toBeGreaterThan(4.5)
+  })
+
+  /**
+   * T-71 — the semantic tier. Every one of these is a pairing that exists on
+   * screen today, not a hypothetical: danger/warn/ok text sits on the three
+   * app surfaces, and three of them sit on a wash of their OWN strong tone
+   * (HookIndicator's three badges, CaptionsPanel's setup notice,
+   * AutosaveRestore's recovery card) which is the case a naive
+   * "token on background" check would miss entirely.
+   */
+  it('every semantic text tone is readable on all three surfaces', () => {
+    for (const tone of [DANGER, DANGER_SOFT, DANGER_STRONG, WARN, OK, OK_STRONG]) {
+      for (const surface of [BG_BASE, BG_ELEVATED, BG_HOVER]) {
+        expect(contrast(tone, surface), `${tone} on ${surface}`).toBeGreaterThan(4.5)
+      }
+    }
+  })
+
+  it('semantic text stays readable on a wash of its own strong tone', () => {
+    // HookIndicator: `bg-*-strong/20 text-* border-*-strong/40`, on a card.
+    expect(contrast(DANGER, over(DANGER_STRONG, BG_ELEVATED, 0.2))).toBeGreaterThan(4.5)
+    expect(contrast(OK, over(OK_STRONG, BG_ELEVATED, 0.2))).toBeGreaterThan(4.5)
+    expect(contrast(WARN, over(EMBER, BG_ELEVATED, 0.2))).toBeGreaterThan(4.5)
+    // CaptionsPanel's "Captions need setup" card is the /10 version.
+    expect(contrast(WARN, over(EMBER, BG_ELEVATED, 0.1))).toBeGreaterThan(4.5)
+    // AutosaveRestore's recovery card is a danger-strong/5 wash.
+    expect(contrast(DANGER, over(DANGER_STRONG, BG_ELEVATED, 0.05))).toBeGreaterThan(4.5)
+  })
+
+  /**
+   * The one place a semantic token is a FILL under text: MoodBoardPanel's
+   * per-item remove chip turns solid on hover. It carried `hover:bg-rose-500`
+   * with the glyph left at inherited ink-base — 2.93:1, under AA, and nobody
+   * could have found it because neither color was a token. Dark-on-fill is
+   * how `.btn-primary` already solves this against accent.
+   */
+  it('dark text is readable on a filled danger surface', () => {
+    expect(contrast(BG_BASE, DANGER_STRONG)).toBeGreaterThan(4.5)
+    expect(contrast(INK_BASE, DANGER_STRONG)).toBeLessThan(4.5)
   })
 })
 

@@ -23,7 +23,26 @@ hard-code chrome colors in `className` — use the token.
 | `ink-base` | `#ece4e2` | Primary text (15.5:1) |
 | `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
 | `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). |
-| `ember` | `#fbbf24` | Warnings, the icon's sun, and the **playhead** in both timed studios — wavesurfer's cursor in Audio, the Timeline marker in Video. 10.0:1 on `bg-hover`, 7.4:1 on the clip range's `accent/25` fill, so it stays readable over the accent it is drawn across (T-56). |
+| `ember` | `#fbbf24` | Warning **surfaces** (`bg-ember/10`, `border-ember/40`, the yellow status dot), the icon's sun, and the **playhead** in both timed studios — wavesurfer's cursor in Audio, the Timeline marker in Video. 10.0:1 on `bg-hover`, 7.4:1 on the clip range's `accent/25` fill, so it stays readable over the accent it is drawn across (T-56). |
+
+**The semantic tier (T-71)** — three meanings that used to be carried by
+raw rose/amber/emerald palette classes across a dozen files. The values
+are the palette values that were already on screen, so adopting them was
+a rename, not a redesign.
+
+| Token | Value | Use |
+|---|---|---|
+| `danger` | `#fda4af` | Destructive actions, failures, clipping — **text**. Delete buttons, the REC clock, error copy. 9.6:1 on `bg-elevated`, 7.0:1 on a `danger-strong/20` wash. |
+| `danger-soft` | `#fecdd3` | The hover brighten on a `text-danger` ghost-button label, and error-card body copy. 12.9:1 on `bg-elevated`. |
+| `danger-strong` | `#fb7185` | Danger as a **mark**: meter bars, status dots, failed progress bars, borders, `/NN` washes. 7.2:1 on `bg-base`. Text drawn ON it is `text-bg-base` (7.2:1), never `ink-base` (2.2:1). |
+| `warn` | `#fcd34d` | Caution / "this needs setup" — **text**. 12.6:1 on `bg-elevated`, 10.4:1 on an `ember/10` wash. |
+| `ok` | `#6ee7b7` | Healthy, ready, passed — **text**. 12.0:1 on `bg-elevated`, 8.2:1 on an `ok-strong/20` wash. |
+| `ok-strong` | `#34d399` | Ok as a **mark**: meter bars, status dots, borders, washes. 10.1:1 on `bg-base`. |
+
+There is deliberately **no `warn-strong`** — `amber-400` is `ember` to the
+byte, so warning surfaces use the ember token rather than a second name
+for one color. `designTokensInSync.test.ts` fails if any other token is
+ever given the ember hex.
 
 The palette (round 19, "obsidian volcano") lives in TWO files by
 necessity: `tailwind.config.js` (for classNames) and
@@ -48,7 +67,7 @@ copied from. In a className, use Tailwind's own `/NN` suffix
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
 weights 400/500/600.
 
-**Documented raw-color exceptions.** Three places use raw hex / rgba
+**Documented raw-color exceptions.** Four places use raw hex / rgba
 deliberately; nowhere else may:
 
 - **NavCard accent washes.** Per-studio NavCard accents on the Home
@@ -59,6 +78,22 @@ deliberately; nowhere else may:
   uses inline-style raw hex on purpose — the error may originate in
   layout itself, so the fallback avoids Tailwind classes that depend on
   shared layout context.
+- **Document content** (T-71). `image-studio/templates.ts`,
+  `references/assetCatalog.ts`, and the blank page's `background:
+  '#ffffff'` in `canvasStore.ts` describe **artwork**, not chrome: they
+  are compositions with per-template alphas that a designer tuned by eye,
+  and they end up as pixels inside the user's exported PNG. A chrome
+  retheme must not silently redesign a shipped template. The line: the
+  app's own **default marks** — the fill and stroke a freshly drawn
+  rect / ellipse / line / text layer comes out in — DO follow the tokens,
+  because a user expects new shapes to arrive in imagii's colors.
+
+**Text on a semantic fill.** Any token used as a `bg-*` under text needs
+its own pairing checked — the fill tones (`accent`, `danger-strong`,
+`ember`, `ok-strong`) are all bright, so the readable partner is
+`text-bg-base`, the way `.btn-primary` already does it. `ink-base` on a
+bright fill fails AA and looks fine while doing so; that was the T-71
+finding in MoodBoardPanel's remove chip (2.93:1).
 
 ---
 

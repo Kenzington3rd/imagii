@@ -67,11 +67,11 @@ export function ReferencePanel(): JSX.Element {
       </p>
 
       {error ? (
-        <div className="card p-3 border-rose-400/40 text-sm text-rose-200">{error}</div>
+        <div className="card p-3 border-danger-strong/40 text-sm text-danger-soft">{error}</div>
       ) : null}
 
       {response?.notice ? (
-        <div className="card p-3 border-amber-400/40 text-sm text-amber-200">
+        <div className="card p-3 border-ember/40 text-sm text-warn">
           {response.notice}
         </div>
       ) : null}

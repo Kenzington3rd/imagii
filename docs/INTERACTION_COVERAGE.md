@@ -1130,3 +1130,24 @@ end state, all in `tests/e2e/image.spec.ts` and
   mechanism) — full suite 123/123 at ~4.4m, flake class removed.
 - Residue ticketed [T-72]: ? stacks the hotkey overlay over open
   dialogs; Record's Escape-to-stop shape noted in the same ticket.
+
+
+## Dispositions — round 44 (fix wave batch 18: T-65 + T-71 + T-72)
+
+- **HotkeyOverlay ? toggle:** conditional — inert behind any other
+  modal, still self-closing (the predicate counts modal claims and
+  subtracts its own). Both directions E2E + 4 unit cases; the naive
+  guard traps the overlay open behind its own claim (mutation-proven
+  by worker), the missing guard stacks dialogs (red-first).
+- **Record - Escape mid-take:** guarded by isModalOpen — ? then
+  Escape dismisses the overlay only; the next Escape stops the take.
+  Expediter mutation: guard disabled -> exactly that E2E red.
+- **Export pipeline (Layer 5 surface):** every auto-cropped export
+  ships SAR 1:1 (was 405:404 on odd-aspect crops); absolute pins
+  added so path-identity cannot mask a shared wrong value.
+- **Semantic color tier:** danger/warn/ok tokens across ~28 renderer
+  files; five E2E locators renamed in place; MoodBoard remove-chip
+  hover is the one behavioral delta (AA fix, 2.93 -> 7.20). The
+  NavCard raw accents remain inside their documented exception;
+  templates/assetCatalog are now a documented exception of their own
+  (artwork specs, not chrome).

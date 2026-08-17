@@ -373,6 +373,16 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
       await window.keyboard.press('Escape')
       await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // T-72: and the third way out — `?` itself, which is what the panel
+      // copy promises ("Press ? again to close."). The overlay renders a
+      // Modal, so the "is a dialog open" guard added in T-72 has to exempt
+      // the overlay's own; if it did not, this press would be swallowed and
+      // the overlay would be stuck open behind its own guard.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
     } finally {
       await app.close()
       cleanup(root)

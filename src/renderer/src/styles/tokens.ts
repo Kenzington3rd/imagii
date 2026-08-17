@@ -16,6 +16,12 @@
  *   INK_DIM on BG_BASE           6.2:1  (5.8:1 on BG_ELEVATED)
  *   EMBER on BG_BASE            11.6:1  (9.99:1 on BG_HOVER — the Timeline
  *                                        track the playhead is drawn on)
+ *   DANGER on BG_ELEVATED       9.64:1  (6.97:1 on a DANGER_STRONG/20 wash)
+ *   DANGER_SOFT on BG_ELEVATED 12.92:1
+ *   DANGER_STRONG on BG_BASE    7.20:1  (BG_BASE text on it: 7.20:1)
+ *   WARN on BG_ELEVATED        12.64:1  (10.4:1 on an EMBER/10 wash)
+ *   OK on BG_ELEVATED          11.96:1  (8.16:1 on an OK_STRONG/20 wash)
+ *   OK_STRONG on BG_BASE       10.08:1
  */
 
 import { assert } from '@shared/assert'
@@ -47,6 +53,44 @@ export const INK_DIM = '#9c8f8b'
  * (9.99:1 on BG_HOVER, 7.35:1 on the range's `accent/25` fill).
  */
 export const EMBER = '#fbbf24'
+
+/**
+ * T-71 — the semantic tier: danger / warn / ok.
+ *
+ * These three meanings were carried by RAW Tailwind palette classes — the
+ * rose, amber and emerald families, straight out of Tailwind's defaults —
+ * across a dozen files. Same bug as T-56's `bg-pink-400` playhead: nothing
+ * fails, nothing looks broken, and a retheme walks straight past every one
+ * of them. The VALUES are deliberately the palette values that were already
+ * on screen, so this migration is a rename, not a redesign.
+ *
+ * Two tiers, because both were in use and mean different things:
+ *   DEFAULT   the readable TEXT tone on a dark surface
+ *   _STRONG   the saturated MARK tone — meter bars, status dots, progress
+ *             fills, borders and the /NN washes drawn under the text
+ * `_SOFT` exists only for danger, where seven ghost buttons brighten their
+ * label on hover; warn and ok have no such state, and a token nobody uses
+ * is scaffolding.
+ *
+ * There is deliberately no `WARN_STRONG`: amber-400 IS `EMBER`, to the byte.
+ * Every amber-400 surface in the app moved onto the ember token instead of
+ * gaining a second name for one color — the DESIGN_GUIDE row for ember has
+ * claimed "warnings" since round 19, and now the code agrees.
+ */
+/** Destructive actions, failures, clipping — text tone. */
+export const DANGER = '#fda4af'
+/** Danger text brightened for hover (ghost-button labels). */
+export const DANGER_SOFT = '#fecdd3'
+/** Danger as a mark: meter bars, status dots, error bars, borders, washes. */
+export const DANGER_STRONG = '#fb7185'
+
+/** Caution, "this needs setup", degraded-but-working — text tone. */
+export const WARN = '#fcd34d'
+
+/** Healthy, ready, passed — text tone. */
+export const OK = '#6ee7b7'
+/** Ok as a mark: meter bars, status dots, borders, washes. */
+export const OK_STRONG = '#34d399'
 
 /** Checkerboard tiles for transparent-image previews (two warm darks). */
 export const CHECKER_A = '#221616'

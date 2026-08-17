@@ -1380,9 +1380,9 @@ test.describe('ExportPanel', () => {
       expect(
         await card.getByRole('button', { name: 'Show', exact: true }).count()
       ).toBeLessThan(3)
-      // The cancelled rows are painted as errors (rose bar), not left at a
+      // The cancelled rows are painted as errors (danger bar), not left at a
       // hopeful accent-coloured percentage.
-      await expect(card.locator('.bg-rose-400')).not.toHaveCount(0)
+      await expect(card.locator('.bg-danger-strong')).not.toHaveCount(0)
     } finally {
       await app.close()
     }

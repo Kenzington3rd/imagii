@@ -13,7 +13,7 @@ import type { JSX } from 'react'
  * Usage:
  *   <Icon name="record" />                 // 1em, inherits color
  *   <Icon name="save" size={16} />         // explicit pixel size
- *   <Icon name="warning" className="text-rose-300" />
+ *   <Icon name="warning" className="text-danger" />
  *
  * Adding an icon: add a key to ICON_PATHS with the raw inner SVG markup
  * (paths drawn in a 24×24 coordinate space). Keep strokes at 2px and use

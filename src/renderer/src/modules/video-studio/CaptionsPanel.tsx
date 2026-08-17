@@ -186,10 +186,10 @@ export function CaptionsPanel(): JSX.Element | null {
       </PanelHeader>
 
       {!status?.ready ? (
-        <div className="bg-amber-400/10 border border-amber-400/30 rounded p-2 text-xs">
-          <div className="font-semibold text-amber-300 mb-1">Captions need setup</div>
+        <div className="bg-ember/10 border border-ember/30 rounded p-2 text-xs">
+          <div className="font-semibold text-warn mb-1">Captions need setup</div>
           <button
-            className="text-amber-200 hover:underline"
+            className="text-warn hover:underline"
             onClick={() => setShowSetup((v) => !v)}
           >
             {showSetup ? 'Hide' : 'Show'} setup instructions
@@ -271,7 +271,7 @@ export function CaptionsPanel(): JSX.Element | null {
                         {Math.round(installProgress.percent ?? 0)}%
                       </span>
                       <button
-                        className="text-ink-dim hover:text-rose-300 px-1"
+                        className="text-ink-dim hover:text-danger px-1"
                         onClick={() => void window.api.captions.cancelInstall()}
                         title="Cancel download"
                         aria-label="Cancel download"
@@ -310,7 +310,7 @@ export function CaptionsPanel(): JSX.Element | null {
               phase is in flight. */}
           {progress.phase === 'burning-in' ? (
             <button
-              className="btn-ghost px-2 py-1.5 text-xs text-rose-300 hover:text-rose-200"
+              className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
               onClick={() => void window.api.captions.cancelBurnIn()}
               title="Cancel burn-in"
             >

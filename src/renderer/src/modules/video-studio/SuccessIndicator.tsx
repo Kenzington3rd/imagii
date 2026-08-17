@@ -9,15 +9,15 @@ interface SuccessIndicatorProps {
 }
 
 const COLORS: Record<'green' | 'yellow' | 'red', string> = {
-  green: 'bg-emerald-400',
-  yellow: 'bg-amber-400',
-  red: 'bg-rose-400'
+  green: 'bg-ok-strong',
+  yellow: 'bg-ember',
+  red: 'bg-danger-strong'
 }
 
 const TEXTS: Record<'green' | 'yellow' | 'red', string> = {
-  green: 'text-emerald-300',
-  yellow: 'text-amber-300',
-  red: 'text-rose-300'
+  green: 'text-ok',
+  yellow: 'text-warn',
+  red: 'text-danger'
 }
 
 export function SuccessIndicator(props: SuccessIndicatorProps): JSX.Element {

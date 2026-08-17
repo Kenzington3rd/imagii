@@ -883,7 +883,7 @@ test.describe('Image Studio — tools and drawing', () => {
       expectNear(rect.y, 150, 'rect y')
       expectNear(rect.width, 200, 'rect width')
       expectNear(rect.height, 150, 'rect height')
-      expect(rect.fill).toBe('rgba(255,49,49,0.4)')
+      expect(rect.fill).toBe('rgba(255, 49, 49, 0.4)')
 
       // A drag that ends up-and-left of its start still commits a positive box.
       await dragOnStage(window, { x: 700, y: 500 }, { x: 600, y: 400 })
@@ -1226,6 +1226,16 @@ test.describe('Image Studio — selection', () => {
       await expectLayerCount(window, 3)
       expect(await layerNames(window)).toEqual(names)
 
+      // ── T-72: `?` is a window-level binding too, and the app-wide
+      //    HotkeyOverlay renders its OWN Modal — so on the old build it
+      //    stacked a second dialog on top of the one the user was in,
+      //    covering the dialog they had opened on purpose. ──
+      await window.keyboard.press('?')
+      await expect(window.locator('[role="dialog"]')).toHaveCount(1)
+      await expect(window.getByText('Press ? again to close.')).toHaveCount(0)
+      // …and the one dialog still up is the one the user opened.
+      await expect(dialog.getByRole('button', { name: 'Generate 3 variants' })).toBeVisible()
+
       // ── and the dialog itself is unharmed: its own keys still work ──
       await expect(dialog).toBeVisible()
       await window.keyboard.press('Escape')
@@ -1241,6 +1251,15 @@ test.describe('Image Studio — selection', () => {
       await expectLayerCount(window, 2)
       await window.keyboard.press('Control+z')
       await expectLayerCount(window, 3)
+
+      // ── T-72's other half: `?` is inert BEHIND a dialog, not disabled.
+      //    With nothing open it still toggles, and it can still close the
+      //    overlay it opened — the self-exemption. A blanket isModalOpen()
+      //    guard would have trapped the overlay open forever. ──
+      await window.keyboard.press('?')
+      await expect(window.getByText('Press ? again to close.')).toBeVisible()
+      await window.keyboard.press('?')
+      await expect(window.locator('[role="dialog"]')).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }
@@ -1402,7 +1421,7 @@ test.describe('Image Studio — properties panel', () => {
       // An ellipse gets the same three fields; a line layer gets none of them.
       await window.locator(TOOLBAR).getByRole('button', { name: 'Ellipse' }).click()
       await dragOnStage(window, { x: 700, y: 250 }, { x: 900, y: 400 })
-      await expect(field(window, 'Fill')).toHaveValue('rgba(244,63,94,0.4)')
+      await expect(field(window, 'Fill')).toHaveValue('rgba(245, 46, 46, 0.4)')
       await window.locator(TOOLBAR).getByRole('button', { name: '+ More' }).click()
       await window.locator(TOOLBAR).getByRole('button', { name: 'Line' }).click()
       await dragOnStage(window, { x: 200, y: 600 }, { x: 500, y: 700 })

@@ -852,12 +852,14 @@ test.describe('imagii References studio', () => {
       const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
       // The search button is the only button in the card that holds the input.
       const searchButton = window.locator('.card', { has: input }).getByRole('button')
-      // T-30: the rose card renders `searchError` — a REJECTED invoke, i.e.
-      // Electron's raw "Error invoking remote method …" preamble. The amber
+      // T-30: the danger card renders `searchError` — a REJECTED invoke, i.e.
+      // Electron's raw "Error invoking remote method …" preamble. The warn
       // card renders a `notice` carried on a normal response. A search that
-      // could not run must land on the amber one whichever hop died.
-      const errorCard = window.locator('.border-rose-400\\/40')
-      const noticeCard = window.locator('.border-amber-400\\/40')
+      // could not run must land on the warn one whichever hop died.
+      // (T-71 renamed both borders off the raw rose/amber palette classes;
+      // the values on screen are unchanged.)
+      const errorCard = window.locator('.border-danger-strong\\/40')
+      const noticeCard = window.locator('.border-ember\\/40')
 
       await expect(searchButton).toHaveText('Search')
       await expect(searchButton).toBeEnabled()
