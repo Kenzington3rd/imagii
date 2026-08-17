@@ -14,6 +14,134 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-54 + T-46: the image capture had one more thing the canvas showed and it did not
+
+One batch, one lesson, third round running on the same helper. T-45
+took the window's zoom out of the export MATH; T-53 took the editor's
+chrome out of the export CONTENT; this pair finishes the list — the
+part of the document that was never in the render tree at all, and the
+one capture path that had never been routed through the shared helper.
+
+### Bug (T-54) — every export dropped the document's background
+- **Root cause.** `doc.background` was applied as a CSS `background` on
+  the Konva stage's container element (`Canvas.tsx`'s `<Stage style>`).
+  Konva's `Stage._toKonvaCanvas` draws NODES into a fresh off-screen
+  canvas; a CSS property on the host element is not a node and is not in
+  that canvas. So every export lost it: a PNG of the 1280x720
+  `yt-thumb-bold` template came out with a fully transparent
+  `rgba(0,0,0,0)` where the canvas showed `#241614`, and the JPG — no
+  alpha channel to carry the hole — composited the same pixels onto
+  BLACK. The user's thumbnail was a dark design on screen and a
+  transparent-or-black design in the file. It survived T-45 and T-53
+  because every export assertion to that point read the PNG header
+  (size) or compared two exports of the same doc to each other (chrome):
+  both are blind to a background that is uniformly missing from every
+  byte in every case.
+- **Fix.** The background is now the first NODE of the document layer —
+  a `<Rect name="background" width={doc.width} height={doc.height}
+  fill={doc.background} listening={false} />` — and the CSS property is
+  gone. Chosen over the two capture-time alternatives (adding a
+  temporary background layer inside `captureDocument`, or compositing
+  the captured data URL onto a filled canvas): both leave TWO renderers
+  of one property, CSS for the screen and a fill for the file, which is
+  precisely the split that caused the bug and would have to be kept in
+  step by every future export path. As a node it is one render, so
+  screen and every capture — single PNG/JPG, emote pack, variants, and
+  anything added later — agree by construction, `captureDocument` needs
+  no change at all, and there is no capture-time mutation to flicker or
+  to strand on a throw. `listening={false}` keeps the empty-canvas click
+  on the Stage, which is what deselects. It is deliberately NOT tagged
+  `chrome`: that tag means "hide for the capture", the exact opposite of
+  why this node exists. Transparency needs no branch and no per-export
+  control — a `transparent` fill draws nothing, so the overlay and emote
+  templates (whose whole point is an alpha channel) still export
+  transparent, and the same is true of any doc the user sets that way.
+- **Test.** `tests/e2e/image.spec.ts` — "the document background lands
+  in the bytes, and a transparent doc stays transparent" exports the
+  1280x720 template as PNG and as JPG and samples one document pixel out
+  of the real bytes with the repo's own bundled ffmpeg
+  (`format=rgba,crop=1:1:x:y` — the `format` first because a JPEG
+  decodes subsampled and `crop` rounds a 1x1 box down to 0x0), asserting
+  exactly `{36,22,20,255}` for the PNG and within a JPEG tolerance for
+  the JPG; the probe point is guarded against every layer box derived
+  from the template module, so "background" is a claim and not a hope.
+  It then applies the emote template through the Templates dialog and
+  asserts the corner of the 112px pack member has `a === 0`, with the
+  centre pixel asserted to be the circle's own fill as a positive
+  control — otherwise "transparent corner" would also pass on an export
+  that came out empty. `tests/unit/interactionWiring.test.ts` (+3) pins
+  the three facts a later edit could quietly undo: the rect is first in
+  the document layer, the CSS property has not come back, and the node
+  is not tagged chrome. Red-green: on the unfixed build the PNG probe
+  read `{0,0,0,0}` and the JPG probe `r=0` against 36; both flipped with
+  the fix. The T-45 window-invariance and T-53 four-way chrome
+  byte-identity tests were re-run and stay green — the background is
+  constant across window sizes and chrome states, so painting it cannot
+  break an equality between two exports of the same document.
+
+### Bug (T-46) — variants showed a dead canvas, and saved at window size
+- **Root cause.** Two faults in one dialog, both from it being the one
+  capture path nobody had touched. (a) `ThumbnailVariants` kept
+  `previews` in component state and only early-returned on `!open`, so
+  the instance and its previews survived a close — and every edit. Close
+  the dialog, hide a layer, reopen: four renders of a canvas that no
+  longer existed, with the Generate button hidden precisely BECAUSE
+  `previews` was non-empty, so there was no way back to a fresh render
+  except the Regenerate button buried under the stale tiles. (b) It had
+  its own local `getStageDataUrl()` calling `stage.toDataURL()` raw —
+  the last raw stage capture in the renderer, T-53 having deleted the
+  other one — so saving the "Warm" variant of a 1280x720 template wrote
+  956x537, exactly the T-45 defect, months after T-45 fixed it in
+  `ExportDialog`. The existing test asserted `pngSize(warm).w > 0`,
+  which is true of every PNG ever written.
+- **Fix.** (a) The previews now carry the document they were rendered
+  from: `useState<{ doc, items } | null>`, and the render uses them only
+  while `previews.doc === doc`. The store replaces the `doc` object on
+  every edit and hands the same object back on undo, so identity IS the
+  question being asked. Reopening an untouched canvas keeps the work;
+  reopening after any edit shows the Generate button again. Clearing on
+  close was the smaller change and the worse one — it throws away a
+  render nobody invalidated. (b) The local capture is deleted; the base
+  render goes through `captureDocument` like everything else, so a
+  variant is the document at 1:1, without the editor's chrome (T-53) and
+  with the background (T-54) — a variant of what the user sees.
+- **Test.** `tests/e2e/image.spec.ts` — "variants: generate four tiles,
+  save one, regenerate, save all" pins the saved bytes at exactly
+  `1280x720` (the old assertion was `w > 0`) for the single Save and for
+  all four of Save all, having first asserted the on-screen stage is NOT
+  1:1 so the number is a claim about the capture; and drives the reopen
+  both ways — untouched keeps the four tiles, hidden-layer shows zero
+  tiles and the Generate button. `tests/unit/interactionWiring.test.ts`
+  (+4) pins the `captureDocument` route, the absence of any raw stage
+  capture, the identity check, and that Generate and Regenerate are the
+  same handler (which is what makes the E2E's re-read proof cover both).
+  Red-green: the unfixed build reported `956x537` where `1280x720` is
+  now asserted, and four tiles where zero are; the old stale pin
+  (`stale === urls` with Generate absent) is inverted.
+
+### Lesson
+**A capture pipeline is only as complete as its least-visited path, and
+"what the canvas shows" includes everything the canvas shows.** Four
+rounds on one export: the zoom (T-45), the editor's furniture (T-53),
+the background (T-54), and a second capture path that had silently kept
+its own copy of the original bug (T-46). Two rules fall out. First: when
+a property is rendered one way for the screen and another way for the
+file, the file will eventually be wrong — the durable fix puts the
+property in the render tree BOTH paths already share, rather than
+teaching the export path to reproduce it. Second: one shared capture
+helper is only a fix for the call sites that actually call it. T-45 and
+T-53 both landed in `captureDocument` and both were correct, and a
+component fifty lines away kept a private `stage.toDataURL()` and stayed
+broken through both. When a helper is introduced to make a mistake
+unrepeatable, grep for the mistake, not for the helper. And note again
+what hid it: dimension assertions are blind to content (T-53's lesson),
+and equality assertions between two exports of the same document are
+blind to anything uniformly missing from both. Only sampling an actual
+pixel against an expectation derived from the document catches a
+background that was never drawn.
+
+---
+
 ## 2026-08-17 — T-59 + T-60 + T-57: three ways to lie about a failure
 
 One batch, three failures in main-process error handling. They are

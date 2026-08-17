@@ -815,7 +815,7 @@ IMG-PREC.
 - **Acceptance criteria:** reopen regenerates or clears (Generate
   visible); stale pin flipped; variant saves go through
   `captureDocument` and a dimension pin asserts doc-size bytes.
-- **Status:** open
+- **Status:** done (round 40 — see Done)
 
 ## T-48 — chat highlight "+ clip" reports success for a clip it never adds
 
@@ -927,7 +927,7 @@ IMG-PREC.
         matching the canvas.
   - [ ] E2E samples a background pixel from the exported bytes both
         ways.
-- **Status:** open
+- **Status:** done (round 40 — see Done)
 
 ## T-55 — full-suite E2E runs drop one roaming test under runner contention
 
@@ -1098,6 +1098,19 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** open
 
+## T-68 — image hotkeys fire through open modals
+
+- **Spec:** T-46/T-54 worker finding, pre-existing. ImageStudio's
+  global key handler guards only INPUT/TEXTAREA, not "a modal is
+  open" — with the Variants or Templates dialog up, Delete still
+  removes the selected layer behind the scrim and R/O/L/P still
+  switch the canvas tool.
+- **Acceptance criteria:** studio hotkeys are inert while a Modal is
+  open (shared mechanism if another studio has the same hole — grep
+  first); E2E asserts Delete behind the Variants dialog removes
+  nothing; existing hotkey coverage stays green.
+- **Status:** open
+
 ## T-67 — tempCleanup.test.ts is polluted by other suites' temp families
 
 - **Spec:** T-59/T-60 worker finding, pre-existing. The test clears
@@ -1186,6 +1199,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 40 — fix wave batch 14: T-46 + T-54 (the image-capture pair).
+T-54's mechanism is the standout: instead of painting the background
+at capture time (either capture-side option would re-split the very
+property whose split WAS the bug, and would drag DOM dependencies
+into the node-testable captureDocument), doc.background became a
+permanent Rect — first child of the document layer, listening=false,
+NOT tagged chrome (the T-53 trap, pinned) — and the CSS background on
+the Stage is deleted. One property, one renderer: screen and every
+capture path agree by construction, and captureDocument needed zero
+changes. fill="transparent" draws nothing, so the 7
+overlay/emote templates keep their alpha with no branch and no
+speculative UI (the AC's optional control skipped, stated). T-46:
+variants route through captureDocument (the last raw toDataURL in the
+renderer deleted); stale previews are keyed to the document they were
+rendered from — reopening an untouched canvas keeps the tiles,
+reopening after any edit shows Generate (chosen over clear-on-close:
+discarding a render nobody invalidated loses under the tiebreaker;
+store identity is exactly the question). Red-green: PNG {0,0,0,0} and
+JPG r=0 flipped to the canvas's #241614; variants save 956x537
+flipped to 1280x720 (the ticket's exact numbers); the stale pin
+inverted. Byte-identity interplay re-verified: the T-45
+window-invariance and T-53 four-way chrome tests stay green with the
+background painted. Worker mutations: background Rect deleted, raw
+toDataURL restored, doc-identity check dropped. Expediter's own: the
+background tagged chrome -> exactly the not-chrome unit pins + the
+background-pixel E2E red, restore, green — the T-53 trap guard
+discriminates. Gates: 1052 unit / 121 E2E (one T-62 audio-drag drop
+under parallelism, green standalone; image suite 19/19 twice). E2E
+pixel technique recorded: sample via bundled ffmpeg with format
+BEFORE crop (JPEG chroma subsampling rounds a 1x1 crop to 0x0
+otherwise). Findings: T-68 filed (hotkeys fire through modals); the
+no-background-control gap noted as a future owner call (setBackground
+has zero callers — the natural home if a transparent-background
+choice is ever wanted); duplicate round-39 ledger section deduped.
 
 Round 39 — fix wave batch 13: T-57 + T-59 + T-60 (the error-path
 cluster). T-60 first, because T-59 builds on it: the single convert
