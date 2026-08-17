@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { MoodBoardCollection, SearchResult } from '../../shared/search'
@@ -217,6 +217,15 @@ describe('sweepOrphanThumbs — the reap moved to a point undo cannot reach', ()
     const m = await import('./moodboard')
     const used = seedThumb('in-use.jpg')
     const orphan = seedThumb('orphan.jpg')
+    // Backdated: the sweep deliberately skips files newer than its own
+    // start so it can never eat a thumb being written mid-sweep, and on
+    // Windows Date.now()'s ~15 ms quantization can put a JUST-written
+    // file's mtime ahead of the sweep's start — the v1.5.0 release run
+    // caught this test racing that guard. An old orphan is the semantic
+    // under test anyway.
+    const aMinuteAgo = new Date(Date.now() - 60_000)
+    utimesSync(used, aMinuteAgo, aMinuteAgo)
+    utimesSync(orphan, aMinuteAgo, aMinuteAgo)
     seedBoard(withThumb('live', 'Live board', used))
 
     const removed = await m.sweepOrphanThumbs()
