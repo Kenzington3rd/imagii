@@ -136,13 +136,17 @@ describe('corrupt autosave: what main reports', () => {
 })
 
 describe('corrupt autosave: what the renderer requires', () => {
+  // Normalized to LF: a Windows checkout (core.autocrlf) hands this file
+  // over as CRLF, and the multi-line indexOf markers below contain bare \n —
+  // unnormalized, indexOf returns -1 and the slices silently come out empty.
+  // Caught by the v1.5.0 release run (the de facto Windows CI).
   const source = readFileSync(
     path.join(
       process.cwd(),
       'src/renderer/src/components/AutosaveRestore.tsx'
     ),
     'utf8'
-  )
+  ).replace(/\r\n/g, '\n')
 
   /** The `!result.ok` branch — the only one that renders Clear / Dismiss. */
   const branch = source.slice(
