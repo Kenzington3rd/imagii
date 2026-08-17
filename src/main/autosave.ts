@@ -31,6 +31,18 @@ export interface AutosaveInfo {
   sizeBytes?: number
 }
 
+/**
+ * Age of a timestamp, clamped at zero. On Windows, `Date.now()`'s ~15 ms
+ * quantization and the filesystem's clock can disagree, so a JUST-written
+ * file's mtime lands fractionally in the future and a bare subtraction goes
+ * negative — the v1.5.0 release run (the de facto Windows CI) caught
+ * `ageMs: -0.49` violating the >= 0 contract the corruption banner's tests
+ * pin. A file from the future is, for every purpose here, brand new.
+ */
+function ageOf(timestampMs: number): number {
+  return Math.max(0, Date.now() - timestampMs)
+}
+
 export interface AutosaveLoadResult {
   ok: boolean
   reason?: string
@@ -156,7 +168,7 @@ async function readAndValidate(filePath: string): Promise<AutosaveLoadResult> {
         // and withholding the age here is what left that banner — and its
         // Clear button, the only way to get rid of the bad file — unable to
         // render at all.
-        ageMs: Date.now() - stats.mtimeMs,
+        ageMs: ageOf(stats.mtimeMs),
         sizeBytes: stats.size
       }
     }
@@ -168,7 +180,7 @@ async function readAndValidate(filePath: string): Promise<AutosaveLoadResult> {
       exists: true,
       filePath,
       savedAt: validation.project.savedAt,
-      ageMs: Date.now() - validation.project.savedAt,
+      ageMs: ageOf(validation.project.savedAt),
       sizeBytes: stats.size
     }
   }
@@ -199,13 +211,13 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
     const validation = validateProjectJsonString(raw)
     if (!validation.ok) {
       // Same contract as readAndValidate above: no savedAt, but a real age.
-      return { exists: true, filePath, ageMs: Date.now() - s.mtimeMs, sizeBytes: s.size }
+      return { exists: true, filePath, ageMs: ageOf(s.mtimeMs), sizeBytes: s.size }
     }
     return {
       exists: true,
       filePath,
       savedAt: validation.project.savedAt,
-      ageMs: Date.now() - validation.project.savedAt,
+      ageMs: ageOf(validation.project.savedAt),
       sizeBytes: s.size
     }
   } catch {
