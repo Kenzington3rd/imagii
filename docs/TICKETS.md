@@ -1100,6 +1100,27 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** done (round 42 — see Done)
 
+## T-74 — text overlays never render on a clip that does not start at 0
+
+- **Spec:** T-51 worker finding, proven on linux with drawbox as a
+  build-independent stand-in. drawTextFilter emits
+  enable='between(t,startSec,endSec)' in SOURCE-absolute seconds (the
+  editor's Time fields show that same timeline), but runExportJob uses
+  -ss clip.startSec — INPUT seeking, so frames reach the filter graph
+  at t=0 and the window is clip-relative. For a clip starting at S
+  with duration D the overlay shows only during t in [S, D] — late by
+  S seconds, and gone entirely once S > D. Only a clip starting at
+  0.00 behaves as promised. Transcript: clip 10->13 with the editor's
+  default [10,13] window -> overlay ABSENT at all probed times; the
+  same clip with [0,3] -> visible at all four.
+- **Acceptance criteria:** the enable window is built clip-relative
+  (subtract clip.startSec, or store it clip-relative — pick and
+  document); Layer 5 case on a non-zero-start clip (drawbox stand-in
+  on linux, drawtext under the win32 gate); the T-51 pixel tests'
+  startSec: 0 note updated; LESSONS entry (two timebases, one field).
+- **Status:** open (next cycle; noted as a known issue in the v1.5.0
+  release notes)
+
 ## T-73 — one Escape closes every stacked modal at once
 
 - **Spec:** T-72 worker finding, pre-existing. Each open Modal
@@ -1269,11 +1290,38 @@ IMG-PREC.
   - [ ] Runs in the release workflow's verify step; documented in
         mediaFormats-style per-platform caveat comment where the
         watermark graph is built.
-- **Status:** open
+- **Status:** done (round 45 — see Done; the win32 positives' first
+  real execution is the v1.5.0 release run, by design)
 
 ---
 
 ## Done
+
+Round 45 — T-51 (the release-paired Layer 5 capability ticket) +
+the v1.5.0 version bump. Watermark and text-overlay PIXELS are now
+proven where they can be: five win32-gated Layer 5 tests against a
+flat mid-gray fixture at preset geometry (crop/scale no-ops, so
+drawtext is the only thing that can move a pixel and untouched
+regions re-encode bit-identically — exact assertions, not drift
+bands); four watermark corners each leaving the other three flat;
+two overlays in one export proving position, per-overlay colour by
+dominant-channel counting, and the enable gate both ways; a font
+preflight so a runner without Arial fails legibly. Two linux pins
+mirror the mpegts pattern and name their own obsolescence condition;
+discrimination proved the pin reads the real -filters table (486
+parsed, scale/subtitles asserted present) and — the ticket's premise
+confirmed — that NO other test anywhere catches a broken watermark
+graph: drawtext->drawtxt left all 1082 unit tests green and only the
+Layer 5 pin red. release.yml gains a test:media step (dispatch/tag
+triggers untouched; timeout 30->45), so the win32 positives' first
+real execution is the release run — structured for legible failure
+by design. Expediter re-ran the pin inversion personally (named red,
+restore, 71/5). The worker's deep-read found T-74 (text overlays
+never render on clips not starting at 0 — enable windows are
+source-absolute while -ss makes frames clip-relative; proven with
+drawbox), deliberately NOT pinned yet so a wrong pin could not block
+the release; filed with the full transcript and noted in the v1.5.0
+release notes as a known issue.
 
 Round 44 — fix wave batch 18: T-65 + T-71 + T-72 (the final product
 trio). T-65: scaleFilter was the only crop-then-scale graph without

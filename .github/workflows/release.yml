@@ -27,7 +27,11 @@ concurrency:
 jobs:
   build-and-release:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 45, not 30: the Layer 5 media suite below spawns real ffmpeg for every
+    # case and is markedly slower on a Windows runner than the ~90 s it takes
+    # on linux — and it now carries six extra 1080p encodes for the T-51
+    # drawtext pixels. The ceiling still only bounds a run that has hung.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +45,16 @@ jobs:
 
       - name: Verify (emoji guard + typecheck + unit tests)
         run: npm run verify
+
+      # This runner is the only Windows execution of the test suite
+      # (LESSONS 2026-08-15) and the only platform whose bundled ffmpeg has
+      # the `drawtext` filter, so the win32-gated watermark / text-overlay
+      # pixel tests (T-51) run here or nowhere. `verify` deliberately does
+      # not include this suite — it spawns real ffmpeg and takes minutes.
+      # No new trigger is added for it: this workflow stays dispatch/tag
+      # only, so it carries no new standing Actions cost.
+      - name: Real-media suite (Layer 5, incl. the win32-only drawtext pixels)
+        run: npm run test:media
 
       - name: Build portable exe
         run: npm run dist

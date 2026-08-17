@@ -173,6 +173,19 @@ that passed every string-shape unit test and were rejected by ffmpeg at
 runtime, 100% of the time. A unit test can pin what we *think* the
 filter should say; only real ffmpeg can pin that it *parses and runs*.
 
+**Per-platform cases.** ffmpeg-static ships binaries from different
+upstream builders per platform, so some evidence is only obtainable
+where the product ships. Two capability gaps are gated here today: the
+linux binary SIGSEGVs on mpegts input, and it has no `drawtext` filter
+at all, which is the only filter a watermark or a text overlay
+produces. Both follow the same shape — `it.skipIf(process.platform
+!== 'win32')` positives, plus a **linux pin that fails the moment the
+capability appears**, so an ffmpeg-static upgrade forces the gate to be
+lifted instead of leaving dead coverage behind. The release workflow
+(windows-latest, the de facto Windows CI — see the 2026-08-15 lesson)
+runs `npm run test:media` after `verify`, which is where those gated
+tests actually execute; nothing else in the project runs them.
+
 **Adding a case.** Generate sources in `beforeAll` with lavfi
 (`testsrc2`, `sine`, `anoisesrc`), drive the real exported function, and
 assert with `ffprobeJson`/`measureLufs`/`bandMeanVolume` helpers already

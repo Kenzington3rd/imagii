@@ -119,6 +119,28 @@ function safeOverlayColor(colorHex: unknown): string {
   return 'white'
 }
 
+/**
+ * PER-PLATFORM CAVEAT (drawtext — this filter and `watermarkFilter` below,
+ * the app's only two users of it): ffmpeg-static ships binaries from
+ * DIFFERENT upstream builders per platform, exactly as the mpegts note in
+ * shared/mediaFormats.ts describes. The linux x64 binary (johnvansickle
+ * 7.0.2-static) is compiled without libfreetype and therefore has NO
+ * `drawtext` filter — any export carrying a text overlay or a watermark
+ * dies at graph init with "No such filter: 'drawtext'". The win32 x64
+ * binary (gyan.dev 6.1.1), the one that ships in the product, has it.
+ *
+ * Consequence: these two features work in the shipped Windows app and
+ * cannot run at all in linux dev runs, so their PIXELS are only assertable
+ * on win32. Layer 5 gates that coverage by platform (the T-51 block in
+ * tests/integration/media.spec.ts) and the release workflow — windows-
+ * latest — runs `npm run test:media` so it actually executes; a linux pin
+ * in the same block fails if ffmpeg-static ever gains the filter, which is
+ * what forces the gate to be lifted instead of left to rot.
+ *
+ * The hardcoded C:/Windows font paths below are the second half of the same
+ * Windows-only assumption (known-and-accepted in LESSONS_LEARNED): bundle a
+ * font before any cross-platform build.
+ */
 function drawTextFilter(overlay: TextOverlay, preset: PlatformPreset): string {
   const fontPath = 'C\\:/Windows/Fonts/arial.ttf'
   const x = Math.round(overlay.x * preset.width)
@@ -166,6 +188,12 @@ function hypeShakeFilter(): string {
   return `crop=iw-6:ih-6:'3+3*sin(2*PI*t*8)':'3+3*cos(2*PI*t*9)'`
 }
 
+/**
+ * The watermark graph. Subject to the PER-PLATFORM CAVEAT on
+ * `drawTextFilter` above: this string only renders on win32, and its pixels
+ * are pinned by the win32-gated T-51 tests in the Layer 5 suite (all four
+ * corners, against a control render of the same source).
+ */
 function watermarkFilter(spec: WatermarkSpec, preset: PlatformPreset): string {
   const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
   const fontSize = Math.max(12, Math.round((spec.fontSizePct / 100) * preset.height))

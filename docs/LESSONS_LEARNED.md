@@ -1866,6 +1866,17 @@ No product code changed this round, but three findings generalize.
   class (mpegts segfault, pathToFileURL drive letters) — ticketed
   T-51 for a win32-gated Layer 5 test that runs where the release
   workflow runs.
+- **Closed (T-51).** Layer 5 gained a drawtext block: win32-gated
+  positives render a watermark in all four corners and two text
+  overlays against a control render of a flat-gray source (region luma
+  exact on the untouched quadrants, PSNR bands corroborating, the
+  `enable` window proven on and off), and two linux pins fail the day
+  ffmpeg-static gains the filter. `release.yml` now runs
+  `npm run test:media` after `verify` so the gated half executes.
+  Renaming the watermark's filter to `drawtxt` leaves all 1082 unit
+  tests green and fails only the linux pin — the string-shape layer
+  never covered this graph at all, which is the finding the ticket's
+  premise predicted.
 - **Lesson.** Per-platform evidence applies to FILTER AVAILABILITY,
   not just binaries and runtimes. When a feature's only executions all
   happen on a platform that can't run it, its coverage is a unit-level

@@ -22,7 +22,13 @@ import { runReframe } from '../../src/main/ffmpeg/reframe'
 import { runConcat, runPipComposite } from '../../src/main/ffmpeg/concat'
 import { analyzeClipHook, findHighlights } from '../../src/main/ffmpeg/highlights'
 import { runBurnIn } from '../../src/main/sidecars/whisperManager'
-import type { Clip, ExportJobSpec, PlatformId } from '../../src/shared/clip'
+import type {
+  Clip,
+  ExportJobSpec,
+  PlatformId,
+  TextOverlay,
+  WatermarkSpec
+} from '../../src/shared/clip'
 import type { CustomPreset } from '../../src/shared/customPresets'
 import { DEFAULT_CHAIN_SPEC, type AudioExportSpec, type ChainSpec } from '../../src/shared/audio'
 import { escapeSubtitlesPath } from '../../src/shared/captions'
@@ -58,6 +64,9 @@ let rampSrc = ''
 // color makes "is the overlay actually in the output" a pixel readback.
 let pipOverlaySrc = ''
 const PIP_OVERLAY_RGB: readonly [number, number, number] = [30, 223, 74]
+// Flat mid-gray 1920x1080 + stereo audio — the drawtext fixture (T-51).
+// Featureless on purpose: see the block comment on the drawtext describe.
+let flatGraySrc = ''
 
 function ff(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -217,6 +226,70 @@ async function meanRgb(
   }
   const n = buf.length / 3
   return [acc[0] / n, acc[1] / n, acc[2] / n] as [number, number, number]
+}
+
+/**
+ * min / max / mean luma (0-255) over an arbitrary crop region of one frame.
+ * On the flat-gray fixture an untouched region reports min === max, so a
+ * spread is proof that something was painted there.
+ */
+async function regionLuma(
+  file: string,
+  timeSec: number,
+  crop: string
+): Promise<{ min: number; max: number; mean: number }> {
+  const buf = await samplePixels(file, timeSec, crop, 'gray')
+  let min = 255
+  let max = 0
+  let sum = 0
+  for (const v of buf) {
+    if (v < min) min = v
+    if (v > max) max = v
+    sum += v
+  }
+  return { min, max, mean: sum / buf.length }
+}
+
+/**
+ * How many pixels in `crop` are unmistakably tinted toward `dominant`
+ * (0=R, 1=G, 2=B) — that channel more than 60 levels above BOTH the others.
+ * The gray fixture is achromatic by construction, so a region with no
+ * coloured text scores exactly 0 and any nonzero count is glyph pixels that
+ * carry the overlay's own `colorHex`.
+ */
+async function countTintedPixels(
+  file: string,
+  timeSec: number,
+  crop: string,
+  dominant: 0 | 1 | 2
+): Promise<number> {
+  const buf = await samplePixels(file, timeSec, crop, 'rgb24')
+  let n = 0
+  for (let i = 0; i + 2 < buf.length; i += 3) {
+    const r = buf[i]
+    const g = buf[i + 1]
+    const b = buf[i + 2]
+    const lead = dominant === 0 ? r : dominant === 1 ? g : b
+    const rest = Math.max(dominant === 0 ? g : r, dominant === 2 ? g : b)
+    if (lead - rest > 60) n++
+  }
+  return n
+}
+
+/**
+ * Every filter name compiled into the bundled ffmpeg, parsed out of the
+ * `-filters` table (`flags name in->out description`). Asking the binary
+ * what it can do is the only way to tell a per-platform capability gap from
+ * a bug in our own filter string.
+ */
+async function ffFilterNames(): Promise<Set<string>> {
+  const { stdout } = await ff(['-hide_banner', '-filters'])
+  const names = new Set<string>()
+  for (const line of stdout.split('\n')) {
+    const m = line.match(/^\s*[A-Z.]{3}\s+(\S+)\s+\S+->\S+/)
+    if (m) names.add(m[1])
+  }
+  return names
 }
 
 /** Largest per-channel absolute difference between two RGB samples. */
@@ -399,6 +472,23 @@ beforeAll(async () => {
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     pipOverlaySrc
   ])
+
+  // T-51: featureless mid-gray at the youtube preset's own geometry, so the
+  // export's crop/scale stage is a no-op and the ONLY thing that can change
+  // a pixel is drawtext. Every other fixture here is testsrc2, whose busy
+  // pattern makes x264 re-allocate bits the moment a watermark appears — on
+  // that, "the rest of the frame is untouched" can only ever be a PSNR band.
+  // On flat frames an untouched region re-encodes bit-identically (measured
+  // on a control render: min == max == 128 in all four quadrants), which
+  // turns it into an exact assertion.
+  flatGraySrc = path.join(workDir, 'flat-gray.mp4')
+  await ff([
+    '-y',
+    '-f', 'lavfi', '-i', 'color=c=0x808080:size=1920x1080:rate=30:duration=4',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-ac', '2', '-shortest', flatGraySrc
+  ])
 }, 240_000)
 
 afterAll(async () => {
@@ -527,6 +617,329 @@ describe('video export presets (real ffmpeg)', () => {
     expect(v?.width).toBe(1920)
     expect(v?.height).toBe(1080)
   })
+})
+
+/**
+ * T-51 — watermark and text-overlay PIXELS.
+ *
+ * PER-PLATFORM CAVEAT, same class as the mpegts segfault further down:
+ * ffmpeg-static ships binaries from DIFFERENT upstream builders per
+ * platform, and the linux x64 one (johnvansickle 7.0.2-static) is built
+ * without libfreetype, so it has no `drawtext` filter at all — the only
+ * filter a watermark or a text overlay produces. Every dev box and every CI
+ * run of this suite is linux, so until this block the pixels those two
+ * features paint were proven on NO platform: the deepest coverage anywhere
+ * asserted the command string, or (in the E2E) asserted that the export
+ * FAILS naming drawtext. The shipped win32 binary (gyan.dev 6.1.1) has the
+ * filter, and the release workflow — windows-latest, the de facto Windows
+ * CI (LESSONS 2026-08-15) — now runs `npm run test:media`, so the gated
+ * tests below execute exactly where the product ships. The linux pins at
+ * the bottom fail the moment ffmpeg-static gains the filter, which is what
+ * forces the gate to be lifted rather than left to rot.
+ *
+ * Technique: the caption burn-in bands (render, re-render the identical
+ * pipeline without the thing under test, diff the regions), with the
+ * fixture swapped for a featureless gray so "nothing else moved" is an
+ * exact pixel assertion rather than an encoder-drift band. Region luma is
+ * the primary evidence — it needs no font metrics, only "these pixels are
+ * not the flat value" — and PSNR corroborates it on the named technique.
+ *
+ * Timebase note for the `enable` windows: `-ss` before `-i` is input
+ * seeking, so frames reach the filter graph starting at t=0. A drawtext
+ * `enable` window is therefore CLIP-relative, not source-absolute.
+ */
+describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
+  // The exact font files the filter graph hardcodes (src/main/ffmpeg/
+  // filters.ts). Named here so a runner image without Arial fails as
+  // "the font this filter demands is missing" instead of as "drawtext
+  // painted nothing" — see the known-and-accepted note in LESSONS.
+  const WATERMARK_FONT = 'C:/Windows/Fonts/arialbd.ttf'
+  const OVERLAY_FONT = 'C:/Windows/Fonts/arial.ttf'
+
+  // The values ExportPanel actually builds a WatermarkSpec with, so this
+  // proves the shipped configuration rather than a synthetic one.
+  const WATERMARK_TEXT = '@imagii_test'
+  const WATERMARK_OPACITY = 0.85
+  const WATERMARK_FONT_SIZE_PCT = 3.5
+
+  const POSITIONS: readonly WatermarkSpec['position'][] = [
+    'top-left',
+    'top-right',
+    'bottom-left',
+    'bottom-right'
+  ]
+  // Quadrants of the 1920x1080 youtube export. A whole quadrant rather than
+  // a tight box on purpose: containment must not depend on the substituted
+  // font's metrics, only on which corner the text was anchored to.
+  const QUADRANT: Record<WatermarkSpec['position'], string> = {
+    'top-left': 'crop=960:540:0:0',
+    'top-right': 'crop=960:540:960:0',
+    'bottom-left': 'crop=960:540:0:540',
+    'bottom-right': 'crop=960:540:960:540'
+  }
+  const DIAGONAL: Record<WatermarkSpec['position'], WatermarkSpec['position']> = {
+    'top-left': 'bottom-right',
+    'top-right': 'bottom-left',
+    'bottom-left': 'top-right',
+    'bottom-right': 'top-left'
+  }
+
+  const CLIP_START = 0
+  const CLIP_END = 3
+  const SAMPLE_T = 1.0
+
+  function watermarkClip(): Clip {
+    return makeClip({ startSec: CLIP_START, endSec: CLIP_END })
+  }
+
+  // The control: the identical export, identical encoder settings, no
+  // drawtext in the chain. Every assertion below is a diff against this.
+  let controlOut = ''
+  let flatLuma = 0
+
+  beforeAll(async () => {
+    if (process.platform !== 'win32') return
+    const res = await runExportJob(
+      {
+        ...makeJob(flatGraySrc, 'youtube', watermarkClip(), 'job-drawtext-control'),
+        outputFilename: 'drawtext-control.mp4'
+      },
+      () => {}
+    )
+    controlOut = res.outputPath
+    const whole = await regionLuma(controlOut, SAMPLE_T, 'crop=1920:1080:0:0')
+    flatLuma = whole.min
+  }, 180_000)
+
+  it.skipIf(process.platform !== 'win32')(
+    'preflight: this build has drawtext, the hardcoded fonts exist, and the control render is genuinely flat',
+    async () => {
+      const names = await ffFilterNames()
+      expect(names.size, 'the -filters table parsed').toBeGreaterThan(100)
+      expect(
+        names.has('drawtext'),
+        'the shipped win32 ffmpeg has drawtext (if false, the gated tests below prove nothing and the product is broken on its own platform)'
+      ).toBe(true)
+      expect(existsSync(WATERMARK_FONT), `watermark font present: ${WATERMARK_FONT}`).toBe(true)
+      expect(existsSync(OVERLAY_FONT), `text-overlay font present: ${OVERLAY_FONT}`).toBe(true)
+
+      // Everything below reads "differs from flat" as "text was painted".
+      // That inference is only sound if the control really is flat.
+      const whole = await regionLuma(controlOut, SAMPLE_T, 'crop=1920:1080:0:0')
+      expect(
+        whole.max - whole.min,
+        `control render is featureless (luma ${whole.min}..${whole.max})`
+      ).toBeLessThanOrEqual(2)
+    },
+    120_000
+  )
+
+  it.skipIf(process.platform !== 'win32')(
+    'a watermark paints its own corner and leaves the other three untouched',
+    async () => {
+      for (const position of POSITIONS) {
+        const watermark: WatermarkSpec = {
+          text: WATERMARK_TEXT,
+          position,
+          opacity: WATERMARK_OPACITY,
+          fontSizePct: WATERMARK_FONT_SIZE_PCT
+        }
+        const res = await runExportJob(
+          {
+            ...makeJob(flatGraySrc, 'youtube', watermarkClip(), `job-wm-${position}`),
+            watermark,
+            outputFilename: `watermark-${position}.mp4`
+          },
+          () => {}
+        )
+
+        // Its own corner carries BOTH halves of the watermark: white@0.85
+        // glyphs well above the flat value, and the black@0.34 box behind
+        // them well below it.
+        const own = await regionLuma(res.outputPath, SAMPLE_T, QUADRANT[position])
+        expect(
+          own.max,
+          `"${position}": white glyph pixels in the ${position} quadrant (max luma ${own.max}, flat ${flatLuma})`
+        ).toBeGreaterThan(flatLuma + 60)
+        expect(
+          own.min,
+          `"${position}": the watermark's dark box in the ${position} quadrant (min luma ${own.min}, flat ${flatLuma})`
+        ).toBeLessThan(flatLuma - 15)
+
+        // The other three quadrants are the flat value, full stop.
+        for (const other of POSITIONS.filter((p) => p !== position)) {
+          const q = await regionLuma(res.outputPath, SAMPLE_T, QUADRANT[other])
+          expect(
+            q.max,
+            `"${position}": ${other} quadrant untouched (luma ${q.min}..${q.max}, flat ${flatLuma})`
+          ).toBeLessThanOrEqual(flatLuma + 4)
+          expect(
+            q.min,
+            `"${position}": ${other} quadrant untouched (luma ${q.min}..${q.max}, flat ${flatLuma})`
+          ).toBeGreaterThanOrEqual(flatLuma - 4)
+        }
+
+        // Same claim in the caption tests' currency. The watermark covers a
+        // few percent of a quadrant, so its band sits far higher than a
+        // burned-in caption's ~18 dB — the separation is what carries the
+        // assertion, not the absolute number.
+        const ownPsnr = await regionPsnr(res.outputPath, controlOut, QUADRANT[position])
+        const farPsnr = await regionPsnr(res.outputPath, controlOut, QUADRANT[DIAGONAL[position]])
+        expect(
+          ownPsnr,
+          `"${position}": its own quadrant differs from the control (${ownPsnr} dB)`
+        ).toBeLessThan(45)
+        expect(
+          farPsnr,
+          `"${position}": the ${DIAGONAL[position]} quadrant matches the control (${farPsnr} dB)`
+        ).toBeGreaterThan(60)
+        expect(
+          farPsnr - ownPsnr,
+          `"${position}": painted vs clean quadrants are clearly separated`
+        ).toBeGreaterThan(15)
+      }
+    },
+    600_000
+  )
+
+  it.skipIf(process.platform !== 'win32')(
+    'text overlays paint their own colour at the x/y they name, and only inside their enable window',
+    async () => {
+      // Two overlays in one export: it also proves the chain survives more
+      // than one drawtext. `lower` spans the whole clip (the shape the
+      // editor produces, whose window is the clip's own range); `timed`
+      // carries a sub-range, which is the only thing `enable` is for.
+      const lower: TextOverlay = {
+        id: 'ov-lower',
+        text: 'LOWER THIRD',
+        font: 'Arial',
+        sizePx: 48,
+        colorHex: '#ff3b30',
+        x: 0.1,
+        y: 0.85,
+        startSec: CLIP_START,
+        endSec: CLIP_END
+      }
+      const timed: TextOverlay = {
+        id: 'ov-timed',
+        text: 'TIMED',
+        font: 'Arial',
+        sizePx: 48,
+        colorHex: '#30d158',
+        x: 0.1,
+        y: 0.1,
+        startSec: 0.4,
+        endSec: 1.6
+      }
+      // x=0.1 -> 192 px, y -> 918 / 108 px, drawn downward from there.
+      const LOWER_REGION = 'crop=768:160:128:900'
+      const TIMED_REGION = 'crop=768:160:128:90'
+      // The same band on the far side of the frame: proves the text landed
+      // at the x it named rather than merely somewhere on that row.
+      const MIRROR_REGION = 'crop=768:160:1152:900'
+
+      const res = await runExportJob(
+        {
+          ...makeJob(
+            flatGraySrc,
+            'youtube',
+            makeClip({ startSec: CLIP_START, endSec: CLIP_END, textOverlays: [lower, timed] }),
+            'job-overlays'
+          ),
+          outputFilename: 'text-overlays.mp4'
+        },
+        () => {}
+      )
+      const out = res.outputPath
+
+      // ── inside both windows ──
+      const lowerOn = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 0)
+      expect(
+        lowerOn,
+        `"LOWER THIRD" paints red glyphs at x=0.1,y=0.85 (${lowerOn} red px at t=${SAMPLE_T})`
+      ).toBeGreaterThan(100)
+      const timedOn = await countTintedPixels(out, SAMPLE_T, TIMED_REGION, 1)
+      expect(
+        timedOn,
+        `"TIMED" paints green glyphs at x=0.1,y=0.1 inside its window (${timedOn} green px at t=${SAMPLE_T})`
+      ).toBeGreaterThan(50)
+
+      // Each overlay's colour is its own: neither region carries the other's.
+      const lowerGreen = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 1)
+      expect(
+        lowerGreen,
+        `the lower band carries no green — colorHex is per-overlay (${lowerGreen} green px)`
+      ).toBe(0)
+      const mirrorRed = await countTintedPixels(out, SAMPLE_T, MIRROR_REGION, 0)
+      expect(
+        mirrorRed,
+        `the mirrored band at x=1152..1920 is untouched, so the text landed at the x it named (${mirrorRed} red px)`
+      ).toBe(0)
+
+      // ── outside the timed window ──
+      // 2.5 s is past `timed`'s 1.6 s end but inside `lower`'s range, so one
+      // assertion proves the gate closes and the other proves the export did
+      // not simply stop drawing.
+      const timedOff = await countTintedPixels(out, 2.5, TIMED_REGION, 1)
+      expect(timedOff, `"TIMED" is gone at t=2.5 (${timedOff} green px)`).toBe(0)
+      const timedOffLuma = await regionLuma(out, 2.5, TIMED_REGION)
+      expect(
+        timedOffLuma.max - timedOffLuma.min,
+        `and its band is flat again at t=2.5 (luma ${timedOffLuma.min}..${timedOffLuma.max})`
+      ).toBeLessThanOrEqual(4)
+      const lowerStill = await countTintedPixels(out, 2.5, LOWER_REGION, 0)
+      expect(
+        lowerStill,
+        `"LOWER THIRD" is still painted at t=2.5 (${lowerStill} red px)`
+      ).toBeGreaterThan(100)
+    },
+    600_000
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'KNOWN linux-binary gap: the bundled ffmpeg has NO drawtext filter (if this FAILS, ffmpeg-static gained it — lift the win32 gate on the pixel tests above and delete both pins)',
+    async () => {
+      const names = await ffFilterNames()
+      // Prove the table was really read before trusting an absence. The two
+      // positives also show this build has SOME text rendering — `subtitles`
+      // is the libass path the caption burn-in relies on — so the gap is
+      // specifically drawtext/libfreetype, not "no text at all".
+      expect(names.size, 'the -filters table parsed').toBeGreaterThan(100)
+      expect(names.has('scale'), 'a filter every build has').toBe(true)
+      expect(names.has('subtitles'), 'the libass path the caption tests use').toBe(true)
+      expect(names.has('drawtext'), 'drawtext is absent from the linux build').toBe(false)
+    },
+    60_000
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'KNOWN linux-binary gap: a real watermarked export dies at graph init naming drawtext (same obsolescence condition as the pin above)',
+    async () => {
+      // The consequence the capability probe implies, taken through the real
+      // production runner: this is why the pixel tests above are gated
+      // rather than merely slow. Note the exact message — when ffmpeg-static
+      // does gain drawtext this stops being "no such filter" and becomes a
+      // font error, because the filter hardcodes a C:/Windows path, so this
+      // pin fails on the upgrade either way.
+      const watermark: WatermarkSpec = {
+        text: WATERMARK_TEXT,
+        position: 'bottom-right',
+        opacity: WATERMARK_OPACITY,
+        fontSizePct: WATERMARK_FONT_SIZE_PCT
+      }
+      await expect(
+        runExportJob(
+          {
+            ...makeJob(flatGraySrc, 'youtube', makeClip({ startSec: 0, endSec: 1 }), 'job-wm-pin'),
+            watermark,
+            outputFilename: 'watermark-linux-pin.mp4'
+          },
+          () => {}
+        )
+      ).rejects.toThrow(/No such filter: 'drawtext'/)
+    },
+    120_000
+  )
 })
 
 /**
