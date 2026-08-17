@@ -109,7 +109,14 @@ export function HighlightPanel(): JSX.Element | null {
   }
 
   function addAsClip(h: ScoredHighlight, index: number): void {
-    addClipFromRange(`Highlight ${index + 1}`, h.startSec, h.endSec)
+    // T-59 rider: success is reported from what the store actually did,
+    // never assumed. addClipFromRange refuses a range it cannot honour (no
+    // source loaded, a range past the end) and refuses in silence — the
+    // same shape ChatHighlightPanel's Add fixed in T-48.
+    if (!addClipFromRange(`Highlight ${index + 1}`, h.startSec, h.endSec)) {
+      toast.error("Couldn't add that clip — the highlight is outside this video.")
+      return
+    }
     toast.success('Clip added — see the Clips list')
   }
 

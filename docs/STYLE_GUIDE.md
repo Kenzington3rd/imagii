@@ -67,6 +67,13 @@ Repeated UI is a component, not copy-paste:
   second one in a studio: react-hot-toast keeps one toast store per
   toaster id and each `<Toaster>` draws all of it, so two mounts render
   every toast twice (T-31).
+- **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — what a
+  `catch` around a `window.api.*` call toasts. Electron wraps anything an
+  `ipcMain.handle` handler throws in
+  `Error invoking remote method '<channel>': Error: …`, so
+  `toast.error(err.message)` shows the user a channel name and the word
+  "remote" for work that never left their machine (T-30, T-59). Main
+  still owns the sentence; this only unwraps the envelope.
 - **`useUndoRedoHotkeys(undo, redo)`** — the window-level
   Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z binding for a studio's own history
   (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, Image and References all

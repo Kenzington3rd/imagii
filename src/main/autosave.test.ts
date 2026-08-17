@@ -126,11 +126,45 @@ describe('autosave atomic write', () => {
     const m = await buildAutosaveModule()
     await m.writeAutosave(validProject())
     await m.writeAutosave(validProject())
-    await m.clearAutosave()
+    await expect(m.clearAutosave()).resolves.toBeUndefined()
 
     const dir = path.join(tempDir, 'autosave')
     expect(existsSync(path.join(dir, 'autosave.json'))).toBe(false)
     expect(existsSync(path.join(dir, 'autosave.prev.json'))).toBe(false)
+  })
+
+  it('clearAutosave is a no-op when there is nothing to clear', async () => {
+    const m = await buildAutosaveModule()
+    await expect(m.clearAutosave()).resolves.toBeUndefined()
+  })
+
+  // T-57: every unlink failure used to be swallowed, so the renderer heard
+  // "cleared" about a file that was still there — the banner disappeared and
+  // came straight back on the next launch with nothing said. A delete that
+  // did not happen is now reported.
+  it('clearAutosave reports a file it could not delete', async () => {
+    const m = await buildAutosaveModule()
+    await m.writeAutosave(validProject())
+    const dir = path.join(tempDir, 'autosave')
+    // A directory in the temp file's place: unlink refuses it on every OS
+    // (EISDIR/EPERM), which is what a locked or read-only file does too, and
+    // unlike a chmod it behaves the same for root and on Windows.
+    await mkdir(path.join(dir, 'autosave.tmp', 'occupied'), { recursive: true })
+
+    await expect(m.clearAutosave()).rejects.toThrow(/could not delete autosave\.tmp/)
+
+    // The files it COULD delete are still gone — a partial failure does not
+    // put the autosave back, and the message names only what survived.
+    expect(existsSync(path.join(dir, 'autosave.json'))).toBe(false)
+    expect(existsSync(path.join(dir, 'autosave.tmp'))).toBe(true)
+  })
+
+  it('clearAutosave names the autosave itself when that is what survived', async () => {
+    const m = await buildAutosaveModule()
+    const dir = path.join(tempDir, 'autosave')
+    await mkdir(path.join(dir, 'autosave.json', 'occupied'), { recursive: true })
+
+    await expect(m.clearAutosave()).rejects.toThrow(/could not delete autosave\.json/)
   })
 
   it('rejects payloads that fail JSON serialization', async () => {

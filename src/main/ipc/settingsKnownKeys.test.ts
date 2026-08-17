@@ -30,6 +30,16 @@ describe('settings known-keys validator', () => {
     expect(KNOWN_SETTINGS_KEYS.length).toBeGreaterThanOrEqual(16)
   })
 
+  it('carries no key nothing reads (T-57)', () => {
+    // `lastRoute` was declared in three places — the union, this allowlist,
+    // and the store schema — and written or read by none. T-47 restores the
+    // route from the autosave snapshot's `place` record instead, so the key
+    // was a settings field the app could only ever accumulate. Deleted; this
+    // pins it deleted, because a dead allowlist entry is a door left open on
+    // a room nobody uses.
+    expect(KNOWN_SETTINGS_KEYS).not.toContain('lastRoute')
+  })
+
   it('has no duplicate keys', () => {
     expect(new Set(KNOWN_SETTINGS_KEYS).size).toBe(KNOWN_SETTINGS_KEYS.length)
   })

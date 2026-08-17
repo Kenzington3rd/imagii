@@ -11,7 +11,12 @@ import { runGifExport } from '../../src/main/ffmpeg/gif'
 import { runAudioExport, runAudioMux } from '../../src/main/audio/process'
 import { probeVideo } from '../../src/main/ffmpeg/probe'
 import { probeAudio } from '../../src/main/audio/probe'
-import { convertForImport } from '../../src/main/ffmpeg/convert'
+import {
+  convertForImport,
+  convertToMp4,
+  cancelConverts,
+  ConvertCancelledError
+} from '../../src/main/ffmpeg/convert'
 import { extractAudioFromVideo } from '../../src/main/audio/extract'
 import { runReframe } from '../../src/main/ffmpeg/reframe'
 import { runConcat, runPipComposite } from '../../src/main/ffmpeg/concat'
@@ -1031,6 +1036,114 @@ describe('import conversion for non-native containers (real ffmpeg)', () => {
       await expect(convertForImport(src)).rejects.toThrow(/signal|exit/)
     },
     60_000
+  )
+})
+
+describe('job-scoped convert cancellation (real ffmpeg, T-60)', () => {
+  /**
+   * The convert registry was a single slot: the last convert to start owned
+   * it, so `cancelActiveConvert()` — "Discard recording" — SIGKILLed whatever
+   * happened to be in there. A user who dropped an flv on the importer and
+   * then discarded a take killed the import instead, and the take's own
+   * convert kept running. This is that scenario with both children real: two
+   * concurrent encodes, one cancel, and ffprobe on what survived.
+   *
+   * Unit-level coverage of the registry is in
+   * src/main/ffmpeg/convertCancel.test.ts against a fake child; this is the
+   * layer that proves the SIGKILL lands on the process the user meant.
+   */
+
+  /** The webm a screen recording leaves behind. Looped rather than encoded
+   *  30 s of vp8 (0.06 s instead of 15 s) — the convert under test is the
+   *  slow part, and it needs a source long enough to still be encoding when
+   *  the cancel arrives. */
+  async function longWebm(): Promise<string> {
+    const seed = path.join(workDir, 'cancel-seed.webm')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=duration=2:size=1280x720:rate=30',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+      '-shortest',
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '2M',
+      '-c:a', 'libvorbis',
+      seed
+    ])
+    const long = path.join(workDir, 'cancel-recording.webm')
+    await ff(['-y', '-stream_loop', '14', '-i', seed, '-c', 'copy', long])
+    return long
+  }
+
+  /** A 30 s flv stream dump — the import path's real input. */
+  async function longFlv(): Promise<string> {
+    const src = path.join(workDir, 'cancel-import.flv')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=duration=30:size=1280x720:rate=30',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=30',
+      '-shortest',
+      src
+    ])
+    return src
+  }
+
+  it(
+    'discarding a recording leaves a concurrent import transcode running to completion',
+    async () => {
+      const recSrc = await longWebm()
+      const impSrc = await longFlv()
+      const recOut = path.join(workDir, 'cancel-recording.mp4')
+
+      let recPercent = 0
+      let impPercent = 0
+      const recording = convertToMp4('recording', recSrc, recOut, (p) => {
+        recPercent = p.percent
+      })
+      const importing = convertForImport(impSrc, (p) => {
+        impPercent = p.percent
+      })
+      // Park both rejections now: an unhandled one would take the run down
+      // before the assertions read them.
+      const recordingSettled = recording.then(
+        () => ({ err: null as unknown }),
+        (err: unknown) => ({ err })
+      )
+      const importSettled = importing.then(
+        (out: string) => ({ out, err: null as unknown }),
+        (err: unknown) => ({ out: '', err })
+      )
+
+      // Both children are alive and encoding — ffmpeg only emits `out_time`
+      // while it is actually working, so this is what makes the cancel
+      // deterministic instead of a race with two spawns.
+      const deadline = Date.now() + 60_000
+      while ((recPercent === 0 || impPercent === 0) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      expect(recPercent, 'the recording convert is running').toBeGreaterThan(0)
+      expect(impPercent, 'the import convert is running').toBeGreaterThan(0)
+
+      // The user clicks "Discard recording".
+      cancelConverts('recording')
+
+      const imp = await importSettled
+      const rec = await recordingSettled
+
+      // The money shot: the import was not this button's business. Before
+      // T-60 it rejected here with ConvertCancelledError — the SIGKILL meant
+      // for the recording, delivered to the wrong child.
+      expect(imp.err, 'the import convert was not touched').toBeNull()
+      const probe = await ffprobeJson(imp.out)
+      expect(probe.streams.find((s) => s.codec_type === 'video')?.codec_name).toBe('h264')
+      expect(probe.streams.find((s) => s.codec_type === 'audio')?.codec_name).toBe('aac')
+      expect(Number(probe.format.duration ?? 0)).toBeGreaterThan(25)
+      await assertFaststart(imp.out)
+      await rm(imp.out, { force: true })
+
+      // And the recording's own convert is the one that died — as a
+      // deliberate cancel, not a crash (T-44's sentinel, unchanged).
+      expect(rec.err, 'the recording convert was cancelled').toBeInstanceOf(ConvertCancelledError)
+    },
+    240_000
   )
 })
 

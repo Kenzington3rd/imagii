@@ -210,7 +210,7 @@ until a row carries one, treat it as OPEN.
 | Open project | Home.tsx:74 | project:load -> showOpenDialog -> applyProject | stores rehydrated; toast | HL dialog |
 | Save project | Home.tsx:80 | project:save -> showSaveDialog | .imagii.json written; toast | HL dialog |
 | NavCard x5 | Home.tsx:92-120 | router | route change | COV smoke |
-| AutosaveRestore: Restore / Discard / Later / Clear / Dismiss | AutosaveRestore.tsx:157-176,136-144 | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden | |
+| AutosaveRestore: Restore / Discard / Later / Clear / Dismiss | AutosaveRestore.tsx:179-199,155-167 | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden; a clear that fails toasts the reason and KEEPS the banner (T-57) | |
 
 ### Record (17; 13 HL)
 
@@ -921,3 +921,83 @@ home-chrome.spec.ts, referencesStore.test.ts (13), moodboard.test.ts.
   the friendly amber notice with exact copy, rose error card asserted
   absent ("Reference Search surfaces the friendly notice when the
   network is unreachable").
+
+
+## Dispositions — round 39 (fix wave batch 13: T-57 + T-59 + T-60)
+
+The error-path cluster. No new elements; three rows change end state,
+all in main-process failure handling. Tests in
+tests/e2e/{home-chrome,record}.spec.ts, tests/integration/media.spec.ts
+and the unit files named inline.
+
+- **Home - AutosaveRestore Clear / Discard:** end state gains its
+  refusal branch. A failing `autosave:clear` used to reject unhandled —
+  no toast of any kind, the banner in an ambiguous state, and (because
+  main swallowed every unlink error) usually no failure reported at
+  all. Now: `Couldn't clear the autosave: <reason>. It's still on disk
+  — close anything using it and try again.`, the banner STAYS with
+  Clear still offered and enabled, and the file is still there. E2E
+  "AutosaveRestore: a clear that fails says so and leaves the banner
+  and the file alone" drives both halves in one launch — the refusal,
+  then the same button succeeding — so the two copies are read side by
+  side. Clear also gains `disabled={busy}`, matching Discard. Main's
+  half is unit-covered in autosave.test.ts (clearAutosave now reports
+  a file that survived the unlink, and names which one).
+- **Record - finalize save dialog (crash branch):** was "a real
+  ffmpeg failure keeps its error text and travels up" — which meant
+  `Error invoking remote method 'recording:finalize': Error:
+  convert-to-mp4 exit 1: <stderr tail>` in a toast, and the
+  half-written .mp4 left at the user's chosen path (pinned for T-59 in
+  round 32). Now: the partial is reaped on both branches, and the
+  failure crosses the IPC as `Converting the recording to MP4 failed
+  (ffmpeg exit code N). Nothing was saved — try again, or untick
+  "Convert to MP4 after recording" to keep the WebM.` E2E "a convert
+  that really crashes says so in plain words and leaves nothing
+  behind" (real ffmpeg, real failure — an unwritable output path)
+  asserts the copy and the absence of the invoke envelope, ffmpeg
+  vocabulary, and the calm discard copy; the reaping half is
+  recordingCancel.test.ts, where the convert can write bytes and THEN
+  fail (the round-32 pin flipped from `toBe(true)` to `toBe(false)`).
+- **Record - Discard recording:** unchanged for the user, rebuilt
+  underneath. Cancellation is keyed on the owner that started the
+  convert, so this button can no longer reach an import transcode.
+  Layer 5 "discarding a recording leaves a concurrent import transcode
+  running to completion" runs both encodes for real and ffprobes the
+  survivor; convertCancel.test.ts covers the registry (18 units, was
+  10: per-owner scoping both directions, two jobs in one owner,
+  cancelAll, and a finished convert no longer clearing someone else's
+  registration).
+- **Video 4j - HighlightPanel +Clip:** success toast gated on
+  `addClipFromRange`'s boolean, the shape T-48 fixed next door in
+  ChatHighlightPanel; a refused range now says "Couldn't add that clip
+  — the highlight is outside this video." instead of claiming a clip
+  that was never made. Not reachable as a false success today (the
+  finder's candidates come from the loaded source), so it is pinned
+  structurally in interactionWiring.test.ts rather than driven E2E.
+- New shared surface: `src/shared/ipcError.ts` (13 units) — the single
+  place Electron's invoke envelope is stripped before a message
+  reaches a toast. Used by RecordStudio's finalize catch and
+  AutosaveRestore's discard catch.
+
+
+## Dispositions — round 39 (fix wave batch 13: T-57 + T-59 + T-60)
+
+- **Record - Discard recording (scope):** cancellation is job-scoped —
+  the Layer 5 concurrency test proves a live import transcode survives
+  a recording discard (and the red transcript proved the old slot
+  killed it). Unit: convertCancel.test.ts 18.
+- **Record - convert crash:** end state upgraded from the T-59 pin —
+  partial output reaped on crash AND cancel, friendly copy ("Converting
+  the recording to MP4 failed (ffmpeg exit code N). Nothing was
+  saved...") with envelope/ffmpeg vocabulary asserted absent, real
+  detail logged in main. E2E "a convert that really crashes says so in
+  plain words and leaves nothing behind". Expediter mutation:
+  ipcErrorMessage strip disabled -> 3 units + that E2E red.
+- **Home - corruption banner Clear (failure branch):** a failed clear
+  toasts the reason + "It's still on disk", dismisses nothing (banner
+  and enabled Clear stay), and the same button then succeeds in the
+  same test so both copies read side by side. clearAutosave no longer
+  swallows unlink errors (unit x4, directory-in-place technique).
+- **Shared - ipcErrorMessage:** every renderer catch now strips the
+  invoke envelope through one tested helper (13 units) — the
+  raw-IPC-text class (T-30/T-44/T-59) is closed at a single point.

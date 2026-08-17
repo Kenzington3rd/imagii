@@ -876,6 +876,88 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  test('AutosaveRestore: a clear that fails says so and leaves the banner and the file alone', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('autosave-clear-fails')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+
+      // T-57: make the delete fail the way a locked or read-only file makes
+      // it fail. The refusal is stubbed in MAIN — the same place the save
+      // dialog is stubbed — rather than by chmod, because file permissions
+      // mean different things to root and to Windows and this assertion is
+      // about what the user is told, which must be the same everywhere.
+      // The message is verbatim what main/autosave.ts raises when a file it
+      // tried to delete is still there afterwards.
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => {
+          throw new Error('could not delete autosave.json')
+        })
+      })
+
+      const banner = window.getByText(/An autosave was found .* but failed validation/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear' }).click()
+
+      // The error names what failed, why, and what to do — and it says the
+      // file is still there, which is the truth the old silent version
+      // could not tell. Before T-57 `discard()` had no catch at all: the
+      // rejected clear was an unhandled rejection, no toast of any kind
+      // appeared, and the banner sat there with no explanation.
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 20_000,
+          intervals: [200]
+        })
+        .toContain("Couldn't clear the autosave")
+      const failedToasts = (await readToastLog(window)).join(' | ')
+      expect(failedToasts).toContain('could not delete autosave.json')
+      expect(failedToasts).toContain("It's still on disk")
+      // The success copy must NOT appear — a failed delete that says
+      // "Autosave discarded." is the lie this ticket exists to remove.
+      expect(failedToasts).not.toContain('Autosave discarded.')
+      // Nor Electron's invoke envelope (T-30/T-59: same disease).
+      expect(failedToasts).not.toMatch(/Error invoking remote method/)
+
+      // Truthful state: the file is still on disk, and the banner is still
+      // up with Clear still offered — the button is the only way to reach
+      // the file, so hiding it would strand it.
+      expect(existsSync(autosaveFile(userDataDir))).toBe(true)
+      await expect(banner).toBeVisible()
+      const clearButton = window.getByRole('button', { name: 'Clear' })
+      await expect(clearButton).toBeVisible()
+      await expect(clearButton).toBeEnabled()
+      await expect(window.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+
+      // Discrimination: the SAME button, with a clear that works. What is
+      // being told apart here is the renderer's two branches, so the stub is
+      // swapped for one that succeeds and the file is removed alongside it,
+      // keeping the app's answer and the disk in agreement. main's own
+      // clearAutosave — both the success and the "could not delete" branch —
+      // is driven for real in src/main/autosave.test.ts.
+      rmSync(autosaveFile(userDataDir), { force: true })
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => undefined)
+      })
+      await clearButton.click()
+      await expect(window.getByText(/but failed validation/)).toHaveCount(0, { timeout: 20_000 })
+      expect(await readToastLog(window)).toContain('Autosave discarded.')
+      expect(existsSync(autosaveFile(userDataDir))).toBe(false)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('Video tutorial: Next / Back / arrows / Enter / scrim run it to Done and persist tutorialSeen.video', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()

@@ -52,8 +52,8 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 948 tests across 59 files (T-34 added `Tutorial.test.ts`, the
-coachmark's placement geometry and key-intent table). Fresh-run time on a
+**Count.** 1045 tests across 62 files (T-59 added `src/shared/ipcError.test.ts`
+— the invoke-envelope stripper every renderer catch now goes through). Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
 last-updated marker.)
@@ -112,7 +112,7 @@ so concurrent runs don't collide.
 
 ## Layer 2.5: real-media integration (`tests/integration/media.spec.ts`)
 
-**Run with:** `npm run test:media` (~30-60 seconds).
+**Run with:** `npm run test:media` (~90 seconds).
 
 **Environment.** node + the real bundled ffmpeg/ffprobe binaries. No
 Electron, no DOM. Configured by `vitest.integration.config.ts` so it
@@ -125,7 +125,9 @@ sources and asserts on the bytes that come out — dimensions, codecs,
 faststart atom order, two-pass loudnorm accuracy (±1 LU), sidechain
 ducking depth (measured through a bandpass isolate), cut-region
 durations, and subtitle-path escaping against ffmpeg's real filtergraph
-parser.
+parser. Since T-60 it also runs two concurrent encodes and cancels one,
+because "which process did the SIGKILL reach" is a question no fake
+child can answer.
 
 **Why it exists.** Round 18 proved the gap: three shipped features
 (autoZoom, sidechain ducking, parametric denoise) had filter strings

@@ -3,7 +3,6 @@ import type { SettingsKey } from '../shared/api'
 
 interface SettingsSchema {
   theme?: 'dark' | 'light'
-  lastRoute?: string
   welcomeSeen?: boolean
   'tutorialSeen.video'?: boolean
   'tutorialSeen.audio'?: boolean
@@ -42,7 +41,6 @@ interface SettingsSchema {
  */
 const schema = {
   theme: { type: 'string', enum: ['dark', 'light'] },
-  lastRoute: { type: 'string' },
   welcomeSeen: { type: 'boolean' },
   'tutorialSeen.video': { type: 'boolean' },
   'tutorialSeen.audio': { type: 'boolean' },

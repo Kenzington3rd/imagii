@@ -218,3 +218,66 @@ describe('T-20 — the posting diary lives in the settings store', () => {
     expect(checklist).toMatch(/migrateDiary\(\{ stored, legacyRaw \}\)/)
   })
 })
+
+describe('T-59 — a success toast reports what happened, not what was attempted', () => {
+  // E2E: tests/e2e/record.spec.ts drives the crashed convert end to end
+  // (friendly toast, no partial file); tests/e2e/video-pipelines.spec.ts
+  // drives the highlight Add. Both facts below are one line of source each
+  // and unreachable from a node test without a DOM, so they are pinned here.
+
+  it('HighlightPanel gates its "Clip added" on the store returning true', () => {
+    const panel = read('modules/video-studio/HighlightPanel.tsx')
+    expect(panel).toMatch(
+      /if \(!addClipFromRange\(`Highlight \$\{index \+ 1\}`, h\.startSec, h\.endSec\)\) \{/
+    )
+    // The refusal says so rather than passing for a success.
+    const gate = panel.slice(panel.indexOf('if (!addClipFromRange'), panel.indexOf('Clip added'))
+    expect(gate).toMatch(/toast\.error\(/)
+    expect(gate).toMatch(/return/)
+  })
+
+  it('ChatHighlightPanel still has the same gate (T-48, the shape this copies)', () => {
+    const panel = read('modules/video-studio/ChatHighlightPanel.tsx')
+    expect(panel).toMatch(/if \(!addClipFromRange\(/)
+  })
+
+  it('RecordStudio unwraps the IPC envelope instead of toasting err.message', () => {
+    const studio = read('modules/record-studio/RecordStudio.tsx')
+    expect(studio).toMatch(/import \{ ipcErrorMessage \} from '@shared\/ipcError'/)
+    expect(studio).toMatch(/toast\.error\(ipcErrorMessage\(err, 'Save failed'\)\)/)
+    // The old line: Electron's "Error invoking remote method
+    // 'recording:finalize': …" reached the toast in full.
+    expect(studio).not.toMatch(/toast\.error\(err instanceof Error \? err\.message : 'Save failed'\)/)
+  })
+})
+
+describe('T-57 — discarding an autosave has an error path', () => {
+  // E2E: tests/e2e/home-chrome.spec.ts drives a failing autosave:clear and
+  // reads the toast plus the banner that stays.
+  const banner = read('components/AutosaveRestore.tsx')
+
+  it('discard() catches a failed clear', () => {
+    const discard = banner.slice(
+      banner.indexOf('async function discard'),
+      banner.indexOf('const ageText')
+    )
+    expect(discard).toMatch(/await window\.api\.autosave\.clear\(\)/)
+    expect(discard).toMatch(/\} catch \(err\) \{/)
+    expect(discard).toMatch(/toast\.error\(/)
+    // Truthful state: the banner is only dismissed on the branch where the
+    // file is actually gone.
+    const dismissIndex = discard.indexOf('setDismissed(true)')
+    const catchIndex = discard.indexOf('} catch (err) {')
+    expect(dismissIndex).toBeGreaterThan(-1)
+    expect(dismissIndex).toBeLessThan(catchIndex)
+  })
+
+  it('both banner buttons that start the clear are disabled while it runs', () => {
+    const corruptionBanner = banner.slice(
+      banner.indexOf('An autosave was found'),
+      banner.indexOf('imagii autosaved your work')
+    )
+    expect(corruptionBanner).toMatch(/>\s*Clear\s*</)
+    expect(corruptionBanner).toMatch(/disabled=\{busy\}/)
+  })
+})

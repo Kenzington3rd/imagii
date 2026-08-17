@@ -967,7 +967,7 @@ IMG-PREC.
   still reports an error, in friendly copy naming what failed; the
   known-gap pin flips; HighlightPanel gate added; negative tests
   discriminate per round-21 protocol.
-- **Status:** open
+- **Status:** done (round 39 — see Done)
 
 ## T-60 — the single-slot convert registry lets Discard kill an unrelated import
 
@@ -980,7 +980,7 @@ IMG-PREC.
   asked (keyed registry or per-job handle); a Layer 5 or E2E proof
   that discarding a recording leaves a concurrent import transcode
   running to completion.
-- **Status:** open
+- **Status:** done (round 39 — see Done)
 
 ## T-57 — discarding an autosave has no error path
 
@@ -1000,7 +1000,7 @@ IMG-PREC.
 - **Acceptance criteria:** failed clear surfaces a specific error
   toast and leaves the banner in a truthful state; negative test
   proves the copy discriminates (round-21 protocol).
-- **Status:** open
+- **Status:** done (round 39 — see Done)
 
 ## T-58 — give References an undo history (owner ruled: yes, 2026-08-16)
 
@@ -1098,6 +1098,18 @@ IMG-PREC.
   "starts in the gap" workaround note is retired.
 - **Status:** open
 
+## T-67 — tempCleanup.test.ts is polluted by other suites' temp families
+
+- **Spec:** T-59/T-60 worker finding, pre-existing. The test clears
+  only imagii-audio and imagii-concat, but pruneStaleTempFiles also
+  scans imagii-import — running test:media (whose linux
+  mpegts-segfault pin leaves a partial there) before npm test makes
+  "handles a missing tempdir gracefully" fail with expected 0 to be 2.
+- **Acceptance criteria:** the test isolates every family the
+  function scans (clear or tempdir-scope them all); running test:media
+  then npm test back-to-back is green.
+- **Status:** open
+
 ## T-66 — References polish: failure notice contradicted by "No results."; delete toast should advertise undo
 
 - **Spec:** T-58/T-30 worker findings. (a) ReferencePanel renders
@@ -1140,7 +1152,13 @@ IMG-PREC.
   gesture-derived coordinate at precision 0 instead of the file's own
   MOUSE_TOL — deterministically red at 1600x1200 Xvfb geometry, green
   at 1920x1080 (fit-zoom changes pointer->document rounding). Fix the
-  tolerance in the same pass.
+  tolerance in the same pass. WIDENED round 39: under the T-59 worker's
+  self-generated load (two extra Electron launches at 2 workers), the
+  audio waveform drag helper's readiness read returned NaN and the
+  drag failed reproducibly — passes on an idle box at the same worker
+  count (expediter confirmed 120/120). Harden the readiness read (poll
+  a number, not a first read); `--workers=1` remains the documented
+  fallback if flakes continue after conversion.
 - **Status:** open
 
 ## T-51 — nothing anywhere renders watermark/text-overlay pixels (drawtext)
@@ -1168,6 +1186,42 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 39 — fix wave batch 13: T-57 + T-59 + T-60 (the error-path
+cluster). T-60 first, because T-59 builds on it: the single convert
+slot became a keyed registry — each job's entry carries its owner
+('recording' | 'import') and its own T-44 cancelled flag; Discard
+cancels only 'recording', convertForImport owns 'import', before-quit
+cancels all. The red transcript is the ticket's exact disaster run
+live: two real encodes, "Discard recording" -> the IMPORT died with
+ConvertCancelledError while the recording's own convert ran to
+completion untouched. Green: a Layer 5 concurrency test (stream_loop
+long fixtures, cancel one owner, ffprobe the survivor) — "which
+process did the SIGKILL reach" is a question no fake child can
+answer; convertCancel.test.ts 10 -> 18 incl. the second latent slot
+bug (a finished convert evicting other registrations). T-59: the
+partial-output unlink moved ABOVE the cancel/crash branch so both
+reap; ffmpeg's real text stays in main's log; the IPC carries a
+friendly typed message and the renderer strips Electron's envelope
+via the new shared ipcErrorMessage (STYLE_GUIDE entry) — the
+known-gap pin flipped, and a real-crash E2E asserts the plain copy
+with envelope/ffmpeg vocabulary absent. HighlightPanel rider gated.
+T-57: the root cause was TWO-layered — clearAutosave swallowed unlink
+errors, so the toast lied before discard() could even fail; main now
+verifies the files are gone and throws naming survivors, discard()
+catches, toasts the reason + "It's still on disk", and dismisses
+NOTHING (banner + Clear stay, asserted). lastRoute rider deleted from
+all four registries with the cross-check updated. Worker mutations
+per ticket (owner-blind cancel; unlink-in-cancel-only; raw toast
+restored; gate removed; swallow restored) — each red by name.
+Expediter's own: ipcErrorMessage envelope-strip disabled -> 3 units +
+the real-crash E2E red, restore, 13/13 + 16/16. Gates: 1045 unit /
+68+2 Layer 5 / 120 E2E (worker green at --workers=1 under its own
+load; expediter 120/120 at default workers on an idle box — the
+discrepancy recorded in T-62, which gains the readiness-read
+hardening; workers:1 stays a documented fallback, not a config
+change no ticket asked for). tempCleanup cross-suite pollution noted
+below as a new ticket.
 
 Round 38 — fix wave batch 12: T-58 + T-30 (the References pair; T-58
 per the owner's 2026-08-16 ruling). T-58: referencesStore gains the

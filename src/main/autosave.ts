@@ -213,14 +213,29 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
   }
 }
 
+/**
+ * Delete the autosave, its backup, and any leftover temp file.
+ *
+ * T-57: this used to swallow every unlink failure, so "Autosave discarded."
+ * was printed over a file that was still on disk — the banner vanished, the
+ * next launch offered the same autosave again, and nothing anywhere said
+ * why. A delete that did not happen is reported. The check is `existsSync`
+ * rather than the thrown errno because a file that vanished underneath us
+ * (a second window clearing at the same time) is the outcome the caller
+ * asked for, not a failure.
+ */
 export async function clearAutosave(): Promise<void> {
+  const survivors: string[] = []
   for (const p of [autosavePath(), prevAutosavePath(), tmpAutosavePath()]) {
-    if (existsSync(p)) {
-      try {
-        await unlink(p)
-      } catch {
-        /* ignore */
-      }
+    if (!existsSync(p)) continue
+    try {
+      await unlink(p)
+    } catch {
+      /* the existsSync below decides whether this mattered */
     }
+    if (existsSync(p)) survivors.push(path.basename(p))
+  }
+  if (survivors.length > 0) {
+    throw new Error(`could not delete ${survivors.join(', ')}`)
   }
 }

@@ -10,7 +10,6 @@ import type { SettingsKey } from '../../shared/api'
 // the per-feature read sites already coerce as needed.
 const KNOWN_SETTINGS_KEYS: readonly SettingsKey[] = [
   'theme',
-  'lastRoute',
   'welcomeSeen',
   'tutorialSeen.video',
   'tutorialSeen.audio',

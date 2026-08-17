@@ -7,6 +7,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import type { RecordingSource } from '@shared/workspace'
+import { ipcErrorMessage } from '@shared/ipcError'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
 type Phase = 'idle' | 'choosing' | 'recording' | 'saving'
@@ -397,7 +398,10 @@ export function RecordStudio(): JSX.Element {
         toast('Recording discarded.', { icon: <Icon name="trash" size={18} /> })
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Save failed')
+      // T-59: main names the failure in the studio's own words; this side
+      // strips the "Error invoking remote method 'recording:finalize':"
+      // envelope Electron staples on, which used to reach the toast in full.
+      toast.error(ipcErrorMessage(err, 'Save failed'))
       // Failure path: reap the partial temp file. Reached when an append
       // failed mid-recording or finalize itself threw; in the latter case
       // main already deleted the session and abandon is a false no-op.

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
 import { applyProject } from '../modules/project/ProjectIO'
 import { suppressAutosave } from '../hooks/useAutosave'
+import { ipcErrorMessage } from '@shared/ipcError'
 import { Icon } from './Icon'
 
 interface AutosaveSnapshot {
@@ -124,6 +125,15 @@ export function AutosaveRestore(): JSX.Element | null {
       await window.api.autosave.clear()
       toast('Autosave discarded.', { icon: <Icon name="trash" size={18} /> })
       setDismissed(true)
+    } catch (err) {
+      // T-57: a clear that failed leaves the file exactly where it was, so
+      // the banner stays too — with its button, because trying again is the
+      // only thing to do and hiding the offer would strand the file with no
+      // way to reach it. Nothing here dismisses.
+      toast.error(
+        `Couldn't clear the autosave: ${ipcErrorMessage(err, 'unknown reason')}. ` +
+          "It's still on disk — close anything using it and try again."
+      )
     } finally {
       setBusy(false)
     }
@@ -142,7 +152,11 @@ export function AutosaveRestore(): JSX.Element | null {
           An autosave was found ({ageText}) but failed validation: {snapshot.reason}. It will
           not be loaded. You can clear it.
         </span>
-        <button className="btn-ghost px-3 py-1 text-xs" onClick={() => void discard()}>
+        <button
+          className="btn-ghost px-3 py-1 text-xs"
+          onClick={() => void discard()}
+          disabled={busy}
+        >
           Clear
         </button>
         <button

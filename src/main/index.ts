@@ -10,11 +10,7 @@ import { registerAudioIpc } from './ipc/audio'
 import { registerSearchIpc } from './ipc/search'
 import { registerCaptionsIpc } from './ipc/captions'
 import { registerProjectIpc } from './ipc/project'
-import {
-  registerRecordingIpc,
-  cancelRecordingConvert,
-  abandonAllRecordingStreams
-} from './ipc/recording'
+import { registerRecordingIpc, abandonAllRecordingStreams } from './ipc/recording'
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 import { pruneStaleTempFiles } from './tempCleanup'
@@ -26,6 +22,7 @@ import { cancelAllReframeJobs } from './ffmpeg/reframe'
 import { cancelAllGifJobs } from './ffmpeg/gif'
 import { cancelAllHighlightJobs } from './ffmpeg/highlights'
 import { cancelAllFrameJobs } from './ffmpeg/frame'
+import { cancelAllConverts } from './ffmpeg/convert'
 import {
   cancelWhisperModelInstall,
   cancelTranscribe,
@@ -320,8 +317,11 @@ app.on('before-quit', (event) => {
   } catch {
     /* ignore */
   }
+  // T-60: every convert, whoever owns it — the recording's and any import
+  // transcode. Per-owner cancellation is for the buttons in the UI; quitting
+  // leaves no ffmpeg child of ours behind, which is this hook's whole job.
   try {
-    cancelRecordingConvert()
+    cancelAllConverts()
   } catch {
     /* ignore */
   }
