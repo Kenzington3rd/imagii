@@ -27,6 +27,24 @@ export interface SafeZoneRow {
 }
 
 /**
+ * The four corners a watermark can sit in, in the order the picker offers
+ * them. T-49: the list is also the guard for the stored value — a corner
+ * read back off disk is only applied if it is still one of these.
+ */
+const WATERMARK_POSITIONS: ReadonlyArray<WatermarkSpec['position']> = [
+  'bottom-right',
+  'bottom-left',
+  'top-right',
+  'top-left'
+]
+const WATERMARK_POSITION_LABELS: Record<WatermarkSpec['position'], string> = {
+  'bottom-right': 'Bottom right',
+  'bottom-left': 'Bottom left',
+  'top-right': 'Top right',
+  'top-left': 'Top left'
+}
+
+/**
  * Every export target queued on one clip, platform presets first and the
  * user's own custom presets after — the order the grid draws them in and
  * the order the queue runs them in. A custom preset id with no preset
@@ -134,6 +152,15 @@ export function ExportPanel(): JSX.Element | null {
       if (cancelled) return
       if (handle) setWatermarkText(handle)
     })
+    // T-49: the corner comes back with the handle. Remembering the text but
+    // not where it goes gave a user who picked "top left" bottom-right back
+    // on the next launch, with no way to tell which one the export used.
+    window.api.settings
+      .get<WatermarkSpec['position']>('watermarkPosition')
+      .then((position) => {
+        if (cancelled || !position) return
+        if (WATERMARK_POSITIONS.includes(position)) setWatermarkPosition(position)
+      })
     window.api.settings.get<string>('filenameTemplate').then((tpl) => {
       if (cancelled) return
       if (tpl) setFilenameTemplate(tpl)
@@ -224,7 +251,10 @@ export function ExportPanel(): JSX.Element | null {
           fontSizePct: 3.5
         }
       : null
-    if (watermark) await window.api.settings.set('streamerHandle', watermark.text)
+    if (watermark) {
+      await window.api.settings.set('streamerHandle', watermark.text)
+      await window.api.settings.set('watermarkPosition', watermark.position)
+    }
     if (filenameTemplate) await window.api.settings.set('filenameTemplate', filenameTemplate)
     const sourceBase = source.fileName.replace(/\.[^.]+$/, '')
     const queue: ExportJobSpec[] = []
@@ -265,10 +295,11 @@ export function ExportPanel(): JSX.Element | null {
         })
       }
     }
-    if (queue.length === 0) {
-      toast.error('No presets selected on any clip')
-      return
-    }
+    // No empty-queue branch: `totalQueued` counts the same `queuedPresets`
+    // this loop pushes, and the Export button is disabled while that count is
+    // zero, so the queue can never arrive here empty. T-49 deleted the
+    // nothing-queued toast that used to sit here — copy no path can reach is
+    // copy nobody notices going wrong.
     setJobs(statuses)
     setRunning(true)
     try {
@@ -407,10 +438,11 @@ export function ExportPanel(): JSX.Element | null {
           onChange={(e) => setWatermarkPosition(e.target.value as WatermarkSpec['position'])}
           aria-label="Watermark position"
         >
-          <option value="bottom-right">Bottom right</option>
-          <option value="bottom-left">Bottom left</option>
-          <option value="top-right">Top right</option>
-          <option value="top-left">Top left</option>
+          {WATERMARK_POSITIONS.map((position) => (
+            <option key={position} value={position}>
+              {WATERMARK_POSITION_LABELS[position]}
+            </option>
+          ))}
         </select>
       </div>
 

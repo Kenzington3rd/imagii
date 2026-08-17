@@ -10,7 +10,17 @@ import type { RecordingSource } from '@shared/workspace'
 import { ipcErrorMessage } from '@shared/ipcError'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
-type Phase = 'idle' | 'choosing' | 'recording' | 'saving'
+type Phase = 'idle' | 'recording' | 'saving'
+
+/**
+ * T-41: what the source list knows about itself. There used to be a
+ * 'choosing' phase that rendered exactly like 'idle', so a search that came
+ * back with nothing was indistinguishable from a search that never ran — on
+ * a Wayland session without a portal, or a macOS box with screen recording
+ * denied, the button simply looked dead. These three states each render
+ * differently: the invitation, the wait, and the answer.
+ */
+type SourceSearch = 'never' | 'searching' | 'done'
 
 const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
 const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
@@ -33,6 +43,7 @@ interface CamDevice {
 export function RecordStudio(): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle')
   const [sources, setSources] = useState<RecordingSource[]>([])
+  const [sourceSearch, setSourceSearch] = useState<SourceSearch>('never')
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [includeMic, setIncludeMic] = useState(true)
   const [convertToMp4, setConvertToMp4] = useState(true)
@@ -82,13 +93,22 @@ export function RecordStudio(): JSX.Element {
   const startTimeRef = useRef<number>(0)
   const elapsedTimerRef = useRef<number | null>(null)
 
+  // T-43: restore the Record preferences, and READ ONLY. Each control writes
+  // its own choice in its onChange (below), so arriving on /record — or
+  // bouncing through it on the way somewhere else — never touches
+  // config.json. The old persist effect fired on mount and stamped the
+  // default corner over an absent key, which made navigation alone a
+  // settings write.
   useEffect(() => {
     void refreshDevices()
-    // Restore the user's preferred webcam corner across sessions.
     let cancelled = false
     void window.api.settings.get<WebcamCorner>('record.webcamCorner').then((stored) => {
       if (cancelled || !stored) return
       if (WEBCAM_CORNERS.includes(stored)) setWebcamCorner(stored)
+    })
+    void window.api.settings.get<boolean>('record.convertToMp4').then((stored) => {
+      if (cancelled || typeof stored !== 'boolean') return
+      setConvertToMp4(stored)
     })
     return () => {
       cancelled = true
@@ -103,11 +123,6 @@ export function RecordStudio(): JSX.Element {
     })
     return off
   }, [])
-
-  // Persist the corner choice whenever it changes — survives restart.
-  useEffect(() => {
-    void window.api.settings.set('record.webcamCorner', webcamCorner)
-  }, [webcamCorner])
 
   // Round 18 C: the `?` HotkeyOverlay has documented "Esc: Stop recording"
   // for /record since round 15 but nothing ever wired it. Listener exists
@@ -144,11 +159,21 @@ export function RecordStudio(): JSX.Element {
   }
 
   async function chooseSource(): Promise<void> {
-    setPhase('choosing')
-    const list = await window.api.recording.listSources()
-    setSources(list)
-    const first = list[0]
-    if (first && !selectedSourceId) setSelectedSourceId(first.id)
+    setSourceSearch('searching')
+    try {
+      const list = await window.api.recording.listSources()
+      setSources(list)
+      const first = list[0]
+      if (first && !selectedSourceId) setSelectedSourceId(first.id)
+    } catch (err) {
+      // A refused capture permission comes back as a rejected IPC call, not
+      // an empty list. Say what happened rather than leaving the wait on
+      // screen forever — the empty state below then offers the retry.
+      setSources([])
+      toast.error(ipcErrorMessage(err, 'Could not list screens or windows'))
+    } finally {
+      setSourceSearch('done')
+    }
   }
 
   function stopAllStreams(): void {
@@ -466,7 +491,7 @@ export function RecordStudio(): JSX.Element {
         ) : null}
       </header>
 
-      {phase === 'idle' || phase === 'choosing' ? (
+      {phase === 'idle' ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(320px,20%,520px)] gap-5">
           <div className="card p-4 flex flex-col gap-3">
             <PanelHeader
@@ -480,8 +505,26 @@ export function RecordStudio(): JSX.Element {
               What to record
             </PanelHeader>
             {sources.length === 0 ? (
-              <div className="bg-bg-hover rounded p-6 text-center text-sm text-ink-muted">
-                <button className="btn-primary px-4 py-2" onClick={chooseSource}>
+              // T-41: three states, three renders. Before a search there is
+              // only the invitation; during one the wait says so and the
+              // button cannot be clicked twice; after one that found nothing
+              // the card says what happened and what to try, in the Audio
+              // card's own words (see the mic/camera warnings above).
+              <div className="bg-bg-hover rounded p-6 text-center text-sm text-ink-muted flex flex-col items-center gap-3">
+                {sourceSearch === 'searching' ? (
+                  <p className="text-xs">Looking for screens and windows…</p>
+                ) : null}
+                {sourceSearch === 'done' ? (
+                  <p className="text-xs text-amber-300">
+                    No screens or windows found. Click "Refresh sources" after granting
+                    screen-recording permission.
+                  </p>
+                ) : null}
+                <button
+                  className="btn-primary px-4 py-2 disabled:opacity-50"
+                  onClick={chooseSource}
+                  disabled={sourceSearch === 'searching'}
+                >
                   Pick a screen or window
                 </button>
               </div>
@@ -582,7 +625,11 @@ export function RecordStudio(): JSX.Element {
                   <select
                     className="bg-bg-base rounded px-2 py-1 text-sm flex-1"
                     value={webcamCorner}
-                    onChange={(e) => setWebcamCorner(e.target.value as WebcamCorner)}
+                    onChange={(e) => {
+                      const corner = e.target.value as WebcamCorner
+                      setWebcamCorner(corner)
+                      void window.api.settings.set('record.webcamCorner', corner)
+                    }}
                   >
                     {WEBCAM_CORNERS.map((c) => (
                       <option key={c} value={c}>
@@ -604,7 +651,11 @@ export function RecordStudio(): JSX.Element {
                 <input
                   type="checkbox"
                   checked={convertToMp4}
-                  onChange={(e) => setConvertToMp4(e.target.checked)}
+                  onChange={(e) => {
+                    const on = e.target.checked
+                    setConvertToMp4(on)
+                    void window.api.settings.set('record.convertToMp4', on)
+                  }}
                 />
                 <span>
                   Convert to MP4 after recording (slower; better compatibility)

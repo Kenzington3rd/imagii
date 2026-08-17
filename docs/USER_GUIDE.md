@@ -35,10 +35,14 @@ Capture your screen, a window, or your webcam to a single video file.
 3. Under **Webcam**, tick **Include webcam in recording** to composite
    your camera into the video as a picture-in-picture. Pick which
    corner it sits in.
-4. Choose **Convert to MP4** (slower, plays everywhere) or leave it off
+4. Choose **Convert to MP4** (slower, plays everywhere) or untick it
    for instant WebM.
 5. Click **Start recording**. Click **Stop** when done, then pick where
    to save.
+
+Your webcam corner and your MP4 choice are remembered for next time.
+If no screens or windows turn up, the panel says so — grant screen
+recording permission for imagii, then click **Refresh sources**.
 
 ---
 
@@ -52,7 +56,8 @@ Drop a video in (or use the file picker), then:
 - **Export** — tick the platforms you post to (YouTube, Reels, TikTok,
   X, Facebook); each shows a green/yellow/red indicator predicting how
   well your clip fits there. Add a **watermark** to stamp your handle on
-  every export.
+  every export — your handle and the corner you put it in are remembered
+  for your next batch.
 - **Clip Kit** — one click exports a clip for all five platforms plus
   thumbnails into a single folder.
 - **Smart highlight finder** — scans the audio for loud, exciting

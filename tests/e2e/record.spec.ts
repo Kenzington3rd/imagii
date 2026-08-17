@@ -49,13 +49,21 @@ const __dirname = path.dirname(__filename)
  * is a coverage ticket and touches no `src/`); each is asserted at the
  * boundary where it actually bites and carries a `T-27 FINDING` comment
  * at that assertion:
- *   A. Zero sources is indistinguishable from never-searched. When
- *      desktopCapturer returns [], `chooseSource` sets phase 'choosing'
- *      but the idle and choosing branches render identically, so the user
- *      gets the same "Pick a screen or window" button back with no "no
+ *   A. Zero sources was indistinguishable from never-searched. When
+ *      desktopCapturer returned [], `chooseSource` set phase 'choosing'
+ *      but the idle and choosing branches rendered identically, so the user
+ *      got the same "Pick a screen or window" button back with no "no
  *      screens found" message, no error toast, and no spinner. Clicking
- *      Refresh sources on a box with nothing to capture looks like a dead
- *      button. (RecordStudio.tsx:473-478)
+ *      Refresh sources on a box with nothing to capture looked like a dead
+ *      button.
+ *      FIXED 2026-08-17 by T-41, and this spec's zero-sources test is now
+ *      the positive: the ambiguous 'choosing' phase is gone, replaced by a
+ *      three-state `sourceSearch` ('never' | 'searching' | 'done') whose
+ *      renders differ — the invitation, "Looking for screens and windows…"
+ *      with the button disabled, and the amber "No screens or windows
+ *      found." twin of the mic/camera warnings. The rejected-IPC branch
+ *      (capture blocked outright, rather than empty) is driven too, so the
+ *      wait can never stick on screen.
  *   B. "Include webcam in recording" had no zero-camera hint. The Audio
  *      card renders "No microphone found." when `mics` is empty; the
  *      Webcam card rendered nothing at all when `cams` is empty — the
@@ -71,11 +79,14 @@ const __dirname = path.dirname(__filename)
  *      WITH-a-camera half is driven by stubbing `enumerateDevices` in the
  *      renderer (see `stubCameras`), which also lifts the Webcam `<select>`
  *      out of the HL block it sat in.
- *   C. The MP4 checkbox is the only Record preference that does not
- *      persist. `record.webcamCorner` is written to config.json on every
- *      change; `convertToMp4` is component-local `useState(true)`, so a
- *      user who wants WebM re-ticks it on every single visit to the
+ *   C. The MP4 checkbox was the only Record preference that did not
+ *      persist. `record.webcamCorner` was written to config.json on every
+ *      change; `convertToMp4` was component-local `useState(true)`, so a
+ *      user who wanted WebM re-ticked it on every single visit to the
  *      route — including after a mid-session trip to Home.
+ *      FIXED 2026-08-17 by T-43 together with D: `record.convertToMp4` is
+ *      a settings key like the corner, and the MP4 test below is now the
+ *      positive (written on change, restored by a second launch).
  *   E. "Discard recording" reported as a crash and stranded a broken file.
  *      FIXED 2026-08-15 by T-44, and this spec's discard test is now the
  *      positive: cancelConverts('recording') marks the child as
@@ -87,11 +98,16 @@ const __dirname = path.dirname(__filename)
  *      renders as the calm "Recording discarded." A real convert failure
  *      still rejects; since T-59 it reaps its partial too and rejects in
  *      the studio's own words, driven by the crash test below.
- *   D. Visiting /record writes to config.json with no user action. The
- *      corner-persist effect has no "did the user touch it" guard, so
- *      mounting the route stamps `record.webcamCorner: "bottom-right"`
- *      over an absent key. Harmless today (the value equals the default)
- *      but it means the settings file is written by navigation alone.
+ *   D. Visiting /record wrote to config.json with no user action. The
+ *      corner-persist effect had no "did the user touch it" guard, so
+ *      mounting the route stamped `record.webcamCorner: "bottom-right"`
+ *      over an absent key. Harmless in value (it equalled the default) but
+ *      it meant the settings file was written by navigation alone.
+ *      FIXED 2026-08-17 by T-43: there is no persist effect at all now.
+ *      Each control writes its own choice in its `onChange`, so a write is
+ *      a user action by construction, and the mount effect only reads. Both
+ *      persistence tests below assert the file is byte-identical after an
+ *      untouched visit.
  */
 
 const SCREENSHOTS = path.join(__dirname, 'screenshots')
@@ -108,7 +124,7 @@ interface SeedConfig {
 
 interface StoredConfig {
   welcomeSeen?: boolean
-  record?: { webcamCorner?: string }
+  record?: { webcamCorner?: string; convertToMp4?: boolean }
   recentFiles?: Record<string, string[]>
 }
 
@@ -265,12 +281,37 @@ function readRevealCalls(app: ElectronApplication): Promise<string[]> {
  * always has exactly one screen, so the zero-sources branch — a real state on
  * a locked workstation or a permissions-denied macOS/Wayland session — can
  * only be reached by making main answer the way those systems answer.
+ *
+ * `delayMs` holds the answer back so the in-flight state T-41 added is a
+ * state a test can see: a real `getSources` call with thumbnails takes long
+ * enough to be worth saying "Looking for…" about, and an instant stub does
+ * not.
  */
-async function stubEmptySources(app: ElectronApplication): Promise<void> {
-  await app.evaluate(async ({ desktopCapturer }) => {
+async function stubEmptySources(app: ElectronApplication, delayMs: number): Promise<void> {
+  await app.evaluate(async ({ desktopCapturer }, ms) => {
     const target = desktopCapturer as unknown as { getSources: unknown }
-    target.getSources = async () => []
-  })
+    target.getSources = async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      return []
+    }
+  }, delayMs)
+}
+
+/**
+ * Make `desktopCapturer.getSources` throw, the way a blocked capture answers
+ * on a system that refuses outright instead of returning nothing. The
+ * rejection crosses the IPC bridge wrapped in Electron's
+ * "Error invoking remote method …" envelope, which is what makes this the
+ * test of both halves: the studio must strip the envelope (T-30/T-59) AND
+ * leave the in-flight state.
+ */
+async function stubFailingSources(app: ElectronApplication, message: string): Promise<void> {
+  await app.evaluate(async ({ desktopCapturer }, msg) => {
+    const target = desktopCapturer as unknown as { getSources: unknown }
+    target.getSources = async () => {
+      throw new Error(msg)
+    }
+  }, message)
 }
 
 /**
@@ -617,13 +658,14 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('link', { name: /Record/ }).first().click()
       await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
 
-      // T-27 FINDING D: the persist effect runs on mount with no
-      // user-touched guard, so simply arriving on /record stamps the default
-      // corner into config.json. Pinned rather than fixed: it is the current
-      // contract, and a fix that adds the guard has to update this assertion.
-      await expect
-        .poll(() => readConfig(userDataDir).record?.webcamCorner, { timeout: 15_000, intervals: [200] })
-        .toBe('bottom-right')
+      // T-43 (was T-27 FINDING D): arriving on /record writes NOTHING. The
+      // old persist effect ran on mount with no user-touched guard and
+      // stamped the default corner over an absent key, which made navigation
+      // alone a settings write; the effect is gone and the select writes its
+      // own choice instead. The settle wait is longer than the write ever
+      // took (it was observable inside 200 ms).
+      await window.waitForTimeout(2000)
+      expect(readConfig(userDataDir).record).toBeUndefined()
 
       await window.getByRole('checkbox').nth(1).check()
       const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
@@ -659,16 +701,35 @@ test.describe('T-27 Record Studio', () => {
     }
   })
 
-  test('MP4 checkbox toggles but is component-local — it resets on every visit', async () => {
+  test('MP4 checkbox persists like the corner, and an untouched visit writes nothing (T-43)', async () => {
     test.setTimeout(150_000)
     const root = makeRoot('mp4')
     const userDataDir = path.join(root, 'userData')
     seedUserData(userDataDir, SEED)
+    const configFile = path.join(userDataDir, 'config.json')
 
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
-      await gotoRecordFromHome(window)
+      // Snapshot AFTER the app has settled on Home: electron-store stamps its
+      // own `theme` default at construction, so the file is legitimately
+      // rewritten once per launch. What must not happen is a write caused by
+      // walking into a route.
+      await waitForHome(window)
+      await window.waitForTimeout(1000)
+      const bytesBefore = readFileSync(configFile, 'utf8')
+      const mtimeBefore = statSync(configFile).mtimeMs
+
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(2000)
+
+      // T-43 (was T-27 FINDING D), the sharp version: mounting the route and
+      // touching nothing leaves config.json byte-identical, down to its mtime.
+      // The old build's mount-write landed within 200 ms of arrival.
+      expect(readFileSync(configFile, 'utf8')).toBe(bytesBefore)
+      expect(statSync(configFile).mtimeMs).toBe(mtimeBefore)
+      expect(readConfig(userDataDir).record).toBeUndefined()
 
       const mp4Box = window.getByRole('checkbox').nth(2)
       await expect(mp4Box).toBeChecked()
@@ -676,26 +737,51 @@ test.describe('T-27 Record Studio', () => {
         window.getByText("Off = save as WebM (instant, but some apps don't accept WebM).")
       ).toBeVisible()
 
+      // T-43 (was T-27 FINDING C): the choice is a setting now, written the
+      // moment it is made — the same mechanism as the corner select, which is
+      // what the finding said it should have been all along.
       await mp4Box.uncheck()
       await expect(mp4Box).not.toBeChecked()
+      await expect
+        .poll(() => readConfig(userDataDir).record?.convertToMp4, {
+          timeout: 15_000,
+          intervals: [200]
+        })
+        .toBe(false)
 
-      // T-27 FINDING C: `convertToMp4` is component-local useState, so a
-      // round trip to Home and back throws the choice away. Nothing is
-      // written to config.json either — contrast the corner select, which
-      // persists on every change. Asserted in BOTH directions so a future
-      // fix that makes it settings-backed fails this test loudly rather than
-      // silently changing behavior.
+      // A round trip to Home and back keeps it: the remount reads the stored
+      // value instead of springing back to its `useState(true)` default.
       await window.getByRole('link', { name: 'Home' }).click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
       await window.getByRole('link', { name: /Record/ }).first().click()
       await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
-      await expect(window.getByRole('checkbox').nth(2)).toBeChecked()
-
-      const stored = readConfig(userDataDir) as Record<string, unknown>
-      expect(Object.keys(stored)).not.toContain('convertToMp4')
-      expect(JSON.stringify(stored)).not.toContain('convertToMp4')
+      await expect(window.getByRole('checkbox').nth(2)).not.toBeChecked()
     } finally {
       await app.close()
+    }
+
+    // Second launch on the SAME userData — the relaunch the finding was
+    // written about: a user who wants WebM used to re-tick this on every
+    // single visit.
+    const app2 = await launchApp(userDataDir)
+    try {
+      const window = await app2.firstWindow()
+      await gotoRecordFromHome(window)
+      await expect(window.getByRole('checkbox').nth(2)).not.toBeChecked()
+      // And restoring does not rewrite a different value over the stored one.
+      expect(readConfig(userDataDir).record?.convertToMp4).toBe(false)
+
+      // Re-ticking goes back to disk as true, so the setting is a live
+      // two-way binding rather than a one-shot opt-out.
+      await window.getByRole('checkbox').nth(2).check()
+      await expect
+        .poll(() => readConfig(userDataDir).record?.convertToMp4, {
+          timeout: 15_000,
+          intervals: [200]
+        })
+        .toBe(true)
+    } finally {
+      await app2.close()
       cleanup(root)
     }
   })
@@ -704,7 +790,12 @@ test.describe('T-27 Record Studio', () => {
   // 2. Source discovery — the empty branch and the real one
   // ------------------------------------------------------------------
 
-  test('zero capture sources: no crash, but also no message — the button just comes back', async () => {
+  /** T-41's empty-state copy, the twin of the mic and camera warnings. */
+  const NO_SOURCES_WARNING =
+    'No screens or windows found. Click "Refresh sources" after granting screen-recording permission.'
+  const SEARCHING_COPY = 'Looking for screens and windows…'
+
+  test('zero capture sources says so: never-searched, searching and found-nothing all render differently (T-41)', async () => {
     test.setTimeout(120_000)
     ensureScreenshots()
     const root = makeRoot('nosources')
@@ -714,38 +805,75 @@ test.describe('T-27 Record Studio', () => {
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
-      await stubEmptySources(app)
+      // Held back by 1.5 s so the in-flight state is observable — see
+      // stubEmptySources. Every other byte of the path is real: the click,
+      // the IPC round trip, main's own handler.
+      await stubEmptySources(app, 1500)
       await gotoRecordFromHome(window)
       await installToastLog(window)
 
       const pick = window.getByRole('button', { name: 'Pick a screen or window' })
-      await expect(pick).toBeVisible()
+      const warning = window.getByText(NO_SOURCES_WARNING)
+      const searching = window.getByText(SEARCHING_COPY)
+
+      // ── state 1, never searched: the invitation and nothing else. An
+      //    untouched panel makes no claim about what is out there. ──
+      await expect(pick).toBeEnabled()
+      await expect(searching).toHaveCount(0)
+      await expect(warning).toHaveCount(0)
+
       await pick.click()
 
-      // The IPC really ran and really answered []: nothing throws, the page
-      // is still mounted, and the header survives.
-      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      // ── state 2, in flight: the card says it is looking, and the button
+      //    it was clicked with cannot be clicked again. ──
+      await expect(searching).toBeVisible()
+      await expect(pick).toBeDisabled()
+      await expect(warning).toHaveCount(0)
 
-      // T-27 FINDING A: this is the entire user-visible outcome of a search
-      // that found nothing. `chooseSource` moved phase idle -> 'choosing',
-      // but the two branches render the same markup, so the placeholder card
-      // reappears verbatim. There is no "no screens found" line, no error
-      // toast, no disabled state, no spinner — a user on a system where
-      // capture is blocked (Wayland without a portal, macOS screen-recording
-      // permission denied) sees a button that appears to do nothing at all.
-      await expect(pick).toBeVisible()
+      // ── state 3, the answer: T-41 (was T-27 FINDING A). The search really
+      //    ran and really came back empty — and now says so, in the Audio
+      //    card's own words, naming the control that retries and the
+      //    permission that is usually the cause. The old build put the
+      //    placeholder button back verbatim, so a user on a blocked system
+      //    (Wayland without a portal, macOS screen recording denied) saw a
+      //    button that appeared to do nothing at all. ──
+      await expect(warning).toBeVisible({ timeout: 20_000 })
+      await expect(warning).toHaveClass(/text-amber-300/)
+      await expect(searching).toHaveCount(0)
+      await expect(pick).toBeEnabled()
       await expect(window.locator('img[alt]')).toHaveCount(0)
-      await expect(window.getByText(/no (screens|sources|windows) found/i)).toHaveCount(0)
-      expect(await readToastLog(window)).toEqual([])
-
-      // Refresh sources takes the same path and lands in the same place.
-      await window.getByRole('button', { name: 'Refresh sources' }).click()
-      await expect(pick).toBeVisible()
-      expect(await readToastLog(window)).toEqual([])
-
-      // And Start is still correctly refused: no source id was ever set.
+      // Nothing was found, but nothing went wrong either: an empty answer is
+      // reported in the card, not as an error toast. (`[role="status"]` is
+      // react-hot-toast's own aria wrapper — this route renders no other.)
+      await expect(window.locator('[role="status"]')).toHaveCount(0)
+      // The page is intact and Start is still correctly refused: no source
+      // id was ever set.
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeDisabled()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'record-03-no-sources.png') })
+
+      // ── Refresh sources takes the same path and lands in the same state,
+      //    rather than dropping back to the never-searched invitation. ──
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(searching).toBeVisible()
+      await expect(warning).toBeVisible({ timeout: 20_000 })
+      await expect(window.locator('[role="status"]')).toHaveCount(0)
+
+      // ── the other way capture fails: refused outright, not empty. The
+      //    studio names the fault (envelope stripped, T-59) and leaves the
+      //    in-flight state instead of waiting forever. ──
+      await stubFailingSources(app, 'Screen recording permission denied')
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 30_000,
+          intervals: [200]
+        })
+        .toMatch(/Screen recording permission denied/)
+      expect((await readToastLog(window)).join(' | ')).not.toContain('Error invoking remote method')
+      await expect(searching).toHaveCount(0)
+      await expect(warning).toBeVisible()
+      await expect(pick).toBeEnabled()
     } finally {
       await app.close()
       cleanup(root)

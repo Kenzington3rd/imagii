@@ -429,17 +429,28 @@ Electron's command line). The screen half of the pipeline is real E2E.
 
 Covered (15/17): Refresh sources + thumbnails + auto-select + Start
 enablement -> E2E against the real screen source; zero-sources branch
-via a main-side getSources stub, pinned [T-41: both branches render
-identically]. Start refusal (mic on, no device) -> E2E, no orphaned
-temp. Stop -> real WebM on disk (ffprobe: webm container, video stream,
+via a main-side getSources stub [T-41 pin: both branches rendered
+identically] — UPGRADED round 41: the stub is held back 1.5 s and all
+three source-search states are driven and distinguished (invitation;
+"Looking for screens and windows…" with the button disabled; the amber
+"No screens or windows found." twin of the mic warning, exact copy +
+class), no toast for an empty-but-successful search (`[role="status"]`
+count), plus a THROWING getSources stub proving the refusal names the
+fault, strips the invoke envelope, and leaves the in-flight state.
+Start refusal (mic on, no device) -> E2E, no orphaned temp. Stop -> real WebM on disk (ffprobe: webm container, video stream,
 no audio stream) + `Saved N.N MB.` toast. Esc -> real MP4 (ffprobe:
 mp4/h264) through the convert phase. Mic checkbox both branches
 (zero-device warning asserted, select asserted absent). Webcam checkbox
 -> Corner select with its four exact labels [T-42 pin: no zero-camera
 hint, PiP silently dropped]. Corner select -> `record.webcamCorner` on
 disk AND restored by a second launch on the same userData; the
-mount-write is pinned [T-43]. MP4 checkbox -> toggles, resets on
-revisit, writes nothing [T-43 pin]. Save dialog both branches
+mount-write was pinned [T-43] — FIXED round 41: both controls persist
+from their own onChange, so arriving on /record leaves config.json
+byte- and mtime-identical (asserted in both persistence tests). MP4
+checkbox -> `record.convertToMp4` on disk on change, kept across a
+Home round trip, restored by a second launch, and re-ticked back to
+`true` (two-way binding) [was T-43 pin: component-local, reset on
+revisit]. Save dialog both branches
 (main-process stub): chosen path -> ffprobed file + recents entry;
 cancel -> exact "Recording discarded." + temp reaped + no recents.
 Discard mid-convert -> real SIGKILL of a live convert [T-44 pin: raw
@@ -543,9 +554,15 @@ both exact validation toasts, Escape/Done/Close; scrim-click owned by
 the T-21 Modal contract; custom presets never become export targets,
 pinned in both directions [T-50]. 4t ExportPanel (13): 12/13 E2E — 2
 clips x 2 presets -> 4 template-named ffprobed files + persisted
-settings; watermark reaches the filter graph, its handle persisted,
-its position NOT [T-49]; the dead "No presets selected on any clip"
-path [T-49]; safe-zone modal both branches; cancel modal both branches
+settings; watermark reaches the filter graph, and since round 41 BOTH
+halves of it persist — handle + `watermarkPosition` on disk, then read
+back off the live panel after a relaunch on the same userData, and
+absent together when the watermark is blank [was T-49 pin: position
+never persisted]. The dead "No presets selected on any clip" branch is
+deleted [T-49]; the disabled Export button is the whole refusal, with
+the copy's absence pinned in `interactionWiring.test.ts` (a string
+nothing renders is invisible to a DOM test) and the E2E toast-log
+tripwire kept for the other direction. Safe-zone modal both branches; cancel modal both branches
 (real SIGKILL); refusals without an output folder / selection; per-row
 Show HL-shell. Watermark PIXELS are platform-pinned: linux
 ffmpeg-static has no `drawtext`, so nothing anywhere renders a
@@ -1042,3 +1059,24 @@ end state, all in `tests/e2e/image.spec.ts` and
   route through `captureDocument`, keep no raw stage capture, tie
   previews to their document, and share one handler across both buttons.
   All seven proven to discriminate.
+
+
+## Dispositions — round 41 (fix wave batch 15: T-49 + T-41 + T-43)
+
+- **Video 4t ExportPanel - watermark:** both halves persist and
+  restore across a relaunch (handle + position read back off the live
+  panel); a blank watermark writes neither key (asserted in the
+  four-file queue test). The dead "No presets" copy is deleted;
+  source-level pins in interactionWiring keep it dead, the toast
+  tripwire keeps the direction covered.
+- **Record - zero-sources branch:** the T-41 pin (both branches render
+  identically) flips to three driven states — never-searched
+  invitation, disabled "Looking for screens and windows...", and the
+  amber "No screens or windows found..." — plus a throwing-stub
+  refusal that names the fault with the IPC envelope stripped.
+- **Record - Corner select:** mount-write pin flips —
+  config.json byte/mtime-identical on an untouched visit.
+- **Record - MP4 checkbox (was the one non-persisting preference):**
+  on-disk write on change, Home round trip, relaunch restore, re-tick
+  two-way. Expediter mutation: restore inverted -> exactly that test
+  red.

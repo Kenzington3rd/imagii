@@ -34,11 +34,17 @@ export type SettingsKey =
   | 'tutorialSeen.image'
   | 'tutorialSeen.ai'
   | 'streamerHandle'
+  // T-49: the corner the handle is drawn in. Remembered with the handle —
+  // the two halves of one watermark are one preference.
+  | 'watermarkPosition'
   | 'filenameTemplate'
   | 'recentFiles.video'
   | 'recentFiles.audio'
   | 'recentFiles.image'
   | 'record.webcamCorner'
+  // T-43: the MP4-vs-WebM choice, the last Record preference that used to
+  // reset on every visit.
+  | 'record.convertToMp4'
   // INIT-E (round 15): persist the last-used output folders so a user
   // exporting many clips doesn't have to re-pick on every batch.
   | 'export.lastOutputDir'

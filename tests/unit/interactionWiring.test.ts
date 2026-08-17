@@ -350,3 +350,30 @@ describe('T-46 — the variants dialog captures the document, not the screen', (
     expect(variants.match(/onClick=\{generate\}/g)).toHaveLength(2)
   })
 })
+
+describe('T-49 — the export panel carries no copy a user can never reach', () => {
+  // E2E: tests/e2e/video-pipelines.spec.ts "refuses to start without an output
+  // folder…" drives the refusal that IS reachable — the disabled button — and
+  // watches the toast log stay clean. The deleted branch can only be pinned
+  // here: a string no code path reaches is invisible to a DOM test, which is
+  // exactly how it survived long enough to be documented as a defect.
+  const panel = read('modules/video-studio/ExportPanel.tsx')
+
+  it('has no "No presets selected on any clip" toast behind the disabled button', () => {
+    expect(panel).not.toMatch(/No presets selected/)
+  })
+
+  it('still refuses at zero queued targets, by disabling Export', () => {
+    // The reachable half of the same guard. If this line ever goes, the
+    // deleted branch stops being dead and its removal becomes a bug.
+    expect(panel).toMatch(/disabled=\{running \|\| totalQueued === 0\}/)
+  })
+
+  it('remembers the watermark corner with the handle, not instead of it', () => {
+    // Both keys are written in the same block, so a future edit cannot drop
+    // one and leave the export remembering half of one preference.
+    const persist = panel.slice(panel.indexOf('if (watermark) {'), panel.indexOf('const sourceBase'))
+    expect(persist).toMatch(/settings\.set\('streamerHandle', watermark\.text\)/)
+    expect(persist).toMatch(/settings\.set\('watermarkPosition', watermark\.position\)/)
+  })
+})

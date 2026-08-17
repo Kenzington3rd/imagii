@@ -14,6 +14,151 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-49 + T-41 + T-43: a control is a promise, in both directions
+
+One entry for three tickets, because they are one lesson seen from
+three sides. Every one of them is a gap between what a control implies
+and what the app actually does with it: two preferences the UI let the
+user set and then forgot (T-49's watermark corner, T-43's MP4
+checkbox), one settings write no user ever asked for (T-43's
+mount-write), one state with no words on it (T-41's empty source list),
+and one set of words with no state behind it (T-49's dead toast). The
+same sentence covers all five: what is on screen is the promise, and
+the file on disk and the copy in the panel both have to keep it.
+
+### Bug (T-49) — the watermark remembered half of itself
+- **Root cause.** `runExportQueue` persisted `streamerHandle` and
+  `filenameTemplate` and nothing else, while the position `<select>` was
+  plain component state seeded at `'bottom-right'`. A user who set
+  `@handle` + "top left" and came back the next day got their handle in
+  the corner they had rejected — and no way to tell, short of exporting
+  and looking at the file, because the picker showed the default as
+  confidently as it would have shown their choice. Two halves of one
+  preference, one of them remembered.
+- **Fix.** A `watermarkPosition` settings key, written in the same block
+  as the handle (`if (watermark) { … }`, so a blank watermark still
+  writes neither) and restored in the same mount effect, guarded against
+  a stored value that is no longer one of the four corners. The four
+  corners are now one `WATERMARK_POSITIONS` array feeding both the guard
+  and the `<option>` list, so a fifth corner cannot be offered by the
+  picker and rejected by the restore. Four registries move together, as
+  they always do here: the `SettingsKey` union, the IPC allowlist, the
+  electron-store schema, and `settingsKnownKeys.test.ts`.
+- **Test.** `tests/e2e/video-pipelines.spec.ts` — "the watermark reaches
+  the filter graph, and both halves of it survive a relaunch (T-49)"
+  keeps the drawtext half and now asserts `watermarkPosition` on disk,
+  then relaunches on the SAME userData, re-imports the footage, and
+  reads `@imagii_e2e` and `top-left` back off the live panel (the
+  two-launch technique record.spec uses for the webcam corner). The
+  four-file queue test asserts the pair is absent together when the
+  watermark is blank. Red-green: the old pin was
+  `expect(JSON.stringify(config)).not.toContain('top-left')`.
+
+### Bug (T-49, second half) — a refusal nobody could ever reach
+- **Root cause.** `runExportQueue` opened with a
+  `queue.length === 0 → toast.error(…)` branch. The Export button is
+  disabled at `totalQueued === 0`, and `totalQueued` is the sum of the
+  same `queuedPresets()` the queue loop pushes — so the toast could only
+  fire if those two disagreed, which they cannot. Dead copy is worse
+  than no copy: it reads as a covered case in review, it survives
+  refactors nobody tests, and if the impossible ever happens it is the
+  message that has never once been seen by anyone.
+- **Fix.** Deleted, with a comment naming the button that does the real
+  refusing so the branch is not "restored" by a future reader.
+- **Test.** `tests/unit/interactionWiring.test.ts` (+3) — the copy is
+  gone from the panel source, the disabling condition is still there
+  (delete it and the branch stops being dead), and both watermark keys
+  are written in one block. A string nothing renders is invisible to a
+  DOM test, which is exactly how it survived long enough to be filed;
+  the E2E keeps its toast-log tripwire for the other direction.
+  Red-green: re-adding the toast line reds the source pin — as did, on
+  the first run, a comment that merely quoted the deleted sentence.
+
+### Bug (T-41) — "no screens found" looked exactly like "not looked yet"
+- **Root cause.** `chooseSource` flipped a phase to `'choosing'`, and
+  the `'idle'` and `'choosing'` branches rendered identical markup. When
+  `desktopCapturer` answered `[]` — a locked workstation, Wayland with
+  no portal, macOS with screen recording denied — the placeholder card
+  came back verbatim: same button, no message, no spinner, no toast. The
+  button looked broken on precisely the systems where the user most
+  needs to be told what to do.
+- **Fix.** The ambiguous phase is deleted, not patched. `Phase` is now
+  `'idle' | 'recording' | 'saving'` and the source list carries its own
+  `'never' | 'searching' | 'done'`, which is the question the card was
+  actually being asked. Three states, three renders: the invitation; the
+  wait ("Looking for screens and windows…", button disabled so it cannot
+  be double-fired); and the answer — an amber line in the Audio card's
+  own register, "No screens or windows found. Click "Refresh sources"
+  after granting screen-recording permission." Adding the wait made an
+  error path mandatory rather than optional: a rejected `listSources`
+  used to leave a phase nobody could see, and would now leave the wait
+  on screen forever, so the catch toasts through `ipcErrorMessage` and
+  the `finally` always lands on `'done'`.
+- **Test.** `tests/e2e/record.spec.ts` — "zero capture sources says so"
+  drives all three states off a main-side `getSources` stub held back
+  1.5 s (an instant stub cannot show an in-flight state), asserts the
+  exact copy and the amber class, asserts no toast is raised for an
+  empty-but-successful search (`[role="status"]`, react-hot-toast's own
+  aria wrapper), and then swaps in a THROWING stub to prove the refusal
+  path names the fault, strips Electron's invoke envelope, and leaves
+  the wait. Red-green: the old pin asserted no "no … found" text existed
+  anywhere on the page.
+
+### Bug (T-43) — one preference of three, and a write nobody asked for
+- **Root cause.** Two faults with one shape. (a) `convertToMp4` was
+  component-local `useState(true)` while the webcam corner was a
+  settings key, so the one Record preference a user is most likely to
+  change permanently — I want WebM, not a slow convert — reset on every
+  visit to the route, including a mid-session trip to Home. (b) The
+  corner's persistence was an effect keyed on the value, and an effect
+  keyed on a value runs on mount, so merely arriving at /record stamped
+  `record.webcamCorner: "bottom-right"` over an absent key. Harmless in
+  value and wrong in kind: the settings file recorded a decision the
+  user had not made, and "did they choose this or did they walk past it"
+  became unanswerable from disk.
+- **Fix.** `record.convertToMp4` joins the corner as a settings key
+  (same four registries), and BOTH controls now write in their own
+  `onChange` instead of through an effect — a write is a user action by
+  construction, no `userTouched` ref required. The mount effect is
+  reads-only. That is one fewer effect and one fewer piece of state than
+  a touched-guard would have cost.
+- **Test.** `tests/e2e/record.spec.ts` — "MP4 checkbox persists like the
+  corner, and an untouched visit writes nothing (T-43)" snapshots
+  config.json's bytes AND mtime once the app has settled on Home, walks
+  into /record, waits 2 s (the old mount-write landed inside 200 ms) and
+  asserts the file is untouched to the byte; then unchecks, reads
+  `false` off disk, proves a Home round trip keeps it, relaunches on the
+  same userData and finds the box still unchecked, and re-ticks to prove
+  the binding runs both ways. The corner test carries the same
+  no-write-on-arrival assertion. Red-green: both old pins
+  (`record.webcamCorner === 'bottom-right'` after mere arrival; the MP4
+  box checked again after a route round trip) fail on the fixed build.
+
+### Lesson
+**A control on screen is a promise about state, and the promise runs in
+both directions: remember what the user chose, store only what the user
+chose, and say out loud what actually happened.** Three practical rules
+came out of this batch. First, a preference is not "persisted" until
+the control that shows it is restored from disk on a fresh launch —
+half-persistence (the handle without its corner, the corner without the
+MP4 box) is the worst state, because the UI looks equally confident
+about the value it kept and the value it invented; when a preference
+has two fields, write them in one block so a future edit cannot drop
+one. Second, persist from the event, not from an effect: an effect
+keyed on a value cannot tell a user's choice from a component's
+default, so it writes on mount, and every "was this chosen?" question
+about the settings file becomes unanswerable. Third — the honesty half
+— every state a user can reach needs words, and every set of words
+needs a state that reaches it. The two failures look opposite and are
+the same review question, asked in each direction: for this state, what
+does the panel say, and for this sentence, what does the user do to see
+it? An empty result rendered as an untouched panel is a lie by
+omission; a toast behind a condition that cannot occur is a lie in the
+other direction, and neither one shows up in a test that only drives
+the happy path.
+
+---
+
 ## 2026-08-17 — T-54 + T-46: the image capture had one more thing the canvas showed and it did not
 
 One batch, one lesson, third round running on the same helper. T-45
