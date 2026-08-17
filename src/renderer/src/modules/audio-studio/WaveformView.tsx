@@ -4,7 +4,7 @@ import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.e
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
-import { ACCENT, ACCENT_MUTED, EMBER } from '../../styles/tokens'
+import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
 
 /**
  * Every region this view puts on the waveform for a stored cut carries this id
@@ -13,6 +13,12 @@ import { ACCENT, ACCENT_MUTED, EMBER } from '../../styles/tokens'
  * property the caller sets on the returned region is not set yet.
  */
 const CUT_ID_PREFIX = 'cut-'
+
+/** The live drag selection, and the stored cut it becomes. Both are the
+ *  accent (T-56 — the stored one used to be a raw rose-500 literal); the
+ *  weight is what separates "being drawn now" from "committed". */
+const SELECTION_FILL = withAlpha(ACCENT, 0.25)
+const CUT_FILL = withAlpha(ACCENT, 0.35)
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
@@ -79,7 +85,7 @@ export function WaveformView(): JSX.Element | null {
     const offPause = ws.on('pause', () => setPlaying(false))
     const offFinish = ws.on('finish', () => setPlaying(false))
 
-    regions.enableDragSelection({ color: 'rgba(255, 49, 49, 0.25)' })
+    regions.enableDragSelection({ color: SELECTION_FILL })
     // One drag is one cut, which is what the panel copy below promises.
     // wavesurfer 7.12 emits `region-created` from `saveRegion()` in
     // `enableDragSelection`'s "end" branch — i.e. when the button comes up —
@@ -116,14 +122,26 @@ export function WaveformView(): JSX.Element | null {
       if (r.id.startsWith(CUT_ID_PREFIX)) r.remove()
     }
     cutRegions.forEach((cut, idx) => {
-      regions.addRegion({
+      const region = regions.addRegion({
         start: cut.startSec,
         end: cut.endSec,
-        color: 'rgba(244, 63, 94, 0.35)',
+        color: CUT_FILL,
         drag: false,
         resize: false,
         id: `${CUT_ID_PREFIX}${idx}`
       })
+      // A stored cut is a MARK, not a control: it is removed through its chip
+      // below, never dragged or resized. wavesurfer 7.12 gives every region
+      // its own `makeDraggable` anyway — `initMouseEvents` calls it whatever
+      // `drag`/`resize` say — and that handler `preventDefault`s the
+      // document-level pointermove before `enableDragSelection`'s sees it, so
+      // a new cut drag that STARTED on top of an existing cut silently did
+      // nothing (T-61): the exact gesture for widening a cut. Making the mark
+      // pointer-transparent is the fix at the root — no pointerdown on the
+      // region, no draggable, and the gesture is an ordinary drag selection
+      // like it is anywhere else on the waveform. (The plugin has no option
+      // for this; `drag:false` only makes its `onMove` a no-op.)
+      if (region.element) region.element.style.pointerEvents = 'none'
     })
   }, [cutRegions])
 
@@ -157,11 +175,16 @@ export function WaveformView(): JSX.Element | null {
       {cutRegions.length > 0 ? (
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="text-ink-muted">Cuts:</span>
+          {/* A chip is the legend for its mark on the waveform above, so it
+              carries the same token — a user pairs the two by color. It was a
+              raw rose-500 while the mark was a raw rose rgba(); T-56 moved
+              both onto the accent together, because moving one alone is what
+              would break the pairing. */}
           {cutRegions.map((cut, i) => (
             <button
               key={i}
               onClick={() => removeCutRegion(i)}
-              className="px-2 py-0.5 bg-rose-500/20 border border-rose-400/40 rounded hover:bg-rose-500/30"
+              className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
               title="Click to remove this cut"
             >
               {formatTime(cut.startSec)}–{formatTime(cut.endSec)} ✕

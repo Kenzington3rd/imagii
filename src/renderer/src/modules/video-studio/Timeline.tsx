@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { useVideoStore } from './store/videoStore'
+import { playableDuration, useVideoStore } from './store/videoStore'
 
 function formatShort(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00.0'
@@ -25,7 +25,11 @@ export function Timeline(): JSX.Element | null {
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragMode>(null)
 
-  const duration = source?.probe.duration ?? 0
+  // T-56: the track's coordinate space is what the video really PLAYS, not
+  // what ffprobe rounded the container to. They differ by up to a frame, and
+  // the difference was the last frames of every file: unreachable by click,
+  // by drag, and by End, while the Player's own nudge already reached them.
+  const duration = useVideoStore((s) => playableDuration(s.source, s.mediaDuration))
   const clip = useMemo(
     () => clips.find((c) => c.id === selectedClipId) ?? null,
     [clips, selectedClipId]
@@ -149,8 +153,12 @@ export function Timeline(): JSX.Element | null {
           className="absolute top-0 bottom-0 bg-accent/25 border-x-2 border-accent pointer-events-none"
           style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
         />
+        {/* The playhead. `bg-ember` is the same mark the Audio Studio's
+            waveform cursor carries, and the one color on the track that stays
+            readable across the accent clip range under it (T-56 — it was a
+            raw `bg-pink-400` that predated the round-19 retheme). */}
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-pink-400 pointer-events-none"
+          className="absolute top-0 bottom-0 w-0.5 bg-ember pointer-events-none"
           style={{ left: `calc(${playheadPct}% - 1px)` }}
         />
         <button

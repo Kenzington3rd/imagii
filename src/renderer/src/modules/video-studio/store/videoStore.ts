@@ -27,6 +27,14 @@ interface History {
 interface VideoStudioState {
   source: VideoSource | null
   currentTime: number
+  /** The media element's OWN duration, published by the Player on
+   *  `durationchange`. ffprobe reports the container's rounded number and the
+   *  decoder has the real one (the E2E fixture probes 2.000 s and decodes
+   *  2.020136 s), so anything built on the probe stops ~20 ms short of the end
+   *  of the file — which is where the Timeline's right edge used to sit,
+   *  leaving the last frames unreachable by click or End (T-56). null until an
+   *  element has spoken; every consumer falls back to the probe until then. */
+  mediaDuration: number | null
   /** A seek asked for by a scrubbing surface (the Timeline track's click,
    *  drag, and arrow keys). The Player owns the `<video>`, so it is the one
    *  that applies it — this is the only channel between them. A FRESH object
@@ -53,6 +61,9 @@ interface VideoStudioState {
   loadSource: (filePath: string) => Promise<void>
   clearSource: () => void
   setCurrentTime: (t: number) => void
+  /** Trust boundary: the element reports NaN before metadata and Infinity for
+   *  a live stream, and neither is a duration. Both land as null. */
+  setMediaDuration: (seconds: number) => void
   requestSeek: (seconds: number) => void
   setSrtPath: (p: string | null) => void
 
@@ -101,6 +112,24 @@ function fileNameFromPath(p: string): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
+}
+
+/**
+ * How long the loaded video actually PLAYS — the ceiling for every scrubbing
+ * surface (T-56).
+ *
+ * The media element's own duration is the authority when it has published one
+ * (the Player does, on `durationchange`); ffprobe's rounded number is the
+ * stand-in until then, and for a source with no element at all. The two differ
+ * by a frame or less, which is exactly the gap that made the end of a file
+ * unreachable from the Timeline while the Player's own nudge could reach it.
+ */
+export function playableDuration(
+  source: VideoSource | null,
+  mediaDuration: number | null
+): number {
+  if (mediaDuration !== null) return mediaDuration
+  return source?.probe.duration ?? 0
 }
 
 function makeDefaultClip(duration: number, index: number): Clip {
@@ -158,6 +187,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
   return {
     source: null,
     currentTime: 0,
+    mediaDuration: null,
     seekRequest: null,
     clips: [],
     selectedClipId: null,
@@ -180,6 +210,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
           probe
         },
         currentTime: 0,
+        // A new file's element duration is unknown until its element loads;
+        // carrying the previous file's number over would size the track to the
+        // wrong video for as long as the load takes.
+        mediaDuration: null,
         seekRequest: null,
         clips: [initial],
         selectedClipId: initial.id,
@@ -192,6 +226,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({
         source: null,
         currentTime: 0,
+        mediaDuration: null,
         seekRequest: null,
         clips: [],
         selectedClipId: null,
@@ -200,13 +235,20 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         historyKey: null
       }),
     setCurrentTime: (t: number) => set({ currentTime: t }),
+    setMediaDuration: (seconds: number) =>
+      set({
+        mediaDuration: Number.isFinite(seconds) && seconds > 0 ? seconds : null
+      }),
     requestSeek: (seconds: number) => {
       // Trust boundary: `seconds` comes from pointer geometry (a click x
       // against a track width that can be 0 mid-layout) and from key handlers
       // doing arithmetic on it, so NaN is reachable — never hand one to a
       // media element.
       if (!Number.isFinite(seconds)) return
-      const duration = get().source?.probe.duration ?? 0
+      // The element's own duration when it has published one (T-56): the
+      // probe's rounded number as the ceiling is what stopped a scrub, an End
+      // press, and a restored playhead ~20 ms short of the end of the file.
+      const duration = playableDuration(get().source, get().mediaDuration)
       const target = clamp(seconds, 0, duration)
       // currentTime moves with the request rather than waiting for the media
       // element's `timeupdate`: on a long recording a seek can take a moment,

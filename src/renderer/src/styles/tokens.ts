@@ -14,8 +14,11 @@
  *   INK_BASE on BG_BASE         15.5:1
  *   INK_MUTED on BG_BASE         7.1:1
  *   INK_DIM on BG_BASE           6.2:1  (5.8:1 on BG_ELEVATED)
- *   EMBER on BG_BASE            11.6:1
+ *   EMBER on BG_BASE            11.6:1  (9.99:1 on BG_HOVER — the Timeline
+ *                                        track the playhead is drawn on)
  */
+
+import { assert } from '@shared/assert'
 
 /** App background — obsidian black, warm undertone. */
 export const BG_BASE = '#120c0c'
@@ -36,9 +39,32 @@ export const INK_MUTED = '#a59a97'
 /** Tertiary text, borders, disabled. */
 export const INK_DIM = '#9c8f8b'
 
-/** Ember highlight — warnings, the icon's sun, hype moments. */
+/**
+ * Ember highlight — warnings, the icon's sun, hype moments, and the
+ * PLAYHEAD in both timed studios: wavesurfer's cursor in Audio, the
+ * Timeline marker in Video (T-56). One meaning, one color — and it is the
+ * one thing on the track that must stay readable over an accent clip range
+ * (9.99:1 on BG_HOVER, 7.35:1 on the range's `accent/25` fill).
+ */
 export const EMBER = '#fbbf24'
 
 /** Checkerboard tiles for transparent-image previews (two warm darks). */
 export const CHECKER_A = '#221616'
 export const CHECKER_B = '#1c1313'
+
+/**
+ * A token at partial alpha, for the JS contexts that need a translucent
+ * FILL rather than a solid — wavesurfer region colors, which take one CSS
+ * color string and have no separate opacity option.
+ *
+ * The alternative is a hand-copied `rgba(255, 49, 49, 0.25)` literal, and
+ * WaveformView carried two of them (one of which was rose-500, a palette
+ * color that was never in this file at all) two lines under its `tokens`
+ * import until T-56. A literal cannot follow a retheme; this can.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  assert(/^#[0-9a-fA-F]{6}$/.test(hex), `withAlpha expects #rrggbb, got ${hex}`)
+  assert(alpha >= 0 && alpha <= 1, `withAlpha expects an alpha in 0..1, got ${alpha}`)
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+}

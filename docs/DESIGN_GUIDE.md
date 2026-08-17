@@ -23,6 +23,7 @@ hard-code chrome colors in `className` — use the token.
 | `ink-base` | `#ece4e2` | Primary text (15.5:1) |
 | `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
 | `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). |
+| `ember` | `#fbbf24` | Warnings, the icon's sun, and the **playhead** in both timed studios — wavesurfer's cursor in Audio, the Timeline marker in Video. 10.0:1 on `bg-hover`, 7.4:1 on the clip range's `accent/25` fill, so it stays readable over the accent it is drawn across (T-56). |
 
 The palette (round 19, "obsidian volcano") lives in TWO files by
 necessity: `tailwind.config.js` (for classNames) and
@@ -30,7 +31,19 @@ necessity: `tailwind.config.js` (for classNames) and
 wavesurfer options, inline SVG, the toaster). Never write a raw chrome
 hex anywhere else; import from `tokens.ts`.
 `tests/unit/designTokensInSync.test.ts` fails the build if the two files
-drift, and also pins the contrast claims above. |
+drift, and also pins the contrast claims above.
+
+**A raw palette color is the same bug as a raw hex.** `bg-pink-400`,
+`bg-rose-500/20`, `rgba(244, 63, 94, .35)` — Tailwind's default palette
+resolves them all, so nothing fails and nothing looks broken, and a
+retheme walks straight past them. Three of them survived round 19 inside
+the Timeline and the waveform until T-56. If a color is not in the table
+above, it does not belong in `src/renderer`.
+
+**Alpha in a JS context** is `withAlpha(TOKEN, 0.25)` from `tokens.ts`,
+not a hand-written `rgba()` — a literal cannot follow the token it was
+copied from. In a className, use Tailwind's own `/NN` suffix
+(`bg-accent/25`).
 
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
 weights 400/500/600.

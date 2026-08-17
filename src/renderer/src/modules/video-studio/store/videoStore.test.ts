@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useVideoStore } from './videoStore'
+import { playableDuration, useVideoStore } from './videoStore'
 import type { VideoSource } from './videoStore'
 
 const FAKE_SOURCE: VideoSource = {
@@ -147,11 +147,64 @@ describe('srtPath state — Phase 4 tech-debt', () => {
   })
 })
 
+/**
+ * T-56 — the scrubbing surfaces' coordinate space.
+ *
+ * ffprobe reports the container's rounded duration and the decoder has the
+ * real one; the E2E fixture probes 2.000 s and decodes 2.020136 s. Everything
+ * built on the probe therefore stopped ~20 ms short of the end of the file,
+ * which is where the Timeline's right edge sat — the last frames were
+ * unreachable by click, by drag and by End, while the Player's own nudge
+ * (fixed in T-52) already reached them.
+ */
+describe('playableDuration — the element outranks the probe (T-56)', () => {
+  it('is the probe duration until an element has published one', () => {
+    expect(playableDuration(FAKE_SOURCE, null)).toBe(60)
+  })
+
+  it('is the element duration once it has', () => {
+    expect(playableDuration(FAKE_SOURCE, 60.5)).toBe(60.5)
+    // Shorter, too: the element is the authority, not the larger number.
+    expect(playableDuration(FAKE_SOURCE, 59.5)).toBe(59.5)
+  })
+
+  it('is 0 with no source at all, so a track cannot divide by a phantom', () => {
+    expect(playableDuration(null, null)).toBe(0)
+  })
+})
+
+describe('setMediaDuration — what the element is allowed to publish (T-56)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({ source: FAKE_SOURCE, mediaDuration: null })
+  })
+
+  it('records a real duration', () => {
+    useVideoStore.getState().setMediaDuration(2.020136)
+    expect(useVideoStore.getState().mediaDuration).toBe(2.020136)
+  })
+
+  it('refuses NaN, Infinity and zero — the element reports all three', () => {
+    // NaN before metadata, Infinity for a live stream, 0 for an empty load.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0, -3]) {
+      useVideoStore.getState().setMediaDuration(2)
+      useVideoStore.getState().setMediaDuration(bad)
+      expect(useVideoStore.getState().mediaDuration).toBeNull()
+    }
+  })
+
+  it('a new source clears it — the next file has not spoken yet', () => {
+    useVideoStore.getState().setMediaDuration(2.02)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().mediaDuration).toBeNull()
+  })
+})
+
 describe('requestSeek — the Timeline scrub channel (T-52)', () => {
   beforeEach(() => {
     useVideoStore.setState({
       source: FAKE_SOURCE,
       currentTime: 0,
+      mediaDuration: null,
       seekRequest: null,
       clips: [],
       selectedClipId: null
@@ -186,6 +239,24 @@ describe('requestSeek — the Timeline scrub channel (T-52)', () => {
     expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 0 })
     useVideoStore.getState().requestSeek(9999)
     expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 60 })
+  })
+
+  // T-56: with an element duration published, the ceiling is the element's.
+  it('clamps to what the element can PLAY, not to what ffprobe rounded', () => {
+    useVideoStore.getState().setMediaDuration(60.5)
+    useVideoStore.getState().requestSeek(9999)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 60.5 })
+  })
+
+  // The T-47 restore parks the playhead through this same channel, and a
+  // position the user left in the last frames of the file is inside the
+  // element's duration while being past the probe's. Clamping it to the probe
+  // would quietly rewind a restored session.
+  it('leaves a position past the probe duration alone when the element is longer', () => {
+    useVideoStore.getState().setMediaDuration(60.5)
+    useVideoStore.getState().requestSeek(60.4)
+    expect(useVideoStore.getState().seekRequest).toEqual({ seconds: 60.4 })
+    expect(useVideoStore.getState().currentTime).toBe(60.4)
   })
 
   it('ignores a non-finite request rather than handing NaN to the media element', () => {
