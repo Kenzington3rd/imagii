@@ -243,7 +243,12 @@ describe('imagii-file handler resolves legitimate requests', () => {
     expect(res.headers.get('Content-Type')).toBe('video/mp4')
     expect(res.headers.get('Content-Range')).toBeNull()
     expect(await res.text()).toBe(BODY)
-    expect(fsSpy.touched).toEqual([clip, clip])
+    // Separator-insensitive: the handler passes the decoded forward-slash
+    // path to fs (Windows accepts it), while `clip` is path.join-native —
+    // backslashes on win32. The recorder stays verbatim; the comparison
+    // normalizes. Caught by the v1.5.0 release run.
+    const fwd = (p: string): string => p.replace(/\\/g, '/')
+    expect(fsSpy.touched.map(fwd)).toEqual([clip, clip].map(fwd))
   })
 
   it('round-trips a filename with #, space and % through to the real file', async () => {

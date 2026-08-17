@@ -14,6 +14,32 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — the release runner catches platform-sensitive TESTS, again (v1.5.0)
+
+### Bug — two wave-era tests failed only on windows-latest
+- **Root cause.** Two test constructs that every linux run waves
+  through: (1) protocol.test.ts compared the no-file-access recorder's
+  verbatim paths (forward slashes — what the handler passes to fs)
+  against `path.join`-built expectations (backslashes on win32);
+  (2) autosaveCorruptInfo.test.ts slices AutosaveRestore.tsx between
+  multi-line indexOf markers containing bare \n — a CRLF checkout
+  (core.autocrlf) makes indexOf return -1 and the slice silently comes
+  out EMPTY, so `expect('').toContain(...)` was the failure, not the
+  product.
+- **Fix.** Separator-insensitive comparison at the assertion (the
+  recorder stays verbatim); LF-normalize the source at read time.
+- **Test.** The same two, now green on both platforms (linux locally;
+  win32 by the re-run release workflow).
+- **Lesson.** Third instance of the class (pathToFileURL drive
+  letters, filter availability, now separators + line endings): **a
+  test that touches paths, file contents, or platform binaries is
+  itself platform-sensitive code.** Structural tests that slice source
+  by multi-line markers must normalize line endings; path comparisons
+  must normalize separators. The release workflow's test steps remain
+  the only Windows execution — treat every red there as a gift.
+
+---
+
 ## 2026-08-17 — T-65 + T-71 + T-72: a rule that was only ever enforced where it was found
 
 Three bugs, one shape: a rule the app genuinely holds — square pixels,
