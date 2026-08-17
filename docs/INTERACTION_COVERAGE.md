@@ -1105,3 +1105,28 @@ end state, all in `tests/e2e/image.spec.ts` and
   the copy still renders when a search truly finds nothing.
 - **References - board delete toast:** "Deleted — press Ctrl+Z to
   undo." pinned verbatim.
+
+
+## Dispositions — round 43 (fix wave batch 17: T-62/67/70 + T-68/69)
+
+- **Image - studio hotkeys:** new negative end state — Delete/
+  Backspace/R/O/L/P/Ctrl+Z all inert behind an open dialog, and each
+  drives its real end state again after it closes ("T-68: every studio
+  hotkey is inert behind an open dialog, and works again after it
+  closes"; useUndoRedoHotkeys.test.ts "never fires while a Modal is
+  open"). Mechanism: Modal's module-level open counter, read at event
+  time; both halves mutation-proven (worker: consumer check; expediter:
+  the counter itself).
+- **Record - Refresh sources:** three new negatives — refresh into
+  empty (Start disabled + the T-41 card), refresh into a changed list
+  (selection moves to a LISTED source, Start enabled), refresh refused
+  (selection dropped, error named). "T-69: a refresh reconciles the
+  selection...".
+- **Test infrastructure:** tests/e2e/toastLog.ts is the one toast
+  reader ([data-rht-toaster] [role=status], element-identity dedupe) —
+  8 specs converted, 197 duplicated lines gone. drag.ts adoption is
+  complete across every mouse gesture. playwright.config.ts pins
+  workers: 1 (T-62 fallback branch; the config comment carries the
+  mechanism) — full suite 123/123 at ~4.4m, flake class removed.
+- Residue ticketed [T-72]: ? stacks the hotkey overlay over open
+  dialogs; Record's Escape-to-stop shape noted in the same ticket.

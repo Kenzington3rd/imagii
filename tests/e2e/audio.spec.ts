@@ -12,6 +12,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { dragTo } from './drag'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -129,31 +130,6 @@ function seedUserData(userDataDir: string, extra?: Record<string, unknown>): voi
     ),
     'utf8'
   )
-}
-
-/**
- * Record the text of every node react-hot-toast mounts. Toasts auto-dismiss,
- * so polling for one with a locator races the timer; a MutationObserver
- * installed before the action never misses one. (Same helper as export.spec.)
- */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
 }
 
 type DialogAction = 'accept' | 'dismiss'
@@ -329,6 +305,61 @@ function selectionRegion(window: Page) {
 }
 
 /**
+ * The box a gesture can be planned against: one that is a real number AND has
+ * stopped moving.
+ *
+ * T-62. Every coordinate of a synthetic drag is computed from one read of the
+ * surface, so the read is as load-bearing as the gesture — and a single read
+ * answers only for the instant it was taken. Two ways that goes wrong, both
+ * load-sensitive and both silent: the surface has not laid out yet (no box at
+ * all, or a zero width, which collapses `from` and `to` onto the same point),
+ * or a re-render is still settling and the surface moves out from under
+ * coordinates that were correct when they were read. Either way the press
+ * lands somewhere else, wavesurfer never opens a drag selection, and the
+ * failure arrives ten seconds later as the drag helper's `the drag never
+ * reached its extent (last read: NaN)` — naming the extent, which was never
+ * the problem. Two consecutive identical reads rules both out, as a
+ * condition and never a sleep: a surface that never lays out, or never stops
+ * moving, still fails, and fails saying which read never settled.
+ *
+ * What this does NOT explain, and what the round-39 flake turned out to be:
+ * the same `last read: NaN` still appears roughly one mixed 2-worker run in
+ * four, on whichever drag happens to be running, and an instrumented run
+ * proved the planning box was identical before and after settling every
+ * time. That leaves the crossing event in `tests/e2e/drag.ts`'s header at the
+ * earliest point of its window — between `mouse.down()` and the first move
+ * the page processes, before the selection region exists. Nothing is drawn
+ * yet, so no polled condition can wait it out and the helper is forbidden
+ * from re-sending the gesture. `--workers=1` (green 2/2 over these three
+ * specs) remains the documented fallback.
+ */
+async function settledBox(
+  target: ReturnType<Page['locator']>,
+  label: string
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  let previous = ''
+  await expect
+    .poll(
+      async () => {
+        const box = await target.boundingBox().catch(() => null)
+        if (!box || !(box.width > 0)) {
+          previous = ''
+          return false
+        }
+        const current = `${box.x},${box.y},${box.width},${box.height}`
+        const stable = current === previous
+        previous = current
+        return stable
+      },
+      { timeout: 15_000, message: `${label}: never settled on a box to gesture across` }
+    )
+    .toBe(true)
+  const box = await target.boundingBox()
+  if (!box) throw new Error(`${label}: settled, then gone`)
+  return box
+}
+
+/**
  * Make a cut the way the panel copy says one is made: ONE drag on the
  * waveform. WaveformView commits on the regions plugin's `region-created`,
  * which wavesurfer 7.12.6 emits from `saveRegion()` when the button comes up.
@@ -342,8 +373,7 @@ function selectionRegion(window: Page) {
  */
 async function dragCut(window: Page, fromFraction: number, toFraction: number): Promise<void> {
   const surface = window.locator(`${WAVEFORM} .card > div`).first()
-  const box = await surface.boundingBox()
-  if (!box) throw new Error('waveform surface has no box')
+  const box = await settledBox(surface, 'waveform surface')
   const y = box.y + box.height / 2
   const toX = box.x + box.width * toFraction
   await dragTo(

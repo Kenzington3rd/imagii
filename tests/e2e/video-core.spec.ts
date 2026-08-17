@@ -13,6 +13,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { dragThrough, dragTo } from './drag'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -186,27 +187,6 @@ async function dropOnVideoImporter(window: Page, filePath: string, fileName: str
     },
     { filePath, fileName }
   )
-}
-
-/** Record the text of every node react-hot-toast mounts (export.spec pattern). */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
 }
 
 /** Launch, walk to Video Studio, and import the fixture through the drop zone. */
@@ -1335,16 +1315,23 @@ test.describe('Video Studio core editing surface', () => {
       expect(await cropBox(window)).toEqual(beforeFree)
 
       // ── drag the rectangle ──
+      // T-62: through drag.ts. react-rnd writes the live translate into the
+      // element's own inline style, so the box `cropBox` reads IS the drawn
+      // state — the button comes up only once the move has fully landed.
       const beforeDrag = await cropBox(window)
       const dragBox = (await cropRect.boundingBox())!
-      await window.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2)
-      await window.mouse.down()
-      await window.mouse.move(
-        dragBox.x + dragBox.width / 2 - 40,
-        dragBox.y + dragBox.height / 2 - 8,
-        { steps: 8 }
+      await dragTo(
+        window,
+        { x: dragBox.x + dragBox.width / 2, y: dragBox.y + dragBox.height / 2 },
+        { x: dragBox.x + dragBox.width / 2 - 40, y: dragBox.y + dragBox.height / 2 - 8 },
+        {
+          extent: {
+            label: 'crop rect drag left 40px',
+            read: async () => (await cropBox(window)).x,
+            settled: (x) => x <= beforeDrag.x - 40 + 0.5
+          }
+        }
       )
-      await window.mouse.up()
       await expect.poll(async () => (await cropBox(window)).x).toBeCloseTo(beforeDrag.x - 40, 0)
       const afterDrag = await cropBox(window)
       expect(afterDrag.y).toBeCloseTo(beforeDrag.y - 8, 0)
@@ -1354,14 +1341,18 @@ test.describe('Video Studio core editing surface', () => {
       // ── resize from the bottom-right handle (aspect is unlocked) ──
       const handle = cropRect.locator('div[style*="se-resize"]')
       const handleBox = (await handle.boundingBox())!
-      await window.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
-      await window.mouse.down()
-      await window.mouse.move(
-        handleBox.x + handleBox.width / 2 + 24,
-        handleBox.y + handleBox.height / 2 + 12,
-        { steps: 8 }
+      await dragTo(
+        window,
+        { x: handleBox.x + handleBox.width / 2, y: handleBox.y + handleBox.height / 2 },
+        { x: handleBox.x + handleBox.width / 2 + 24, y: handleBox.y + handleBox.height / 2 + 12 },
+        {
+          extent: {
+            label: 'crop se-handle resize +24px',
+            read: async () => (await cropBox(window)).w,
+            settled: (w) => w >= afterDrag.w + 24 - 0.5
+          }
+        }
       )
-      await window.mouse.up()
       await expect.poll(async () => (await cropBox(window)).w).toBeCloseTo(afterDrag.w + 24, 0)
       const afterResize = await cropBox(window)
       expect(afterResize.h).toBeCloseTo(afterDrag.h + 12, 0)
@@ -1684,11 +1675,11 @@ test.describe('Video Studio core editing surface', () => {
       await expect(window.locator('header').getByText(/\.wav$/)).toBeVisible()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-06-clean-audio.png') })
 
-      // The route change replaces the page in one mutation, so the success
-      // toast can land inside a larger inserted subtree rather than as its
-      // own record — match on containment.
-      const toasts = await readToastLog(window)
-      expect(toasts.some((t) => t.includes('Opening Audio Studio'))).toBe(true)
+      // T-70: the recorder reads react-hot-toast's own `[role="status"]`
+      // node, so the toast is one entry of its own — the route change that
+      // inserts a whole studio's subtree around it no longer swallows it into
+      // a larger record, and this can be the exact sentence.
+      expect(await readToastLog(window)).toContain('Opening Audio Studio')
     } finally {
       await app.close()
     }

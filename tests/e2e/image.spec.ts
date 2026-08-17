@@ -16,7 +16,8 @@ import {
   CANVAS_TEMPLATES,
   type CanvasTemplate
 } from '../../src/renderer/src/modules/image-studio/templates'
-import { dragThrough } from './drag'
+import { dragThrough, dragTo } from './drag'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -227,27 +228,6 @@ function installDialogSpy(window: Page): DialogSpy {
     void (spy.action === 'accept' ? dialog.accept() : dialog.dismiss())
   })
   return spy
-}
-
-/** Record the text of every node react-hot-toast mounts (export.spec pattern). */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
 }
 
 interface Studio {
@@ -1088,13 +1068,24 @@ test.describe('Image Studio — selection', () => {
       await expect(field(window, 'y')).toHaveValue(String(Math.round(start.y)))
 
       // ── drag the shape: onDragEnd writes x/y through updateLayer ──
+      // T-62: through drag.ts, like every other gesture in this directory —
+      // Konva moves the node live, so `x` is the extent to wait for before
+      // the button comes up (see tests/e2e/drag.ts for the crossing-event
+      // race that makes the wait load-bearing).
       const g = await stageGeom(window)
       const from = await toScreen(window, { x: 450, y: 400 })
-      await window.mouse.move(from.x, from.y)
-      await window.mouse.down()
-      await window.mouse.move(from.x + 40 * g.scale, from.y + 30 * g.scale, { steps: 4 })
-      await window.mouse.move(from.x + 80 * g.scale, from.y + 60 * g.scale, { steps: 8 })
-      await window.mouse.up()
+      await dragTo(
+        window,
+        from,
+        { x: from.x + 80 * g.scale, y: from.y + 60 * g.scale },
+        {
+          extent: {
+            label: 'shape drag to +80,+60 doc px',
+            read: async () => (await lastShape(window)).x,
+            settled: (x) => x > start.x + 80 - MOUSE_TOL
+          }
+        }
+      )
       await expect
         .poll(async () => (await lastShape(window)).x, { timeout: 10_000 })
         .toBeGreaterThan(start.x + 70)
@@ -1105,13 +1096,22 @@ test.describe('Image Studio — selection', () => {
       await expect(field(window, 'y')).toHaveValue(String(Math.round(dragged.y)))
 
       // ── drag a corner anchor: onTransformEnd writes scale + position ──
+      // The Transformer scales the node while the button is down, so the
+      // scale IS the drawn state this drag waits on (T-62).
       const before = await lastShape(window)
       const anchor = await anchorPoint(window, 'bottom-right')
-      await window.mouse.move(anchor.x, anchor.y)
-      await window.mouse.down()
-      await window.mouse.move(anchor.x + 30 * g.scale, anchor.y + 20 * g.scale, { steps: 4 })
-      await window.mouse.move(anchor.x + 60 * g.scale, anchor.y + 40 * g.scale, { steps: 8 })
-      await window.mouse.up()
+      await dragTo(
+        window,
+        anchor,
+        { x: anchor.x + 60 * g.scale, y: anchor.y + 40 * g.scale },
+        {
+          extent: {
+            label: 'bottom-right anchor drag',
+            read: async () => (await lastShape(window)).scaleX,
+            settled: (scaleX) => scaleX > before.scaleX + 0.1
+          }
+        }
+      )
       await expect
         .poll(async () => (await lastShape(window)).scaleX, { timeout: 10_000 })
         .toBeGreaterThan(before.scaleX + 0.1)
@@ -1181,6 +1181,70 @@ test.describe('Image Studio — selection', () => {
       await closeStudio(studio)
     }
   })
+
+  test('T-68: every studio hotkey is inert behind an open dialog, and works again after it closes', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('modal-hotkeys')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await dragOnStage(window, { x: 200, y: 200 }, { x: 400, y: 350 })
+      await dragOnStage(window, { x: 500, y: 200 }, { x: 700, y: 350 })
+      await toolbar.getByRole('button', { name: 'Select' }).click()
+      await expectLayerCount(window, 3)
+      await window.locator(LAYERS).getByText('Rectangle', { exact: true }).first().click()
+      await expect(propsCard(window)).toBeVisible()
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      const names = await layerNames(window)
+
+      // The Variants dialog, over a canvas with a selected layer behind it.
+      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await expect(dialog).toBeVisible()
+
+      // ── the destructive one: Delete and Backspace reach the layer behind
+      //    the scrim on the old build, and the user's only clue is a row
+      //    that has vanished by the time they close the dialog. ──
+      await window.keyboard.press('Delete')
+      await expectLayerCount(window, 3)
+      await window.keyboard.press('Backspace')
+      await expectLayerCount(window, 3)
+      expect(await layerNames(window)).toEqual(names)
+
+      // ── the tool switches: R/O/L/P retarget the canvas underneath ──
+      for (const key of ['r', 'o', 'l', 'p']) {
+        await window.keyboard.press(key)
+        await expect(window.getByText('Tool: Select')).toBeVisible()
+      }
+
+      // ── the shared undo hook is the same hole (useUndoRedoHotkeys guards
+      //    INPUT/TEXTAREA only), so Ctrl+Z used to roll the document back
+      //    while the dialog that was rendered FROM that document stayed up. ──
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, 3)
+      expect(await layerNames(window)).toEqual(names)
+
+      // ── and the dialog itself is unharmed: its own keys still work ──
+      await expect(dialog).toBeVisible()
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+
+      // ── with the dialog gone every binding is live again. The fix is
+      //    "not while a Modal is open", not "hotkeys off". ──
+      await window.keyboard.press('r')
+      await expect(window.getByText('Tool: Rectangle')).toBeVisible()
+      await toolbar.getByRole('button', { name: 'Select' }).click()
+      await window.locator(LAYERS).getByText('Rectangle', { exact: true }).first().click()
+      await window.keyboard.press('Delete')
+      await expectLayerCount(window, 2)
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, 3)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
 })
 
 test.describe('Image Studio — layer panel', () => {
@@ -1225,10 +1289,10 @@ test.describe('Image Studio — layer panel', () => {
         .toBe(false)
       const g = await stageGeom(window)
       const grab = await toScreen(window, { x: 300, y: 275 })
-      await window.mouse.move(grab.x, grab.y)
-      await window.mouse.down()
-      await window.mouse.move(grab.x + 60 * g.scale, grab.y + 40 * g.scale, { steps: 6 })
-      await window.mouse.up()
+      // T-62: through drag.ts, with no `extent` — a gesture that must commit
+      // NOTHING has no drawn state to wait for, which is exactly the case
+      // drag.ts documents as the one legitimate omission.
+      await dragTo(window, grab, { x: grab.x + 60 * g.scale, y: grab.y + 40 * g.scale })
       const afterLock = (await stageShapes(window))[1]
       expect(afterLock?.x).toBe(beforeLock?.x)
       expect(afterLock?.y).toBe(beforeLock?.y)
@@ -1258,9 +1322,18 @@ test.describe('Image Studio — layer panel', () => {
         'Text'
       ])
       await expect(field(window, 'Name')).toHaveValue('Rectangle copy')
+      // The +20 offset is the app's own arithmetic, so it is exact against the
+      // layer it was copied from. The nominal 220 is not: the source rect's
+      // own coordinate came out of a DRAG, so it carries MOUSE_TOL like every
+      // other gesture-derived expectation in this file. T-62 —
+      // `toBeCloseTo(220, 0)` (< 0.5 doc px) was deterministically red at
+      // 1600x1200, where one screen pixel is ~1.3 doc px at the fit zoom.
+      const source = (await stageShapes(window))[1]
       const copy = await lastShape(window)
-      expect(copy.x).toBeCloseTo(220, 0)
-      expect(copy.y).toBeCloseTo(220, 0)
+      expect(copy.x).toBeCloseTo((source?.x ?? 0) + 20, 5)
+      expect(copy.y).toBeCloseTo((source?.y ?? 0) + 20, 5)
+      expectNear(copy.x, 220, 'duplicate x')
+      expectNear(copy.y, 220, 'duplicate y')
 
       // ── delete: no confirm dialog (the documented design), row gone ──
       await layerRow(window, 'Rectangle copy').getByRole('button', { name: 'Delete layer' }).click()

@@ -52,8 +52,10 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1055 tests across 62 files (T-49 added three dead-copy /
-watermark-persistence pins to `tests/unit/interactionWiring.test.ts`).
+**Count.** 1070 tests across 62 files (T-68 added the "never fires
+while a Modal is open" case to `useUndoRedoHotkeys.test.ts`; T-67
+rewrote `tempCleanup.test.ts`'s per-family case to cover every family
+the function scans).
 Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
@@ -108,6 +110,41 @@ the E2E layer lives behind `npm run test:e2e:build` for release smoke
 **Adding an E2E case.** Drop `*.spec.ts` into `tests/e2e/`. Keep the
 launch hermetic (`os.tmpdir()` userDataDir + cleanup in a `finally`)
 so concurrent runs don't collide.
+
+**Two shared helpers, and the rule for each** (the specs are not
+typechecked by `npm run verify` — `tsconfig.*.json` cover `src/` only —
+so these conventions are held by review and by the suite itself):
+
+- **Every synthetic mouse gesture goes through `tests/e2e/drag.ts`**
+  (`dragTo` / `dragThrough`), never raw `mouse.down` + `mouse.move` +
+  `mouse.up`. The helper's header explains the crossing-event race it
+  closes; what a caller owes it is the `extent` — a read of what the
+  app DRAWS while the button is down (the region's right edge, the
+  node's `x`, the rnd box's width) and the value it has to reach. A
+  gesture that must commit NOTHING is the one legitimate omission. Any
+  coordinate the gesture is planned from is polled until it is a real
+  number first: a box read before the surface lays out plans the whole
+  drag against nothing and fails ten seconds later as `last read: NaN`
+  (T-62).
+- **Toasts are recorded, never polled for**, via
+  `tests/e2e/toastLog.ts` (`installToastLog` before the action,
+  `readToastLog` at the assertion). It records
+  `[data-rht-toaster] [role="status"]` — react-hot-toast's own message
+  node inside its own container — so the log holds toasts and nothing
+  else. The wide version this replaced logged every element mounted
+  under `<body>`, which meant a route change logged a studio's entire
+  panel copy as one entry and `toContain` / `toEqual([])` assertions
+  were quietly answering questions about the page (T-70).
+
+**A unit test that asserts an exact count over a shared tmpdir clears
+every family the function scans, not just the ones it writes to.**
+`tempCleanup.test.ts` cleared `imagii-audio` and `imagii-concat` while
+`pruneStaleTempFiles` also scanned `imagii-import`, so `npm run
+test:media` (whose linux mpegts pin can crash a convert child
+mid-write) followed by `npm test` failed on a test that had nothing to
+do with either. The list is derived from the function's own
+`TEMP_SUBDIRS` now, so a family added later is isolated on the same
+commit (T-67).
 
 ---
 

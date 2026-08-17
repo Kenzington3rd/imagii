@@ -12,6 +12,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
+import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -262,27 +263,6 @@ async function stubDialogs(
 /** The system clipboard, read from the main process (see header). */
 function systemClipboard(app: ElectronApplication): Promise<string> {
   return app.evaluate(({ clipboard }) => clipboard.readText())
-}
-
-/** Record the text of every node react-hot-toast mounts (export.spec pattern). */
-async function installToastLog(window: Page): Promise<void> {
-  await window.evaluate(() => {
-    const log: string[] = []
-    ;(window as unknown as { __toastLog: string[] }).__toastLog = log
-    new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach((node) => {
-          if (node.nodeType !== 1) return
-          const text = (node as HTMLElement).textContent ?? ''
-          if (text.trim()) log.push(text.trim())
-        })
-      }
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-}
-
-function readToastLog(window: Page): Promise<string[]> {
-  return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
 }
 
 /** Wait until some toast text contains `needle`, then return the whole log. */
