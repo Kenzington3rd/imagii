@@ -14,6 +14,116 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-59 + T-60 + T-57: three ways to lie about a failure
+
+One batch, three failures in main-process error handling. They are
+different bugs with one family resemblance: in each, the code knew
+something had gone wrong and the user did not.
+
+### Bug — a crashed convert kept the wreckage and reported in ffmpeg
+- **Root cause.** T-44 taught `promoteTempWebm` to tell a deliberate
+  cancel from a crash, and then fixed only the cancel: the crash branch
+  was a bare `throw err`. So a real ffmpeg failure left the half-written
+  .mp4 sitting at the name the user picked in the save dialog — killed
+  long before the moov atom, openable by nothing — and rejected the IPC
+  with ffmpeg's own sentence, which Electron wrapped and the renderer
+  toasted whole: `Error invoking remote method 'recording:finalize':
+  Error: convert-to-mp4 exit 1: <stderr tail>`. The reaping and the
+  cancel were coupled for no reason other than the order the tickets
+  were written in; ffmpeg leaves the same unplayable stub either way.
+- **Fix.** The unlink moved above the branch, so both outcomes reap.
+  `ConvertFailedError` now carries the exit code and signal as fields
+  (T-44's argument, applied one level down: a caller that has to explain
+  the failure should not be parsing ffmpeg's message back out of a
+  string), `recordingConvertFailureMessage` turns those fields into the
+  studio's own sentence — naming the failure, the take, and the one
+  checkbox that gets the user a file anyway — and `console.error` keeps
+  the real detail in main for the bug report. On the renderer side
+  `src/shared/ipcError.ts` strips Electron's invoke envelope, so no
+  catch that toasts a rejected `window.api.*` call can leak it again.
+- **Test.** `src/main/ipc/recordingCancel.test.ts` — the round-32 pin
+  ("crash still strands its partial output") flipped from `toBe(true)`
+  to `toBe(false)`, plus the crash/discard discrimination in one test
+  and four cases on the copy; `src/shared/ipcError.test.ts` (13);
+  `tests/e2e/record.spec.ts` "a convert that really crashes says so in
+  plain words and leaves nothing behind" — a real ffmpeg failure, the
+  friendly copy asserted present and the envelope, the ffmpeg
+  vocabulary and the calm discard copy all asserted absent.
+- **Lesson.** When a fix splits a path in two, the half you did not come
+  for is now a branch someone deliberately wrote. Whatever the old code
+  did on that side is not "unchanged", it is endorsed — so it has to be
+  read as a decision and defended as one, or it inherits the bug the
+  ticket was about.
+
+### Bug — "Discard recording" killed an unrelated import
+- **Root cause.** `convert.ts` held one global slot. Whichever child
+  spawned last owned it, so `cancelActiveConvert()` — the recorder's
+  Discard button, and before-quit — SIGKILLed whatever happened to be in
+  there. A user who dropped an flv on the importer and then discarded a
+  take killed the import; the take's own convert ran happily on. The
+  same slot made the first of two concurrent converts uncancellable: its
+  registration was overwritten, so nothing could reach it, before-quit
+  included. Both are the same mistake — the registry recorded "a
+  convert" where the callers needed "whose convert".
+- **Fix.** One entry per in-flight child, each carrying the owner
+  (`'recording' | 'import'`) that cancellation keys on;
+  `cancelConverts(owner)` for the buttons, `cancelAllConverts()` for
+  before-quit, whose contract genuinely is everything. The entry is the
+  job's handle, so a child that finishes clears its own registration
+  instead of the whole slot. Per-job semantics from T-44 are untouched:
+  the cancelled flag is still set before the kill, and each job still
+  rejects with its own `ConvertCancelledError`.
+- **Test.** `tests/integration/media.spec.ts` "discarding a recording
+  leaves a concurrent import transcode running to completion" — two real
+  encodes, one cancel, ffprobe on the survivor (Layer 5, because a fake
+  child cannot prove which process the SIGKILL reached);
+  `src/main/ffmpeg/convertCancel.test.ts` grew 10 -> 18 (scoping both
+  directions, two jobs under one owner, cancelAll, and a finished
+  convert no longer clearing someone else's entry).
+- **Lesson.** A single-slot registry is a bet that two of the thing can
+  never be in flight at once. The bet is invisible at the spawn site and
+  is lost by a feature added a year later in another file — here, the
+  round-20 change that pointed the importer at the recorder's
+  converter. If a cancel button exists, the registry has to know whose
+  work it is cancelling, not just that some work exists.
+
+### Bug — an autosave that failed to clear said nothing, then said the wrong thing
+- **Root cause.** Two halves. `clearAutosave` wrapped every `unlink` in
+  `try {} catch { /* ignore */ }`, so a locked or read-only file
+  resolved as success: "Autosave discarded.", banner gone, and the same
+  autosave back on the next launch with nothing said. And
+  `AutosaveRestore.discard()` had no `catch` at all, so on the days the
+  call did reject the promise went unhandled — no toast, the banner in
+  an ambiguous state, and (since T-33 made the corruption banner
+  renderable) a Clear button users can actually reach doing nothing
+  visible.
+- **Fix.** `clearAutosave` checks whether each file is actually gone and
+  throws naming the survivors — the check is `existsSync` rather than
+  the errno, because a file that vanished underneath us is the outcome
+  the caller wanted. `discard()` catches, toasts
+  `Couldn't clear the autosave: <reason>. It's still on disk — close
+  anything using it and try again.`, and dismisses nothing: the file is
+  still there, so the banner and its button stay. Clear gained
+  `disabled={busy}` to match Discard. The dead `lastRoute` settings key
+  went out with it (declared in three places, read by none since T-47
+  started restoring the route from the snapshot's `place` record).
+- **Test.** `src/main/autosave.test.ts` (clearAutosave reports the file
+  it could not delete, and names which one — driven by putting a
+  directory in the file's place, which unlink refuses on every OS and
+  for root too); `tests/e2e/home-chrome.spec.ts` "a clear that fails
+  says so and leaves the banner and the file alone" — the refusal and
+  then the same button succeeding, in one launch, so the two copies are
+  read side by side; `tests/unit/interactionWiring.test.ts` for the
+  catch and the busy gate; `settingsKnownKeys.test.ts` pins `lastRoute`
+  deleted.
+- **Lesson.** `catch { /* ignore */ }` on a delete is a promise that the
+  delete does not matter. It did: it is the whole content of the button
+  the user pressed. Swallowing at the bottom and no handler at the top
+  is the same bug twice — the failure has to be raised where it is
+  known and answered where the user is standing.
+
+---
+
 ## 2026-08-16 — T-30: one outage, two different stories
 
 ### Bug — a first-hop search failure leaked raw IPC text

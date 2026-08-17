@@ -78,13 +78,15 @@ const __dirname = path.dirname(__filename)
  *      route — including after a mid-session trip to Home.
  *   E. "Discard recording" reported as a crash and stranded a broken file.
  *      FIXED 2026-08-15 by T-44, and this spec's discard test is now the
- *      positive: cancelActiveConvert marks the child as user-cancelled, so
- *      convertToMp4 rejects with ConvertCancelledError instead of an exit
- *      -signal error, promoteTempWebm reaps the half-written .mp4 at the
- *      user's chosen path, and finalize resolves null — the same "nothing
- *      was saved" answer the cancelled save dialog gives, which the
- *      renderer already renders as the calm "Recording discarded."
- *      A real convert failure still rejects with its error text.
+ *      positive: cancelConverts('recording') marks the child as
+ *      user-cancelled, so convertToMp4 rejects with
+ *      ConvertCancelledError instead of an exit-signal error,
+ *      promoteTempWebm reaps the half-written .mp4 at the user's chosen
+ *      path, and finalize resolves null — the same "nothing was saved"
+ *      answer the cancelled save dialog gives, which the renderer already
+ *      renders as the calm "Recording discarded." A real convert failure
+ *      still rejects; since T-59 it reaps its partial too and rejects in
+ *      the studio's own words, driven by the crash test below.
  *   D. Visiting /record writes to config.json with no user action. The
  *      corner-persist effect has no "did the user touch it" guard, so
  *      mounting the route stamps `record.webcamCorner: "bottom-right"`
@@ -1121,6 +1123,73 @@ test.describe('T-27 Record Studio', () => {
       // Nothing was pushed to recents, and the partial webm is gone.
       expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
       expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a convert that really crashes says so in plain words and leaves nothing behind', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('convertcrash')
+    const userDataDir = path.join(root, 'userData')
+    // A folder that does not exist. ffmpeg cannot open the output, exits
+    // non-zero, and the crash branch runs for real — no fault injection, no
+    // mocked convert: the same rejection a corrupt take or a full disk
+    // produces. (The half-written-file half of T-59 is driven at the unit
+    // layer, in src/main/ipc/recordingCancel.test.ts, where the convert can
+    // be made to write bytes and THEN fail.)
+    const outPath = path.join(root, 'nope', 'crashed.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      // MP4 stays ticked — the convert is the thing under test.
+      await expect(window.getByRole('checkbox').nth(2)).toBeChecked()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // T-59: the studio's own sentence. It names what failed, what happened
+      // to the take, and the setting that gets the user a file anyway.
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), {
+          timeout: 90_000,
+          intervals: [200]
+        })
+        .toContain('Converting the recording to MP4 failed')
+
+      const toasts = (await readToastLog(window)).join(' | ')
+      expect(toasts).toContain('Nothing was saved')
+      expect(toasts).toContain('Convert to MP4 after recording')
+      // None of what used to arrive instead: Electron's invoke envelope
+      // wrapped around ffmpeg's own vocabulary.
+      expect(toasts).not.toMatch(/Error invoking remote method/)
+      expect(toasts).not.toMatch(/convert-to-mp4 exit/)
+      expect(toasts).not.toMatch(/libx264|yuv420p|movflags|No such file or directory/)
+      // And it is a failure, not the calm discard — those two must never
+      // read alike (T-44's copy is the contrast).
+      expect(toasts).not.toContain('Recording discarded.')
+      expect(toasts).not.toMatch(/Saved \d/)
+
+      // Back to idle with nothing left over: no file at the chosen path, no
+      // streaming temp, nothing in recents.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
+        timeout: 60_000
+      })
+      expect(existsSync(outPath)).toBe(false)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+      expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
     } finally {
       await app.close()
       cleanup(root)

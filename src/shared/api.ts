@@ -28,7 +28,6 @@ import type { CustomPreset } from './customPresets'
 
 export type SettingsKey =
   | 'theme'
-  | 'lastRoute'
   | 'welcomeSeen'
   | 'tutorialSeen.video'
   | 'tutorialSeen.audio'

@@ -3,7 +3,12 @@ import { writeFile, mkdir, unlink } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
-import { convertToMp4, cancelActiveConvert, ConvertCancelledError } from '../ffmpeg/convert'
+import {
+  convertToMp4,
+  cancelConverts,
+  ConvertCancelledError,
+  ConvertFailedError
+} from '../ffmpeg/convert'
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
@@ -92,6 +97,30 @@ export function abandonAllRecordingStreams(): void {
 }
 
 /**
+ * T-59: what the user is told when the convert crashes. Everything ffmpeg
+ * says about itself — the argv, the stderr tail, the words "convert-to-mp4"
+ * — is main-process detail; what crosses the IPC is the studio's own
+ * sentence, naming what failed, what happened to the take, and the one
+ * setting that gets them a file anyway ("Convert to MP4 after recording" in
+ * the Record panel). The exit code rides along because it is the one piece
+ * of ffmpeg vocabulary worth a bug report.
+ */
+export function recordingConvertFailureMessage(err: unknown): string {
+  const detail =
+    err instanceof ConvertFailedError
+      ? err.code !== null
+        ? ` (ffmpeg exit code ${err.code})`
+        : err.signal !== null
+          ? ` (ffmpeg stopped on ${err.signal})`
+          : ''
+      : ''
+  return (
+    `Converting the recording to MP4 failed${detail}. Nothing was saved — ` +
+    'try again, or untick "Convert to MP4 after recording" to keep the WebM.'
+  )
+}
+
+/**
  * Shared tail of both save paths: given a fully-written temp .webm, show
  * the save dialog, convert/copy to the chosen location, and reap the temp
  * file no matter which branch ran. Extracted verbatim from the legacy
@@ -123,7 +152,7 @@ async function promoteTempWebm(
     const outputPath = result.filePath
     if (spec.convertToMp4) {
       try {
-        await convertToMp4(tempPath, outputPath, (info) => {
+        await convertToMp4('recording', tempPath, outputPath, (info) => {
           win.webContents.send('recording:progress', info)
         })
       } catch (err) {
@@ -136,15 +165,23 @@ async function promoteTempWebm(
         // was saved" null the cancelled save dialog returns, which the
         // renderer already renders as the calm "Recording discarded."
         // Everything else is a real failure and still throws.
-        if (err instanceof ConvertCancelledError) {
-          try {
-            await unlink(outputPath)
-          } catch {
-            /* never created, or already gone */
-          }
-          return null
+        //
+        // T-59: and a crash is not a reason to keep the wreckage. ffmpeg
+        // dies with the same half-written mp4 at the same chosen path
+        // whether we asked it to stop or not — unplayable either way — so
+        // the reaping is common to both branches. What differs is the
+        // answer: a crash still fails, in a sentence the user can act on.
+        // The raw exit code and stderr stay in the main-process log, where
+        // a bug report can find them; the toast gets the plain-language
+        // version (raw IPC text reaching the user is the T-30 disease).
+        try {
+          await unlink(outputPath)
+        } catch {
+          /* never created, or already gone */
         }
-        throw err
+        if (err instanceof ConvertCancelledError) return null
+        console.error('[recording] convert failed:', err)
+        throw new Error(recordingConvertFailureMessage(err))
       }
     } else {
       const fs = await import('node:fs/promises')
@@ -174,9 +211,10 @@ async function promoteTempWebm(
 
 // M6 fix (round 15) / round 20: the conversion child lives in
 // ffmpeg/convert.ts now (generalized so imported flv/ts/wmv containers
-// use the same transcode). Cancellation semantics are unchanged:
-// single-slot, killable by the renderer's "Discard recording" and by
-// app-level before-quit cleanup.
+// use the same transcode). T-60: cancellation is keyed on the owner that
+// started the convert, so "Discard recording" reaches the recording's own
+// child and never an import transcode. before-quit still takes them all
+// (cancelAllConverts, wired in main/index.ts).
 
 export type RecordingProgressListener = (info: {
   percent: number
@@ -184,11 +222,12 @@ export type RecordingProgressListener = (info: {
 }) => void
 
 /**
- * Abort the in-flight conversion child if any. Returns true when there
- * was something to cancel.
+ * Abort the recording's in-flight conversion child if any. Returns true
+ * when there was something to cancel. Scoped to the recording (T-60): an
+ * import transcode running at the same time is not this button's business.
  */
 export function cancelRecordingConvert(): boolean {
-  return cancelActiveConvert()
+  return cancelConverts('recording')
 }
 
 export function registerRecordingIpc(): void {
