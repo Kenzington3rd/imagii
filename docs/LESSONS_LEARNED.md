@@ -14,6 +14,152 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-17 — T-56 + T-61 + T-63 + T-66: the layer on top must not eat the gesture, the number, or the sentence
+
+Four small UI residues across three studios, and three of them are the
+same shape: something drawn or handled ON TOP of a surface quietly took
+what belonged to the surface underneath. A decoration took the pointer
+(T-61), a container key handler took the key (T-63), a stale message
+took the answer (T-66). The fourth is the reason the other three lived
+so long unseen: what nothing can measure, nothing corrects (T-56).
+
+### Bug (T-61) — a cut drag that started on an existing cut did nothing
+
+- **Root cause.** wavesurfer 7.12's `Region.initMouseEvents` calls
+  `makeDraggable(element)` unconditionally — `drag: false` /
+  `resize: false` only make `onMove`/`onResize` no-ops, they do not
+  stop the listener being attached. That draggable's document-level
+  `pointermove` handler calls `preventDefault()` the moment the
+  threshold is crossed, and `enableDragSelection`'s handler — added
+  later, on the wrapper, so it runs second — opens with
+  `if (t.defaultPrevented) return`. Press on a stored cut and the new
+  drag was consumed by a region that had nothing to do with it: no
+  selection, no chip, no error. The exact gesture a user makes to widen
+  a cut, answered with silence.
+- **Fix.** Stored cuts are marks, not controls — they are removed
+  through their chips — so the mark is now pointer-transparent:
+  `region.element.style.pointerEvents = 'none'` at `addRegion`. No
+  pointerdown on the region, no draggable, and the gesture is an
+  ordinary drag selection wherever it starts. The behavior chosen is
+  "creates its own cut", not "extends the one under the press": that is
+  what a drag already does everywhere else on the waveform (a drag that
+  ENDS inside a cut has always got its own chip), and the panel copy
+  promises one drag, one region.
+- **Test.** `tests/e2e/audio.spec.ts` — "waveform drag makes cut
+  regions, and cut chips remove them" now drags 70% -> 95% starting
+  squarely inside the 60%..80% cut and asserts a fourth chip whose
+  start is inside that cut and whose end runs past it, plus
+  `pointer-events: none` on the mark itself. The T-36 "starts in the
+  gap" workaround note is retired. Red: the drag helper timed out with
+  `the drag never reached its extent (last read: NaN)` — the selection
+  region never existed.
+- **Lesson.** Look for the listener, not the flag. A library that
+  offers `drag: false` has told you what its region will DO, not what
+  it will LISTEN to; the two are different questions and only the
+  source answers the second. And the general rule this repo keeps
+  re-learning: anything drawn over an interactive surface has to be
+  `pointer-events: none` unless it is itself a control. The Timeline's
+  clip range and playhead already carry that comment.
+
+### Bug (T-63) — Space on a focused crop preset went to the transport
+
+- **Root cause.** The Player's key handler sits on the column that
+  holds the crop row, the picture and the transport, and exempted only
+  `INPUT`/`TEXTAREA`. A `<button>` is neither, so Space on a focused
+  crop preset reached `togglePlay()` — and its `e.preventDefault()`
+  then suppressed the button's OWN activation on keyup. The ticket
+  described this as "activates the button AND toggles playback"; the
+  red run showed worse. The preset never applied at all: the class
+  stayed `bg-bg-hover`, the video started rolling, and the only thing
+  the keypress did was the thing it was not aimed at.
+- **Fix.** `if (tag === 'BUTTON' && e.key === ' ') return`. Per-key,
+  not per-element: Space is how a keyboard user clicks a button, so the
+  button owns it — while `,`, `.`, the arrows and I/O mean nothing to a
+  button and stay available from anywhere in the column, which is what
+  makes them feel global inside the player. Scoping the whole handler
+  to `e.target === e.currentTarget` would have been fewer characters
+  and would have cost the user those four bindings after any click.
+- **Test.** `tests/e2e/video-core.spec.ts` — "player transport" focuses
+  the 1:1 preset, presses Space, and asserts the preset applied, the
+  video stayed paused and the playhead did not move, then presses
+  ArrowRight from that same focused button and asserts the nudge still
+  lands. The pre-existing Space-from-the-column coverage above it is
+  untouched.
+- **Lesson.** A key handler on a container is a claim over every key of
+  every control inside it. Exempt by what the focused control does with
+  THAT key, not by what kind of element it is — and remember that
+  `preventDefault()` on keydown reaches forward into the activation the
+  browser was going to perform on keyup, so a container handler that
+  fires on a control does not merely double up, it can replace.
+
+### Bug (T-66) — "No results." printed underneath a failure notice
+
+- **Root cause.** The panel's two conditions were written for two
+  states that were once far apart: an amber notice for "the search
+  could not run", and "No results." for `results.length === 0`. A
+  notice response also carries zero results, so both rendered — and
+  since T-30 routed the first-hop failure through the notice too, that
+  pair is the COMMON failure view: an outage message with "the search
+  ran and found nothing" printed under it.
+- **Fix.** One condition — `&& !response.notice`. The delete toast in
+  MoodBoardPanel got the other half of this ticket: reversible since
+  T-58, so it says so ("Deleted — press Ctrl+Z to undo."). No other
+  studio advertises undo in a toast, so this is the pattern to copy,
+  not to diverge from.
+- **Test.** `tests/e2e/references.spec.ts` — the notice test asserts
+  "No results." is absent in both notice phases, and a new phase 4
+  stubs `search:images` in MAIN to answer the way DuckDuckGo answers a
+  query with no hits (a normal response, zero results, no notice) and
+  asserts the copy IS there — without it, deleting the branch outright
+  would have passed. The delete-toast pin now carries the exact
+  sentence.
+- **Lesson.** Two conditions written for two states are one bug the
+  moment a third state satisfies both. When a new failure path is
+  routed into an existing view (T-30 did exactly that), re-read every
+  other condition on that screen — the new route is what makes an
+  impossible pair common.
+
+### Bug (T-56) — a raw palette color and a duration that stopped early
+
+- **Root cause, colors.** The Timeline playhead was `bg-pink-400` and
+  the waveform's cut regions were `rgba(244, 63, 94, 0.35)` +
+  `bg-rose-500/20` — raw Tailwind palette values, two lines under a
+  `tokens.ts` import in one case. Round 19 rethemed the app around them
+  because nothing could see them: `designTokensInSync` compares the two
+  token FILES, and a color that is in neither file is invisible to it.
+  They are now `bg-ember` (a token that existed in `tokens.ts` and was
+  missing from `tailwind.config.js` because only JS had needed it) and
+  `withAlpha(ACCENT, …)`.
+- **Root cause, duration.** The Timeline's coordinate space was
+  `probe.duration`. ffprobe reports the container's rounded number and
+  the decoder has the real one — 2.000 vs 2.020136 on the fixture — so
+  the track's right edge sat ~20 ms short of the end of the file and
+  the last frames were unreachable by click, by drag and by End. T-52
+  fixed exactly this for the Player's own nudge and the Timeline kept
+  the old ceiling.
+- **Fix.** The Player publishes the element's duration on
+  `durationchange`; `playableDuration(source, mediaDuration)` is the
+  one function the track, the `aria-valuemax`, the transport readout
+  and `requestSeek`'s clamp all read. Non-finite and non-positive
+  values (NaN before metadata, Infinity for a live stream) land as
+  null, and a new source clears it.
+- **Test.** `designTokensInSync.test.ts` gained the ember pair, the
+  playhead's contrast on both the track and the clip-range fill, and
+  `withAlpha`'s exact output + its refusals. `videoStore.test.ts` pins
+  `playableDuration`, what the element is allowed to publish, and that
+  a position past the probe but inside the element is NOT clamped (the
+  T-47 restore parks the playhead through that same channel). E2E: the
+  keyboard-scrubber pin now asserts `aria-valuemax` and End land on the
+  element's duration, and the scrub test clicks the far end of the
+  track and asserts the playhead lands PAST the probe duration.
+- **Lesson.** A checker that compares two files cannot see a value that
+  is in neither. That is not an argument against the checker — it is
+  the reason a color has to be in the table at all, and why "it is a
+  Tailwind class so it must be fine" is the exact shape of the mistake.
+  The duration half is the same lesson in numbers: ffprobe describes
+  the container, the decoder plays the file, and every surface that
+  claims to reach "the end" has to be built on the second one.
+
 ## 2026-08-17 — T-49 + T-41 + T-43: a control is a promise, in both directions
 
 One entry for three tickets, because they are one lesson seen from

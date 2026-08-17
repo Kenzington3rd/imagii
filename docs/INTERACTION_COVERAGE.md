@@ -1080,3 +1080,28 @@ end state, all in `tests/e2e/image.spec.ts` and
   on-disk write on change, Home round trip, relaunch restore, re-tick
   two-way. Expediter mutation: restore inverted -> exactly that test
   red.
+
+
+## Dispositions — round 42 (fix wave batch 16: T-56 + T-61 + T-63 + T-66)
+
+- **Video - Timeline playhead:** locator class bg-pink-400 -> bg-ember
+  (token; WCAG numbers in the round-42 Done entry). Track space
+  reaches the element's duration: aria-valuemax and End read the live
+  element; the right-edge POINTER path is a drag (expediter-corrected:
+  the strip right of the trim-end handle is sub-pixel at narrow
+  geometries and the handle owns clicks by design — the drag carries
+  under it, expectation derived from real boxes).
+- **Video - Player Space handling:** BUTTON owns Space (activation
+  now actually works — pre-fix the container's preventDefault
+  suppressed the keyup activation entirely); arrows/,/./I/O stay
+  global in the column, asserted from a focused button.
+- **Audio - waveform cuts:** a drag STARTING inside a cut commits its
+  own cut (pointer-events: none on stored cut marks — wavesurfer
+  attaches makeDraggable unconditionally and its preventDefault
+  starved the selection handler); the T-36 "starts in the gap"
+  workaround retired; cut marks assert the accent fill.
+- **References - search:** "No results." never renders under a notice
+  (both notice phases), and a NEW empty-but-successful phase proves
+  the copy still renders when a search truly finds nothing.
+- **References - board delete toast:** "Deleted — press Ctrl+Z to
+  undo." pinned verbatim.

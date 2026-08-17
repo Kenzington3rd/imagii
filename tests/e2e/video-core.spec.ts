@@ -349,7 +349,7 @@ async function trackPointAt(window: Page, ratio: number): Promise<{ x: number; y
  */
 async function playheadPercent(window: Page): Promise<number> {
   const style = await window
-    .locator('[data-tutorial="video-timeline"] .bg-pink-400')
+    .locator('[data-tutorial="video-timeline"] .bg-ember')
     .getAttribute('style')
   const match = /calc\(([\d.]+)%/.exec(style ?? '')
   if (!match) throw new Error(`timeline playhead has no percentage: ${String(style)}`)
@@ -597,7 +597,7 @@ test.describe('Video Studio core editing surface', () => {
 
       // The playhead reached the STORE: Timeline draws it from currentTime.
       const playheadLeft = await window
-        .locator('[data-tutorial="video-timeline"] .bg-pink-400')
+        .locator('[data-tutorial="video-timeline"] .bg-ember')
         .getAttribute('style')
       const pct = Number(/calc\(([\d.]+)%/.exec(playheadLeft ?? '')?.[1] ?? '0')
       expect(pct).toBeGreaterThan(5)
@@ -615,6 +615,34 @@ test.describe('Video Studio core editing surface', () => {
       await expect
         .poll(async () => (await videoState(window)).paused, { timeout: 10_000 })
         .toBe(true)
+
+      // ── T-63: Space on a focused BUTTON belongs to the button ──
+      // The transport shortcuts live on the column, and the crop row sits
+      // inside it, so a Space aimed at a crop preset used to reach the
+      // transport as well — activating the preset AND toggling playback from
+      // one keypress. The other shortcuts are not button keys and stay
+      // available from anywhere in the column (asserted below).
+      const cropRow = window.locator('[data-tutorial="video-crop"]')
+      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      const preset = cropRow.getByRole('button', { name: '1:1', exact: true })
+      await expect(preset).not.toHaveClass(/bg-accent/)
+      const beforeSpace = (await videoState(window)).t
+      await preset.focus()
+      await window.keyboard.press('Space')
+      // The button did what a keyboard user asked it to…
+      await expect(preset).toHaveClass(/bg-accent/)
+      // …and the transport did not move. `play()` clears `paused`
+      // synchronously, so this cannot pass by being read too early.
+      const afterSpace = await videoState(window)
+      expect(afterSpace.paused, 'Space on a focused button must not start playback').toBe(true)
+      expect(
+        Math.abs(afterSpace.t - beforeSpace),
+        'Space on a focused button must not move the playhead'
+      ).toBeLessThan(SEEK_TOLERANCE)
+      // The non-button keys still reach the transport from inside the row.
+      await window.keyboard.press('ArrowRight')
+      await expectScrubbedTo(window, beforeSpace + 0.1, 'ArrowRight from a focused crop preset')
+      await window.getByRole('checkbox', { name: 'Crop' }).uncheck()
 
       // ── safe zones ──
       const guides = window.locator('[data-tutorial="video-player"] svg > g > text')
@@ -676,7 +704,7 @@ test.describe('Video Studio core editing surface', () => {
         '0:01.5'
       )
       const playheadLeft = await window
-        .locator('[data-tutorial="video-timeline"] .bg-pink-400')
+        .locator('[data-tutorial="video-timeline"] .bg-ember')
         .getAttribute('style')
       const pct = Number(/calc\(([\d.]+)%/.exec(playheadLeft ?? '')?.[1] ?? '0')
       expect(pct).toBeGreaterThan(70)
@@ -921,6 +949,38 @@ test.describe('Video Studio core editing surface', () => {
       expect(clickedPct, 'playhead after a 25% click').toBeLessThan(26)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-03b-scrub.png') })
 
+      // ── T-56: the far end of the track is the end of the FILE ──
+      // The track used to be scaled to ffprobe's rounded 2.000 s while the
+      // decoder has 2.020136 s, so a click at the right-hand edge landed on
+      // the probe's number and the last frames could not be reached by
+      // pointer at all. 99.9% of the track is past the probe duration only if
+      // the track is scaled to the element's.
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS + 0.005)
+      const { dur } = await seekableRanges(window)
+      // Expediter fix (round 42): a CLICK at the track's right edge is not a
+      // reliable pointer path to the file's end — the trim-end handle (16 px,
+      // drag priority by design) sits at probe/element = ~99% and its overhang
+      // covers the last strip entirely at narrow geometries (measured: handle
+      // right edge 895.5 on an 896 track — a sub-pixel strip). The honest
+      // pointer gesture is a DRAG: it starts on the scrub surface left of the
+      // handle, and the window-level move carries it under and past the
+      // handle to the edge, where positionToSeconds clamps the ratio. Derive
+      // the expectation from the real boxes, never a magic ratio.
+      const trackBox = (await timelineTrack(window).boundingBox())!
+      const edgeX = trackBox.x + trackBox.width - 1
+      const edgeRatio = (edgeX - trackBox.x) / trackBox.width
+      const edgePoint = { x: edgeX, y: trackBox.y + trackBox.height / 2 }
+      await dragThrough(window, await trackPointAt(window, 0.9), [edgePoint], async () =>
+        expectScrubbedTo(window, dur * edgeRatio, 'drag to the right edge of the track')
+      )
+      const edgeLanded = await settledTime(window)
+      expect(
+        edgeLanded,
+        `a drag to the end of the track landed at ${edgeLanded}s, short of the file's end`
+      ).toBeGreaterThan(FIXTURE_SECONDS)
+
       // ── drag: one gesture, three positions, each landing under the cursor ──
       // One mouse round trip per position, and each position is confirmed
       // before the next move (and before the release) — see tests/e2e/drag.ts.
@@ -998,8 +1058,28 @@ test.describe('Video Studio core editing surface', () => {
     try {
       const slider = window.getByRole('slider', { name: 'Playhead' })
       await expect(slider).toHaveAttribute('aria-valuemin', '0')
-      await expect(slider).toHaveAttribute('aria-valuemax', String(FIXTURE_SECONDS))
       await expect(slider).toHaveAttribute('aria-valuenow', '0')
+
+      // T-56: the track's coordinate space is the MEDIA ELEMENT's duration,
+      // not ffprobe's rounded one. The fixture probes 2.000 s and decodes
+      // 2.020136 s, so the right edge of the track used to sit ~20 ms short of
+      // the end of the file and the last frames were unreachable from here —
+      // the T-52 tail pin, extended from the Player's nudge to the track.
+      // Polled for the same reason that pin polls: Chromium reports the
+      // container's rounded duration at metadata time and refines it to the
+      // decoder's once it has parsed the file (a second `durationchange`).
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, {
+          timeout: 20_000,
+          message: 'the fixture must expose the probe/element duration gap this pin exists for'
+        })
+        .toBeGreaterThan(FIXTURE_SECONDS + 0.005)
+      const { dur } = await seekableRanges(window)
+      const maxLabel = String(Number(dur.toFixed(2)))
+      expect(Number(maxLabel), 'the track must reach PAST the probe duration').toBeGreaterThan(
+        FIXTURE_SECONDS
+      )
+      await expect(slider).toHaveAttribute('aria-valuemax', maxLabel)
 
       await slider.focus()
       await window.keyboard.press('ArrowRight')
@@ -1009,9 +1089,13 @@ test.describe('Video Studio core editing surface', () => {
       await window.keyboard.press('ArrowLeft')
       await expectScrubbedTo(window, 0.1, 'ArrowLeft from 0.2')
 
+      // End goes to the end of the FILE, not to where ffprobe rounded it: the
+      // landing is past the probe duration, which is the frames T-56 gave back.
       await window.keyboard.press('End')
-      await expectScrubbedTo(window, FIXTURE_SECONDS, 'End')
-      await expect(slider).toHaveAttribute('aria-valuenow', String(FIXTURE_SECONDS))
+      await expectScrubbedTo(window, dur, 'End')
+      const endLanded = await settledTime(window)
+      expect(endLanded, `End landed at ${endLanded}s`).toBeGreaterThan(FIXTURE_SECONDS)
+      await expect(slider).toHaveAttribute('aria-valuenow', maxLabel)
       await window.keyboard.press('Home')
       await expectScrubbedTo(window, 0, 'Home')
       // The value a screen reader announces tracks the playhead it describes.

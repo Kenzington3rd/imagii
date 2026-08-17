@@ -112,6 +112,29 @@ async function launchApp(
   })
 }
 
+/**
+ * Make `search:images` answer the way DuckDuckGo answers a query it has
+ * nothing for: a normal response, zero results, NO notice
+ * (`duckduckgo.test.ts` — "returns an empty result set with no notice when
+ * DuckDuckGo has no hits" — pins that the parser really produces this).
+ *
+ * It is the one response shape that should print "No results.", and it needs
+ * a live provider with a genuinely empty index to reach for real. Replacing
+ * the handler in MAIN is the same technique record.spec.ts uses for the
+ * zero-sources branch: only the upstream answer is synthetic — the invoke,
+ * the store write and everything the panel renders are real.
+ */
+async function stubEmptySearchResults(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async ({ ipcMain }) => {
+    ipcMain.removeHandler('search:images')
+    ipcMain.handle('search:images', (_e, query: unknown) => ({
+      query: typeof query === 'string' ? query : '',
+      provider: 'duckduckgo',
+      results: []
+    }))
+  })
+}
+
 async function openReferences(window: Page): Promise<void> {
   await window.waitForLoadState('domcontentloaded')
   await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
@@ -174,6 +197,8 @@ function readBoardsFromDisk(boardsDir: string): MoodBoardCollection[] {
 
 /** Locators shared by several tests. */
 const searchPlaceholder = 'Search for inspiration'
+/** MoodBoardPanel's delete toast, verbatim — it names the undo path (T-66). */
+const DELETED_TOAST = 'Deleted — press Ctrl+Z to undo.'
 const boardsHeading = /^Boards \(\d+\)$/
 
 function moodBoardTab(window: Page) {
@@ -351,7 +376,7 @@ test.describe('imagii References studio', () => {
         'Alpha board',
         'Beta board'
       ])
-      expect(await readToastLog(window)).not.toContain('Deleted')
+      expect(await readToastLog(window)).not.toContain(DELETED_TOAST)
 
       // ── delete, accepted ──
       dialogs.length = 0
@@ -369,7 +394,10 @@ test.describe('imagii References studio', () => {
       await expect
         .poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name))
         .toEqual(['Beta board'])
-      await expect.poll(() => readToastLog(window)).toContain('Deleted')
+      // T-66: the delete is reversible (T-58 gave this studio real undo), so
+      // the toast says how — the header's Undo button is not where anyone is
+      // looking at the moment a board disappears.
+      await expect.poll(() => readToastLog(window)).toContain(DELETED_TOAST)
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
@@ -905,6 +933,11 @@ test.describe('imagii References studio', () => {
       expect(text).toMatch(/^DuckDuckGo search failed: net::ERR_[A-Z0-9_]+$/)
       // …and nothing rejected, so the raw-IPC card never appears.
       await expect(errorCard).toHaveCount(0)
+      // T-66: the notice IS the answer. "No results." underneath it said the
+      // search ran and found nothing — the opposite of what happened, and
+      // since T-30 routed the first hop here too this is the common failure
+      // view, not a corner of one.
+      await expect(window.getByText('No results.')).toHaveCount(0)
       // No grid: a failed search returns no results to draw.
       await expect(window.locator('img[referrerpolicy="no-referrer"]')).toHaveCount(0)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-05-search-error.png') })
@@ -919,6 +952,19 @@ test.describe('imagii References studio', () => {
       expect((await noticeCard.innerText()).trim()).toBe(
         'DuckDuckGo search failed: net::ERR_PROXY_CONNECTION_FAILED'
       )
+      // Still one message, not two (T-66) — a re-run lands on the same view.
+      await expect(window.getByText('No results.')).toHaveCount(0)
+
+      // ── phase 4: the search RAN and found nothing — the one state that
+      // does print "No results." (T-66) ──
+      // Without this the notice assertions above would pass just as happily
+      // against a panel that had lost the copy altogether.
+      await stubEmptySearchResults(app)
+      await input.fill('a query nothing matches')
+      await input.press('Enter')
+      await expect(window.getByText('No results.')).toBeVisible()
+      await expect(noticeCard).toHaveCount(0)
+      await expect(errorCard).toHaveCount(0)
     } finally {
       killProxy()
       await app.close()

@@ -75,7 +75,11 @@ export function MoodBoardPanel(): JSX.Element {
     const ok = confirm(`Delete "${collection.name}" and all ${collection.items.length} item(s)?`)
     if (!ok) return
     await deleteCollection(collection.id)
-    toast.success('Deleted')
+    // T-66: reversible since T-58, and the toast is the only place the user is
+    // looking when it happens. The header's Undo button says the same thing,
+    // but a board that just vanished is exactly when nobody is reading a
+    // toolbar.
+    toast.success('Deleted — press Ctrl+Z to undo.')
   }
 
   return (

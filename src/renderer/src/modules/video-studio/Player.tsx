@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { computeCropBox, type CropBox } from '@shared/safeZone'
-import { useVideoStore } from './store/videoStore'
+import { playableDuration, useVideoStore } from './store/videoStore'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
@@ -90,6 +90,8 @@ interface PlayerProps {
 export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const setCurrentTime = useVideoStore((s) => s.setCurrentTime)
+  const setMediaDuration = useVideoStore((s) => s.setMediaDuration)
+  const playable = useVideoStore((s) => playableDuration(s.source, s.mediaDuration))
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
   const [frameEl, setFrameEl] = useState<HTMLDivElement | null>(null)
@@ -173,7 +175,11 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   if (!source) return null
 
   const fps = source.probe.fps > 0 ? source.probe.fps : 30
-  const duration = source.probe.duration
+  // The readout says what the transport can reach, so it is the same number
+  // the Timeline's track is scaled to (T-56): the element's own duration once
+  // it has published one, the probe's until then. A readout that topped out
+  // 20 ms below where the playhead can go is the same lie in words.
+  const duration = playable
 
   function togglePlay(): void {
     const v = videoRef.current
@@ -220,7 +226,16 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
     const tag = (e.target as HTMLElement).tagName
+    // A control that owns the key gets it, and the studio shortcut stands
+    // down. Text fields own every key. A BUTTON owns Space and only Space:
+    // Space is how a keyboard user clicks one, so a Space that reached the
+    // transport from a focused crop preset both moved the video and (with
+    // `preventDefault` below) fought the button's own activation (T-63) —
+    // while `,`, `.`, the arrows and I/O carry no meaning for a button and
+    // stay available from anywhere in the column, which is what makes them
+    // feel global inside the player.
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    if (tag === 'BUTTON' && e.key === ' ') return
     switch (e.key) {
       case ' ':
         e.preventDefault()
@@ -277,6 +292,12 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
           ref={attachVideo}
           src={source.url}
           className="max-h-[60vh] w-auto"
+          // T-56: the decoder is the only thing that knows how long the file
+          // really is. Chromium reports the container's rounded duration at
+          // metadata time and refines it once it has parsed the file, firing
+          // this again — so the Timeline's coordinate space follows the
+          // refinement instead of freezing on the probe's number.
+          onDurationChange={(e) => setMediaDuration(e.currentTarget.duration)}
           onTimeUpdate={(e) => {
             const t = e.currentTarget.currentTime
             setTime(t)

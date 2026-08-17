@@ -1053,7 +1053,7 @@ IMG-PREC.
         designTokensInSync check stays green.
   - [ ] Track space (click, drag, End, aria-valuemax) reaches the
         element's duration; the T-52 tail pin extended to the track.
-- **Status:** open
+- **Status:** done (round 42 — see Done)
 
 ## T-64 — the tutorial coachmark is aria-modal but traps no focus
 
@@ -1081,7 +1081,7 @@ IMG-PREC.
   the button (exempt BUTTON, or scope the handler); E2E asserts no
   playback toggle; existing Space-toggles-playback coverage still
   green.
-- **Status:** open
+- **Status:** done (round 42 — see Done)
 
 ## T-61 — a cut drag that starts on top of an existing cut does nothing
 
@@ -1096,6 +1096,23 @@ IMG-PREC.
   creates its own cut (or visibly extends — pick the behavior a user
   expects and say why); E2E asserts it; the T-36 overlap test's
   "starts in the gap" workaround note is retired.
+- **Status:** done (round 42 — see Done)
+
+## T-71 — no semantic color tier: rose/amber/emerald raw palette classes repo-wide
+
+- **Spec:** T-56 worker finding. There is no danger/warn/ok token
+  tier, so text-rose-300, bg-rose-500, bg-amber-300, bg-emerald-400,
+  border-amber-400/40 carry those meanings across ~12 files
+  (VolumeMeter, SuccessIndicator, ReferencePanel notice + error cards,
+  most delete buttons). Same disease as T-56's playhead, larger scope.
+  Rider: hand-copied alpha literals of real tokens are now mechanical
+  with withAlpha — Canvas.tsx:87,98 (INK_MUTED@0.18),
+  canvasStore.ts:259,281; templates.ts/assetCatalog.ts are arguably
+  document content, decide and document.
+- **Acceptance criteria:** danger/warn/ok tokens added to both files
+  + the sync test, WCAG AA shown per pairing; all semantic palette
+  classes migrated with locators updated; withAlpha adopted for the
+  alpha literals; owner screenshot review flagged (visual deltas).
 - **Status:** open
 
 ## T-69 — a stale source selection keeps Start enabled after a refresh into nothing
@@ -1160,7 +1177,7 @@ IMG-PREC.
 - **Acceptance criteria:** no "No results." while a notice is shown
   (both asserted); delete toast names the undo path; copy per
   BRANDING_GUIDE.
-- **Status:** open
+- **Status:** done (round 42 — see Done)
 
 ## T-65 — auto-cropped exports carry a non-square SAR (anamorphic by ~0.25%)
 
@@ -1225,6 +1242,49 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 42 — fix wave batch 16: T-56 + T-61 + T-63 + T-66 (UI residues).
+T-56: the playhead is bg-ember — EMBER already IS the Audio Studio's
+playhead (wavesurfer cursor), so one mark now has one color in both
+timed studios; 9.99:1 on the bare track, 7.35:1 over the clip fill
+(accent rejected: the range/handles are accent and the old pink sat
+at 1.38:1 where the handles paint over the marker). The two waveform
+rgba literals route through a new tokens.ts withAlpha helper — the
+drag fill was ACCENT@0.25 exactly (byte-identical output); the cut
+fill goes rose->accent DELIBERATELY, chips moved with it (the chip is
+the legend for the mark) — owner screenshot review flagged. Track
+space: the Player publishes the element duration on durationchange;
+playableDuration feeds the track, aria-valuemax, the transport
+readout, and requestSeek's clamp, so the readout can no longer say
+0:02.00 while the playhead sits at 2.02. T-61: wavesurfer attaches
+makeDraggable to every region unconditionally (drag:false only gates
+onMove) and its preventDefault starves enableDragSelection — stored
+cuts are marks, not controls, so pointer-events: none on the cut
+elements kills the interception at the root; a drag starting inside a
+cut now creates its own cut (extend-under-press would make one
+gesture mean two things). T-63: the bug was WORSE than ticketed — the
+container's preventDefault also suppressed Chromium's keyup button
+activation, so Space on a focused preset applied nothing and only
+started playback. Per-key exemption (BUTTON owns Space; arrows/,/.
+stay global in the column — target-scoping would have silently cost
+those four bindings after any click). T-66: one condition kills "No
+results." under a notice, with a NEW empty-but-successful-search
+phase (main-stub) so deleting the branch outright cannot pass;
+delete toast: "Deleted — press Ctrl+Z to undo." Red-green on all
+pins; worker mutations per ticket; EXPEDITER CORRECTION: the batch's
+new right-edge-click test was geometry-fragile — at the runner's
+1280 screen the strip right of the trim-end handle is sub-pixel
+(measured 895.5 on an 896 track; resizing wider is clamped by
+windowSizing), so the click landed on the handle, which has drag
+priority BY DESIGN. Rewritten as the honest pointer gesture: a drag
+that starts on the scrub surface and carries under the handle to the
+edge, expectation derived from the real boxes — 19/19 + 121/121
+after. Expediter mutation: playableDuration ignoring the element ->
+3 named units + the keyboard-scrubber E2E red, restore, green.
+Gates: 1069 unit / 121 E2E. Findings: T-71 filed (semantic color
+tier, repo-wide); clip ranges still clamp to probe (deliberate,
+export path untouched); the T-47 restore-park probe-clamp residual
+bounded under SEEK_TOLERANCE and unit-pinned.
 
 Round 41 — fix wave batch 15: T-49 + T-41 + T-43 (the persistence/
 honesty trio; one shared lesson — a control is a promise in both

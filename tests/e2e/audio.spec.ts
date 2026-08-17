@@ -608,11 +608,16 @@ test.describe('imagii Audio Studio', () => {
       expect(end).toBeGreaterThan(1.1)
       expect(end).toBeLessThan(1.4)
       // The selection region is gone and the store-driven cut region replaced
-      // it — rose fill, not the drag-selection red.
+      // it. Both fills are the ACCENT token now (T-56 — the stored one was a
+      // raw rose-500 rgba literal, a palette color that was never in
+      // tokens.ts at all); the committed cut is the heavier of the two.
       await expect(selectionRegion(window)).toHaveCount(0)
       const cutRegion = window.locator(`${WAVEFORM} [part~="cut-0"]`)
       await expect(cutRegion).toHaveCount(1)
-      await expect(cutRegion).toHaveCSS('background-color', 'rgba(244, 63, 94, 0.35)')
+      await expect(cutRegion).toHaveCSS('background-color', 'rgba(255, 49, 49, 0.35)')
+      // A stored cut is a mark, not a control: it never swallows a pointer
+      // (T-61 — see the drag that starts on top of one, below).
+      await expect(cutRegion).toHaveCSS('pointer-events', 'none')
       await expect(
         window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
       ).toHaveCount(0)
@@ -631,9 +636,9 @@ test.describe('imagii Audio Studio', () => {
       // `addRegion`, which emits the same `region-created` the commit listens
       // to; without the id guard in WaveformView each re-render would add the
       // whole list again and these counts would run away.
-      // (It starts in the 40%..60% gap on purpose: a drag that BEGINS on top
-      // of an existing cut region never reaches wavesurfer's drag-selection —
-      // the region's own draggable preventDefaults the pointermove first.)
+      // (Until T-61 this drag had to START in the 40%..60% gap: a gesture that
+      // BEGAN on top of an existing cut never reached wavesurfer's
+      // drag-selection at all. The next block is that gesture.)
       await dragCut(window, 0.45, 0.65)
       await expect(cutChips(window)).toHaveCount(3)
       await expect(window.locator(`${WAVEFORM} [part~="cut-2"]`)).toHaveCount(1)
@@ -651,6 +656,38 @@ test.describe('imagii Audio Studio', () => {
         await expect(window.locator(`${WAVEFORM} [part~="${id}"]`)).toHaveCount(1)
       }
       await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-02-cuts.png') })
+
+      // ── a drag that STARTS on top of an existing cut makes its own cut ──
+      // T-61: the gesture a user makes to widen a cut. It used to do nothing
+      // at all — every stored region got its own `makeDraggable` even at
+      // drag:false/resize:false, and that handler `preventDefault`s the
+      // document-level pointermove before `enableDragSelection`'s handler sees
+      // it, which bails on `defaultPrevented`. Silence, on the one gesture
+      // most likely to be tried twice.
+      //
+      // It creates a new cut rather than extending the one under the press:
+      // that is what the drag does everywhere else on this waveform (the third
+      // drag above ENDS inside a cut and gets its own chip), and the panel
+      // copy promises one drag, one region to cut. The audio chain takes
+      // overlapping regions already.
+      const inside = 0.7 // squarely inside the 60%..80% cut
+      await dragCut(window, inside, 0.95)
+      await expect(cutChips(window)).toHaveCount(4)
+      await expect(window.locator(`${WAVEFORM} [part~="cut-3"]`)).toHaveCount(1)
+      const [fourthStart, fourthEnd] = parseTimestampPair(
+        (await cutChips(window).nth(3).textContent()) ?? ''
+      )
+      // The press really landed inside the existing 60%..80% cut…
+      expect(fourthStart).toBeGreaterThan(FIXTURE_SECONDS * 0.6)
+      expect(fourthStart).toBeLessThan(FIXTURE_SECONDS * 0.8)
+      // …and the new cut runs out past its far edge, which is the whole point
+      // of the gesture.
+      expect(fourthEnd).toBeGreaterThan(FIXTURE_SECONDS * 0.8)
+      await expect(window.locator(`${WAVEFORM} [part^="region "]`)).toHaveCount(4)
+      await expect(selectionRegion(window)).toHaveCount(0)
+      // Back to three so the removal block below reads as it always has.
+      await cutChips(window).nth(3).click()
+      await expect(cutChips(window)).toHaveCount(3)
 
       // ── chip removal ──
       await cutChips(window).first().click()

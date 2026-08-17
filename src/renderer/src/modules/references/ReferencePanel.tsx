@@ -76,7 +76,11 @@ export function ReferencePanel(): JSX.Element {
         </div>
       ) : null}
 
-      {response && response.results.length === 0 && !loading ? (
+      {/* "No results." is the answer to a search that RAN. A response carrying
+          a notice is a search that could not run — since T-30 that is the
+          common failure view, because a first-hop outage lands here too — and
+          printing both said the search worked and found nothing (T-66). */}
+      {response && response.results.length === 0 && !response.notice && !loading ? (
         <p className="text-sm text-ink-dim">No results.</p>
       ) : null}
 
