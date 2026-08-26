@@ -123,7 +123,8 @@ export async function deleteCollection(id: string): Promise<void> {
     // look like the delete never happened — a board that comes back with
     // dead thumbnail paths does not. Reaping them here made that impossible,
     // so the reap moved to `sweepOrphanThumbs()` at startup, past the point
-    // any undo can reach; the LRU in `pruneThumbCache` is the second net.
+    // any undo can reach — the one pass that can tell an orphan from a
+    // picture still in use.
     // These files live in `cache/thumbs` and re-derive from `item.thumbnail`,
     // which is what makes deferring them safe and deleting them eagerly not.
     await unlink(file)
@@ -311,46 +312,33 @@ export async function sweepOrphanThumbs(): Promise<number> {
 }
 
 /**
- * Reclaim thumbnail-cache disk, oldest file first.
+ * Empty the thumbnail cache — every file, whatever its size or age.
  *
- * Two callers, two intents, and T-29 was the gap between them:
+ * The one caller is the "Clear thumbnail cache" button
+ * (`moodboard:clearThumbs`). T-29 made the button honest: it used to invoke
+ * a 500 MB LRU trim, so for every user whose cache was under the budget —
+ * essentially every user — it deleted nothing while the toast said the cache
+ * was cleared.
  *
- *   - `maxBytes > 0` (the default) is the AUTOMATIC path — an LRU trim that
- *     keeps the cache under a budget and deletes nothing while it already
- *     is. `main/index.ts` runs it once per launch, right after the orphan
- *     sweep. Nothing else ever ran it, which is why a cache under 500 MB
- *     grew forever.
- *   - `maxBytes === 0` is "empty it", what the "Clear thumbnail cache"
- *     button asks for via `moodboard:clearThumbs`. It was wired to the
- *     budgeted call, so for every user whose cache was under 500 MB — that
- *     is, essentially every user — the button deleted nothing while the
- *     toast said the cache was cleared.
+ * T-79 removed the budget itself. The LRU's only automatic caller was launch,
+ * chained behind `sweepOrphanThumbs`, and by then every orphan is already
+ * gone: the only files left for a budget to reclaim are ones a board still
+ * refers to. A size cap that can only delete user data is not a cap worth
+ * having, so this is a clear and nothing else. What keeps the cache honest is
+ * the sweep, which deletes by REFERENCE rather than by size.
  *
- * A budget of 0 is deliberately NOT the same as "trim until the total is 0":
- * a zero-byte file (a truncated write) fits under any budget and would have
- * survived the clear. Both guards below test the budget itself so the empty
- * case never falls out of the size arithmetic.
+ * Deliberately not expressed as size arithmetic ("trim until the total is
+ * 0"): a zero-byte file — a truncated write — is under every threshold and
+ * would survive a clear written that way.
  */
-export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<void> {
+export async function clearThumbCache(): Promise<void> {
   const dir = thumbsCacheDir()
   if (!existsSync(dir)) return
-  const files = await readdir(dir)
-  const stats = await Promise.all(
-    files.map(async (f) => {
-      const info = await stat(path.join(dir, f))
-      return { file: f, mtime: info.mtimeMs, size: info.size }
-    })
-  )
-  let total = stats.reduce((acc, s) => acc + s.size, 0)
-  if (maxBytes > 0 && total <= maxBytes) return
-  stats.sort((a, b) => a.mtime - b.mtime)
-  for (const s of stats) {
-    if (maxBytes > 0 && total <= maxBytes) break
+  for (const f of await readdir(dir)) {
     try {
-      await unlink(path.join(dir, s.file))
-      total -= s.size
+      await unlink(path.join(dir, f))
     } catch {
-      /* ignore */
+      /* gone, or not ours to remove */
     }
   }
 }

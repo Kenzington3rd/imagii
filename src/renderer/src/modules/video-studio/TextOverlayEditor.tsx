@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useVideoStore } from './store/videoStore'
+import { handleGestureEndPointerUp, useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
 
 const FONT_OPTIONS = ['Arial', 'Impact', 'Verdana', 'Georgia', 'Courier New', 'Comic Sans MS']
@@ -39,7 +39,15 @@ export function TextOverlayEditor(): JSX.Element | null {
     // caption and later retyping its colour were one undo step. Leaving a
     // field (focusout) or releasing a control ends that edit; both bubble, so
     // one pair here covers every input in every overlay row.
-    <div className="card p-4 flex flex-col gap-3" onPointerUp={endGesture} onBlur={endGesture}>
+    // T-80: a click INSIDE the caption or a number field being edited bubbles
+    // that same pointerup — `handleGestureEndPointerUp` lets it through, so
+    // moving the caret mid-caption no longer starts a new undo step. Leaving
+    // the field still ends the edit.
+    <div
+      className="card p-4 flex flex-col gap-3"
+      onPointerUp={handleGestureEndPointerUp}
+      onBlur={endGesture}
+    >
       <PanelHeader
         icon="text"
         actions={

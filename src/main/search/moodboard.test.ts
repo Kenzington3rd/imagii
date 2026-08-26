@@ -280,13 +280,17 @@ describe('sweepOrphanThumbs — the reap moved to a point undo cannot reach', ()
 })
 
 /**
- * T-29 — the two intents behind one function. `pruneThumbCache(0)` is what
- * the "Clear thumbnail cache" button asks for (`moodboard:clearThumbs`); the
- * default 500 MB budget is the LRU trim that runs at launch. Wiring the
- * button to the budgeted call is exactly the defect: under the cap it
- * deleted nothing while the toast claimed the cache was cleared.
+ * T-29 — the "Clear thumbnail cache" button (`moodboard:clearThumbs`) empties
+ * the directory. It used to call the same function with a 500 MB budget, an
+ * LRU trim, so under the cap it deleted nothing while the toast claimed the
+ * cache was cleared.
+ *
+ * T-79 — and the budget is gone entirely. Its only automatic caller ran at
+ * launch, behind `sweepOrphanThumbs`, where every file left is one a board
+ * refers to: a size cap there can only delete pictures the user still wants.
+ * What survives is the clear, and it deletes by ASKING, not by arithmetic.
  */
-describe('pruneThumbCache — clear vs trim (T-29)', () => {
+describe('clearThumbCache — the button empties it, whatever it holds (T-29, T-79)', () => {
   /** Seed `name` with `size` bytes and an mtime of `age` seconds ago. */
   function seedSized(name: string, size: number, ageSec: number): string {
     mkdirSync(thumbsDir(), { recursive: true })
@@ -301,7 +305,7 @@ describe('pruneThumbCache — clear vs trim (T-29)', () => {
     return readdirSync(thumbsDir()).sort()
   }
 
-  it('a budget of 0 empties the directory', async () => {
+  it('empties the directory, including a zero-byte file', async () => {
     const m = await import('./moodboard')
     seedSized('a.jpg', 1024, 30)
     seedSized('b.jpg', 2048, 20)
@@ -309,35 +313,38 @@ describe('pruneThumbCache — clear vs trim (T-29)', () => {
     // written as "trim to 0 bytes" would leave behind.
     seedSized('truncated.jpg', 0, 10)
 
-    await m.pruneThumbCache(0)
+    await m.clearThumbCache()
 
     expect(cached()).toEqual([])
   })
 
-  it('the default budget deletes nothing when the cache is under it', async () => {
+  it('takes a tiny cache too — there is no threshold left to be under', async () => {
     const m = await import('./moodboard')
+    // 2 KB: a quarter of a million times under the budget the old wiring
+    // measured the button by, and so the exact case that did nothing.
     seedSized('small-a.jpg', 1024, 30)
     seedSized('small-b.jpg', 1024, 20)
 
-    await m.pruneThumbCache()
+    await m.clearThumbCache()
 
-    expect(cached()).toEqual(['small-a.jpg', 'small-b.jpg'])
+    expect(cached()).toEqual([])
   })
 
-  it('over the budget it drops oldest first and stops as soon as it fits', async () => {
+  it('leaves the boards alone — it frees pictures, not references', async () => {
     const m = await import('./moodboard')
-    seedSized('oldest.jpg', 4096, 300)
-    seedSized('middle.jpg', 4096, 200)
-    seedSized('newest.jpg', 4096, 100)
+    const thumb = seedThumb('referenced.jpg')
+    seedBoard(withThumb('keeper', 'Keeper', thumb))
 
-    // Room for two of the three.
-    await m.pruneThumbCache(9000)
+    await m.clearThumbCache()
 
-    expect(cached()).toEqual(['middle.jpg', 'newest.jpg'])
+    expect(cached()).toEqual([])
+    // The board file and its item survive with the path still on them: the
+    // tile falls back to `item.thumbnail` and re-downloads (T-79).
+    expect(boardOnDisk('keeper')?.items[0]?.cachedThumbPath).toBe(thumb)
   })
 
   it('does nothing when there is no cache directory yet', async () => {
     const m = await import('./moodboard')
-    await expect(m.pruneThumbCache(0)).resolves.toBeUndefined()
+    await expect(m.clearThumbCache()).resolves.toBeUndefined()
   })
 })

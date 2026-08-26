@@ -1,4 +1,4 @@
-import { useVideoStore } from './store/videoStore'
+import { handleGestureEndPointerUp, useVideoStore } from './store/videoStore'
 import { ClipKitButton } from './ClipKitButton'
 import { HookIndicator } from './HookIndicator'
 import { Icon } from '../../components/Icon'
@@ -30,7 +30,15 @@ export function ClipList(): JSX.Element {
     // stream from the next one. pointerup and focusout bubble, so one pair
     // here closes the window for the slider, its Reset button and every
     // rename input in the list.
-    <div className="card p-4 flex flex-col gap-3" onPointerUp={endGesture} onBlur={endGesture}>
+    // T-80: every pointerup — including the click that moves the caret inside
+    // a rename field mid-edit. `handleGestureEndPointerUp` lets that one
+    // through; a text field's gesture ends on blur, which is the other half
+    // of this pair.
+    <div
+      className="card p-4 flex flex-col gap-3"
+      onPointerUp={handleGestureEndPointerUp}
+      onBlur={endGesture}
+    >
       <PanelHeader
         icon="film"
         actions={

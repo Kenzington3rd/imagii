@@ -12,7 +12,7 @@ import {
   removeFromCollection,
   renameCollection,
   restoreCollections,
-  pruneThumbCache
+  clearThumbCache
 } from '../search/moodboard'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '../../shared/search'
 import { validateSearchResult } from '../../shared/search'
@@ -141,9 +141,8 @@ export function registerSearchIpc(): void {
     }
     return restoreCollections(collections as MoodBoardCollection[])
   })
-  // T-29: a budget of zero — the button says "Clear thumbnail cache" and now
-  // means it. The 500 MB LRU is the automatic path and runs at launch
-  // (main/index.ts); no renderer-supplied budget crosses the bridge, so
-  // there is nothing here to validate.
-  ipcMain.handle('moodboard:clearThumbs', () => pruneThumbCache(0))
+  // T-29: the button says "Clear thumbnail cache" and now means it. T-79
+  // retired the budgeted trim it used to call, so there is one operation
+  // left and no argument at all — nothing crosses the bridge to validate.
+  ipcMain.handle('moodboard:clearThumbs', () => clearThumbCache())
 }

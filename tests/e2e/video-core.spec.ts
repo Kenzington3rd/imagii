@@ -1276,6 +1276,61 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  /**
+   * T-80 — clicking inside the field you are typing in is not the end of the
+   * edit.
+   *
+   * T-40 put `onPointerUp={endGesture}` on the panel so a slider release
+   * closes the coalescing window. Every pointerup in the panel bubbles to it,
+   * including the plain click a user makes to move the caret mid-word — so
+   * one rename split into as many undo steps as the user clicked, and the
+   * first Undo took back only the tail of it. For text entry the documented
+   * gesture end is blur, and blur alone.
+   */
+  test('clip list: a caret click mid-rename keeps the edit one undo step (T-80)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('caret')
+    try {
+      const clipCard = clipListCard(window)
+      const field = clipCard.locator('li').first().getByRole('textbox')
+      const undoButton = window.getByRole('button', { name: 'Undo' })
+
+      // Importing a source resets history, so the rename below is the only
+      // step there will ever be — which is what makes "one Undo" exact.
+      await expect(undoButton).toBeDisabled()
+      await expect(field).toHaveValue('Clip 1')
+
+      // ── type the first half ──
+      await field.click()
+      await field.press('Control+a')
+      await field.pressSequentially('HOOK')
+      await expect(field).toHaveValue('HOOK')
+
+      // ── the caret click: a real press and release INSIDE the focused
+      //    field, past the end of the text so the caret lands after it ──
+      const box = (await field.boundingBox())!
+      await window.mouse.move(box.x + box.width - 6, box.y + box.height / 2)
+      await window.mouse.down()
+      await window.mouse.up()
+      await expect(field).toBeFocused()
+
+      // ── type the rest ──
+      await field.pressSequentially(' TIME')
+      await expect(field).toHaveValue('HOOK TIME')
+      await expect(clipCard.getByRole('button', { name: 'Select clip HOOK TIME' })).toBeVisible()
+
+      // ── ONE undo takes back the whole caption ──
+      await undoButton.click()
+      await expect(field).toHaveValue('Clip 1')
+      await expect(undoButton).toBeDisabled()
+      // Redo puts the whole edit back in one step too.
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(field).toHaveValue('HOOK TIME')
+    } finally {
+      await app.close()
+    }
+  })
+
   test('clip list: remove asks first — dismissing keeps the clip, accepting removes it', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('remove')

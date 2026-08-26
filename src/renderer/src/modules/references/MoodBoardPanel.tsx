@@ -56,6 +56,13 @@ export function MoodBoardPanel(): JSX.Element {
   )
 
   const [newName, setNewName] = useState('')
+  // T-79: item ids whose cached thumbnail would not load. The cache is
+  // disposable by design — "Clear thumbnail cache" empties it and the board
+  // files keep their `cachedThumbPath` — so a tile pointed at a file that is
+  // no longer there must fall back to the URL the picture came from rather
+  // than stay broken for good. One way per item: if the source fails too,
+  // the id is already in the set, nothing re-renders, and there is no loop.
+  const [uncachedItemIds, setUncachedItemIds] = useState<ReadonlySet<string>>(new Set())
   // T-28: Rename used window's prompt, which Electron does not implement, so
   // the click threw in the renderer and nothing happened at all. The same
   // question, asked with the app's own dialog.
@@ -142,8 +149,10 @@ export function MoodBoardPanel(): JSX.Element {
         {/* Round 17 B8: wire the previously-dead prune handler so users can
             reclaim disk after binging on references. T-29: it called the
             500 MB LRU trim, so under the budget the toast was a lie — the
-            channel is `clearThumbs` now and empties the directory. The
-            budgeted trim is the automatic path and runs at launch. */}
+            channel is `clearThumbs` now and empties the directory. T-79:
+            that clear is the only thing that empties this cache on purpose,
+            and the tiles it empties out from under fall back to the source
+            image above, so pressing it costs a re-download, never a board. */}
         <button
           className="btn-ghost px-2 py-1 text-xs text-ink-dim hover:text-ink-base self-start mt-auto"
           onClick={async () => {
@@ -180,9 +189,10 @@ export function MoodBoardPanel(): JSX.Element {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                 {collection.items.map((item) => {
-                  const src = item.cachedThumbPath
-                    ? window.api.video.fileUrl(item.cachedThumbPath)
-                    : item.thumbnail
+                  const src =
+                    item.cachedThumbPath && !uncachedItemIds.has(item.id)
+                      ? window.api.video.fileUrl(item.cachedThumbPath)
+                      : item.thumbnail
                   return (
                     <div
                       key={item.id}
@@ -193,6 +203,14 @@ export function MoodBoardPanel(): JSX.Element {
                         alt={item.title}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
+                        onError={() =>
+                          setUncachedItemIds((prev) => {
+                            if (prev.has(item.id)) return prev
+                            const next = new Set(prev)
+                            next.add(item.id)
+                            return next
+                          })
+                        }
                       />
                       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                         <span className="text-xs text-ink-base line-clamp-2">{item.title}</span>

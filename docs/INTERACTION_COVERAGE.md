@@ -417,8 +417,10 @@ UPGRADED round 46 to positives: both flows run through the in-app
 creates the board, saves the item and caches its thumbnail bytes), see
 the round-46 section. Clear thumb cache -> POSITIVE since [T-29]: the
 button empties the cache (it used to call the 500 MB LRU trim, which
-under the budget deleted nothing), and the budgeted trim's own end
-state is now driven by launching the app; see the round-47 section.
+under the budget deleted nothing), and since [T-79] the tiles it
+empties out from under fall back to their source image; the launch
+pass is the orphan sweep alone and is driven by launching the app. See
+the round-47 and round-48 sections.
 
 ## Dispositions — round 26 (Wave B)
 
@@ -1238,7 +1240,8 @@ end state, all in `tests/e2e/image.spec.ts` and
 ## Dispositions — round 47 (fix wave batch 20: T-29 + T-40 + T-74)
 
 - **References - Clear thumbnail cache (was defect pin both directions
-  [T-29]):** POSITIVE. `moodboard:clearThumbs` -> `pruneThumbCache(0)`;
+  [T-29]):** POSITIVE. `moodboard:clearThumbs` -> `clearThumbCache()`
+  (`pruneThumbCache(0)` at the time; renamed by T-79);
   references.spec.ts "Clear thumbnail cache empties the cache under the
   budget too" seeds board-owned thumbs (unowned ones are reaped by
   T-58's launch sweep before anything can be clicked), clicks, and
@@ -1246,12 +1249,11 @@ end state, all in `tests/e2e/image.spec.ts` and
   handler put back to the budgeted call -> that assertion red with the
   two files still on disk.
 - **New automatic end state (no control):** the 500 MB LRU now runs once
-  per launch, chained after `sweepOrphanThumbs`. Driven by
-  references.spec.ts "the 500 MB thumbnail budget is enforced at launch,
-  oldest first" — 600 MB of sparse board-owned thumbs, app launched,
-  nothing clicked, oldest-first until it fits; a second launch on a
-  cache that already fits deletes nothing more. Mutation: startup call
-  removed -> red with all four files present.
+  per launch, chained after `sweepOrphanThumbs`. **Reversed by T-79 —
+  see the round-48 section:** behind the sweep the LRU could only delete
+  board-owned files, so the budget is gone and this end state with it.
+  The launch test it was driven by is now the protection test that no
+  board-owned thumbnail is deleted at launch.
 - **Video 4e Timeline trim handles / 4i grade sliders + Reset / 4d crop
   rect + aspect presets / 4q overlay fields / Player I-O markers
   ([T-40]):** end state extended from "the edit lands" to "the edit is
@@ -1272,3 +1274,52 @@ end state, all in `tests/e2e/image.spec.ts` and
   has no drawtext) — clip-relative window proven on every build,
   including the speed divisor. The win32 drawtext pixel tests carry the
   same claim on the shipping platform via the release runner.
+
+
+## Dispositions — round 48 (QA follow-ons: T-79 + T-80)
+
+Two rows the round-47 entries above claimed and this round corrects.
+No new interactive elements in either ticket; both change what an
+existing control's end state is allowed to be.
+
+- **References - mood-board tile `<img>` ([T-79]):** end state extended
+  from "the cached bytes decode" to "the tile survives its cache being
+  deleted". `onError` swaps the tile to `item.thumbnail`, one way per
+  item id. references.spec.ts "a tile whose cached file was cleared
+  falls back to its source image (T-79)" drives the real Clear button
+  and finds the picture on the next launch — with `naturalWidth`, so
+  the fallback is proven to DECODE, not merely to be set. The stand-in
+  is the transport, not the code path: the renderer's CSP allows
+  `https:` and `data:` for images but not `http:`, so the source URL in
+  the fixture is a `data:` URL carrying the same real PNG bytes the
+  HTTP-server tests serve to MAIN; live https thumbnails stay
+  HL-network as before. Mutation: the `uncachedItemIds` guard removed
+  from the src choice -> red, tile still on the dead `imagii-file://`
+  URL.
+- **References - launch maintenance (no control) ([T-79]):** the
+  round-47 budget row is withdrawn — launch runs `sweepOrphanThumbs`
+  and nothing else, and the end state under test is now a REFUSAL to
+  delete. references.spec.ts "launching far over any budget deletes no
+  board-owned thumbnail (T-79)": 600 MB of sparse board-owned thumbs
+  plus one unowned orphan; the orphan's removal proves the chain ran,
+  and every owned file survives the launch, the app's close and a
+  second launch. Red-first against the round-47 chain: three of the
+  four board-owned files gone.
+- **Video 4f ClipList rename fields / 4q TextOverlayEditor caption,
+  colour and number fields ([T-80]):** end state extended from "the
+  edit lands and is undoable" to "a caret click inside the field does
+  not split it". The panel `onPointerUp` is
+  `handleGestureEndPointerUp`, which consults the pure
+  `endsGestureOnPointerUp` predicate (unit-tested in
+  videoStore.test.ts, node, no DOM) and lets a release inside the
+  focused text-entry control through; `onBlur={endGesture}` still ends
+  a text edit, and slider/checkbox releases still end a gesture, so
+  T-40's coverage is unchanged and green. Driven by video-core.spec.ts
+  "clip list: a caret click mid-rename keeps the edit one undo step
+  (T-80)" — type, real mouse down/up inside the focused field, type,
+  ONE Undo back to "Clip 1", Undo disabled, Redo restores the whole
+  edit. Mutation: the predicate's last line forced to `return true` ->
+  that E2E red at "HOOK" plus four unit cases red.
+- **Video 4i ColorGradePanel ([T-80], verified not changed):** sliders,
+  two checkboxes and a button only — no text entry — so its bare
+  `onPointerUp={endGesture}` is already correct and was left alone.

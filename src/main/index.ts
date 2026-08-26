@@ -14,7 +14,7 @@ import { registerRecordingIpc, abandonAllRecordingStreams } from './ipc/recordin
 import { smokeTestFfmpeg } from './ffmpeg/smoke'
 import { registerPrivilegedSchemes, registerFileProtocol } from './protocol'
 import { pruneStaleTempFiles } from './tempCleanup'
-import { pruneThumbCache, sweepOrphanThumbs } from './search/moodboard'
+import { sweepOrphanThumbs } from './search/moodboard'
 import { cancelAllExportJobs } from './ffmpeg/export'
 import { cancelAllAudioJobs } from './audio/process'
 import { cancelAllConcatJobs } from './ffmpeg/concat'
@@ -218,18 +218,20 @@ app.whenReady().then(async () => {
   // can put it back whole. Launch is the first moment those orphans are
   // certainly unreachable, so this is where they are reclaimed. Same
   // fire-and-forget shape as the sweep above — never gate first paint on it.
+  //
+  // T-79: the sweep is the whole of launch maintenance, deliberately. Round
+  // 47 chained the 500 MB LRU behind it to give the budget an automatic
+  // caller, but the two are not the same kind of delete: the sweep is safe
+  // because it builds a `referenced` set first and only touches files no
+  // board points at, and an mtime LRU has no such check. Running it here —
+  // AFTER every orphan is already gone — left it nothing to reclaim but
+  // pictures boards still refer to. A budget must never eat user data.
   sweepOrphanThumbs()
     .then((removed) => {
       if (removed > 0) console.log(`[moodboard] reclaimed ${removed} orphaned thumbnail(s)`)
-      // T-29: the 500 MB LRU had no automatic caller at all — the only thing
-      // that ever ran it was the "Clear thumbnail cache" button, which is
-      // now a true clear instead. Launch is where the budget belongs: the
-      // same moment the sweep already proves safe. Chained rather than
-      // concurrent because both unlink from this one directory.
-      return pruneThumbCache()
     })
     .catch((err) => {
-      console.warn('[moodboard] thumbnail maintenance failed', err)
+      console.warn('[moodboard] thumbnail sweep failed', err)
     })
   createWindow()
 
