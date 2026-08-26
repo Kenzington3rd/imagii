@@ -14,6 +14,100 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-26 — T-79 + T-80: two fixes that inherited the wrong half of an earlier one
+
+Both bugs here were introduced by the round-47 entry directly below.
+Neither is a typo or an oversight in the code that landed — each is a
+mechanism that was correct where it was written and wrong one line
+further down the chain it was attached to. A pass that runs after
+another pass inherits that pass's guarantees, or breaks them.
+
+### Bug (T-79) — the launch-time LRU could only delete pictures boards still used
+
+- **Root cause.** Round 47 gave the 500 MB `pruneThumbCache` an
+  automatic caller by chaining it after `sweepOrphanThumbs` at launch —
+  "the same moment the sweep already proves safe". It is not the same
+  moment, and the sweep's safety was never the moment: the sweep builds
+  a `referenced` set from every board file first and unlinks only what
+  no board points at. `pruneThumbCache` is a pure mtime LRU with no
+  reference check at all, and it ran *after* the sweep, when every
+  orphan is already gone. So past the budget it could only ever delete
+  files a board still refers to — silently, with the board left pointing
+  at a hole. The tile made that permanent: `<img src={cachedThumbPath}>`
+  had no error fallback, so a missing cached file was a broken square
+  for good, which also meant the now-working "Clear thumbnail cache"
+  button broke every tile on the board it emptied.
+- **Fix.** Launch runs the sweep and nothing else. With the LRU's only
+  other caller being the clear button at budget 0, the budget machinery
+  was dead code and went with it: `pruneThumbCache(maxBytes)` is
+  `clearThumbCache()`, one operation with no argument, still on the
+  `moodboard:clearThumbs` channel. And the tile falls back to
+  `item.thumbnail` — the URL the picture came from, which the board
+  keeps forever — when the cached file fails to load, one way per item
+  id so a failing source cannot loop. A cleared cache now heals instead
+  of breaking. Referenced thumbnails are user data; a disk budget is not
+  allowed to eat them (owner's usability tiebreaker).
+- **Test.** `tests/e2e/references.spec.ts` — the round-47 launch-LRU
+  test is now "launching far over any budget deletes no board-owned
+  thumbnail (T-79)": 600 MB of sparse board-owned thumbs plus one
+  unowned orphan, app launched, nothing clicked; the orphan's
+  disappearance is the proof the maintenance chain really ran, and all
+  four owned files outlive it, the app's close, and a second launch.
+  "a tile whose cached file was cleared falls back to its source image
+  (T-79)" drives the Clear button and finds the picture — not a hole —
+  on the next launch. `src/main/search/moodboard.test.ts` —
+  "clearThumbCache — the button empties it, whatever it holds".
+- **Lesson.** **A maintenance pass chained after a correctness pass
+  inherits its guarantees or breaks them.** "Right after the safe one"
+  is not a safety property; the sweep was safe because of the set it
+  builds, and running an LRU behind it left the LRU nothing to eat but
+  the files the sweep had just decided to keep. Second: **a cache is
+  only disposable if the thing that reads it can survive its absence.**
+  The clear button was safe to press only once the tile could re-derive
+  its picture — the fallback is what makes the word "cache" true.
+
+### Bug (T-80) — a caret click inside a focused field split one edit into several undo steps
+
+- **Root cause.** T-40 closed the undo-coalescing window with one
+  `onPointerUp={endGesture}` per panel rather than a prop on every
+  control, deliberately, so a control added later would inherit it.
+  pointerup bubbles, though, and a plain click *inside* a text or
+  number input the user is already typing in bubbles the identical
+  event: repositioning the caret mid-caption, or double-clicking a word
+  to replace it, ended the gesture. One rename or one caption edit
+  became as many undo steps as the user clicked, and the first Undo
+  gave back only the tail — the exact mid-gesture close T-40's own
+  design notes promised not to have, since blur is the documented
+  gesture end for a text field.
+- **Fix.** `endsGestureOnPointerUp(tagName, inputType, isActiveElement)`
+  in `videoStore.ts` — a pure predicate, no DOM — answers the one
+  question: a release inside the FOCUSED text-entry control (textarea,
+  or an input whose type is text-like, with a missing or unrecognized
+  type read as text) is part of the edit, everything else ends the
+  gesture. Range, checkbox, radio and colour releases still end it, or
+  T-40's slider fix regresses. `handleGestureEndPointerUp` is the one
+  DOM-facing line, shared by ClipList and TextOverlayEditor; both keep
+  `onBlur={endGesture}`, which is what actually ends a text edit.
+  ColorGradePanel holds only sliders, checkboxes and a button, so its
+  bare `endGesture` is already right and was left alone.
+- **Test.** `src/renderer/src/modules/video-studio/store/videoStore.test.ts`
+  — "endsGestureOnPointerUp — a caret click is not a gesture end
+  (T-80)" covers the text-like types, the missing/unknown type, the
+  release types that must still end a gesture, the unfocused field, and
+  case. `tests/e2e/video-core.spec.ts` — "clip list: a caret click
+  mid-rename keeps the edit one undo step (T-80)" types, clicks inside
+  the focused field, types again, and ONE Undo restores "Clip 1" with
+  Undo then disabled (unguarded, it restores the half-typed "HOOK").
+- **Lesson.** **A handler placed on a container to catch one kind of
+  event catches every element that bubbles that event, including the
+  ones the feature was meant to protect.** Delegation is the right
+  shape here — it is what makes a later control inherit the behavior —
+  but it owes each element class an answer, and "text entry ends on
+  blur" was already the written rule when the pointerup handler was
+  added on top of it.
+
+---
+
 ## 2026-08-26 — T-29 + T-40 + T-74: three controls measured against the wrong number
 
 A button that measured a clear against a budget, an undo step that
@@ -83,21 +177,28 @@ three survived their own tests.
   per launch, chained after `sweepOrphanThumbs` rather than beside it,
   because both unlink from the same directory. No renderer-supplied
   budget crosses the bridge, so there is nothing new to validate at the
-  boundary.
-- **Test.** `src/main/search/moodboard.test.ts` — "pruneThumbCache —
-  clear vs trim (T-29)" covers all three: a budget of 0 empties even a
-  zero-byte file, the default budget deletes nothing under the cap, an
-  explicit budget drops oldest-first and stops the moment it fits.
+  boundary. **REVERSED by T-79 (see the entry above): that second half
+  was wrong.** Behind the sweep, the only files an LRU can reach are
+  ones a board still refers to, so the budget was deleting user data by
+  construction. The budget is gone; `pruneThumbCache` is
+  `clearThumbCache()` and launch runs the sweep alone. The clear half of
+  this fix stands.
+- **Test.** `src/main/search/moodboard.test.ts` — the clear-vs-trim
+  block is now "clearThumbCache — the button empties it, whatever it
+  holds (T-29, T-79)"; the zero-byte case survives as the clear's own,
+  the budget cases died with the budget.
   `tests/e2e/references.spec.ts` — the old two-direction defect pin is
-  now "Clear thumbnail cache empties the cache under the budget too"
-  and "the 500 MB thumbnail budget is enforced at launch, oldest first"
-  (nothing is clicked in the second: launching the app is the action).
+  now "Clear thumbnail cache empties the cache under the budget too",
+  and the launch test is the protection test T-79 flipped it into.
 - **Lesson.** **A toast is a promise; the call under it has to be the
   thing the promise says.** "Prune" and "clear" are different operations
   and a default argument is not a place to decide which one a user
-  asked for. Second, from the other half: **a maintenance routine with
-  no automatic caller is not a policy, it is a function** — if a budget
-  is meant to hold, something must run it on its own.
+  asked for. The other half of this entry taught the opposite of what it
+  claimed: **a maintenance routine with no automatic caller is a
+  question, not a bug** — before wiring one up, ask what it will be
+  allowed to delete at the moment it runs. Here the honest answer was
+  "only things the user still wants", which is a reason to delete the
+  routine rather than to schedule it.
 
 ### Bug (T-40) — undo coalescing never closed, so two drags were one step
 

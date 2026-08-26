@@ -73,7 +73,10 @@ Drop a video in (or use the file picker), then:
   background ffmpeg/whisper process is killed and the panel returns to
   its idle state.
 - **References — Mood Boards** has a **Clear thumbnail cache** button
-  to drop the on-disk image cache when boards have grown large.
+  to drop the on-disk image cache immediately. Your boards keep every
+  item: a cleared thumbnail loads again from its source the next time
+  you open the board. imagii also tidies the cache at each launch, but
+  only ever removes images no board still uses.
 
 ---
 

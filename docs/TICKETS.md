@@ -1376,9 +1376,90 @@ IMG-PREC.
   back to the pre-drag value; existing undo coverage green.
 - **Status:** open
 
+## T-79 — the launch-time thumbnail LRU deletes images boards still reference
+
+- **Spec:** guide-sync QA review (HIGH), a round-47 decision reversed
+  on evidence. `pruneThumbCache` is a pure mtime LRU with no
+  reference check; round 47 chained it after `sweepOrphanThumbs` on
+  every launch. But the sweep already removes every orphan, so by the
+  time the LRU runs, every surviving file is one a board points to —
+  past 500 MB it can ONLY delete referenced images, silently breaking
+  saved boards. Worse, the tile `<img>` (MoodBoardPanel.tsx:183-196)
+  has no error fallback: `cachedThumbPath` set + file gone = broken
+  tile forever, which means the now-working Clear button breaks every
+  tile too. Referenced thumbnails are user data, not cache overhead;
+  a budget must never eat them (usability ruling).
+- **Acceptance criteria:** the launch chain runs the sweep only — no
+  LRU (with its only other caller gone, the budget machinery goes
+  too: dead code); the Clear button keeps a true clear; the tile
+  falls back to `item.thumbnail` when the cached file fails to load,
+  so a cleared cache heals from the network instead of breaking; the
+  round-47 launch-LRU E2E flips into a protection test (launch over
+  budget deletes NO board-owned thumb); a fallback E2E drives Clear
+  and asserts the tile recovers; USER_GUIDE / TESTING.md / ledger
+  corrected; LESSONS entry (a maintenance pass chained after a
+  correctness pass inherits its guarantees or breaks them).
+- **Status:** done (round 48 — see Done)
+
+## T-80 — a caret click inside a focused text field ends the undo gesture
+
+- **Spec:** guide-sync QA review (MED), T-40 follow-on. The panel-level
+  `onPointerUp={endGesture}` in ClipList.tsx:33 and
+  TextOverlayEditor.tsx:42 catches slider releases — but a plain click
+  INSIDE an already-focused text or number input (repositioning the
+  caret mid-edit, double-clicking a word) bubbles the same pointerup,
+  so one caption edit splits into several undo steps. Exactly the
+  mid-gesture close T-40's design promised not to have; blur is the
+  documented gesture end for text fields.
+- **Acceptance criteria:** pointerup whose target is the focused
+  text-entry control (text/number input, textarea — NOT range/
+  checkbox, whose releases must keep ending gestures) does not end
+  the gesture; one shared implementation for both panels with the
+  decision as a pure exported predicate, unit-tested (node, no DOM);
+  E2E types, caret-clicks, types again, and ONE undo restores the
+  whole edit (discriminates: red against the unguarded handler);
+  existing T-40 slider/drag coverage green.
+- **Status:** done (round 48 — see Done)
+
 ---
 
 ## Done
+
+Round 48 — guide-sync QA follow-ons: T-79 + T-80, the same-day
+reversal of round 47's launch-LRU decision. The guide-sync reviewers
+ran over rounds 46-47; design returned zero violations, QA returned
+1 HIGH + 1 MED, both verified against source before ticketing.
+T-79 (HIGH): chaining the 500 MB LRU behind sweepOrphanThumbs meant
+that by the time it ran, every orphan was gone — past the budget it
+could ONLY delete images boards still reference, silently and
+unrecoverably, and the tile <img> had no fallback, so even the
+now-working Clear button broke every tile. Fix: launch maintenance
+is the sweep alone (it deletes by REFERENCE, the only safe kind);
+the budget machinery is deleted outright (pruneThumbCache ->
+clearThumbCache(), no parameter — "prune" was the word the budget
+hid inside); the tile falls back one-way per item to item.thumbnail
+on load error, so a clear costs a re-download, never a board. The
+round-47 launch test flipped into the protection test (600 MB of
+board-owned thumbs + launch = zero deletions, with an orphan as the
+the-chain-ran signal). T-80 (MED): the T-40 panel-level onPointerUp
+also caught the click that repositions a caret inside a focused
+text field, splitting one caption edit into several undo steps —
+pure predicate endsGestureOnPointerUp (release types range/checkbox/
+radio/color/button-ish end gestures; text-like and unknown types do
+not; unfocused targets always do) + one DOM-facing wrapper shared by
+ClipList and TextOverlayEditor; ColorGradePanel verified range-only
+and left alone. Expedite: verify 1133/1133, build clean, full
+Playwright 131/131; worker's red-first evidence for all three new
+tests + two mutations reviewed, and a third independent mutation
+re-executed personally (clearThumbCache's unlink gutted -> ONLY the
+clear-button test red, protection test green -> byte-identical
+restore -> 11/11). The first mutation attempt hit the count guard
+(the unlink line exists in the sweep too) and was retargeted on
+unique context — the guard doing its job. Note for T-78: when audio/
+image stores gain coalescing, their panels must use
+endsGestureOnPointerUp from day one. USER_GUIDE/TESTING/ledger
+corrected in-commit; the round-47 ledger rows amended in place with
+the reversal named rather than rewritten.
 
 Round 47 — backlog batch 20: T-29 + T-40 + T-74 (the final open
 trio; the backlog is clear). Three controls measured against the

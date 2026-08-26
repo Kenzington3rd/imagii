@@ -207,8 +207,9 @@ export interface ImagiiApi {
     /** T-58 — make the boards on disk match this list exactly. The inverse
      *  the references undo history steps through; see restoreCollections. */
     restore(collections: MoodBoardCollection[]): Promise<void>
-    /** T-29 — empty the on-disk thumbnail cache outright. The 500 MB LRU
-     *  trim is the automatic path and runs at launch; this is the button. */
+    /** T-29 — empty the on-disk thumbnail cache outright. T-79: the one
+     *  deliberate delete on this cache; launch only reclaims orphans, and a
+     *  tile whose file goes falls back to `item.thumbnail`. */
     clearThumbs(): Promise<void>
   }
   project: {

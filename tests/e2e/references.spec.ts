@@ -920,13 +920,17 @@ test.describe('imagii References studio', () => {
    * DEFAULT 500 MB budget — an LRU trim, not a clear — so for every user
    * whose cache was under 500 MB (essentially every user) it deleted nothing
    * while the toast said "Thumbnail cache cleared". The channel is
-   * `moodboard:clearThumbs` now and passes a budget of 0; the budgeted trim
-   * kept its own automatic caller, covered by the launch test below.
+   * `moodboard:clearThumbs` now and the call under it takes no budget at
+   * all — the name and the operation are the same thing.
    *
    * The board that owns these thumbs is not decoration: T-58's startup sweep
    * reclaims cached files no board refers to, so a fixture of free-floating
    * thumbs would be gone before the first click and an empty directory would
    * prove nothing about the button.
+   *
+   * (T-79 removed the budgeted trim entirely; the clear is all that is left
+   * of the function, and the tiles it empties out from under heal — the test
+   * below.)
    */
   test('Clear thumbnail cache empties the cache under the budget too', async () => {
     test.setTimeout(120_000)
@@ -970,43 +974,50 @@ test.describe('imagii References studio', () => {
   })
 
   /**
-   * T-29's other half: the 500 MB LRU is the AUTOMATIC path and runs once per
-   * launch, right after the orphan sweep (src/main/index.ts). Before this it
-   * had no automatic caller at all — the button was the only thing that ever
-   * ran it — so a cache under the budget grew forever and one over it was
-   * only ever trimmed by a user who happened to press a button that claimed
-   * to do something else.
+   * T-79 — a cleared cache heals; it does not leave a board of broken tiles.
    *
-   * Nothing is clicked here: launching the app IS the action. The over-cap
-   * files are sparse (ftruncate writes no blocks), so 600 MB of fixture costs
-   * bytes of real disk.
+   * The board file keeps its `cachedThumbPath` after a clear (the button
+   * frees disk, it does not edit the user's references), so the tile asks
+   * `imagii-file://` for a file that is no longer there. Before the fallback
+   * that was a permanently broken image: the one control on the panel that
+   * IS supposed to delete something took every picture with it. The item's
+   * own `thumbnail` URL is the picture's origin and never went anywhere, so
+   * a failed load swaps to it and the tile comes back.
+   *
+   * The remote here is a `data:` URL carrying the same real PNG bytes the
+   * rest of this file serves over HTTP. The renderer's CSP allows `https:`
+   * and `data:` for images but not `http:`, so the local HTTP server the
+   * first-save test uses — the right harness for a MAIN-process fetch —
+   * cannot stand in for a picture the RENDERER loads. Live https thumbnails
+   * stay HL-network; what is under test is the swap and that the bytes it
+   * lands on decode.
    */
-  test('the 500 MB thumbnail budget is enforced at launch, oldest first', async () => {
-    test.setTimeout(120_000)
-    const fx = makeFixture('refs-lru')
-    const MB = 1024 * 1024
+  test('a tile whose cached file was cleared falls back to its source image (T-79)', async () => {
+    test.setTimeout(180_000)
+    const fx = makeFixture('refs-fallback')
+    const remote = `data:image/png;base64,${PNG_8x6}`
 
-    // Every file is owned by a board, so the startup sweep leaves all four
-    // alone and what happens next is the LRU's doing.
-    const small = ['old-a.jpg', 'old-b.jpg']
-    small.forEach((name, i) => {
-      const file = path.join(fx.thumbsDir, name)
-      writeFileSync(file, Buffer.alloc(1024))
-      const t = 1_700_000_000 + i
-      utimesSync(file, t, t)
-    })
-    const big = ['big-1.jpg', 'big-2.jpg']
-    big.forEach((name, i) => {
-      const file = path.join(fx.thumbsDir, name)
-      const fd = openSync(file, 'w')
-      ftruncateSync(fd, 300 * MB)
-      closeSync(fd)
-      const t = 1_700_000_100 + i
-      utimesSync(file, t, t)
-    })
+    const cachedThumbPath = path.join(fx.thumbsDir, 'cached-thumb.png')
+    writeFileSync(cachedThumbPath, Buffer.from(PNG_8x6, 'base64'))
     writeFileSync(
-      path.join(fx.boardsDir, 'lruboard.json'),
-      JSON.stringify(boardOwning('lruboard', 'LRU board', fx.thumbsDir, [...small, ...big])),
+      path.join(fx.boardsDir, 'healboard.json'),
+      JSON.stringify({
+        id: 'healboard',
+        name: 'Heal board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'healitem',
+            collectionId: 'healboard',
+            thumbnail: remote,
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Healing reference',
+            cachedThumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
       'utf8'
     )
 
@@ -1014,22 +1025,128 @@ test.describe('imagii References studio', () => {
     try {
       const window = await app.firstWindow()
       await openReferences(window)
-      // Oldest-first until the total fits: both small files, then big-1
-      // (600 MB -> 300 MB). big-2, the newest, survives.
-      await expect.poll(() => readdirSync(fx.thumbsDir).sort(), { timeout: 30_000 }).toEqual([
-        'big-2.jpg'
-      ])
-      // A second launch on a cache that already fits deletes nothing more.
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+
+      // ── before: the tile is the cached file, decoded from disk ──
+      const tile = window.locator('img[alt="Healing reference"]')
+      await expect(tile).toHaveAttribute('src', pathToImagiiFileUrl(cachedThumbPath))
+      await expect
+        .poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+          timeout: 15_000
+        })
+        .toBe(8)
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+      // The reference itself is untouched — which is exactly why the tile
+      // still asks for a file that is gone.
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items[0]?.cachedThumbPath).toBe(cachedThumbPath)
+    } finally {
       await app.close()
+    }
+
+    // ── after: the next visit finds the picture, not a hole ──
+    // A fresh launch rather than a re-render: the decoded image is already
+    // in the tile that cleared the cache, and a user meets the empty cache
+    // the next time they open the app.
+    const again = await launchApp(fx.userDataDir)
+    try {
+      const window = await again.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const tile = window.locator('img[alt="Healing reference"]')
+      await expect(tile).toHaveAttribute('src', remote, { timeout: 15_000 })
+      await expect
+        .poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+          timeout: 15_000
+        })
+        .toBe(8)
+    } finally {
+      await again.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * T-79 — launch maintenance never eats a picture a board still points at.
+   *
+   * This test is the round-47 launch-LRU test, flipped. Round 47 chained the
+   * 500 MB `pruneThumbCache` after the orphan sweep so the budget would have
+   * an automatic caller. But the sweep runs first and removes every orphan,
+   * so by the time an LRU runs, every surviving file is one a board REFERS
+   * TO: past the budget it could only ever delete a user's own references,
+   * silently, with the board still pointing at the hole. The chain is the
+   * sweep alone now, and this pins that the pictures survive a launch far
+   * over any plausible budget.
+   *
+   * Nothing is clicked: launching the app IS the action. The unowned orphan
+   * is the proof the maintenance chain really ran — without it, a green here
+   * could just as well mean nothing happened at all. The over-cap files are
+   * sparse (ftruncate writes no blocks), so 600 MB of fixture costs bytes of
+   * real disk.
+   */
+  test('launching far over any budget deletes no board-owned thumbnail (T-79)', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-lru')
+    const MB = 1024 * 1024
+    const old = 1_700_000_000
+
+    // Owned by a board, and old: the two properties a doomed file needed
+    // under the LRU, so if a budget still ran these are the first to go.
+    const small = ['old-a.jpg', 'old-b.jpg']
+    small.forEach((name, i) => {
+      const file = path.join(fx.thumbsDir, name)
+      writeFileSync(file, Buffer.alloc(1024))
+      utimesSync(file, old + i, old + i)
+    })
+    const big = ['big-1.jpg', 'big-2.jpg']
+    big.forEach((name, i) => {
+      const file = path.join(fx.thumbsDir, name)
+      const fd = openSync(file, 'w')
+      ftruncateSync(fd, 300 * MB)
+      closeSync(fd)
+      utimesSync(file, old + 100 + i, old + 100 + i)
+    })
+    const owned = [...small, ...big].sort()
+    // Referred to by nothing: the sweep's own work, and this test's signal
+    // that the launch chain reached the disk at all.
+    const orphan = path.join(fx.thumbsDir, 'orphan.jpg')
+    writeFileSync(orphan, Buffer.alloc(1024))
+    utimesSync(orphan, old, old)
+    writeFileSync(
+      path.join(fx.boardsDir, 'lruboard.json'),
+      JSON.stringify(boardOwning('lruboard', 'LRU board', fx.thumbsDir, owned)),
+      'utf8'
+    )
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      // The sweep ran — so anything that was going to delete has had its turn.
+      await expect.poll(() => existsSync(orphan), { timeout: 30_000 }).toBe(false)
+      expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
+      // And the board is whole on screen: four items, none of them a hole.
+      await expect(window.locator('li', { hasText: 'LRU board' })).toContainText('4')
+      await expect(window.locator('img[alt^="Cached "]')).toHaveCount(4)
+
+      // Closing the app is the last moment the launch chain could still be
+      // unlinking; the files outlive it.
+      await app.close()
+      expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
+
+      // A second launch on the same over-budget cache is no hungrier.
       const again = await launchApp(fx.userDataDir)
       try {
         await again.firstWindow()
-        await expect
-          .poll(() => readdirSync(fx.thumbsDir).sort(), { timeout: 30_000 })
-          .toEqual(['big-2.jpg'])
+        await expect.poll(() => readdirSync(fx.thumbsDir).sort(), { timeout: 30_000 }).toEqual(owned)
       } finally {
         await again.close()
       }
+      expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

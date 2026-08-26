@@ -52,10 +52,12 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1126 tests across 63 files (batch 20 added the T-74 enable-
-window block to `filters.test.ts`, the T-40 gesture-end cases to
-`videoStore.test.ts`, and the T-29 clear-vs-trim block to
-`moodboard.test.ts`).
+**Count.** 1133 tests across 63 files (round 48 added the T-80
+`endsGestureOnPointerUp` block to `videoStore.test.ts` — a pure
+predicate, which is why the DOM question "does a caret click end the
+undo gesture" is answerable here at all — and rewrote the T-29
+clear-vs-trim block in `moodboard.test.ts` as the clear's own, T-79
+having removed the budget it was trimming against).
 Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
@@ -135,6 +137,14 @@ so these conventions are held by review and by the suite itself):
   under `<body>`, which meant a route change logged a studio's entire
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
+
+**A picture the RENDERER has to load cannot come from the test's HTTP
+server.** `index.html`'s CSP allows `img-src 'self' data: blob: https:
+imagii-file:` — no plain `http:` — so the local server that proves a
+MAIN-process fetch (the T-28 first-save test) is the wrong harness for
+a fixture the tile itself loads. A `data:` URL carrying the same real
+bytes is: it decodes, `naturalWidth` still discriminates, and live
+`https:` thumbnails stay HL-network (T-79's fallback test).
 
 **A unit test that asserts an exact count over a shared tmpdir clears
 every family the function scans, not just the ones it writes to.**

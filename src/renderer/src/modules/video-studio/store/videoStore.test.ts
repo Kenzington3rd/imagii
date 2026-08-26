@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { playableDuration, useVideoStore } from './videoStore'
+import { endsGestureOnPointerUp, playableDuration, useVideoStore } from './videoStore'
 import type { VideoSource } from './videoStore'
 
 const FAKE_SOURCE: VideoSource = {
@@ -493,6 +493,63 @@ describe('clip history — undo/redo (UX round 18)', () => {
     expect(useVideoStore.getState().canUndo()).toBe(false)
     expect(useVideoStore.getState().canRedo()).toBe(false)
     expect(useVideoStore.getState().history.past).toHaveLength(0)
+  })
+})
+
+/**
+ * T-80 — which pointerups end a gesture and which are part of one.
+ *
+ * The panels close their coalescing window on any pointerup that bubbles to
+ * them (T-40), which is right for a slider release and wrong for the click a
+ * user makes to move the caret inside the field they are typing in. The
+ * decision is this predicate; `handleGestureEndPointerUp` supplies it the
+ * tag, the input type and whether the element has focus, and nothing else.
+ */
+describe('endsGestureOnPointerUp — a caret click is not a gesture end (T-80)', () => {
+  const FOCUSED = true
+
+  it('lets a release inside the focused text field through', () => {
+    expect(endsGestureOnPointerUp('INPUT', 'text', FOCUSED)).toBe(false)
+    expect(endsGestureOnPointerUp('TEXTAREA', null, FOCUSED)).toBe(false)
+  })
+
+  it('treats every text-like input type the same', () => {
+    for (const type of ['text', 'number', 'search', 'url', 'email', 'password']) {
+      expect(endsGestureOnPointerUp('INPUT', type, FOCUSED), type).toBe(false)
+    }
+  })
+
+  it('treats a missing or unrecognized type as text entry', () => {
+    // The DOM reports 'text' for both, but the predicate is handed whatever
+    // the caller read: neither answer may end an edit in progress.
+    expect(endsGestureOnPointerUp('INPUT', null, FOCUSED)).toBe(false)
+    expect(endsGestureOnPointerUp('INPUT', 'not-a-real-type', FOCUSED)).toBe(false)
+  })
+
+  it('still ends the gesture when a slider or a box is released — T-40 stands', () => {
+    for (const type of ['range', 'checkbox', 'radio', 'color', 'button', 'submit', 'reset']) {
+      expect(endsGestureOnPointerUp('INPUT', type, FOCUSED), type).toBe(true)
+    }
+  })
+
+  it('ends the gesture on anything that is not a field', () => {
+    for (const tag of ['DIV', 'BUTTON', 'SELECT', 'SPAN', 'LABEL', 'svg']) {
+      expect(endsGestureOnPointerUp(tag, null, FOCUSED), tag).toBe(true)
+    }
+  })
+
+  it('ends the gesture over a text field that is NOT focused', () => {
+    // A drag that began on a slider and happens to finish over a caption box
+    // is still the slider's gesture ending. Only the focused field is
+    // mid-edit.
+    expect(endsGestureOnPointerUp('INPUT', 'text', false)).toBe(true)
+    expect(endsGestureOnPointerUp('TEXTAREA', null, false)).toBe(true)
+  })
+
+  it('reads the tag and type case-insensitively, as the DOM spells them', () => {
+    expect(endsGestureOnPointerUp('input', 'TEXT', FOCUSED)).toBe(false)
+    expect(endsGestureOnPointerUp('input', 'Range', FOCUSED)).toBe(true)
+    expect(endsGestureOnPointerUp('textarea', null, FOCUSED)).toBe(false)
   })
 })
 
