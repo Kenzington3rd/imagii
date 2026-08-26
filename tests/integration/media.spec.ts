@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -393,6 +393,64 @@ function makeJob(
   return { jobId, sourcePath, outDir: workDir, clip, preset }
 }
 
+/** The stand-in box, in the same band the glyphs it replaces would occupy. */
+const STAND_IN_BOX_W = 200
+const STAND_IN_BOX_H = 120
+
+/**
+ * T-74 — run a REAL export with `drawtext` swapped for `drawbox`.
+ *
+ * The bundled linux ffmpeg has no drawtext (see the T-51 block), so the one
+ * thing a text overlay's `enable` window can be proven against on this
+ * platform is a filter every build has. The swap is the filter NAME and
+ * nothing else: the chain is still whatever the production `buildVideoFilter`
+ * returned, the `enable` expression is carried across byte for byte, the box
+ * takes the x/y and the colour out of the drawtext string it replaces, and
+ * the command around it — above all the `-ss` before `-i` that makes the
+ * graph's clock clip-relative — is `runExportJob`'s own. A regression in
+ * either half fails the tests that use this; a hand-written ffmpeg command in
+ * the test would only ever prove what ffmpeg does, not what we ask it.
+ */
+async function exportWithDrawboxStandIn(job: ExportJobSpec): Promise<string> {
+  vi.resetModules()
+  vi.doMock('../../src/main/ffmpeg/filters', async () => {
+    const real = await vi.importActual<typeof import('../../src/main/ffmpeg/filters')>(
+      '../../src/main/ffmpeg/filters'
+    )
+    return {
+      ...real,
+      buildVideoFilter: (...args: Parameters<typeof real.buildVideoFilter>): string => {
+        const chain = real.buildVideoFilter(...args)
+        let swapped = 0
+        const standIn = chain.replace(
+          /drawtext=([\s\S]*?):x=(-?\d+):y=(-?\d+):enable='(between\(t,[-\d.]+,[-\d.]+\))'/g,
+          (_all: string, head: string, x: string, y: string, enable: string): string => {
+            const color = /fontcolor=([^:]+)/.exec(head)
+            if (!color) throw new Error(`drawbox stand-in: no fontcolor in "${head}"`)
+            swapped += 1
+            return `drawbox=x=${x}:y=${y}:w=${STAND_IN_BOX_W}:h=${STAND_IN_BOX_H}:color=${color[1]}@1:t=fill:enable='${enable}'`
+          }
+        )
+        const expected = args[0].textOverlays.length
+        if (swapped !== expected) {
+          throw new Error(
+            `drawbox stand-in: swapped ${swapped} of ${expected} overlays in "${chain}"`
+          )
+        }
+        return standIn
+      }
+    }
+  })
+  try {
+    const { runExportJob: run } = await import('../../src/main/ffmpeg/export')
+    const res = await run(job, () => {})
+    return res.outputPath
+  } finally {
+    vi.doUnmock('../../src/main/ffmpeg/filters')
+    vi.resetModules()
+  }
+}
+
 beforeAll(async () => {
   workDir = await mkdtemp(path.join(os.tmpdir(), 'imagii-media-'))
 
@@ -488,11 +546,13 @@ beforeAll(async () => {
   // On flat frames an untouched region re-encodes bit-identically (measured
   // on a control render: min == max == 128 in all four quadrants), which
   // turns it into an exact assertion.
+  // 6 s rather than the 4 s it was: since T-74 every clip cut from it starts
+  // at CLIP_START = 2, which is the whole point of that block.
   flatGraySrc = path.join(workDir, 'flat-gray.mp4')
   await ff([
     '-y',
-    '-f', 'lavfi', '-i', 'color=c=0x808080:size=1920x1080:rate=30:duration=4',
-    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4',
+    '-f', 'lavfi', '-i', 'color=c=0x808080:size=1920x1080:rate=30:duration=6',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=6',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-ac', '2', '-shortest', flatGraySrc
   ])
@@ -651,9 +711,17 @@ describe('video export presets (real ffmpeg)', () => {
  * the primary evidence — it needs no font metrics, only "these pixels are
  * not the flat value" — and PSNR corroborates it on the named technique.
  *
- * Timebase note for the `enable` windows: `-ss` before `-i` is input
- * seeking, so frames reach the filter graph starting at t=0. A drawtext
- * `enable` window is therefore CLIP-relative, not source-absolute.
+ * Timebase note for the `enable` windows (rewritten by T-74): `-ss` before
+ * `-i` is input seeking, so frames reach the filter graph starting at t=0 and
+ * a drawtext `enable` window is CLIP-relative. What the editor STORES is
+ * source-absolute, though, so `buildVideoFilter` converts — and until T-74 it
+ * did not, which meant an overlay only ever appeared on a clip starting at
+ * 0.00. These tests used to be written at `startSec: 0`, where the two
+ * timebases coincide and the bug is invisible; every clip below now starts at
+ * CLIP_START = 2 so they run in the regime that was broken. The overlays
+ * carry the source-absolute numbers the editor would have written for such a
+ * clip, and the probe times stay clip-relative because that is what the
+ * output file's own clock is.
  */
 describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
   // The exact font files the filter graph hardcodes (src/main/ffmpeg/
@@ -691,8 +759,11 @@ describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
     'bottom-right': 'top-left'
   }
 
-  const CLIP_START = 0
-  const CLIP_END = 3
+  // A clip that does NOT start at 0 (T-74). SAMPLE_T and the 2.5 s probe
+  // below are positions in the 3-second OUTPUT, which starts at 0 whatever
+  // the clip's source range is.
+  const CLIP_START = 2
+  const CLIP_END = 5
   const SAMPLE_T = 1.0
 
   function watermarkClip(): Clip {
@@ -809,96 +880,183 @@ describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
     600_000
   )
 
+  // Two overlays in one export: it also proves the chain survives more than
+  // one drawtext. `lower` spans the whole clip (the shape the editor
+  // produces, whose window is the clip's own range); `timed` carries a
+  // sub-range, which is the only thing `enable` is for. Both carry
+  // SOURCE-absolute seconds, because that is what the editor stores and what
+  // `buildVideoFilter` has to rebase (T-74).
+  const lower: TextOverlay = {
+    id: 'ov-lower',
+    text: 'LOWER THIRD',
+    font: 'Arial',
+    sizePx: 48,
+    colorHex: '#ff3b30',
+    x: 0.1,
+    y: 0.85,
+    startSec: CLIP_START,
+    endSec: CLIP_END
+  }
+  const timed: TextOverlay = {
+    id: 'ov-timed',
+    text: 'TIMED',
+    font: 'Arial',
+    sizePx: 48,
+    colorHex: '#30d158',
+    x: 0.1,
+    y: 0.1,
+    startSec: CLIP_START + 0.4,
+    endSec: CLIP_START + 1.6
+  }
+  // x=0.1 -> 192 px, y -> 918 / 108 px, drawn downward from there.
+  const LOWER_REGION = 'crop=768:160:128:900'
+  const TIMED_REGION = 'crop=768:160:128:90'
+  // The same band on the far side of the frame: proves the mark landed at
+  // the x it named rather than merely somewhere on that row.
+  const MIRROR_REGION = 'crop=768:160:1152:900'
+  const OFF_T = 2.5
+
+  function overlayClip(): Clip {
+    return makeClip({ startSec: CLIP_START, endSec: CLIP_END, textOverlays: [lower, timed] })
+  }
+
+  /**
+   * What both overlays must do, asserted identically whether the marks were
+   * painted by the real `drawtext` (win32) or by the drawbox stand-in below.
+   * Every probe time is a position in the OUTPUT — the file starts at 0 even
+   * though its clip starts at CLIP_START, which is exactly the confusion
+   * T-74 fixed.
+   */
+  async function assertOverlayWindows(out: string, painter: string): Promise<void> {
+    // ── inside both windows ──
+    const lowerOn = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 0)
+    expect(
+      lowerOn,
+      `${painter}: "LOWER THIRD" paints red at x=0.1,y=0.85 (${lowerOn} red px at t=${SAMPLE_T})`
+    ).toBeGreaterThan(100)
+    const timedOn = await countTintedPixels(out, SAMPLE_T, TIMED_REGION, 1)
+    expect(
+      timedOn,
+      `${painter}: "TIMED" paints green at x=0.1,y=0.1 inside its window (${timedOn} green px at t=${SAMPLE_T})`
+    ).toBeGreaterThan(50)
+
+    // Each overlay's colour is its own: neither region carries the other's.
+    const lowerGreen = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 1)
+    expect(
+      lowerGreen,
+      `${painter}: the lower band carries no green — colorHex is per-overlay (${lowerGreen} green px)`
+    ).toBe(0)
+    const mirrorRed = await countTintedPixels(out, SAMPLE_T, MIRROR_REGION, 0)
+    expect(
+      mirrorRed,
+      `${painter}: the mirrored band at x=1152..1920 is untouched, so the mark landed at the x it named (${mirrorRed} red px)`
+    ).toBe(0)
+
+    // ── the whole-clip window really covers the WHOLE clip ──
+    // The first frame is the one T-74 lost: with a source-absolute window on
+    // a clip starting at CLIP_START, nothing was painted until the graph's
+    // clock reached CLIP_START — seconds into a clip that may not last that
+    // long. Both ends of the output are probed.
+    const lowerFirst = await countTintedPixels(out, 0.05, LOWER_REGION, 0)
+    expect(
+      lowerFirst,
+      `${painter}: "LOWER THIRD" is already on at the FIRST frame of the clip (${lowerFirst} red px at t=0.05)`
+    ).toBeGreaterThan(100)
+    const lowerLast = await countTintedPixels(out, CLIP_END - CLIP_START - 0.1, LOWER_REGION, 0)
+    expect(
+      lowerLast,
+      `${painter}: and still on at the last (${lowerLast} red px at t=${CLIP_END - CLIP_START - 0.1})`
+    ).toBeGreaterThan(100)
+
+    // ── outside the timed window ──
+    // 2.5 s is past `timed`'s clip-relative 1.6 s end but inside `lower`'s
+    // range, so one assertion proves the gate closes and the other proves
+    // the export did not simply stop drawing.
+    const timedOff = await countTintedPixels(out, OFF_T, TIMED_REGION, 1)
+    expect(timedOff, `${painter}: "TIMED" is gone at t=${OFF_T} (${timedOff} green px)`).toBe(0)
+    const timedOffLuma = await regionLuma(out, OFF_T, TIMED_REGION)
+    expect(
+      timedOffLuma.max - timedOffLuma.min,
+      `${painter}: and its band is flat again at t=${OFF_T} (luma ${timedOffLuma.min}..${timedOffLuma.max})`
+    ).toBeLessThanOrEqual(4)
+    const lowerStill = await countTintedPixels(out, OFF_T, LOWER_REGION, 0)
+    expect(
+      lowerStill,
+      `${painter}: "LOWER THIRD" is still painted at t=${OFF_T} (${lowerStill} red px)`
+    ).toBeGreaterThan(100)
+  }
+
   it.skipIf(process.platform !== 'win32')(
     'text overlays paint their own colour at the x/y they name, and only inside their enable window',
     async () => {
-      // Two overlays in one export: it also proves the chain survives more
-      // than one drawtext. `lower` spans the whole clip (the shape the
-      // editor produces, whose window is the clip's own range); `timed`
-      // carries a sub-range, which is the only thing `enable` is for.
-      const lower: TextOverlay = {
-        id: 'ov-lower',
-        text: 'LOWER THIRD',
-        font: 'Arial',
-        sizePx: 48,
-        colorHex: '#ff3b30',
-        x: 0.1,
-        y: 0.85,
-        startSec: CLIP_START,
-        endSec: CLIP_END
-      }
-      const timed: TextOverlay = {
-        id: 'ov-timed',
-        text: 'TIMED',
-        font: 'Arial',
-        sizePx: 48,
-        colorHex: '#30d158',
-        x: 0.1,
-        y: 0.1,
-        startSec: 0.4,
-        endSec: 1.6
-      }
-      // x=0.1 -> 192 px, y -> 918 / 108 px, drawn downward from there.
-      const LOWER_REGION = 'crop=768:160:128:900'
-      const TIMED_REGION = 'crop=768:160:128:90'
-      // The same band on the far side of the frame: proves the text landed
-      // at the x it named rather than merely somewhere on that row.
-      const MIRROR_REGION = 'crop=768:160:1152:900'
-
       const res = await runExportJob(
         {
-          ...makeJob(
-            flatGraySrc,
-            'youtube',
-            makeClip({ startSec: CLIP_START, endSec: CLIP_END, textOverlays: [lower, timed] }),
-            'job-overlays'
-          ),
+          ...makeJob(flatGraySrc, 'youtube', overlayClip(), 'job-overlays'),
           outputFilename: 'text-overlays.mp4'
         },
         () => {}
       )
-      const out = res.outputPath
+      await assertOverlayWindows(res.outputPath, 'drawtext')
+    },
+    600_000
+  )
 
-      // ── inside both windows ──
-      const lowerOn = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 0)
-      expect(
-        lowerOn,
-        `"LOWER THIRD" paints red glyphs at x=0.1,y=0.85 (${lowerOn} red px at t=${SAMPLE_T})`
-      ).toBeGreaterThan(100)
-      const timedOn = await countTintedPixels(out, SAMPLE_T, TIMED_REGION, 1)
-      expect(
-        timedOn,
-        `"TIMED" paints green glyphs at x=0.1,y=0.1 inside its window (${timedOn} green px at t=${SAMPLE_T})`
-      ).toBeGreaterThan(50)
+  /**
+   * T-74 — the same claim on a build with no drawtext, which is every build
+   * this suite normally runs on.
+   *
+   * `drawbox` exists in every ffmpeg and takes the same `enable` expression,
+   * so this substitutes the FILTER NAME and nothing else. The chain still
+   * comes from the production `buildVideoFilter`; the enable expression is
+   * production's own, byte for byte; the box's position and colour are read
+   * back out of the drawtext string it produced; and the args around it —
+   * above all the `-ss` before `-i` that makes the graph's clock
+   * clip-relative in the first place — are `runExportJob`'s own. A
+   * regression in EITHER half fails this test, which is what a hand-written
+   * ffmpeg command in the test would not catch.
+   *
+   * Not gated by platform: it is the same evidence on win32, where it runs
+   * beside the real drawtext case above.
+   */
+  it(
+    'the enable window is clip-relative on a clip that starts at 2 s (drawbox stand-in, every build)',
+    async () => {
+      const out = await exportWithDrawboxStandIn({
+        ...makeJob(flatGraySrc, 'youtube', overlayClip(), 'job-overlays-drawbox'),
+        outputFilename: 'text-overlays-drawbox.mp4'
+      })
+      await assertOverlayWindows(out, 'drawbox stand-in')
+    },
+    600_000
+  )
 
-      // Each overlay's colour is its own: neither region carries the other's.
-      const lowerGreen = await countTintedPixels(out, SAMPLE_T, LOWER_REGION, 1)
-      expect(
-        lowerGreen,
-        `the lower band carries no green — colorHex is per-overlay (${lowerGreen} green px)`
-      ).toBe(0)
-      const mirrorRed = await countTintedPixels(out, SAMPLE_T, MIRROR_REGION, 0)
-      expect(
-        mirrorRed,
-        `the mirrored band at x=1152..1920 is untouched, so the text landed at the x it named (${mirrorRed} red px)`
-      ).toBe(0)
-
-      // ── outside the timed window ──
-      // 2.5 s is past `timed`'s 1.6 s end but inside `lower`'s range, so one
-      // assertion proves the gate closes and the other proves the export did
-      // not simply stop drawing.
-      const timedOff = await countTintedPixels(out, 2.5, TIMED_REGION, 1)
-      expect(timedOff, `"TIMED" is gone at t=2.5 (${timedOff} green px)`).toBe(0)
-      const timedOffLuma = await regionLuma(out, 2.5, TIMED_REGION)
-      expect(
-        timedOffLuma.max - timedOffLuma.min,
-        `and its band is flat again at t=2.5 (luma ${timedOffLuma.min}..${timedOffLuma.max})`
-      ).toBeLessThanOrEqual(4)
-      const lowerStill = await countTintedPixels(out, 2.5, LOWER_REGION, 0)
-      expect(
-        lowerStill,
-        `"LOWER THIRD" is still painted at t=2.5 (${lowerStill} red px)`
-      ).toBeGreaterThan(100)
+  /**
+   * The second half of the same conversion: `setpts=PTS/speed` sits ahead of
+   * the overlay in the chain, so the graph's clock is divided as well as
+   * shifted. At 2x the clip's 3 source seconds are 1.5 output seconds and
+   * `timed`'s source 2.4 -> 3.6 window has to land at 0.2 -> 0.8.
+   */
+  it(
+    'a sped-up clip divides the window too (drawbox stand-in, every build)',
+    async () => {
+      const out = await exportWithDrawboxStandIn({
+        ...makeJob(
+          flatGraySrc,
+          'youtube',
+          makeClip({
+            startSec: CLIP_START,
+            endSec: CLIP_END,
+            speedMultiplier: 2,
+            textOverlays: [timed]
+          }),
+          'job-overlays-drawbox-2x'
+        ),
+        outputFilename: 'text-overlays-drawbox-2x.mp4'
+      })
+      const on = await countTintedPixels(out, 0.5, TIMED_REGION, 1)
+      expect(on, `"TIMED" is on at t=0.5 of the 2x output (${on} green px)`).toBeGreaterThan(50)
+      const off = await countTintedPixels(out, 1.2, TIMED_REGION, 1)
+      expect(off, `and gone by t=1.2, not still running to 3.6 (${off} green px)`).toBe(0)
     },
     600_000
   )

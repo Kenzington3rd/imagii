@@ -155,7 +155,7 @@ const api: ImagiiApi = {
       ipcRenderer.invoke('moodboard:removeItem', collectionId, itemId),
     restore: (collections: MoodBoardCollection[]) =>
       ipcRenderer.invoke('moodboard:restore', collections),
-    prune: () => ipcRenderer.invoke('moodboard:prune')
+    clearThumbs: () => ipcRenderer.invoke('moodboard:clearThumbs')
   },
   project: {
     save: (project: ImagiiProject, defaultName?: string) =>

@@ -139,14 +139,15 @@ export function MoodBoardPanel(): JSX.Element {
             Create a board, then save references from the Reference Search tab.
           </p>
         ) : null}
-        {/* Round 17 B8: wire the previously-dead moodboard:prune handler so
-            users can reclaim disk after binging on references. The IPC
-            layer caps the cache at 500 MB internally; the button is the
-            on-demand counterpart. */}
+        {/* Round 17 B8: wire the previously-dead prune handler so users can
+            reclaim disk after binging on references. T-29: it called the
+            500 MB LRU trim, so under the budget the toast was a lie — the
+            channel is `clearThumbs` now and empties the directory. The
+            budgeted trim is the automatic path and runs at launch. */}
         <button
           className="btn-ghost px-2 py-1 text-xs text-ink-dim hover:text-ink-base self-start mt-auto"
           onClick={async () => {
-            await window.api.moodboard.prune()
+            await window.api.moodboard.clearThumbs()
             toast.success('Thumbnail cache cleared')
           }}
           title="Drop the on-disk thumbnail cache for mood boards"

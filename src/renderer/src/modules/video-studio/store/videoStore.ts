@@ -55,7 +55,7 @@ interface VideoStudioState {
    *  While consecutive mutations carry the same key (a trim drag firing
    *  setClipRange per mousemove, a speed slider, typing a name), only the
    *  first pushes a snapshot — so one drag equals one undo step. Discrete
-   *  actions and undo/redo reset it to null. */
+   *  actions, undo/redo and `endGesture` reset it to null. */
   historyKey: string | null
 
   loadSource: (filePath: string) => Promise<void>
@@ -98,6 +98,17 @@ interface VideoStudioState {
   addTextOverlay: (id: string, overlay: Omit<TextOverlay, 'id'>) => void
   updateTextOverlay: (clipId: string, overlayId: string, patch: Partial<TextOverlay>) => void
   removeTextOverlay: (clipId: string, overlayId: string) => void
+
+  /** T-40 — close the coalescing window. A key alone can only tell "the same
+   *  kind of edit as last time" from "a different kind"; it cannot tell one
+   *  gesture from the next one just like it, so two consecutive trim drags,
+   *  two crop drags, or a slider nudged twice all collapsed into a single
+   *  undo step (and a Reset button sharing the key vanished into the drag
+   *  before it). The surfaces that own a gesture call this when it ENDS —
+   *  Timeline's mouseup, the crop rectangle's drag/resize stop, a slider
+   *  release or blur, an in/out marker press — so the next mutation starts a
+   *  fresh step even though it carries the same key. */
+  endGesture: () => void
 
   undo: () => void
   redo: () => void
@@ -444,6 +455,14 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
             : c
         )
       }),
+
+    endGesture: () => {
+      // Cheap no-op when no window is open: gesture ends are frequent (every
+      // pointerup in the studio reaches one) and writing the same null back
+      // would notify every subscriber for nothing.
+      if (get().historyKey === null) return
+      set({ historyKey: null })
+    },
 
     undo: () => {
       const { history, clips, selectedClipId } = get()

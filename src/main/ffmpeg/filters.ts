@@ -120,6 +120,38 @@ function safeOverlayColor(colorHex: unknown): string {
 }
 
 /**
+ * TWO TIMEBASES, ONE FIELD (T-74) — the seam where a stored overlay time
+ * becomes a filter-graph time.
+ *
+ * `overlay.startSec` / `overlay.endSec` are SOURCE-absolute seconds. That is
+ * what `TextOverlayEditor` shows in its Time fields, what it defaults a new
+ * overlay to (`clip.startSec` -> `clip.endSec`), and what every saved
+ * project on disk already holds — so the storage stays absolute and the
+ * conversion happens here instead.
+ *
+ * `drawtext`'s `enable` expression is evaluated against the frame's own PTS
+ * as it arrives at this filter, and two things ahead of it move that clock:
+ *
+ *   - `runExportJob` passes `-ss` BEFORE `-i` (input seeking), so the first
+ *     frame of the clip reaches the graph at t=0, not at `clip.startSec`;
+ *   - `setpts=PTS/speed`, which `buildVideoFilter` puts at the head of the
+ *     chain whenever the clip is sped up or slowed down.
+ *
+ * Hence `t_graph = (t_source - clip.startSec) / speed`. Emitting the raw
+ * source-absolute numbers — what this did before T-74 — showed the overlay
+ * `clip.startSec` seconds late, and not at all once the clip started later
+ * than it was long. Only a clip starting at 0.00 ever behaved as promised.
+ *
+ * Deliberately unclamped: an overlay window that opens before the clip maps
+ * to a negative start, and `between()` simply matches from t=0 — the visible
+ * half of the window, which is the right answer. One that closes before the
+ * clip maps to two negatives and never matches, which is also right.
+ */
+function graphSeconds(sourceSec: number, clipStartSec: number, speed: number): number {
+  return (sourceSec - clipStartSec) / speed
+}
+
+/**
  * PER-PLATFORM CAVEAT (drawtext — this filter and `watermarkFilter` below,
  * the app's only two users of it): ffmpeg-static ships binaries from
  * DIFFERENT upstream builders per platform, exactly as the mpegts note in
@@ -141,15 +173,21 @@ function safeOverlayColor(colorHex: unknown): string {
  * Windows-only assumption (known-and-accepted in LESSONS_LEARNED): bundle a
  * font before any cross-platform build.
  */
-function drawTextFilter(overlay: TextOverlay, preset: PlatformPreset): string {
+function drawTextFilter(
+  overlay: TextOverlay,
+  preset: PlatformPreset,
+  clipStartSec: number,
+  speed: number
+): string {
   const fontPath = 'C\\:/Windows/Fonts/arial.ttf'
   const x = Math.round(overlay.x * preset.width)
   const y = Math.round(overlay.y * preset.height)
   const text = escapeDrawtext(overlay.text)
   const fontSize = safeOverlaySize(overlay.sizePx)
   const fontColor = safeOverlayColor(overlay.colorHex)
-  const between = `between(t,${overlay.startSec.toFixed(3)},${overlay.endSec.toFixed(3)})`
-  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${x}:y=${y}:enable='${between}'`
+  const from = graphSeconds(overlay.startSec, clipStartSec, speed).toFixed(3)
+  const to = graphSeconds(overlay.endSec, clipStartSec, speed).toFixed(3)
+  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${x}:y=${y}:enable='between(t,${from},${to})'`
 }
 
 function colorGradeFilter(g: ColorGrade): string | null {
@@ -247,7 +285,9 @@ export function buildVideoFilter(
   }
   if (clip.autoZoom) parts.push(autoZoomFilter(preset))
   for (const overlay of clip.textOverlays) {
-    parts.push(drawTextFilter(overlay, preset))
+    // `speed` is passed because `setpts` above already divided the graph's
+    // clock by it — see the timebase note on drawTextFilter.
+    parts.push(drawTextFilter(overlay, preset, clip.startSec, speed))
   }
   if (watermark && watermark.text.trim()) {
     parts.push(watermarkFilter(watermark, preset))

@@ -52,10 +52,10 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1070 tests across 62 files (T-68 added the "never fires
-while a Modal is open" case to `useUndoRedoHotkeys.test.ts`; T-67
-rewrote `tempCleanup.test.ts`'s per-family case to cover every family
-the function scans).
+**Count.** 1126 tests across 63 files (batch 20 added the T-74 enable-
+window block to `filters.test.ts`, the T-40 gesture-end cases to
+`videoStore.test.ts`, and the T-29 clear-vs-trim block to
+`moodboard.test.ts`).
 Fresh-run time on a
 mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
 `npm run verify` output as the source of truth and this line as the
@@ -181,7 +181,18 @@ at all, which is the only filter a watermark or a text overlay
 produces. Both follow the same shape — `it.skipIf(process.platform
 !== 'win32')` positives, plus a **linux pin that fails the moment the
 capability appears**, so an ffmpeg-static upgrade forces the gate to be
-lifted instead of leaving dead coverage behind. The release workflow
+lifted instead of leaving dead coverage behind.
+
+A gated positive is not the only option, though: where what is under
+test is an ARGUMENT rather than the filter itself, a stand-in runs
+everywhere. T-74's `exportWithDrawboxStandIn` drives the real
+`runExportJob` with `drawtext` swapped for `drawbox` — same `enable`
+expression byte for byte, same x/y and colour, same `-ss`-before-`-i`
+command — so the clip-relative overlay window is proven on the linux
+binary that has no drawtext at all. Substitute the NAME, never the
+argument under test, or the test stops being about the product.
+
+The release workflow
 (windows-latest, the de facto Windows CI — see the 2026-08-15 lesson)
 runs `npm run test:media` after `verify`, which is where those gated
 tests actually execute; nothing else in the project runs them.

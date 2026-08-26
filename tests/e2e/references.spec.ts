@@ -41,11 +41,13 @@ const __dirname = path.dirname(__filename)
  * and the search error path. Live DuckDuckGo is HL-network and is
  * dispositioned rather than faked — see the search test's header.
  *
- * Two of these tests pin DEFECTS rather than correct behavior. They are
- * named `defect:` and each carries a comment saying what the app should
- * do instead; the ticket that fixes one also rewrites its assertions.
- * Pinning beats leaving the surface untested — a silent regression in a
- * broken control is still a regression.
+ * This file used to carry `defect:` tests — pins on behavior that was
+ * wrong, kept because a silent regression in a broken control is still a
+ * regression. All of them have since been flipped to positives by the
+ * ticket that fixed them (T-28's rename and first-save dialogs in round 46,
+ * T-29's "Clear thumbnail cache" here), which is the shape a new one should
+ * follow: pin both directions, then rewrite the assertions rather than the
+ * test.
  *
  * Hermetic on three axes:
  *   - userData is a throwaway temp dir per test (`--user-data-dir=`),
@@ -190,6 +192,34 @@ const searchPlaceholder = 'Search for inspiration'
 /** MoodBoardPanel's delete toast, verbatim — it names the undo path (T-66). */
 const DELETED_TOAST = 'Deleted — press Ctrl+Z to undo.'
 const boardsHeading = /^Boards \(\d+\)$/
+
+/**
+ * A board whose items point at `names` inside `thumbsDir`. Ownership is what
+ * T-58's launch sweep checks before it reclaims a cached file, so a thumbnail
+ * fixture that must survive to be acted on has to belong to a board.
+ */
+function boardOwning(
+  id: string,
+  name: string,
+  thumbsDir: string,
+  names: string[]
+): MoodBoardCollection {
+  return {
+    id,
+    name,
+    createdAt: 1700000000000,
+    items: names.map((file, i) => ({
+      id: `${id}item${i}`,
+      collectionId: id,
+      thumbnail: `https://example.invalid/${file}`,
+      fullUrl: `https://example.invalid/full-${file}`,
+      source: 'example.invalid',
+      title: `Cached ${file}`,
+      cachedThumbPath: path.join(thumbsDir, file),
+      addedAt: 1700000000000 + i
+    }))
+  }
+}
 
 function moodBoardTab(window: Page) {
   return window.getByRole('button', { name: 'Mood Boards', exact: true })
@@ -883,35 +913,27 @@ test.describe('imagii References studio', () => {
   })
 
   /**
-   * DEFECT PIN — "Clear thumbnail cache" does not clear the cache.
+   * T-29 — "Clear thumbnail cache" clears the thumbnail cache.
    *
-   * The button is wired to `moodboard:prune`, whose handler calls
-   * `pruneThumbCache()` with its DEFAULT 500 MB budget — an LRU trim, not
-   * a clear. For every user whose cache is under 500 MB (i.e. essentially
-   * every user) the button deletes nothing while the toast claims
-   * "Thumbnail cache cleared".
+   * It used to be a defect pin, in both directions: the button was wired to
+   * `moodboard:prune`, whose handler called `pruneThumbCache()` with its
+   * DEFAULT 500 MB budget — an LRU trim, not a clear — so for every user
+   * whose cache was under 500 MB (essentially every user) it deleted nothing
+   * while the toast said "Thumbnail cache cleared". The channel is
+   * `moodboard:clearThumbs` now and passes a budget of 0; the budgeted trim
+   * kept its own automatic caller, covered by the launch test below.
    *
-   * This test pins both halves so the fix can't be mistaken for a no-op:
-   * under the cap nothing is deleted, over the cap the oldest files go
-   * until the total fits. The over-cap files are sparse (ftruncate writes
-   * no blocks) so the case costs bytes of real disk, not gigabytes.
-   *
-   * What the app SHOULD do: the button needs a real "empty it" call —
-   * `pruneThumbCache(0)` via a dedicated `moodboard:clearThumbs` channel,
-   * leaving the 500 MB budget for the automatic path. When that lands,
-   * this test's first phase flips to asserting an empty directory.
+   * The board that owns these thumbs is not decoration: T-58's startup sweep
+   * reclaims cached files no board refers to, so a fixture of free-floating
+   * thumbs would be gone before the first click and an empty directory would
+   * prove nothing about the button.
    */
-  test('defect: Clear thumbnail cache only trims above the 500 MB budget', async () => {
+  test('Clear thumbnail cache empties the cache under the budget too', async () => {
     test.setTimeout(120_000)
-    const fx = makeFixture('refs-prune')
-    const MB = 1024 * 1024
+    const fx = makeFixture('refs-clear')
 
-    // Two ordinary small thumbs, oldest first, owned by a board — T-58's
-    // startup sweep reclaims cached files no board refers to, so a fixture of
-    // free-floating thumbs would be gone before the first click. Owned ones
-    // are exactly what the LRU is meant to trim.
-    const small = ['old-a.jpg', 'old-b.jpg']
-    small.forEach((name, i) => {
+    const owned = ['old-a.jpg', 'old-b.jpg']
+    owned.forEach((name, i) => {
       const file = path.join(fx.thumbsDir, name)
       writeFileSync(file, Buffer.alloc(1024))
       const t = 1_700_000_000 + i
@@ -919,21 +941,7 @@ test.describe('imagii References studio', () => {
     })
     writeFileSync(
       path.join(fx.boardsDir, 'pruneboard.json'),
-      JSON.stringify({
-        id: 'pruneboard',
-        name: 'Prune board',
-        createdAt: 1700000000000,
-        items: small.map((name, i) => ({
-          id: `pruneitem${i}`,
-          collectionId: 'pruneboard',
-          thumbnail: `https://example.invalid/${name}`,
-          fullUrl: `https://example.invalid/full-${name}`,
-          source: 'example.invalid',
-          title: `Cached ${name}`,
-          cachedThumbPath: path.join(fx.thumbsDir, name),
-          addedAt: 1700000000000 + i
-        }))
-      }),
+      JSON.stringify(boardOwning('pruneboard', 'Prune board', fx.thumbsDir, owned)),
       'utf8'
     )
 
@@ -944,30 +952,84 @@ test.describe('imagii References studio', () => {
       await installToastLog(window)
       await moodBoardTab(window).click()
 
-      const clearButton = window.getByRole('button', { name: 'Clear thumbnail cache' })
-
-      // ── under the cap: the toast fires, the disk is untouched ──
-      await clearButton.click()
+      // 2 KB against the 500 MB budget the old wiring measured itself by — a
+      // quarter of a million times under it, and the whole cache, which is
+      // what the button asked for.
+      expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
       await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
-      expect(readdirSync(fx.thumbsDir).sort()).toEqual(small)
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
 
-      // ── over the cap: 600 MB of sparse files pushes past the budget ──
-      const big = ['big-1.jpg', 'big-2.jpg']
-      big.forEach((name, i) => {
-        const file = path.join(fx.thumbsDir, name)
-        const fd = openSync(file, 'w')
-        ftruncateSync(fd, 300 * MB)
-        closeSync(fd)
-        const t = 1_700_000_100 + i
-        utimesSync(file, t, t)
-      })
+      // The boards themselves are untouched: this frees pictures that
+      // re-download, not the user's references.
+      expect(readBoardsFromDisk(fx.boardsDir).map((c) => c.id)).toEqual(['pruneboard'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
 
-      await clearButton.click()
+  /**
+   * T-29's other half: the 500 MB LRU is the AUTOMATIC path and runs once per
+   * launch, right after the orphan sweep (src/main/index.ts). Before this it
+   * had no automatic caller at all — the button was the only thing that ever
+   * ran it — so a cache under the budget grew forever and one over it was
+   * only ever trimmed by a user who happened to press a button that claimed
+   * to do something else.
+   *
+   * Nothing is clicked here: launching the app IS the action. The over-cap
+   * files are sparse (ftruncate writes no blocks), so 600 MB of fixture costs
+   * bytes of real disk.
+   */
+  test('the 500 MB thumbnail budget is enforced at launch, oldest first', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-lru')
+    const MB = 1024 * 1024
+
+    // Every file is owned by a board, so the startup sweep leaves all four
+    // alone and what happens next is the LRU's doing.
+    const small = ['old-a.jpg', 'old-b.jpg']
+    small.forEach((name, i) => {
+      const file = path.join(fx.thumbsDir, name)
+      writeFileSync(file, Buffer.alloc(1024))
+      const t = 1_700_000_000 + i
+      utimesSync(file, t, t)
+    })
+    const big = ['big-1.jpg', 'big-2.jpg']
+    big.forEach((name, i) => {
+      const file = path.join(fx.thumbsDir, name)
+      const fd = openSync(file, 'w')
+      ftruncateSync(fd, 300 * MB)
+      closeSync(fd)
+      const t = 1_700_000_100 + i
+      utimesSync(file, t, t)
+    })
+    writeFileSync(
+      path.join(fx.boardsDir, 'lruboard.json'),
+      JSON.stringify(boardOwning('lruboard', 'LRU board', fx.thumbsDir, [...small, ...big])),
+      'utf8'
+    )
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
       // Oldest-first until the total fits: both small files, then big-1
       // (600 MB -> 300 MB). big-2, the newest, survives.
       await expect.poll(() => readdirSync(fx.thumbsDir).sort(), { timeout: 30_000 }).toEqual([
         'big-2.jpg'
       ])
+      // A second launch on a cache that already fits deletes nothing more.
+      await app.close()
+      const again = await launchApp(fx.userDataDir)
+      try {
+        await again.firstWindow()
+        await expect
+          .poll(() => readdirSync(fx.thumbsDir).sort(), { timeout: 30_000 })
+          .toEqual(['big-2.jpg'])
+      } finally {
+        await again.close()
+      }
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

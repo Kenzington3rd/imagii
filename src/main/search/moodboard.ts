@@ -310,6 +310,27 @@ export async function sweepOrphanThumbs(): Promise<number> {
   return removed
 }
 
+/**
+ * Reclaim thumbnail-cache disk, oldest file first.
+ *
+ * Two callers, two intents, and T-29 was the gap between them:
+ *
+ *   - `maxBytes > 0` (the default) is the AUTOMATIC path — an LRU trim that
+ *     keeps the cache under a budget and deletes nothing while it already
+ *     is. `main/index.ts` runs it once per launch, right after the orphan
+ *     sweep. Nothing else ever ran it, which is why a cache under 500 MB
+ *     grew forever.
+ *   - `maxBytes === 0` is "empty it", what the "Clear thumbnail cache"
+ *     button asks for via `moodboard:clearThumbs`. It was wired to the
+ *     budgeted call, so for every user whose cache was under 500 MB — that
+ *     is, essentially every user — the button deleted nothing while the
+ *     toast said the cache was cleared.
+ *
+ * A budget of 0 is deliberately NOT the same as "trim until the total is 0":
+ * a zero-byte file (a truncated write) fits under any budget and would have
+ * survived the clear. Both guards below test the budget itself so the empty
+ * case never falls out of the size arithmetic.
+ */
 export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<void> {
   const dir = thumbsCacheDir()
   if (!existsSync(dir)) return
@@ -321,10 +342,10 @@ export async function pruneThumbCache(maxBytes = 500 * 1024 * 1024): Promise<voi
     })
   )
   let total = stats.reduce((acc, s) => acc + s.size, 0)
-  if (total <= maxBytes) return
+  if (maxBytes > 0 && total <= maxBytes) return
   stats.sort((a, b) => a.mtime - b.mtime)
   for (const s of stats) {
-    if (total <= maxBytes) break
+    if (maxBytes > 0 && total <= maxBytes) break
     try {
       await unlink(path.join(dir, s.file))
       total -= s.size

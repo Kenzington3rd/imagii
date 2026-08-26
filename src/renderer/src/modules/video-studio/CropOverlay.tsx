@@ -41,6 +41,7 @@ export function CropControls({
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const setClipCrop = useVideoStore((s) => s.setClipCrop)
+  const endGesture = useVideoStore((s) => s.endGesture)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null
   if (!source || !clip) return null
@@ -73,10 +74,15 @@ export function CropControls({
       w: normW,
       h: normH
     })
+    // T-40: one click is one whole edit. These buttons share `setClipCrop`'s
+    // coalescing key with the crop drag and with each other, so without this
+    // "16:9 then 9:16 then 1:1" was a single undo step.
+    endGesture()
   }
 
   function clearCrop(): void {
     setClipCrop(activeClip.id, null)
+    endGesture()
   }
 
   return (
@@ -134,6 +140,7 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const setClipCrop = useVideoStore((s) => s.setClipCrop)
+  const endGesture = useVideoStore((s) => s.endGesture)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null
   if (!clip || !rect || rect.w <= 0 || rect.h <= 0) return null
@@ -159,6 +166,10 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
           width: cropRect.w * picture.w,
           height: cropRect.h * picture.h
         }}
+        // T-40: Rnd's *Stop callbacks ARE the gesture end — closing the
+        // coalescing window here is what makes a second drag of the
+        // rectangle its own undo step instead of a silent extension of the
+        // first one.
         onDragStop={(_e, d) => {
           setClipCrop(activeClip.id, {
             x: Math.max(0, Math.min(1 - cropRect.w, d.x / picture.w)),
@@ -166,6 +177,7 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
             w: cropRect.w,
             h: cropRect.h
           })
+          endGesture()
         }}
         onResizeStop={(_e, _dir, ref, _delta, position) => {
           setClipCrop(activeClip.id, {
@@ -174,6 +186,7 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
             w: ref.offsetWidth / picture.w,
             h: ref.offsetHeight / picture.h
           })
+          endGesture()
         }}
         className="pointer-events-auto border-2 border-accent"
         style={{
