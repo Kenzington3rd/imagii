@@ -125,10 +125,26 @@ NOT roll their own fixed-inset scrim — they should compose
 
 Adoption is now project-wide as of round 16: TemplatesDialog,
 SafeZoneWarningModal, FixWizard, ThumbnailVariants, CustomPresetManager,
-and HotkeyOverlay all use `<Modal>`. The only "modal-shaped" UIs that
-DON'T use it are the image-studio and audio-studio export bars, which
-are inline panels, not dialogs. If you find yourself writing
+HotkeyOverlay and NameDialog all use `<Modal>`. The only "modal-shaped"
+UIs that DON'T use it are the image-studio and audio-studio export bars,
+which are inline panels, not dialogs. If you find yourself writing
 `fixed inset-0 bg-black/70` again, stop — that's a bug.
+
+**Ask for one value with `<NameDialog>`** (`components/NameDialog.tsx`)
+rather than building another one-field dialog: title, labelled field,
+Cancel and a confirm button, Enter to submit, blank refused. It is what
+the mood-board rename and the first-save flow both use (T-28). And
+never `window.prompt` / `window.alert` — Electron does not implement
+them, so the call throws inside the click handler and the control is
+silently dead. `tests/unit/interactionWiring.test.ts` fails the build on
+any `prompt` call in `src/`.
+
+**Two z-layers, and only two.** Dialogs sit at `z-[1200]` (Modal's
+scrim) and the tutorial coachmark at `z-[1000]`; react-hot-toast's own
+container is above both. A Modal can only ever open OVER a coachmark, so
+that order is also the order of the Escape claim — the dialog that owns
+the keyboard is the one on top of the screen (T-73). Don't introduce a
+third layer; compose `<Modal>` and inherit the one that exists.
 
 ---
 

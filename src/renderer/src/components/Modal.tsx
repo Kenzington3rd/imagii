@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 interface ModalProps {
   open: boolean
@@ -18,30 +19,20 @@ interface ModalProps {
 /**
  * M12 fix (round 15): shared dialog helper used by TemplatesDialog,
  * CustomPresetManager, ThumbnailVariants, SafeZoneWarningModal, FixWizard,
- * HotkeyOverlay, and the image-studio ExportDialog. Centralizes:
+ * HotkeyOverlay, NameDialog, ClipKitButton, and the video-studio
+ * ExportPanel. Centralizes:
  *   - role="dialog" + aria-modal="true"
  *   - aria-labelledby (or aria-label when no visible title)
- *   - first-focusable-on-mount + Tab trapping
- *   - focus restore to the previously focused element on unmount
- *   - Escape-to-close
+ *   - first-focusable-on-mount + Tab trapping + focus restore on unmount
+ *     (all three from `useFocusTrap`, which the tutorial coachmark shares
+ *     since T-64 — one trap, two dialogs)
+ *   - Escape-to-close, but only for the TOPMOST dialog (T-73)
  *   - Scrim-click-to-close (and stopPropagation on the inner card)
  *
  * Body scroll lock is NOT added here — every previous modal positioned itself
  * over a fixed-height app shell so the renderer doesn't scroll in the first
  * place. If a future host adds long-scroll content we'll layer that on then.
- *
- * Power-of-Ten note: focus discovery uses a closed-form query rather than a
- * MutationObserver. The dialog content rarely changes focusability between
- * the first focus and Escape, and tests rely on the synchronous behavior.
  */
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])'
-].join(',')
 
 /**
  * T-68: how many Modals are open right now.
@@ -53,9 +44,12 @@ const FOCUSABLE_SELECTOR = [
  * fragile way to state that is the component that owns the claim: a counter,
  * not a DOM query (`[role="dialog"]` would also match a dialog rendered by
  * something that is not a Modal, and would go stale between a render and the
- * keydown that reads it). A counter rather than a boolean because dialogs
- * stack — ExportDialog's "confirm cancel" opens over ExportDialog itself, and
- * closing the inner one must not un-guard the outer.
+ * keydown that reads it). A counter rather than a boolean because T-72's
+ * HotkeyOverlay needs to subtract its own claim (see openModalCount below),
+ * and because no Modal stacks over another today (the T-73 audit found none —
+ * the only real stack is a Modal over the tutorial coachmark, which is not a
+ * Modal) but the first one that does must not un-guard the window when the
+ * inner one closes.
  */
 let openModals = 0
 
@@ -89,11 +83,10 @@ export function Modal({
   children
 }: ModalProps): JSX.Element | null {
   const contentRef = useRef<HTMLDivElement | null>(null)
-  const previouslyFocused = useRef<HTMLElement | null>(null)
-  // B7 fix (round 16): React 18 useId() so two titled modals stacked together
-  // (e.g. a "confirm cancel" inside ExportDialog) don't collide on a shared
-  // aria-labelledby target.
+  // B7 fix (round 16): React 18 useId() so two titled Modals mounted at once
+  // anywhere in the tree don't collide on a shared aria-labelledby target.
   const generatedTitleId = useId()
+  const isTopmost = useFocusTrap(open, contentRef)
 
   useEffect(() => {
     if (!open) return
@@ -104,71 +97,20 @@ export function Modal({
   }, [open])
 
   useEffect(() => {
-    if (!open) return
-    previouslyFocused.current = (document.activeElement as HTMLElement | null) ?? null
-    const root = contentRef.current
-    if (root) {
-      const first = root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
-      if (first) {
-        first.focus()
-      } else {
-        // No focusable child — make the dialog itself focusable so screen
-        // readers announce the title rather than the page behind it.
-        root.tabIndex = -1
-        root.focus()
-      }
-    }
-    return () => {
-      const prev = previouslyFocused.current
-      if (prev && typeof prev.focus === 'function') {
-        try {
-          prev.focus()
-        } catch {
-          /* element may be gone */
-        }
-      }
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
+    if (!open || !closeOnEscape) return
     function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape' && closeOnEscape) {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab') return
-      const root = contentRef.current
-      if (!root) return
-      const focusables = Array.from(
-        root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
-      ).filter((el) => !el.hasAttribute('disabled') && el.tabIndex !== -1)
-      if (focusables.length === 0) {
-        // Trap focus on the dialog itself — Tab does nothing useful but at
-        // least it doesn't escape behind the modal.
-        e.preventDefault()
-        root.focus()
-        return
-      }
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      const active = document.activeElement as HTMLElement | null
-      if (e.shiftKey) {
-        if (active === first || !root.contains(active)) {
-          e.preventDefault()
-          last?.focus()
-        }
-      } else {
-        if (active === last) {
-          e.preventDefault()
-          first?.focus()
-        }
-      }
+      if (e.key !== 'Escape') return
+      // T-73: one Escape closes ONE dialog. Every open dialog — Modal or the
+      // tutorial coachmark — has a listener on this same event, so without
+      // the claim the `?` shortcuts overlay raised over a coachmark took the
+      // coachmark down with it.
+      if (!isTopmost()) return
+      e.preventDefault()
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, closeOnEscape, onClose])
+  }, [open, closeOnEscape, onClose, isTopmost])
 
   if (!open) return null
 
@@ -179,9 +121,14 @@ export function Modal({
       ? { 'aria-label': ariaLabel }
       : {}
 
+  // T-73: z-[1200] sits above the tutorial coachmark's z-[1000]. A Modal can
+  // only ever open OVER a coachmark (the scrim eats every click that would
+  // open one the other way round), so the dialog that owns Escape is also the
+  // dialog on top of the screen — the shortcuts overlay `?` raises over a
+  // coachmark is clickable rather than dimmed underneath it.
   return (
     <div
-      className="fixed inset-0 z-[800] bg-black/70 flex items-center justify-center p-6"
+      className="fixed inset-0 z-[1200] bg-black/70 flex items-center justify-center p-6"
       onClick={() => {
         if (closeOnScrimClick) onClose()
       }}

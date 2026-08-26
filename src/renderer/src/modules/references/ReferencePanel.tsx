@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import type { SearchResult } from '@shared/search'
 import { useReferencesStore } from './state/referencesStore'
 import { Icon } from '../../components/Icon'
+import { NameDialog } from '../../components/NameDialog'
 
 export function ReferencePanel(): JSX.Element {
   const search = useReferencesStore((s) => s.search)
@@ -16,6 +17,11 @@ export function ReferencePanel(): JSX.Element {
   const createCollection = useReferencesStore((s) => s.createCollection)
 
   const [query, setQuery] = useState('')
+  // T-28: the result waiting on a board to exist. Saving with no board yet
+  // asked for a name through window's prompt — which Electron does not
+  // implement, so the click threw and the FIRST save a new user tries was
+  // impossible. The Save button was disabled into the bargain, which hid it.
+  const [pendingResult, setPendingResult] = useState<SearchResult | null>(null)
 
   useEffect(() => {
     void refreshCollections()
@@ -26,24 +32,49 @@ export function ReferencePanel(): JSX.Element {
     void search(query)
   }
 
-  async function ensureCollection(): Promise<string | null> {
-    if (selectedCollectionId) return selectedCollectionId
-    const name = prompt('Name your first mood board:')
-    if (!name) return null
-    await createCollection(name.trim() || 'Inspiration')
-    const cs = await window.api.moodboard.list()
-    return cs[0]?.id ?? null
+  /** Naming the board in the toast is the only place the answer to "where did
+   *  that go?" appears — the grid the user is looking at is search results,
+   *  not the board. */
+  async function saveInto(
+    collectionId: string,
+    boardName: string,
+    result: SearchResult
+  ): Promise<void> {
+    await addToCollection(collectionId, result)
+    toast.success(`Saved to "${boardName}"`)
   }
 
-  async function saveResult(result: SearchResult): Promise<void> {
-    const collectionId = await ensureCollection()
-    if (!collectionId) return
-    await addToCollection(collectionId, result)
-    toast.success('Saved to mood board')
+  function saveResult(result: SearchResult): void {
+    const board = collections.find((c) => c.id === selectedCollectionId)
+    if (!selectedCollectionId || !board) {
+      setPendingResult(result)
+      return
+    }
+    void saveInto(board.id, board.name, result)
+  }
+
+  /** The first-save continuation: name the board, create it, save into it. */
+  async function createBoardAndSave(name: string): Promise<void> {
+    const result = pendingResult
+    setPendingResult(null)
+    if (!result) return
+    // The id comes back from the create rather than from a re-read of the
+    // directory: `list()[0]` is the newest board by createdAt, which is the
+    // right answer only when nothing else has happened.
+    const collectionId = await createCollection(name)
+    await saveInto(collectionId, name, result)
   }
 
   return (
     <div className="flex flex-col gap-4">
+      <NameDialog
+        open={pendingResult !== null}
+        title="Name your first mood board"
+        label="Board name"
+        confirmLabel="Create & save"
+        onCancel={() => setPendingResult(null)}
+        onConfirm={(name) => void createBoardAndSave(name)}
+      />
       <div className="card p-3 flex items-center gap-2">
         <input
           type="text"
@@ -100,10 +131,13 @@ export function ReferencePanel(): JSX.Element {
               <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                 <span className="text-xs text-ink-base line-clamp-2">{result.title}</span>
                 <span className="text-xs text-ink-dim">{result.source}</span>
+                {/* T-28: never disabled. "You have no board yet" is a reason
+                    to ASK for one, not a reason to refuse the click — the
+                    disabled state is what made the first-save prompt
+                    unreachable, and hid the fact that it was broken. */}
                 <button
-                  className="btn-primary px-3 py-1 text-xs disabled:opacity-50 inline-flex items-center gap-1.5"
+                  className="btn-primary px-3 py-1 text-xs inline-flex items-center gap-1.5"
                   onClick={() => saveResult(result)}
-                  disabled={collections.length === 0 && !selectedCollectionId}
                 >
                   <Icon name="star" size={13} /> Save
                 </button>

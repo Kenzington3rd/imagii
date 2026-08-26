@@ -276,6 +276,26 @@ function focusInfo(window: Page): Promise<FocusInfo> {
   })
 }
 
+/**
+ * Where focus is relative to the COACHMARK specifically (T-64).
+ *
+ * `focusInfo` above takes the first `[role="dialog"]` on the page, which is
+ * ambiguous the moment two are open. The coachmark is the one whose
+ * aria-label names the tour, so address it by that.
+ */
+function coachmarkFocus(window: Page): Promise<{ inside: boolean; label: string | null }> {
+  return window.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null
+    const card = document.querySelector('[role="dialog"][aria-label*="tutorial"]')
+    return {
+      inside: Boolean(card && el && card.contains(el)),
+      label: el
+        ? (el.getAttribute('aria-label') ?? (el.textContent ?? '').trim().slice(0, 40))
+        : null
+    }
+  })
+}
+
 /** The coachmark's current step number, read off its own counter. */
 async function currentStep(window: Page): Promise<number> {
   const text = await window.locator('div[role="dialog"] span', { hasText: /· \d+ of \d+$/ }).first().textContent()
@@ -383,6 +403,226 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
       await window.keyboard.press('?')
       await expect(window.getByRole('dialog')).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  /**
+   * T-73 — one Escape closes ONE dialog: the topmost.
+   *
+   * Every open dialog registered its own window keydown, and each one closed
+   * on any Escape it saw. The only stack a user can actually build is this
+   * one — the shortcuts overlay opened with `?` while a coachmark is up — and
+   * on the unfixed build a single Escape closed BOTH, taking the tutorial the
+   * user was reading with it. Each dialog claims a depth now (Modal and
+   * Tutorial share the claim stack) and only the top of the stack answers
+   * Escape.
+   */
+  test('T-73 Escape closes only the topmost dialog: the overlay goes, the coachmark stays', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('stacked-escape')
+    const userDataDir = path.join(root, 'userData')
+    // Only the video tutorial is unseen, so Video Studio auto-starts it.
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: { audio: true, image: true, ai: true }
+    })
+    const total = videoTutorial.steps.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('dialog')).toHaveCount(1)
+
+      // ── `?` stacks the shortcuts overlay over the coachmark ──
+      // Reachable because the coachmark is not a <Modal>: openModalCount() is
+      // still 0, which is exactly the shape T-72 left in place.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toHaveCount(2)
+      const overlay = window.getByRole('dialog').filter({ hasText: 'Press ? again to close.' })
+      await expect(overlay).toHaveCount(1)
+      // The topmost dialog is topmost on screen too, not dimmed under the
+      // coachmark's scrim: its close control is what a click at its own
+      // centre actually hits.
+      const box = await overlay.getByRole('button', { name: 'Close shortcuts' }).boundingBox()
+      expect(box).not.toBeNull()
+      if (!box) throw new Error('unreachable')
+      const hit = await window.evaluate(
+        (point) => {
+          const el = document.elementFromPoint(point.x, point.y) as HTMLElement | null
+          return el?.getAttribute('aria-label') ?? el?.tagName ?? null
+        },
+        { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+      )
+      expect(hit).toBe('Close shortcuts')
+
+      // ── ONE Escape: the overlay closes, the tutorial survives ──
+      await window.keyboard.press('Escape')
+      await expect(overlay).toHaveCount(0)
+      await expect(window.getByRole('dialog')).toHaveCount(1)
+      await expect(counter(1)).toBeVisible()
+
+      // ── the second Escape reaches the coachmark, now that it is topmost ──
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(counter(1)).toHaveCount(0)
+      // Escape is a dismissal, not a completion — nothing is persisted.
+      expect(readConfig(userDataDir).tutorialSeen?.video).toBeFalsy()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  /**
+   * T-64 — the coachmark says aria-modal="true"; now it behaves like one.
+   *
+   * It carried role="dialog" + aria-modal="true" with no Tab trap and no
+   * focus restore, so Tab walked straight out into the studio behind the
+   * scrim — every control there is unreachable by mouse (the scrim eats the
+   * clicks) and reachable by keyboard, which is the worst of both. It shares
+   * Modal's trap now (hooks/useFocusTrap.ts).
+   */
+  test('T-64 the tutorial coachmark traps Tab and restores focus to its opener', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-trap')
+    const userDataDir = path.join(root, 'userData')
+    // Every tutorial seen: this one is STARTED from the header button, so the
+    // opener that focus must come back to is a real element.
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = videoTutorial.steps.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      const opener = window.getByRole('button', { name: 'Show tutorial' })
+      await expect(opener).toBeVisible({ timeout: 20_000 })
+      await opener.click()
+
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+
+      // Focus lands on Next, the way it has since the coachmark shipped.
+      expect(await coachmarkFocus(window)).toEqual({ inside: true, label: 'Next' })
+
+      // ── Tab cycles inside the card ──
+      // Step 1 renders Skip and Next and no Back, so the cycle is two long:
+      // Tab off the last wraps to the first, and no press ever lands outside.
+      await window.keyboard.press('Tab')
+      expect(await coachmarkFocus(window)).toEqual({ inside: true, label: 'Skip' })
+      await window.keyboard.press('Tab')
+      expect(await coachmarkFocus(window)).toEqual({ inside: true, label: 'Next' })
+      for (let i = 0; i < 8; i++) {
+        await window.keyboard.press('Tab')
+        expect((await coachmarkFocus(window)).inside, `Tab #${i + 1}`).toBe(true)
+      }
+      // …and backwards.
+      for (let i = 0; i < 5; i++) {
+        await window.keyboard.press('Shift+Tab')
+        expect((await coachmarkFocus(window)).inside, `Shift+Tab #${i + 1}`).toBe(true)
+      }
+
+      // ── Escape closes and hands focus back to the button that opened it ──
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      expect((await focusInfo(window)).label).toBe('Show tutorial')
+
+      // ── and so does Skip, the other way out ──
+      await opener.click()
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Skip' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      expect((await focusInfo(window)).label).toBe('Show tutorial')
+      // Neither way out is a completion.
+      expect(readConfig(userDataDir).tutorialSeen?.video).toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  /**
+   * T-64 rider — the coachmark stopped re-scrolling the page under itself.
+   *
+   * The 300 ms poll re-issued `scrollIntoView({behavior:'smooth'})` on every
+   * tick, so a step whose target is on screen and still kept the page in a
+   * permanent smooth-scroll animation and re-rendered the card ~3x/s. The
+   * scroll belongs to arriving at a step, so it fires once per step; the poll
+   * is only there to notice the target MOVING, and now only writes state when
+   * it really has.
+   */
+  test('T-64 the coachmark scrolls its target into view once per step, not 3x a second', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-poll')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: { audio: true, image: true, ai: true }
+    })
+    const total = videoTutorial.steps.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Instrumented before the studio (and therefore the coachmark) mounts,
+      // so no call can be missed. Every scrollIntoView on the page is
+      // recorded by the data-tutorial name of the element it was called on.
+      await window.addInitScript(() => {
+        const calls: string[] = []
+        ;(window as unknown as { __scrollCalls: string[] }).__scrollCalls = calls
+        const original = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = function patched(
+          this: Element,
+          ...args: unknown[]
+        ): void {
+          calls.push(this.getAttribute('data-tutorial') ?? this.tagName)
+          ;(original as (...a: unknown[]) => void).apply(this, args)
+        }
+      })
+      await window.reload()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      const scrollsOn = async (name: string): Promise<number> =>
+        (
+          await window.evaluate(
+            () => (window as unknown as { __scrollCalls?: string[] }).__scrollCalls ?? []
+          )
+        ).filter((n) => n === name).length
+
+      // Step 2 is the first step with a target that the unloaded studio
+      // actually renders.
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => scrollsOn('video-import'), { timeout: 10_000 }).toBe(1)
+
+      // Two seconds is ~7 poll ticks. Nothing moved, so the count must not
+      // move either — this is the assertion that was 7-ish before the fix.
+      await window.waitForTimeout(2_000)
+      expect(await scrollsOn('video-import')).toBe(1)
+
+      // Stepping away and back is a NEW arrival, so it scrolls again: the
+      // fix is "once per step", not "once ever".
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(3)).toBeVisible()
+      await window.getByRole('button', { name: 'Back' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => scrollsOn('video-import'), { timeout: 10_000 }).toBe(2)
     } finally {
       await app.close()
       cleanup(root)

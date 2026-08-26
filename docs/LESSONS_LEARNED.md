@@ -14,6 +14,140 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-26 — T-28 + T-73 + T-64: the dialogs, and what each of them only half was
+
+Three bugs about dialogs. Two of them are the same shape as bugs this
+file already records — a rule written where it was found rather than
+where it holds (T-65/T-71/T-72), and a key consumed without being
+prevented (T-34) — arriving in a place nobody had looked.
+
+### Bug (T-28) — Rename and first-save were dead: Electron has no window prompt
+
+- **Root cause.** `MoodBoardPanel.onRename` and
+  `ReferencePanel.ensureCollection` both asked for a name with the DOM's
+  `prompt`. Electron does not implement it: the renderer throws
+  "prompt() is and will not be supported.", the click handler dies
+  there, and nothing at all happens — no dialog, no toast, no error, the
+  board keeps its name. Two controls that looked completely healthy.
+  The first-save half was worse: its Save button was ALSO disabled
+  whenever there were no boards, which is precisely the state that
+  branch exists for, so the flow was unreachable *and* broken and the
+  disabled button is why nobody noticed. Its continuation then re-read
+  the boards directory and took `list()[0]` as "the one I just made" —
+  right only because the list is sorted newest-first and nothing else
+  had happened.
+- **Fix.** One `<NameDialog>` (a `<Modal>` around the same inline text
+  field the create-board row uses) serves both flows: pre-filled and
+  pre-selected for a rename, empty for the first save, Enter or the
+  button to confirm, a blank name unconfirmable, and Escape / Cancel /
+  scrim leaving everything untouched. The rename still goes through
+  `renameCollection`, so it stays undoable like every other board edit.
+  `createCollection` now RESOLVES with the new board's id, so the
+  first-save continuation saves into the board it just made rather than
+  into whichever one sorts first. Save is never disabled: having no
+  board is a reason to ask for one.
+- **Test.** `tests/e2e/references.spec.ts` — the old
+  "defect: Rename throws instead of renaming" pin is now
+  "the Rename dialog renames on Enter and on the button, and both
+  cancels leave disk alone" (every path asserted against the board JSON,
+  plus undo/redo), and "saving a result with no board yet names one,
+  creates it, and saves into it" drives the first save end to end with
+  the thumbnail served over a socket the test owns and the cached file
+  compared byte-for-byte. `tests/unit/interactionWiring.test.ts` parses
+  every file in `src/` with the TypeScript compiler and fails on any
+  call whose callee is `prompt`.
+- **Lesson.** **A renderer API that Electron does not implement fails as
+  a throw inside a click handler, which is the quietest failure mode
+  there is** — no red screen, no toast, no console anyone is reading,
+  and a control that looks fine. `alert`, `prompt` and `showModalDialog`
+  are the list; the guard is a repo-wide scan, not a fix at the two call
+  sites that happened to be found. And the second lesson, free with the
+  first: **a disabled control is a place bugs go to hide.** Ask why the
+  state it refuses exists — if the answer is "so it can ask the user
+  something", the control should be enabled and do the asking.
+
+### Bug (T-28, found by the E2E) — Enter confirmed the dialog, then reopened it
+
+- **Root cause.** T-34's double-advance, exactly, in a new place.
+  `NameDialog`'s Enter handler confirmed and closed the dialog; the
+  focus trap's cleanup then restored focus to the button that had opened
+  it; and Chromium applied the SAME keypress's default action to
+  whatever was focused by then — clicking the opener and reopening the
+  dialog. The rename had already landed, so the symptom was "it worked
+  and the dialog is still up", which reads like the close is broken.
+- **Fix.** `e.preventDefault()` on the Enter we consume.
+- **Test.** Both new references E2E tests assert the dialog count is 0
+  after an Enter; the mechanism was found by the first run of them.
+- **Lesson.** Second instance, so it is a rule now: **a key handler that
+  consumes a key AND moves focus must preventDefault it.** The default
+  action is applied late, against wherever focus ended up, so "I handled
+  it" and "the browser will not also handle it" are two separate
+  statements and only one of them is free.
+
+### Bug (T-73) — one Escape closed every open dialog
+
+- **Root cause.** Each open dialog registered its own window keydown and
+  closed on any Escape it saw. Reachable today by pressing `?` over a
+  tutorial coachmark: one Escape dismissed the shortcuts overlay AND the
+  tour behind it. The same gap T-72 closed for the `?` key itself, one
+  key over.
+- **Fix.** A claim stack in `hooks/useFocusTrap.ts`. Each dialog takes a
+  numbered claim while it is open and asks `isTopmost()` before acting
+  on a key — Escape and Tab both. The claim is an ID released by
+  identity, not a depth compared against a count, so an out-of-order
+  close leaves the survivor live rather than inert. `<Modal>` also moved
+  to `z-[1200]`, above the coachmark's `z-[1000]`: the dialog that owns
+  the keyboard has to be the one on top of the screen, or the overlay
+  `?` raises is dimmed under a scrim and unclickable.
+- **Test.** `tests/e2e/home-chrome.spec.ts` "Escape closes only the
+  topmost dialog" (one Escape closes the overlay, the coachmark
+  survives, a second closes it, and `elementFromPoint` proves the
+  overlay is really on top). `useFocusTrap.test.ts` pins the pure
+  predicate at every ordering; `interactionWiring.test.ts` pins that
+  both dialogs consult it, because Modal-over-Modal is not reachable in
+  today's app and no DOM test can reach that half.
+- **Lesson.** **Window-level listeners are broadcast, not delivery.**
+  Every handler for a key sees every press of it, so "the newest one
+  wins" is a claim that has to be stated somewhere both handlers can
+  read. Count-based guards answer "is anyone else here"; only an
+  identity claim answers "am I the one who should act".
+
+### Bug (T-64) — the coachmark said aria-modal and trapped nothing
+
+- **Root cause.** `role="dialog" aria-modal="true"` with no Tab trap and
+  no focus restore, written before `Modal` existed and never revisited.
+  Tab walked straight out into the studio behind the scrim — controls
+  the mouse cannot reach (the scrim eats clicks) and the keyboard can,
+  which is the worst of both. Rider: the 300 ms target poll built a
+  fresh rect object every tick and handed it to setState unconditionally
+  (React compares by identity, so an unmoved target re-rendered the card
+  ~3x/s) and re-issued `scrollIntoView({behavior:'smooth'})` with it, so
+  the page crawled under a coachmark nobody had touched — 7 scrolls in
+  two seconds, measured.
+- **Fix.** `Modal`'s trap moved into `hooks/useFocusTrap.ts` and the
+  coachmark calls it — one implementation, two dialogs, the T-15
+  `useUndoRedoHotkeys` precedent. The poll compares before it writes
+  (`sameRect`, half-pixel epsilon) and the scroll fires once per step,
+  because bringing a target into view belongs to ARRIVING at a step, not
+  to watching it.
+- **Test.** `tests/e2e/home-chrome.spec.ts` — "the tutorial coachmark
+  traps Tab and restores focus to its opener" (red on the unfixed build:
+  one Tab landed on `Home`) and "scrolls its target into view once per
+  step, not 3x a second" (red: 7). `Tutorial.test.ts` pins `sameRect`
+  including a hair over the epsilon; disabling the shared trap fails the
+  coachmark test AND both pre-existing Modal-contract tests, which is
+  what "shared" means.
+- **Lesson.** **`aria-modal="true"` is a promise about the keyboard, not
+  a label.** An element that claims it owes a focus trap and a focus
+  restore, and the way to keep that promise everywhere is one
+  implementation every dialog calls — a second copy is a second thing to
+  forget. And for polls: **a timer that recomputes state must compare
+  before it writes.** A fresh object is never equal to the old one, so
+  an unconditional setState turns "watch for a change" into "re-render
+  forever".
+
+---
+
 ## 2026-08-17 — the release runner catches platform-sensitive TESTS, again (v1.5.0)
 
 ### Bug — two wave-era tests failed only on windows-latest

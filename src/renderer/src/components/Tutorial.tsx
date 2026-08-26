@@ -1,14 +1,44 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { assert } from '@shared/assert'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import { Icon } from './Icon'
 import { ACCENT } from '../styles/tokens'
 
-interface Rect {
+/** A box in viewport coordinates — the thing a step points at. */
+export interface Rect {
   top: number
   left: number
   width: number
   height: number
+}
+
+/**
+ * How far a polled rect may drift before it counts as having moved.
+ *
+ * getBoundingClientRect returns floats, and a layout that has not changed can
+ * still hand back a value a hair different from the last one. Half a pixel is
+ * the same threshold the card measurement below uses.
+ */
+export const RECT_EPSILON = 0.5
+
+/**
+ * T-64: is this the same box as last tick?
+ *
+ * The poll built a FRESH object every 300 ms and handed it to setState
+ * unconditionally, so an open coachmark re-rendered ~3x/s while nothing on
+ * screen moved — React compares state by identity and a new object is never
+ * the old one. The poll exists to notice a target MOVING; this is what makes
+ * it only report that.
+ */
+export function sameRect(a: Rect | null, b: Rect | null): boolean {
+  if (a === null || b === null) return a === b
+  return (
+    Math.abs(a.top - b.top) <= RECT_EPSILON &&
+    Math.abs(a.left - b.left) <= RECT_EPSILON &&
+    Math.abs(a.width - b.width) <= RECT_EPSILON &&
+    Math.abs(a.height - b.height) <= RECT_EPSILON
+  )
 }
 
 interface TutorialProps {
@@ -21,10 +51,22 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const step: TutorialStep | undefined = def.steps[stepIndex]
 
   const [targetRect, setTargetRect] = useState<Rect | null>(null)
+  /** Mirrors `targetRect` so the poll can compare without re-subscribing. */
+  const lastRect = useRef<Rect | null>(null)
+
+  // T-64: the coachmark has claimed `role="dialog" aria-modal="true"` since it
+  // shipped and honored neither half of the promise — Tab walked out into the
+  // studio behind the scrim, where the mouse cannot reach. Modal's trap,
+  // shared rather than copied, plus the claim that decides whether an Escape
+  // is ours (T-73) when the shortcuts overlay is stacked over us.
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const isTopmost = useFocusTrap(true, cardRef)
 
   // A11y: the coachmark is a dialog, so keyboard/AT users need focus to
   // land inside it. Move focus to the Next button on mount and on every
-  // step change.
+  // step change. Declared AFTER the trap so this wins the mount: the trap
+  // opens on the first focusable (Skip) and this puts focus where the user
+  // wants it, in the same commit.
   const nextBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     nextBtnRef.current?.focus()
@@ -38,7 +80,6 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   // guarantees the card always has more room than it wants, so its width
   // cannot depend on where it was put. A layout effect, so the corrected
   // position is in the DOM before the browser paints.
-  const cardRef = useRef<HTMLDivElement | null>(null)
   const [cardSize, setCardSize] = useState<Size>({
     width: TOOLTIP_MAX_WIDTH,
     height: TOOLTIP_MAX_HEIGHT
@@ -61,17 +102,30 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
     // outer guard.
     const selector = step?.targetSelector
     if (!selector) {
+      lastRect.current = null
       setTargetRect(null)
       return
+    }
+    // T-64: bringing the target into view belongs to ARRIVING at a step, not
+    // to watching it. Re-issued every tick it restarted a smooth scroll
+    // three times a second, so the page crawled under a coachmark nobody had
+    // touched. Scoped to this effect, so a new step scrolls again.
+    let scrolled = false
+    const write = (next: Rect | null): void => {
+      if (sameRect(lastRect.current, next)) return
+      lastRect.current = next
+      setTargetRect(next)
     }
     const update = (): void => {
       const el = document.querySelector(selector)
       if (!el) {
-        setTargetRect(null)
+        write(null)
         return
       }
       const r = (el as HTMLElement).getBoundingClientRect()
-      setTargetRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+      write({ top: r.top, left: r.left, width: r.width, height: r.height })
+      if (scrolled) return
+      scrolled = true
       try {
         ;(el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' })
       } catch {
@@ -89,6 +143,10 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
+      // T-73: a dialog stacked over us (the `?` shortcuts overlay is the one
+      // a user can reach) owns the keyboard until it closes — including the
+      // Escape that would otherwise dismiss the tour behind it.
+      if (!isTopmost()) return
       const onButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON'
       const intent = tutorialKeyIntent({ key: e.key, onButton })
       if (intent === 'none') return

@@ -67,7 +67,11 @@ interface ReferencesStudioState {
   search: (query: string) => Promise<void>
 
   refreshCollections: () => Promise<void>
-  createCollection: (name: string) => Promise<void>
+  /** Resolves with the new board's id — T-28's first-save saves INTO it, and
+   *  re-reading the directory to guess which one is new picked `collections[0]`,
+   *  i.e. the newest board by createdAt, which is only the right answer when
+   *  the create is the only thing that happened. */
+  createCollection: (name: string) => Promise<string>
   deleteCollection: (id: string) => Promise<void>
   renameCollection: (id: string, name: string) => Promise<void>
   selectCollection: (id: string) => void
@@ -154,6 +158,7 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
         selectedCollectionId: collection.id,
         history: pushHistory(get().history, before)
       })
+      return collection.id
     },
     deleteCollection: async (id: string) => {
       const before = snapshot()

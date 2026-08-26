@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeTooltipPosition,
+  sameRect,
   tutorialKeyIntent,
+  RECT_EPSILON,
   TOOLTIP_MARGIN,
   TOOLTIP_MAX_WIDTH,
   TOOLTIP_MAX_HEIGHT,
+  type Rect,
   type Size,
   type TooltipPlacement
 } from './Tutorial'
@@ -273,6 +276,64 @@ describe('computeTooltipPosition — input validation', () => {
     // for the single pass before the real card is measured.
     expect(TOOLTIP_MAX_WIDTH).toBe(448)
     expect(TOOLTIP_MAX_HEIGHT).toBeGreaterThan(CARD.height)
+  })
+})
+
+/**
+ * T-64 rider regression: the 300 ms poll.
+ *
+ * `update()` built a fresh Rect every tick and handed it straight to
+ * setState. React compares state by identity, so an open coachmark
+ * re-rendered ~3x/s pointing at a target that had not moved a pixel — and
+ * re-issued `scrollIntoView({behavior:'smooth'})` with it, which kept the
+ * page in a permanent smooth scroll. The E2E in home-chrome.spec.ts counts
+ * the scrolls in the real app (7 in two seconds before the fix, 1 after);
+ * this is the comparison that stops the state write.
+ */
+describe('sameRect', () => {
+  const base: Rect = { top: 100, left: 200, width: 300, height: 40 }
+
+  it('is true for the same box read twice', () => {
+    expect(sameRect(base, { ...base })).toBe(true)
+  })
+
+  it('is true for sub-pixel float drift on every field', () => {
+    // getBoundingClientRect returns floats; an unchanged layout can still
+    // hand back a hair of difference, and that is not "the target moved".
+    const drift = RECT_EPSILON / 2
+    expect(
+      sameRect(base, {
+        top: base.top + drift,
+        left: base.left - drift,
+        width: base.width + drift,
+        height: base.height - drift
+      })
+    ).toBe(true)
+  })
+
+  it.each([
+    ['top', { ...base, top: base.top + 1 }],
+    ['left', { ...base, left: base.left - 1 }],
+    ['width', { ...base, width: base.width + 1 }],
+    ['height', { ...base, height: base.height - 1 }]
+  ])('is false when %s really moved', (_field, moved) => {
+    expect(sameRect(base, moved)).toBe(false)
+  })
+
+  it('is false at a hair OVER the threshold, not just at a whole pixel', () => {
+    // Discrimination: an epsilon that swallowed real movement would pass the
+    // whole-pixel cases above just as happily.
+    expect(sameRect(base, { ...base, left: base.left + RECT_EPSILON + 0.01 })).toBe(false)
+    expect(sameRect(base, { ...base, left: base.left + RECT_EPSILON })).toBe(true)
+  })
+
+  it('treats a target appearing or disappearing as a change', () => {
+    expect(sameRect(null, base)).toBe(false)
+    expect(sameRect(base, null)).toBe(false)
+  })
+
+  it('treats two absent targets as unchanged, so a step with no target settles', () => {
+    expect(sameRect(null, null)).toBe(true)
   })
 })
 

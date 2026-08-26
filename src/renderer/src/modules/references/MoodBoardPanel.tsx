@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeImageLayer } from '../image-studio/state/canvasStore'
+import { NameDialog } from '../../components/NameDialog'
 import { PanelHeader } from '../../components/PanelHeader'
 
 export function MoodBoardPanel(): JSX.Element {
@@ -55,6 +56,10 @@ export function MoodBoardPanel(): JSX.Element {
   )
 
   const [newName, setNewName] = useState('')
+  // T-28: Rename used window's prompt, which Electron does not implement, so
+  // the click threw in the renderer and nothing happened at all. The same
+  // question, asked with the app's own dialog.
+  const [renaming, setRenaming] = useState(false)
 
   async function onCreate(): Promise<void> {
     const name = newName.trim()
@@ -63,11 +68,12 @@ export function MoodBoardPanel(): JSX.Element {
     setNewName('')
   }
 
-  async function onRename(): Promise<void> {
+  async function onRename(next: string): Promise<void> {
+    setRenaming(false)
     if (!collection) return
-    const next = prompt('Rename mood board', collection.name)
-    if (!next) return
-    await renameCollection(collection.id, next.trim() || collection.name)
+    // Through the store, which is what makes a rename undoable like every
+    // other board edit (T-58's history subscribes here, not to the IPC).
+    await renameCollection(collection.id, next)
   }
 
   async function onDelete(): Promise<void> {
@@ -83,6 +89,16 @@ export function MoodBoardPanel(): JSX.Element {
   }
 
   return (
+    <>
+    <NameDialog
+      open={renaming && collection !== null}
+      title="Rename mood board"
+      label="Board name"
+      initialValue={collection?.name ?? ''}
+      confirmLabel="Rename"
+      onCancel={() => setRenaming(false)}
+      onConfirm={(next) => void onRename(next)}
+    />
     <div className="grid grid-cols-1 lg:grid-cols-[clamp(220px,16%,320px)_1fr] gap-4">
       <div className="card p-3 flex flex-col gap-3">
         <PanelHeader icon="star">Boards ({collections.length})</PanelHeader>
@@ -145,7 +161,7 @@ export function MoodBoardPanel(): JSX.Element {
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-lg font-semibold truncate">{collection.name}</h3>
               <div className="flex gap-2 text-sm">
-                <button className="btn-ghost px-3 py-1" onClick={onRename}>
+                <button className="btn-ghost px-3 py-1" onClick={() => setRenaming(true)}>
                   Rename
                 </button>
                 <button
@@ -216,5 +232,6 @@ export function MoodBoardPanel(): JSX.Element {
         )}
       </div>
     </div>
+    </>
   )
 }

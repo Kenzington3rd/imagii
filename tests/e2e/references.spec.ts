@@ -18,6 +18,7 @@ import {
   utimesSync,
   writeFileSync
 } from 'node:fs'
+import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
@@ -134,6 +135,32 @@ async function stubEmptySearchResults(app: ElectronApplication): Promise<void> {
       results: []
     }))
   })
+}
+
+/**
+ * One synthetic result, answered in MAIN — same technique as
+ * `stubEmptySearchResults`, and for the same reason: live DuckDuckGo is
+ * HL-network. The thumbnail URL is a socket the calling test owns, so the
+ * cache write that follows a Save is a real `net.fetch` over a real
+ * connection rather than a stub.
+ */
+async function stubOneSearchResult(app: ElectronApplication, thumbnailUrl: string): Promise<void> {
+  await app.evaluate(async ({ ipcMain }, url) => {
+    ipcMain.removeHandler('search:images')
+    ipcMain.handle('search:images', (_e, query: unknown) => ({
+      query: typeof query === 'string' ? query : '',
+      provider: 'duckduckgo',
+      results: [
+        {
+          id: 'stubresult',
+          thumbnail: url,
+          fullUrl: url,
+          source: '127.0.0.1',
+          title: 'Stubbed reference'
+        }
+      ]
+    }))
+  }, thumbnailUrl)
 }
 
 async function openReferences(window: Page): Promise<void> {
@@ -478,26 +505,25 @@ test.describe('imagii References studio', () => {
   })
 
   /**
-   * DEFECT PIN — Rename is dead in Electron.
+   * T-28 — Rename, through the app's own dialog. WAS a defect pin.
    *
-   * MoodBoardPanel.onRename calls `prompt()`, which Electron does not
-   * implement: the renderer throws "prompt() is and will not be
-   * supported." and the rename never runs. No dialog reaches Playwright
-   * (so no dialog handler can rescue it), no toast, no error surfaced to
-   * the user, and the board keeps its old name on disk. The identical
-   * pattern in ReferencePanel.ensureCollection ("Name your first mood
-   * board:") is broken the same way.
+   * MoodBoardPanel.onRename called `prompt()`, which Electron does not
+   * implement: the renderer threw "prompt() is and will not be supported.",
+   * no dialog reached Playwright (so no dialog handler could rescue it), no
+   * toast, no error surfaced to the user, and the board kept its old name on
+   * disk. It is a `<NameDialog>` now — the create-board field's pattern,
+   * inside a Modal — and this test drives every way in and out of it.
    *
-   * What the app SHOULD do: replace the `prompt()` with the in-app Modal
-   * component (an inline name input, like the create-board field right
-   * next to it). When that lands, this test flips to asserting the new
-   * name in the UI and in the board JSON.
+   * The `pageerror` recorder stays: it is what catches the whole class of
+   * "this control throws in the renderer and nothing happens", and it has to
+   * be empty on the way through.
    */
-  test('defect: Rename throws instead of renaming (Electron has no prompt())', async () => {
+  test('the Rename dialog renames on Enter and on the button, and both cancels leave disk alone', async () => {
     test.setTimeout(120_000)
     const fx = makeFixture('refs-rename')
+    const boardFile = path.join(fx.boardsDir, 'renameboard.json')
     writeFileSync(
-      path.join(fx.boardsDir, 'renameboard.json'),
+      boardFile,
       JSON.stringify({
         id: 'renameboard',
         name: 'Original name',
@@ -511,33 +537,228 @@ test.describe('imagii References studio', () => {
       const window = await app.firstWindow()
       const pageErrors: string[] = []
       window.on('pageerror', (e) => pageErrors.push(e.message))
+      // A native-dialog spy: nothing here may reach one. The old code's
+      // failure was that this stayed empty AND nothing happened; the new
+      // code's contract is that it stays empty and the rename lands.
+      const nativeDialogs: string[] = []
+      window.on('dialog', (d: Dialog) => {
+        nativeDialogs.push(`${d.type()}: ${d.message()}`)
+        void d.dismiss()
+      })
       await openReferences(window)
       await installToastLog(window)
       await moodBoardTab(window).click()
-      await expect(window.locator('h3.text-lg')).toHaveText('Original name')
 
-      // A handler that WOULD rename, registered before the click. It never
-      // fires, which is half the finding.
-      const dialogs: string[] = []
-      const renamer = (d: Dialog): void => {
-        dialogs.push(`${d.type()}: ${d.message()}`)
-        void d.accept('Renamed board')
-      }
-      window.once('dialog', renamer)
-      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      const detailTitle = window.locator('h3.text-lg')
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      // Safe to address unscoped ONLY while the dialog is shut — its confirm
+      // button carries the same name.
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+      await expect(detailTitle).toHaveText('Original name')
 
-      await expect
-        .poll(() => pageErrors, { timeout: 15_000 })
-        .toContain('prompt() is and will not be supported.')
-      expect(dialogs).toEqual([])
-      await expect(window.locator('h3.text-lg')).toHaveText('Original name')
-      await expect(window.locator('li', { hasText: 'Original name' })).toHaveCount(1)
-      await expect(window.locator('li', { hasText: 'Renamed board' })).toHaveCount(0)
+      // ── the dialog opens pre-filled with the name it is about to change ──
+      await openRename.click()
+      await expect(dialog).toBeVisible()
+      await expect(field).toHaveValue('Original name')
+      // Focus is in the field with the old name selected, so typing replaces
+      // rather than appends — the reason a rename dialog pre-fills at all.
+      expect(
+        await window.evaluate(() => {
+          const el = document.activeElement as HTMLInputElement | null
+          return el?.tagName === 'INPUT' ? (el.selectionEnd ?? 0) - (el.selectionStart ?? 0) : -1
+        })
+      ).toBe('Original name'.length)
+
+      // ── Escape abandons it: on screen and on disk ──
+      await field.fill('Abandoned by Escape')
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
       expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
-      // And the user is told nothing at all — no toast, success or error.
+
+      // ── Cancel abandons it too, and the field comes back clean ──
+      await openRename.click()
+      await expect(field).toHaveValue('Original name')
+      await field.fill('Abandoned by Cancel')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+
+      // ── a blank name cannot be confirmed (the create-board field's rule) ──
+      await openRename.click()
+      await field.fill('   ')
+      await expect(dialog.getByRole('button', { name: 'Rename' })).toBeDisabled()
+      await field.press('Enter')
+      await expect(dialog).toBeVisible()
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+
+      // ── Enter renames, everywhere the name is shown and in the file ──
+      await field.fill('Renamed board')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Renamed board')
+      await expect(window.locator('li', { hasText: 'Renamed board' })).toHaveCount(1)
+      await expect(window.locator('li', { hasText: 'Original name' })).toHaveCount(0)
+      await expect
+        .poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name))
+        .toEqual(['Renamed board'])
+      // Same board, not a new one wearing the name: id and createdAt survive.
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => [b.id, b.createdAt])).toEqual([
+        ['renameboard', 1700000000000]
+      ])
+
+      // ── and it went through the store, so it is undoable like every other
+      //    board edit (T-58 / round 38) ──
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect(detailTitle).toHaveText('Original name')
+      await expect
+        .poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name))
+        .toEqual(['Original name'])
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(detailTitle).toHaveText('Renamed board')
+      await expect
+        .poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name))
+        .toEqual(['Renamed board'])
+
+      // ── the confirm BUTTON is a second way in, not decoration ──
+      await openRename.click()
+      await field.fill('Renamed by button')
+      await dialog.getByRole('button', { name: 'Rename' }).click()
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Renamed by button')
+      await expect
+        .poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name))
+        .toEqual(['Renamed by button'])
+
+      // Nothing threw on any of those paths, and no native dialog was asked
+      // for — the two halves of the defect this test used to pin.
+      expect(pageErrors).toEqual([])
+      expect(nativeDialogs).toEqual([])
+      // The rename speaks for itself on screen; it raises no toast.
       expect(await readToastLog(window)).toEqual([])
-      window.off('dialog', renamer)
     } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * T-28 — the FIRST save: no board yet, and Save has to make one.
+   *
+   * `ReferencePanel.ensureCollection` asked for the board name with
+   * `prompt()` too, so a brand-new user's first Save threw in the renderer.
+   * Worse, the button was disabled whenever there were no boards, which is
+   * the state that branch exists for — the flow was unreachable AND broken,
+   * and the disabled button is why nobody noticed.
+   *
+   * Hermetic: `search:images` is answered in MAIN with one synthetic result
+   * (the technique the empty-results test above documents), and its
+   * thumbnail is served by an HTTP server this test owns — so the
+   * thumbnail cache really is written by a real `net.fetch`, and the
+   * mood-board tile that comes back is bytes off this machine.
+   */
+  test('saving a result with no board yet names one, creates it, and saves into it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-firstsave')
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+      res.end(png)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+
+      // No boards at all — the state the old build refused to serve.
+      expect(readBoardsFromDisk(fx.boardsDir)).toHaveLength(0)
+
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      // Enabled with zero boards: having none is a reason to ask for one.
+      await expect(save).toBeEnabled()
+
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+
+      // ── cancelling writes nothing at all ──
+      await save.click()
+      await expect(dialog).toBeVisible()
+      await expect(dialog.getByText('Name your first mood board').first()).toBeVisible()
+      await expect(field).toHaveValue('')
+      await expect(dialog.getByRole('button', { name: 'Create & save' })).toBeDisabled()
+      await field.fill('Abandoned board')
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      expect(readBoardsFromDisk(fx.boardsDir)).toHaveLength(0)
+      expect(await readToastLog(window)).toEqual([])
+
+      // ── and the real thing: one continuation creates the board AND saves ──
+      await save.click()
+      await expect(field).toHaveValue('')
+      await field.fill('Inspiration')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readToastLog(window)).toContain('Saved to "Inspiration"')
+
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual([
+        'Inspiration'
+      ])
+      const [board] = readBoardsFromDisk(fx.boardsDir)
+      expect(board?.items).toHaveLength(1)
+      const item = board?.items[0]
+      expect(item?.title).toBe('Stubbed reference')
+      expect(item?.fullUrl).toBe(thumbUrl)
+      // The thumbnail was cached into <userData>/cache/thumbs by the main
+      // process's own fetch, and the file holds the bytes this test served.
+      expect(item?.cachedThumbPath).toBeTruthy()
+      expect(path.dirname(item?.cachedThumbPath ?? '')).toBe(fx.thumbsDir)
+      expect(readFileSync(item?.cachedThumbPath ?? '')).toEqual(png)
+
+      // ── the board is real in the UI too, with the picture decoded ──
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(window.locator('h3.text-lg')).toHaveText('Inspiration')
+      const thumb = window.locator('img[alt="Stubbed reference"]')
+      await expect(thumb).toHaveAttribute(
+        'src',
+        pathToImagiiFileUrl(item?.cachedThumbPath ?? '')
+      )
+      await expect
+        .poll(() => thumb.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+          timeout: 15_000
+        })
+        .toBe(8)
+
+      // ── with a board selected, Save no longer asks — it just saves ──
+      await window.getByRole('button', { name: 'Reference Search', exact: true }).click()
+      await input.fill('a second look')
+      await input.press('Enter')
+      await save.click()
+      // Same fullUrl, so the store de-duplicates rather than adding a twin —
+      // but the toast still names where it went, and no dialog appears.
+      await expect(dialog).toHaveCount(0)
+      await expect
+        .poll(() => readToastLog(window).then((l) => l.filter((t) => t.includes('Inspiration'))))
+        .toHaveLength(2)
+
+      expect(pageErrors).toEqual([])
+    } finally {
+      thumbServer.close()
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
     }
