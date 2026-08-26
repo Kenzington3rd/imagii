@@ -222,6 +222,11 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     } else {
       state.setClipEnd(id, v.currentTime)
     }
+    // T-40: a keypress is the whole gesture. Both markers coalesce (they
+    // share setClipRange's machinery with the timeline drags), so without
+    // this a second I at a different playhead vanished into the first one's
+    // undo step.
+    state.endGesture()
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {

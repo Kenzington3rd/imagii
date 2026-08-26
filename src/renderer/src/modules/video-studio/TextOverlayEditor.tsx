@@ -11,6 +11,7 @@ export function TextOverlayEditor(): JSX.Element | null {
   const addTextOverlay = useVideoStore((s) => s.addTextOverlay)
   const updateTextOverlay = useVideoStore((s) => s.updateTextOverlay)
   const removeTextOverlay = useVideoStore((s) => s.removeTextOverlay)
+  const endGesture = useVideoStore((s) => s.endGesture)
 
   const clip = useMemo(
     () => clips.find((c) => c.id === selectedClipId) ?? null,
@@ -34,7 +35,11 @@ export function TextOverlayEditor(): JSX.Element | null {
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3">
+    // T-40: one overlay's every field shares a coalescing key, so typing a
+    // caption and later retyping its colour were one undo step. Leaving a
+    // field (focusout) or releasing a control ends that edit; both bubble, so
+    // one pair here covers every input in every overlay row.
+    <div className="card p-4 flex flex-col gap-3" onPointerUp={endGesture} onBlur={endGesture}>
       <PanelHeader
         icon="text"
         actions={

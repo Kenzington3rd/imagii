@@ -477,7 +477,9 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         argument), leaving the budgeted trim for the automatic path.
   - [ ] Flip the defect pin: cache dir emptied under the budget too.
   - [ ] LESSONS entry.
-- **Status:** open
+- **Status:** done (round 47 — see Done; the round-38 LRU note was
+  implemented: the budget runs at launch, chained after the orphan
+  sweep)
 
 ## T-30 — first-hop search failure leaks raw IPC error text
    (Round-32 note: T-44 established the house shape for this class —
@@ -651,7 +653,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
         coalescing window; two consecutive drags = two undo steps.
   - [ ] Unit test on the store; E2E workaround removed with the pin
         flipped.
-- **Status:** open
+- **Status:** done (round 47 — see Done)
 
 ## T-47 — session continuity: close the app, reopen where you were (owner request, 2026-08-15)
 
@@ -1118,8 +1120,9 @@ IMG-PREC.
   document); Layer 5 case on a non-zero-start clip (drawbox stand-in
   on linux, drawtext under the win32 gate); the T-51 pixel tests'
   startSec: 0 note updated; LESSONS entry (two timebases, one field).
-- **Status:** open (next cycle; noted as a known issue in the v1.5.0
-  release notes)
+- **Status:** done (round 47 — see Done; the fix also divides by the
+  speed multiplier, since setpts=PTS/speed moves the same clock — one
+  step past the ticket's wording, proven by its own Layer 5 case)
 
 ## T-73 — one Escape closes every stacked modal at once
 
@@ -1352,9 +1355,70 @@ IMG-PREC.
   lifecycle.
 - **Status:** open (backlog)
 
+## T-78 — Audio and Image sliders have T-40's mirror-image bug: no undo coalescing at all
+
+- **Spec:** T-40 worker finding, pre-existing. `audioStore.patchChain`
+  (audio-studio/state/audioStore.ts:99-103) pushes a history step per
+  call, and the Cleanup/Levels/secondary-track sliders call it on every
+  `input` event (CleanupPanel.tsx:135, LevelsPanel.tsx:127,
+  SecondaryTrackPanel.tsx:110,219); same for `canvasStore.updateLayer`
+  behind the image-studio opacity slider (PropertiesPanel.tsx:83-88).
+  One drag fills the undo stack with dozens of steps and Ctrl+Z moves
+  the value one notch — the exact inverse of T-40's video-studio bug,
+  and the same usability ruling applies: one gesture, one undo step.
+  (Konva canvas drags are fine — they commit on onDragEnd /
+  onTransformEnd.)
+- **Acceptance criteria:** both stores get the video store's
+  `historyKey` + `endGesture` pair (one binding, one implementation —
+  extract if the ladder says so, per the T-15 precedent); a slider drag
+  is one undo step and two consecutive drags are two; unit tests on
+  both stores; E2E drives a real drag per studio and walks Undo once
+  back to the pre-drag value; existing undo coverage green.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 47 — backlog batch 20: T-29 + T-40 + T-74 (the final open
+trio; the backlog is clear). Three controls measured against the
+wrong number, each correct only on the one input where the numbers
+coincide. T-74: overlay times are stored SOURCE-absolute (the
+editor's Time fields' own promise) but -ss-before--i hands the graph
+clip-relative frames, and setpts=PTS/speed divides the same clock
+again — so `buildVideoFilter`, the one place that sees clip and
+overlay together, converts: t_graph = (t_source - clip.startSec) /
+speed. The speed divisor is one step past the ticket's wording and
+load-bearing: the expediter's independent mutation removed ONLY that
+division and the sped-up Layer 5 case went red at the pixel level
+(overlay overstaying to t=3.6) while the plain clip-relative case
+stayed green — exact discrimination. Layer 5 now cuts every T-51
+clip at CLIP_START=2, with two all-platform cases running the real
+runExportJob with drawtext swapped for drawbox (name substituted,
+enable argument byte-identical — the stand-in rule now in
+TESTING.md). T-29: "Clear thumbnail cache" called the 500 MB LRU
+trim, which under the budget deletes nothing — a new
+moodboard:clearThumbs channel calls pruneThumbCache(0) ("keep
+nothing", so a zero-byte truncated write cannot survive on size
+arithmetic), and the budgeted trim — which had NO automatic caller —
+now runs once per launch, chained after sweepOrphanThumbs (round-38
+note implemented; both unlink from one dir, so chained not
+concurrent). Defect pin flipped to two positives, one driven by
+launching alone. T-40: historyKey could tell "a different kind of
+edit" but never "a second gesture of the same kind" — endGesture()
+closes the window at gesture end (Timeline mouseup, crop drag/resize
+stop, marker presses, and a bubbling onPointerUp+onBlur pair per
+panel so future controls inherit it); two consecutive trim drags are
+two undo steps, the video-core workaround retired. Expedite: verify
+1126/1126, build clean, test:media 73/73 (+5 win32 gates), full
+Playwright 129/129, worker's three mutation proofs reviewed + the
+speed-divisor one re-executed personally (content-replace, restored
+byte-identically). Worker finding filed as T-78 (audio/image sliders
+have the mirror-image bug: no coalescing at all, one drag = dozens
+of steps). Also noted, not ticketed: watermarks carry no enable
+window — nothing in the app offers to time one, so there is no
+promise to break; the T-74 comment sits above both drawtext users if
+that changes.
 
 Round 46 — backlog batch 19: T-73 + T-28 + T-64 (the modal cluster).
 T-73's ticketed stack turned out not to exist — no Modal ever opens

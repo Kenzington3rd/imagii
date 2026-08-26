@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { __testing__, even } from './filters'
+import { __testing__, buildVideoFilter, even } from './filters'
+import { PLATFORM_PRESETS } from './presets'
+import type { Clip, TextOverlay } from '../../shared/clip'
 
 const { escapeDrawtext, safeOverlaySize, safeOverlayColor } = __testing__
 
@@ -96,6 +98,92 @@ describe('even', () => {
     expect(even(NaN)).toBe(0)
     expect(even(Infinity)).toBe(0)
     expect(even(-Infinity)).toBe(0)
+  })
+})
+
+/**
+ * T-74 — the overlay `enable` window is stored SOURCE-absolute (the editor's
+ * Time fields) and consumed in the FILTER GRAPH's timebase, which starts at 0
+ * for every clip because `runExportJob` seeks with `-ss` before `-i`, and is
+ * divided again by `setpts=PTS/speed`. These pin the conversion; the Layer 5
+ * drawbox stand-in (`npm run test:media`) proves real ffmpeg agrees.
+ */
+describe('text-overlay enable window (T-74)', () => {
+  const preset = PLATFORM_PRESETS.youtube
+  const source = { width: 1920, height: 1080 }
+
+  function overlay(startSec: number, endSec: number): TextOverlay {
+    return {
+      id: 'ov1',
+      text: 'HELLO',
+      font: 'Arial',
+      sizePx: 48,
+      colorHex: '#ffffff',
+      x: 0.1,
+      y: 0.85,
+      startSec,
+      endSec
+    }
+  }
+
+  function clipWith(startSec: number, endSec: number, overlays: TextOverlay[]): Clip {
+    return {
+      id: 'c1',
+      name: 'clip',
+      startSec,
+      endSec,
+      cropRect: null,
+      textOverlays: overlays,
+      selectedPresets: ['youtube']
+    }
+  }
+
+  function windowsIn(chain: string): string[] {
+    return [...chain.matchAll(/enable='between\(t,([-\d.]+),([-\d.]+)\)'/g)].map(
+      (m) => `${m[1]},${m[2]}`
+    )
+  }
+
+  it("rebases the editor default (the clip's own range) onto the clip", () => {
+    // What TextOverlayEditor creates for a clip that starts at 10: the
+    // overlay covers 10 -> 13, and the graph must draw it for all 3 seconds.
+    const chain = buildVideoFilter(clipWith(10, 13, [overlay(10, 13)]), preset, source)
+    expect(windowsIn(chain)).toEqual(['0.000,3.000'])
+  })
+
+  it('rebases a sub-range the same way', () => {
+    const chain = buildVideoFilter(clipWith(10, 13, [overlay(11, 12)]), preset, source)
+    expect(windowsIn(chain)).toEqual(['1.000,2.000'])
+  })
+
+  it('leaves a clip that starts at 0 exactly as it was (the only case that ever worked)', () => {
+    const chain = buildVideoFilter(clipWith(0, 3, [overlay(0.4, 1.6)]), preset, source)
+    expect(windowsIn(chain)).toEqual(['0.400,1.600'])
+  })
+
+  it('divides by the clip speed, because setpts already did', () => {
+    // 2x: the clip's 3 source seconds become 1.5 output seconds, so an
+    // overlay covering source 11 -> 12 lands at 0.5 -> 1.0 in the graph.
+    const clip = { ...clipWith(10, 13, [overlay(11, 12)]), speedMultiplier: 2 }
+    const chain = buildVideoFilter(clip, preset, source)
+    expect(chain.startsWith('setpts=PTS/2.0000,')).toBe(true)
+    expect(windowsIn(chain)).toEqual(['0.500,1.000'])
+  })
+
+  it('converts every overlay on the clip, not just the first', () => {
+    const chain = buildVideoFilter(
+      clipWith(10, 13, [overlay(10, 13), overlay(11.5, 12.5)]),
+      preset,
+      source
+    )
+    expect(windowsIn(chain)).toEqual(['0.000,3.000', '1.500,2.500'])
+  })
+
+  it('keeps the visible half of a window that opens before the clip', () => {
+    // Unclamped on purpose: `between()` cannot match before t=0 anyway, so
+    // a negative start is exactly "already on when the clip begins".
+    const chain = buildVideoFilter(clipWith(10, 13, [overlay(8, 11)]), preset, source)
+    expect(windowsIn(chain)).toEqual(['-2.000,1.000'])
   })
 })
 

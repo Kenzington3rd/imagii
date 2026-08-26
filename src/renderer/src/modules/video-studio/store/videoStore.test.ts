@@ -397,6 +397,82 @@ describe('clip history — undo/redo (UX round 18)', () => {
     expect(useVideoStore.getState().clips[0]?.startSec).toBe(0)
   })
 
+  /**
+   * T-40 — the coalescing key can only say "same kind of edit as last time".
+   * Telling one gesture from the next one just like it is what `endGesture`
+   * is for; the surfaces call it on mouseup / Rnd stop / slider release.
+   */
+  it('two consecutive trim drags are two undo steps, not one', () => {
+    useVideoStore.getState().addClipFromRange('two-drags', 0, 30)
+    const id = useVideoStore.getState().clips[0]!.id
+    const before = useVideoStore.getState().history.past.length
+
+    // Drag 1: mousemoves, then the button comes up.
+    for (let t = 1; t <= 5; t++) useVideoStore.getState().setClipRange(id, t, 30)
+    useVideoStore.getState().endGesture()
+    // Drag 2: same handle, same coalescing key, a separate gesture.
+    for (let t = 6; t <= 10; t++) useVideoStore.getState().setClipRange(id, t, 30)
+    useVideoStore.getState().endGesture()
+
+    expect(useVideoStore.getState().history.past.length).toBe(before + 2)
+    expect(useVideoStore.getState().clips[0]?.startSec).toBe(10)
+
+    // The first undo takes back only the second drag…
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips[0]?.startSec).toBe(5)
+    // …and the second takes back the first.
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips[0]?.startSec).toBe(0)
+  })
+
+  it('still collapses the whole of one gesture while it is open', () => {
+    useVideoStore.getState().addClipFromRange('one-drag', 0, 30)
+    const id = useVideoStore.getState().clips[0]!.id
+    const before = useVideoStore.getState().history.past.length
+
+    for (let t = 1; t <= 10; t++) useVideoStore.getState().setClipRange(id, t, 30)
+    useVideoStore.getState().endGesture()
+
+    expect(useVideoStore.getState().history.past.length).toBe(before + 1)
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips[0]?.startSec).toBe(0)
+  })
+
+  it('closes the window for a slider and for the Reset that follows it', () => {
+    // The colour sliders and "Reset color" all carry `grade:<id>`: without a
+    // gesture end, four slider drags plus the reset were ONE step, and undo
+    // jumped past every one of them.
+    useVideoStore.getState().addClipFromRange('grade', 0, 30)
+    const id = useVideoStore.getState().clips[0]!.id
+    const graded = { brightness: 0.25, contrast: 1.2, saturation: 1.5, temperature: -0.5 }
+
+    useVideoStore.getState().setClipColorGrade(id, graded)
+    useVideoStore.getState().endGesture()
+    useVideoStore
+      .getState()
+      .setClipColorGrade(id, { brightness: 0, contrast: 1, saturation: 1, temperature: 0 })
+    useVideoStore.getState().endGesture()
+
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips[0]?.colorGrade).toEqual(graded)
+  })
+
+  it('is a no-op with no gesture open, so it cannot swallow a step', () => {
+    useVideoStore.getState().addClipFromRange('idle', 0, 30)
+    const id = useVideoStore.getState().clips[0]!.id
+    const state = useVideoStore.getState()
+
+    state.endGesture()
+    state.endGesture()
+    expect(useVideoStore.getState().historyKey).toBeNull()
+    const depth = useVideoStore.getState().history.past.length
+
+    // And the next coalescible edit still records exactly one step.
+    useVideoStore.getState().setClipRange(id, 4, 30)
+    useVideoStore.getState().setClipRange(id, 5, 30)
+    expect(useVideoStore.getState().history.past.length).toBe(depth + 1)
+  })
+
   it('a new edit after undo clears the redo stack', () => {
     useVideoStore.getState().addClipFromRange('branch', 5, 15)
     const id = useVideoStore.getState().clips[0]!.id

@@ -21,6 +21,7 @@ export function Timeline(): JSX.Element | null {
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const currentTime = useVideoStore((s) => s.currentTime)
   const setClipRange = useVideoStore((s) => s.setClipRange)
+  const endGesture = useVideoStore((s) => s.endGesture)
   const requestSeek = useVideoStore((s) => s.requestSeek)
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragMode>(null)
@@ -68,6 +69,10 @@ export function Timeline(): JSX.Element | null {
 
     function onUp(): void {
       setDrag(null)
+      // T-40: the button coming up ends this trim. Without it the next drag
+      // of the same handle carried the same coalescing key and disappeared
+      // into this one's undo step.
+      endGesture()
     }
 
     window.addEventListener('mousemove', onMove)
@@ -76,7 +81,7 @@ export function Timeline(): JSX.Element | null {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [drag, clip, positionToSeconds, setClipRange, requestSeek])
+  }, [drag, clip, positionToSeconds, setClipRange, requestSeek, endGesture])
 
   /** Click or drag anywhere on the track: seek to that point in the source. */
   function startScrub(e: ReactMouseEvent<HTMLDivElement>): void {

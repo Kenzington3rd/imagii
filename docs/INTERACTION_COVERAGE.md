@@ -415,8 +415,10 @@ composition). Rename + first-save prompt -> defect pins [T-28] —
 UPGRADED round 46 to positives: both flows run through the in-app
 `<NameDialog>`, driven to disk (rename incl. undo/redo; first save
 creates the board, saves the item and caches its thumbnail bytes), see
-the round-46 section. Clear thumb cache -> defect pin both directions
-[T-29].
+the round-46 section. Clear thumb cache -> POSITIVE since [T-29]: the
+button empties the cache (it used to call the 500 MB LRU trim, which
+under the budget deleted nothing), and the budgeted trim's own end
+state is now driven by launching the app; see the round-47 section.
 
 ## Dispositions — round 26 (Wave B)
 
@@ -1231,3 +1233,42 @@ end state, all in `tests/e2e/image.spec.ts` and
   Both dialogs are one component (`components/NameDialog.tsx`), so
   Modal's scrim, Escape and focus-restore coverage carries over; the
   per-flow end states are the two tests named above.
+
+
+## Dispositions — round 47 (fix wave batch 20: T-29 + T-40 + T-74)
+
+- **References - Clear thumbnail cache (was defect pin both directions
+  [T-29]):** POSITIVE. `moodboard:clearThumbs` -> `pruneThumbCache(0)`;
+  references.spec.ts "Clear thumbnail cache empties the cache under the
+  budget too" seeds board-owned thumbs (unowned ones are reaped by
+  T-58's launch sweep before anything can be clicked), clicks, and
+  asserts an EMPTY directory plus the boards left intact. Mutation: the
+  handler put back to the budgeted call -> that assertion red with the
+  two files still on disk.
+- **New automatic end state (no control):** the 500 MB LRU now runs once
+  per launch, chained after `sweepOrphanThumbs`. Driven by
+  references.spec.ts "the 500 MB thumbnail budget is enforced at launch,
+  oldest first" — 600 MB of sparse board-owned thumbs, app launched,
+  nothing clicked, oldest-first until it fits; a second launch on a
+  cache that already fits deletes nothing more. Mutation: startup call
+  removed -> red with all four files present.
+- **Video 4e Timeline trim handles / 4i grade sliders + Reset / 4d crop
+  rect + aspect presets / 4q overlay fields / Player I-O markers
+  ([T-40]):** end state extended from "the edit lands" to "the edit is
+  its OWN undo step". `endGesture()` closes the coalescing window at
+  each gesture end; two consecutive drags of one handle are two steps
+  (video-core.spec.ts "timeline: two consecutive trim drags are two undo
+  steps (T-40)", driven with the house `dragTo` helper), and the
+  colour-and-motion test now walks Undo/Redo through slider, slider,
+  Reset as three separate steps. Mutation: `endGesture` made a no-op ->
+  both E2E tests and two store unit cases red. The panel-level
+  `onPointerUp` + `onBlur` pair means a control added to any of those
+  panels later inherits the behavior; no new interactive elements.
+- **Video 4q TextOverlayEditor time fields ([T-74], see round 45):**
+  the SOURCE-vs-clip timebase defect is FIXED, so the fields' end state
+  is now real pixels on a clip that does not start at 0. Layer 5 cuts
+  every T-51 clip at CLIP_START = 2, and two new cases run a real
+  `runExportJob` with `drawtext` swapped for `drawbox` (the linux binary
+  has no drawtext) — clip-relative window proven on every build,
+  including the speed divisor. The win32 drawtext pixel tests carry the
+  same claim on the shipping platform via the release runner.

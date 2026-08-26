@@ -8,6 +8,7 @@ export function ColorGradePanel(): JSX.Element | null {
   const setClipColorGrade = useVideoStore((s) => s.setClipColorGrade)
   const setClipAutoZoom = useVideoStore((s) => s.setClipAutoZoom)
   const setClipHypeShake = useVideoStore((s) => s.setClipHypeShake)
+  const endGesture = useVideoStore((s) => s.endGesture)
   const clip = clips.find((c) => c.id === selectedClipId)
   if (!clip) return null
   const grade: ColorGrade = clip.colorGrade ?? DEFAULT_COLOR_GRADE
@@ -18,7 +19,17 @@ export function ColorGradePanel(): JSX.Element | null {
   }
 
   return (
-    <div className="card p-3 flex flex-col gap-3 text-sm">
+    // T-40: every slider in this panel shares one coalescing key ("the grade
+    // of this clip"), which is what makes a drag one undo step — and what
+    // used to swallow the NEXT slider, and Reset, into the same step. Both
+    // handlers sit on the panel rather than on each control because pointerup
+    // and focusout bubble: one pair covers the four sliders, the two
+    // checkboxes and the Reset button, and any control added later.
+    <div
+      className="card p-3 flex flex-col gap-3 text-sm"
+      onPointerUp={endGesture}
+      onBlur={endGesture}
+    >
       <PanelHeader icon="palette">Color & motion</PanelHeader>
       <Slider
         label="Brightness"

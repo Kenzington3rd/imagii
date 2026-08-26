@@ -19,12 +19,18 @@ export function ClipList(): JSX.Element {
   const removeClip = useVideoStore((s) => s.removeClip)
   const renameClip = useVideoStore((s) => s.renameClip)
   const setClipSpeed = useVideoStore((s) => s.setClipSpeed)
+  const endGesture = useVideoStore((s) => s.endGesture)
   const source = useVideoStore((s) => s.source)
   const selected = clips.find((c) => c.id === selectedClipId)
   const selectedSpeed = selected?.speedMultiplier ?? 1
 
   return (
-    <div className="card p-4 flex flex-col gap-3">
+    // T-40: the speed slider and each rename field coalesce their own stream
+    // of events into one undo step, and only a gesture END can tell that
+    // stream from the next one. pointerup and focusout bubble, so one pair
+    // here closes the window for the slider, its Reset button and every
+    // rename input in the list.
+    <div className="card p-4 flex flex-col gap-3" onPointerUp={endGesture} onBlur={endGesture}>
       <PanelHeader
         icon="film"
         actions={

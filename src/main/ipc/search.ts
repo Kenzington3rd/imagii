@@ -141,5 +141,9 @@ export function registerSearchIpc(): void {
     }
     return restoreCollections(collections as MoodBoardCollection[])
   })
-  ipcMain.handle('moodboard:prune', () => pruneThumbCache())
+  // T-29: a budget of zero — the button says "Clear thumbnail cache" and now
+  // means it. The 500 MB LRU is the automatic path and runs at launch
+  // (main/index.ts); no renderer-supplied budget crosses the bridge, so
+  // there is nothing here to validate.
+  ipcMain.handle('moodboard:clearThumbs', () => pruneThumbCache(0))
 }

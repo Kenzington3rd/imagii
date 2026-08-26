@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { MoodBoardCollection, SearchResult } from '../../shared/search'
@@ -267,5 +276,68 @@ describe('sweepOrphanThumbs — the reap moved to a point undo cannot reach', ()
   it('does nothing when there is no cache directory yet', async () => {
     const m = await import('./moodboard')
     expect(await m.sweepOrphanThumbs()).toBe(0)
+  })
+})
+
+/**
+ * T-29 — the two intents behind one function. `pruneThumbCache(0)` is what
+ * the "Clear thumbnail cache" button asks for (`moodboard:clearThumbs`); the
+ * default 500 MB budget is the LRU trim that runs at launch. Wiring the
+ * button to the budgeted call is exactly the defect: under the cap it
+ * deleted nothing while the toast claimed the cache was cleared.
+ */
+describe('pruneThumbCache — clear vs trim (T-29)', () => {
+  /** Seed `name` with `size` bytes and an mtime of `age` seconds ago. */
+  function seedSized(name: string, size: number, ageSec: number): string {
+    mkdirSync(thumbsDir(), { recursive: true })
+    const file = path.join(thumbsDir(), name)
+    writeFileSync(file, Buffer.alloc(size))
+    const t = Math.floor(Date.now() / 1000) - ageSec
+    utimesSync(file, t, t)
+    return file
+  }
+
+  function cached(): string[] {
+    return readdirSync(thumbsDir()).sort()
+  }
+
+  it('a budget of 0 empties the directory', async () => {
+    const m = await import('./moodboard')
+    seedSized('a.jpg', 1024, 30)
+    seedSized('b.jpg', 2048, 20)
+    // A zero-byte file fits under ANY budget, so it is the one file a clear
+    // written as "trim to 0 bytes" would leave behind.
+    seedSized('truncated.jpg', 0, 10)
+
+    await m.pruneThumbCache(0)
+
+    expect(cached()).toEqual([])
+  })
+
+  it('the default budget deletes nothing when the cache is under it', async () => {
+    const m = await import('./moodboard')
+    seedSized('small-a.jpg', 1024, 30)
+    seedSized('small-b.jpg', 1024, 20)
+
+    await m.pruneThumbCache()
+
+    expect(cached()).toEqual(['small-a.jpg', 'small-b.jpg'])
+  })
+
+  it('over the budget it drops oldest first and stops as soon as it fits', async () => {
+    const m = await import('./moodboard')
+    seedSized('oldest.jpg', 4096, 300)
+    seedSized('middle.jpg', 4096, 200)
+    seedSized('newest.jpg', 4096, 100)
+
+    // Room for two of the three.
+    await m.pruneThumbCache(9000)
+
+    expect(cached()).toEqual(['middle.jpg', 'newest.jpg'])
+  })
+
+  it('does nothing when there is no cache directory yet', async () => {
+    const m = await import('./moodboard')
+    await expect(m.pruneThumbCache(0)).resolves.toBeUndefined()
   })
 })

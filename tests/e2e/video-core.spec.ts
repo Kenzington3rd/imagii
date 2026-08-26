@@ -911,6 +911,83 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  /**
+   * T-40 — one gesture, one undo step; the NEXT gesture is its own.
+   *
+   * `historyKey` coalesces a drag's stream of `setClipRange` calls, and it
+   * only ever reset on a discrete action or an undo. Two consecutive drags
+   * of the same handle therefore carried the same key and collapsed into one
+   * step: the first Undo threw away both. This spec used to work around it —
+   * the trim-start phase above undoes and redoes before the trim-end drag,
+   * which is what re-opened the window for it. Here the two drags are
+   * back to back with nothing in between, which is the shape that failed.
+   */
+  test('timeline: two consecutive trim drags are two undo steps (T-40)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('coalesce')
+    try {
+      const undoButton = window.getByRole('button', { name: 'Undo' })
+      await expect(undoButton).toBeDisabled()
+      expect(await timelineReadouts(window)).toEqual([0, FIXTURE_SECONDS, FIXTURE_SECONDS])
+
+      const track = window.locator('[data-tutorial="video-timeline"] .relative.h-12')
+      const trackBox = (await track.boundingBox())!
+
+      async function dragStartTo(toRatio: number): Promise<void> {
+        const handle = window.getByRole('button', { name: 'Trim start' })
+        const box = (await handle.boundingBox())!
+        await dragTo(
+          window,
+          { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+          { x: trackBox.x + trackBox.width * toRatio, y: trackBox.y + trackBox.height / 2 },
+          {
+            extent: {
+              label: `Trim start to ${Math.round(toRatio * 100)}%`,
+              read: async () => (await timelineReadouts(window))[0],
+              settled: (v) => Math.abs(v - FIXTURE_SECONDS * toRatio) < 0.15
+            }
+          }
+        )
+      }
+
+      // ── two drags of the same handle, back to back ──
+      await dragStartTo(0.25)
+      const [afterFirst] = await timelineReadouts(window)
+      expect(Math.abs(afterFirst - 0.5)).toBeLessThan(0.15)
+
+      await dragStartTo(0.5)
+      const [afterSecond] = await timelineReadouts(window)
+      expect(Math.abs(afterSecond - 1.0)).toBeLessThan(0.15)
+
+      // ── the first Undo takes back the SECOND drag only ──
+      await expect(undoButton).toBeEnabled()
+      await undoButton.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0])
+        .toBeCloseTo(afterFirst, 3)
+      // Still something to undo: the first drag is its own step.
+      await expect(undoButton).toBeEnabled()
+
+      // ── the second Undo takes back the first ──
+      await undoButton.click()
+      expect(await timelineReadouts(window)).toEqual([0, FIXTURE_SECONDS, FIXTURE_SECONDS])
+      await expect(undoButton).toBeDisabled()
+
+      // Redo walks the same two steps forward again.
+      const redoButton = window.getByRole('button', { name: 'Redo' })
+      await redoButton.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0])
+        .toBeCloseTo(afterFirst, 3)
+      await redoButton.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0])
+        .toBeCloseTo(afterSecond, 3)
+    } finally {
+      await app.close()
+    }
+  })
+
   test('timeline: clicking the track scrubs there, dragging scrubs continuously, and the trim handles keep priority (T-52)', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('scrub')
@@ -1490,6 +1567,21 @@ test.describe('Video Studio core editing surface', () => {
       await gradeCard.getByRole('button', { name: 'Reset color' }).click()
       await expect(readouts).toHaveText(['0.00', '1.00', '1.00', '+0.00'])
       await expect(gradeCard.getByRole('slider', { name: 'Brightness' })).toHaveValue('0')
+
+      // T-40: Reset is its own undo step. Every control in this panel shares
+      // one coalescing key ("the grade of this clip"), so before the gesture
+      // window learned to close, the four slider edits AND the reset were a
+      // single step and this Undo landed on the defaults it had just set.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect(readouts).toHaveText(['0.25', '1.20', '1.50', '-0.50'])
+      // And each slider is a step of its own: undoing again walks back one
+      // field, not the whole panel.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect(readouts).toHaveText(['0.25', '1.20', '1.50', '+0.00'])
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(readouts).toHaveText(['0.25', '1.20', '1.50', '-0.50'])
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(readouts).toHaveText(['0.00', '1.00', '1.00', '+0.00'])
 
       // ── the two motion checkboxes ──
       // Both are controlled from the clip in the store, so a box that stays

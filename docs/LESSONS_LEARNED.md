@@ -14,6 +14,128 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-08-26 — T-29 + T-40 + T-74: three controls measured against the wrong number
+
+A button that measured a clear against a budget, an undo step that
+measured a gesture against a label, and a filter window that measured
+one clock against another. Each one worked perfectly on the one input
+where the two numbers happen to agree — a cache over 500 MB, a drag
+followed by an undo, a clip starting at 0.00 — which is exactly why all
+three survived their own tests.
+
+### Bug (T-74) — text overlays never rendered on a clip that does not start at 0
+
+- **Root cause.** Two timebases, one field. `overlay.startSec` /
+  `endSec` are SOURCE-absolute seconds: that is what the Text overlays
+  panel shows in its Time fields and what it defaults a new overlay to
+  (`clip.startSec` -> `clip.endSec`). `drawTextFilter` emitted those
+  numbers straight into `enable='between(t,...)'`, but `runExportJob`
+  passes `-ss` BEFORE `-i` — input seeking — so the clip's first frame
+  reaches the filter graph at t=0 and the window is clip-relative. For a
+  clip starting at S with duration D the overlay appeared only during
+  t in [S, D]: late by S seconds, and absent entirely once S > D. A
+  clip cut at 10 -> 13 with the editor's own default window showed
+  nothing at all. `setpts=PTS/speed`, which sits ahead of the overlay in
+  the chain, divides the same clock again, so a sped-up clip was wrong
+  in a second way.
+- **Fix.** `buildVideoFilter` — the one place that can see both the clip
+  and the overlay — converts: `t_graph = (t_source - clip.startSec) /
+  speed`. Storage stays source-absolute deliberately: it is what the
+  editor displays and what every saved project already holds, so
+  re-basing it would silently reinterpret existing files. Unclamped, so
+  a window that opens before the clip keeps its visible half. The whole
+  derivation lives in the block comment above `drawTextFilter`, at the
+  seam, not in a ticket.
+- **Test.** `src/main/ffmpeg/filters.test.ts` — "text-overlay enable
+  window (T-74)" pins the conversion including the speed divisor and the
+  negative-start case. Layer 5 (`npm run test:media`) proves real ffmpeg
+  agrees: the T-51 pixel block now cuts every clip at CLIP_START = 2
+  instead of 0, and two new cases run a REAL `runExportJob` with
+  `drawtext` swapped for `drawbox` — the linux binary has no drawtext at
+  all — asserting the overlay is painted from the clip's first frame and
+  that a 2x clip's window lands at 0.2 -> 0.8.
+- **Lesson.** **When a stored number and a consumed number are both
+  "seconds", write down which clock each one is on at the place they
+  meet.** The bug is invisible at the origin (0 is 0 in every timebase),
+  which is where tests get written; it only appears at an offset. And a
+  stand-in filter is a legitimate way to test a filter the local binary
+  cannot run — as long as you substitute the NAME and keep the argument
+  under test byte-identical, so the production string and the production
+  command are still the things being proven.
+
+### Bug (T-29) — "Clear thumbnail cache" cleared nothing under 500 MB
+
+- **Root cause.** The button invoked `moodboard:prune`, whose handler
+  called `pruneThumbCache()` with its DEFAULT 500 MB budget. That is an
+  LRU trim: under the budget it deletes nothing and returns happily,
+  and the renderer toasted "Thumbnail cache cleared" regardless. Since
+  essentially every cache is under 500 MB, the button did nothing for
+  essentially every user. The mirror-image half: the budgeted trim had
+  no automatic caller at all — this button was the only thing that ever
+  ran it — so a cache under the cap grew forever and one over it was
+  trimmed only by a user pressing a button that claimed to do something
+  else.
+- **Fix.** Two intents, named separately. `moodboard:clearThumbs` calls
+  `pruneThumbCache(0)` and empties the directory (0 is treated as "keep
+  nothing", not "trim to 0 bytes" — a zero-byte truncated write fits
+  under any budget and would have survived a clear expressed as size
+  arithmetic). The 500 MB LRU became the automatic path: it runs once
+  per launch, chained after `sweepOrphanThumbs` rather than beside it,
+  because both unlink from the same directory. No renderer-supplied
+  budget crosses the bridge, so there is nothing new to validate at the
+  boundary.
+- **Test.** `src/main/search/moodboard.test.ts` — "pruneThumbCache —
+  clear vs trim (T-29)" covers all three: a budget of 0 empties even a
+  zero-byte file, the default budget deletes nothing under the cap, an
+  explicit budget drops oldest-first and stops the moment it fits.
+  `tests/e2e/references.spec.ts` — the old two-direction defect pin is
+  now "Clear thumbnail cache empties the cache under the budget too"
+  and "the 500 MB thumbnail budget is enforced at launch, oldest first"
+  (nothing is clicked in the second: launching the app is the action).
+- **Lesson.** **A toast is a promise; the call under it has to be the
+  thing the promise says.** "Prune" and "clear" are different operations
+  and a default argument is not a place to decide which one a user
+  asked for. Second, from the other half: **a maintenance routine with
+  no automatic caller is not a policy, it is a function** — if a budget
+  is meant to hold, something must run it on its own.
+
+### Bug (T-40) — undo coalescing never closed, so two drags were one step
+
+- **Root cause.** `historyKey` marks a run of high-frequency mutations
+  as one undo step ("range:<clipId>", "grade:<clipId>", ...), and it
+  only ever reset on a discrete action, on undo/redo, or on selecting
+  another clip. A key can say "the same kind of edit as last time"; it
+  cannot say "a different gesture of that same kind". So two
+  consecutive trim drags, two crop drags, four colour sliders and the
+  Reset that followed them all collapsed into a single step, and one
+  Undo threw away every one of them. `video-core.spec.ts` had been
+  written around it — its trim-end drag comes after an undo/redo, which
+  is what re-opened the window.
+- **Fix.** `endGesture()` on the store closes the window (a no-op when
+  none is open, since every pointerup in the studio reaches one), and
+  the surfaces that own a gesture call it when the gesture ENDS:
+  Timeline's window `mouseup`, the crop rectangle's `onDragStop` /
+  `onResizeStop`, the aspect-preset and Reset buttons that share the
+  crop key, the Player's I/O marker presses, and — via one bubbling
+  `onPointerUp` + `onBlur` pair on each panel rather than props on every
+  control — the speed slider, the four grade sliders, the rename fields
+  and the overlay editor's inputs.
+- **Test.** `src/renderer/src/modules/video-studio/store/videoStore.test.ts`
+  — "two consecutive trim drags are two undo steps, not one", plus the
+  cases pinning that one open gesture still collapses and that the
+  no-op cannot swallow a step. `tests/e2e/video-core.spec.ts` — "two
+  consecutive trim drags are two undo steps (T-40)" drives two real
+  drags back to back with nothing in between, and the colour-and-motion
+  test now walks Undo/Redo through slider, slider, Reset as three steps.
+- **Lesson.** **Coalescing needs an end event, not just a key.** Any
+  "batch the next N events into one" scheme has to be told when the
+  batch is over by whatever owns the gesture — mouseup, drag stop,
+  blur — because the events themselves cannot tell you. If the only
+  thing that closes your window is a different KIND of action, then
+  doing the same thing twice in a row is silently one thing.
+
+---
+
 ## 2026-08-26 — T-28 + T-73 + T-64: the dialogs, and what each of them only half was
 
 Three bugs about dialogs. Two of them are the same shape as bugs this
