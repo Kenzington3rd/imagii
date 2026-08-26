@@ -143,7 +143,7 @@ fleet ticket that will drive its end state.
    schema pinned against each other). E2E: T-23.
 
 Also noted, not ticketed: Tutorial's scrim click ADVANCES rather than
-dismisses (Tutorial.tsx:121) — by design, but tests must not click the
+dismisses (Tutorial.tsx:212) — by design, but tests must not click the
 scrim to escape; Image emote-pack export (112x112 + PNG) silently emits
 three files from one click (ExportDialog.tsx:77-89) — intended feature,
 covered by T-25 (round 26). The orphaned getStageDataUrl() this note
@@ -311,19 +311,25 @@ format/quality/scale selects, Variants (generate/save/regenerate/
 save-all — download events), Export (browser download; emote-pack
 3-file branch), modal escape/scrim.
 
-### References (20)
+### References (26)
 
 HomeLink (COV), TutorialButton, tabs x3, search input + Enter + button
-(HL live DDG), result Save (HL + NAT first-board prompt), remote thumbs
-(HL), board name input + Enter + "+" button, board row select, clear
-thumb cache, rename (NAT), delete (NAT), item ->Canvas (cross-studio
-bridge), item remove, asset cards (headless-safe canvas replacement).
+(HL live DDG), result Save (live results HL; the SAVE and its
+first-board flow are covered since T-28), remote thumbs (HL), board
+name input + Enter + "+" button, board row select, clear thumb cache,
+rename button, delete (NAT), item ->Canvas (cross-studio bridge), item
+remove, asset cards (headless-safe canvas replacement). **T-28 added
+six**: the rename dialog's field / Cancel / Rename, and the first-save
+dialog's field / Cancel / Create & save — one `<NameDialog>` serving
+both, so Modal's own rows cover the scrim, Escape and focus restore.
 
 ### Shared (21)
 
 Modal scrim/stopPropagation/Escape/focus-trap, Tutorial scrim-advance /
 Skip (no persist) / Back / Next-Done (persists tutorialSeen) + 4 key
-bindings (Esc COV partial), RecentFilesMenu toggle/mouse-leave/item/
+bindings, **the coachmark's own Tab cycle + focus restore and the
+topmost-claim Escape (T-64/T-73 — Modal and Tutorial share one trap)**,
+RecentFilesMenu toggle/mouse-leave/item/
 clear **+ Escape and click-outside (T-18)**, TutorialButton x4,
 HomeLink x5 (COV), ErrorBoundary reload + details disclosure,
 AppToaster surface (MutationObserver pattern from export.spec),
@@ -405,8 +411,12 @@ E2E (imagii-file:// thumb served for real; ->Canvas bridge to layer at
 replace-not-append E2E. Search: input/Enter/button/in-flight/error-card
 -> proxy-hermetic E2E; live search + result Save + remote thumbs ->
 HL-network (deepest: duckduckgo.test.ts 27 units + validator
-composition). Rename + first-save prompt -> defect pins [T-28]. Clear
-thumb cache -> defect pin both directions [T-29].
+composition). Rename + first-save prompt -> defect pins [T-28] —
+UPGRADED round 46 to positives: both flows run through the in-app
+`<NameDialog>`, driven to disk (rename incl. undo/redo; first save
+creates the board, saves the item and caches its thumbnail bytes), see
+the round-46 section. Clear thumb cache -> defect pin both directions
+[T-29].
 
 ## Dispositions — round 26 (Wave B)
 
@@ -1167,3 +1177,57 @@ end state, all in `tests/e2e/image.spec.ts` and
   windows-latest after verify — the Layer 5 suite now executes on the
   shipping platform every release, closing the "green on linux only"
   gap the v1.3.0 failure exposed.
+
+
+## Dispositions — round 46 (fix wave batch 19: T-73 + T-28 + T-64)
+
+- **Escape, app-wide:** conditional — the TOPMOST dialog only. Every
+  open dialog holds a numbered claim (`hooks/useFocusTrap.ts`) and
+  consults it before acting on Escape or Tab. E2E drives the one stack
+  a user can build (`?` over a coachmark): one Escape closes the
+  overlay, the coachmark survives, a second closes it, and
+  `elementFromPoint` proves the overlay is on top rather than dimmed
+  under the coachmark's scrim (Modal moved to z-[1200]). Mutation:
+  the coachmark's guard removed -> one Escape closes both (red).
+  Modal-over-Modal is UNREACHABLE in today's app (no dialog opens
+  another; every opener sits behind a scrim) — that half is pinned
+  structurally in interactionWiring.test.ts plus 10 pure-predicate
+  units, the T-49 precedent.
+- **Tutorial coachmark (Shared 21):** Tab cycle + focus restore now
+  real, not just claimed by `aria-modal`. E2E: Tab and Shift+Tab stay
+  inside the card over 13 presses (red-first: one Tab landed on
+  `Home`), Escape and Skip both hand focus back to the opener.
+  Mutation: the shared trap disabled -> the coachmark test AND both
+  pre-existing Modal-contract tests (Templates, FixWizard) go red,
+  which is what "one implementation" means.
+- **Tutorial target poll:** `scrollIntoView` fires once per step, and
+  the poll only writes state when the rect really moved. Instrumented
+  E2E counts the calls in the live page: 7 in two seconds before, 1
+  after, and 2 after stepping away and back. `sameRect` unit-pinned
+  including a hair over the half-pixel epsilon.
+- **References - Rename (was NAT / defect pin [T-28]):** in-app
+  `<NameDialog>`. New elements, all E2E-driven to disk in
+  references.spec.ts "the Rename dialog renames on Enter and on the
+  button, and both cancels leave disk alone": the board-name field
+  (pre-filled AND pre-selected, asserted via selection length), Enter
+  to confirm, the Rename button to confirm, Cancel, Escape, and the
+  blank-name refusal (button disabled, Enter inert, disk untouched).
+  Rename goes through the store, so undo/redo are asserted too, and
+  the id/createdAt survive (same board, not a new one wearing the
+  name). The `pageerror` and native-dialog spies must both stay empty.
+- **References - result Save (was HL + NAT first-board prompt
+  [T-28]):** the first-save flow is now covered rather than
+  dispositioned. references.spec.ts "saving a result with no board yet
+  names one, creates it, and saves into it" answers `search:images` in
+  MAIN with one synthetic result whose thumbnail is served by an HTTP
+  server the test owns, so the cache write is a real `net.fetch`: the
+  board JSON, the item, and the cached thumbnail's BYTES are all
+  asserted, and the tile is re-read through imagii-file:// with
+  naturalWidth 8. Cancel writes nothing. The Save button is no longer
+  disabled at zero boards (mutation: re-disable it -> red). Live
+  DuckDuckGo results and remote thumbnails remain HL-network.
+- **New elements (+6 on References 20 -> 26):** rename dialog field /
+  Cancel / Rename; first-save dialog field / Cancel / Create & save.
+  Both dialogs are one component (`components/NameDialog.tsx`), so
+  Modal's scrim, Escape and focus-restore coverage carries over; the
+  per-flow end states are the two tests named above.

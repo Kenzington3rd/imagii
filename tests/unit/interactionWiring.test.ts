@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 import { RENDERER_ROOT, ROUTE_ENTRY, collectRouteSources } from './routeSources'
 
 /**
@@ -375,5 +376,165 @@ describe('T-49 — the export panel carries no copy a user can never reach', () 
     const persist = panel.slice(panel.indexOf('if (watermark) {'), panel.indexOf('const sourceBase'))
     expect(persist).toMatch(/settings\.set\('streamerHandle', watermark\.text\)/)
     expect(persist).toMatch(/settings\.set\('watermarkPosition', watermark\.position\)/)
+  })
+})
+
+describe('T-73 — one Escape closes one dialog, and it is the topmost', () => {
+  // E2E: tests/e2e/home-chrome.spec.ts "Escape closes only the topmost dialog"
+  // drives the ONE stack a user can build today — the `?` shortcuts overlay
+  // raised over a tutorial coachmark — and its mutation proof is the
+  // coachmark's own guard. Modal-over-Modal is not reachable in this app: no
+  // dialog opens another, and every opener sits behind a scrim. That half of
+  // the claim can only be pinned here, which is exactly how the T-49 dead
+  // branch survived long enough to be documented.
+  const modal = read('components/Modal.tsx')
+  const tutorial = read('components/Tutorial.tsx')
+  const trap = read('hooks/useFocusTrap.ts')
+
+  it('Modal answers Escape only while it holds the topmost claim', () => {
+    const handler = modal.slice(modal.indexOf("if (e.key !== 'Escape')"), modal.indexOf('onClose()'))
+    expect(handler).toMatch(/if \(!isTopmost\(\)\) return/)
+  })
+
+  it('the coachmark consults the same claim before acting on any key', () => {
+    const handler = tutorial.slice(
+      tutorial.indexOf('function onKey'),
+      tutorial.indexOf('const intent =')
+    )
+    expect(handler).toMatch(/if \(!isTopmost\(\)\) return/)
+  })
+
+  it('both take that claim from the one shared trap', () => {
+    for (const [label, source] of [
+      ['Modal.tsx', modal],
+      ['Tutorial.tsx', tutorial]
+    ] as const) {
+      expect(source, label).toMatch(/import \{ useFocusTrap \} from '\.\.\/hooks\/useFocusTrap'/)
+      expect(source, label).toMatch(/useFocusTrap\(/)
+    }
+  })
+
+  it('leaves no second copy of the trap behind (T-64, the T-15 precedent)', () => {
+    // One binding, one implementation. A component that re-grows its own
+    // focusable query has stopped sharing the claim with it.
+    for (const [label, source] of [
+      ['Modal.tsx', modal],
+      ['Tutorial.tsx', tutorial]
+    ] as const) {
+      expect(source, label).not.toMatch(/FOCUSABLE|querySelectorAll/)
+    }
+    expect(trap).toMatch(/FOCUSABLE_SELECTOR/)
+  })
+
+  it('keeps the topmost dialog topmost on screen', () => {
+    // The claim decides who answers Escape; the z-order has to agree, or the
+    // dialog that owns the keyboard is the one buried under the other's scrim.
+    const modalZ = /z-\[(\d+)\]/.exec(modal)
+    const tutorialZ = /z-\[(\d+)\]/.exec(tutorial)
+    expect(modalZ?.[1]).toBeDefined()
+    expect(tutorialZ?.[1]).toBeDefined()
+    expect(Number(modalZ?.[1])).toBeGreaterThan(Number(tutorialZ?.[1]))
+  })
+})
+
+/**
+ * T-28 — `prompt` is not a thing in Electron, and never becomes one.
+ *
+ * MoodBoardPanel.onRename and ReferencePanel.ensureCollection both asked for
+ * a name with `window.prompt`. Electron does not implement it: the renderer
+ * throws "prompt() is and will not be supported.", no dialog appears, and the
+ * control is dead while looking perfectly healthy. That is invisible to a
+ * types check, invisible to a review that reads the line as ordinary DOM, and
+ * — because the failure is a throw inside a click handler — invisible to
+ * anything but a test that watches for it.
+ *
+ * So the rule is enforced on the whole tree rather than on the two files that
+ * happened to break: the app asks for a name with `<NameDialog>`.
+ * E2E: tests/e2e/references.spec.ts drives both flows to disk.
+ */
+describe('T-28 — nothing in src/ calls the DOM prompt', () => {
+  const SRC_ROOT = path.resolve(__dirname, '../../src')
+
+  /**
+   * Every call in `code` whose callee is `prompt` or `<something>.prompt`.
+   *
+   * Parsed rather than grepped, for the reason interactiveNesting gives: a
+   * regex over source text answers a question about characters, not about
+   * code. The first draft of this check flagged its own doc comment, and
+   * would have flagged a string in an error message just as happily — a
+   * scanner nobody can write prose around gets weakened until it passes.
+   */
+  function promptCalls(code: string, file = 'x.tsx'): string[] {
+    const source = ts.createSourceFile(file, code, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX)
+    const found: string[] = []
+    function walk(node: ts.Node): void {
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression
+        const name = ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : ts.isIdentifier(callee)
+            ? callee.text
+            : null
+        if (name === 'prompt') found.push(callee.getText(source))
+      }
+      ts.forEachChild(node, walk)
+    }
+    walk(source)
+    return found
+  }
+
+  function sources(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry)
+      if (statSync(full).isDirectory()) sources(full, out)
+      else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) out.push(full)
+    }
+    return out
+  }
+
+  const files = sources(SRC_ROOT)
+
+  it('finds sources to check', () => {
+    // Floor: a scanner that silently matched nothing would look identical to
+    // a clean tree (the interactiveNesting lesson).
+    expect(files.length).toBeGreaterThan(100)
+  })
+
+  it('has no call left anywhere', () => {
+    const offenders = files
+      .filter((f) => promptCalls(readFileSync(f, 'utf8'), f).length > 0)
+      .map((f) => path.relative(SRC_ROOT, f))
+    expect(offenders).toEqual([])
+  })
+
+  it('discriminates: it catches both spellings of the call it removed', () => {
+    // The exact two lines that were in the tree, plus the bare form.
+    expect(promptCalls("const next = prompt('Rename mood board', collection.name)")).toEqual([
+      'prompt'
+    ])
+    expect(promptCalls("const name = window.prompt('Name your first mood board:')")).toEqual([
+      'window.prompt'
+    ])
+    expect(promptCalls('function f() { return globalThis.prompt() }')).toEqual([
+      'globalThis.prompt'
+    ])
+  })
+
+  it('does not fire on names that merely end in "prompt", or on prose', () => {
+    // A future AI-art panel with a `setPrompt(value)` call must not fail the
+    // build; the rule is about the DOM function, not about the word.
+    expect(promptCalls('setPrompt(value)')).toEqual([])
+    expect(promptCalls('const userPrompt = promptText')).toEqual([])
+    expect(promptCalls("throw new Error('prompt() is not supported') // prompt(x)")).toEqual([])
+  })
+
+  it('names NameDialog as the replacement, and both flows use it', () => {
+    expect(read('components/NameDialog.tsx')).toMatch(/<Modal/)
+    for (const rel of [
+      'modules/references/MoodBoardPanel.tsx',
+      'modules/references/ReferencePanel.tsx'
+    ]) {
+      expect(read(rel), rel).toMatch(/<NameDialog/)
+    }
   })
 })

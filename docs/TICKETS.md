@@ -459,7 +459,7 @@ Statuses: `open` -> `in-progress (worker)` -> `review (expediter)` ->
   - [ ] Flip both defect pins into positive tests (rename persists to
         disk; first-save creates the board and saves the item).
   - [ ] LESSONS entry per IMG-PREC.
-- **Status:** open
+- **Status:** done (round 46 — see Done)
 
 ## T-29 — "Clear thumbnail cache" only trims above a 500 MB budget
    (Round-38 note: T-58 moved the eager per-delete thumb reap to a
@@ -1070,7 +1070,7 @@ IMG-PREC.
   restores on close/skip (reuse Modal's mechanism per the ladder);
   poll only updates state when the rect actually changed and
   scrollIntoView fires once per step; E2E + unit per the standing bar.
-- **Status:** open
+- **Status:** done (round 46 — see Done)
 
 ## T-63 — Space on a focused crop button both clicks it and toggles playback
 
@@ -1132,7 +1132,13 @@ IMG-PREC.
 - **Acceptance criteria:** Escape closes only the topmost modal;
   the stacked-confirm E2E asserts the outer dialog survives one
   Escape; existing single-modal Escape coverage green.
-- **Status:** open (backlog — post-wave)
+- **Status:** done (round 46 — see Done. The ticketed premise was
+  wrong: no confirm ever stacks inside ExportDialog — no Modal opens
+  over another anywhere. The REAL reachable stack was `?` over a
+  tutorial coachmark, where one Escape did take both, plus a z-order
+  bug leaving the overlay dimmed UNDER the coachmark scrim; both
+  fixed via a shared topmost-claim stack, and Modal-over-Modal is
+  pinned structurally for the day it becomes reachable.)
 
 ## T-72 — HotkeyOverlay's ? toggle stacks over open dialogs
 
@@ -1293,9 +1299,100 @@ IMG-PREC.
 - **Status:** done (round 45 — see Done; the win32 positives' first
   real execution is the v1.5.0 release run, by design)
 
+## T-75 — studio hotkeys fire under an open tutorial coachmark
+
+- **Spec:** T-73/T-64 worker finding, pre-existing. The T-68 hotkey
+  guard reads `openModalCount()`, and the coachmark deliberately stays
+  out of that count so `?` stays pressable during a tutorial (the
+  T-72 exemption). Side effect: with a coachmark open over a studio,
+  the bare-letter tool keys and Delete still reach the canvas behind
+  the scrim — exactly the T-68 failure, resurrected through the one
+  dialog the count ignores. The claim stack in `hooks/useFocusTrap.ts`
+  now counts every open dialog including the coachmark, so the right
+  reader exists; the studios just don't consult it.
+- **Acceptance criteria:** bare-letter/Delete studio hotkeys are inert
+  while a coachmark is open (guard on the claim stack, not
+  `openModalCount` — `?` must stay live per T-72); E2E drives a letter
+  key under an open coachmark and asserts the canvas did not change;
+  existing hotkey and `?`-during-tutorial coverage green.
+- **Status:** open
+
+## T-76 — saving a result already on the board toasts "Saved to X" without saving
+
+- **Spec:** T-73/T-28 worker finding, T-48 class (false success copy).
+  `addToCollection` (src/main/search/moodboard.ts:221) silently
+  returns the collection unchanged when the result's fullUrl is
+  already on the board — the dedupe is right — but
+  `ReferencePanel.saveInto` toasts `Saved to "X"` unconditionally, so
+  a duplicate save reports a write that never happened. Usability
+  ruling: the toast must tell the truth.
+- **Acceptance criteria:** a duplicate save gets its own honest toast
+  (e.g. already-saved wording), distinct from the success copy; the
+  renderer learns the difference from the call it already makes (item
+  count, or a flag on the IPC result — pick and document); E2E drives
+  the double save and asserts both toasts; the negative discriminates
+  per round-21 protocol.
+- **Status:** open
+
+## T-77 — aria-modal is a promise the DOM does not keep: background stays in the AT tree
+
+- **Spec:** a11y review, round 46 (MED). Every dialog is
+  `aria-modal="true"`, but Chromium does not enforce aria-modal for
+  virtual-cursor/browse-mode navigation — the studio behind the scrim
+  stays in the accessibility tree, so a screen reader can walk out of
+  the dialog the Tab trap correctly contains. The honest mechanism is
+  `inert` (or `aria-hidden`) on the app root while any dialog claim is
+  live; the claim stack from T-73 is the single source of truth for
+  "any dialog open".
+- **Acceptance criteria:** while any Modal or coachmark is open the
+  app root behind it is inert/aria-hidden and interactive content
+  behind the scrim is out of the AT tree; released when the last claim
+  drops (stacked dialogs must not un-hide early); unit-pin the
+  claim-count edge; E2E asserts the attribute toggles with the dialog
+  lifecycle.
+- **Status:** open (backlog)
+
 ---
 
 ## Done
+
+Round 46 — backlog batch 19: T-73 + T-28 + T-64 (the modal cluster).
+T-73's ticketed stack turned out not to exist — no Modal ever opens
+over another — but the CLASS was real where the ticket didn't look:
+`?` raised over a tutorial coachmark, where one Escape closed both
+AND a z-order bug (Modal z-[800] under the coachmark's z-[1000])
+left the overlay dimmed beneath the scrim it was raised over. Fix is
+a shared numbered-claim stack in the new `hooks/useFocusTrap.ts`:
+every open dialog takes an identity claim and consults
+`isTopmost()` before acting on Escape or Tab, released by ID so
+out-of-order closes stay correct; Modal moved to z-[1200]. T-64
+rides the same extraction — the coachmark (aria-modal since it
+shipped, trapping nothing) now calls the one trap Modal uses, and
+the red-first E2E proved Tab used to walk out (landed on Home).
+Rider fixed too: scrollIntoView once per step and a sameRect
+epsilon gate (7 calls per 2 s -> 1, instrumented in the live page).
+T-28: `window.prompt` — which Electron does not implement — replaced
+by the in-app `<NameDialog>` for rename and first-save; both flows
+driven to disk (rename preserves id/createdAt and is undoable;
+first save creates the board, saves the item, and the cached
+thumbnail's BYTES are asserted through a test-owned HTTP server +
+net.fetch); an AST scanner in interactionWiring.test.ts bans
+prompt/alert/confirm in src/ forever. Worker fixed an Enter
+double-fire found mid-build (confirm closes the dialog, focus
+restores to the opener, and the same keypress's default action
+clicks it — reopening the dialog; `e.preventDefault()`, the T-34
+mechanism). Expedite: verify 1112/1112, build clean, full Playwright
+127/127, worker's mutations reviewed + one re-run personally
+(Enter-guard -> named red -> byte-identical restore -> green 9/9).
+a11y review: 0 HIGH; the MED (aria-modal not honest for AT virtual
+cursor) filed as T-77, the latent zero-focusable Tab fallback
+hardened in-batch (tabIndex before focus), the two LOWs are
+inherited house patterns, noted and accepted. Worker findings filed
+as T-75 (hotkeys fire under a coachmark — the T-72 exemption's side
+effect) and T-76 (duplicate save toasts "Saved to X" without
+saving). Expediter also retired Modal.tsx's fictional
+"confirm-over-ExportDialog" comments — the stack cited three times
+never existed; comments now name the real one.
 
 Round 45 — T-51 (the release-paired Layer 5 capability ticket) +
 the v1.5.0 version bump. Watermark and text-overlay PIXELS are now

@@ -79,6 +79,21 @@ Repeated UI is a component, not copy-paste:
   (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, Image and References all
   call it; its pure `undoRedoIntent` half is what the unit test drives.
   Never hand-roll another copy of the branch.
+- **`useFocusTrap(active, ref)`** (`hooks/useFocusTrap.ts`) — the app's
+  ONE focus trap: focus in on arrival, Tab cycling, focus restore on
+  close. It also takes the dialog's claim on the window and returns the
+  `isTopmost()` predicate the caller's own key handler must consult, so
+  one Escape closes one dialog (T-73). `Modal` and the tutorial
+  coachmark both call it; a third copy of a trap is a bug. Its pure
+  `isTopmostClaim` half is what the unit test drives.
+- **`<NameDialog>`** (`components/NameDialog.tsx`) — "ask the user for
+  one name", the whole of it: Modal chrome, a labelled field, Enter or
+  the confirm button, a blank name refused, Cancel/Escape/scrim leaving
+  the caller untouched. **Never `window.prompt` or `window.alert`** —
+  Electron does not implement them, so the call throws inside the click
+  handler and the control looks fine while doing nothing (T-28).
+  `tests/unit/interactionWiring.test.ts` parses `src/` and fails on any
+  `prompt` call.
 - **`PanelHeader`** — every panel section header. Renders the standard
   `<h3>` (`text-xs font-semibold uppercase tracking-wide text-ink-muted`,
   an `Icon`, `inline-flex items-center gap-1.5`). Pass an `actions`
