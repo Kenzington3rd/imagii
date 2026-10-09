@@ -66,8 +66,10 @@ jobs:
           name: imagii ${{ inputs.tag || github.ref_name }}
           files: dist/imagii.exe
           body: |
-            Standalone Windows app — no install needed.
+            imagii for Windows 10/11 (64-bit). Free, no account, nothing to install.
 
-            **Download `imagii.exe` below**, put it anywhere, and
-            double-click. Windows SmartScreen will warn on first run because
-            the file is unsigned: click **More info → Run anyway**.
+            1. Under **Assets** below, download **imagii.exe** (about 170 MB — not "Source code").
+            2. Put it anywhere and double-click. The first launch takes 10-15 seconds with no window while it unpacks.
+            3. Windows SmartScreen will say "Windows protected your PC" because the file is unsigned: click **More info**, then **Run anyway**. If your antivirus quarantines it, restore it and allow it.
+
+            Everything stays on your computer. Optional: auto-captions need a one-time setup (see the in-app Captions panel).

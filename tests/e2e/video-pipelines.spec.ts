@@ -431,7 +431,7 @@ function pipCard(window: Page): Locator {
 }
 
 function postCard(window: Page): Locator {
-  return cardWithButton(window, 'Suggest 4 titles')
+  return cardWithButton(window, 'Title starters')
 }
 
 /** The clip rows of the ClipList, as "name" + "start → end" pairs. */
@@ -2638,7 +2638,7 @@ test.describe('PostChecklist', () => {
       await expect(card.getByRole('button', { name: 'copy' })).toHaveCount(1)
 
       // ── four titles, each with its own copy button ──
-      await card.getByRole('button', { name: 'Suggest 4 titles' }).click()
+      await card.getByRole('button', { name: 'Title starters' }).click()
       const titleRows = card.locator('li')
       await expect(titleRows).toHaveCount(4)
       const first = (await titleRows.first().innerText()).replace(/\s*copy$/, '').trim()

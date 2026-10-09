@@ -14,6 +14,68 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-87 (round 53): a generator that glued letters onto words, and a subject that broke the article
+
+One ticket, found by the content review rather than by a user: the "Suggest 4
+titles" starters were the first sentences a streamer read after a clip, and the
+review proved each lens's sample title broken before it reached anyone.
+
+### Bug (T-87) — "Suggest 4 titles" wrote sentences a reader stops on
+
+- **Bug.** The generator produced "I clutchedd a boss fight so you don't have
+  to", "I beatd a glitch so you don't have to", "Day 41 of reacted toing
+  glitch", and "I clutchedd a achievement so you don't have to": a doubled
+  suffix, a gerund built on a past form, and an article in front of a word it
+  had not chosen. Two patterns named one of five games the streamer might not
+  play, and three slots dropped a bare noun into a sentence that needs one
+  ("Why boss fight broke me").
+- **Root cause.** The generator treated words as strings to glue. The verb bank
+  held past forms ('clutched', 'reacted to'), and the patterns appended `d` and
+  `ing` to whatever slot they sat in, so 'clutched' + 'd' and 'reacted to' +
+  'ing' typed words that do not exist. The article was written into the
+  pattern's literal text ("a {subject}"), so a subject that starts with a vowel
+  could only ever read "a achievement". Nothing could fail: the strings were
+  never checked against any grammar, and the set of titles the generator could
+  produce was never enumerated, only sampled at random.
+- **Fix.** `modules/video-studio/PostChecklist.tsx`. `VERBS` is a table of
+  `{ base, past, gerund }`, and every pattern names the form it needs
+  (`{base}`, `{past}`, `{gerund}`). `{a_subject}` is built with `article()`,
+  which returns 'an' for a vowel. `fillTitle()` is the only substitution, and
+  every slot takes a table value, its article, or the day number. `GAME_BANK`
+  and every `{game}` slot are gone; the two patterns that used one now stand
+  without it. 'achievement' left the subject list, so "an achievement" cannot be
+  generated. The button reads "Title starters"; its toast and the rest of the
+  panel are unchanged.
+- **Test.** Red first, against the old banks. `PostChecklist.test.ts` reached
+  the old constants through a temporary shim (the old banks exported under the
+  new names and filled by the old `.replace` chain) and failed on the full
+  cross-product: 20 titles with "dd ", 5 with "toing", 6 with "a achievement",
+  6 with "a" before a vowel, 30 with "!", and 2 patterns naming a game. The shim
+  was removed by restoring the original component (sha256 `411ca38e…`); the real
+  change then went in, and the file went green at 20 of 20. Mutation: one
+  pattern's `{past}` swapped to `{base}d` (`I {base}d {a_subject} so you
+  don't have to`). The named test "no letter is glued onto a verb slot" went red
+  (`expected [ Array(1) ] to deeply equal []`) and the file was restored
+  byte-identically. The output checks cannot see that mutation (`clutchd` has no
+  doubled letter), which is why the pattern-level check exists. The E2E pin moved
+  to 'Title starters' (`tests/e2e/video-pipelines.spec.ts`, "title ideas and
+  hashtag packs reach the real clipboard"), and it is green in the full run
+  (149 passed, 0 failed). Before and after, from the same
+  generator: "I clutchedd a boss fight so you don't have to" becomes "I clutched
+  a boss fight so you don't have to"; "Day 41 of reacted toing glitch" becomes
+  "Day 41 of reacting to a glitch".
+- **Lesson.** **A string that will be concatenated with grammar is a grammar
+  claim, and it needs a table, not a suffix.** Name the form each slot needs and
+  look the form up; a letter appended to a table value is a bug no matter what
+  the output looks like. **Enumerate what a generator can produce.** Random
+  sampling showed the bug in a few runs at best; the cross-product of patterns,
+  verbs and subjects is 192 titles, and every one of them is checked on the
+  day a pattern or a word is added. **Put the rule where the word lives:** the
+  article is a function of the word that follows it, so it is computed from the
+  word and never typed into a pattern.
+
+---
+
 ## 2026-10-09 — T-85 + T-86 (round 52): copy that promised what the code does not do, and tours that described a different app
 
 Two tickets with one root: a string in the product is a claim, and nothing

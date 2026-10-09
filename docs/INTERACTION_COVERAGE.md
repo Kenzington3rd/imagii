@@ -274,7 +274,7 @@ format. HomeLink COV.
   safe-zone modal cancel/continue.
 - **CustomPresetManager (12):** close, name, base select, w/h/fps,
   bitrates x2, save, delete (NAT), done, Escape/scrim.
-- **PostChecklist (10):** suggest titles, copy x2 (HL clipboard),
+- **PostChecklist (10):** title starters, copy x2 (HL clipboard),
   hashtag select, name input, platform toggles x6, notes, log post
   (writes `settings.postingDiary` since T-20), delete entry, perf
   inputs x3. Persistence covered by `shared/postingDiary.test.ts`;
@@ -1731,3 +1731,24 @@ that the old ones are gone.
   and the words that were wrong or were jargon are banned. DISPOSITION: that
   proves the NAME exists on the route, not that the control is on screen at that
   moment — the E2E walk proves the cutouts, and only for the fixtures it loads.
+
+## Dispositions — round 53 (T-87 + T-93: the title starters, and the guide that has to match them)
+
+One interactive element changed its LABEL and its generated output; no control
+changed what it does. The button that was "Suggest 4 titles" is "Title starters"
+and every starter it writes is grammatical. T-93 is copy and a release body
+only: no element, no handler, no trigger changed, so it has no row here.
+
+- **Video 4r PostChecklist - Title starters ([T-87], label and output changed):**
+  the button writes four starters from the verb table and the subject list, each
+  with its own copy button, and copy writes that starter to the REAL system
+  clipboard. E2E (`video-pipelines.spec.ts`, "title ideas and hashtag packs reach
+  the real clipboard"): clicks 'Title starters' by its new name, expects four rows,
+  copies the first, and reads it back from the MAIN process's clipboard
+  (`expect.poll(systemClipboard)` toBe the row's text). DISPOSITION: the OUTPUT is
+  not an E2E question (Math.random picks the starter); every generatable starter is
+  proven by `PostChecklist.test.ts`, which generates the full cross-product (8 patterns x
+  6 verbs x 4 subjects = 192 starters) and asserts no doubled suffix, no
+  'toing', no doubled or mismatched article, no placeholder, no exclamation mark,
+  and no pattern names a game. The hashtag select, the platform toggles, the log and the
+  diary are unchanged and keep their rows above.
