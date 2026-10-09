@@ -613,7 +613,7 @@ test.describe('T-27 Record Studio', () => {
           timeout: 30_000,
           intervals: [200]
         })
-        .toMatch(/Webcam failed: No camera found\. Recording screen only\./)
+        .toContain('No camera found. Recording screen only.')
 
       // And it is a warning, not an abort: the screen half of the take is
       // still what the user asked for, so it runs.
@@ -1025,14 +1025,22 @@ test.describe('T-27 Record Studio', () => {
       await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
       await window.getByRole('button', { name: /Start recording/ }).click()
 
-      // The specific device error reaches the user verbatim, not a generic
-      // "Could not start recording".
+      // The fault is named — which device class, and what to do — in the
+      // app's words. T-84: the browser's own "Requested device not found" /
+      // "NotFoundError" is for the console; the user reads a sentence, and
+      // the context line ("Couldn't start recording.") leads it so the toast
+      // still says what failed.
       await expect
         .poll(async () => (await readToastLog(window)).join(' | '), {
           timeout: 20_000,
           intervals: [200]
         })
-        .toMatch(/Requested device not found|NotFoundError|Could not start recording/)
+        .toContain(
+          "Couldn't start recording. That device wasn't found. Check it's plugged in, then try again."
+        )
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(
+        /Requested device not found|NotFoundError/
+      )
 
       // And the app stayed idle: no REC header, no Stop button, the option
       // cards are still on screen.

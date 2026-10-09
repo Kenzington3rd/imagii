@@ -11,6 +11,7 @@ import type { SafeZoneRow } from './ExportPanel'
 import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
+import { reportFailure } from '../../lib/reportFailure'
 
 interface ClipKitButtonProps {
   clip: Clip
@@ -157,7 +158,10 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       const firstOutput = path.join(kitDir, youtubeFilename)
       void window.api.video.revealInFolder(firstOutput)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Clip kit failed')
+      reportFailure(err, {
+        failed: 'Clip Kit failed.',
+        canceled: 'Clip Kit canceled. Files already finished are in your folder.'
+      })
     } finally {
       setRunning(false)
       setPhase('')

@@ -14,6 +14,149 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-84: the failure path spoke ffmpeg, not English
+
+One symptom, four mechanisms. A streamer who pressed Cancel read a red
+"FFmpeg exit null: …" for four seconds; one whose recording had been moved
+read ffprobe's stderr; one whose autosave was damaged read a validator's field
+path; one whose app crashed was asked to "report" a "render error" to a channel
+a local-first app does not have. Nothing was wrong with the jobs. The words
+were the bug.
+
+### Bug (T-84) — ~22 catch sites toasted `err.message`
+
+- **Bug.** `toast.error(err instanceof Error ? err.message : '<fallback>')`
+  across export, Clip Kit, GIF, compile, reframe, PiP, captions (3), the
+  highlight scan, Audio and Image export, image import, thumbnail variants,
+  the mood-board canvas bridge, Record (2), Home (2), the autosave restore and
+  the references store: "Error invoking remote method
+  'video:exportBatch': Error: FFmpeg exit 1: …" on screen. Worse classes on top
+  of it: **Cancel was a red failure** in every cancellable job (a SIGKILL'd
+  child exits non-zero, which is the same catch); the **corrupt-autosave banner**
+  and the **project-load toast** printed validator strings ("videoStudio.clips
+  not array", "invalid JSON: Unexpected end of JSON input"); a **moved video
+  aborted project load half-restored** (canvas in, audio and place never
+  applied) behind ffprobe's stderr; **search failures** told the user to "switch
+  provider" (no screen offers one) and otherwise printed `net::ERR_…`;
+  **`describeImportError`** printed the raw message first and the explanation
+  after it, and the audio importer showed video wording ("The video uses a
+  codec…") for an mp3; the **crash screen** said "render error" and "report it";
+  and a **failed export row** was a red bar that said nothing once the toast
+  faded — you could not tell a fault from your own Cancel.
+- **Root cause.** Four separate things hiding behind one line. (1) *No single
+  place turned an error into words.* STYLE_GUIDE had a rule
+  (`ipcErrorMessage`) and three sites followed it; the other 22 each wrote
+  their own two lines, so whatever main threw WAS the interface. (2) *Cancel
+  and crash are the same event to everyone but the party that asked.* The
+  runners rejected with their own exit-code error; two of them guessed from the
+  signal (`SIGTERM|SIGKILL` -> "highlight scan cancelled", "extractFrame
+  cancelled"), which an out-of-memory kill satisfies equally. T-44 had already
+  said where the distinction has to be made — at the point of origin — and
+  applied it to converts only. (3) *`applyProject` was one straight line of
+  awaits*, so the first missing file was an exception for the whole project.
+  (4) *Row state was never stored.* The queue painted a bar red and kept
+  nothing that outlived the toast.
+- **Fix.** `src/shared/cancel.ts`: one sentinel (`CANCELLED_MESSAGE`,
+  `CancelledError`, `isCancelledError`); `ConvertCancelledError` is now its
+  subclass, so there is one mechanism, not two. `src/main/ffmpeg/cancelMark.ts`:
+  `killAsCancelled(child)` writes the fact down BEFORE the SIGKILL and
+  `cancelledOr(child, failure)` is what every runner's close/error handler
+  rejects with — export, GIF, concat segment + concat + PiP, reframe, highlight
+  scan, hook analysis, frame extract, audio (export, mux, re-attach), caption
+  burn-in and transcription; the model download resolves `{ ok: false, reason:
+  CANCELLED_MESSAGE }`. A WeakSet on the child rather than a field on each
+  registry, because the child IS the job's handle in all of them. The signal
+  guess is gone: an outside SIGKILL is a failure. `src/shared/userFacingError.ts`
+  is the one helper: envelope stripped, the sentinel -> `cancelled: true`,
+  known shapes (encoder exit, missing file, locked file, full disk, network,
+  damaged input, refused capture device, model-server HTTP/checksum) -> the
+  caller's context sentence + one plain cause, a finished sentence main wrote
+  passes through, everything else -> the context sentence alone, and **the raw
+  error always goes to the console** (cancel at info level — it is not an
+  error). `lib/reportFailure.ts` is the toast half: a cancel is a plain
+  `toast(...)` in the feature's own words ("Export canceled. Files already
+  finished are in your folder."), a failure is `toast.error` for 8 s. All 22
+  sites route through it. ExportPanel stores `error` + `canceled` per row and
+  prints **Failed** / **Canceled**, which outlive the toast. `applyProject` now
+  loads each studio through one isolation point (`loadReporting`): a media
+  file that cannot be opened is reported in the outcome, the studio is left as
+  it was, every other studio is applied, and Home and Restore show ONE message
+  naming the file ("Couldn't find stream.mp4. It may have been moved or
+  deleted. The rest of your project is open — load the video again in Video
+  Studio."). Copy: autosave banner, project-open, search (both hops, one
+  sentence), `describeImportError` (no raw prefix; `kind` makes audio say audio),
+  and the crash screen (what is safe and where it is; the thrown text behind a
+  collapsed Details).
+- **Test.** Red-first, quoted. `src/main/ffmpeg/cancelSentinel.test.ts` (72):
+  a TABLE of 12 runners x every way to ask each to stop x both exit shapes a
+  SIGKILL produces (Windows code 1, POSIX null + SIGKILL), plus the control
+  (the same exit unasked stays the runner's failure), a cancel aimed at another
+  job, the superseded hook analysis, the model download, and the convert
+  subclass — 50 failed / 22 passed against the old runners
+  (`expected 'FFmpeg exit 1: ' to be 'imagii:cancelled'`, `'highlight scan
+  cancelled'`, `{ reason: 'cancelled' }`). `src/shared/userFacingError.test.ts`
+  (50) and `cancel.test.ts` (17): every envelope form, every mapped shape, the
+  pass-through rule, the fallback, the console contract.
+  `src/renderer/src/modules/project/ProjectIO.test.ts`: a moved video still
+  opens audio, canvas and place; a moved audio file still opens the rest; both
+  gone; none gone; a place that points into the empty studio — red against
+  the abort (`Error: ffprobe exit 1: /home/user/Videos/stream.mp4: No such file
+  or directory`), plus the one-message builder.
+  `tests/unit/failurePathLanguage.test.ts` parses the renderer: no `catch`
+  reads its variable's `.message` outside a console call, no `toast.error` is
+  handed one, every named site still calls the helper, the crash screen has no
+  "render error"/"report", no "switch provider", one spelling of cancel — and
+  the scanner proves it discriminates on the shape that shipped; against the
+  old tree it found 23 catch reads and 20 `toast.error(…message…)` calls.
+  `importDiagnostics.test.ts`, `duckduckgo.test.ts`, `search.test.ts`,
+  `referencesStore.test.ts` for the rewritten copy; the T-33 pins in
+  `autosaveCorruptInfo.test.ts` and `interactionWiring.test.ts` moved with the
+  banner's words. E2E (`video-pipelines.spec.ts`): the scan, batch, Clip Kit
+  and PiP cancel tests now assert the neutral toast by words AND by KIND
+  (`readToastEntries`: a plain `toast()` draws no status icon, so "Export
+  canceled" in a red `toast.error` fails), "a failed export says so in plain
+  words…" (source removed after import: the toast, the console, the **Failed**
+  row, the row still there after the toaster empties, a clean next export),
+  "cancelling a reframe, a GIF and a compilation…", "a vanished source fails
+  Reframe, GIF, Compile and PiP in each panel's own plain words" (four catch
+  sites, one scenario), and "Open project with a moved file" (one message, rest
+  open, a complete project still says "Project loaded"); `audio.spec.ts`
+  drives the Export panel for the first time (save dialog stubbed in main): an
+  unwritable render fails in plain words, and Cancel on an hour-long two-pass
+  render is ONE neutral toast — the old build raised "Audio export cancelled"
+  AND the killed ffmpeg's message in red; `home-chrome` (banner copy + reason
+  in the console, crash screen, Restore with a moved video), `references` (the
+  one search sentence), `record`, and `export` (envelope gone from the import
+  refusals). Red-first run against the
+  old build, quoted: `Received: ["Video loaded", "Error invoking remote method
+  'video:findHighlights': Error: highlight scan cancelled"]`, `"FFmpeg exit
+  null: …"` for the batch and kit, `"pip exit null: …"`, `"reframe exit null:
+  …"`, `"DuckDuckGo search failed: net::ERR_EMPTY_RESPONSE"`, `ffprobe exit 1:
+  …stream-that-moved.mp4: No such file or directory`. Mutations, each reverted
+  byte-identically (sha256 checked): `cancelledOr` ignoring the mark -> 43 of
+  the sentinel table red; `isCancelledError` returning false -> 9 unit red and,
+  in E2E with the project re-aborting and the row label deleted, all 7 named
+  tests red (`Received: ["Video loaded", "Scan failed."]`); `reportFailure`
+  raising the cancel through `toast.error` -> the kind assertion red on every
+  cancel test (`"Scan canceled." is a plain toast, not an error or success
+  toast`); ProjectIO rethrowing -> 4 unit red; the GIF site written the old way
+  -> 3 structural red; the missing-file cause removed -> 3 helper red.
+- **Lesson.** **A cancel is a fact main knows; make it where the kill happens
+  and never let the renderer guess** (T-44's second lesson, now applied to
+  every runner — and the guess it replaces was wrong in a way nobody had
+  hit yet). Second: **when twenty-two sites share one bad line, the fix is the
+  one place AND the scanner that fails on the shape** — a helper nobody is
+  forced to call is `ipcErrorMessage`, which three sites used; the structural
+  test is what makes the next site's author find out at `npm test`, not in front
+  of a user. Third: **moving the raw text to the console is what makes friendly
+  copy safe** — nothing a bug report needs is lost, it is only where the user
+  no longer reads it. Fourth: **assert the KIND of a notification, not just its
+  words** — a cancel in a red toast with the right sentence passes every text
+  assertion. Fifth: **state that explains a failure must outlive the message
+  that announced it**; the toast is for noticing, the row is for knowing.
+
+---
+
 ## 2026-10-09 — T-83 + T-94: the export did something the screen never said
 
 Both bugs produced files that opened, played and were the right size. T-83's

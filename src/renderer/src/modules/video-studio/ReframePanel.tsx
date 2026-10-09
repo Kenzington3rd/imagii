@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 type ReframePosition = 'left' | 'center' | 'right' | 'smart'
 
@@ -92,7 +93,7 @@ export function ReframePanel(): JSX.Element | null {
         </span>
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Reframe failed')
+      reportFailure(err, { failed: 'Reframe failed.', canceled: 'Reframe canceled.' })
     } finally {
       setRunning(false)
       jobIdRef.current = null

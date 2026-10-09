@@ -12,6 +12,7 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
 import { isImageFilename } from '@shared/mediaFormats'
@@ -74,7 +75,7 @@ export function ImportPanel(): JSX.Element {
       addLayer({ ...makeImageLayer(dataUrl, w, h), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Import failed')
+      reportFailure(err, { failed: "Couldn't import that image." })
     }
   }
 

@@ -1462,3 +1462,145 @@ which the E2E crosses with the house main-process dialog stub.
   {n} clip(s)" (the panel only renders at 2+ clips). Driven by the
   existing compilation test, updated from the exact name "Compile" to
   "Compile 2 clips"; the header "Compile clips (N)" is unchanged.
+
+
+## Dispositions — round 51 (T-84: the failure path speaks English)
+
+One new interactive element and a changed END STATE for every control that
+can fail or be canceled. The end state used to be "a red toast in ffmpeg's
+words"; it is now (a) a plain sentence for a failure, (b) a neutral toast for
+a cancel, in kind as well as in words, and (c) a row/banner/screen that says
+the same thing after the toast fades. Every `window.api.*` catch in the
+renderer now routes through `reportFailure` / `userFacingError`;
+`tests/unit/failurePathLanguage.test.ts` parses the renderer and fails on the
+old shape, and lists each site that must stay routed.
+
+How the "which kind" question is asserted: `tests/e2e/toastLog.ts` gained
+`readToastEntries`, which records whether a toast drew a status icon. A plain
+`toast()` draws none; `toast.error` / `toast.success` do. Every cancel E2E
+asserts the sentence AND `hasIcon === false` AND that nothing in the log is
+in ffmpeg's or the bridge's voice — a cancel raised through `toast.error`
+with the right words goes red (mutation below).
+
+- **Video 4t ExportPanel - Cancel / Keep running / Cancel jobs ([T-84]):**
+  end state extended from "the batch rejects and rows go red" to "a neutral
+  'Export canceled. Files already finished are in your folder.', every row
+  that did not finish says **Canceled** (none says Failed), and the label is
+  still there after the toaster empties". video-pipelines.spec.ts
+  "cancelling a multi-job batch asks first…" (updated). Sentinel plumbing
+  below the click: src/main/ffmpeg/cancelSentinel.test.ts, the 'video export'
+  rows. Red-first against the old build, quoted: `Received: ["Video loaded",
+  "Error invoking remote method 'video:exportBatch': Error: FFmpeg exit null:
+  …"]`.
+- **Video 4t ExportPanel - Export (a failure) + the queue rows ([T-84]):**
+  video-pipelines.spec.ts "a failed export says so in plain words, the row
+  keeps saying so after the toast fades, and the next good export is clean":
+  the source is removed after import, the REAL job fails, the toast is
+  "Export failed. A file imagii needs isn't there. It may have been moved or
+  deleted." as an ERROR toast, ffprobe's text is in the console and not on
+  screen, the row says **Failed** (one danger bar) and still does once the
+  toaster is empty, no file is written, and the next good export carries no
+  stale label. The Linux-only watermark test (`drawtext` missing from the
+  bundled ffmpeg) now proves the same split: the toast is a plain sentence, the
+  console holds `No such filter: 'drawtext'` — still the proof that the
+  watermark reached the filter string.
+- **Video 4p ClipKit - Cancel / Cancel jobs ([T-84]):** "cancelling a kit
+  asks first…" now expects the neutral 'Clip Kit canceled. Files already
+  finished are in your folder.' DISPOSITION (unchanged, found): Clip Kit's
+  Cancel only reaches the EXPORT phase (`video:cancelAll` kills export jobs);
+  a click during the three thumbnail extractions has nothing to kill —
+  candidate ticket.
+- **Video 4j HighlightPanel - Cancel ([T-84]):** "Cancel kills the scan
+  mid-flight…" now expects 'Scan canceled.' (neutral). The old behaviour
+  guessed a cancel from ANY SIGTERM/SIGKILL; an outside kill is now a failure
+  (cancelSentinel.test.ts, "a kill nobody asked for").
+- **Video 4k ReframePanel / 4l GifPanel / 4m CompilationPanel - Cancel
+  ([T-84]):** NEW E2E "cancelling a reframe, a GIF and a compilation…" on the
+  20-minute source: each panel's own neutral sentence ('Reframe canceled.',
+  'GIF canceled.', 'Compilation canceled.'), the button returns, no compilation
+  file is left. Failure: "a vanished source fails Reframe, GIF, Compile and
+  PiP in each panel's own plain words" — four catch sites, four error toasts
+  that lead with their own sentence and end in the one cause, raw errors in the
+  console, every panel freed.
+- **Video 4n PipPanel - Cancel ([T-84]):** the existing cancel test expects
+  'Picture-in-picture canceled.' (neutral); its failure is in the four-panel
+  test above.
+- **Video 4o CaptionsPanel - Transcribe / Burn into video / burn-in Cancel /
+  model download + its cancel button ([T-84]):** DISPOSITION unchanged
+  (HL-whisper, HL-network: whisper is not installed in any test environment
+  and the model is a 141 MB download). Deepest layer covered, and newly so:
+  the runners' own cancel — cancelSentinel.test.ts drives `runTranscribe`,
+  `runBurnIn` (both cancel entry points, both exit shapes, the control) and
+  `installWhisperModel` (a cancel resolves `{ ok: false, reason:
+  CANCELLED_MESSAGE }`; a network error stays a failure) — and the four
+  catch/result sites in the panel are pinned routed by the structural test.
+- **Audio - Export (success path unchanged) / failure / Cancel ([T-84]):**
+  UPGRADED from HL-dialog to E2E: audio.spec.ts stubs the save dialog in the
+  main process (the OS chooser itself stays HL, as in video-pipelines) and
+  drives the REAL job — a render whose folder does not exist fails with the
+  plain sentence and frees the button; Cancel on an hour-long two-pass
+  loudness render is ONE neutral 'Audio export canceled.' (the old build raised
+  a neutral line from the Cancel handler AND the killed ffmpeg's message in
+  red), the button frees, and nothing is written. Behavior change: the Cancel
+  handler no longer flips `running` itself — it follows the export call's
+  settling, so a Cancel that reaches no child (between passes) cannot re-enable
+  Export over a render that is still going.
+- **Home - Open project ([T-84]):** end state extended from "toast" to "the
+  studios the file can still open ARE open, and ONE message names the file
+  that is gone". video-pipelines.spec.ts "Open project with a moved file…"
+  (project file + main-process open-dialog stub): canvas, audio and an EMPTY
+  video studio; the message exactly; no 'Project loaded' beside it; the
+  complete project still says 'Project loaded'. Unit:
+  ProjectIO.test.ts — a moved video, a moved audio file, both, none, and a
+  place pointing into the empty studio; `describeUnavailableSources`. Red-first:
+  `Error: ffprobe exit 1: /home/user/Videos/stream.mp4: No such file or
+  directory` (today's abort). Mutation: `loadReporting` rethrowing -> 4 unit
+  red, and the E2E red.
+- **Home - Save project ([T-84]):** HL-dialog, unchanged; the catch is routed
+  (structural test) — a save failure reads "Couldn't save the project." plus a
+  cause when one is known.
+- **AutosaveRestore - Restore ([T-84]):** same rule as Open project —
+  home-chrome.spec.ts "Restore with a moved video opens the rest and names the
+  file": the message, no 'Restored from autosave', the canvas layer back, the
+  video studio empty.
+- **AutosaveRestore - corrupt-autosave banner, Clear, Dismiss ([T-84]):**
+  copy rewritten ("imagii found an autosave from a moment ago, but it's damaged
+  and can't be restored. Clear it to get rid of it."); the validator's reason
+  moved to the console. The two T-33/T-57 E2Es assert the new sentence, that
+  'invalid JSON' and 'validation' are NOT on screen, and (after a reload) that
+  the reason IS in the console. The structural pins in
+  autosaveCorruptInfo.test.ts and interactionWiring.test.ts moved with the
+  words in the same change; the branch still gates on `exists` alone.
+- **ErrorBoundary - Details disclosure (NEW) / Reload to Home ([T-84]):** the
+  screen says "Something went wrong in this studio" and that the work is safe
+  and where it is; the thrown message and React's stack are behind a collapsed
+  Details. home-chrome.spec.ts (T-35 test, updated): the heading and sentence,
+  that the VISIBLE text has no 'render error' or 'report', Details collapsed
+  then expanded to the message and a multi-frame stack, the raw-hex styling
+  pins unchanged, Reload to Home still recovers.
+- **References - Search (button, Enter, in-flight, error card) ([T-84]):** the
+  notice is one sentence for both hops and every transport ("Couldn't reach
+  DuckDuckGo. Check your internet connection and try again. Your saved boards
+  still work offline."); the proxy-hermetic E2E asserts it verbatim on the first
+  failure and on the re-run, and that no `net::`, 'DuckDuckGo search failed' or
+  'provider' appears. Main's transport detail is in the log
+  (duckduckgo.test.ts / search.test.ts assert the `console.error`). The
+  rejected-search card (referencesStore) is unit-tested.
+- **Video 4a Importer / Audio importer - drop, Choose file ([T-84]):** the
+  refusal sentences are exact now, with no IPC preamble (export.spec.ts and
+  audio.spec.ts compare the toast entry whole, not as a substring); every
+  `describeImportError` branch is unit-tested for both kinds, and an mp3 never
+  reads video wording.
+- **Record - Start recording failure ([T-84]):** "Start with mic enabled and
+  no microphone refuses…" now asserts the plain sentence ("Couldn't start
+  recording. That device wasn't found. Check it's plugged in, then try
+  again.") and that the browser's 'Requested device not found' is not on
+  screen; the webcam fallback toast is "No camera found. Recording screen
+  only." (T-42's test updated). DISPOSITION: "Edit in Video Studio" failing
+  needs a saved take whose file then vanishes — its catch is the same helper
+  call, pinned by the structural test.
+- **Stream Graphics - Export / Import / Thumbnail variants; References - Add
+  to canvas ([T-84]):** DISPOSITION: the failure branches need a canvas stage
+  or an image decoder that fails on cue; their happy paths are unchanged and
+  already driven. Each catch is routed through the helper (structural test)
+  and the helper is unit-tested on every shape those errors take.

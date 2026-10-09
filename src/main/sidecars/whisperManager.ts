@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { net } from 'electron'
 import { extractAudioFromVideo } from '../audio/extract'
 import { ffmpegPath } from '../ffmpeg/paths'
+import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import {
   captionsOutputDir,
   whisperExePath,
@@ -37,6 +38,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { assert } from '../../shared/assert'
+import { CANCELLED_MESSAGE } from '../../shared/cancel'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
 
@@ -94,21 +96,13 @@ export function cancelTranscribe(jobId?: string): boolean {
   if (jobId) {
     const child = activeTranscribe.get(jobId)
     if (!child) return false
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
+    killAsCancelled(child)
     activeTranscribe.delete(jobId)
     return true
   }
   let any = false
   for (const [, child] of activeTranscribe) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
+    killAsCancelled(child)
     any = true
   }
   activeTranscribe.clear()
@@ -119,21 +113,13 @@ export function cancelBurnIn(jobId?: string): boolean {
   if (jobId) {
     const child = activeBurnIn.get(jobId)
     if (!child) return false
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
+    killAsCancelled(child)
     activeBurnIn.delete(jobId)
     return true
   }
   let any = false
   for (const [, child] of activeBurnIn) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
+    killAsCancelled(child)
     any = true
   }
   activeBurnIn.clear()
@@ -230,12 +216,12 @@ async function runTranscribeBody(
       })
       child.on('error', (err) => {
         activeTranscribe.delete(req.jobId)
-        reject(err)
+        reject(cancelledOr(child, err))
       })
       child.on('close', (code) => {
         activeTranscribe.delete(req.jobId)
         if (code === 0) resolve()
-        else reject(new Error(`whisper exit ${code}: ${stderr.slice(-500)}`))
+        else reject(cancelledOr(child, new Error(`whisper exit ${code}: ${stderr.slice(-500)}`)))
       })
     })
 
@@ -437,12 +423,12 @@ export async function runBurnIn(
       })
       child.on('error', (err) => {
         activeBurnIn.delete(req.jobId)
-        reject(err)
+        reject(cancelledOr(child, err))
       })
       child.on('close', (code) => {
         activeBurnIn.delete(req.jobId)
         if (code === 0) resolve()
-        else reject(new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`))
+        else reject(cancelledOr(child, new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`)))
       })
     })
   } finally {
@@ -645,8 +631,8 @@ async function runInstall(
           if (settled) return
           if (me.cancelled) {
             void cleanupPartial().then(() => {
-              onProgress({ phase: 'failed', message: 'Cancelled by user' })
-              settle({ ok: false, reason: 'cancelled' })
+              onProgress({ phase: 'failed', message: 'Download canceled' })
+              settle({ ok: false, reason: CANCELLED_MESSAGE })
             })
             return
           }
@@ -661,20 +647,20 @@ async function runInstall(
       })
     })
     request.on('error', (err: Error) => {
-      const reason = me.cancelled ? 'cancelled' : err.message
+      const reason = me.cancelled ? CANCELLED_MESSAGE : err.message
       out?.destroy()
       void cleanupPartial()
       onProgress({
         phase: 'failed',
-        message: me.cancelled ? 'Cancelled by user' : err.message
+        message: me.cancelled ? 'Download canceled' : err.message
       })
       settle({ ok: false, reason })
     })
     request.on('abort', () => {
       out?.destroy()
       void cleanupPartial().then(() => {
-        onProgress({ phase: 'failed', message: 'Cancelled by user' })
-        settle({ ok: false, reason: 'cancelled' })
+        onProgress({ phase: 'failed', message: 'Download canceled' })
+        settle({ ok: false, reason: CANCELLED_MESSAGE })
       })
     })
     request.end()

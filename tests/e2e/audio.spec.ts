@@ -12,7 +12,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { dragTo } from './drag'
-import { installToastLog, readToastLog } from './toastLog'
+import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -39,10 +39,12 @@ const __dirname = path.dirname(__filename)
  *     test via `app.evaluate`. Only the OS chooser itself is replaced; the
  *     click, the `audio:pickFile` IPC handler, the store write, and every
  *     control the loaded state renders are real. See `stubOpenDialog`.
- *   - `dialog.showSaveDialog` (Export) is NOT stubbed: driving it would start
- *     a real ffmpeg render that Layer 5 (`npm run test:media`) already owns.
- *     The Export button's reachable state is asserted instead. See the
- *     DISPOSITIONS note on the export test.
+ *   - `dialog.showSaveDialog` (Export) is stubbed ONLY by the two T-84 tests
+ *     at the end of this file (`stubSaveDialog`): they start a real ffmpeg
+ *     render to prove what the user reads when it fails and when it is
+ *     canceled. What the render's BYTES are stays Layer 5's
+ *     (`npm run test:media`), so the configuration test below still does not
+ *     click Export. See the DISPOSITIONS note on that test.
  *
  * Native `confirm()` (Close, preset delete) is driven through a dialog spy
  * that is installed BEFORE the first click and records every message, so the
@@ -271,6 +273,44 @@ const WAVEFORM = '[data-tutorial="audio-waveform"]'
 const FIXWIZARD = '[data-tutorial="audio-fixwizard"]'
 
 /** CleanupPanel / LevelsPanel mark the selected option with the accent fill. */
+/**
+ * Replace the OS SAVE dialog in the MAIN process (the same technique as
+ * `stubOpenDialog`, for the Export button's chooser). Only the chooser is
+ * replaced: the click, `audio:suggestOutputName`, `audio:export`, the real
+ * ffmpeg job and its cancel are all real.
+ */
+async function stubSaveDialog(app: ElectronApplication, filePath: string): Promise<void> {
+  await app.evaluate(({ dialog }, picked) => {
+    ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async () => ({
+      canceled: false,
+      filePath: picked
+    })
+  }, filePath)
+}
+
+/**
+ * An hour of 8 kHz mono sound, small on disk (~14 MB) and cheap to decode, but
+ * long enough that a two-pass loudness render is still measuring when Cancel
+ * is clicked.
+ */
+async function makeLongMp3(outPath: string): Promise<void> {
+  const result = await runBinary(ffmpegPath, [
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:sample_rate=8000:duration=3600',
+    '-ac',
+    '1',
+    '-b:a',
+    '32k',
+    outPath
+  ])
+  if (result.code !== 0) {
+    throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+}
+
 function expectSelected(locator: ReturnType<Page['locator']>): Promise<void> {
   return expect(locator).toHaveClass(/bg-accent/)
 }
@@ -496,13 +536,18 @@ test.describe('imagii Audio Studio', () => {
       writeFileSync(notes, 'this is not audio, it is a text file\n', 'utf8')
       await dropOnImporter(window, notes, 'stream-notes.txt')
 
-      const REFUSAL = 'No audio stream found in file'
-      // Arrives wrapped in Electron's IPC preamble ("Error invoking remote
-      // method 'audio:probe': …"), so the sentence is asserted as a substring.
+      // T-84: the probe's "No audio stream found in file" is main's note to
+      // itself; the user is told what it MEANS, in audio words (the importer
+      // used to share the video importer's phrasing), with no IPC preamble in
+      // front of it.
+      const REFUSAL = "This file has no sound, so there's nothing to clean. Pick a file with audio."
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
-        .toEqual(expect.arrayContaining([expect.stringContaining(REFUSAL)]))
+        .toContain(REFUSAL)
       await expect(window.getByText(REFUSAL, { exact: false }).first()).toBeVisible()
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(
+        /No audio stream found|Error invoking remote method/
+      )
 
       // And it never entered a loaded state.
       const toasts = await readToastLog(window)
@@ -1308,11 +1353,12 @@ test.describe('imagii Audio Studio', () => {
       const exportPanel = window.locator(EXPORT)
       const format = exportPanel.getByRole('combobox').first()
 
-      // DISPOSITION: the Export button itself is NOT clicked. It opens
+      // DISPOSITION: the Export button itself is NOT clicked HERE. It opens
       // dialog.showSaveDialog (a main-process OS dialog) and then runs a real
       // ffmpeg render; `runAudioExport` / `runAudioMux` are Layer 5's
       // (`npm run test:media`). What is asserted here is everything the user
-      // can reach before that boundary.
+      // can reach before that boundary. (T-84's two tests below stub the
+      // dialog and click it, for the failure and cancel copy.)
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       await expect(exportButton).toBeVisible()
       await expect(exportButton).toBeEnabled()
@@ -1339,6 +1385,91 @@ test.describe('imagii Audio Studio', () => {
       // A source-less studio has no Export panel at all.
       await window.getByRole('button', { name: 'Close', exact: true }).click()
       await expect(window.locator(EXPORT)).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a render that cannot be written says so in plain words and frees the button (T-84)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('exportfail')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      // The save dialog is stubbed (the OS chooser itself stays HL); what it
+      // returns is a path inside a folder that does not exist, so the REAL
+      // ffmpeg job fails to open its output. Unlike the video side there is no
+      // cheap "source vanished" here — the player holds the decoded file.
+      await stubSaveDialog(app, path.join(studio.root, 'no-such-folder', 'out.mp3'))
+      await exportButton.click()
+
+      const FAILED =
+        "Export failed. A file imagii needs isn't there. It may have been moved or deleted."
+      await expect
+        .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
+        .toContain(FAILED)
+      const entries = await readToastEntries(window)
+      // A failure IS an error toast (an icon beside it)…
+      expect(entries.find((e) => e.text === FAILED)?.hasIcon).toBe(true)
+      // …in plain words: none of ffmpeg's, none of the bridge's.
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+        /FFmpeg|exit|Error invoking remote method|No such file|\.mp3/
+      )
+      // The panel is free again, not stuck on "Exporting…".
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      await expect(exportPanel.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+      expect(existsSync(path.join(studio.root, 'no-such-folder'))).toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Cancel on a long render is a neutral toast in the panel\'s own words, and frees the button (T-84)', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('exportcancel')
+    const { app, window } = studio
+    try {
+      const long = path.join(studio.root, 'source', 'long-tone.mp3')
+      await makeLongMp3(long)
+      await dropOnImporter(window, long, 'long-tone.mp3')
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+
+      // Loudness normalization is a TWO-pass render: an hour of audio spends
+      // tens of seconds in the measure pass, which is the window Cancel needs.
+      await window.locator(LEVELS).getByRole('checkbox').check()
+
+      const out = path.join(studio.root, 'cancelled.mp3')
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportButton.click()
+
+      const cancel = exportPanel.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toBeVisible({ timeout: 30_000 })
+      await expect(exportPanel.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await cancel.click()
+
+      // Raised from ONE place — the export call's rejection — not also by the
+      // Cancel handler (the old build toasted twice: a neutral line AND the
+      // killed ffmpeg's message in red).
+      const CANCELED = 'Audio export canceled.'
+      await expect
+        .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
+        .toContain(CANCELED)
+      const entries = await readToastEntries(window)
+      expect(entries.filter((e) => e.text === CANCELED)).toHaveLength(1)
+      expect(entries.find((e) => e.text === CANCELED)?.hasIcon).toBe(false)
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+        /FFmpeg|\bexit\b|cancelled|imagii:cancelled|Error invoking remote method/i
+      )
+      // Freed, and nothing was written under a name that claims success.
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      await expect(cancel).toHaveCount(0)
+      expect(existsSync(out)).toBe(false)
+      expect(entries.map((e) => e.text)).not.toContain('Cleaned audio exported')
     } finally {
       await closeStudio(studio)
     }

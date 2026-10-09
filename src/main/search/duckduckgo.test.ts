@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { validateSearchResult } from '../../shared/search'
 
 /**
@@ -50,7 +50,13 @@ const HTML_NO_VQD = `<!DOCTYPE html><html><head><title>DuckDuckGo</title></head>
 /** Truncated mid-script: the shape a proxy or a cut connection produces. */
 const HTML_MALFORMED = '<!DOCTYPE html><html><head><scr'
 
-const NOTICE_NO_VQD = 'Could not initialize search session. Try again or switch provider.'
+// T-84: every way a search can fail to reach DuckDuckGo says ONE sentence — the
+// session hop that found no token, the transport that threw, the server that
+// answered an error. The transport's own words go to the log.
+const NOTICE_UNREACHABLE =
+  "Couldn't reach DuckDuckGo. Check your internet connection and try again. " +
+  'Your saved boards still work offline.'
+const NOTICE_NO_VQD = NOTICE_UNREACHABLE
 
 interface DdgItem {
   image: string
@@ -98,8 +104,13 @@ function serve(html: string, json: unknown): void {
   fetchMock.mockResolvedValueOnce(textResponse(html)).mockResolvedValueOnce(jsonResponse(json))
 }
 
+let errorSpy: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   fetchMock.mockReset()
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+})
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('searchDuckduckgoImages — happy parse', () => {
@@ -197,6 +208,7 @@ describe('searchDuckduckgoImages — vqd token missing', () => {
 
     expect(response.results).toEqual([])
     expect(response.notice).toBe(NOTICE_NO_VQD)
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('no session token'))
     expect(response.query).toBe('mountains')
     expect(response.provider).toBe('duckduckgo')
     // The second fetch is the expensive one — it must not fire without a token.
@@ -253,9 +265,7 @@ describe('searchDuckduckgoImages — empty and hostile payloads', () => {
     const response = await searchDuckduckgoImages('test')
 
     expect(response.results).toEqual([])
-    expect(response.notice).toBe(
-      'DuckDuckGo search failed: Unexpected token < in JSON at position 0'
-    )
+    expect(response.notice).toBe(NOTICE_UNREACHABLE)
   })
 
   it('reports a failure notice when i.js answers with an HTTP error', async () => {
@@ -266,7 +276,12 @@ describe('searchDuckduckgoImages — empty and hostile payloads', () => {
     const response = await searchDuckduckgoImages('test')
 
     expect(response.results).toEqual([])
-    expect(response.notice).toBe('DuckDuckGo search failed: HTTP 429')
+    expect(response.notice).toBe(NOTICE_UNREACHABLE)
+    // …and the server's words are in the log, not the card.
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[search] DuckDuckGo search failed:',
+      expect.objectContaining({ message: 'HTTP 429' })
+    )
   })
 
   it('reports a failure notice when results is not an array', async () => {
@@ -275,7 +290,7 @@ describe('searchDuckduckgoImages — empty and hostile payloads', () => {
     const response = await searchDuckduckgoImages('test')
 
     expect(response.results).toEqual([])
-    expect(response.notice).toMatch(/^DuckDuckGo search failed: /)
+    expect(response.notice).toBe(NOTICE_UNREACHABLE)
   })
 
   it('reports a failure notice when an item has an unparseable url and no source', async () => {
@@ -286,7 +301,7 @@ describe('searchDuckduckgoImages — empty and hostile payloads', () => {
     const response = await searchDuckduckgoImages('test')
 
     expect(response.results).toEqual([])
-    expect(response.notice).toMatch(/^DuckDuckGo search failed: /)
+    expect(response.notice).toBe(NOTICE_UNREACHABLE)
   })
 
   /**

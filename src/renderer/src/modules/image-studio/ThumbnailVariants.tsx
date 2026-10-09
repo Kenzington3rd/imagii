@@ -4,6 +4,7 @@ import type { CanvasDocument } from '@shared/canvas'
 import { useCanvasStore } from './state/canvasStore'
 import { assertDefined } from '@shared/assert'
 import { Modal } from '../../components/Modal'
+import { reportFailure } from '../../lib/reportFailure'
 import { captureDocument, type ExportStage } from './ExportDialog'
 
 interface VariantSpec {
@@ -164,7 +165,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       }
       setPreviews({ doc, items: out })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not generate variants')
+      reportFailure(err, { failed: "Couldn't generate variants." })
     } finally {
       setBusy(false)
     }

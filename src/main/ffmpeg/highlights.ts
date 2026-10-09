@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 import { assert, assertDefined } from '../../shared/assert'
 
 export interface HighlightCandidate {
@@ -99,14 +100,15 @@ export async function findHighlights(
     })
     child.on('error', (err) => {
       if (activeScan === child) activeScan = null
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code, signal) => {
       if (activeScan === child) activeScan = null
       if (code === 0) resolve(buffer)
-      else if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-        reject(new Error('highlight scan cancelled'))
-      } else reject(new Error(`ebur128 exit ${code}`))
+      // T-84: a cancel is what the cancel functions below MARKED, not what
+      // any SIGTERM/SIGKILL looks like — an out-of-memory kill used to read
+      // to the user as a decision they had made.
+      else reject(cancelledOr(child, new Error(`ebur128 exit ${code ?? signal}`)))
     })
   })
 
@@ -218,11 +220,7 @@ export async function analyzeClipHook(
   // renderer's effect cleanup already drops the corresponding promise via
   // its `cancelled` flag, so the killed process's rejection is ignored.
   if (activeHookProcess && activeHookProcess.exitCode === null) {
-    try {
-      activeHookProcess.kill()
-    } catch {
-      /* already dead */
-    }
+    killAsCancelled(activeHookProcess)
   }
 
   const args = [
@@ -253,15 +251,14 @@ export async function analyzeClipHook(
     })
     child.on('error', (err) => {
       if (activeHookProcess === child) activeHookProcess = null
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code, signal) => {
       if (activeHookProcess === child) activeHookProcess = null
       if (code === 0) resolve(buffer)
-      // SIGTERM means we killed it on a newer request — surface a typed
-      // error the renderer is allowed to ignore.
-      else if (signal === 'SIGTERM') reject(new Error('hook analysis cancelled'))
-      else reject(new Error(`hook ebur128 exit ${code}`))
+      // A child we killed on a newer request rejects with the sentinel — the
+      // typed error the renderer is allowed to ignore.
+      else reject(cancelledOr(child, new Error(`hook ebur128 exit ${code ?? signal}`)))
     })
   })
 
@@ -292,11 +289,7 @@ export async function analyzeClipHook(
 // a scan was actually killed.
 export function cancelActiveHighlightScan(): boolean {
   if (!activeScan || activeScan.exitCode !== null) return false
-  try {
-    activeScan.kill('SIGKILL')
-  } catch {
-    /* ignore */
-  }
+  killAsCancelled(activeScan)
   activeScan = null
   return true
 }
@@ -305,20 +298,10 @@ export function cancelActiveHighlightScan(): boolean {
 // app quit. Covers both findHighlights (full source pass) and analyzeClipHook
 // (per-clip window pass). Pre-16, a long source scan survived app quit.
 export function cancelAllHighlightJobs(): void {
-  if (activeScan && activeScan.exitCode === null) {
-    try {
-      activeScan.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  if (activeScan && activeScan.exitCode === null) killAsCancelled(activeScan)
   activeScan = null
   if (activeHookProcess && activeHookProcess.exitCode === null) {
-    try {
-      activeHookProcess.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
+    killAsCancelled(activeHookProcess)
   }
   activeHookProcess = null
 }

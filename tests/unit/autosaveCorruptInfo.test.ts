@@ -9,8 +9,10 @@ import { tmpdir } from 'node:os'
  * it renderable.
  *
  * Before T-33 this file pinned a MISMATCH: `AutosaveRestore.tsx` gated its
- * corruption branch — "An autosave was found (…) but failed validation: …"
- * with its **Clear** and **Dismiss** buttons — on `result.info.ageMs`, and
+ * corruption branch — the banner with its **Clear** and **Dismiss** buttons,
+ * then worded "An autosave was found (…) but failed validation: …" and since
+ * T-84 "imagii found an autosave from …, but it's damaged and can't be
+ * restored" — on `result.info.ageMs`, and
  * main's reader returned `{ exists, filePath, sizeBytes }` with no ageMs for
  * exactly the files that fail validation. A user whose autosave was corrupt
  * saw nothing at all on Home: no banner, no Clear, and not even the
@@ -174,12 +176,27 @@ describe('corrupt autosave: what the renderer requires', () => {
   })
 
   it('Clear and Dismiss exist in the markup that branch gates', () => {
-    expect(source).toContain('but failed validation')
+    // T-84: the pin moved with the copy. The old words named a process
+    // ("failed validation") the user never sees; these say what is true of
+    // THEIR file and what to do about it.
+    expect(source).toContain("but it's damaged and can't be restored")
+    expect(source).not.toContain('but failed validation')
     expect(source).toMatch(/>\s*Clear\s*</)
     expect(source).toMatch(/>\s*Dismiss\s*</)
   })
 
   it('the age is rendered defensively, so a failed stat still shows the banner', () => {
-    expect(source).toContain(": 'unknown'")
+    // The damaged banner reads "an autosave from {when}"; with no age it says
+    // "from earlier" rather than hiding, or printing "from unknown".
+    expect(source).toContain('snapshot.info.ageMs === undefined')
+    expect(source).toContain("'earlier'")
+  })
+
+  it("the validator's reason goes to the console, never into the banner", () => {
+    // T-84: "invalid JSON: Unexpected end of JSON input" is a debugging fact.
+    expect(branch).toContain('console.error')
+    expect(branch).toContain('result.reason')
+    const banner = source.slice(source.indexOf('if (!snapshot.ok)'))
+    expect(banner.slice(0, banner.indexOf('</div>'))).not.toContain('snapshot.reason')
   })
 })

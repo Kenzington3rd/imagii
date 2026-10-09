@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { mkdir } from 'node:fs/promises'
 import { nanoid } from 'nanoid'
 import { ffmpegPath } from './paths'
+import { CancelledError } from '../../shared/cancel'
 
 /**
  * Transcode any ffmpeg-readable container to a preview-safe mp4
@@ -29,9 +30,12 @@ export interface ConvertProgress {
  * made here, at the point of origin. Callers string-matching ffmpeg's exit
  * message would be guessing; this is the fact.
  */
-export class ConvertCancelledError extends Error {
+export class ConvertCancelledError extends CancelledError {
   constructor() {
-    super('convert cancelled')
+    super()
+    // T-84: same sentinel message as every other cancellable runner
+    // (shared/cancel.ts) — the class stays so recording.ts can tell a
+    // discarded take from any other cancel by `instanceof`.
     this.name = 'ConvertCancelledError'
   }
 }

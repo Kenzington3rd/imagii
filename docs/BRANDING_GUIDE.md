@@ -57,7 +57,14 @@ corporation, not a hype machine.
 ### Microcopy patterns
 
 - Errors name what failed and, where possible, what to do:
-  "Couldn't load project: <reason>".
+  "Export failed. A file imagii needs isn't there. It may have been moved
+  or deleted." The raw message (ffmpeg's stderr, an errno, a validator's
+  field path) never reaches the toast — it goes to the console. A cancel is
+  not an error: say it was canceled, neutrally, and say what survived
+  ("Export canceled. Files already finished are in your folder."). Spell it
+  "canceled".
+- A crash screen says what is safe and where it is, and never asks the user
+  to "report" anything — a local-first app has no channel to report to.
 - Empty states invite the next action: "Drop a video here".
 - Destructive actions are explicit and never silent.
 

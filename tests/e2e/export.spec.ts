@@ -305,14 +305,14 @@ test.describe('imagii Video Studio import -> export', () => {
       //    floor, passed through describeImportError unchanged (it carries
       //    no "codec"/"no video stream" trigger word, so the user reads the
       //    sentence the guard wrote).
-      //    The toast text arrives wrapped in Electron's own IPC preamble
-      //    ("Error invoking remote method 'video:probe': Error: …"), so the
-      //    guard's sentence is asserted as a substring — the same shape the
-      //    round-21 version of this test used for the ffprobe error.
+      //    T-84: the toast IS that sentence, whole. It used to arrive wrapped
+      //    in Electron's own IPC preamble ("Error invoking remote method
+      //    'video:probe': Error: …") and this test asserted a substring to get
+      //    around it; the preamble is gone, so the entry is compared exactly.
       const REFUSAL = 'This file is text, not a video — pick a video file such as MP4, MOV, or MKV.'
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
-        .toEqual(expect.arrayContaining([expect.stringContaining(REFUSAL)]))
+        .toContain(REFUSAL)
       await expect(window.getByText(REFUSAL).first()).toBeVisible()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'export-03-refused.png') })
 

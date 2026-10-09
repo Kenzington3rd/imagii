@@ -1043,13 +1043,19 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // `{ exists, filePath, sizeBytes }` with no age for exactly the files
       // that fail validation, so a user whose autosave was corrupt saw
       // nothing at all: no banner, no Clear, no status line.
-      const banner = window.getByText(/An autosave was found .* but failed validation/)
+      const banner = window.getByText(/imagii found an autosave from .*, but it's damaged/)
       await expect(banner).toBeVisible({ timeout: 20_000 })
-      // The age comes from the file's mtime (seeded seconds ago) and the
-      // reason is the validator's own, so the user learns what happened.
-      await expect(banner).toContainText('(just now)')
-      await expect(banner).toContainText('invalid JSON')
-      await expect(banner).toContainText('It will not be loaded.')
+      // T-84: the banner speaks to a streamer, not a parser. The age comes
+      // from the file's mtime (seeded seconds ago); the validator's reason
+      // ("invalid JSON: Unexpected end of JSON input") is for the console —
+      // it used to be printed here, and the old words ("failed validation",
+      // "It will not be loaded.") named a process the user never sees.
+      await expect(banner).toHaveText(
+        "imagii found an autosave from a moment ago, but it's damaged and can't be restored. " +
+          'Clear it to get rid of it.'
+      )
+      await expect(banner).not.toContainText('invalid JSON')
+      await expect(banner).not.toContainText('validation')
       await expect(window.getByRole('button', { name: 'Clear' })).toBeVisible()
       await expect(window.getByRole('button', { name: 'Dismiss' })).toBeVisible()
 
@@ -1067,7 +1073,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
 
       // ── Dismiss: banner hidden, file untouched ──
       await window.getByRole('button', { name: 'Dismiss' }).click()
-      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
       // The dismissed state still reports the backup's age — the same
       // mtime-derived number, so the status line is no longer suppressed by
       // a corrupt file either.
@@ -1078,24 +1084,31 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       )
 
       // Dismiss is per-session, like Later: a reload brings the notice back.
+      // T-84: and this time the console is listening, because the reason the
+      // banner no longer prints has to go SOMEWHERE a bug report can find it.
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
       await window.reload()
       await waitForHome(window)
       await installToastLog(window)
-      await expect(window.getByText(/but failed validation/)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText(/but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      await expect
+        .poll(() => consoleLines.join('\n'), { timeout: 20_000 })
+        .toContain('invalid JSON')
 
       // ── Clear: the file is deleted from disk ──
       await window.getByRole('button', { name: 'Clear' }).click()
       await expect
         .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
         .toBe(false)
-      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
       expect(await readToastLog(window)).toContain('Autosave discarded.')
 
       // And it stays gone: nothing to warn about after a reload.
       await window.reload()
       await waitForHome(window)
       await window.waitForTimeout(1500)
-      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
       await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
       expect(existsSync(autosaveFile(userDataDir))).toBe(false)
     } finally {
@@ -1131,7 +1144,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         })
       })
 
-      const banner = window.getByText(/An autosave was found .* but failed validation/)
+      const banner = window.getByText(/imagii found an autosave from .*, but it's damaged/)
       await expect(banner).toBeVisible({ timeout: 20_000 })
       await window.getByRole('button', { name: 'Clear' }).click()
 
@@ -1177,9 +1190,65 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         ipcMain.handle('autosave:clear', () => undefined)
       })
       await clearButton.click()
-      await expect(window.getByText(/but failed validation/)).toHaveCount(0, { timeout: 20_000 })
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0, { timeout: 20_000 })
       expect(await readToastLog(window)).toContain('Autosave discarded.')
       expect(existsSync(autosaveFile(userDataDir))).toBe(false)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('AutosaveRestore: Restore with a moved video opens the rest and names the file (T-84)', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('autosave-moved')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // A snapshot that validates (the file is fine) but whose video is gone:
+    // the recording was on a drive that is not plugged in.
+    const gone = path.join(root, 'source', 'stream-that-moved.mp4')
+    seedAutosave(userDataDir, {
+      ...canvasProject('Kept rect'),
+      videoStudio: {
+        sourcePath: gone,
+        clips: [],
+        selectedClipId: null,
+        watermark: null,
+        srtPath: null
+      }
+    })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+
+      await window.getByRole('button', { name: 'Restore' }).click()
+
+      // ONE message, naming the file — in place of "Restored from autosave"
+      // (which would be true of the canvas and false of the video) and of
+      // ffprobe's stderr (which is what this used to throw).
+      const MESSAGE =
+        "Couldn't find stream-that-moved.mp4. It may have been moved or deleted. " +
+        'The rest of your project is open — load the video again in Video Studio.'
+      await expect
+        .poll(() => readToastLog(window), { timeout: 20_000, intervals: [200] })
+        .toContain(MESSAGE)
+      const log = await readToastLog(window)
+      expect(log).not.toContain('Restored from autosave')
+      expect(log.join(' | ')).not.toMatch(/ffprobe|No such file|Error invoking remote method/)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+
+      // The rest came back: the canvas layer is there.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      // …and the studio that lost its file is the empty one, not half-loaded.
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
     } finally {
       await app.close()
       cleanup(root)
@@ -1458,15 +1527,32 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       })
 
       await expect(alert).toBeVisible({ timeout: 15_000 })
-      await expect(alert.getByText('imagii hit a render error')).toBeVisible()
+      // T-84: the crash screen speaks to a streamer. It used to say "imagii
+      // hit a render error" and ask the user to "copy the message below and
+      // report it" — to a channel that does not exist in a local-first app.
+      // Now: what happened, what is safe, where it is.
       await expect(
-        alert.getByText(/Your autosave is intact; reloading\s+to the home screen/)
+        alert.getByRole('heading', { name: 'Something went wrong in this studio' })
       ).toBeVisible()
-      // The thrown message reaches the user verbatim — that is what makes the
-      // panel worth copying into a report.
+      await expect(
+        alert.getByText(
+          'imagii saves your work every few seconds, so most of it should be waiting on the Home screen.'
+        )
+      ).toBeVisible()
+      // What the user can SEE says neither — `innerText` skips the closed
+      // Details, whose thrown message ("Forced render error …") legitimately
+      // does.
+      expect(await alert.innerText()).not.toMatch(/render error|\breport\b/i)
+      // The technical text is still there for whoever wants it — behind a
+      // collapsed "Details" disclosure, not in the user's face.
+      const details = alert.locator('details')
+      await expect(details.locator('summary')).toHaveText('Details')
+      const technical = details.locator('pre')
+      await expect(technical).toHaveCount(2) // the thrown message, then React's component stack
+      await expect(technical.first()).toBeHidden()
       await expect(
         alert.getByText('Forced render error (T-35 ErrorBoundary harness)')
-      ).toBeVisible()
+      ).toBeHidden()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'home-08-error-boundary.png') })
 
       // ── the raw-hex styling is intact ──
@@ -1494,12 +1580,13 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         messageColor: 'rgb(248, 113, 113)'
       })
 
-      // ── the details disclosure expands ──
-      const details = alert.locator('details')
-      const stack = details.locator('pre')
-      await expect(details.getByText('Component stack')).toBeVisible()
-      await expect(stack).toBeHidden()
-      await details.getByText('Component stack').click()
+      // ── the Details disclosure expands: the thrown message, then the stack ──
+      await details.locator('summary').click()
+      await expect(technical.first()).toBeVisible()
+      await expect(
+        alert.getByText('Forced render error (T-35 ErrorBoundary harness)')
+      ).toBeVisible()
+      const stack = technical.nth(1)
       await expect(stack).toBeVisible()
       // React's own component stack, so it is worth reading: several frames,
       // each an "at …" line. (Names are minified in a production build, which

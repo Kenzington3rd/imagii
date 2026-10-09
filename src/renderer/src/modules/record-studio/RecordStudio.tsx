@@ -9,6 +9,8 @@ import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import type { RecordingSource } from '@shared/workspace'
 import { ipcErrorMessage } from '@shared/ipcError'
+import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
+import { reportFailure } from '../../lib/reportFailure'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 
 type Phase = 'idle' | 'recording' | 'saving'
@@ -272,7 +274,7 @@ export function RecordStudio(): JSX.Element {
           // skipped and the take came out screen-only with no message at
           // all. Raise it through the SAME failure path a dead camera takes,
           // so a ticked box that cannot be honoured always says so.
-          if (!effectiveCamId) throw new Error('No camera found')
+          if (!effectiveCamId) throw new Error('No camera found.')
           camStream = await navigator.mediaDevices.getUserMedia({
             video: { deviceId: { exact: effectiveCamId } }
           })
@@ -291,11 +293,11 @@ export function RecordStudio(): JSX.Element {
             void camPreviewRef.current.play()
           }
         } catch (err) {
-          toast.error(
-            err instanceof Error
-              ? `Webcam failed: ${err.message}. Recording screen only.`
-              : 'Webcam failed; recording screen only.'
-          )
+          // T-84: the cause in plain words (the zero-camera case is our own
+          // sentence above), then what the take will be instead — so the
+          // ticked box and the file still agree (T-42).
+          const { message } = userFacingError(err, 'Webcam failed.')
+          toast.error(`${message} Recording screen only.`, { duration: ERROR_TOAST_MS })
           // Fall through with videoTrackSource still pointing at the raw screen
         }
       }
@@ -373,7 +375,7 @@ export function RecordStudio(): JSX.Element {
         sessionIdRef.current = null
         void window.api.recording.abandon(sid).catch(() => undefined)
       }
-      toast.error(err instanceof Error ? err.message : 'Could not start recording')
+      reportFailure(err, { failed: "Couldn't start recording." })
     }
   }
 
@@ -392,9 +394,7 @@ export function RecordStudio(): JSX.Element {
       await loadVideoSource(outputPath)
       navigate('/video')
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : 'Could not open in Video Studio'
-      )
+      reportFailure(err, { failed: "Couldn't open the recording in Video Studio." })
     }
   }
 

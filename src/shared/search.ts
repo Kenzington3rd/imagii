@@ -15,6 +15,19 @@ export interface SearchResponse {
   notice?: string
 }
 
+/**
+ * T-84 — the one sentence for a search that could not reach DuckDuckGo,
+ * whichever hop failed and whatever the transport said. It used to print
+ * "DuckDuckGo search failed: net::ERR_PROXY_CONNECTION_FAILED" for one hop
+ * and "Could not initialize search session. Try again or switch provider."
+ * for the other — the second naming a provider switch no screen offers. The
+ * transport's own words go to main's log; the card says what to do, and what
+ * still works.
+ */
+export const SEARCH_UNREACHABLE_NOTICE =
+  "Couldn't reach DuckDuckGo. Check your internet connection and try again. " +
+  'Your saved boards still work offline.'
+
 export interface MoodBoardItem {
   id: string
   collectionId: string

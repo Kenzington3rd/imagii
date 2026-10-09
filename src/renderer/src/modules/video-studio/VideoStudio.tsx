@@ -25,6 +25,7 @@ import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
+import { reportFailure } from '../../lib/reportFailure'
 import { videoTutorial } from '../../tutorials/videoTutorial'
 
 export function VideoStudio(): JSX.Element {
@@ -78,7 +79,7 @@ export function VideoStudio(): JSX.Element {
       navigate('/audio')
     } catch (err) {
       toast.dismiss('extract-audio')
-      toast.error(err instanceof Error ? err.message : 'Failed to extract audio')
+      reportFailure(err, { failed: "Couldn't extract the audio." })
     } finally {
       setExtractingAudio(false)
     }

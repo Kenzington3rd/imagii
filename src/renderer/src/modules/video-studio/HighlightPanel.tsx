@@ -9,6 +9,7 @@ import {
 import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 import { ACCENT } from '../../styles/tokens'
 
 function formatTime(seconds: number): string {
@@ -102,7 +103,7 @@ export function HighlightPanel(): JSX.Element | null {
       }
       else toast.success(`Found ${narrowed.length} candidates`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Scan failed')
+      reportFailure(err, { failed: 'Scan failed.', canceled: 'Scan canceled.' })
     } finally {
       setScanning(false)
     }

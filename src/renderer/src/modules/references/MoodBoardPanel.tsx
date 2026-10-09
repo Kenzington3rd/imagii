@@ -5,6 +5,7 @@ import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeImageLayer } from '../image-studio/state/canvasStore'
 import { NameDialog } from '../../components/NameDialog'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -42,7 +43,7 @@ export function MoodBoardPanel(): JSX.Element {
       toast.success('Added to canvas as overlay')
       navigate('/image')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not add to canvas')
+      reportFailure(err, { failed: "Couldn't add that image to the canvas." })
     }
   }
 

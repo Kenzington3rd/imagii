@@ -5,6 +5,7 @@ import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 interface JobState {
   jobId: string
@@ -71,8 +72,10 @@ export function ExportDialog(): JSX.Element | null {
       }
       setJob((prev) => (prev ? { ...prev, percent: 100, outputPath } : prev))
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Export failed'
-      toast.error(msg)
+      // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
+      // call — carrying the sentinel, so the neutral line is raised from ONE
+      // place (cancelExport below only asks main to stop).
+      reportFailure(err, { failed: 'Export failed.', canceled: 'Audio export canceled.' })
     } finally {
       setRunning(false)
     }
@@ -86,11 +89,8 @@ export function ExportDialog(): JSX.Element | null {
     if (!job) return
     try {
       await window.api.audio.cancel(job.jobId)
-      toast('Audio export cancelled')
     } catch {
-      /* the renderer Promise rejecting on kill is fine */
-    } finally {
-      setRunning(false)
+      /* the export call rejecting on the kill is the signal; nothing to add */
     }
   }
 

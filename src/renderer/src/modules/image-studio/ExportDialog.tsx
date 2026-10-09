@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { ThumbnailVariants } from './ThumbnailVariants'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 import { useCanvasStore } from './state/canvasStore'
 
 type FormatOption = 'png' | 'jpg'
@@ -182,7 +183,7 @@ export function ExportDialog(): JSX.Element {
       downloadDataUrl(dataUrl, `imagii-${Date.now()}.${format}`)
       toast.success(`${format.toUpperCase()} saved`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Export failed')
+      reportFailure(err, { failed: 'Export failed.' })
     } finally {
       setBusy(false)
     }

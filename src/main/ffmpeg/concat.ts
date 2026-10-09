@@ -4,6 +4,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { ffmpegPath } from './paths'
 import { even } from './filters'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 import { assertDefined } from '../../shared/assert'
 
 export interface ConcatJobSpec {
@@ -32,11 +33,7 @@ export function cancelConcatJob(jobId: string): boolean {
   // Cancel any sub-keyed children too (segment-N, concat).
   for (const [key, child] of activeJobs) {
     if (key === jobId || key.startsWith(`${jobId}:`)) {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* ignore */
-      }
+      killAsCancelled(child)
       activeJobs.delete(key)
       killed = true
     }
@@ -45,13 +42,7 @@ export function cancelConcatJob(jobId: string): boolean {
 }
 
 export function cancelAllConcatJobs(): void {
-  for (const [, child] of activeJobs) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }
 
@@ -140,12 +131,12 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       })
       child.on('error', (err) => {
         activeJobs.delete(childKey)
-        reject(err)
+        reject(cancelledOr(child, err))
       })
       child.on('close', (code) => {
         activeJobs.delete(childKey)
         if (code === 0) resolve()
-        else reject(new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`))
+        else reject(cancelledOr(child, new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`)))
       })
     })
   }
@@ -190,12 +181,12 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     })
     child.on('error', (err) => {
       activeJobs.delete(childKey)
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code) => {
       activeJobs.delete(childKey)
       if (code === 0) resolve()
-      else reject(new Error(`concat exit ${code}: ${stderr.slice(-500)}`))
+      else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })
   })
 
@@ -285,12 +276,12 @@ export async function runPipComposite(
     })
     child.on('error', (err) => {
       activeJobs.delete(jobId)
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code) => {
       activeJobs.delete(jobId)
       if (code === 0) resolve()
-      else reject(new Error(`pip exit ${code}: ${stderr.slice(-500)}`))
+      else reject(cancelledOr(child, new Error(`pip exit ${code}: ${stderr.slice(-500)}`)))
     })
   })
 

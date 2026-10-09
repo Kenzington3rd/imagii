@@ -52,7 +52,25 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1259 tests across 68 files (round 50 added three files —
+**Count.** 1449 tests across 72 files (round 51 added four files —
+`src/main/ffmpeg/cancelSentinel.test.ts`, the table that drives twelve real
+cancellable runners (video export, GIF, compile, PiP, reframe, highlight
+scan, audio export and re-attach, caption burn-in, transcription, convert,
+frame extract) against a fake child and asks, for every way the app can stop
+each one under both exit shapes a SIGKILL produces, that the rejection is the
+cancel sentinel — and that the same exit nobody asked for is not; plus the
+superseded hook analysis, the model download and the convert subclass;
+`src/shared/cancel.test.ts`; `src/shared/userFacingError.test.ts`, the helper
+every renderer `catch` goes through, exercised on the real strings main
+produces wrapped the way Electron wraps them; and
+`tests/unit/failurePathLanguage.test.ts`, a TypeScript-AST scan of the renderer
+that fails on a `catch` reading its variable's `.message` or a `toast.error`
+handed one, lists every site that must stay routed through the helper, and
+proves on a bad snippet that the scanner itself discriminates — and grew the
+`applyProject` block in `ProjectIO.test.ts` (each studio's failure leaves the
+others applied), the `describeImportError` table for both importer kinds, the
+rewritten search notice in `duckduckgo.test.ts` / `search.test.ts`, and the
+rejected-search case in `referencesStore.test.ts`; round 50 added three files —
 `presets.test.ts`, the first unit test of `evaluateSuccess`, the export
 grid's per-platform verdict, now with reason-specific labels;
 `ExportPanel.test.ts`, the first for `findSafeZoneIssues`, now read against
@@ -150,7 +168,9 @@ so these conventions are held by review and by the suite itself):
   (T-62).
 - **Toasts are recorded, never polled for**, via
   `tests/e2e/toastLog.ts` (`installToastLog` before the action,
-  `readToastLog` at the assertion). It records
+  `readToastLog` at the assertion; `readToastEntries` adds whether the toast
+  drew a status icon, because a cancel in a red `toast.error` carries the
+  right words and is still wrong — T-84). It records
   `[data-rht-toaster] [role="status"]` — react-hot-toast's own message
   node inside its own container — so the log holds toasts and nothing
   else. The wide version this replaced logged every element mounted

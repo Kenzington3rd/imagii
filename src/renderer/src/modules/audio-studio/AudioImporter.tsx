@@ -38,7 +38,7 @@ export function AudioImporter(): JSX.Element {
     } catch (err) {
       console.error('[audio-import] failed', { filePath, err })
       toast.dismiss('extract')
-      toast.error(describeImportError(err, filePath), { duration: 8000 })
+      toast.error(describeImportError(err, filePath, 'audio'), { duration: 8000 })
     } finally {
       setBusy(false)
     }

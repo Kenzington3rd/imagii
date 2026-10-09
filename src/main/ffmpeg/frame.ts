@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 import { assert } from '../../shared/assert'
 import { sanitizeFilename } from '../../shared/filename'
 
@@ -12,13 +13,7 @@ import { sanitizeFilename } from '../../shared/filename'
 let activeFrame: ChildProcess | null = null
 
 export function cancelAllFrameJobs(): void {
-  if (activeFrame && activeFrame.exitCode === null) {
-    try {
-      activeFrame.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  if (activeFrame && activeFrame.exitCode === null) killAsCancelled(activeFrame)
   activeFrame = null
 }
 
@@ -68,14 +63,16 @@ export async function extractFrame(
     })
     child.on('error', (err) => {
       if (activeFrame === child) activeFrame = null
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code, signal) => {
       if (activeFrame === child) activeFrame = null
       if (code === 0) resolve()
-      else if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-        reject(new Error('extractFrame cancelled'))
-      } else reject(new Error(`extractFrame exit ${code}: ${stderr.slice(-500)}`))
+      else {
+        reject(
+          cancelledOr(child, new Error(`extractFrame exit ${code ?? signal}: ${stderr.slice(-500)}`))
+        )
+      }
     })
   })
 

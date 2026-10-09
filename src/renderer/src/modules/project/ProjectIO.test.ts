@@ -10,7 +10,12 @@ import {
   isSafeToAutosave
 } from '@shared/projectValidation'
 import { pathToImagiiFileUrl } from '@shared/fileUrl'
-import { captureProject, applyProject, applyPlace } from './ProjectIO'
+import {
+  captureProject,
+  applyProject,
+  applyPlace,
+  describeUnavailableSources
+} from './ProjectIO'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
@@ -485,5 +490,160 @@ describe('place record: capture, restore, and per-field degradation', () => {
     // sure Undo does not come back pointing at the session before it.
     expect(useReferencesStore.getState().canUndo()).toBe(false)
     expect(useReferencesStore.getState().canRedo()).toBe(false)
+  })
+})
+
+/**
+ * T-84 — a project whose video was moved opens the REST of the project.
+ *
+ * applyProject used to be one straight line of awaits, so the first
+ * `loadSource` that threw (a recording moved to another drive, a file on a
+ * disconnected USB stick) rejected the whole call and left the project
+ * half-restored — canvas in, audio and place never applied — behind a toast
+ * that printed ffprobe's stderr. A project is the user's work in up to four
+ * studios; one missing media file is a fact about ONE of them. The contract
+ * these tests pin:
+ *
+ *   - a studio whose source cannot be loaded is reported, not thrown, and is
+ *     left exactly as it was (no clips or caption path applied over a source
+ *     that is not there);
+ *   - every other studio is applied regardless of which one failed or in
+ *     what order the failures come;
+ *   - the report names the file, so the one message the user sees can too.
+ */
+describe('applyProject: a studio whose file is gone does not take the rest down (T-84)', () => {
+  const MISSING = (p: string): Error =>
+    new Error(`ffprobe exit 1: ${p}: No such file or directory`)
+
+  /** The preload bridge with the given paths "moved": their probes reject. */
+  function bridgeWithout(...gone: string[]): void {
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: (p: string) =>
+            gone.includes(p) ? Promise.reject(MISSING(p)) : Promise.resolve(VIDEO_PROBE),
+          fileUrl: (p: string) => pathToImagiiFileUrl(p)
+        },
+        audio: {
+          probe: (p: string) =>
+            gone.includes(p) ? Promise.reject(MISSING(p)) : Promise.resolve(AUDIO_PROBE)
+        }
+      }
+    })
+  }
+
+  /** A full project on disk, as `captureProject` wrote it. */
+  async function fullProject(): Promise<ImagiiProject> {
+    await seedAllStudios()
+    useCanvasStore.getState().selectLayer('layer-text')
+    const project = JSON.parse(JSON.stringify(captureProject())) as ImagiiProject
+    wipeAllStudios()
+    return project
+  }
+
+  it('a moved VIDEO still opens the audio, the canvas and the place', async () => {
+    const project = await fullProject()
+    bridgeWithout(VIDEO_PATH)
+
+    const outcome = await applyProject(project)
+
+    expect(outcome.unavailable).toEqual([
+      { studio: 'video', path: VIDEO_PATH, fileName: 'stream.mp4' }
+    ])
+    // Everything the project could still give back is back…
+    expect(useAudioStore.getState().source?.filePath).toBe(AUDIO_PATH)
+    expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    expect(useCanvasStore.getState().doc).toEqual(DOC)
+    expect(useCanvasStore.getState().selectedLayerId).toBe('layer-text')
+    // …and the studio that lost its file holds NOTHING from the project: no
+    // clips or caption path hanging over a video that is not there.
+    expect(useVideoStore.getState().source).toBeNull()
+    expect(useVideoStore.getState().clips).toEqual([])
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('a moved AUDIO file still opens the video, the canvas and the place', async () => {
+    const project = await fullProject()
+    bridgeWithout(AUDIO_PATH)
+
+    const outcome = await applyProject(project)
+
+    expect(outcome.unavailable).toEqual([
+      { studio: 'audio', path: AUDIO_PATH, fileName: 'mic.wav' }
+    ])
+    expect(useVideoStore.getState().source?.filePath).toBe(VIDEO_PATH)
+    expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    expect(useVideoStore.getState().selectedClipId).toBe(CLIP_B.id)
+    expect(useVideoStore.getState().srtPath).toBe(SRT_PATH)
+    expect(useCanvasStore.getState().doc).toEqual(DOC)
+    expect(useAudioStore.getState().source).toBeNull()
+    // The audio load failing must not leave the store stuck "loading".
+    expect(useAudioStore.getState().loading).toBe(false)
+  })
+
+  it('both media files gone still opens the canvas, and reports both in order', async () => {
+    const project = await fullProject()
+    bridgeWithout(VIDEO_PATH, AUDIO_PATH)
+
+    const outcome = await applyProject(project)
+
+    expect(outcome.unavailable.map((u) => u.studio)).toEqual(['video', 'audio'])
+    expect(useCanvasStore.getState().doc).toEqual(DOC)
+    expect(useCanvasStore.getState().selectedLayerId).toBe('layer-text')
+  })
+
+  it('reports nothing when every file is where the project left it', async () => {
+    const project = await fullProject()
+    bridgeWithout()
+
+    const outcome = await applyProject(project)
+
+    expect(outcome.unavailable).toEqual([])
+    expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    expect(useAudioStore.getState().source?.filePath).toBe(AUDIO_PATH)
+  })
+
+  it('does not apply a place that points into the studio that lost its file', async () => {
+    const project = await fullProject()
+    bridgeWithout(VIDEO_PATH)
+    // The clip selection and playhead live in the video studio; with no
+    // video there is nothing for them to select or seek.
+    await applyProject({
+      ...project,
+      place: { videoClipId: CLIP_B.id, videoTimeSec: 42 }
+    })
+    expect(useVideoStore.getState().selectedClipId).toBeNull()
+    expect(useVideoStore.getState().seekRequest).toBeNull()
+  })
+})
+
+describe('describeUnavailableSources: the ONE message for the files a project could not find (T-84)', () => {
+  const video = { studio: 'video' as const, path: '/v/stream.mp4', fileName: 'stream.mp4' }
+  const audio = { studio: 'audio' as const, path: '/a/mic.wav', fileName: 'mic.wav' }
+
+  it('says nothing when nothing is missing', () => {
+    expect(describeUnavailableSources([])).toBeNull()
+  })
+
+  it('names the video, says the rest is open, and says where to load it again', () => {
+    expect(describeUnavailableSources([video])).toBe(
+      "Couldn't find stream.mp4. It may have been moved or deleted. " +
+        'The rest of your project is open — load the video again in Video Studio.'
+    )
+  })
+
+  it('names the audio file and sends the user to Audio Studio', () => {
+    expect(describeUnavailableSources([audio])).toBe(
+      "Couldn't find mic.wav. It may have been moved or deleted. " +
+        'The rest of your project is open — load the audio again in Audio Studio.'
+    )
+  })
+
+  it('names both files in one sentence when both are gone', () => {
+    expect(describeUnavailableSources([video, audio])).toBe(
+      "Couldn't find stream.mp4 and mic.wav. They may have been moved or deleted. " +
+        'The rest of your project is open — load the video again in Video Studio ' +
+        'and the audio again in Audio Studio.'
+    )
   })
 })
