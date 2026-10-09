@@ -226,20 +226,22 @@ describe('T-59 — a success toast reports what happened, not what was attempted
   // drives the highlight Add. Both facts below are one line of source each
   // and unreachable from a node test without a DOM, so they are pinned here.
 
-  it('HighlightPanel gates its "Clip added" on the store returning true', () => {
+  it('HighlightPanel gates its "Clip added" on the store not refusing (T-94: addScannedClip)', () => {
     const panel = read('modules/video-studio/HighlightPanel.tsx')
     expect(panel).toMatch(
-      /if \(!addClipFromRange\(`Highlight \$\{index \+ 1\}`, h\.startSec, h\.endSec\)\) \{/
+      /const added = addScannedClip\(`Highlight \$\{index \+ 1\}`, h\.startSec, h\.endSec\)/
     )
+    expect(panel).toMatch(/if \(added === 'refused'\) \{/)
     // The refusal says so rather than passing for a success.
-    const gate = panel.slice(panel.indexOf('if (!addClipFromRange'), panel.indexOf('Clip added'))
+    const gate = panel.slice(panel.indexOf("if (added === 'refused')"), panel.indexOf('Clip added'))
     expect(gate).toMatch(/toast\.error\(/)
     expect(gate).toMatch(/return/)
   })
 
   it('ChatHighlightPanel still has the same gate (T-48, the shape this copies)', () => {
     const panel = read('modules/video-studio/ChatHighlightPanel.tsx')
-    expect(panel).toMatch(/if \(!addClipFromRange\(/)
+    expect(panel).toMatch(/const added = addScannedClip\(/)
+    expect(panel).toMatch(/if \(added === 'refused'\) \{/)
   })
 
   it('RecordStudio unwraps the IPC envelope instead of toasting err.message', () => {
@@ -249,6 +251,41 @@ describe('T-59 — a success toast reports what happened, not what was attempted
     // The old line: Electron's "Error invoking remote method
     // 'recording:finalize': …" reached the toast in full.
     expect(studio).not.toMatch(/toast\.error\(err instanceof Error \? err\.message : 'Save failed'\)/)
+  })
+})
+
+describe('T-94 — only the highlight scanners retire the whole-video clip', () => {
+  // The store's unit tests prove WHAT addScannedClip does; this pins WHO calls
+  // it. The distinction is the whole feature: a manual "+ Add clip" is the
+  // user making a clip on purpose and must never delete one, and a scanner's
+  // "+ Clip" that quietly went back to addClipFromRange would put the
+  // three-hour VOD back into every export. E2E: video-pipelines.spec.ts.
+  const scanners = [
+    'modules/video-studio/HighlightPanel.tsx',
+    'modules/video-studio/ChatHighlightPanel.tsx'
+  ]
+
+  it.each(scanners)('%s adds through addScannedClip, and says so when it retired a clip', (file) => {
+    const panel = read(file)
+    expect(panel).toMatch(/useVideoStore\(\(s\) => s\.addScannedClip\)/)
+    expect(panel).not.toMatch(/addClipFromRange/)
+    expect(panel).toMatch(/added === 'added-dropped-whole-video'/)
+    expect(panel).toMatch(/toast\(WHOLE_VIDEO_DROPPED_MESSAGE/)
+  })
+
+  it('the manual paths do not: ClipList adds through addClip', () => {
+    const list = read('modules/video-studio/ClipList.tsx')
+    expect(list).toMatch(/useVideoStore\(\(s\) => s\.addClip\)/)
+    expect(list).not.toMatch(/addScannedClip/)
+  })
+
+  it('the Export and Compile buttons say how many files and clips they will make', () => {
+    expect(read('modules/video-studio/ExportPanel.tsx')).toMatch(
+      /`Export \$\{countOf\(totalQueued, 'file'\)\}`/
+    )
+    expect(read('modules/video-studio/CompilationPanel.tsx')).toMatch(
+      /`Compile \$\{countOf\(clips\.length, 'clip'\)\}`/
+    )
   })
 })
 

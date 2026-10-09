@@ -1376,3 +1376,89 @@ cut" could not.
   reaches the intermediate WAV's `finally`, which is the same cleanup path
   the failed-mux case covers; a cancel landing in the instant between the
   render and mux passes has no child to kill, as before.
+
+
+## Dispositions — round 50 (T-83 + T-94: the export grid and the whole-video clip)
+
+No new interactive elements. Both tickets change what an existing
+control's end state is allowed to be, and every end state below is
+reachable without an OS boundary except the export bytes' save dialog,
+which the E2E crosses with the house main-process dialog stub.
+
+- **Video 4d CropOverlay - enable checkbox, aspect presets, drag, resize,
+  Reset ([T-83]):** end state extended from "the rect lands in the store
+  and the preview redraws" to "every ticked platform exports a centered
+  cut OF that rect at its own size, never stretched". Layer 5
+  (media.spec.ts "manual crop exported to a mismatched preset (real
+  ffmpeg, T-83)") measures a known SQUARE through five real
+  `runExportJob` runs — 4:3 -> Reels, 9:16 -> YouTube, 1:1 -> X, an odd
+  1919x1079 source, plus the matching-shape control — and asserts it is
+  still square, centered and at the hand-derived scale. The same promise
+  through the real UI: video-pipelines.spec.ts "a cropped clip exports at
+  every ticked platform's own size with square pixels (T-83)" (1:1 crop,
+  YouTube + Reels, both files at their preset's size with SAR 1:1).
+  Red-first against the old filter: marker 180x426, 568x180, 190x106.
+  Mutation (post-crop aspect cut skipped when `cropRect` is set) -> 4
+  unit + 4 Layer 5 cases red.
+- **Video 4t ExportPanel - platform checkboxes and their SuccessIndicator
+  ([T-83]):** end state extended from "the box ticks" to "the card judges
+  the frame the export starts from, says WHY, and says it on screen".
+  video-pipelines.spec.ts "the grid judges the crop, not the file": on a
+  4K 26 s fixture, no crop -> TikTok / Reels "Wrong shape" with the reason
+  visible (`getByText`, not `title`); a 9:16 crop drawn through the real
+  Crop control -> TikTok and Reels "Great", YouTube / X / Facebook "Wrong
+  shape"; unchecking Crop returns the source's verdicts; "Trim" is gone.
+  The verdict function itself is `evaluateSuccess`, newly unit-tested in
+  presets.test.ts (labels, both-red, minutes wording, every cap is a
+  "typical" limit, no reason names a platform, the 9:16-crop matrix).
+- **Video 4t ExportPanel + 4p ClipKit - safe-zone modal Cancel / Export
+  anyway ([T-83]):** buttons renamed (were "Cancel export" / "Continue
+  anyway") with the dialog's title and body rewritten in plain words; same
+  two end states as before — declined: no queue, no files, panel
+  untouched; accepted: the same batch runs — asserted in the existing
+  "safe-zone pre-flight warns before a mixed-aspect batch" and the two
+  ClipKit tests, updated to the new copy and the new row format ("<A>
+  frame -> cut down for <B>"). New: "with a crop in place the safe-zone
+  pre-flight reads the crop" — the same 4:3 clip lists both directions
+  uncropped and exactly "TikTok frame -> cut down for YouTube" under a 9:16
+  crop (`findSafeZoneIssues` is re-pointed at the clip's effective frame and
+  unit-tested in ExportPanel.test.ts for the first time). The modal is not
+  one of the Modal-contract tests' named dialogs (Escape / scrim / trap are
+  asserted on others); its `<Modal>` wiring is unchanged.
+- **Video - OutputPreview platform select ([T-83]):** the canvas now
+  draws "your crop, then this platform's shape cut from it" through the
+  pure `outputSourceRect` (safeZone.test.ts: with and without a crop, never
+  leaves the crop, a crop of the platform's own shape is whole, a corrupt
+  rect is no crop). DISPOSITION: the `drawImage` call itself is DOM-bound
+  and its pixels under a crop are NOT asserted — the existing video-core
+  tests prove the select redraws and that a crop changes the picture; the
+  geometry handed to it is the unit-tested part. Candidate follow-up: a
+  marker-based canvas read, the preview's version of the Layer 5 case.
+- **Video 4f ClipList + 4j HighlightPanel "+ Clip" + 4g ChatHighlightPanel
+  "+ clip" ([T-94]):** end state extended from "a clip lands in the list" to
+  "the first scanner clip also retires the untouched whole-video clip, in ONE
+  undo step, and says so". video-pipelines.spec.ts "the first highlight
+  retires the untouched whole-video clip, one undo brings it back, and
+  Export writes only what is left (T-94)" drives the VOD path end to end:
+  scan the burst fixture, + Clip, the list is exactly [Highlight 1], the
+  neutral toast appears once, ONE Ctrl+Z restores "Clip 1" with Undo then
+  disabled, Ctrl+Y re-applies both halves, and the export writes exactly the
+  excerpt (two files, ~11 s of a 14 s source, none named for Clip 1). Chat
+  scanner: "the chat scanner retires it too, a manual + Add clip never does,
+  and a clip the user touched is left alone" and "a whole-video clip the
+  user has trimmed is theirs". ClipList "+ Add clip" is the negative: a
+  manual "Clip 2" of the same whole-video range SURVIVES a scanner add.
+  Red-first against the shipped build: `Expected "Clips (1)", Received
+  "Clips (2)"`. Mutations: predicate forced false -> unit + both retire
+  E2Es red; forced true -> 25 unit cases and the renamed-clip E2E red.
+- **Video 4t ExportPanel - Export button ([T-94]):** copy is "Export {n}
+  file(s)" (plural-correct through `countOf`, unit-tested in plural.test.ts
+  and pinned in interactionWiring.test.ts); the E2E asserts the real
+  count at three points (1 file with the whole-video clip, 1 after the
+  scan retires it, 2 after a second platform) and that the files on disk
+  match it. The pre-existing export tests locate the button by name
+  substring ("Export 4") and are green unchanged.
+- **Video 4m CompilationPanel - Compile button ([T-94]):** copy is "Compile
+  {n} clip(s)" (the panel only renders at 2+ clips). Driven by the
+  existing compilation test, updated from the exact name "Compile" to
+  "Compile 2 clips"; the header "Compile clips (N)" is unchanged.

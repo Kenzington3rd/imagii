@@ -52,7 +52,16 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1178 tests across 65 files (round 49 added
+**Count.** 1259 tests across 68 files (round 50 added three files —
+`presets.test.ts`, the first unit test of `evaluateSuccess`, the export
+grid's per-platform verdict, now with reason-specific labels;
+`ExportPanel.test.ts`, the first for `findSafeZoneIssues`, now read against
+a clip's effective frame (it imports the component module directly, which
+works under the node config because nothing renders); and
+`src/shared/plural.test.ts` — plus the T-83 crop-chain block in
+`filters.test.ts`, `cropFrameSize` / `outputSourceRect` in
+`safeZone.test.ts`, and the T-94 pristine-predicate table and
+scanner-action block in `videoStore.test.ts`; round 49 added
 `src/shared/captions.test.ts` — the T-81 `shiftSrtToRange` cases plus
 `tsToSeconds`, which moved there from `whisperManager.test.ts` along with
 its helper, a first unit pin for `escapeSubtitlesPath`, and the
@@ -234,6 +243,17 @@ flat, so "is a caption painted at this instant" is a luma-spread read of
 0 vs > 100) and the ramp (every frame's luma is 12 x its own source
 second, plus one loud audio burst, so "which part of the source is under
 this sound" is arithmetic). Cut at an offset, never from 0.
+
+**A stretch passes every container check — measure a shape whose truth you
+know.** Round 50's T-83 shipped a manual crop squeezed 2-3x on one axis
+inside files whose dimensions, codec, SAR and duration were all correct, so
+nothing ffprobe can say would have caught it. The fixture is a black frame
+carrying one white SQUARE; the export is decoded whole and the square's
+bounding box is measured from the pixels (square within 3%, the hand-derived
+scale, centered). Two rules: derive the expected scale from the geometry of
+the request ("the crop's full height maps onto 1920 px"), never from the
+filter string under test; and keep a control whose shape already matches the
+preset, so a fix that over-crops cannot pass.
 
 ---
 

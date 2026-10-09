@@ -50,12 +50,17 @@ const __dirname = path.dirname(__filename)
  *
  * ── Fixtures ──────────────────────────────────────────────────────────
  *
- * Four, all built once by the repo's own bundled ffmpeg:
+ * Five, all built once by the repo's own bundled ffmpeg:
  *   clipSrc  — 320x240 / 2 s / 15 fps testsrc2 + 440 Hz. The export fixture.
  *   pipSrc   — 160x120 / 2 s flat green, no audio. The PiP overlay.
  *   burstSrc — 320x240 / 14 s, a quiet 440 Hz bed with one 1.5 s full-scale
  *              burst at 6.0-7.5 s (the Layer 5 `rampSrc` recipe, shortened).
  *              findHighlights returns exactly one candidate for it.
+ *   bigSrc   — 3840x2160 / 26 s / 1 fps flat colour (T-83). Big enough that no
+ *              platform trips the "smaller than the output" check, and 26 s
+ *              sits inside both TikTok's 21-34 s and Reels' 15-90 s sweet
+ *              spots — so a 9:16 crop CAN turn those two indicators green,
+ *              which is the thing the grid-honesty test has to show.
  *   longSrc  — 64x48 / ~1200 s, built by `-stream_loop` + `-c copy` from a
  *              15 s base so it costs ~0.6 s to make and 5 MB on disk. Two
  *              jobs need it: the chat panel (whose padded ranges run past
@@ -102,6 +107,7 @@ let clipSrc = ''
 let pipSrc = ''
 let burstSrc = ''
 let longSrc = ''
+let bigSrc = ''
 /** Real duration of longSrc, read back from ffprobe after the loop. */
 let longSeconds = 0
 
@@ -552,6 +558,15 @@ test.beforeAll(async () => {
     '-c:a', 'aac', '-b:a', '32k', '-ac', '1', '-shortest',
     loopBase
   ])
+  // T-83: 4K, 26 s, one frame per second — a flat colour at 1 fps encodes in
+  // well under a second and decodes without effort, and the file is a few KB.
+  bigSrc = path.join(sourceDir, 'big.mp4')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi', '-i', 'color=c=0x303a4a:size=3840x2160:rate=1:duration=26',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    bigSrc
+  ])
   await ffmpeg(['-y', '-stream_loop', '79', '-i', loopBase, '-c', 'copy', longSrc])
   longSeconds = Number((await ffprobeJson(longSrc)).format?.duration ?? 0)
   expect(longSeconds).toBeGreaterThan(600)
@@ -596,15 +611,15 @@ test.describe('ChatHighlightPanel', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-01-chat-peaks.png') })
 
       // ── + clip: a real clip, with the padded range, in the store ──
+      // T-94: the scanner's FIRST clip retires the untouched whole-video
+      // "Clip 1" (the dedicated tests below drive that end to end), so the
+      // list goes from the one default clip to the one excerpt.
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       await row.getByRole('button', { name: '+ clip' }).click()
-      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       await expectToast(window, 'Clip added')
       // start = bucketStart (15), end = bucketStart + bucket + 2 * pad = 55.
-      expect((await clipRows(window))[1]).toEqual({
-        name: 'Chat hype 1',
-        range: '0:15 → 0:55'
-      })
+      expect(await clipRows(window)).toEqual([{ name: 'Chat hype 1', range: '0:15 → 0:55' }])
 
       // ── the two number inputs change the arithmetic, not just the UI ──
       // Pad 15 -> 0 moves the peak's start from 0:15 to the bucket itself.
@@ -620,10 +635,11 @@ test.describe('ChatHighlightPanel', () => {
       await expect(card.locator('li').first().getByText('5 msgs')).toBeVisible()
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30')
 
-      // And the re-run's + clip uses the NEW numbers: 30 -> 30 + 5 + 0.
+      // And the re-run's + clip uses the NEW numbers: 30 -> 30 + 5 + 0. By now
+      // there is no whole-video clip left to retire, so this one just adds.
       await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
-      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (3)')
-      expect((await clipRows(window))[2]).toEqual({
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      expect((await clipRows(window))[1]).toEqual({
         name: 'Chat hype 1',
         range: '0:30 → 0:35'
       })
@@ -700,11 +716,68 @@ test.describe('ChatHighlightPanel', () => {
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00')
       await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
       await expectToast(window, 'Clip added')
-      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
-      expect((await clipRows(window))[1]).toEqual({
-        name: 'Chat hype 1',
-        range: '0:00 → 0:02'
-      })
+      // T-94: it replaced the untouched whole-video clip (also 0:00 → 0:02 on
+      // this 2 s source, which is why the NAME is what tells them apart).
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect(await clipRows(window)).toEqual([{ name: 'Chat hype 1', range: '0:00 → 0:02' }])
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('ChatHighlightPanel — the whole-video clip (T-94)', () => {
+  test('the chat scanner retires it too, a manual + Add clip never does, and a clip the user touched is left alone', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t94chat', longSrc)
+    try {
+      const card = chatCard(window)
+      const list = clipListCard(window)
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li')).toHaveCount(1)
+
+      // ── manual: "+ Add clip" is the user making a clip on purpose ──
+      await list.getByRole('button', { name: '+ Add clip' }).click()
+      await expect(list.locator('h3')).toHaveText('Clips (2)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 1', 'Clip 2'])
+
+      // ── scanner: retires the untouched "Clip 1" and ONLY that one ──
+      // "Clip 2" is the same whole-video range, but the user asked for it.
+      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await expectToast(
+        window,
+        'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+      )
+      await expect(list.locator('h3')).toHaveText('Clips (2)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 2', 'Chat hype 1'])
+
+      // ── one undo puts back exactly the state before the scanner's add ──
+      await window.keyboard.press('Control+z')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 1', 'Clip 2'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a whole-video clip the user has trimmed is theirs: the scanner adds beside it, silently', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t94touched', longSrc)
+    try {
+      const card = chatCard(window)
+      const list = clipListCard(window)
+      // Touch Clip 1: any edit at all — here, renaming it.
+      await list.locator('li').first().getByRole('textbox').fill('Whole stream')
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await expectToast(window, 'Clip added')
+      await expect(list.locator('h3')).toHaveText('Clips (2)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Whole stream', 'Chat hype 1'])
+      // No removal, so no removal toast.
+      expect(
+        (await readToastLog(window)).some((t) => t.includes('Removed the whole-video clip'))
+      ).toBe(false)
     } finally {
       await app.close()
     }
@@ -747,12 +820,80 @@ test.describe('HighlightPanel', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-02-highlights.png') })
 
       // ── + Clip ──
+      // T-94: the scanner's first clip replaces the untouched whole-video
+      // "Clip 1" (driven end to end in the T-94 test below).
       await row.getByRole('button', { name: '+ Clip' }).click()
-      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       await expectToast(window, 'Clip added — see the Clips list')
-      const rows = await clipRows(window)
-      expect(rows[1]?.name).toBe('Highlight 1')
-      expect(rows[1]?.range).toBe('0:01 → 0:12')
+      expect(await clipRows(window)).toEqual([{ name: 'Highlight 1', range: '0:01 → 0:12' }])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the first highlight retires the untouched whole-video clip, one undo brings it back, and Export writes only what is left (T-94)', async () => {
+    test.setTimeout(600_000)
+    // The VOD path, end to end: load a "VOD" (14 s here, 3 h in life), scan it,
+    // add the highlight, export. Before T-94 the whole-video "Clip 1" rode
+    // along in every export — the full source re-encoded beside the excerpt —
+    // and the button said "Export 6" without saying six of what.
+    const { app, window, outDir } = await launchWithVideo('t94', burstSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = highlightCard(window)
+      const exp = exportCard(window)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const WHOLE_GONE =
+        'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+
+      // ── before: the whole-video clip, and a button that counts FILES ──
+      expect(await clipRows(window)).toEqual([{ name: 'Clip 1', range: '0:00 → 0:14' }])
+      await expect(exp.getByRole('button', { name: 'Export 1 file', exact: true })).toBeVisible()
+
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
+
+      // ── after the first + Clip: the whole-video clip is gone ──
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect(await clipRows(window)).toEqual([{ name: 'Highlight 1', range: '0:01 → 0:12' }])
+      // ...the user was told, once, with the way back...
+      const toasts = await expectToast(window, WHOLE_GONE)
+      expect(toasts.filter((t) => t.includes('Removed the whole-video clip'))).toHaveLength(1)
+      // ...the add itself still reported (the two toasts are different facts)...
+      expect(toasts.some((t) => t.includes('Clip added — see the Clips list'))).toBe(true)
+
+      // ── ONE undo restores both halves: the whole-video clip is back and the
+      //    highlight is gone, and there is nothing further to undo ──
+      await window.keyboard.press('Control+z')
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect(await clipRows(window)).toEqual([{ name: 'Clip 1', range: '0:00 → 0:14' }])
+      await expect(undo).toBeDisabled()
+      // ...and redo takes them away again, together.
+      await window.keyboard.press('Control+y')
+      expect(await clipRows(window)).toEqual([{ name: 'Highlight 1', range: '0:01 → 0:12' }])
+
+      // ── the button says what it will produce, in files ──
+      await presetBox(window, 'X / Twitter').check()
+      await expect(exp.getByRole('button', { name: 'Export 2 files', exact: true })).toBeEnabled()
+
+      // ── and the export writes exactly that: the excerpt on two platforms,
+      //    NOT the 14 s source on top of it ──
+      await exp.getByRole('button', { name: 'Choose folder…' }).click()
+      await exp.getByRole('button', { name: 'Export 2 files', exact: true }).click()
+      const expected = ['burst_Highlight 1_twitter.mp4', 'burst_Highlight 1_youtube.mp4']
+      await expect
+        .poll(() => mp4sIn(outDir), { timeout: 540_000, intervals: [500] })
+        .toEqual(expected)
+      await expectToast(window, 'Exported 2 files')
+      for (const name of expected) {
+        const seconds = Number((await ffprobeJson(path.join(outDir, name))).format?.duration)
+        // The burst candidate is ~1.3-12.7 s of a 14 s file. A full-source
+        // re-encode would be 14 s; the excerpt is ~11.4.
+        expect(seconds, `${name} is the excerpt, not the source`).toBeGreaterThan(10)
+        expect(seconds, `${name} is the excerpt, not the source`).toBeLessThan(13)
+      }
+      expect(mp4sIn(outDir).some((f) => f.includes('Clip 1'))).toBe(false)
     } finally {
       await app.close()
     }
@@ -1305,15 +1446,31 @@ test.describe('ExportPanel', () => {
 
       const modal = window.getByRole('dialog')
       await expect(modal).toBeVisible()
-      await expect(modal.getByRole('heading', { name: 'Safe-zone warning' }).last()).toBeVisible()
-      // Both directions of the collision are listed, by clip name.
-      await expect(modal.locator('li')).toHaveText([
-        'Clip 1 — clips: YouTube → Reels, Reels → YouTube'
+      // T-83: plain words. The title says what will happen to the picture,
+      // the body says why, and neither uses "clip" as a verb or "safe zone"
+      // as a noun.
+      await expect(
+        modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()
+      ).toBeVisible()
+      await expect(modal).toContainText(
+        'the tall ones keep only the middle of the frame, and anything near the edges is lost'
+      )
+      await expect(modal).not.toContainText('safe zone')
+      await expect(modal).not.toContainText('clips:')
+      // Both directions of the collision are listed, by clip name. The 4:3
+      // fixture is neither wide nor tall, so each platform's cut takes
+      // something the other keeps: "<this platform's picture> is cut down for
+      // <that platform>".
+      await expect(modal.locator('li')).toHaveCount(1)
+      await expect(modal.locator('li')).toContainText('Clip 1')
+      await expect(modal.locator('li > div')).toHaveText([
+        'Reels frame → cut down for YouTube',
+        'YouTube frame → cut down for Reels'
       ])
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-07-safezone.png') })
 
       // ── declined: no queue, no files, and the panel is untouched ──
-      await modal.getByRole('button', { name: 'Cancel export' }).click()
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(card.getByText('Queue', { exact: true })).toHaveCount(0)
       expect(mp4sIn(outDir)).toEqual([])
@@ -1322,7 +1479,7 @@ test.describe('ExportPanel', () => {
       // ── accepted: the same batch runs ──
       await card.getByRole('button', { name: 'Export 2' }).click()
       await expect(window.getByRole('dialog')).toBeVisible()
-      await window.getByRole('dialog').getByRole('button', { name: 'Continue anyway' }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Export anyway' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect
         .poll(() => mp4sIn(outDir).length, { timeout: 540_000, intervals: [500] })
@@ -1333,6 +1490,120 @@ test.describe('ExportPanel', () => {
       )
       expect(reels.width).toBe(1080)
       expect(reels.height).toBe(1920)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the grid judges the crop, not the file: a 9:16 crop turns TikTok and Reels green, and the rest say why they are not (T-83)', async () => {
+    test.setTimeout(120_000)
+    // bigSrc: 4K, 26 s. Big enough that nothing is "smaller than the output",
+    // and 26 s sits inside TikTok's 21-34 s and Reels' 15-90 s sweet spots —
+    // so SHAPE is the only thing left that can keep those two from green.
+    const { app, window } = await launchWithVideo('t83grid', bigSrc)
+    try {
+      const card = exportCard(window)
+      const platform = (name: string): Locator => card.locator('label').filter({ hasText: name })
+      const cropRow = window.locator('[data-tutorial="video-crop"]')
+      const TALL_ON_WIDE = "Only the middle 32% of the picture's width fits this shape"
+      const WIDE_ON_TALL = "Only the middle 32% of the picture's height fits this shape"
+
+      // ── no crop: the 16:9 source is the frame, so the tall platforms are the
+      //    wrong shape — and the card SAYS so, on screen (not in a tooltip) ──
+      await expect(platform('TikTok').getByText('Wrong shape', { exact: true })).toBeVisible()
+      await expect(platform('TikTok').getByText(TALL_ON_WIDE)).toBeVisible()
+      await expect(platform('Reels').getByText('Wrong shape', { exact: true })).toBeVisible()
+      // The old catch-all is gone; "Trim" says "shorten the clip".
+      await expect(card.getByText('Trim', { exact: true })).toHaveCount(0)
+      // 26 s is under YouTube's one-minute sweet spot: yellow, reason in words.
+      await expect(platform('YouTube').getByText('OK', { exact: true })).toBeVisible()
+      await expect(platform('YouTube').getByText('Under the 1-minute sweet spot')).toBeVisible()
+
+      // ── draw a 9:16 crop: the grid now judges THAT frame ──
+      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await cropRow.getByRole('button', { name: '9:16', exact: true }).click()
+      for (const tall of ['TikTok', 'Reels']) {
+        await expect(platform(tall).getByText('Great', { exact: true })).toBeVisible()
+        await expect(platform(tall)).not.toContainText('Wrong shape')
+      }
+      for (const wide of ['YouTube', 'X / Twitter', 'Facebook']) {
+        await expect(platform(wide).getByText('Wrong shape', { exact: true })).toBeVisible()
+        await expect(platform(wide).getByText(WIDE_ON_TALL)).toBeVisible()
+      }
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-14-grid-crop.png') })
+
+      // ── clearing the crop gives the source back, and the grid follows ──
+      await window.getByRole('checkbox', { name: 'Crop' }).uncheck()
+      await expect(platform('TikTok').getByText('Wrong shape', { exact: true })).toBeVisible()
+      await expect(platform('TikTok').getByText(TALL_ON_WIDE)).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('with a crop in place the safe-zone pre-flight reads the crop, so it is the wide platform that is cut down (T-83)', async () => {
+    test.setTimeout(120_000)
+    const { app, window, outDir } = await launchWithVideo('t83safe', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await presetBox(window, 'TikTok').check()
+      const modal = window.getByRole('dialog')
+
+      // The 4:3 fixture uncropped: each cut takes something the other keeps.
+      await card.getByRole('button', { name: 'Export 2 files' }).click()
+      await expect(modal.locator('li > div')).toHaveText([
+        'TikTok frame → cut down for YouTube',
+        'YouTube frame → cut down for TikTok'
+      ])
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+      // A 9:16 crop is the new frame. TikTok's shape IS the frame, so it keeps
+      // all of it; YouTube takes a wide strip out of it. One platform loses.
+      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '9:16', exact: true })
+        .click()
+      await card.getByRole('button', { name: 'Export 2 files' }).click()
+      await expect(modal.locator('li > div')).toHaveText(['TikTok frame → cut down for YouTube'])
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+      expect(mp4sIn(outDir)).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a cropped clip exports at every ticked platform\'s own size with square pixels (T-83)', async () => {
+    test.setTimeout(600_000)
+    // The bytes of "nothing is stretched" are Layer 5's (a marker that stays
+    // square). This is the same promise through the real UI: the crop drawn
+    // in the player reaches main as the clip's cropRect, and each platform's
+    // export comes out at ITS size, valid, with a 1:1 pixel aspect.
+    const { app, window, outDir } = await launchWithVideo('t83export', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '1:1', exact: true })
+        .click()
+      await presetBox(window, 'Reels').check()
+      await card.getByRole('button', { name: 'Export 2 files' }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Export anyway' }).click()
+      await expect
+        .poll(() => mp4sIn(outDir).length, { timeout: 540_000, intervals: [500] })
+        .toBe(2)
+      await expectToast(window, 'Exported 2 files')
+      const yt = videoStream(await ffprobeJson(path.join(outDir, 'pipeline_Clip 1_youtube.mp4')))
+      expect([yt.width, yt.height]).toEqual([1920, 1080])
+      expect(yt.sample_aspect_ratio).toBe('1:1')
+      const reels = videoStream(await ffprobeJson(path.join(outDir, 'pipeline_Clip 1_reels.mp4')))
+      expect([reels.width, reels.height]).toEqual([1080, 1920])
+      expect(reels.sample_aspect_ratio).toBe('1:1')
     } finally {
       await app.close()
     }
@@ -1659,11 +1930,13 @@ test.describe('ClipKit', () => {
       //    fixed 5-platform mix (both 16:9 and 9:16 are in it, always) ──
       await kit.click()
       const modal = window.getByRole('dialog')
-      await expect(modal.getByRole('heading', { name: 'Safe-zone warning' }).last()).toBeVisible()
+      await expect(
+        modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()
+      ).toBeVisible()
       await expect(modal.locator('li')).toHaveCount(1)
-      await expect(modal.locator('li')).toContainText('YouTube → Reels')
-      await expect(modal.locator('li')).toContainText('Reels → Facebook')
-      await modal.getByRole('button', { name: 'Continue anyway' }).click()
+      await expect(modal.locator('li')).toContainText('Reels frame → cut down for YouTube')
+      await expect(modal.locator('li')).toContainText('Facebook frame → cut down for Reels')
+      await modal.getByRole('button', { name: 'Export anyway' }).click()
 
       // ── the run: the button becomes its own progress readout ──
       await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
@@ -1721,16 +1994,13 @@ test.describe('ClipKit', () => {
       // ── the kit's OWN safe-zone modal, declined: nothing starts, and the
       //    output folder is never even asked for ──
       await kit.click()
-      await window.getByRole('dialog').getByRole('button', { name: 'Cancel export' }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
       expect(readdirSync(outDir)).toEqual([])
 
       await kit.click()
-      await window
-        .getByRole('dialog')
-        .getByRole('button', { name: 'Continue anyway' })
-        .click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Export anyway' }).click()
       await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
 
       // ── the confirm, in the kit's own words ──
@@ -1969,7 +2239,8 @@ test.describe('single-output panels', () => {
       await expect(card.getByText('0 ms')).toBeVisible()
 
       await card.getByRole('button', { name: 'Choose folder…' }).click()
-      await card.getByRole('button', { name: 'Compile', exact: true }).click()
+      // T-94: the button says how many clips it will stitch.
+      await card.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
 
       const output = path.join(outDir, 'pipeline_compilation.mp4')
       await expect
@@ -1983,7 +2254,7 @@ test.describe('single-output panels', () => {
       // Two full-length copies of a 2 s clip, normalized to one 1080p file.
       expect(Number(probe.format?.duration)).toBeGreaterThan(2 * CLIP_SECONDS - 0.5)
       expect(Number(probe.format?.duration)).toBeLessThan(2 * CLIP_SECONDS + 0.5)
-      await expect(card.getByRole('button', { name: 'Compile', exact: true })).toBeEnabled()
+      await expect(card.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled()
     } finally {
       await app.close()
     }

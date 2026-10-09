@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
+import { countOf } from '@shared/plural'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -105,7 +106,7 @@ export function CompilationPanel(): JSX.Element | null {
           disabled={busy}
           onClick={exportCompilation}
         >
-          {busy ? 'Stitching…' : 'Compile'}
+          {busy ? 'Stitching…' : `Compile ${countOf(clips.length, 'clip')}`}
         </button>
         {/* Round 17 B4 */}
         {busy ? (
