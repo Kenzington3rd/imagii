@@ -18,12 +18,14 @@ import {
   utimesSync,
   writeFileSync
 } from 'node:fs'
+import { spawn } from 'node:child_process'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
+import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
 import { installToastLog, readToastLog } from './toastLog'
@@ -75,6 +77,28 @@ interface Fixture {
   userDataDir: string
   boardsDir: string
   thumbsDir: string
+}
+
+/**
+ * One pixel of a PNG, decoded by the repo's own bundled ffmpeg (the same
+ * technique image.spec.ts uses): `format=rgba` first so the crop is a legal
+ * 1x1, then a 4-byte raw dump.
+ */
+function pngPixel(file: string, x: number, y: number): Promise<{ r: number; g: number; b: number; a: number }> {
+  const raw = `${file}.${x}-${y}.raw`
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegPath, [
+      '-y', '-i', file, '-vf', `format=rgba,crop=1:1:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgba', raw
+    ])
+    let stderr = ''
+    child.stderr.on('data', (b) => (stderr += String(b)))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`pixel probe exit ${code}: ${stderr.slice(-400)}`))
+      const px = readFileSync(raw)
+      resolve({ r: px[0] ?? -1, g: px[1] ?? -1, b: px[2] ?? -1, a: px[3] ?? -1 })
+    })
+  })
 }
 
 /** Hermetic userData dir with every overlay flag pre-seeded (smoke.spec shape). */
@@ -226,7 +250,9 @@ function moodBoardTab(window: Page) {
 }
 
 function layerRows(window: Page) {
-  return window.locator('[data-tutorial="image-layers"] li')
+  // The NAME of each row. (Since T-91 a row can also carry a "won't export"
+  // tag; `span.truncate` is the name alone, as image.spec.ts reads it.)
+  return window.locator('[data-tutorial="image-layers"] li span.truncate')
 }
 
 test.describe('imagii References studio', () => {
@@ -862,7 +888,9 @@ test.describe('imagii References studio', () => {
 
       // ── -> Canvas bridge ──
       await window.getByRole('button', { name: /Canvas/ }).click()
-      await expect.poll(() => readToastLog(window)).toContain('Added to canvas as overlay')
+      await expect
+        .poll(() => readToastLog(window))
+        .toContain("Added to canvas as a reference \u2014 it won't be in your export")
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
         timeout: 15_000
       })
@@ -875,7 +903,35 @@ test.describe('imagii References studio', () => {
       const opacity = window.locator('input[aria-label="Layer opacity"]')
       await expect(opacity).toHaveValue('0.4')
       await expect(opacity).toHaveAttribute('aria-valuetext', '40 percent')
+      // T-91: the layer says, where it is listed, that it is a guide…
+      await expect(window.locator('[data-tutorial="image-layers"] li')).toContainText(
+        "reference \u2014 won't export"
+      )
       await window.screenshot({ path: path.join(SCREENSHOTS, 'refs-02-canvas-overlay.png') })
+
+      // …and an export proves it: the faded red picture sits at (60, 60) on a
+      // white page, and the file has white there, not a 40% pink.
+      const exportsDir = path.join(fx.root, 'exports')
+      mkdirSync(exportsDir, { recursive: true })
+      await app.evaluate(({ dialog }, dir) => {
+        ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async (
+          _w: unknown,
+          o: { defaultPath?: string }
+        ) => ({
+          canceled: false,
+          filePath: `${dir}/${(o.defaultPath ?? 'out.png').split(/[\\/]/).pop()}`
+        })
+      }, exportsDir)
+      await window.getByLabel('Scale').selectOption('1')
+      await window.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => readdirSync(exportsDir).length, { timeout: 30_000 }).toBe(1)
+      const exported = path.join(exportsDir, readdirSync(exportsDir)[0] as string)
+      expect(await pngPixel(exported, 62, 62), 'the reference is not in the export').toEqual({
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255
+      })
 
       // ── back to the board; Remove the item ──
       await backToReferences(window)

@@ -33,12 +33,12 @@ Plus, in the side panels:
 Hotkeys: `Space` play/pause · `← →` nudge 0.1s · `, .` frame-step · `I O` set in/out · `?` show shortcut overlay
 
 ### 🎚 Audio Studio
-Import an audio file, or extract audio from any video. One-click denoise (light/medium/aggressive), 60 Hz hum removal, de-essing, voice/music/mixed compressor presets, two-pass loudnorm to podcast-standard −16 LUFS. Drag on the waveform to mark cuts. Live volume meter so you can see clipping. Save/load named cleanup presets ("My USB mic"). Add a second track for background music with sidechain ducking, or mix in a co-host's mic. Export MP3/WAV/FLAC/AAC, or re-attach cleaned audio to the original video.
+Import an audio file, or extract audio from any video. One-click denoise (light/medium/aggressive), hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds, voice/music/mixed compressor presets, two-pass loudnorm to podcast-standard −16 LUFS. Drag on the waveform to mark cuts. Live volume meter so you can see clipping. Save/load named cleanup presets ("My USB mic"). Add a second track for background music with sidechain ducking, or mix in a co-host's mic. Export MP3/WAV/FLAC/AAC, or re-attach cleaned audio to the original video.
 
 The Video Studio has a **🎚 Clean audio** button that pipes a clip through here automatically.
 
 ### 🖼 Image Canvas
-Paste / drop / import images. Layers, exact-degree rotation (15/30/45/90/180/270 presets, or type any number). Streamer templates for YouTube thumbnails and Twitch overlay frames with a webcam hole. Grid + snap. Drawing tools: rectangle, ellipse, line, freehand. Export PNG / JPG with HiDPI scale.
+Paste / drop / import images. Layers, exact-degree rotation (15/30/45/90/180/270 presets, or type any number). Streamer templates for YouTube thumbnails and Twitch overlay frames with a webcam hole (the guides and placeholders show while you design and are left out of the export). Grid + snap. Drawing tools: rectangle, ellipse, line, freehand. Export PNG / JPG with HiDPI scale.
 
 Hotkeys: `V R O L P` tools · `Ctrl+Z` undo · `Ctrl+Y` redo · `Delete` remove layer
 

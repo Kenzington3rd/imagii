@@ -22,7 +22,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'waveform',
       title: 'The waveform',
-      body: 'Drag across the waveform to mark a region to cut. Click a cut tag under it to undo that cut.',
+      body: 'Drag across the waveform to mark a part to remove. It comes out when you export; click a mark to put it back.',
       targetSelector: '[data-tutorial="audio-waveform"]',
       placement: 'bottom'
     },
@@ -36,21 +36,21 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'cleanup',
       title: 'Cleanup',
-      body: "Pick a Denoise strength: Light, Medium, Aggressive, or Custom. Then tick 'Remove low rumble', 'Reduce 60 Hz hum', or 'De-ess' as needed.",
+      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then tick 'Remove low rumble', 'Hum removal', or 'Softer harsh' sounds as needed.",
       targetSelector: '[data-tutorial="audio-cleanup"]',
       placement: 'left'
     },
     {
       id: 'levels',
       title: 'Levels',
-      body: "Pick a Compressor preset: Voice for streaming, Music for songs. Tick 'Normalize to' and choose a Platform so every export lands at the same loudness.",
+      body: "Pick a Compressor preset: Voice for streaming, Music for songs. Tick 'Even volume' and choose a Platform so every export lands at the same loudness.",
       targetSelector: '[data-tutorial="audio-levels"]',
       placement: 'left'
     },
     {
       id: 'second-track',
       title: 'Add a second track',
-      body: "Layer in 'Background music', a 'Second mic', or 'Game audio' alongside your voice. Tick 'Duck under primary' to turn it down whenever you talk.",
+      body: "Layer in 'Background music', a 'Second mic', or 'Game audio' alongside your voice. Tick 'Duck under your voice' to turn it down whenever you talk.",
       targetSelector: '[data-tutorial="audio-music"]',
       placement: 'left'
     },

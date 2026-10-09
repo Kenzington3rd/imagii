@@ -1,4 +1,4 @@
-import type { DenoiseParams, DenoiseStrength } from '@shared/audio'
+import type { DenoiseParams, DenoiseStrength, MainsHz } from '@shared/audio'
 import { DEFAULT_DENOISE_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -15,11 +15,21 @@ const DENOISE_OPTIONS: Array<{ value: DenoiseStrength; label: string; descriptio
   }
 ]
 
+// T-90: the grid the hum comes from. 60 Hz is the US/Canada mains, 50 Hz most
+// of the rest of the world; a notch at the wrong one removes nothing, so the
+// choice is on screen the moment hum removal is on.
+const MAINS_OPTIONS: Array<{ value: MainsHz; label: string }> = [
+  { value: 60, label: '60 Hz — US, Canada' },
+  { value: 50, label: '50 Hz — most other regions' }
+]
+
 export function CleanupPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
   const patchChain = useAudioStore((s) => s.patchChain)
 
   const params = chain.denoiseParams ?? DEFAULT_DENOISE_PARAMS
+  // A chain saved before 50 Hz existed has no humHz and was always 60.
+  const mains: MainsHz = chain.humHz === 50 ? 50 : 60
 
   function updateParam(patch: Partial<DenoiseParams>): void {
     patchChain({ denoiseParams: { ...params, ...patch } })
@@ -30,7 +40,7 @@ export function CleanupPanel(): JSX.Element {
       <PanelHeader icon="sparkle">Cleanup</PanelHeader>
 
       <div>
-        <div className="text-xs text-ink-muted mb-1.5">Denoise strength</div>
+        <div className="text-xs text-ink-muted mb-1.5">Quieter background (strength)</div>
         <div className="grid grid-cols-5 gap-1.5 text-xs">
           {DENOISE_OPTIONS.map((opt) => (
             <button
@@ -87,7 +97,7 @@ export function CleanupPanel(): JSX.Element {
             checked={chain.rumbleHighpass}
             onChange={(e) => patchChain({ rumbleHighpass: e.target.checked })}
           />
-          <span>Remove low rumble (highpass 80 Hz)</span>
+          <span>Remove low rumble (below 80 Hz)</span>
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -95,15 +105,32 @@ export function CleanupPanel(): JSX.Element {
             checked={chain.hum60}
             onChange={(e) => patchChain({ hum60: e.target.checked })}
           />
-          <span>Reduce 60 Hz hum / power-line buzz</span>
+          <span>Hum removal ({mains} Hz mains)</span>
         </label>
+        {chain.hum60 ? (
+          <label className="flex items-center gap-2 text-xs -mt-1 ml-6">
+            <span className="text-ink-muted">Power-line frequency</span>
+            <select
+              className="bg-bg-base rounded px-2 py-1 flex-1"
+              value={mains}
+              onChange={(e) => patchChain({ humHz: Number(e.target.value) === 50 ? 50 : 60 })}
+              aria-label="Power-line frequency"
+            >
+              {MAINS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={chain.deEss}
             onChange={(e) => patchChain({ deEss: e.target.checked })}
           />
-          <span>De-ess sibilance (dynamic)</span>
+          <span>Softer harsh 's' sounds</span>
         </label>
       </div>
     </div>

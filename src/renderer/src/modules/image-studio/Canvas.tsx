@@ -12,7 +12,15 @@ import {
 } from 'react-konva'
 import useImage from 'use-image'
 import type Konva from 'konva'
-import type { CanvasLayer, ImageLayer, LineLayer, RectLayer, EllipseLayer, TextLayer } from '@shared/canvas'
+import {
+  HINT_NODE_NAME,
+  type CanvasLayer,
+  type ImageLayer,
+  type LineLayer,
+  type RectLayer,
+  type EllipseLayer,
+  type TextLayer
+} from '@shared/canvas'
 import {
   makeEllipseLayer,
   makeLineLayer,
@@ -51,6 +59,7 @@ function ImageNode({
       scaleX={layer.scaleX}
       scaleY={layer.scaleY}
       opacity={layer.opacity}
+      name={layer.hint ? HINT_NODE_NAME : undefined}
       draggable={draggable}
       onClick={onSelect}
       onTap={onSelect}
@@ -261,6 +270,9 @@ export function Canvas(): JSX.Element {
       scaleX: layer.scaleX,
       scaleY: layer.scaleY,
       opacity: layer.opacity,
+      // T-91: a hint node carries this name so the export capture can switch
+      // it off (captureDocument), exactly as it does the `chrome` layers.
+      name: layer.hint ? HINT_NODE_NAME : undefined,
       draggable,
       onClick: onSelect,
       onTap: onSelect,

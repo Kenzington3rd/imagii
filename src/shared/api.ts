@@ -25,6 +25,7 @@ import type {
   RecordingResult
 } from './workspace'
 import type { CustomPreset } from './customPresets'
+import type { ImageSaveManyRequest, ImageSaveRequest } from './canvas'
 
 export type SettingsKey =
   | 'theme'
@@ -174,6 +175,18 @@ export interface ImagiiApi {
     listPresets(): Promise<ChainPreset[]>
     savePreset(name: string, chain: ChainSpec): Promise<ChainPreset>
     deletePreset(id: string): Promise<void>
+  }
+  /**
+   * T-91: Stream Graphics saves through main's native dialogs, so the renderer
+   * learns whether a file was really written. (It used to click a hidden
+   * `<a download>` and toast "saved" in the same breath, whether or not the
+   * Save dialog was then canceled.)
+   */
+  image: {
+    /** The path written, or `null` when the user canceled the dialog. */
+    save(req: ImageSaveRequest): Promise<string | null>
+    /** One folder picker, then every file in it. `null` when canceled. */
+    saveMany(req: ImageSaveManyRequest): Promise<{ dir: string; count: number } | null>
   }
   search: {
     images(query: string): Promise<SearchResponse>

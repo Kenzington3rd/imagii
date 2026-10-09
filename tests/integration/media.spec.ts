@@ -30,7 +30,12 @@ import type {
   WatermarkSpec
 } from '../../src/shared/clip'
 import type { CustomPreset } from '../../src/shared/customPresets'
-import { DEFAULT_CHAIN_SPEC, type AudioExportSpec, type ChainSpec } from '../../src/shared/audio'
+import {
+  DEFAULT_CHAIN_SPEC,
+  audioFileExtension,
+  type AudioExportSpec,
+  type ChainSpec
+} from '../../src/shared/audio'
 import { escapeSubtitlesPath } from '../../src/shared/captions'
 import { ALL_PRESET_IDS, PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
 import { buildWatermark } from '../../src/shared/watermark'
@@ -1846,6 +1851,83 @@ describe('audio chain (real ffmpeg)', () => {
     const spec = makeAudioSpec({ deEss: true }, 'deess.wav', 'aud-deess')
     const res = await runAudioExport(spec, () => {})
     expect(existsSync(res.outputPath)).toBe(true)
+  })
+
+  it('hum removal notches the mains the user chose: 50 Hz clears 50/100, 60 Hz clears 60/120 (T-90)', async () => {
+    // The notch is 2 Hz wide, so a tone one grid away from it is untouched: this
+    // measures the graph ffmpeg actually built, which a string-shape test of
+    // `bandreject=f=50` cannot (a filter that parses is not a filter that
+    // lands on the right frequency). One pure tone per frequency, so a drop in
+    // its own band can only be the notch.
+    const TONES = [50, 60, 100, 120, 1000]
+    const tone: Record<number, string> = {}
+    for (const hz of TONES) {
+      tone[hz] = path.join(workDir, `hum-tone-${hz}.wav`)
+      await ff([
+        '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:duration=3:sample_rate=44100`,
+        '-ac', '1', tone[hz] as string
+      ])
+    }
+    async function levelOf(hz: number, hum: 'off' | 'default' | 50 | 60): Promise<number> {
+      const chain: Partial<ChainSpec> =
+        hum === 'off'
+          ? {}
+          : hum === 'default'
+            ? { hum60: true } // no humHz — every project saved before 50 Hz existed
+            : { hum60: true, humHz: hum }
+      const res = await runAudioExport(
+        {
+          jobId: `hum-${hz}-${hum}`,
+          sourcePath: tone[hz] as string,
+          outputPath: path.join(workDir, `hum-${hz}-${hum}.wav`),
+          chain: { ...DEFAULT_CHAIN_SPEC, ...chain },
+          format: 'wav'
+        },
+        () => {}
+      )
+      // Past the filter's settling time (a 2 Hz notch rings for ~0.2 s).
+      return bandMeanVolume(res.outputPath, 1, 1.5, hz)
+    }
+    const NOTCHED: Record<string, number[]> = { '50': [50, 100], '60': [60, 120], default: [60, 120] }
+    for (const hum of [50, 60, 'default'] as const) {
+      for (const hz of TONES) {
+        const drop = (await levelOf(hz, 'off')) - (await levelOf(hz, hum))
+        if ((NOTCHED[String(hum)] as number[]).includes(hz)) {
+          expect(drop, `${hum} Hz setting should remove the ${hz} Hz tone (dropped ${drop.toFixed(1)} dB)`).toBeGreaterThan(20)
+        } else {
+          expect(drop, `${hum} Hz setting must leave the ${hz} Hz tone alone (dropped ${drop.toFixed(1)} dB)`).toBeLessThan(1.5)
+        }
+      }
+    }
+  })
+
+  it('AAC exports as a real .m4a container, where a bare .aac is a raw ADTS stream (T-90)', async () => {
+    const ext = audioFileExtension('aac')
+    expect(ext).toBe('m4a')
+    const chain = { denoise: 'light' as const, loudnorm: true }
+    const m4a = await runAudioExport(
+      { ...makeAudioSpec(chain, `clean.${ext}`, 'aud-m4a', 'aac'), bitrate: '192k' },
+      () => {}
+    )
+    const info = await ffprobeJson(m4a.outputPath)
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    // The codec did not change — only the container around it.
+    expect(a?.codec_name).toBe('aac')
+    expect(Number(a?.sample_rate)).toBe(48000)
+    expect(info.format.format_name).toContain('m4a')
+    // The bytes say so too: an MP4-family file opens with an `ftyp` box whose
+    // major brand is M4A, which is what makes players call it audio.
+    const head = (await readFile(m4a.outputPath)).subarray(4, 12).toString('latin1')
+    expect(head).toBe('ftypM4A ')
+    // The contrast that explains the change: the SAME encode named .aac is
+    // headerless ADTS, with no container at all.
+    const bare = await runAudioExport(
+      { ...makeAudioSpec(chain, 'clean-bare.aac', 'aud-bare-aac', 'aac'), bitrate: '192k' },
+      () => {}
+    )
+    expect((await ffprobeJson(bare.outputPath)).format.format_name).toBe('aac')
+    // And it is audio you can decode end to end, with the length of the source.
+    expect((await probeAudio(m4a.outputPath)).duration).toBeGreaterThan(7)
   })
 
   it('mux replaces video audio track with processed audio (faststart)', async () => {

@@ -92,7 +92,9 @@ describe('T-14 — the cleanup preset panel is reachable', () => {
     expect(panel).toMatch(/window\.api\.audio\.listPresets\(\)/)
     expect(panel).toMatch(/window\.api\.audio\.savePreset\(/)
     expect(panel).toMatch(/window\.api\.audio\.deletePreset\(/)
-    expect(panel).toMatch(/patchChain\(p\.chain\)/)
+    // T-90: Apply patches the preset's CLEANUP settings, never the raw chain.
+    expect(panel).toMatch(/patchChain\(presetPatch\(p\)\)/)
+    expect(panel).not.toMatch(/patchChain\(p\.chain\)/)
     // Delete stays behind a confirm (the ledger's native-dialog inventory).
     expect(panel).toMatch(/confirm\(`Delete preset/)
   })
@@ -613,5 +615,102 @@ describe('T-88 — Record: Refresh sources re-checks what its hints send people 
   it('a rejected discard goes through the one failure helper, and a sentinel rejection is a discard', () => {
     expect(code).toMatch(/\.cancelSave\(\)[\s\S]*?\.catch\(\(err\) => \{[\s\S]*?reportFailure\(err/)
     expect(code).toMatch(/if \(isCancelledError\(err\)\) \{/)
+  })
+})
+
+describe('T-90 — the Fix Wizard shows what it applies, and Start over starts over', () => {
+  // E2E: audio.spec.ts "Fix Wizard reconfigures Cleanup and Levels…". Unit:
+  // fixWizard.test.ts runs all 18 answer combinations through the pure halves.
+  const wizard = read('modules/audio-studio/FixWizard.tsx')
+
+  it('builds the patch ONCE and renders the list from it', () => {
+    expect(wizard.match(/fixPatch\(/g)).toHaveLength(1)
+    expect(wizard).toMatch(/fixSummary\(patch\)/)
+  })
+
+  it('applies that same object — no second derivation from the answers', () => {
+    expect(wizard).toMatch(/patchChain\(patch\)/)
+    // The component never reads an answer to decide what a setting is: that is
+    // what let the list and the apply step disagree.
+    expect(wizard).not.toMatch(/answers\.(backgroundNoise|primaryUse)/)
+  })
+
+  it('Start over restarts the wizard; Close is what closes it', () => {
+    expect(wizard).toMatch(/onClick=\{restart\}\s*>\s*Start over/)
+    expect(wizard.match(/onClick=\{close\}/g)?.length).toBeGreaterThanOrEqual(1)
+    // restart() must not close: onClose is called from close() only.
+    const restartFn = wizard.slice(wizard.indexOf('function restart'), wizard.indexOf('function close'))
+    expect(restartFn).not.toMatch(/onClose/)
+  })
+
+  it('speaks as imagii, not as "I"', () => {
+    expect(wizard).not.toMatch(/\bI'll\b/)
+    expect(wizard).toMatch(/imagii will set/)
+  })
+})
+
+describe('T-90 — preset save and delete report failures', () => {
+  const panel = read('modules/audio-studio/PresetPanel.tsx')
+
+  it('both IPC calls sit inside a try with a reportFailure catch', () => {
+    expect(panel).toMatch(/try \{\s*await window\.api\.audio\.savePreset\([^)]*\)\s*\} catch \(err\) \{\s*reportFailure\(err/)
+    expect(panel).toMatch(/try \{\s*await window\.api\.audio\.deletePreset\([^)]*\)\s*\} catch \(err\) \{\s*reportFailure\(err/)
+  })
+
+  it('says exactly what a preset keeps', () => {
+    expect(panel).toMatch(
+      /Saves your cleanup settings — noise, levels, and voice treatments — so you can reuse\s+them\. Cuts and the second track stay with the session\./
+    )
+  })
+})
+
+describe('T-91 — Stream Graphics saves through main and toasts after the save', () => {
+  // E2E: tests/e2e/image.spec.ts "export: …" and "variants: …" drive the real
+  // dialogs both ways (saved / canceled). These pin the shape that makes the
+  // lie impossible: no hidden <a download>, and no success toast above the await.
+  const exportDialog = read('modules/image-studio/ExportDialog.tsx')
+  const variants = read('modules/image-studio/ThumbnailVariants.tsx')
+
+  it('neither dialog clicks a hidden download link any more', () => {
+    for (const [rel, src] of [['ExportDialog', exportDialog], ['ThumbnailVariants', variants]]) {
+      expect(src, rel).not.toMatch(/\.download\s*=/)
+      expect(src, rel).not.toMatch(/createElement\('a'\)/)
+      expect(src, rel).not.toMatch(/downloadDataUrl/)
+    }
+  })
+
+  it('the Export button saves one file through image.save and the emote pack through ONE saveMany', () => {
+    expect(exportDialog).toMatch(/window\.api\.image\.save\(/)
+    expect(exportDialog.match(/window\.api\.image\.saveMany\(/g)).toHaveLength(1)
+    // Three files, one dialog: the pack is built as a list, never saved in a loop.
+    expect(exportDialog).not.toMatch(/for \(const size of EMOTE_PACK_SIZES\)[^}]*image\.save/)
+  })
+
+  it('a success toast only ever comes after a null (canceled) check on the save result', () => {
+    for (const [rel, src] of [['ExportDialog', exportDialog], ['ThumbnailVariants', variants]]) {
+      const successes = [...src.matchAll(/toast\.success\(/g)].map((m) => m.index ?? 0)
+      for (const at of successes) {
+        const before = src.slice(Math.max(0, at - 220), at)
+        expect(before, `${rel}: toast.success at ${at}`).toMatch(/if \(saved === null\) return\s*(toast\.success\([^\n]*\)\s*return\s*if \(saved === null\) return\s*)?$|if \(saved === null\) return\s*$/)
+      }
+    }
+  })
+
+  it('Save all says what it saves: the three variants plus the original', () => {
+    expect(variants).toMatch(/Save all \(\{items\.length - 1\} \+ original\)/)
+    expect(variants).not.toMatch(/Saving \$\{items\.length\} variants/)
+    expect(variants).toMatch(/Saved \$\{countOf\(saved\.count, 'thumbnail'\)\}/)
+  })
+
+  it('the capture hides hint nodes through the same switch as the editor chrome', () => {
+    expect(exportDialog).toMatch(/stage\.find\(`\.\$\{HINT_NODE_NAME\}`\)/)
+    const canvas = read('modules/image-studio/Canvas.tsx')
+    expect(canvas.match(/name: layer\.hint \? HINT_NODE_NAME : undefined/g)).toHaveLength(1)
+    expect(canvas).toMatch(/name=\{layer\.hint \? HINT_NODE_NAME : undefined\}/)
+  })
+
+  it('the Layers panel tags what will not export, from the shared rule', () => {
+    const panel = read('modules/image-studio/LayerPanel.tsx')
+    expect(panel).toMatch(/hintTag\(layer\)/)
   })
 })

@@ -174,7 +174,7 @@ export function WaveformView(): JSX.Element | null {
       <VolumeMeter audioElement={mediaEl} />
       {cutRegions.length > 0 ? (
         <div className="flex flex-wrap gap-2 text-xs">
-          <span className="text-ink-muted">Cuts:</span>
+          <span className="text-ink-muted">Removed when you export:</span>
           {/* A chip is the legend for its mark on the waveform above, so it
               carries the same token — a user pairs the two by color. It was a
               raw rose-500 while the mark was a raw rose rgba(); T-56 moved
@@ -185,7 +185,7 @@ export function WaveformView(): JSX.Element | null {
               key={i}
               onClick={() => removeCutRegion(i)}
               className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
-              title="Click to remove this cut"
+              title="Click to put this part back"
             >
               {formatTime(cut.startSec)}–{formatTime(cut.endSec)} ✕
             </button>
@@ -193,7 +193,8 @@ export function WaveformView(): JSX.Element | null {
         </div>
       ) : (
         <p className="text-xs text-ink-dim">
-          Drag on the waveform to select a region to cut. Click a cut tag to undo it.
+          Drag across the waveform to mark a part to remove — it comes out when you export.
+          Click a mark to put it back.
         </p>
       )}
     </div>

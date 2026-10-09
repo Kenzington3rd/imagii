@@ -238,18 +238,30 @@ Drop in audio, or any video, and imagii extracts its audio.
 - **Help me fix this** runs a short wizard that picks cleanup settings for you
   if you're not sure.
 - Or set them yourself, panel by panel:
-  - **Cleanup** — denoise strength (Off, Light, Medium, Aggressive, or Custom,
-    where you tune the noise floor and reduction by hand), plus switches for
-    low rumble (an 80 Hz highpass), 60 Hz hum, and de-essing.
-  - **Levels** — the compressor preset, a loudness target to normalize to
-    (with platform presets), and manual gain.
-  - **Cleanup presets** — **Save current** keeps your cleanup settings under a
-    name, so you can apply or remove them later.
+  - **Cleanup** — **Quieter background** (Off, Light, Medium, Aggressive, or
+    Custom, where you tune the noise floor and reduction by hand), plus switches
+    for removing low rumble (below 80 Hz), **Hum removal**, and softer harsh
+    's' sounds. Hum removal follows your power grid: 60 Hz in the US and Canada,
+    50 Hz in most other regions. Pick yours in the **Power-line frequency**
+    list that appears when the box is ticked.
+  - **Levels** — the compressor preset, **Even volume** with a loudness target
+    (pick talking and podcasts at −16, or YouTube, Spotify, TikTok and Reels at
+    −14), and manual gain. imagii measures the whole file first, so exports
+    with a loudness target take a little longer.
+  - **Cleanup presets** — **Save current** keeps your cleanup settings (noise,
+    levels and voice treatments) under a name, so you can apply or remove them
+    later. Cuts and the second track belong to the recording, so they are not
+    saved in a preset.
   - **Add a second track** — layer in background music, a co-host's mic, or game
-    audio. **Duck under primary** lowers it while you speak.
-- Drag on the waveform to mark a region to cut; click a cut's tag to remove it.
-  `Ctrl+Z` / `Ctrl+Y` step back and forward through the cleanup chain.
-- **Export** to MP3, WAV, FLAC, or AAC.
+    audio. **Duck under your voice** lowers it while you speak.
+- The wizard's last card lists exactly the settings it is about to apply.
+  **Start over** goes back to its first question; **Close** leaves it.
+- Drag across the waveform to mark a part to remove. It comes out when you
+  export; click a mark to put it back. `Ctrl+Z` / `Ctrl+Y` step back and
+  forward through the cleanup chain.
+- **Export** to MP3, WAV, FLAC, or AAC. AAC is saved as an `.m4a` file. From a
+  video, **Re-attach to video** writes an `.mp4`; if you removed parts, the
+  picture is re-encoded to match, which takes longer.
 
 ---
 
@@ -260,20 +272,29 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
 1. Start from a **template**, or use **Or start blank**: **Import image** or
    **Start with text**. Templates are grouped as **Thumbnails** (1280×720, plus
    2K and 4K bold variants), **Stream overlays** (1920×1080, plus 2K and 4K),
-   **Banners** (1200×480 for when the stream is offline, and 2560×1440 for a
-   channel banner), and **Emotes** (a 112×112 canvas).
+   **Banners** (1200×480 for your Twitch channel page, and 2560×1440 for
+   YouTube channel art), and **Emotes** (a 112×112 canvas). Guide layers such as
+   the facecam hole, "Drop face here" and "@yourhandle" placeholders are tagged
+   **hint — won't export** in the Layers panel: they show while you design and
+   are left out of the file. Type your own words over a placeholder and they
+   export.
 2. Edit with the toolbar: **Select**, **Rect**, **Ellipse**, and (under
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and delete them. The **Properties** panel edits the selected layer.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
-   design becomes: 0.5×, 1×, 2×, or 3×. The export is the design itself, not
+   design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
+   of the file in pixels (it adds a note when a 16:9 export is bigger than
+   YouTube's 1280×720 thumbnail size). The export is the design itself, not
    your window, so 1× is the size you laid out. The scale starts at 2× on a
    high-DPI screen (3× on the densest ones) and at 1× otherwise. JPG adds a
    quality setting. An emote canvas exported as PNG writes the three-file Twitch
    pack, at 28, 56, and 112 px.
-   Images do not ask where to save. They download as `imagii-<timestamp>.png`
-   (or `.jpg`) to your default downloads folder.
+   Export opens a Save dialog (`imagii-<timestamp>.png` or `.jpg` is the
+   suggested name), and imagii says "saved" only after the file is written; if
+   you cancel the dialog, nothing is saved and nothing is announced. The emote
+   pack and **Variants → Save all (3 + original)** ask for one folder instead
+   and write all their files into it.
 
 ---
 
@@ -288,7 +309,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
 - **Mood Boards** — your saved collections. Hover an item and click **→ Canvas**
-  to add it to the Stream Graphics canvas as a 40%-opacity reference layer.
+  to add it to the Stream Graphics canvas as a 40%-opacity reference layer. A
+  reference is a guide only: it is tagged **reference — won't export** and is
+  left out of exports.
   **Clear thumbnail cache** (on this tab) empties imagii's on-disk copy of the
   board thumbnails right away. Your boards keep every item: a cleared thumbnail
   loads again from its source the next time its board is shown. imagii also

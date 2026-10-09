@@ -104,4 +104,61 @@ describe('audio presets store (round 17 phase-6 coverage)', () => {
     expect(m.parseChainPreset(JSON.stringify({ id: '', name: 'x', chain: {} }))).toBeNull()
     expect(m.parseChainPreset('null')).toBeNull()
   })
+
+  // ── T-90: a preset is cleanup settings, not a copy of one recording ──────
+
+  const SESSION_CHAIN = {
+    ...DEFAULT_CHAIN_SPEC,
+    denoise: 'medium' as const,
+    deEss: true,
+    hum60: true,
+    humHz: 50 as const,
+    cutRegions: [{ startSec: 12, endSec: 20 }],
+    secondaryTrack: {
+      filePath: 'C:/streams/monday-music.wav',
+      fileName: 'monday-music.wav',
+      role: 'music' as const,
+      gainDb: -10,
+      duckUnderPrimary: true
+    }
+  }
+
+  it('savePreset keeps the cut times and the second track OUT of the file on disk', async () => {
+    const m = await loadModule()
+    const saved = await m.savePreset('Mic A', SESSION_CHAIN)
+    const { readFile } = await import('node:fs/promises')
+    const onDisk = JSON.parse(
+      await readFile(path.join(TMP, 'audio-presets', `${saved.id}.json`), 'utf8')
+    )
+    expect('cutRegions' in onDisk.chain).toBe(false)
+    expect('secondaryTrack' in onDisk.chain).toBe(false)
+    // …and the file says nothing about Monday's music at all.
+    expect(JSON.stringify(onDisk)).not.toContain('monday-music')
+    // The cleanup it exists to keep is all there, including the mains choice.
+    expect(onDisk.chain).toMatchObject({ denoise: 'medium', deEss: true, hum60: true, humHz: 50 })
+    expect('cutRegions' in saved.chain).toBe(false)
+  })
+
+  it('listPresets drops the cut times and second track an older build saved into a preset', async () => {
+    const m = await loadModule()
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const dir = path.join(TMP, 'audio-presets')
+    await mkdir(dir, { recursive: true })
+    // The whole chain, exactly as a pre-T-90 build wrote it.
+    await writeFile(
+      path.join(dir, 'old.json'),
+      JSON.stringify({ id: 'old', name: 'Old mic', chain: SESSION_CHAIN, createdAt: 3 }),
+      'utf8'
+    )
+    const [p] = await m.listPresets()
+    expect(p?.name).toBe('Old mic')
+    expect('cutRegions' in (p?.chain ?? {})).toBe(false)
+    expect('secondaryTrack' in (p?.chain ?? {})).toBe(false)
+    expect(p?.chain).toMatchObject({ denoise: 'medium', deEss: true })
+  })
+
+  it('parseChainPreset refuses a chain that is an array', async () => {
+    const m = await loadModule()
+    expect(m.parseChainPreset(JSON.stringify({ id: 'a', name: 'x', chain: [1, 2] }))).toBeNull()
+  })
 })

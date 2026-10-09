@@ -1,5 +1,6 @@
 import type { Clip, WatermarkSpec } from './clip'
 import type { ChainSpec } from './audio'
+import type { CleanupSettings } from './audioPreset'
 import type { CanvasDocument } from './canvas'
 
 /** The tabs the References studio can be sitting on. Declared here rather
@@ -65,7 +66,8 @@ export interface ImagiiProject {
 export interface ChainPreset {
   id: string
   name: string
-  chain: ChainSpec
+  /** T-90: cleanup settings only — never cut regions or a second track. */
+  chain: CleanupSettings
   createdAt: number
 }
 

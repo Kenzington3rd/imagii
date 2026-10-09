@@ -2,7 +2,8 @@ import type {
   ChainSpec,
   CompressorPreset,
   DenoiseParams,
-  DenoiseStrength
+  DenoiseStrength,
+  MainsHz
 } from '../../shared/audio'
 import { DEFAULT_DENOISE_PARAMS } from '../../shared/audio'
 
@@ -83,6 +84,17 @@ export function vselectForCuts(cuts: ChainSpec['cutRegions']): string | null {
   return keep ? `select='${keep}',setpts=N/FRAME_RATE/TB` : null
 }
 
+/**
+ * T-90: the mains frequency the hum notch targets. Strict equality, not a
+ * range check: the result is interpolated into a filter string, so ONLY the
+ * two literals can reach ffmpeg — a project file that says `humHz: "60;x"`, or
+ * a number out of range, or nothing at all (every project saved before 50 Hz
+ * existed), is 60, which is what hum removal always did.
+ */
+export function humFrequency(requested: unknown): MainsHz {
+  return requested === 50 ? 50 : 60
+}
+
 function loudnormFilter(targetLufs: number, measured?: LoudnormMeasurement): string {
   // INIT-A (round 15): keep -1.5 dBTP as the safe default — Spotify/YouTube
   // recommend -1.0 dBTP but a small inter-sample peak overhead protects
@@ -129,13 +141,17 @@ export function buildChain(
 
   if (spec.hum60) {
     // B2 fix (round 15): the previous highpass+lowpass pair did NOT touch the
-    // 60 Hz mains-hum fundamental at all — the label was a lie and the
+    // mains-hum fundamental at all — the label was a lie and the
     // lowpass dulled voice. Mains hum is a narrow tone, so a bandreject
     // (notch) at the fundamental AND first harmonic is the correct filter.
     // width_type=h:w=2 = 2 Hz wide, which kills hum without audibly
     // hollowing nearby vocal content.
-    baseFilters.push('bandreject=f=60:width_type=h:w=2')
-    baseFilters.push('bandreject=f=120:width_type=h:w=2')
+    // T-90: the fundamental is the user's grid, 60 Hz (US/Canada) or 50 Hz
+    // (most of the rest of the world). A 2 Hz notch at the wrong one removes
+    // nothing, which is why this is a choice and not a constant.
+    const hz = humFrequency(spec.humHz)
+    baseFilters.push(`bandreject=f=${hz}:width_type=h:w=2`)
+    baseFilters.push(`bandreject=f=${hz * 2}:width_type=h:w=2`)
   }
 
   const dn = denoiseFilter(spec.denoise, spec.denoiseParams)

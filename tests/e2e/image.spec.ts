@@ -7,7 +7,7 @@ import {
   type Page
 } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -53,14 +53,16 @@ const __dirname = path.dirname(__filename)
  *    anchors are Konva nodes, not DOM: their screen position comes from
  *    `getAbsolutePosition()`, which already includes the stage scale.
  *
- * 3. Downloads. Playwright's `page.on('download')` / `context.on('download')`
- *    never fire under `_electron.launch` — probed both ways, neither sees the
- *    `<a download>` click that ExportDialog.tsx:10 and ThumbnailVariants.tsx:95
- *    perform. The download is real, though: Electron's own
- *    `session.will-download` sees it. `installDownloadCapture` hooks that in
- *    the MAIN process from the test (nothing in `src/` changes) and writes each
- *    item to a temp dir, so every export assertion below lands on real bytes —
- *    a deeper end state than a download event object.
+ * 3. Saves. Since T-91 an export does not click a hidden `<a download>`: it
+ *    asks MAIN to save (`image:save` / `image:saveMany`), which opens a native
+ *    dialog and writes the file. The dialogs are the OS boundary, so
+ *    `installSaveStub` replaces `dialog.showSaveDialog` / `showOpenDialog` IN
+ *    MAIN and answers them — with a path in a temp dir (saved) or with
+ *    "canceled" — and records every call. Everything else is real: the click,
+ *    the capture, the IPC, the validation, the bytes written. So every export
+ *    assertion below lands on a real file, and "the user canceled" is a state
+ *    the tests can put the app in (the old `<a download>` could not be
+ *    canceled from here, which is how it got to toast "saved" for one).
  *
  * ── Product findings ───────────────────────────────────────────────────
  *
@@ -236,31 +238,64 @@ interface Studio {
   root: string
   /** The generated PNG — dropped, picked through the file chooser, pasted. */
   fixturePng: string
-  /** Where `will-download` items are written. */
+  /** Where the stubbed Save dialog and folder picker put files. */
   downloadDir: string
   dialogs: DialogSpy
 }
 
+interface SaveCalls {
+  /** `showSaveDialog` options, in call order. */
+  save: Array<{ title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }>
+  /** `showOpenDialog` options (the folder picker), in call order. */
+  open: Array<{ title?: string; properties?: string[] }>
+}
+
 /**
- * Hook Electron's own download plumbing in the MAIN process. Nothing in
- * `src/` changes: `session` is Electron's object, the `<a download>` click and
- * the whole Chromium download path stay real, and every item is written to a
- * temp dir the test can read. See the header note on why Playwright's
- * download events cannot be used here.
+ * Stand in for the OS dialogs, in the MAIN process. Nothing in `src/` changes:
+ * `dialog` is Electron's own object and the `image:save*` handlers read it at
+ * call time. `answer: 'save'` picks `dir` (the Save dialog returns
+ * `dir/<default name>`, the folder picker returns `dir`); `'cancel'` is the
+ * user dismissing it; `'unwritable'` picks a folder that does not exist, so
+ * the write itself fails. Every call is recorded.
  */
-async function installDownloadCapture(app: ElectronApplication, dir: string): Promise<void> {
-  await app.evaluate(({ session }, downloadDir) => {
-    const g = globalThis as unknown as { __dlDir: string; __dl: string[] }
-    g.__dlDir = downloadDir
-    g.__dl = []
-    session.defaultSession.on('will-download', (_event, item) => {
-      const name = item.getFilename()
-      item.setSavePath(`${g.__dlDir}/${name}`)
-      item.once('done', (_e, state) => {
-        if (state === 'completed') g.__dl.push(name)
-      })
-    })
+async function installSaveStub(app: ElectronApplication, dir: string): Promise<void> {
+  await app.evaluate(({ dialog }, outDir) => {
+    const g = globalThis as unknown as {
+      __imgSave: { answer: 'save' | 'cancel' | 'unwritable'; dir: string; calls: SaveCalls }
+    }
+    g.__imgSave = { answer: 'save', dir: outDir, calls: { save: [], open: [] } }
+    const target = dialog as unknown as { showSaveDialog: unknown; showOpenDialog: unknown }
+    target.showSaveDialog = async (_win: unknown, options: SaveCalls['save'][number]) => {
+      g.__imgSave.calls.save.push(options)
+      if (g.__imgSave.answer === 'cancel') return { canceled: true, filePath: undefined }
+      const leaf = (options.defaultPath ?? 'out').split(/[\\/]/).pop()
+      // 'unwritable': the user picked a place the write then cannot reach
+      // (a folder that is gone) — the one honest way for a save to FAIL.
+      const folder = g.__imgSave.answer === 'unwritable' ? `${g.__imgSave.dir}/no-such-folder` : g.__imgSave.dir
+      return { canceled: false, filePath: `${folder}/${leaf}` }
+    }
+    target.showOpenDialog = async (_win: unknown, options: SaveCalls['open'][number]) => {
+      g.__imgSave.calls.open.push(options)
+      if (g.__imgSave.answer === 'cancel') return { canceled: true, filePaths: [] }
+      return { canceled: false, filePaths: [g.__imgSave.dir] }
+    }
   }, dir)
+}
+
+/** The user's answer to the next dialogs: save where the stub says, or cancel. */
+async function answerDialogs(
+  app: ElectronApplication,
+  answer: 'save' | 'cancel' | 'unwritable'
+): Promise<void> {
+  await app.evaluate((_electron, a) => {
+    ;(globalThis as unknown as { __imgSave: { answer: string } }).__imgSave.answer = a
+  }, answer)
+}
+
+function saveCalls(app: ElectronApplication): Promise<SaveCalls> {
+  return app.evaluate(
+    () => (globalThis as unknown as { __imgSave: { calls: SaveCalls } }).__imgSave.calls
+  )
 }
 
 /**
@@ -281,24 +316,36 @@ async function setWindowSize(
   }, { width, height })
 }
 
-function completedDownloads(app: ElectronApplication): Promise<string[]> {
-  return app.evaluate(() => (globalThis as unknown as { __dl?: string[] }).__dl ?? [])
+/** File names currently in the save folder, sorted (a folder has no order to promise). */
+function savedNames(studio: Studio): string[] {
+  return readdirSync(studio.downloadDir).sort()
 }
 
-async function clearDownloads(app: ElectronApplication): Promise<void> {
-  await app.evaluate(() => {
-    const g = globalThis as unknown as { __dl?: string[] }
-    if (g.__dl) g.__dl.length = 0
-  })
+function clearDownloads(studio: Studio): void {
+  for (const name of readdirSync(studio.downloadDir)) {
+    rmSync(path.join(studio.downloadDir, name), { force: true })
+  }
 }
 
-/** Wait until exactly `n` downloads have completed, then read their bytes. */
+/** Wait until exactly `n` files have been saved, then read their bytes (name order). */
 async function waitForDownloads(studio: Studio, n: number): Promise<Buffer[]> {
   await expect
-    .poll(() => completedDownloads(studio.app), { timeout: 30_000, intervals: [200] })
-    .toHaveLength(n)
-  const names = await completedDownloads(studio.app)
-  return names.map((name) => readFileSync(path.join(studio.downloadDir, name)))
+    .poll(() => savedNames(studio).length, { timeout: 30_000, intervals: [200] })
+    .toBe(n)
+  return savedNames(studio).map((name) => readFileSync(path.join(studio.downloadDir, name)))
+}
+
+/** The bytes of the one saved file whose name matches `pattern`. */
+function savedFile(studio: Studio, pattern: RegExp): Buffer {
+  const hits = savedNames(studio).filter((n) => pattern.test(n))
+  if (hits.length !== 1) throw new Error(`expected one saved file like ${pattern}, got ${JSON.stringify(savedNames(studio))}`)
+  return readFileSync(path.join(studio.downloadDir, hits[0] as string))
+}
+
+/** Let any toast the click was going to raise raise it, then read the log. */
+async function toastsAfterSettling(studio: Studio): Promise<string[]> {
+  await studio.window.waitForTimeout(1_000)
+  return readToastLog(studio.window)
 }
 
 /**
@@ -372,7 +419,7 @@ async function openStudio(label: string): Promise<Studio> {
     args: [mainEntry, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
   })
-  await installDownloadCapture(app, downloadDir)
+  await installSaveStub(app, downloadDir)
   const window = await app.firstWindow()
   const dialogs = installDialogSpy(window)
 
@@ -1590,15 +1637,28 @@ test.describe('Image Studio — export', () => {
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       const geom = await stageGeom(window)
 
+      const output = exportPanel.getByTestId('export-output-size')
+
       // ── PNG at 1x ──
       await exportPanel.getByLabel('Scale').selectOption('1')
+      // T-91: the readout beside Scale says what the file will be BEFORE the
+      // click — from the document and the scale, the same arithmetic the
+      // capture uses. 1x of a 1280x720 thumbnail is YouTube's own size, so
+      // there is nothing to add.
+      await expect(output).toHaveText('Output: 1280x720')
+      await expect(exportPanel).not.toContainText("Bigger than YouTube's thumbnail size")
       await exportButton.click()
       const [png1] = await waitForDownloads(studio, 1)
       const size1 = pngSize(png1 as Buffer)
       await expect
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
         .toContain('PNG saved')
-      expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-\d+\.png$/)
+      expect(savedNames(studio)[0]).toMatch(/^imagii-\d+\.png$/)
+      // The native Save dialog was really asked, for a .png, once.
+      const calls1 = await saveCalls(studio.app)
+      expect(calls1.save).toHaveLength(1)
+      expect(calls1.save[0]?.defaultPath).toMatch(/^imagii-\d+\.png$/)
+      expect(calls1.save[0]?.filters).toEqual([{ name: 'PNG image', extensions: ['png'] }])
 
       // T-45: "1×" means one document pixel per exported pixel. The on-screen
       // stage is a fit-to-container render (Canvas.tsx:168-174) and is NOT the
@@ -1608,16 +1668,23 @@ test.describe('Image Studio — export', () => {
       expect(size1).toEqual({ w: t.doc.width, h: t.doc.height })
 
       // ── scale 2x: same click, exactly twice the document ──
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await exportPanel.getByLabel('Scale').selectOption('2')
+      // The default scale on a HiDPI screen is 2x, which makes a thumbnail
+      // YouTube will not take at face value — the readout and the soft note
+      // say so before the file exists, and the file then matches the readout.
+      await expect(output).toHaveText('Output: 2560x1440')
+      await expect(exportPanel).toContainText("Bigger than YouTube's thumbnail size (1280x720).")
       await exportButton.click()
       const [png2] = await waitForDownloads(studio, 1)
       const size2 = pngSize(png2 as Buffer)
       expect(size2).toEqual({ w: t.doc.width * 2, h: t.doc.height * 2 })
 
       // ── scale 0.5x, the other end of the picker ──
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await exportPanel.getByLabel('Scale').selectOption('0.5')
+      await expect(output).toHaveText('Output: 640x360')
+      await expect(exportPanel).not.toContainText("Bigger than YouTube's thumbnail size")
       await exportButton.click()
       const [pngHalf] = await waitForDownloads(studio, 1)
       expect(pngSize(pngHalf as Buffer)).toEqual({
@@ -1626,7 +1693,7 @@ test.describe('Image Studio — export', () => {
       })
 
       // ── JPG: format select swaps the encoder and reveals the quality slider ──
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await expect(window.getByRole('slider', { name: 'JPG export quality' })).toHaveCount(0)
       await exportPanel.getByRole('combobox').first().selectOption('jpg')
       const quality = window.getByRole('slider', { name: 'JPG export quality' })
@@ -1638,10 +1705,13 @@ test.describe('Image Studio — export', () => {
       await expect(exportPanel).toContainText('100%')
       await exportButton.click()
       const [jpgHigh] = await waitForDownloads(studio, 1)
-      expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-\d+\.jpg$/)
+      expect(savedNames(studio)[0]).toMatch(/^imagii-\d+\.jpg$/)
+      expect((await saveCalls(studio.app)).save.at(-1)?.filters).toEqual([
+        { name: 'JPEG image', extensions: ['jpg', 'jpeg'] }
+      ])
       expect(jpegSize(jpgHigh as Buffer)).toEqual(size1)
 
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await quality.fill('0.5')
       await expect(exportPanel).toContainText('50%')
       await exportButton.click()
@@ -1658,7 +1728,7 @@ test.describe('Image Studio — export', () => {
     }
   })
 
-  test('emote pack: a 112x112 PNG export emits three files from one click', async () => {
+  test('emote pack: a 112x112 PNG export writes three files through ONE folder dialog', async () => {
     test.setTimeout(150_000)
     const studio = await openStudio('emote')
     const { window } = studio
@@ -1668,21 +1738,50 @@ test.describe('Image Studio — export', () => {
       await templateCard(window, t).click()
       await expectTemplateApplied(window, t)
       const geom = await stageGeom(window)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
 
-      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      // T-91: the readout tells the truth for the pack — three sizes, not
+      // whatever Scale says — and Scale steps aside with the reason on it.
+      await expect(exportPanel.getByTestId('export-output-size')).toHaveText(
+        'Output: 3 PNGs — 28x28, 56x56, 112x112'
+      )
+      await expect(exportPanel.getByLabel('Scale')).toBeDisabled()
+
+      // ── the user cancels the folder picker: nothing is written, nothing is said ──
+      await answerDialogs(studio.app, 'cancel')
+      await exportButton.click()
+      await expect(exportButton).toBeEnabled({ timeout: 15_000 })
+      expect(await toastsAfterSettling(studio)).toEqual([])
+      expect(savedNames(studio)).toEqual([])
+      const afterCancel = await saveCalls(studio.app)
+      expect(afterCancel.open).toHaveLength(1)
+
+      // ── …then saves ──
+      await answerDialogs(studio.app, 'save')
+      await exportButton.click()
       const files = await waitForDownloads(studio, 3)
-      const names = await completedDownloads(studio.app)
+      const names = savedNames(studio)
       await expect
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
         .toContain('Emote pack saved (3 PNGs: 28, 56, 112)')
 
+      // ONE folder dialog for the pack (the cancel above was the first), and
+      // not one Save dialog among them: three files, one question.
+      const calls = await saveCalls(studio.app)
+      expect(calls.open).toHaveLength(2)
+      expect(calls.save).toHaveLength(0)
+      expect(calls.open[1]?.properties).toEqual(['openDirectory', 'createDirectory'])
+      expect(calls.open[1]?.title).toMatch(/emote pack/i)
+
       // One click, three files, named for the trio Twitch expects.
-      expect(names.map((n) => n.replace(/\d{10,}/, 'STAMP'))).toEqual([
+      expect(names.map((n) => n.replace(/\d{10,}/, 'STAMP')).sort()).toEqual([
+        'imagii-emote-112-STAMP.png',
         'imagii-emote-28-STAMP.png',
-        'imagii-emote-56-STAMP.png',
-        'imagii-emote-112-STAMP.png'
+        'imagii-emote-56-STAMP.png'
       ])
-      const sizes = files.map((f) => pngSize(f as Buffer))
+      const bySize = (n: number): Buffer => savedFile(studio, new RegExp(`^imagii-emote-${n}-\\d+\\.png$`))
+      const sizes = [28, 56, 112].map((n) => pngSize(bySize(n)))
 
       // T-45: the bytes carry the sizes the filenames and the toast promise.
       // This doc sits at the 4x zoom cap (Canvas.tsx:167) — 112 document px
@@ -1696,13 +1795,17 @@ test.describe('Image Studio — export', () => {
       // Three distinct renders, not one file written three times.
       expect(new Set(files.map((f) => (f as Buffer).length)).size).toBe(3)
 
-      // JPG on the same doc takes the ordinary single-file path.
-      await clearDownloads(studio.app)
-      await window.locator(EXPORT).getByRole('combobox').first().selectOption('jpg')
-      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      // JPG on the same doc takes the ordinary single-file path (a Save dialog).
+      await clearDownloads(studio)
+      await exportPanel.getByRole('combobox').first().selectOption('jpg')
+      await expect(exportPanel.getByLabel('Scale')).toBeEnabled()
+      await exportPanel.getByLabel('Scale').selectOption('2')
+      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 224x224')
+      await exportButton.click()
       const single = await waitForDownloads(studio, 1)
       expect(single).toHaveLength(1)
-      expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-\d+\.jpg$/)
+      expect(savedNames(studio)[0]).toMatch(/^imagii-\d+\.jpg$/)
+      expect((await saveCalls(studio.app)).save).toHaveLength(1)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-09-emote.png') })
     } finally {
       await closeStudio(studio)
@@ -1734,7 +1837,7 @@ test.describe('Image Studio — export', () => {
         await expect
           .poll(async () => (await stageGeom(window)).stageW, { timeout: 20_000, intervals: [100] })
           .not.toBe(previous)
-        await clearDownloads(studio.app)
+        await clearDownloads(studio)
         await exportButton.click()
         const [bytes] = await waitForDownloads(studio, 1)
         return { bytes: bytes as Buffer, stageW: (await stageGeom(window)).stageW }
@@ -1782,7 +1885,7 @@ test.describe('Image Studio — export', () => {
       if (!target) throw new Error('yt-thumb-bold lost the layer this test selects')
 
       async function exportOnce(): Promise<Buffer> {
-        await clearDownloads(studio.app)
+        await clearDownloads(studio)
         await exportButton.click()
         const [bytes] = await waitForDownloads(studio, 1)
         return bytes as Buffer
@@ -1891,7 +1994,7 @@ test.describe('Image Studio — export', () => {
       ).toEqual({ ...bg, a: 255 })
 
       // ── JPG: no alpha channel at all, so a dropped background is BLACK ──
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await format.selectOption('jpg')
       await exportButton.click()
       const [jpg] = await waitForDownloads(studio, 1)
@@ -1916,11 +2019,11 @@ test.describe('Image Studio — export', () => {
       await expect(dialog).toHaveCount(0)
       await expectTemplateApplied(window, emote)
 
-      await clearDownloads(studio.app)
+      await clearDownloads(studio)
       await format.selectOption('png')
       await exportButton.click()
-      const pack = await waitForDownloads(studio, 3)
-      const full = pack[2] as Buffer
+      await waitForDownloads(studio, 3)
+      const full = savedFile(studio, /^imagii-emote-112-\d+\.png$/)
       expect(pngSize(full)).toEqual({ w: emote.doc.width, h: emote.doc.height })
       // The corner: outside the base circle (centre 56,56 r 50), so the only
       // thing that could be there is a background that should not exist.
@@ -1981,9 +2084,17 @@ test.describe('Image Studio — export', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-10-variants.png') })
 
       // ── save one tile: T-46, the saved bytes are the DOCUMENT ──
-      await dialog.locator('.card').filter({ hasText: 'Warm' }).getByRole('button', { name: 'Save' }).click()
+      const saveWarm = dialog.locator('.card').filter({ hasText: 'Warm' }).getByRole('button', { name: 'Save' })
+      // A canceled dialog writes nothing and says nothing (T-91).
+      await answerDialogs(studio.app, 'cancel')
+      await saveWarm.click()
+      await expect.poll(async () => (await saveCalls(studio.app)).save.length).toBe(1)
+      expect(await toastsAfterSettling(studio)).toEqual([])
+      expect(savedNames(studio)).toEqual([])
+      await answerDialogs(studio.app, 'save')
+      await saveWarm.click()
       const [warm] = await waitForDownloads(studio, 1)
-      expect((await completedDownloads(studio.app))[0]).toMatch(/^imagii-variant-warm-\d+\.png$/)
+      expect(savedNames(studio)[0]).toMatch(/^imagii-variant-warm-\d+\.png$/)
       expect(
         pngSize(warm as Buffer),
         'T-46: a saved variant is the document, not the window'
@@ -2039,18 +2150,36 @@ test.describe('Image Studio — export', () => {
         .poll(async () => (await tileUrls())[0], { timeout: 30_000 })
         .toBe(urls[0])
 
-      // ── save all four ──
-      await clearDownloads(studio.app)
-      await dialog.getByRole('button', { name: 'Save all 4' }).click()
+      // ── save all four: ONE folder dialog, and the toast comes after ──
+      clearDownloads(studio)
+      const before = await saveCalls(studio.app)
+      const saveAll = dialog.getByRole('button', { name: 'Save all (3 + original)' })
+      await expect(saveAll).toBeVisible()
+      // Canceled first: no files, no toast, and the picker was really asked.
+      await answerDialogs(studio.app, 'cancel')
+      await saveAll.click()
+      await expect
+        .poll(async () => (await saveCalls(studio.app)).open.length)
+        .toBe(before.open.length + 1)
+      expect(await toastsAfterSettling(studio)).toEqual([])
+      expect(savedNames(studio)).toEqual([])
+      // Then saved.
+      await answerDialogs(studio.app, 'save')
+      await saveAll.click()
       await expect
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
-        .toContain('Saving 4 variants…')
+        .toContain('Saved 4 thumbnails')
+      // The old "Saving 4 variants…" promise, made before anything was saved.
+      expect(await readToastLog(window)).not.toContain('Saving 4 variants…')
       const all = await waitForDownloads(studio, 4)
-      expect((await completedDownloads(studio.app)).map((n) => n.replace(/\d{10,}/, 'STAMP'))).toEqual([
+      const calls = await saveCalls(studio.app)
+      expect(calls.open).toHaveLength(before.open.length + 2)
+      expect(calls.open.at(-1)?.title).toBe('Choose a folder for the thumbnail variants')
+      expect(savedNames(studio).map((n) => n.replace(/\d{10,}/, 'STAMP'))).toEqual([
+        'imagii-variant-cool-STAMP.png',
         'imagii-variant-original-STAMP.png',
         'imagii-variant-punchy-STAMP.png',
-        'imagii-variant-warm-STAMP.png',
-        'imagii-variant-cool-STAMP.png'
+        'imagii-variant-warm-STAMP.png'
       ])
       for (const buf of all) {
         expect(pngSize(buf as Buffer)).toEqual({ w: t.doc.width, h: t.doc.height })
@@ -2059,6 +2188,221 @@ test.describe('Image Studio — export', () => {
       // ── the dialog's own Close ──
       await dialog.getByRole('button', { name: 'Close' }).click()
       await expect(dialog).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+test.describe('Image Studio — a success toast follows a real save (T-91)', () => {
+  test('a canceled Save dialog writes nothing and says nothing; a saved one says so after the file exists', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('save-cancel')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-clean')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      // ── canceled: the dialog opened, the user said no ──
+      // This is the state the old `<a download>` could not be put in from a
+      // test, and the one it got wrong: the toast was raised on the click,
+      // before any dialog had answered.
+      await answerDialogs(studio.app, 'cancel')
+      await exportButton.click()
+      await expect.poll(async () => (await saveCalls(studio.app)).save.length).toBe(1)
+      await expect(exportButton).toBeEnabled({ timeout: 15_000 })
+      const toasts = await toastsAfterSettling(studio)
+      expect(toasts, 'a canceled save is neither a success nor an error').toEqual([])
+      expect(savedNames(studio)).toEqual([])
+
+      // ── saved: the toast arrives, and the file is already there ──
+      await answerDialogs(studio.app, 'save')
+      await exportButton.click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] })
+        .toContain('PNG saved')
+      expect(savedNames(studio), 'the toast came after the write').toHaveLength(1)
+      expect(pngSize(readFileSync(path.join(studio.downloadDir, savedNames(studio)[0] as string)))).toEqual({
+        w: t.doc.width * 1,
+        h: t.doc.height * 1
+      })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a save that fails says so in plain words, and is never reported as saved', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('save-fail')
+    const { window } = studio
+    try {
+      await templateCard(window, templateById('yt-thumb-clean')).click()
+      const exportButton = window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true })
+      await answerDialogs(studio.app, 'unwritable')
+      await exportButton.click()
+      const FAILED =
+        "Export failed. A file imagii needs isn't there. It may have been moved or deleted."
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain(FAILED)
+      const toasts = await readToastLog(window)
+      expect(toasts.join(' | ')).not.toMatch(/saved|Error invoking remote method|image:save|ENOENT/)
+      await expect(exportButton).toBeEnabled({ timeout: 15_000 })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+test.describe('Image Studio — hint layers stay on the canvas and out of the file (T-91)', () => {
+  test('the face guide shows on the canvas and in the Layers panel, and is not in the exported pixels', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('hint-export')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      const bg = hexRgb(t.doc.background)
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+
+      const guide = t.doc.layers.find((l) => l.name === 'Face placeholder')
+      if (!guide || guide.type !== 'rect') throw new Error('yt-thumb-bold lost its face guide')
+      // A point well inside the guide and clear of every other layer, from the
+      // template itself. The guide draws a translucent red over the background
+      // there, so a leak is a pixel that is NOT the background.
+      const px = guide.x + 40
+      const py = guide.y + 400
+      for (const l of t.doc.layers) {
+        if (l === guide) continue
+        if (l.type === 'rect') {
+          expect(
+            px >= l.x && px < l.x + l.width && py >= l.y && py < l.y + l.height,
+            `probe must miss "${l.name}"`
+          ).toBe(false)
+        } else if (l.type === 'text') {
+          // Text draws right and down from its origin; a generous line box.
+          const lines = l.text.split('\n').length
+          expect(
+            px < l.x || py < l.y || py > l.y + lines * l.fontSize * 1.5,
+            `probe must miss "${l.name}"`
+          ).toBe(true)
+        }
+      }
+
+      // The guide is on the canvas for the person editing…
+      expect((await stageShapes(window)).map((sh) => sh.cls)).toEqual(
+        t.doc.layers.map((l) => KONVA_CLASS[l.type])
+      )
+      // …and says in the Layers panel, in words, that it will not export.
+      await expect(layerRow(window, 'Face placeholder')).toContainText("hint — won't export")
+      await expect(layerRow(window, 'Face hint')).toContainText("hint — won't export")
+      await expect(layerRow(window, 'Title')).not.toContainText("won't export")
+      await expect(layerRow(window, 'Accent bar')).not.toContainText("won't export")
+
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const [png] = await waitForDownloads(studio, 1)
+      expect(pngSize(png as Buffer)).toEqual({ w: t.doc.width, h: t.doc.height })
+      expect(
+        await samplePixel(studio, png as Buffer, 'png', px, py),
+        'T-91: the face guide is not in the file — this is the plain background'
+      ).toEqual({ ...bg, a: 255 })
+
+      // Positive control: layers that are NOT hints are in the same file. The
+      // accent bar's red is there, so "background at the probe" is a claim
+      // about the guide and not about an export that came out empty.
+      const bar = t.doc.layers.find((l) => l.name === 'Accent bar')
+      if (!bar || bar.type !== 'rect') throw new Error('yt-thumb-bold lost its accent bar')
+      expect(await samplePixel(studio, png as Buffer, 'png', bar.x + 600, bar.y + 90)).toEqual({
+        ...hexRgb(bar.fill),
+        a: 255
+      })
+
+      // Exporting hid the nodes for the capture only: every one is drawing again.
+      expect(
+        await window.evaluate(() => {
+          const stage = (window as unknown as { __imagiiStage: { find(s: string): Array<{ visible(): boolean }> } })
+            .__imagiiStage
+          const hints = stage.find('.hint')
+          return { count: hints.length, allVisible: hints.every((n) => n.visible()) }
+        })
+      ).toEqual({ count: 2, allVisible: true })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an overlay exports transparent where the facecam hole was, and keeps the design around it', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('hint-overlay')
+    const { window } = studio
+    try {
+      const t = templateById('tw-overlay-streamer')
+      expect(t.doc.background).toBe('transparent')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+      // Not a thumbnail: no YouTube note on a transparent overlay.
+      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 1920x1080')
+      await expect(exportPanel).not.toContainText("Bigger than YouTube's")
+
+      // Layers panel: the hole, its label and both placeholders are tagged;
+      // the lower-third plate (design) is not.
+      for (const name of ['Facecam hole', 'Facecam hint', 'Handle', 'Now playing']) {
+        await expect(layerRow(window, name)).toContainText("hint — won't export")
+      }
+      await expect(layerRow(window, 'Lower third')).not.toContainText("won't export")
+
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const [png] = await waitForDownloads(studio, 1)
+      const hole = t.doc.layers.find((l) => l.name === 'Facecam hole')
+      const plate = t.doc.layers.find((l) => l.name === 'Lower third')
+      if (hole?.type !== 'rect' || plate?.type !== 'rect') throw new Error('overlay lost its hole or plate')
+      // Inside the hole: nothing at all — alpha 0, not a 10% red tint.
+      expect((await samplePixel(studio, png as Buffer, 'png', hole.x + 30, hole.y + 30)).a).toBe(0)
+      // On the plate's border-free interior: the design is there, opaque-ish.
+      expect((await samplePixel(studio, png as Buffer, 'png', plate.x + 650, plate.y + 40)).a).toBeGreaterThan(200)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('typing your own words over a placeholder makes them part of the export', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('hint-retype')
+    const { window } = studio
+    try {
+      const t = templateById('tw-overlay-minimal')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      const handle = layerRow(window, 'Handle corner')
+      await expect(handle).toContainText("hint — won't export")
+      await exportButton.click()
+      const [placeholderExport] = await waitForDownloads(studio, 1)
+
+      // The user types their own handle over "@yourhandle".
+      await handle.click()
+      await field(window, 'Text').fill('@makenah')
+      // It is theirs now: the tag is gone…
+      await expect(handle).not.toContainText("won't export")
+      clearDownloads(studio)
+      await exportButton.click()
+      const [typedExport] = await waitForDownloads(studio, 1)
+      // …and the export is no longer the one with the placeholder stripped:
+      // their handle is in the pixels.
+      expect(
+        typedExport?.equals(placeholderExport as Buffer),
+        'the typed handle must reach the file'
+      ).toBe(false)
     } finally {
       await closeStudio(studio)
     }

@@ -122,11 +122,11 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown.
 2. **Cut regions (optional).** Drag on the waveform.
 3. **Volume meter** sits below the waveform — turns red on clipping.
-4. **Cleanup panel:** denoise strength (light/medium/aggressive), low rumble highpass, 60 Hz hum reduction, de-ess.
-5. **Levels panel:** voice/music/mixed compressor preset, two-pass loudnorm, ±12 dB manual gain.
-6. **Cleanup presets:** name and save your tuned chain ("My USB mic"), one-click re-apply next session.
+4. **Cleanup panel:** quieter background (light/medium/aggressive), low-rumble removal, hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds.
+5. **Levels panel:** voice/music/mixed compressor preset, an even-volume loudness target (−16 for talking, −14 for YouTube/Spotify/TikTok/Reels), ±12 dB manual gain.
+6. **Cleanup presets:** name and save your tuned cleanup settings ("My USB mic") for one-click re-apply next session. Cuts and the second track stay with the recording.
 7. **Add a second track** for background music with optional ducking, a co-host's mic, or game audio.
-8. **Click Export.** MP3 / WAV / FLAC / AAC. If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.
+8. **Click Export.** MP3 / WAV / FLAC / AAC (saved as `.m4a`). If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.
 
 ### 🖼 Image Canvas
 1. **Import.** Drop an image, paste with `Ctrl+V`, or pick a file. Or click **✨ Templates** for pre-made YouTube thumbnails and Twitch overlay frames with a facecam hole.
@@ -161,7 +161,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 
 **Video Studio won't import a file** → Check the codec (right-click → Properties). H.264, H.265, VP9, ProRes, AV1 in any common container should work. Some old AVI files use codecs FFmpeg can't decode.
 
-**Audio export is slow** → If "Normalize to LUFS" is on, the app does a two-pass measure-then-apply. Turn it off for a faster single-pass export.
+**Audio export is slow** → If "Even volume" is on, imagii measures the whole file first and then renders. Turn it off for a faster export.
 
 **Image canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. The preview downsamples to 2048 px; very large originals still take memory.
 

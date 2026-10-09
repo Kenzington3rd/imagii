@@ -5,7 +5,7 @@ import { CANVAS_TEMPLATES } from './templates'
 // using non-canonical dimensions. Lock the corrected values in so a future
 // refactor can't quietly revert them.
 describe('round-16 banner templates', () => {
-  it('Twitch video-player banner is 1200x480', () => {
+  it('Twitch profile banner (id tw-banner-videoplayer) is 1200x480', () => {
     const tw = CANVAS_TEMPLATES.find((t) => t.id === 'tw-banner-videoplayer')
     expect(tw, 'tw-banner-videoplayer must exist').toBeDefined()
     expect(tw?.doc.width).toBe(1200)

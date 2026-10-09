@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import type { CanvasDocument, CanvasLayer } from '@shared/canvas'
+import { asHint, type CanvasDocument, type CanvasLayer } from '@shared/canvas'
 import type { IconName } from '../../components/Icon'
 
 export type TemplateCategory = 'thumbnail' | 'overlay' | 'banner' | 'emote'
@@ -24,6 +24,19 @@ export const TEMPLATE_CATEGORY_ICONS: Record<TemplateCategory, IconName> = {
   emote: 'emote'
 }
 
+/**
+ * T-91 — which template layers are `asHint(...)`, and why.
+ *
+ * A hint layer is there to guide the person editing and is left out of every
+ * export (`captureDocument`), so the file they post never says "Facecam goes
+ * here". The rule, which `templates.test.ts` holds every template to:
+ *   - guidance with a name that says so: "... hole", "... hint", "... placeholder",
+ *     and the safe-area frames of the channel banner;
+ *   - a placeholder TEXT that is literally a stand-in: "@yourhandle", "Game name".
+ * Sample copy the user is expected to rewrite and keep ("YOUR TITLE HERE",
+ * "TUTORIAL", a schedule line) is design, not a hint — it stays in the export.
+ * A hint text layer stops being one the moment its words are edited.
+ */
 export interface CanvasTemplate {
   id: string
   name: string
@@ -126,7 +139,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'yt-thumb-bold',
     name: 'YouTube · Bold thumbnail',
-    description: '1280×720 with reaction face zone and shouty title.',
+    description: '1280×720 with a reaction-face zone and a shouty title. The face guide does not export.',
     category: 'thumbnail',
     doc: {
       width: 1280,
@@ -135,8 +148,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         rectLayer('Accent bar', 0, 540, 1280, 180, '#ff3131'),
         textLayer('Title', 60, 60, 'YOUR TITLE\nHERE', 130, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 760, 110, 460, 460, 'rgba(255,49,49,0.18)', '#ff3131', 4, 24),
-        textLayer('Face hint', 880, 320, 'Drop face here', 36, '#ff3131')
+        asHint(rectLayer('Face placeholder', 760, 110, 460, 460, 'rgba(255,49,49,0.18)', '#ff3131', 4, 24)),
+        asHint(textLayer('Face hint', 880, 320, 'Drop face here', 36, '#ff3131'))
       ]
     }
   },
@@ -160,35 +173,28 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'tw-overlay-streamer',
     name: 'Twitch · Stream overlay',
-    description: '1920×1080 transparent — webcam hole + lower-third for OBS.',
+    description:
+      '1920×1080 transparent PNG for OBS — facecam hole + lower-third. The guides and placeholders do not export.',
     category: 'overlay',
     doc: {
       width: 1920,
       height: 1080,
       background: 'transparent',
       layers: [
-        rectLayer(
-          'Facecam hole',
-          1500,
-          800,
-          400,
-          240,
-          'rgba(255,49,49,0.10)',
-          '#ff3131',
-          4,
-          16
+        asHint(
+          rectLayer('Facecam hole', 1500, 800, 400, 240, 'rgba(255,49,49,0.10)', '#ff3131', 4, 16)
         ),
-        textLayer('Facecam hint', 1560, 900, 'Facecam goes here', 22, '#ff3131'),
+        asHint(textLayer('Facecam hint', 1560, 900, 'Facecam goes here', 22, '#ff3131')),
         rectLayer('Lower third', 60, 980, 700, 80, 'rgba(18,12,12,0.85)', '#ff3131', 2, 12),
-        textLayer('Handle', 84, 1000, '@yourhandle', 36, '#ffffff'),
-        textLayer('Now playing', 84, 1044, 'NOW PLAYING · Game name', 18, '#ff3131')
+        asHint(textLayer('Handle', 84, 1000, '@yourhandle', 36, '#ffffff')),
+        asHint(textLayer('Now playing', 84, 1044, 'NOW PLAYING · Game name', 18, '#ff3131'))
       ]
     }
   },
   {
     id: 'tw-overlay-minimal',
     name: 'Twitch · Minimal overlay',
-    description: '1920×1080 transparent with just a corner facecam frame.',
+    description: '1920×1080 transparent PNG for OBS with just a corner facecam frame.',
     category: 'overlay',
     doc: {
       width: 1920,
@@ -206,20 +212,23 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
           5,
           12
         ),
-        textLayer('Handle corner', 60, 256, '@yourhandle', 24, '#ff3131')
+        asHint(textLayer('Handle corner', 60, 256, '@yourhandle', 24, '#ff3131'))
       ]
     }
   },
   {
     // B8 fix (round 16): the prior 1920×480 size did not match any real
-    // Twitch surface. Use 1200×480 — Twitch's "video-player banner" /
-    // offline-screen surface, which is the most useful target for a
-    // template featuring the wordmark + schedule. Layer coordinates
-    // scaled proportionally from the prior 1920-wide layout
-    // (width × 0.625) so the design still reads correctly.
+    // Twitch surface, so this was cut to 1200×480 and called the "video-player
+    // banner / offline screen". T-91: 1200×480 is Twitch's PROFILE banner (the
+    // header on the channel page); the offline / video-player screen is 16:9
+    // (1920×1080 recommended), which this is not. The id is kept — saved
+    // projects and the tests address templates by it — but the name and the
+    // description now say what the pixels fit. Layer coordinates were scaled
+    // proportionally from the prior 1920-wide layout (width × 0.625).
     id: 'tw-banner-videoplayer',
-    name: 'Twitch · Offline / video-player banner',
-    description: '1200×480 video-player banner (shown when stream is offline).',
+    name: 'Twitch · Profile banner',
+    description:
+      "1200×480 — the size of the banner on your Twitch channel page. Not the 16:9 offline screen.",
     category: 'banner',
     doc: {
       width: 1200,
@@ -228,7 +237,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         rectLayer('Bg accent', 0, 0, 1200, 480, '#ff3131', 'transparent', 0, 0),
         rectLayer('Bg dark', 0, 60, 1200, 360, '#120c0c', 'transparent', 0, 0),
-        textLayer('Handle', 50, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif'),
+        asHint(textLayer('Handle', 50, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif')),
         textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#ff3131')
       ]
     }
@@ -241,7 +250,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     // the designer sees what definitely renders on every surface, and an
     // inner TV-safe frame so they know where to keep load-bearing text.
     name: 'YouTube · Channel banner',
-    description: '2560×1440 with both safe-area frames (all-device + TV-safe).',
+    description:
+      '2560×1440 YouTube channel art with both safe-area frames (all-device + TV-safe). The frames do not export.',
     category: 'banner',
     doc: {
       width: 2560,
@@ -250,10 +260,12 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         // All-device safe area: 1546×423 centered on 2560×1440 → offset
         // ((2560-1546)/2, (1440-423)/2) = (507, 508).
-        rectLayer('All-device safe area', 507, 508, 1546, 423, 'transparent', '#ff3131', 2, 12),
+        asHint(rectLayer('All-device safe area', 507, 508, 1546, 423, 'transparent', '#ff3131', 2, 12)),
         // TV-safe minimum: 1235×338 centered → offset (662, 551).
-        rectLayer('TV-safe area', 662, 551, 1235, 338, 'transparent', '#fbbf24', 2, 8),
-        textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24'),
+        asHint(rectLayer('TV-safe area', 662, 551, 1235, 338, 'transparent', '#fbbf24', 2, 8)),
+        asHint(
+          textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24')
+        ),
         textLayer('Channel name', 800, 700, 'YOUR\nCHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif')
       ]
     }
@@ -261,7 +273,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'yt-thumb-bold-2k',
     name: 'YouTube · Bold thumbnail (2K)',
-    description: '2560×1440 reaction-style — same layout as the 720p variant, sharper output.',
+    description:
+      '2560×1440 reaction-style — the 720p layout at twice the pixels. YouTube thumbnails are 1280×720; export at 0.5× to match. The face guide does not export.',
     category: 'thumbnail',
     doc: {
       width: 2560,
@@ -270,15 +283,16 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         rectLayer('Accent bar', 0, 1080, 2560, 360, '#ff3131'),
         textLayer('Title', 120, 120, 'YOUR TITLE\nHERE', 260, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 1520, 220, 920, 920, 'rgba(255,49,49,0.18)', '#ff3131', 6, 36),
-        textLayer('Face hint', 1760, 640, 'Drop face here', 56, '#ff3131')
+        asHint(rectLayer('Face placeholder', 1520, 220, 920, 920, 'rgba(255,49,49,0.18)', '#ff3131', 6, 36)),
+        asHint(textLayer('Face hint', 1760, 640, 'Drop face here', 56, '#ff3131'))
       ]
     }
   },
   {
     id: 'yt-thumb-bold-4k',
     name: 'YouTube · Bold thumbnail (4K)',
-    description: '3840×2160 reaction-style — same layout at 4K resolution for crisp shorts/clips.',
+    description:
+      '3840×2160 reaction-style — the 720p layout at 4K. It is 16:9, so not for vertical Shorts; YouTube thumbnails are 1280×720. The face guide does not export.',
     category: 'thumbnail',
     doc: {
       width: 3840,
@@ -287,44 +301,46 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       layers: [
         rectLayer('Accent bar', 0, 1620, 3840, 540, '#ff3131'),
         textLayer('Title', 180, 180, 'YOUR TITLE\nHERE', 390, '#ffffff', 'Impact, Inter, sans-serif'),
-        rectLayer('Face placeholder', 2280, 330, 1380, 1380, 'rgba(255,49,49,0.18)', '#ff3131', 8, 54),
-        textLayer('Face hint', 2640, 960, 'Drop face here', 84, '#ff3131')
+        asHint(rectLayer('Face placeholder', 2280, 330, 1380, 1380, 'rgba(255,49,49,0.18)', '#ff3131', 8, 54)),
+        asHint(textLayer('Face hint', 2640, 960, 'Drop face here', 84, '#ff3131'))
       ]
     }
   },
   {
     id: 'tw-overlay-streamer-2k',
     name: 'Twitch · Stream overlay (2K)',
-    description: '2560×1440 transparent — facecam + lower-third, output-ready for 1440p streams.',
+    description:
+      '2560×1440 transparent PNG for OBS — facecam hole + lower-third for 1440p streams. The guides and placeholders do not export.',
     category: 'overlay',
     doc: {
       width: 2560,
       height: 1440,
       background: 'transparent',
       layers: [
-        rectLayer('Facecam hole', 2000, 1067, 533, 320, 'rgba(255,49,49,0.10)', '#ff3131', 5, 21),
-        textLayer('Facecam hint', 2080, 1200, 'Facecam goes here', 29, '#ff3131'),
+        asHint(rectLayer('Facecam hole', 2000, 1067, 533, 320, 'rgba(255,49,49,0.10)', '#ff3131', 5, 21)),
+        asHint(textLayer('Facecam hint', 2080, 1200, 'Facecam goes here', 29, '#ff3131')),
         rectLayer('Lower third', 80, 1307, 933, 107, 'rgba(18,12,12,0.85)', '#ff3131', 3, 16),
-        textLayer('Handle', 112, 1333, '@yourhandle', 48, '#ffffff'),
-        textLayer('Now playing', 112, 1392, 'NOW PLAYING · Game name', 24, '#ff3131')
+        asHint(textLayer('Handle', 112, 1333, '@yourhandle', 48, '#ffffff')),
+        asHint(textLayer('Now playing', 112, 1392, 'NOW PLAYING · Game name', 24, '#ff3131'))
       ]
     }
   },
   {
     id: 'tw-overlay-streamer-4k',
     name: 'Twitch · Stream overlay (4K)',
-    description: '3840×2160 transparent — facecam + lower-third, for 4K capture pipelines.',
+    description:
+      '3840×2160 transparent PNG for OBS — facecam hole + lower-third for 4K capture. The guides and placeholders do not export.',
     category: 'overlay',
     doc: {
       width: 3840,
       height: 2160,
       background: 'transparent',
       layers: [
-        rectLayer('Facecam hole', 3000, 1600, 800, 480, 'rgba(255,49,49,0.10)', '#ff3131', 8, 32),
-        textLayer('Facecam hint', 3120, 1800, 'Facecam goes here', 44, '#ff3131'),
+        asHint(rectLayer('Facecam hole', 3000, 1600, 800, 480, 'rgba(255,49,49,0.10)', '#ff3131', 8, 32)),
+        asHint(textLayer('Facecam hint', 3120, 1800, 'Facecam goes here', 44, '#ff3131')),
         rectLayer('Lower third', 120, 1960, 1400, 160, 'rgba(18,12,12,0.85)', '#ff3131', 4, 24),
-        textLayer('Handle', 168, 2000, '@yourhandle', 72, '#ffffff'),
-        textLayer('Now playing', 168, 2088, 'NOW PLAYING · Game name', 36, '#ff3131')
+        asHint(textLayer('Handle', 168, 2000, '@yourhandle', 72, '#ffffff')),
+        asHint(textLayer('Now playing', 168, 2088, 'NOW PLAYING · Game name', 36, '#ff3131'))
       ]
     }
   },

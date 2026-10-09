@@ -43,7 +43,7 @@ export const imageTutorial: TutorialDef = {
     {
       id: 'export',
       title: 'Export',
-      body: "Choose PNG or JPG and a Scale (3× is HiDPI), then click 'Export'. Every visible layer is baked into the picture.",
+      body: "Choose PNG or JPG and a Scale (3× is HiDPI), then click 'Export'. Every visible layer is in the picture, except the ones tagged hint or reference.",
       targetSelector: '[data-tutorial="image-export"]',
       placement: 'top'
     },

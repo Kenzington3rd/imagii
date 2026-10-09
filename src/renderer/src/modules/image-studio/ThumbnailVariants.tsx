@@ -5,6 +5,7 @@ import { useCanvasStore } from './state/canvasStore'
 import { assertDefined } from '@shared/assert'
 import { Modal } from '../../components/Modal'
 import { reportFailure } from '../../lib/reportFailure'
+import { countOf } from '@shared/plural'
 import { captureDocument, type ExportStage } from './ExportDialog'
 
 interface VariantSpec {
@@ -95,15 +96,6 @@ interface VariantPreview {
   dataUrl: string
 }
 
-function downloadDataUrl(dataUrl: string, filename: string): void {
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-}
-
 export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JSX.Element | null {
   const doc = useCanvasStore((s) => s.doc)
   // T-46: previews belong to the DOCUMENT they were rendered from. This
@@ -171,15 +163,40 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
     }
   }
 
-  function downloadAll(): void {
+  // T-91: both saves go through main's native dialogs and are announced only
+  // once the files are on disk. A canceled dialog (null) says nothing — the old
+  // hidden `<a download>` toasted "Saving 4 variants…" before any dialog had
+  // answered, and again for a cancel.
+  async function saveOne(p: VariantPreview): Promise<void> {
+    try {
+      await window.api.image.save({
+        dataUrl: p.dataUrl,
+        defaultName: `imagii-variant-${p.id}-${Date.now()}.png`,
+        format: 'png'
+      })
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save that thumbnail." })
+    }
+  }
+
+  // ONE folder picker for the whole set — four Save dialogs in a row is not a
+  // button called "Save all".
+  async function saveAll(): Promise<void> {
     if (items.length === 0) return
     const stamp = Date.now()
-    items.forEach((p, i) => {
-      setTimeout(() => {
-        downloadDataUrl(p.dataUrl, `imagii-variant-${p.id}-${stamp}.png`)
-      }, i * 100)
-    })
-    toast.success(`Saving ${items.length} variants…`)
+    try {
+      const saved = await window.api.image.saveMany({
+        title: 'Choose a folder for the thumbnail variants',
+        files: items.map((p) => ({
+          name: `imagii-variant-${p.id}-${stamp}.png`,
+          dataUrl: p.dataUrl
+        }))
+      })
+      if (saved === null) return
+      toast.success(`Saved ${countOf(saved.count, 'thumbnail')}`)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save the thumbnails." })
+    }
   }
 
   // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
@@ -232,15 +249,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                     <img src={p.dataUrl} alt={p.label} className="w-full rounded flex-1 object-contain" />
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="font-medium truncate">{p.label}</span>
-                      <button
-                        className="text-accent hover:underline"
-                        onClick={() =>
-                          downloadDataUrl(
-                            p.dataUrl,
-                            `imagii-variant-${p.id}-${Date.now()}.png`
-                          )
-                        }
-                      >
+                      <button className="text-accent hover:underline" onClick={() => saveOne(p)}>
                         Save
                       </button>
                     </div>
@@ -255,8 +264,8 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                 >
                   {busy ? 'Generating…' : 'Regenerate'}
                 </button>
-                <button className="btn-primary px-4 py-1.5 ml-auto" onClick={downloadAll}>
-                  Save all {items.length}
+                <button className="btn-primary px-4 py-1.5 ml-auto" onClick={saveAll}>
+                  Save all ({items.length - 1} + original)
                 </button>
               </div>
             </>
