@@ -14,6 +14,7 @@ import { captionsOutputDir } from '../sidecars/paths'
 import type { TranscribeRequest, BurnInRequest } from '../../shared/captions'
 import {
   assertNonEmptyString,
+  assertOptionalTimeRange,
   assertPlainObject
 } from '../../shared/validators'
 import { assertSafeAbsolutePath } from '../../shared/pathSafety'
@@ -37,6 +38,10 @@ export function registerCaptionsIpc(): void {
     assertSafeAbsolutePath(req.videoPath, 'req.videoPath')
     assertSafeAbsolutePath(req.srtPath, 'req.srtPath')
     assertSafeAbsolutePath(req.outputPath, 'req.outputPath')
+    // T-81: a range is either absent or a real one. Before this, a bad range
+    // (inverted, NaN, a lone startSec) silently became a burn over the whole
+    // video; now it is refused before any file is read or ffmpeg spawned.
+    assertOptionalTimeRange(req.startSec, req.endSec, 'captions:burnIn req')
     return runBurnIn(req, (p) => e.sender.send('captions:progress', p))
   })
 

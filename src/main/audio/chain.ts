@@ -54,13 +54,33 @@ function compressorFilter(preset: CompressorPreset): string | null {
   }
 }
 
-function aselectForCuts(cuts: ChainSpec['cutRegions']): string | null {
-  if (cuts.length === 0) return null
+/**
+ * The ONE place a cut list becomes an ffmpeg expression: "keep a frame unless
+ * its timestamp falls inside any region". Audio and video both cut on this
+ * string (T-82), so the two streams can never be cut at different instants —
+ * the audio-only version of this list is what let "Re-attach to video" drift
+ * the sound ahead of an uncut picture.
+ */
+function keepExpression(cuts: ChainSpec['cutRegions']): string | null {
   const conditions = cuts
     .filter((c) => c.endSec > c.startSec)
     .map((c) => `between(t\\,${c.startSec.toFixed(3)}\\,${c.endSec.toFixed(3)})`)
-  if (conditions.length === 0) return null
-  return `aselect='not(${conditions.join('+')})',asetpts=N/SR/TB`
+  return conditions.length === 0 ? null : `not(${conditions.join('+')})`
+}
+
+export function aselectForCuts(cuts: ChainSpec['cutRegions']): string | null {
+  const keep = keepExpression(cuts)
+  return keep ? `aselect='${keep}',asetpts=N/SR/TB` : null
+}
+
+/**
+ * The picture-side twin of `aselect`: drop the same spans, then re-time the
+ * survivors back-to-back (frame N at N/FRAME_RATE) so the gap closes exactly
+ * as `asetpts=N/SR/TB` closes it for the sound.
+ */
+export function vselectForCuts(cuts: ChainSpec['cutRegions']): string | null {
+  const keep = keepExpression(cuts)
+  return keep ? `select='${keep}',setpts=N/FRAME_RATE/TB` : null
 }
 
 function loudnormFilter(targetLufs: number, measured?: LoudnormMeasurement): string {

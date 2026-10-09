@@ -18,6 +18,26 @@ export function assertRange(v: unknown, lo: number, hi: number, name: string): a
   assert(typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi, `${name} must be in [${lo}, ${hi}]`)
 }
 
+/**
+ * Throws unless `start` and `end` are BOTH absent (an unranged request) or a
+ * real range: finite numbers with 0 <= start < end. A half-given range, an
+ * empty or inverted one, NaN, Infinity, null, or a numeric string are all
+ * refused — the consumers turn these into ffmpeg `-ss`/`-to` and into a
+ * subtitle shift, and a bad one used to degrade silently into a burn over
+ * the WHOLE file.
+ */
+export function assertOptionalTimeRange(start: unknown, end: unknown, name: string): void {
+  assert(typeof name === 'string' && name.length > 0, 'validator name required')
+  if (start === undefined && end === undefined) return
+  assert(
+    start !== undefined && end !== undefined,
+    `${name}: startSec and endSec must be given together`
+  )
+  assertFiniteNonNeg(start, `${name}.startSec`)
+  assertFiniteNonNeg(end, `${name}.endSec`)
+  assert(end > start, `${name}: endSec must be greater than startSec`)
+}
+
 /** Throws if `v` is not one of `allowed`. */
 export function assertEnum<T extends string>(v: unknown, allowed: readonly T[], name: string): asserts v is T {
   assert(Array.isArray(allowed) && allowed.length > 0, `${name} allowed list required`)

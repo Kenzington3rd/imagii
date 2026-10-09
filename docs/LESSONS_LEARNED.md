@@ -14,6 +14,252 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — the References "+" button was unclickable: flex-1 without min-w-0 in a clamped column
+
+- **Bug.** In the References sidebar (a grid column clamped to 220 px),
+  the create-board button sat at x 287-322 while its own card ended at
+  x 252 — the whole input+button row overflowed the column and the
+  button landed UNDER the neighbouring detail card, which swallowed
+  every click. Found when two long-green E2E tests went red in a fresh
+  container.
+- **Root cause.** A flex item's default `min-width` is `auto`, so
+  `flex-1` on the name input could not shrink it below the intrinsic
+  width of its placeholder text. Intrinsic text width depends on the
+  environment's fonts, which is why the same build was green in one
+  container and red in the next — and why the shipped Windows app, with
+  different fonts again, can hit it at ordinary window widths. A
+  layout that only works under one font stack is the platform-sensitive
+  test class (2026-08-15) wearing CSS.
+- **Fix.** `min-w-0` on the input (`MoodBoardPanel.tsx`), and the same
+  token on every other `flex-1` form control in the renderer — the
+  audio preset name input and the image-studio PropertiesPanel fields
+  sit in the same clamped-column pattern and differed only in not
+  having been pushed over the threshold by this font stack yet.
+- **Test.** The two tests that caught it ("mood boards: create by
+  button and by Enter…" and "Home global Undo walks the studios…")
+  drive the click to its end state and are the regression coverage;
+  both red before the one-token fix, green after, nothing else
+  changed.
+- **Lesson.** **`flex-1` on a form control is a bug until `min-w-0`
+  joins it.** Content-intrinsic minimums are font-dependent, so the
+  overflow they cause is invisible on the machine that wrote the code
+  and real on someone else's.
+
+## 2026-10-09 — T-81 + T-82: two exports that were valid files with the wrong content
+
+Both bugs shipped a file that opened, played, had the right codec, the
+right container and a plausible length. Neither failed anything; each
+was wrong only in WHAT was in the file at an offset from the start — the
+caption words of a clip cut from minute 40, the picture under a sound
+three seconds into an edit. Every existing test measured the container
+or the origin (startSec 0, "the file is shorter by the cut"), which is
+the one place the wrong and the right answer coincide.
+
+### Bug (T-81) — captions burned over a clip range showed the wrong part of the transcript
+
+- **Root cause.** T-74's sibling, same disease: two timebases, one file.
+  The SRT Whisper writes is on the SOURCE clock (cue times are seconds
+  into the whole video, and the Captions panel lists them that way).
+  `runBurnIn` seeks with `-ss`/`-to` BEFORE `-i`, which resets the filter
+  graph's clock — the clip's first frame reaches `subtitles=` at t=0 —
+  and then handed the filter the whole-source SRT untouched. A clip cut
+  from minute 40 was captioned with the stream's first minutes, and once
+  `startSec` exceeded the clip's own length no cue could ever show. At
+  `startSec` 0 the two clocks read the same number, which is where every
+  burn-in test had been written.
+- **Fix.** Convert at the one place that sees both clocks (block comment
+  at the seam in `runBurnIn`). `shiftSrtToRange(srt, startSec, endSec)`
+  — a pure helper in `src/shared/captions.ts` — rewrites the cues onto the
+  clip clock: shifted by -startSec, wholly-outside cues dropped,
+  edge-straddling cues clamped to the range, renumbered, timestamps
+  re-serialised as `hh:mm:ss,mmm` in whole milliseconds (no float
+  drift). A ranged burn writes that to a sibling temp SRT, burns from it,
+  and unlinks it on success, ffmpeg failure and cancel alike; `-ss`/`-to`
+  stay before `-i` (fast, and now correct because the cue clock matches
+  the seeked clock). `-copyts` plus an output-side seek was the
+  alternative and was rejected: it keeps the source clock but makes
+  ffmpeg decode from the top of the file to reach minute 40. The SRT on
+  disk — and what Save .srt exports — stays source-absolute; nothing
+  stored is reinterpreted (unlike T-74, no saved project is affected).
+  `tsToSeconds` moved to `shared/captions.ts` beside the helper that
+  needs it (its tests moved with it). One behaviour the fix surfaced: a
+  window nobody speaks in shifts to a cue-less SRT, and ffmpeg's
+  `subtitles` cannot open one ("Unable to open"), so that case burns with
+  no subtitle stage at all — the clip, uncaptioned, which is what a
+  `startSec`-0 range with no cue in it always produced and what the
+  suite's own control render depends on. Two follow-ons in the same round:
+  `captions:burnIn` now validates the range at the IPC boundary
+  (`assertOptionalTimeRange`: both absent, or finite numbers with
+  0 <= startSec < endSec; a lone startSec, an empty or inverted range, NaN
+  or a numeric string is rejected with a plain message before any file is
+  read — before this an inverted range silently burned the WHOLE video);
+  and a hard kill mid-burn used to strand the shifted copy forever, so its
+  naming and its sweep share one helper pair (`shiftedSrtPath` /
+  `isShiftedSrtName`, strict UUID tail) and `tempCleanup` sweeps stale
+  `*.srt.clip-<uuid>.srt` from `userData/captions` at launch — only those
+  names, because that folder also holds the user's real transcripts.
+- **Test.** `src/shared/captions.test.ts` — "shiftSrtToRange — the SRT on
+  the clip clock (T-81)": inside / before / after / touching an edge /
+  straddling each edge / spanning both / zero-length, renumbering, hour
+  boundaries, variable-length fractions, float drift, CRLF + BOM +
+  multi-line, junk blocks, invalid range. Layer 5 (`npm run test:media`),
+  "caption burn-in (real ffmpeg)" on the flat-gray source cut 2 -> 5 s:
+  "a ranged burn shows the cues of the burned span, on the clip clock
+  (T-81)" (cue A at source 3.2-4.4 s must be painted at output 1.8 s;
+  cue B at source 0.2-1.0 s must paint nothing at output 0.6 s, where the
+  bug put it; exact luma-spread reads, 0 vs > 100), "cues straddling
+  either edge keep their visible half", "a range with no cue inside it
+  still yields the clip, uncaptioned", "a burn that fails inside ffmpeg
+  still removes its shifted SRT", and "a ranged burn with a missing SRT
+  fails on the read, before any ffmpeg" (the old missing-SRT case now
+  runs unranged so it keeps pinning the runner's own ffmpeg error).
+  `src/shared/validators.test.ts` — `assertOptionalTimeRange`;
+  `src/main/ipc/captionsBurnIn.test.ts` — the real handler, driven through a
+  captured `ipcMain.handle`, refuses eight bad ranges and never reaches the
+  runner (handler call deleted -> 8 red; `endSec > startSec` deleted -> the
+  validator case and both handler cases red). `src/main/tempCleanup.test.ts`
+  — "the captions temp-copy family": a stale orphan goes, a fresh orphan
+  (a burn that may still be running), an old real transcript and an old
+  note stay (sweep with no name filter -> red; wrong folder -> red).
+  Red-first against the old `runBurnIn`: 3 of the new cases fail — "caption
+  spread at output 1.8 s ... 0: expected 0 to be greater than 100".
+  Mutation: `shiftSrtToRange` returning its input -> the helper's unit
+  cases and 3 Layer 5 cases red; skipping the unlink -> 3 Layer 5 cases red.
+- **Lesson.** **T-74 and T-81 are one bug in two filters: a number that
+  was right on its own clock and wrong on the consumer's, hidden both
+  times by the origin.** Write down which clock each side is on at the
+  place they meet — and put the fixture at an offset: a test that starts
+  at 0 cannot tell two timebases apart. When a fix lands for one consumer,
+  grep for the others that read the same stored field (here: any filter
+  that reads source-absolute seconds after an input `-ss`; the grep
+  after this fix found none left — `concat.ts` fades are already
+  clip-relative).
+  Second: a stand-in for "nothing to show" has to be checked against what
+  the downstream tool will accept; an empty SRT is a different failure
+  from an SRT whose cues are elsewhere, and the difference only showed up
+  when a pre-existing test's control render stopped working.
+
+### Bug (T-82) — audio cuts + "Re-attach to video" desynced the sound and cut the video's tail
+
+- **Root cause.** The chain closes cut gaps in the AUDIO (`aselect` +
+  `asetpts`, so the audio gets shorter by the total cut length) and
+  `runAudioMux` then put it on the ORIGINAL picture with `-c:v copy
+  -shortest`. From the first cut on, the sound ran ahead of the picture by
+  the cut length, and `-shortest` quietly threw away the video's last N
+  seconds — N the total cut — to make the lengths agree. Nothing errored.
+  It also made the obvious test useless: the output's video and audio
+  durations were EQUAL (both trimmed to the shorter), so "durations match"
+  passed on the bug; only the content at an offset told the truth. The
+  waveform copy ("Drag on the waveform to select a region to cut") never
+  said the picture was untouched, and "Re-attach to video" defaults ON.
+  Rider: the intermediate `<name>.cleaned.wav` (~0.7 GB per hour) was named
+  and written by the renderer (`ExportDialog`) and never deleted by
+  anyone — and the renderer is the one place that cannot delete it on every
+  failure path.
+- **Fix.** Per the usability tiebreaker, "cut" means cut both: when cut
+  regions exist and the mux-back path runs, the picture drops the same
+  spans. `chain.ts` has ONE `keepExpression` builder (`not(between(t,..)+..)`)
+  and two thin wrappers — `aselectForCuts` and the new `vselectForCuts`
+  (`select=..,setpts=N/FRAME_RATE/TB`) — so the two streams can never be
+  cut at different instants. `runAudioMux` takes the cut list; with cuts
+  the picture is re-encoded (libx264 medium, yuv420p, default CRF, like the
+  other whole-file re-encodes); the streams agree by construction, so
+  `-shortest` no longer papers over anything — it stays on BOTH paths for
+  one remaining job: bounding a music bed longer than the picture (`amix`
+  runs to its longest input, so the mix is max(voice, music) minus the cuts
+  and overruns a cut picture whenever the music outlasts the source;
+  `-shortest` trims that tail, it shifts nothing). With NO cuts the
+  `-c:v copy -shortest` path is untouched, byte for byte. Two things the
+  re-encode had to re-establish that a stream copy gave for free:
+  (1) frame rate — `setpts` leaves the graph's output rate unknown, so
+  ffmpeg falls back to a forced 25 fps CFR with duplicated frames (a 24 or
+  60 fps recording came out at 25), fixed with `-fps_mode passthrough`;
+  (2) progress — the mux pass was measured against a duration of 0 (fine for
+  an instant copy), so a minutes-long re-encode sat at 0%; it now measures
+  against the cut audio's length. The orchestration moved to main:
+  `AudioMuxSpec` is now `{ jobId, videoPath, sourcePath, outputPath, chain }`
+  and `runAudioReattach` renders the intermediate WAV, muxes, and deletes
+  the WAV in a `finally` — success, failure or cancel, either pass. The
+  WAV path is derived in main, so no renderer-supplied path is ever
+  deleted, and an assert refuses the one collision (a source or video
+  sitting exactly where the intermediate would go). With mux-back OFF the
+  exported audio file IS the deliverable and never goes through this
+  function. The waveform copy needed no change: with this fix it is true
+  of both outputs. One more combination the same promise covers: with a
+  SECONDARY track the chain used to cut only the primary input, so the
+  music ran uncut beside a cut voice, `amix` (longest input) made the audio
+  as long as the music, and the music's own moments sat late. The cut now
+  applies once, to the MIX (`aselectForCuts`, the same shared keep-expression,
+  ahead of the mix-bus loudnorm so that measures only what is kept); the
+  primary's own stages are built without it, and without a secondary track
+  the cut stays first in the primary's chain as before. The measure pass
+  stays cut-first — loudnorm there is linear, so a gain measured on the
+  kept audio is the right constant to apply before or after the cut.
+- **Test.** `src/main/audio/chain.test.ts` — "cut regions — one expression
+  for sound and picture (T-82)": the audio string is unchanged by the
+  refactor, the picture string is its twin, and the two keep-expressions
+  are asserted IDENTICAL (the drift guard). Layer 5, "audio cuts
+  re-attached to video (real ffmpeg, T-82)", on the ramp fixture (every
+  frame's luma is 12 x its source second; audio has one burst at 10.0-11.5
+  s) cut 4 -> 7 s through the real `extractAudioFromVideo` ->
+  `runAudioReattach`: "a cut removes the same span from the picture and
+  the sound, and they end together" (both stream durations 17 s +- 0.25
+  and within 0.15 of each other, the frame at output 5 s reads source 8 s,
+  the frame at 16 s reads source 19 s, the burst sits at output 7.0-8.5 s
+  with source second 10 under it, frame rate 24 not 25, mux progress moves,
+  and the directory holds only the output); "with no cuts the picture is
+  stream-copied untouched" (video packet md5 equals the source's, and no
+  litter); "a mux that fails still removes the intermediate WAV" (video
+  path does not exist, so the export pass has finished and a complete WAV
+  is on disk when the mux dies); "refuses to clobber a file that sits where
+  the intermediate WAV would go" (source survives byte-identical); "a
+  secondary track is cut with the voice, so music, voice and picture stay
+  in step" (a 3 kHz burst in the SECONDARY track at source 12.0-13.5 s,
+  after the cut, must sit at output 9.0-10.5 s under source second 12, be
+  silent where the uncut file would have put it, and video / audio /
+  container durations all come out source-minus-cut) and "a music bed
+  longer than the picture is trimmed to it, not shifted" (the same
+  assertions with a 26 s bed under the 20 s source, so the mix would be
+  23 s against a 17 s picture without the bound; the burst still lands at
+  its shifted time). `media.spec.ts` audio
+  chain: "a cut applies to the mix, music included" (8 s music + a 2 s cut =
+  6 s out, not 8), "a cut mix still ducks the music under the voice", and
+  "the mix cut and the mix-bus loudnorm share one graph".
+  Red-first against the old behaviour (same orchestration, no cut, no
+  delete): "frame at output 5 s reads luma 61; source 8 s is 96",
+  `[ 'ramp-cleaned.cleaned.wav', ... ]` left beside the output, and the
+  collision case dying inside ffmpeg. Mutations, each red: drop the video
+  select (-> the luma case), skip the unlink (-> three litter cases), swap
+  `passthrough` for `cfr` (-> "output frame rate 25/1"), delete the assert
+  (-> the collision case), zero the progress duration (-> "expected 1 to
+  be greater than or equal to 2"), make `vselectForCuts` drop a region
+  (-> three unit cases). The secondary-track cases, red-first against the
+  pre-mix cut: "audio duration 20: expected 20 to be less than 17.25" and
+  "expected 8 to be less than 6.25"; the pre-mix position restored as a
+  mutation -> exactly those two red; `join(';')` instead of `join(',')` in
+  the post-mix stages -> "FFmpeg exit 234" on the composition case. (Ducking
+  alone could not discriminate: a sidechain ends with its shorter input, so
+  the ducked graph was already 6 s.) The long-bed case, red-first against
+  the cut path without `-shortest`: "audio duration 22.928: expected 22.928
+  to be less than 17.25"; removing the `-shortest` that fixed it turns
+  exactly that case red while the equal-length case stays green.
+- **Lesson.** **`-shortest` turns a length mismatch into a quiet
+  truncation, so a duration check cannot catch the mismatch it hides.**
+  Assert on content at an offset (the frame under a known sound), not on
+  lengths. Second: **when an edit is applied to one stream, the other has
+  to be asked.** The chain was written audio-first and the video that rides
+  along was assumed to be "just carried" — the cut list is the only
+  description of the edit, so both streams must be built from the same
+  builder. Third: **a fast path that becomes a slow path owes everything
+  the fast path did implicitly** — frame rate and progress here — and the
+  frame-rate half was a second silent defect (24 fps out as 25) that the
+  first fix's green tests walked straight past; it surfaced only when the
+  output was probed. Fourth: a temp file named in one process
+  and needed to be deleted on every exit path belongs in the process that
+  can see every exit path.
+
+---
+
 ## 2026-08-26 — T-79 + T-80: two fixes that inherited the wrong half of an earlier one
 
 Both bugs here were introduced by the round-47 entry directly below.

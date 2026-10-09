@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdir, writeFile, utimes, readdir } from 'node:fs/promises'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { pruneStaleTempFiles, __testing__ } from './tempCleanup'
+import { CAPTIONS_DIR_NAME, shiftedSrtPath } from '../shared/captions'
 
-const { STALE_THRESHOLD_MS, TEMP_SUBDIRS } = __testing__
+const { STALE_THRESHOLD_MS, TEMP_SUBDIRS, setUserDataDirForTest } = __testing__
 
 /**
  * T-67: every family the function SCANS, not just the two this file writes
@@ -93,5 +95,58 @@ describe('pruneStaleTempFiles', () => {
     await expect(pruneStaleTempFiles(NaN)).rejects.toThrow(/finite non-negative/)
     await expect(pruneStaleTempFiles(Infinity)).rejects.toThrow(/finite non-negative/)
     await expect(pruneStaleTempFiles(-1)).rejects.toThrow(/finite non-negative/)
+  })
+})
+
+/**
+ * T-81: the burn-in's shifted-SRT copies live in userData/captions, beside the
+ * user's real transcripts. That folder is not under tmpdir(), so the isolation
+ * the families above get from SCANNED_DIRS comes from the userData seam
+ * instead: every case points it at its own mkdtemp (never the real userData,
+ * which these tests cannot reach anyway) and puts it back in afterEach, so the
+ * exact-count cases above keep scanning nothing outside tmpdir().
+ */
+describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
+  let userData = ''
+  let captionsDir = ''
+  const STALE = STALE_THRESHOLD_MS + 60_000
+
+  beforeEach(() => {
+    userData = mkdtempSync(path.join(tmpdir(), 'imagii-cleanup-userdata-'))
+    captionsDir = path.join(userData, CAPTIONS_DIR_NAME)
+    setUserDataDirForTest(userData)
+    clearScannedDirs()
+  })
+
+  afterEach(() => {
+    setUserDataDirForTest(null)
+    rmSync(userData, { recursive: true, force: true })
+    clearScannedDirs()
+  })
+
+  it('sweeps a stale orphaned shifted copy and nothing that is the user\'s', async () => {
+    const real = path.join(captionsDir, 'Stream-1700000000000.srt')
+    const staleOrphan = shiftedSrtPath(real, randomUUID())
+    const freshOrphan = shiftedSrtPath(real, randomUUID())
+    const staleOther = path.join(captionsDir, 'notes.txt')
+    await makeFile(captionsDir, path.basename(real), STALE) // a real transcript, however old
+    await makeFile(captionsDir, path.basename(staleOrphan), STALE)
+    await makeFile(captionsDir, path.basename(freshOrphan), 60_000) // a burn that may still be running
+    await makeFile(captionsDir, path.basename(staleOther), STALE)
+
+    const result = await pruneStaleTempFiles()
+
+    expect(existsSync(staleOrphan)).toBe(false)
+    expect(existsSync(freshOrphan)).toBe(true)
+    expect(existsSync(real)).toBe(true)
+    expect(existsSync(staleOther)).toBe(true)
+    // Only the two temp-copy names are candidates; the transcript and the
+    // note are not counted as scanned, let alone removed.
+    expect(result).toEqual({ scanned: 2, removed: 1 })
+  })
+
+  it('a userData without a captions folder is not an error', async () => {
+    const result = await pruneStaleTempFiles()
+    expect(result).toEqual({ scanned: 0, removed: 0 })
   })
 })

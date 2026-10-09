@@ -81,7 +81,7 @@ export function ReferencePanel(): JSX.Element {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
-          className="flex-1 bg-bg-base rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
+          className="flex-1 min-w-0 bg-bg-base rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
           placeholder="Search for inspiration… (e.g. minimalist mountain photography)"
         />
         <button className="btn-primary px-4 py-2 disabled:opacity-50" onClick={submit} disabled={loading}>

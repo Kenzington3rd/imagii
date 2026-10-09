@@ -5,7 +5,8 @@ import {
   assertRange,
   assertEnum,
   assertPlainObject,
-  assertArray
+  assertArray,
+  assertOptionalTimeRange
 } from './validators'
 
 describe('assertNonEmptyString', () => {
@@ -77,5 +78,37 @@ describe('assertArray', () => {
   it('rejects non-arrays and over-cap arrays', () => {
     expect(() => assertArray({}, 'a')).toThrow(/must be an array/)
     expect(() => assertArray([1, 2, 3, 4, 5, 6], 'a', 5)).toThrow(/exceeds max length/)
+  })
+})
+
+describe('assertOptionalTimeRange (captions:burnIn range, T-81)', () => {
+  it('accepts an unranged request: both absent', () => {
+    expect(() => assertOptionalTimeRange(undefined, undefined, 'req')).not.toThrow()
+  })
+  it('accepts a real range, including one starting at 0', () => {
+    expect(() => assertOptionalTimeRange(0, 3, 'req')).not.toThrow()
+    expect(() => assertOptionalTimeRange(2400.5, 2460.25, 'req')).not.toThrow()
+  })
+  it('refuses a half-given range, naming why', () => {
+    expect(() => assertOptionalTimeRange(5, undefined, 'req')).toThrow(/given together/)
+    expect(() => assertOptionalTimeRange(undefined, 5, 'req')).toThrow(/given together/)
+  })
+  it('refuses an empty or inverted range', () => {
+    expect(() => assertOptionalTimeRange(5, 5, 'req')).toThrow(/greater than startSec/)
+    expect(() => assertOptionalTimeRange(9, 2, 'req')).toThrow(/greater than startSec/)
+  })
+  it('refuses negative, non-finite and non-number values', () => {
+    expect(() => assertOptionalTimeRange(-1, 5, 'req')).toThrow(/req\.startSec/)
+    expect(() => assertOptionalTimeRange(NaN, 5, 'req')).toThrow(/req\.startSec/)
+    expect(() => assertOptionalTimeRange(0, Infinity, 'req')).toThrow(/req\.endSec/)
+    expect(() => assertOptionalTimeRange(0, NaN, 'req')).toThrow(/req\.endSec/)
+    expect(() => assertOptionalTimeRange('2', 5, 'req')).toThrow(/req\.startSec/)
+    expect(() => assertOptionalTimeRange(2, '5', 'req')).toThrow(/req\.endSec/)
+    // null is not "absent": IPC sends undefined for a missing field.
+    expect(() => assertOptionalTimeRange(null, null, 'req')).toThrow(/given together|startSec/)
+    expect(() => assertOptionalTimeRange(null, 5, 'req')).toThrow(/req\.startSec/)
+  })
+  it('requires a validator name', () => {
+    expect(() => assertOptionalTimeRange(0, 1, '')).toThrow(/name required/)
   })
 })

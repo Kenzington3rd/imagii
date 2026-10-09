@@ -50,19 +50,12 @@ export function ExportDialog(): JSX.Element | null {
     setRunning(true)
     try {
       if (source.fromVideo && muxBack) {
-        const tempAudioPath = outputPath.replace(/\.mp4$/i, '.cleaned.wav')
-        await window.api.audio.export({
-          jobId,
-          sourcePath: source.filePath,
-          outputPath: tempAudioPath,
-          chain,
-          format: 'wav'
-        })
         await window.api.audio.mux({
           jobId,
           videoPath: source.fromVideo.videoPath,
-          audioPath: tempAudioPath,
-          outputPath
+          sourcePath: source.filePath,
+          outputPath,
+          chain
         })
         toast.success('Audio cleaned and muxed back to video')
       } else {

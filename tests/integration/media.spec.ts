@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,7 +8,7 @@ import path from 'node:path'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { runExportJob } from '../../src/main/ffmpeg/export'
 import { runGifExport } from '../../src/main/ffmpeg/gif'
-import { runAudioExport, runAudioMux } from '../../src/main/audio/process'
+import { runAudioExport, runAudioMux, runAudioReattach } from '../../src/main/audio/process'
 import { probeVideo } from '../../src/main/ffmpeg/probe'
 import { probeAudio } from '../../src/main/audio/probe'
 import {
@@ -95,6 +95,7 @@ function ffprobeJson(file: string): Promise<{
     avg_frame_rate?: string
     sample_aspect_ratio?: string
     display_aspect_ratio?: string
+    duration?: string
   }>
   format: { duration?: string; format_name?: string }
 }> {
@@ -1436,6 +1437,93 @@ describe('audio chain (real ffmpeg)', () => {
     expect(lufs).toBeLessThan(-14)
   })
 
+  it('a cut applies to the mix, music included (T-82)', async () => {
+    // voiceWav is loud 0-2 s and 4-6 s, silent 2-4 s and 6-8 s; musicWav is a
+    // constant 3 kHz tone for all 8 s. Cutting 2 -> 4 s used to cut only the
+    // voice: the 8 s of music then set the length of the mix (amix keeps the
+    // longest input), so the "6 s" export came out 8 s long.
+    const spec = makeAudioSpec(
+      {
+        cutRegions: [{ startSec: 2, endSec: 4 }],
+        secondaryTrack: {
+          filePath: musicWav,
+          fileName: 'music.wav',
+          role: 'music',
+          gainDb: 0,
+          duckUnderPrimary: false
+        }
+      },
+      'cut-mix.wav',
+      'aud-cut-mix'
+    )
+    const res = await runAudioExport(spec, () => {})
+    const probe = await probeAudio(res.outputPath)
+    expect(probe.duration).toBeGreaterThan(5.75)
+    expect(probe.duration).toBeLessThan(6.25)
+    // The music is in what is left, right up to the new end.
+    const level = await bandMeanVolume(res.outputPath, 4.4, 1.2, 3000)
+    expect(level).toBeGreaterThan(-40)
+  })
+
+  it('a cut mix still ducks the music under the voice (T-82)', async () => {
+    // Ducking keys off the primary, which now reaches the sidechain UNCUT and
+    // is cut together with the music afterwards: the voice's loud 0-4 s of
+    // output duck the music, its silent 4-6 s (source 6-8 s) do not. (A
+    // sidechain ends with its shorter input, so this graph came out 6 s long
+    // even before the fix — the length case above is the discriminating one.)
+    const spec = makeAudioSpec(
+      {
+        cutRegions: [{ startSec: 2, endSec: 4 }],
+        secondaryTrack: {
+          filePath: musicWav,
+          fileName: 'music.wav',
+          role: 'music',
+          gainDb: 0,
+          duckUnderPrimary: true
+        }
+      },
+      'cut-duck.wav',
+      'aud-cut-duck'
+    )
+    const res = await runAudioExport(spec, () => {})
+    const probe = await probeAudio(res.outputPath)
+    expect(probe.duration).toBeGreaterThan(5.75)
+    expect(probe.duration).toBeLessThan(6.25)
+    const duckedLevel = await bandMeanVolume(res.outputPath, 0.4, 1.2, 3000)
+    const openLevel = await bandMeanVolume(res.outputPath, 4.4, 1.2, 3000)
+    expect(openLevel - duckedLevel).toBeGreaterThan(3)
+  })
+
+  it('the mix cut and the mix-bus loudnorm share one graph (T-82)', async () => {
+    // matchLoudness + loudnorm puts a loudnorm on the mix bus; the cut sits
+    // ahead of it in the same `[premix]...[mix]` segment, so a composition
+    // slip shows up as ffmpeg rejecting the graph.
+    const spec = makeAudioSpec(
+      {
+        loudnorm: true,
+        loudnormTargetLufs: -16,
+        cutRegions: [{ startSec: 2, endSec: 4 }],
+        secondaryTrack: {
+          filePath: musicWav,
+          fileName: 'music.wav',
+          role: 'music',
+          gainDb: 0,
+          duckUnderPrimary: true,
+          matchLoudness: true
+        }
+      },
+      'cut-match.wav',
+      'aud-cut-match'
+    )
+    const res = await runAudioExport(spec, () => {})
+    const probe = await probeAudio(res.outputPath)
+    expect(probe.duration).toBeGreaterThan(5.75)
+    expect(probe.duration).toBeLessThan(6.25)
+    const lufs = await measureLufs(res.outputPath)
+    expect(lufs).toBeGreaterThan(-18)
+    expect(lufs).toBeLessThan(-14)
+  })
+
   it('parametric denoise export succeeds across the whole slider range', async () => {
     // Pre-round-18 this path emitted an `ns` option afftdn doesn't have
     // (always) and allowed noise floors above -20 dB (a third of the old
@@ -1471,6 +1559,265 @@ describe('audio chain (real ffmpeg)', () => {
     expect(a?.codec_name).toBe('aac')
     await assertFaststart(out)
   })
+})
+
+describe('audio cuts re-attached to video (real ffmpeg, T-82)', () => {
+  // "Re-attach to video" used to render the cleaned audio (cut regions
+  // CLOSED — `aselect` + `asetpts`, so the audio gets shorter) and mux it
+  // onto the video with `-c:v copy -shortest`: a picture that was never cut.
+  // From the first cut on, sound ran ahead of picture by the total cut length
+  // and `-shortest` quietly threw away the video's last N seconds. Nothing
+  // errored; every file looked fine in isolation.
+  //
+  // The fixture is the ramp: every video frame is a flat gray whose luma is
+  // 12 * its own source second, and the audio is a quiet bed with one loud
+  // burst at 10.0-11.5 s. Cutting 4 s -> 7 s (3 s) therefore has exactly one
+  // right answer: the frame at output t shows source t (t < 4) or t + 3
+  // (t >= 4), the burst lands at output 7.0-8.5, and the file is 17 s of
+  // picture AND 17 s of sound. The audio goes through the real flow:
+  // extractAudioFromVideo (the 48 kHz stereo track the Audio Studio loads),
+  // then runAudioReattach (what the Export button's mux-back branch calls).
+  const CUT = { startSec: 4, endSec: 7 }
+  const CUT_LEN = CUT.endSec - CUT.startSec
+  const SOURCE_LEN = 20
+  const RAMP_FPS = 24
+  const LUMA_PER_SEC = 12
+  let outDir = ''
+  const progress: Array<{ pass: string; percent: number }> = []
+
+  async function reattach(
+    name: string,
+    cutRegions: Array<{ startSec: number; endSec: number }>,
+    videoPath = rampSrc,
+    chainExtra: Partial<ChainSpec> = {}
+  ): Promise<{ outputPath: string; dir: string }> {
+    const dir = path.join(outDir, name)
+    await mkdir(dir, { recursive: true })
+    const extracted = await extractAudioFromVideo(rampSrc)
+    try {
+      const outputPath = path.join(dir, 'ramp-cleaned.mp4')
+      progress.length = 0
+      await runAudioReattach(
+        {
+          jobId: `reattach-${name}`,
+          videoPath,
+          sourcePath: extracted.wavPath,
+          outputPath,
+          chain: { ...DEFAULT_CHAIN_SPEC, ...chainExtra, cutRegions }
+        },
+        (p) => progress.push({ pass: p.pass, percent: p.percent })
+      )
+      return { outputPath, dir }
+    } finally {
+      await extracted.cleanup()
+    }
+  }
+
+  /** The frame at output second `outT` must be the source's second `srcT` (the ramp's luma is 12 x source second). */
+  async function expectLumaAt(file: string, outT: number, srcT: number): Promise<void> {
+    const luma = await meanLuma(file, outT)
+    expect(
+      Math.abs(luma - srcT * LUMA_PER_SEC),
+      `frame at output ${outT} s reads luma ${luma}; source ${srcT} s is ${srcT * LUMA_PER_SEC}`
+    ).toBeLessThan(8)
+  }
+
+  /** md5 of the video packets alone: equal iff the stream was copied, not re-encoded. */
+  async function videoPacketMd5(file: string): Promise<string> {
+    const { stdout } = await ff(['-hide_banner', '-i', file, '-map', '0:v:0', '-c', 'copy', '-f', 'md5', '-'])
+    const m = stdout.match(/MD5=([0-9a-f]{32})/)
+    if (!m) throw new Error(`no md5 for ${path.basename(file)}`)
+    return m[1]
+  }
+
+  beforeAll(async () => {
+    outDir = path.join(workDir, 'reattach')
+    await mkdir(outDir, { recursive: true })
+  })
+
+  it('a cut removes the same span from the picture and the sound, and they end together', async () => {
+    const { outputPath, dir } = await reattach('cut', [CUT])
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(v?.codec_name).toBe('h264')
+    expect(a?.codec_name).toBe('aac')
+
+    const expected = SOURCE_LEN - CUT_LEN
+    const vDur = Number(v?.duration)
+    const aDur = Number(a?.duration)
+    // Source minus cut — for BOTH streams (the picture used to stay at 20 s,
+    // the sound at 17) — and equal to each other.
+    expect(vDur, `video duration ${vDur}`).toBeGreaterThan(expected - 0.25)
+    expect(vDur, `video duration ${vDur}`).toBeLessThan(expected + 0.25)
+    expect(aDur, `audio duration ${aDur}`).toBeGreaterThan(expected - 0.25)
+    expect(aDur, `audio duration ${aDur}`).toBeLessThan(expected + 0.25)
+    expect(Math.abs(vDur - aDur), `video ${vDur} s vs audio ${aDur} s`).toBeLessThan(0.15)
+    await assertFaststart(outputPath)
+
+    // The re-encode keeps the source's cadence: setpts leaves the graph's
+    // frame rate unknown, and ffmpeg's fallback is a forced 25 fps CFR (so a
+    // 24 fps recording came out at 25, with duplicated frames).
+    const [num, den] = (v?.avg_frame_rate ?? '0/1').split('/').map(Number)
+    const fps = num / den
+    expect(Math.abs(fps - RAMP_FPS), `output frame rate ${v?.avg_frame_rate}`).toBeLessThan(0.5)
+
+    // The picture is cut where the audio is: before the cut it is the source,
+    // after it the frame at output t is source second t + 3 — including the
+    // very end, the part the old -shortest dropped.
+    const expectLuma = (outT: number, srcT: number): Promise<void> =>
+      expectLumaAt(outputPath, outT, srcT)
+    await expectLuma(3.5, 3.5)
+    await expectLuma(5.0, 5.0 + CUT_LEN)
+    await expectLuma(16.0, 16.0 + CUT_LEN)
+
+    // The sound: the burst (source 10.0-11.5 s) is at output 7.0-8.5 s, and the
+    // picture under its first instant is source second 10. Together with the
+    // luma reads above, that is "in step".
+    const quietBefore = await bandMeanVolume(outputPath, 6.0, 0.8, 440)
+    const burst = await bandMeanVolume(outputPath, 7.2, 1.1, 440)
+    const quietAfter = await bandMeanVolume(outputPath, 8.7, 1.0, 440)
+    expect(burst - quietBefore, `burst ${burst} dB vs before ${quietBefore} dB`).toBeGreaterThan(15)
+    expect(burst - quietAfter, `burst ${burst} dB vs after ${quietAfter} dB`).toBeGreaterThan(15)
+    await expectLuma(7.2, 10.2)
+
+    // The picture is re-encoded, which takes real time, so the mux pass has
+    // to report progress against a real duration (it used to be a stream copy
+    // measured against 0, and would sit at 0% for the whole encode). Every
+    // job ends with one synthetic 100% event, so "moved" means a SECOND
+    // non-zero mux event — ffmpeg's own.
+    const muxMoved = progress.filter((p) => p.pass === 'mux' && p.percent > 0)
+    expect(muxMoved.length, `mux progress: ${JSON.stringify(muxMoved)}`).toBeGreaterThanOrEqual(2)
+
+    // The intermediate .cleaned.wav is gone; the output is all that is left.
+    expect(await readdir(dir)).toEqual(['ramp-cleaned.mp4'])
+  }, 120_000)
+
+  it('with no cuts the picture is stream-copied untouched, and still no litter', async () => {
+    const { outputPath, dir } = await reattach('nocut', [])
+    // Byte-cheap path: the video packets are the source's own.
+    expect(await videoPacketMd5(outputPath)).toBe(await videoPacketMd5(rampSrc))
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    expect(Math.abs(Number(v?.duration) - SOURCE_LEN)).toBeLessThan(0.25)
+    expect(Math.abs(Number(a?.duration) - SOURCE_LEN)).toBeLessThan(0.25)
+    expect(await readdir(dir)).toEqual(['ramp-cleaned.mp4'])
+  }, 120_000)
+
+  /**
+   * Re-attach a cut of the ramp with a secondary track that is silent except a
+   * 3 kHz burst at source 12.0-13.5 s (AFTER the cut, so correctly cut it sits
+   * at output 9.0-10.5 s, under the picture of source seconds 12-13.5), and
+   * check that picture, voice, music and every duration agree.
+   */
+  async function expectSecondaryTrackCut(name: string, musicSeconds: number): Promise<void> {
+    const music = path.join(outDir, `music-burst-${musicSeconds}s.wav`)
+    await ff([
+      '-y',
+      '-f', 'lavfi',
+      '-i', `sine=frequency=3000:sample_rate=48000:duration=${musicSeconds},volume='if(between(t,12,13.5),1,0.001)':eval=frame`,
+      '-ac', '2',
+      music
+    ])
+    const { outputPath, dir } = await reattach(name, [CUT], rampSrc, {
+      secondaryTrack: {
+        filePath: music,
+        fileName: path.basename(music),
+        role: 'music',
+        gainDb: 0,
+        duckUnderPrimary: false
+      }
+    })
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    const a = info.streams.find((s) => s.codec_type === 'audio')
+    const expected = SOURCE_LEN - CUT_LEN
+    const vDur = Number(v?.duration)
+    const aDur = Number(a?.duration)
+    const cDur = Number(info.format.duration)
+    for (const [label, dur] of [['video', vDur], ['audio', aDur], ['container', cDur]] as const) {
+      expect(dur, `${label} duration ${dur}`).toBeGreaterThan(expected - 0.25)
+      expect(dur, `${label} duration ${dur}`).toBeLessThan(expected + 0.25)
+    }
+    expect(Math.abs(vDur - aDur), `video ${vDur} s vs audio ${aDur} s`).toBeLessThan(0.15)
+
+    // The music's burst moved with everything else: loud at output 9.2-10.3,
+    // quiet where the uncut file would have put it (12.2-13.3) and before it.
+    const musicBurst = await bandMeanVolume(outputPath, 9.2, 1.1, 3000)
+    const musicUncutSpot = await bandMeanVolume(outputPath, 12.2, 1.1, 3000)
+    const musicBefore = await bandMeanVolume(outputPath, 7.6, 1.0, 3000)
+    expect(musicBurst - musicUncutSpot, `music burst ${musicBurst} dB vs where uncut ${musicUncutSpot} dB`).toBeGreaterThan(15)
+    expect(musicBurst - musicBefore, `music burst ${musicBurst} dB vs before ${musicBefore} dB`).toBeGreaterThan(15)
+    // The voice is still cut too (its burst: source 10.0-11.5 -> output 7.0-8.5),
+    // and the picture under the music's first instant is source second 12.
+    const voiceBurst = await bandMeanVolume(outputPath, 7.2, 1.1, 440)
+    const voiceBefore = await bandMeanVolume(outputPath, 6.0, 0.8, 440)
+    expect(voiceBurst - voiceBefore, `voice burst ${voiceBurst} dB vs ${voiceBefore} dB`).toBeGreaterThan(15)
+    await expectLumaAt(outputPath, 9.2, 12.2)
+    expect(await readdir(dir)).toEqual(['ramp-cleaned.mp4'])
+  }
+
+  it('a secondary track is cut with the voice, so music, voice and picture stay in step', async () => {
+    // The cut belongs to the FINAL audio. With a secondary track the chain
+    // used to cut only the primary input: the music ran uncut beside a cut
+    // voice, the mix came out as long as the music (20 s against a 17 s
+    // picture), and the music's own moments sat 3 s late. Here the music is
+    // exactly as long as the source.
+    await expectSecondaryTrackCut('cut-secondary', SOURCE_LEN)
+  }, 120_000)
+
+  it('a music bed longer than the picture is trimmed to it, not shifted', async () => {
+    // amix runs to its LONGEST input, so the mix is max(voice, music) minus
+    // the cuts: a 26 s bed under a 20 s source cut by 3 s mixes to 23 s
+    // against a 17 s picture. The mux's -shortest bounds the tail; it must
+    // trim the END of the audio, not move anything, so the burst that lands
+    // at its shifted time in the equal-length case above lands there again.
+    await expectSecondaryTrackCut('cut-secondary-long', SOURCE_LEN + 6)
+  }, 120_000)
+
+  it('a mux that fails still removes the intermediate WAV', async () => {
+    // The video does not exist, so the export pass finishes (the WAV is a
+    // real, complete file by then) and the mux pass dies on its input.
+    const dir = path.join(outDir, 'failing')
+    await mkdir(dir, { recursive: true })
+    await expect(
+      reattach('failing', [CUT], path.join(dir, 'no-such-video.mp4'))
+    ).rejects.toThrow(/^FFmpeg exit \d+: /)
+    expect(await readdir(dir)).toEqual([])
+  }, 120_000)
+
+  it('refuses to clobber a file that sits where the intermediate WAV would go', async () => {
+    // An output named X.mp4 stages its audio at X.cleaned.wav and deletes it
+    // afterwards. If that path is the very file the job reads from, writing
+    // and then deleting it would destroy the user's source: the job has to
+    // stop before touching anything.
+    const dir = path.join(outDir, 'collide')
+    await mkdir(dir, { recursive: true })
+    const extracted = await extractAudioFromVideo(rampSrc)
+    const source = path.join(dir, 'collide.cleaned.wav')
+    try {
+      await copyFile(extracted.wavPath, source)
+      const before = await readFile(source)
+      await expect(
+        runAudioReattach(
+          {
+            jobId: 'reattach-collide',
+            videoPath: rampSrc,
+            sourcePath: source,
+            outputPath: path.join(dir, 'collide.mp4'),
+            chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [CUT] }
+          },
+          () => {}
+        )
+      ).rejects.toThrow(/^Assertion failed: .*intermediate/)
+      expect(existsSync(source)).toBe(true)
+      expect((await readFile(source)).equals(before)).toBe(true)
+      expect(existsSync(path.join(dir, 'collide.mp4'))).toBe(false)
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
 })
 
 describe('subtitles path escaping (real ffmpeg)', () => {
@@ -2317,9 +2664,13 @@ describe('caption burn-in (real ffmpeg)', () => {
   //
   // The control is another runBurnIn through the identical pipeline whose
   // only cue sits a minute past the end of the render. Comparing against
-  // that instead of a plain no-filter encode isolates the rendered text:
-  // both files went through libass and the same encoder settings, so any
-  // difference is the caption itself rather than filter-chain colour drift.
+  // that instead of a hand-built no-filter encode isolates the rendered
+  // text: both files went through runBurnIn's own command and encoder
+  // settings, so any difference is the caption itself rather than drift
+  // from a different command. (Since T-81 a window with no cue in it burns
+  // with no subtitle stage at all — ffmpeg cannot open a cue-less SRT — so
+  // the control no longer passes through libass; the tests below pass
+  // against it with their thresholds unchanged.)
   const CAPTION_BAND = 'crop=1920:200:0:860'
   const TOP_BAND = 'crop=1920:200:0:0'
   let captionedSrt = ''
@@ -2481,12 +2832,192 @@ describe('caption burn-in (real ffmpeg)', () => {
     }
   }, 240_000)
 
+  // -------------------------------------------------------------------------
+  // T-81 — a ranged burn has to caption the span it burns
+  // -------------------------------------------------------------------------
+  //
+  // Every test above burns from startSec 0, where a source-absolute cue time
+  // and a clip-relative one are the same number — the exact blind spot that
+  // hid T-74's overlay window. runBurnIn seeks with `-ss` BEFORE `-i`, so the
+  // clip's first frame reaches `subtitles=` at t=0; Whisper's cues are
+  // source-absolute. Handed the whole-source SRT, a clip cut at 2 -> 5 showed
+  // the words from the first seconds of the source and none of its own.
+  //
+  // Fixture: the flat-gray source, because an untouched region re-encodes
+  // bit-identically there (min == max), which makes "is a caption painted at
+  // this instant" an exact read of the luma spread in the caption band
+  // instead of a PSNR guess. Cue times below are SOURCE time; the output
+  // times they should land at are in the comments.
+  const CLIP_START = 2
+  const CLIP_END = 5
+  const PAINTED_SPREAD = 100
+
+  async function captionSpread(file: string, atSec: number): Promise<number> {
+    const { min, max } = await regionLuma(file, atSec, CAPTION_BAND)
+    return max - min
+  }
+
+  /** Files that sit beside `srt` and start with its name: a leaked temp SRT. */
+  async function srtSiblings(srt: string): Promise<string[]> {
+    const own = path.basename(srt)
+    return (await readdir(path.dirname(srt))).filter((f) => f.startsWith(own) && f !== own)
+  }
+
+  it('a ranged burn shows the cues of the burned span, on the clip clock (T-81)', async () => {
+    const srt = path.join(workDir, 'range-two-cues.srt')
+    await writeFile(
+      srt,
+      // B: before the clip. Unshifted, its window covers OUTPUT 0.2 -> 1.0.
+      '1\n00:00:00,200 --> 00:00:01,000\nCUE BEFORE THE CLIP\n\n' +
+        // A: inside the clip. Correct output window 1.2 -> 2.4; unshifted it
+        // opens at 3.2, after the 3 s clip is over, so it never shows at all.
+        '2\n00:00:03,200 --> 00:00:04,400\nCUE INSIDE THE CLIP\n',
+      'utf8'
+    )
+    const outputPath = path.join(workDir, 'burnin-range.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-range',
+        videoPath: flatGraySrc,
+        srtPath: srt,
+        outputPath,
+        fontSizePct: 4,
+        startSec: CLIP_START,
+        endSec: CLIP_END
+      },
+      () => {}
+    )
+
+    const info = await ffprobeJson(outputPath)
+    expect(Number(info.format.duration)).toBeGreaterThan(2.7)
+    expect(Number(info.format.duration)).toBeLessThan(3.3)
+
+    // Cue A's own window: painted.
+    const inside = await captionSpread(outputPath, 1.8)
+    expect(inside, `caption spread at output 1.8 s (cue A, source 3.8 s): ${inside}`).toBeGreaterThan(
+      PAINTED_SPREAD
+    )
+    // Where only the unshifted cue B is active: nothing. This is the frame
+    // the bug paints a caption onto.
+    const early = await captionSpread(outputPath, 0.6)
+    expect(early, `caption spread at output 0.6 s (no cue in range): ${early}`).toBe(0)
+    // After A has ended: nothing.
+    const late = await captionSpread(outputPath, 2.7)
+    expect(late, `caption spread at output 2.7 s (past cue A): ${late}`).toBe(0)
+
+    // The shifted copy was a means, not an output.
+    expect(await srtSiblings(srt)).toEqual([])
+  }, 120_000)
+
+  it('cues straddling either edge of the range keep their visible half (T-81)', async () => {
+    const srt = path.join(workDir, 'range-edge-cues.srt')
+    await writeFile(
+      srt,
+      // C opens before the clip: visible OUTPUT 0 -> 0.6 (an SRT cannot say
+      // "starts at -0.5 s", so the shifter has to clamp to 0, and libass has
+      // to accept the 00:00:00,000 it writes).
+      '1\n00:00:01,500 --> 00:00:02,600\nCUE OPENING BEFORE\n\n' +
+        // D runs past the clip's end: visible OUTPUT 2.6 -> 3.0.
+        '2\n00:00:04,600 --> 00:00:05,800\nCUE RUNNING PAST\n',
+      'utf8'
+    )
+    const outputPath = path.join(workDir, 'burnin-range-edges.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-range-edges',
+        videoPath: flatGraySrc,
+        srtPath: srt,
+        outputPath,
+        fontSizePct: 4,
+        startSec: CLIP_START,
+        endSec: CLIP_END
+      },
+      () => {}
+    )
+    expect(await captionSpread(outputPath, 0.3), 'C at the clip open').toBeGreaterThan(PAINTED_SPREAD)
+    // Unshifted, C's window (output 1.5 -> 2.6) is what covers this frame.
+    expect(await captionSpread(outputPath, 2.0), 'between C and D').toBe(0)
+    expect(await captionSpread(outputPath, 2.8), 'D at the clip close').toBeGreaterThan(PAINTED_SPREAD)
+    expect(await srtSiblings(srt)).toEqual([])
+  }, 120_000)
+
+  it('a range with no cue inside it still yields the clip, uncaptioned (T-81)', async () => {
+    // ffmpeg cannot open a cue-less SRT ("Unable to open"), and after the
+    // shift a window nobody speaks in IS cue-less. It must burn as the clip
+    // with nothing painted rather than fail, or the control render the tests
+    // above lean on (a cue a minute past the end) would be unmakeable.
+    const srt = path.join(workDir, 'range-no-cues.srt')
+    await writeFile(srt, '1\n00:00:00,200 --> 00:00:01,000\nONLY BEFORE THE CLIP\n', 'utf8')
+    const outputPath = path.join(workDir, 'burnin-range-none.mp4')
+    await runBurnIn(
+      {
+        jobId: 'burnin-range-none',
+        videoPath: flatGraySrc,
+        srtPath: srt,
+        outputPath,
+        fontSizePct: 4,
+        startSec: CLIP_START,
+        endSec: CLIP_END
+      },
+      () => {}
+    )
+    const info = await ffprobeJson(outputPath)
+    expect(Number(info.format.duration)).toBeGreaterThan(2.7)
+    expect(Number(info.format.duration)).toBeLessThan(3.3)
+    // Unshifted, cue B's window (output 0.2 -> 1.0) is what would paint here.
+    for (const t of [0.6, 1.5, 2.5]) {
+      expect(await captionSpread(outputPath, t), `no caption at output ${t} s`).toBe(0)
+    }
+    expect(await srtSiblings(srt)).toEqual([])
+  })
+
+  it('a burn that fails inside ffmpeg still removes its shifted SRT (T-81)', async () => {
+    const srt = path.join(workDir, 'range-failing-burn.srt')
+    await writeFile(srt, '1\n00:00:03,200 --> 00:00:04,400\nCUE INSIDE THE CLIP\n', 'utf8')
+    const outputPath = path.join(workDir, 'burnin-range-fail.mp4')
+    await expect(
+      runBurnIn(
+        {
+          jobId: 'burnin-range-fail',
+          videoPath: path.join(workDir, 'no-such-video.mp4'),
+          srtPath: srt,
+          outputPath,
+          fontSizePct: 4,
+          startSec: CLIP_START,
+          endSec: CLIP_END
+        },
+        () => {}
+      )
+    ).rejects.toThrow(/^burn-in exit \d+: /)
+    expect(await srtSiblings(srt)).toEqual([])
+  })
+
   it('rejects a missing SRT with the burn-in runner error', async () => {
+    // Unranged on purpose: this is the path where ffmpeg itself opens the
+    // SRT, so it is the one that pins the runner's own error shape. A ranged
+    // burn has to READ the SRT first (T-81) — the test after this one.
     const outputPath = path.join(workDir, 'burnin-missing.mp4')
     await expect(
       runBurnIn(
         {
           jobId: 'burnin-missing',
+          videoPath: landscapeSrc,
+          srtPath: path.join(workDir, 'no-such-file.srt'),
+          outputPath,
+          fontSizePct: 4
+        },
+        () => {}
+      )
+    ).rejects.toThrow(/^burn-in exit \d+: .*Unable to open .*no-such-file\.srt/s)
+    expect(existsSync(outputPath)).toBe(false)
+  })
+
+  it('a ranged burn with a missing SRT fails on the read, before any ffmpeg (T-81)', async () => {
+    const outputPath = path.join(workDir, 'burnin-missing-ranged.mp4')
+    await expect(
+      runBurnIn(
+        {
+          jobId: 'burnin-missing-ranged',
           videoPath: landscapeSrc,
           srtPath: path.join(workDir, 'no-such-file.srt'),
           outputPath,
@@ -2496,7 +3027,7 @@ describe('caption burn-in (real ffmpeg)', () => {
         },
         () => {}
       )
-    ).rejects.toThrow(/^burn-in exit \d+: .*Unable to open .*no-such-file\.srt/s)
+    ).rejects.toThrow(/^ENOENT: no such file or directory, open .*no-such-file\.srt/)
     expect(existsSync(outputPath)).toBe(false)
   })
 })

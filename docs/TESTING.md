@@ -52,7 +52,18 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1133 tests across 63 files (round 48 added the T-80
+**Count.** 1178 tests across 65 files (round 49 added
+`src/shared/captions.test.ts` — the T-81 `shiftSrtToRange` cases plus
+`tsToSeconds`, which moved there from `whisperManager.test.ts` along with
+its helper, a first unit pin for `escapeSubtitlesPath`, and the
+shifted-copy naming/sweep agreement —, the T-82 cut-expression block in
+`chain.test.ts`, `assertOptionalTimeRange` in `validators.test.ts`, the
+handler-level `src/main/ipc/captionsBurnIn.test.ts` (the first IPC handler
+test that drives a captured `ipcMain.handle` with the runner mocked, to
+prove "rejected before any work"), and the captions-family case in
+`tempCleanup.test.ts`, whose userData folders are isolated through a
+`setUserDataDirForTest` seam the way its tmpdir families are isolated by
+`TEMP_SUBDIRS`; round 48 added the T-80
 `endsGestureOnPointerUp` block to `videoStore.test.ts` — a pure
 predicate, which is why the DOM question "does a caret click end the
 undo gesture" is answerable here at all — and rewrote the T-29
@@ -168,7 +179,8 @@ stays out of the fast `verify` pass.
 
 **What it covers.** The layer every other layer stops short of: it
 drives the actual production job runners (`runExportJob`,
-`runAudioExport`, `runGifExport`, `runAudioMux`) against tiny generated
+`runAudioExport`, `runGifExport`, `runAudioMux`, `runAudioReattach`,
+`runBurnIn`) against tiny generated
 sources and asserts on the bytes that come out — dimensions, codecs,
 faststart atom order, two-pass loudnorm accuracy (±1 LU), sidechain
 ducking depth (measured through a bandpass isolate), cut-region
@@ -211,6 +223,17 @@ tests actually execute; nothing else in the project runs them.
 (`testsrc2`, `sine`, `anoisesrc`), drive the real exported function, and
 assert with `ffprobeJson`/`measureLufs`/`bandMeanVolume` helpers already
 in the spec.
+
+**Assert content at an offset, not just lengths.** Round 49's two bugs
+(T-81 captions, T-82 re-attach after a cut) each produced a valid file of
+a plausible length that was wrong only away from the origin, and T-82's
+`-shortest` made the video and audio durations EQUAL on the bug, so a
+duration check passed it. The fixtures that catch this are
+self-describing ones: the flat-gray source (an untouched region is exactly
+flat, so "is a caption painted at this instant" is a luma-spread read of
+0 vs > 100) and the ramp (every frame's luma is 12 x its own source
+second, plus one loud audio burst, so "which part of the source is under
+this sound" is arithmetic). Cut at an offset, never from 0.
 
 ---
 
