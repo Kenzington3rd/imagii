@@ -1510,7 +1510,7 @@ IMG-PREC.
   and names the missing file; E2E drives a cancel and a failure per
   class and asserts the visible copy (discriminating negatives per
   round-21); LESSONS entry.
-- **Status:** open
+- **Status:** done (round 51 — see Done)
 
 ## T-85 — copy that promises what the code does not do
 
@@ -1792,9 +1792,93 @@ IMG-PREC.
   with a small-crop row; existing grid coverage green.
 - **Status:** open
 
+## T-98 — Cancel is not a latch: clicked between jobs, it cancels nothing
+
+- **Spec:** round-51 worker finding. `video:cancelAll` only kills
+  LIVE export children — a Cancel clicked in the gap between a
+  batch's jobs is a no-op and the batch continues; Clip Kit's Cancel
+  cannot stop its three thumbnail `extractFrame` calls at all
+  (`cancelAllFrameJobs` is quit-only). The T-84 copy promises
+  "Export canceled" — the click must make that true whenever it
+  lands.
+- **Acceptance criteria:** cancellation latches per batch/kit: jobs
+  not yet started don't start, frame extracts are cancellable, and
+  the T-84 sentinel flows from the latch too; E2E lands a cancel in
+  the between-jobs gap deterministically and asserts nothing more is
+  written; existing cancel coverage green; LESSONS entry.
+- **Status:** open
+
+## T-99 — a project that extracted audio from a video points at a temp file the next launch deletes
+
+- **Spec:** round-51 worker finding. Extracting audio from a video
+  writes a WAV under the `imagii-audio` temp family; saving a
+  project then stores THAT path, and launch-time temp pruning
+  removes it — reopening says "Couldn't find aB3dE5fG7h.wav" with no
+  way back. User data must never point into a temp family.
+- **Acceptance criteria:** the project stores the original video
+  path (+ re-extracts on open), or the extracted WAV is promoted out
+  of the temp family when a project references it — pick per the
+  tiebreaker and document; unit/E2E proves save -> prune -> reopen
+  works; LESSONS entry.
+- **Status:** open
+
+## T-100 — cancel/failure leftovers: partial files, red "Canceled" bars, unlabeled audio rows
+
+- **Spec:** round-51 worker finding, polish cluster on T-84's new
+  states. A cancelled or failed export/GIF/reframe leaves its
+  half-written output in the folder while the toast says finished
+  files are there; a Canceled queue row keeps the danger-red bar
+  under its neutral label; the audio ExportDialog's progress row has
+  no Failed/Canceled label at all.
+- **Acceptance criteria:** the half-written output of the job that
+  was cancelled/failed is deleted (finished files stay; respect the
+  T-59-era partial-output conventions and document any deliberate
+  exception); Canceled rows drop the danger tint; the audio dialog
+  gains the same Failed/Canceled labels; E2E pins each; LESSONS
+  entry.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 51 — content fix wave batch 3: T-84, the failure-path
+overhaul (the review's largest cluster). Cancellation is now a fact
+main records, not a string the renderer parses: `killAsCancelled`
+flags the child before the SIGKILL, every runner's close handler
+rejects through `cancelledOr`, one sentinel (`imagii:cancelled`,
+with ConvertCancelledError now extending the shared CancelledError
+— one mechanism, not two), and the old treat-any-SIGKILL-as-cancel
+guess is gone, so an outside kill is a failure again. One renderer
+helper (`userFacingError` + the `reportFailure` toast wrapper)
+feeds all ~22 sites: envelope stripped, known shapes mapped to
+plain causes, raw error always in the console, cancel = neutral
+6 s toast, failure = 8 s error toast. Export queue rows carry
+visible Failed/Canceled labels that outlive the toast. Project
+load survives a moved file: each studio applies independently, one
+message names what's missing, and Open/Restore toast a warning
+instead of a false "Project loaded". Copy rewrites landed for the
+autosave banner (validator reason to console; T-33 pins moved with
+the words, the exists-only gate untouched), Home load, the search
+notice (the fictional "switch provider" died), import diagnostics
+(raw prefix gone, audio wording for audio files), and the
+ErrorBoundary (details collapsed, no report-nowhere ask).
+Structural enforcement: failurePathLanguage.test.ts scans the
+renderer for raw `.message` reads and toast.error(message) calls
+the way the no-prompt scanner does. Expedite: verify 1449/1449 (72
+files), build clean, test:media 92/92 (+5 gates; run though not
+required — the SIGKILL paths flow through it), full Playwright
+144/144; the worker's seven mutation proofs reviewed (incl. a
+three-mutation E2E build and a kind-vs-words discrimination on the
+cancel toast), one independent expediter mutation at the import-
+diagnostics seam (raw prefix re-prepended -> 14 named unit reds on
+the "without printing the raw message" pins, byte-identical
+restore -> 31/31). Worker deviations accepted: cancels log at
+console.info, the audio dialog's cancel race fixed in-scope, no
+global toaster duration change. Findings filed: T-98 (cancel is
+not a latch between jobs; Clip Kit thumbnails unstoppable), T-99
+(projects can reference a temp WAV the next launch prunes), T-100
+(partial outputs + Canceled-row tint + audio-row labels).
 
 Round 50 — content fix wave batch 2: T-83 + T-94. T-83: a manual
 crop is now the new SOURCE FRAME — crop (user's) ->

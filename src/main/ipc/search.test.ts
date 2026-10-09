@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 /**
  * The `search:images` channel, argument normalization and failure shape.
@@ -38,8 +38,18 @@ function jsonResponse(payload: unknown, status = 200): unknown {
   }
 }
 
+// T-84: a failed search logs the transport's words and shows ONE sentence.
+const UNREACHABLE =
+  "Couldn't reach DuckDuckGo. Check your internet connection and try again. " +
+  'Your saved boards still work offline.'
+let errorSpy: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   fetchMock.mockReset()
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+})
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('normalizeImageQuery', () => {
@@ -93,8 +103,13 @@ describe('runImageSearch — a failed search is a notice, whichever hop failed',
       query: 'mountains',
       provider: 'duckduckgo',
       results: [],
-      notice: 'DuckDuckGo search failed: net::ERR_PROXY_CONNECTION_FAILED'
+      notice: UNREACHABLE
     })
+    // The transport's own words are not lost — they are in the log.
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[search] DuckDuckGo search failed:',
+      expect.objectContaining({ message: 'net::ERR_PROXY_CONNECTION_FAILED' })
+    )
   })
 
   it('turns a first-hop HTTP error into the friendly notice', async () => {
@@ -104,7 +119,7 @@ describe('runImageSearch — a failed search is a notice, whichever hop failed',
       query: 'mountains',
       provider: 'duckduckgo',
       results: [],
-      notice: 'DuckDuckGo search failed: HTTP 503'
+      notice: UNREACHABLE
     })
   })
 
@@ -117,7 +132,7 @@ describe('runImageSearch — a failed search is a notice, whichever hop failed',
       query: 'mountains',
       provider: 'duckduckgo',
       results: [],
-      notice: 'DuckDuckGo search failed: HTTP 429'
+      notice: UNREACHABLE
     })
   })
 
@@ -127,7 +142,7 @@ describe('runImageSearch — a failed search is a notice, whichever hop failed',
     // hop-1 failure.
     await expect(runImageSearch('\uD800')).resolves.toMatchObject({
       results: [],
-      notice: expect.stringMatching(/^DuckDuckGo search failed: /) as unknown as string
+      notice: UNREACHABLE
     })
     expect(fetchMock).not.toHaveBeenCalled()
   })

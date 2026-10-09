@@ -4,6 +4,7 @@ import { ffmpegPath } from './paths'
 import { resolveExportPreset } from './presets'
 import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
 
 export type ProgressListener = (p: ExportProgress) => void
@@ -129,7 +130,7 @@ export async function runExportJob(
 
     child.on('error', (err) => {
       activeJobs.delete(job.jobId)
-      reject(err)
+      reject(cancelledOr(child, err))
     })
 
     child.on('close', (code) => {
@@ -142,7 +143,9 @@ export async function runExportJob(
           durationMs: Date.now() - startedAt
         })
       } else {
-        reject(new Error(`FFmpeg exit ${code}: ${stderrBuffer.trim().slice(-1000)}`))
+        // T-84: a child the cancel functions below killed rejects with the
+        // sentinel; one that died by itself keeps its exit-code error.
+        reject(cancelledOr(child, new Error(`FFmpeg exit ${code}: ${stderrBuffer.trim().slice(-1000)}`)))
       }
     })
   })
@@ -151,18 +154,12 @@ export async function runExportJob(
 export function cancelExportJob(jobId: string): boolean {
   const child = activeJobs.get(jobId)
   if (!child) return false
-  child.kill('SIGKILL')
+  killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
 }
 
 export function cancelAllExportJobs(): void {
-  for (const [, child] of activeJobs) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }

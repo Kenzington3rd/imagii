@@ -4,6 +4,7 @@ import { useVideoStore } from '../video-studio/store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
+import { basename } from '../../components/OutputDirLabel'
 
 /**
  * T-47 — the route the user is on, read off the HashRouter's own hash so a
@@ -99,7 +100,78 @@ export function applyPlace(place: PlaceRecord | undefined): void {
   }
 }
 
-export async function applyProject(project: ImagiiProject): Promise<void> {
+/**
+ * T-84 — a media file a project points at that could not be opened (moved,
+ * deleted, an unplugged drive). One per studio that lost its file.
+ */
+export interface UnavailableSource {
+  studio: 'video' | 'audio'
+  path: string
+  fileName: string
+}
+
+export interface ApplyOutcome {
+  /** In apply order: video, then audio. Empty when every file was found. */
+  unavailable: UnavailableSource[]
+}
+
+/**
+ * The ONE sentence for the files a project could not find, or null when
+ * nothing is missing. It names the file, says the rest is open, and says
+ * where to load it again — the three things a bare probe error ("ffprobe
+ * exit 1: …") never told the user.
+ */
+export function describeUnavailableSources(
+  items: ReadonlyArray<UnavailableSource>
+): string | null {
+  if (items.length === 0) return null
+  const names = [...new Set(items.map((i) => i.fileName))]
+  const reload = items.map((i) =>
+    i.studio === 'video' ? 'the video again in Video Studio' : 'the audio again in Audio Studio'
+  )
+  return (
+    `Couldn't find ${names.join(' and ')}. ` +
+    `${names.length === 1 ? 'It may' : 'They may'} have been moved or deleted. ` +
+    `The rest of your project is open — load ${reload.join(' and ')}.`
+  )
+}
+
+/**
+ * Open one studio's media file; a file that cannot be read is REPORTED, not
+ * thrown. This is the single point where a missing file is allowed to stop
+ * being an exception, so everything after it in `applyProject` still runs.
+ * The raw error goes to the console — it is ffprobe's stderr, not for the
+ * user.
+ */
+async function loadReporting(
+  studio: UnavailableSource['studio'],
+  filePath: string,
+  load: () => Promise<void>,
+  unavailable: UnavailableSource[]
+): Promise<boolean> {
+  try {
+    await load()
+    return true
+  } catch (err) {
+    console.error(`[imagii] project ${studio} file could not be opened:`, filePath, err)
+    unavailable.push({ studio, path: filePath, fileName: basename(filePath) })
+    return false
+  }
+}
+
+/**
+ * Put a project's studios back, each independently.
+ *
+ * T-84: this used to be one straight line of awaits, so the first
+ * `loadSource` to throw (the recording had been moved) rejected the whole
+ * call and left the project half-restored. The order is still canvas, video,
+ * audio, place — but a studio whose file is gone is left exactly as it was
+ * and reported in the outcome, and every other studio is applied regardless.
+ * Nothing from a studio that lost its file is applied over the hole (no clips
+ * or caption path for a video that is not there).
+ */
+export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome> {
+  const unavailable: UnavailableSource[] = []
   // T-58 + T-47: mood boards are not carried in a project file — they are
   // their own files on disk — so there is nothing to put back here. What the
   // contract does require is that no studio comes out of a restore offering
@@ -113,31 +185,42 @@ export async function applyProject(project: ImagiiProject): Promise<void> {
     // Undo would have thrown the restored canvas away in one click.
     useCanvasStore.getState().resetDocument(project.imageCanvas.doc)
   }
-  if (project.videoStudio?.sourcePath) {
-    await useVideoStore.getState().loadSource(project.videoStudio.sourcePath)
-    if (project.videoStudio.clips.length > 0) {
-      useVideoStore.setState({
-        clips: project.videoStudio.clips,
-        selectedClipId:
-          project.videoStudio.selectedClipId ?? project.videoStudio.clips[0]?.id ?? null
-      })
-    }
-    // Restore srtPath after loadSource (which clears it). Ignore on
-    // older v1 projects where the field was absent — they get null.
-    if (project.videoStudio.srtPath) {
-      useVideoStore.getState().setSrtPath(project.videoStudio.srtPath)
+  const video = project.videoStudio
+  if (video?.sourcePath) {
+    const sourcePath = video.sourcePath
+    const loaded = await loadReporting(
+      'video',
+      sourcePath,
+      () => useVideoStore.getState().loadSource(sourcePath),
+      unavailable
+    )
+    if (loaded) {
+      if (video.clips.length > 0) {
+        useVideoStore.setState({
+          clips: video.clips,
+          selectedClipId: video.selectedClipId ?? video.clips[0]?.id ?? null
+        })
+      }
+      // Restore srtPath after loadSource (which clears it). Ignore on
+      // older v1 projects where the field was absent — they get null.
+      if (video.srtPath) {
+        useVideoStore.getState().setSrtPath(video.srtPath)
+      }
     }
   }
-  if (project.audioStudio?.sourcePath) {
-    await useAudioStore
-      .getState()
-      .loadSource(
-        project.audioStudio.sourcePath,
-        project.audioStudio.fromVideoPath ?? undefined
-      )
-    useAudioStore.setState({ chain: project.audioStudio.chain })
+  const audio = project.audioStudio
+  if (audio?.sourcePath) {
+    const sourcePath = audio.sourcePath
+    const loaded = await loadReporting(
+      'audio',
+      sourcePath,
+      () => useAudioStore.getState().loadSource(sourcePath, audio.fromVideoPath ?? undefined),
+      unavailable
+    )
+    if (loaded) useAudioStore.setState({ chain: audio.chain })
   }
   // Last: the selections and the playhead only mean anything once the
   // clips and layers they point at are in place.
   applyPlace(project.place)
+  return { unavailable }
 }

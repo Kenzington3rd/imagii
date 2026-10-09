@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
 import { even } from './filters'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 
 export type ReframePosition = 'left' | 'center' | 'right' | 'smart'
 
@@ -28,13 +29,7 @@ const activeJobs = new Map<string, ChildProcess>()
 // any in-flight reframe encode. Pre-16, a long reframe survived app quit and
 // kept ffmpeg.exe on the CPU after the app icon was gone.
 export function cancelAllReframeJobs(): void {
-  for (const [, child] of activeJobs) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }
 
@@ -43,11 +38,7 @@ export function cancelAllReframeJobs(): void {
 export function cancelReframeJob(jobId: string): boolean {
   const child = activeJobs.get(jobId)
   if (!child) return false
-  try {
-    child.kill('SIGKILL')
-  } catch {
-    /* ignore */
-  }
+  killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
 }
@@ -184,7 +175,7 @@ export async function runReframe(
 
     child.on('error', (e) => {
       activeJobs.delete(spec.jobId)
-      reject(e)
+      reject(cancelledOr(child, e))
     })
     child.on('close', (code) => {
       activeJobs.delete(spec.jobId)
@@ -192,7 +183,7 @@ export async function runReframe(
         onProgress({ jobId: spec.jobId, phase: 'done', percent: 100 })
         resolve()
       } else {
-        reject(new Error(`reframe exit ${code}: ${stderr.slice(-500)}`))
+        reject(cancelledOr(child, new Error(`reframe exit ${code}: ${stderr.slice(-500)}`)))
       }
     })
   })

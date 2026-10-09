@@ -1,5 +1,6 @@
 import { net } from 'electron'
 import { nanoid } from 'nanoid'
+import { SEARCH_UNREACHABLE_NOTICE } from '../../shared/search'
 import type { SearchResponse, SearchResult } from '../../shared/search'
 
 interface DdgImageItem {
@@ -40,14 +41,14 @@ export class SearchUnavailableError extends Error {
  * renderer draw its amber card instead of an error card.
  */
 export function searchFailureNotice(query: string, err: unknown): SearchResponse {
+  // T-84: the transport's words (net::ERR_…, HTTP 503) are for the log; the
+  // card says what to do.
+  console.error('[search] DuckDuckGo search failed:', err)
   return {
     query,
     provider: 'duckduckgo',
     results: [],
-    notice:
-      err instanceof Error
-        ? `DuckDuckGo search failed: ${err.message}`
-        : 'DuckDuckGo search failed'
+    notice: SEARCH_UNREACHABLE_NOTICE
   }
 }
 
@@ -99,11 +100,15 @@ async function fetchJson<T>(url: string): Promise<T> {
 export async function searchDuckduckgoImages(query: string): Promise<SearchResponse> {
   const vqd = await getVqd(query)
   if (!vqd) {
+    // A page that loaded but carried no token: blocked, a consent wall, or a
+    // changed page. The card says the same sentence as an outage (T-84); the
+    // log says which it was.
+    console.error('[search] DuckDuckGo search page carried no session token')
     return {
       query,
       provider: 'duckduckgo',
       results: [],
-      notice: 'Could not initialize search session. Try again or switch provider.'
+      notice: SEARCH_UNREACHABLE_NOTICE
     }
   }
   const url =

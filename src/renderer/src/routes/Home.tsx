@@ -1,10 +1,21 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
 import { Icon } from '../components/Icon'
-import { applyProject, captureProject } from '../modules/project/ProjectIO'
+import {
+  applyProject,
+  captureProject,
+  describeUnavailableSources
+} from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
 import { suppressAutosave } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
+import { reportFailure } from '../lib/reportFailure'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
+
+/** The one line for a project file imagii could not read (T-84). The validator's
+ *  own reason ("videoStudio.clips not array") goes to the console. */
+const PROJECT_OPEN_FAILED =
+  "Couldn't open that project. The file may be damaged, or it was saved by a newer version of imagii."
 
 async function handleSave(): Promise<void> {
   try {
@@ -12,7 +23,7 @@ async function handleSave(): Promise<void> {
     const saved = await window.api.project.save(project)
     if (saved) toast.success('Project saved')
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Save failed')
+    reportFailure(err, { failed: "Couldn't save the project." })
   }
 }
 
@@ -23,14 +34,24 @@ async function handleLoad(): Promise<void> {
     const result = await window.api.project.load()
     if (!result) return // user canceled the dialog
     if (!result.ok) {
-      toast.error(`Couldn't load project: ${result.reason}`)
+      reportFailure(result.reason, { failed: PROJECT_OPEN_FAILED })
       return
     }
     opened = true
-    await applyProject(result.project)
-    toast.success('Project loaded')
+    // T-84: a project whose video was moved still opens everything else, and
+    // the ONE message says which file is gone (instead of "Project loaded"
+    // over a half-empty studio, or a probe error over a half-restored one).
+    const outcome = await applyProject(result.project)
+    const missing = describeUnavailableSources(outcome.unavailable)
+    if (missing) {
+      toast(missing, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+    } else {
+      toast.success('Project loaded')
+    }
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Load failed')
+    // Not a validation failure — something threw while opening (the dialog
+    // bridge, a store). The "damaged or newer" line above would be a guess.
+    reportFailure(err, { failed: "Couldn't open that project." })
   } finally {
     // On a successful load, hold suppression while stores settle. On any
     // failure path (cancel, validation rejection, throw), release immediately

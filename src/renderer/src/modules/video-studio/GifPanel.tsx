@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 export function GifPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -63,7 +64,7 @@ export function GifPanel(): JSX.Element | null {
         </span>
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'GIF export failed')
+      reportFailure(err, { failed: 'GIF export failed.', canceled: 'GIF canceled.' })
     } finally {
       setBusy(false)
       jobIdRef.current = null

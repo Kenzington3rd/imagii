@@ -81,8 +81,16 @@ Drop a video in (or use the file picker), then:
 - **Cancel any long render.** Reframe, GIF, Compile, PiP, highlight
   scan, and caption burn-in all show a **Cancel** button next to the
   progress bar while they're running. Click it to abort cleanly — the
-  background ffmpeg/whisper process is killed and the panel returns to
-  its idle state.
+  background ffmpeg/whisper process is killed, the panel returns to its
+  idle state, and imagii says the job was canceled (a plain note, never a
+  red error). In an Export batch, files that already finished stay in your
+  folder and the rows that didn't are marked **Canceled**.
+- **When something fails,** the message says what happened and what to
+  try, in plain words — and an Export row that didn't finish is marked
+  **Failed**, so you can still see which one after the message fades.
+- **Open project** with a video or audio file that has moved: imagii
+  opens everything else in the project and names the missing file, so you
+  can load it again in its studio.
 - **References — Mood Boards** has a **Clear thumbnail cache** button
   to drop the on-disk image cache immediately. Your boards keep every
   item: a cleared thumbnail loads again from its source the next time

@@ -14,6 +14,7 @@ import { DEFAULT_CAPTION_STYLE, CAPTION_STYLE_PRESETS } from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -88,7 +89,7 @@ export function CaptionsPanel(): JSX.Element | null {
       setSrtPath(result.srtPath)
       toast.success(`Captioned ${result.segments.length} segments`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Transcription failed')
+      reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
     } finally {
       setRunning(false)
     }
@@ -136,7 +137,7 @@ export function CaptionsPanel(): JSX.Element | null {
       })
       toast.success('Captions burned in')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Burn-in failed')
+      reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
     } finally {
       setRunning(false)
     }
@@ -155,10 +156,18 @@ export function CaptionsPanel(): JSX.Element | null {
         toast.success('Whisper model installed')
         await refreshStatus()
       } else {
-        toast.error(`Install failed: ${result.reason}`, { duration: 8000 })
+        // `reason` is a string, not a thrown error: main resolves a failed or
+        // canceled download as { ok: false } (a cancel carries the sentinel).
+        reportFailure(result.reason, {
+          failed: "Couldn't download the model.",
+          canceled: 'Download canceled.'
+        })
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Install failed')
+      reportFailure(err, {
+        failed: "Couldn't download the model.",
+        canceled: 'Download canceled.'
+      })
     } finally {
       setInstalling(false)
       // Tech-debt fix: clear stale progress so a re-attempted install

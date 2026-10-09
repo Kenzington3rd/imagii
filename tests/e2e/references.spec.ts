@@ -1294,8 +1294,18 @@ test.describe('imagii References studio', () => {
       // Chromium supplies the net:: code, and which code depends on whether
       // the socket died mid-CONNECT or the port was already refusing, so the
       // code alone is matched by shape.
+      //
+      // T-84: and it is one plain sentence — what happened, what to do, and
+      // the reassurance that matters offline. Chromium's net:: code is for
+      // the console; the card used to print it ("DuckDuckGo search failed:
+      // net::ERR_PROXY_CONNECTION_FAILED"), and the other hop's copy told
+      // the user to "switch provider", which no screen offers.
+      const UNREACHABLE =
+        "Couldn't reach DuckDuckGo. Check your internet connection and try again. " +
+        'Your saved boards still work offline.'
       const text = (await noticeCard.innerText()).trim()
-      expect(text).toMatch(/^DuckDuckGo search failed: net::ERR_[A-Z0-9_]+$/)
+      expect(text).toBe(UNREACHABLE)
+      expect(text).not.toMatch(/net::|DuckDuckGo search failed|provider/)
       // …and nothing rejected, so the raw-IPC card never appears.
       await expect(errorCard).toHaveCount(0)
       // T-66: the notice IS the answer. "No results." underneath it said the
@@ -1314,9 +1324,7 @@ test.describe('imagii References studio', () => {
       await expect(searchButton).toHaveText('Search', { timeout: 60_000 })
       await expect(noticeCard).toHaveCount(1)
       await expect(errorCard).toHaveCount(0)
-      expect((await noticeCard.innerText()).trim()).toBe(
-        'DuckDuckGo search failed: net::ERR_PROXY_CONNECTION_FAILED'
-      )
+      expect((await noticeCard.innerText()).trim()).toBe(UNREACHABLE)
       // Still one message, not two (T-66) — a re-run lands on the same view.
       await expect(window.getByText('No results.')).toHaveCount(0)
 

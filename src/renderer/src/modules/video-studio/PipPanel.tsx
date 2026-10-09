@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 type Position = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
@@ -63,7 +64,10 @@ export function PipPanel(): JSX.Element {
         </span>
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'PiP failed')
+      reportFailure(err, {
+        failed: 'Picture-in-picture failed.',
+        canceled: 'Picture-in-picture canceled.'
+      })
     } finally {
       setBusy(false)
       jobIdRef.current = null

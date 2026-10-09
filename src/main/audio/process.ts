@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { unlink } from 'node:fs/promises'
 import { ffmpegPath } from '../ffmpeg/paths'
+import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import {
   aselectForCuts,
   buildChain,
@@ -85,12 +86,12 @@ async function runFfmpegJob(
 
     child.on('error', (err) => {
       activeJobs.delete(jobId)
-      reject(err)
+      reject(cancelledOr(child, err))
     })
     child.on('close', (code) => {
       activeJobs.delete(jobId)
       if (code === 0) resolve({ stderr })
-      else reject(new Error(`FFmpeg exit ${code}: ${stderr.trim().slice(-1000)}`))
+      else reject(cancelledOr(child, new Error(`FFmpeg exit ${code}: ${stderr.trim().slice(-1000)}`)))
     })
   })
 }
@@ -391,7 +392,7 @@ export async function runAudioReattach(
 export function cancelAudioJob(jobId: string): boolean {
   const child = activeJobs.get(jobId)
   if (!child) return false
-  child.kill('SIGKILL')
+  killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
 }
@@ -402,12 +403,6 @@ export function cancelAudioJob(jobId: string): boolean {
  * keep an orphaned ffmpeg child alive after the window closes.
  */
 export function cancelAllAudioJobs(): void {
-  for (const [, child] of activeJobs) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }

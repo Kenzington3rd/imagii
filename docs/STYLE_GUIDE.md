@@ -67,13 +67,41 @@ Repeated UI is a component, not copy-paste:
   second one in a studio: react-hot-toast keeps one toast store per
   toaster id and each `<Toaster>` draws all of it, so two mounts render
   every toast twice (T-31).
-- **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — what a
-  `catch` around a `window.api.*` call toasts. Electron wraps anything an
+- **`reportFailure(err, { failed, canceled? })`** (`lib/reportFailure.ts`,
+  over `userFacingError` in `@shared/userFacingError`) — what EVERY `catch`
+  around a `window.api.*` call does (T-84). Electron wraps anything an
   `ipcMain.handle` handler throws in
-  `Error invoking remote method '<channel>': Error: …`, so
-  `toast.error(err.message)` shows the user a channel name and the word
-  "remote" for work that never left their machine (T-30, T-59). Main
-  still owns the sentence; this only unwraps the envelope.
+  `Error invoking remote method '<channel>': Error: …`, and the runners'
+  own messages are ffmpeg's ("FFmpeg exit 1: …"), so
+  `toast.error(err.message)` showed the user a channel name, the word
+  "remote" for work that never left their machine, and an encoder's stderr
+  (T-30, T-59, T-84). The helper strips the envelope, maps known shapes (an
+  encoder exit, a missing or locked file, a full disk, no network, a refused
+  capture device) to the caller's `failed` sentence plus one plain cause,
+  lets a finished sentence main wrote stand alone, and otherwise shows just
+  `failed`; **the raw error always goes to the console**. `failed` is a full
+  sentence with its period ("GIF export failed."). A failure raises
+  `toast.error` for 8 s. **Never write `toast.error(err.message)`, or read
+  `.message` in a `catch` outside a `console` call** —
+  `tests/unit/failurePathLanguage.test.ts` parses the renderer and fails on
+  it, and lists every site that must route through the helper.
+- **Cancel is a fact, not a string.** Pressing Cancel SIGKILLs the child,
+  which exits non-zero exactly like a crash. Main marks the kill —
+  `killAsCancelled(child)` in a runner's cancel function,
+  `cancelledOr(child, failure)` in its close handler
+  (`src/main/ffmpeg/cancelMark.ts`) — and the rejection carries the one
+  sentinel `CANCELLED_MESSAGE` (`@shared/cancel`; `ConvertCancelledError`
+  is a subclass). `userFacingError` reports it as `cancelled: true` and
+  `reportFailure` raises a plain `toast(canceled)` in the feature's own
+  words — never `toast.error`, never in ffmpeg's. **The renderer never
+  string-matches ffmpeg text to detect a cancel.** A new cancellable runner
+  needs both halves and a row in
+  `src/main/ffmpeg/cancelSentinel.test.ts`. Rows that stopped (the export
+  queue) keep saying "Failed" or "Canceled" after the toast fades.
+- **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — the
+  envelope-stripping step `userFacingError` starts with. Still the right
+  call for a site that wants only main's own sentence (the T-30/T-59 sites:
+  Record's source list and save, the autosave clear).
 - **`useUndoRedoHotkeys(undo, redo)`** — the window-level
   Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z binding for a studio's own history
   (`hooks/useUndoRedoHotkeys.ts`). Video, Audio, Image and References all

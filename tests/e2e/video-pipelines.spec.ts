@@ -7,12 +7,20 @@ import {
   type Page
 } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
-import { installToastLog, readToastLog } from './toastLog'
+import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -280,6 +288,29 @@ async function expectToast(window: Page, needle: string): Promise<string[]> {
     .poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] })
     .toEqual(expect.arrayContaining([expect.stringContaining(needle)]))
   return readToastLog(window)
+}
+
+/**
+ * T-84: pressing Cancel is not a failure, and the toast has to say so in
+ * words AND in kind.
+ *
+ * A SIGKILL'd ffmpeg exits non-zero exactly like a crash, so before T-84
+ * every Cancel reached the user as a red toast in the runner's own words
+ * ("FFmpeg exit null", "pip exit 1", "highlight scan cancelled"). Three
+ * things are asserted, because each alone is passed by a different wrong
+ * implementation: the sentence is the feature's own; the toast that carries
+ * it drew NO status icon (a `toast.error` with the right words is still a red
+ * error); and nothing in the log is in ffmpeg's or the IPC bridge's voice.
+ */
+async function expectCanceledNotFailed(window: Page, copy: string): Promise<void> {
+  await expectToast(window, copy)
+  const entries = await readToastEntries(window)
+  const hit = entries.find((e) => e.text === copy)
+  expect(hit, `a toast reading exactly "${copy}"`).toBeDefined()
+  expect(hit?.hasIcon, `"${copy}" is a plain toast, not an error or success toast`).toBe(false)
+  expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+    /\bexit\b|ffmpeg|ffprobe|cancelled|imagii:cancelled|Error invoking remote method/i
+  )
 }
 
 /**
@@ -963,9 +994,10 @@ test.describe('HighlightPanel', () => {
       await expect(card.getByRole('button', { name: 'Scanning…' })).toBeDisabled()
       await cancel.click()
 
-      // The main process rejected the promise rather than resolving empty:
-      // the renderer's catch shows the killed scan's own message.
-      await expectToast(window, 'highlight scan cancelled')
+      // The main process rejected the promise rather than resolving empty,
+      // and marked WHY: the user asked. T-84 — the toast is the panel's own
+      // neutral sentence, not the killed scan's message in a red toast.
+      await expectCanceledNotFailed(window, 'Scan canceled.')
       // UI reset: no progress row, no candidates, and the button is back to
       // its never-scanned identity (audioCandidates was never set).
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
@@ -1366,6 +1398,9 @@ test.describe('ExportPanel', () => {
         await expect(position).toHaveValue(corner)
       }
 
+      // T-84: the failure's raw words belong in the console, not the toast.
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
       await card.getByRole('button', { name: 'Export 1' }).click()
       // `runExportQueue` persists the handle BEFORE it queues anything, so
       // this assertion holds on every platform.
@@ -1388,7 +1423,16 @@ test.describe('ExportPanel', () => {
         // string. If this line ever fails on Linux, the bundled binary
         // gained the filter and the watermark's pixels become assertable
         // here (and in Layer 5, which has no drawtext coverage at all).
-        await expectToast(window, "No such filter: 'drawtext'")
+        //
+        // T-84: the USER reads a plain sentence now, and ffmpeg's stderr
+        // goes to the console — so the proof that the watermark reached the
+        // filter string is read from there. Both halves are asserted: the
+        // toast carries none of it, and the console carries all of it.
+        await expectToast(window, 'Export failed.')
+        expect((await readToastLog(window)).join(' | ')).not.toMatch(/drawtext|FFmpeg exit/)
+        await expect
+          .poll(() => consoleLines.join('\n'), { timeout: 30_000 })
+          .toContain("No such filter: 'drawtext'")
         expect(mp4sIn(outDir)).toEqual([])
       }
       // Either way the panel leaves its running state rather than sticking.
@@ -1643,7 +1687,11 @@ test.describe('ExportPanel', () => {
       //    rejects, and the panel comes back out of its running state ──
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
       await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
-      await expectToast(window, 'FFmpeg exit')
+      // T-84: neutral, in the panel's words, and it says what survived.
+      await expectCanceledNotFailed(
+        window,
+        'Export canceled. Files already finished are in your folder.'
+      )
       await expect(card.getByRole('button', { name: 'Export 3' })).toBeEnabled({ timeout: 30_000 })
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
       // The batch is sequential, so killing the running job stops the rest:
@@ -1654,9 +1702,84 @@ test.describe('ExportPanel', () => {
       expect(
         await card.getByRole('button', { name: 'Show', exact: true }).count()
       ).toBeLessThan(3)
-      // The cancelled rows are painted as errors (danger bar), not left at a
-      // hopeful accent-coloured percentage.
+      // The cancelled rows are painted (danger bar), not left at a hopeful
+      // accent-coloured percentage — and T-84 gives them WORDS that outlive
+      // the toast: every row that did not finish says "Canceled", none says
+      // "Failed" (a cancel is the user's decision, not a fault), and the rows
+      // that did finish say neither.
       await expect(card.locator('.bg-danger-strong')).not.toHaveCount(0)
+      const shown = await card.getByRole('button', { name: 'Show', exact: true }).count()
+      await expect(card.getByText('Canceled', { exact: true })).toHaveCount(3 - shown)
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(0)
+      // Outlives the toast: wait for the toaster to empty, then look again.
+      await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, {
+        timeout: 20_000
+      })
+      await expect(card.getByText('Canceled', { exact: true })).toHaveCount(3 - shown)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a failed export says so in plain words, the row keeps saying so after the toast fades, and the next good export is clean (T-84)', async () => {
+    test.setTimeout(600_000)
+    // The failure is the most ordinary one a streamer meets: the recording was
+    // imported, then moved or deleted (an external drive unplugged, a cleanup
+    // script) before Export. The source is a COPY this test can remove.
+    const moved = path.join(root, 'source', `moved-${Date.now().toString(36)}.mp4`)
+    copyFileSync(clipSrc, moved)
+    const studio = await launchWithVideo('exportfail', moved)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
+
+      rmSync(moved)
+      await card.getByRole('button', { name: 'Export 1' }).click()
+
+      // ── the toast: the context, then the cause, in the app's words ──
+      const MESSAGE =
+        "Export failed. A file imagii needs isn't there. It may have been moved or deleted."
+      await expectToast(window, 'Export failed.')
+      const entries = await readToastEntries(window)
+      expect(entries.map((e) => e.text)).toContain(MESSAGE)
+      // A failure IS an error toast — the contrast with the cancel specs,
+      // where the words are neutral and no icon is drawn.
+      expect(entries.find((e) => e.text === MESSAGE)?.hasIcon).toBe(true)
+      // None of ffprobe's or the IPC bridge's voice reaches the screen…
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+        /ffprobe|ffmpeg|\bexit\b|Error invoking remote method|No such file/i
+      )
+      // …it went to the console, where a bug report can find it.
+      await expect
+        .poll(() => consoleLines.join('\n'), { timeout: 30_000 })
+        .toMatch(/ffprobe exit 1/)
+
+      // ── the row: a visible failed state, and a failure is not a cancel ──
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(1)
+      await expect(card.getByText('Canceled', { exact: true })).toHaveCount(0)
+      await expect(card.locator('.w-40 > .bg-danger-strong')).toHaveCount(1) // the row's bar
+      // …that OUTLIVES the toast: wait for the toaster to empty and look again.
+      await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, {
+        timeout: 30_000
+      })
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(1)
+      expect(mp4sIn(outDir)).toEqual([])
+      await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
+
+      // ── the control: put the file back, export again — the new queue
+      //    replaces the old rows, so a good export carries no stale label ──
+      copyFileSync(clipSrc, moved)
+      await card.getByRole('button', { name: 'Export 1' }).click()
+      await expectToast(window, 'Exported 1 file')
+      await expect
+        .poll(() => mp4sIn(outDir).length, { timeout: 540_000, intervals: [500] })
+        .toBe(1)
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(0)
+      await expect(card.getByText('Canceled', { exact: true })).toHaveCount(0)
     } finally {
       await app.close()
     }
@@ -2020,7 +2143,10 @@ test.describe('ClipKit', () => {
       // ── Cancel jobs: the running ffmpeg is killed and the kit unwinds ──
       await cancelButton.click()
       await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
-      await expectToast(window, 'FFmpeg exit')
+      await expectCanceledNotFailed(
+        window,
+        'Clip Kit canceled. Files already finished are in your folder.'
+      )
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
       await expect(
         clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })
@@ -2107,8 +2233,10 @@ test.describe('PipPanel', () => {
       const cancel = card.getByRole('button', { name: 'Cancel', exact: true })
       await expect(cancel).toBeVisible({ timeout: 30_000 })
       await cancel.click()
-      // cancelPip -> cancelConcatJob -> SIGKILL, surfaced as a non-zero exit.
-      await expectToast(window, 'pip exit')
+      // cancelPip -> cancelConcatJob -> SIGKILL. The kill is marked in main,
+      // so the non-zero exit it causes arrives as a cancel (T-84), not as
+      // "pip exit 1" in a red toast.
+      await expectCanceledNotFailed(window, 'Picture-in-picture canceled.')
       await expect(card.getByRole('button', { name: 'Composite' })).toBeEnabled({ timeout: 30_000 })
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
     } finally {
@@ -2255,6 +2383,134 @@ test.describe('single-output panels', () => {
       expect(Number(probe.format?.duration)).toBeGreaterThan(2 * CLIP_SECONDS - 0.5)
       expect(Number(probe.format?.duration)).toBeLessThan(2 * CLIP_SECONDS + 0.5)
       await expect(card.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a vanished source fails Reframe, GIF, Compile and PiP in each panel\'s own plain words, and frees each panel (T-84)', async () => {
+    test.setTimeout(300_000)
+    // The ordinary failure again — imported, then moved — met by every panel
+    // that spawns its own ffmpeg. Each panel's catch is its own site, so each
+    // is driven; the toast leads with ITS sentence and ends in the one cause.
+    const moved = path.join(root, 'source', `vanish-${Date.now().toString(36)}.mp4`)
+    copyFileSync(clipSrc, moved)
+    const studio = await launchWithVideo('vanish', moved)
+    const { app, window, outDir } = studio
+    try {
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click() // Compile needs 2
+      rmSync(moved)
+      const CAUSE = "A file imagii needs isn't there. It may have been moved or deleted."
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
+
+      // ── Reframe ──
+      await stubDialogs(app, { open: [outDir] })
+      const reframe = reframeCard(window)
+      await reframe.getByRole('button', { name: 'Choose folder…' }).click()
+      await reframe.getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expectToast(window, `Reframe failed. ${CAUSE}`)
+      await expect(reframe.getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({
+        timeout: 30_000
+      })
+
+      // ── GIF ──
+      const gif = gifCard(window)
+      await gif.getByRole('button', { name: 'Choose folder…' }).click()
+      await gif.getByRole('button', { name: 'Export GIF' }).click()
+      await expectToast(window, `GIF export failed. ${CAUSE}`)
+      await expect(gif.getByRole('button', { name: 'Export GIF' })).toBeEnabled({ timeout: 30_000 })
+
+      // ── Compile ──
+      const compile = compileCard(window)
+      await compile.getByRole('button', { name: 'Choose folder…' }).click()
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expectToast(window, `Compilation failed. ${CAUSE}`)
+      await expect(compile.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({
+        timeout: 30_000
+      })
+
+      // ── PiP: the base is the file that moved ──
+      await stubDialogs(app, { open: [moved, pipSrc, outDir] })
+      const pip = pipCard(window)
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await pip.getByRole('button', { name: 'Choose folder…' }).click()
+      await pip.getByRole('button', { name: 'Composite' }).click()
+      await expectToast(window, `Picture-in-picture failed. ${CAUSE}`)
+      await expect(pip.getByRole('button', { name: 'Composite' })).toBeEnabled({ timeout: 30_000 })
+
+      // Four errors, four error toasts — and not one word of ffmpeg's.
+      const entries = await readToastEntries(window)
+      const failures = entries.filter((e) => e.text.endsWith(CAUSE))
+      expect(failures).toHaveLength(4)
+      expect(failures.every((e) => e.hasIcon)).toBe(true)
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+        /ffprobe|ffmpeg|\bexit\b|No such file|Error invoking remote method/i
+      )
+      // The raw errors are in the console, one per panel.
+      await expect
+        .poll(() => consoleLines.filter((l) => /No such file or directory/.test(l)).length, {
+          timeout: 30_000
+        })
+        .toBeGreaterThanOrEqual(4)
+      expect(mp4sIn(outDir)).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('cancelling a reframe, a GIF and a compilation is a neutral toast in each panel\'s own words, and frees the panel (T-84)', async () => {
+    test.setTimeout(600_000)
+    // The 20-minute source: each job is still running when Cancel is clicked.
+    const studio = await launchWithVideo('cancelpanels', longSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      // Compile only renders with two clips; the second is full-length too.
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+
+      // ── Reframe ──
+      const reframe = reframeCard(window)
+      await reframe.getByRole('button', { name: 'Choose folder…' }).click()
+      await reframe.getByRole('button', { name: 'Reframe to 9:16' }).click()
+      const reframeCancel = reframe.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(reframeCancel).toBeVisible({ timeout: 30_000 })
+      await reframeCancel.click()
+      await expectCanceledNotFailed(window, 'Reframe canceled.')
+      await expect(reframe.getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({
+        timeout: 30_000
+      })
+      await expect(reframeCancel).toHaveCount(0)
+
+      // ── GIF ──
+      const gif = gifCard(window)
+      await gif.getByRole('button', { name: 'Choose folder…' }).click()
+      await gif.getByRole('button', { name: 'Export GIF' }).click()
+      const gifCancel = gif.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(gifCancel).toBeVisible({ timeout: 30_000 })
+      await gifCancel.click()
+      await expectCanceledNotFailed(window, 'GIF canceled.')
+      await expect(gif.getByRole('button', { name: 'Export GIF' })).toBeEnabled({
+        timeout: 30_000
+      })
+      await expect(gifCancel).toHaveCount(0)
+
+      // ── Compilation ──
+      const compile = compileCard(window)
+      await compile.getByRole('button', { name: 'Choose folder…' }).click()
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      const compileCancel = compile.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(compileCancel).toBeVisible({ timeout: 30_000 })
+      await compileCancel.click()
+      await expectCanceledNotFailed(window, 'Compilation canceled.')
+      await expect(compile.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({
+        timeout: 30_000
+      })
+      await expect(compileCancel).toHaveCount(0)
+
+      // None of the three left a finished file behind it as if it had worked.
+      expect(mp4sIn(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
     } finally {
       await app.close()
     }
@@ -2426,3 +2682,134 @@ test.describe('PostChecklist', () => {
   })
 })
 
+
+// ═══════════════ Open project — a file that moved (T-84) ═══════════════════
+
+test.describe('Open project with a moved file', () => {
+  /** A project file with a canvas, an audio source and a video source. */
+  function writeProject(name: string, videoPath: string): string {
+    const projectPath = path.join(root, `${name}-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(
+      projectPath,
+      JSON.stringify({
+        schemaVersion: 3,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        videoStudio: {
+          sourcePath: videoPath,
+          clips: [],
+          selectedClipId: null,
+          watermark: null,
+          srtPath: null
+        },
+        audioStudio: {
+          sourcePath: clipSrc,
+          fromVideoPath: null,
+          chain: {
+            denoise: 'off',
+            hum60: false,
+            rumbleHighpass: false,
+            deEss: false,
+            compressor: 'off',
+            loudnorm: false,
+            loudnormTargetLufs: -16,
+            gainDb: 0,
+            cutRegions: [],
+            secondaryTrack: null
+          }
+        },
+        imageCanvas: {
+          doc: {
+            width: 800,
+            height: 450,
+            background: '#101014',
+            layers: [
+              {
+                id: 'kept-rect',
+                type: 'rect',
+                name: 'Kept rect',
+                visible: true,
+                locked: false,
+                x: 10,
+                y: 20,
+                rotation: 0,
+                scaleX: 1,
+                scaleY: 1,
+                opacity: 1,
+                width: 200,
+                height: 100,
+                fill: '#ff5c00',
+                stroke: '#ffffff',
+                strokeWidth: 2,
+                cornerRadius: 4
+              }
+            ]
+          }
+        }
+      }),
+      'utf8'
+    )
+    return projectPath
+  }
+
+  test('opens the rest of the project, names the file that is gone, and a complete project still says "Project loaded" (T-84)', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchHome('movedvideo')
+    const { app, window } = studio
+    try {
+      await installToastLog(window)
+      const gone = path.join(root, 'source', 'stream-that-moved.mp4') // never created
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
+
+      // ── the project whose video moved ──
+      await stubDialogs(app, { open: [writeProject('moved', gone)] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+
+      const MESSAGE =
+        "Couldn't find stream-that-moved.mp4. It may have been moved or deleted. " +
+        'The rest of your project is open — load the video again in Video Studio.'
+      await expectToast(window, "Couldn't find")
+      const log = await readToastLog(window)
+      // ONE message, naming the file — and not the success line beside it.
+      expect(log.filter((t) => t.includes("Couldn't find"))).toEqual([MESSAGE])
+      expect(log).not.toContain('Project loaded')
+      expect(log.join(' | ')).not.toMatch(/ffprobe|No such file|Error invoking remote method/)
+      await expect
+        .poll(() => consoleLines.join('\n'), { timeout: 20_000 })
+        .toContain('ffprobe')
+
+      // ── the rest IS open: the canvas, then the audio, then an empty video ──
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText(path.basename(clipSrc), { exact: true })).toBeVisible({
+        timeout: 30_000
+      })
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await gotoVideoStudio(window)
+      // Nothing half-loaded: the studio that lost its file is the empty one.
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+
+      // ── the control: the same project with its video where it should be ──
+      const before = (await readToastLog(window)).length
+      await stubDialogs(app, { open: [writeProject('complete', clipSrc)] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).slice(before), { timeout: 30_000 })
+        .toContain('Project loaded')
+      expect((await readToastLog(window)).slice(before).join(' | ')).not.toContain("Couldn't find")
+      await gotoVideoStudio(window)
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({
+        timeout: 30_000
+      })
+    } finally {
+      await app.close()
+    }
+  })
+})

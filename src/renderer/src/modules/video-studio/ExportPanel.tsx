@@ -21,6 +21,7 @@ import { Icon } from '../../components/Icon'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
+import { reportFailure } from '../../lib/reportFailure'
 
 export interface SafeZoneRow {
   clipName: string
@@ -131,7 +132,11 @@ interface JobStatus {
   presetLabel: string
   percent: number
   outputPath?: string
+  /** Why the row did not finish — the sentence the toast showed. Set on a
+   *  failure AND a cancel; `canceled` says which, and decides the word on the
+   *  row ("Failed" / "Canceled"). The row outlives the toast (T-84). */
   error?: string
+  canceled?: boolean
 }
 
 export function ExportPanel(): JSX.Element | null {
@@ -320,10 +325,15 @@ export function ExportPanel(): JSX.Element | null {
       // defaults to the same folder.
       void window.api.settings.set('export.lastOutputDir', outDir)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Export failed'
-      toast.error(msg)
+      // T-84: one verdict for the toast AND the rows. A cancel is neutral and
+      // says what survived; a failure is plain words. Either way the rows that
+      // did not finish keep saying so after the toast fades.
+      const { cancelled, message } = reportFailure(err, {
+        failed: 'Export failed.',
+        canceled: 'Export canceled. Files already finished are in your folder.'
+      })
       setJobs((prev) =>
-        prev.map((j) => (j.percent < 100 ? { ...j, error: msg } : j))
+        prev.map((j) => (j.percent < 100 ? { ...j, error: message, canceled: cancelled } : j))
       )
     } finally {
       setRunning(false)
@@ -562,6 +572,17 @@ export function ExportPanel(): JSX.Element | null {
               >
                 {Math.round(j.percent)}%
               </span>
+              {/* T-84: the words for a bar that stopped. The toast fades in a
+                  few seconds; a red bar alone never said whether the file was
+                  lost to a fault or to the user's own Cancel. */}
+              {j.error ? (
+                <span
+                  className={`text-xs font-medium ${j.canceled ? 'text-ink-muted' : 'text-danger'}`}
+                  title={j.error}
+                >
+                  {j.canceled ? 'Canceled' : 'Failed'}
+                </span>
+              ) : null}
               {j.outputPath ? (
                 <button
                   className="text-xs text-accent hover:underline"

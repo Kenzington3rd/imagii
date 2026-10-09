@@ -304,3 +304,39 @@ describe('the T-47 post-restore contract', () => {
     expect(store().canRedo()).toBe(false)
   })
 })
+
+describe('a rejected search (T-84)', () => {
+  // An outage comes back as a `notice` on a normal response (T-30); a REJECTED
+  // search is a bridge fault or a bug. It still must not reach the user as
+  // Electron's envelope, and the raw error must not be lost.
+  function stubSearch(images: () => Promise<never>): void {
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+  }
+
+  it('stores a plain sentence, with the cause when it is a known one', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const raw = new Error("Error invoking remote method 'search:images': Error: net::ERR_PROXY_CONNECTION_FAILED")
+    stubSearch(() => Promise.reject(raw))
+
+    await store().search('mountains')
+
+    expect(store().searchError).toBe(
+      "Search failed. imagii couldn't reach the internet. Check your connection and try again."
+    )
+    expect(store().searchError).not.toMatch(/invoking|remote|net::|search:images/)
+    expect(store().searchResponse).toBeNull()
+    expect(store().searchLoading).toBe(false)
+    expect(errorSpy).toHaveBeenCalledWith('[imagii] Search failed.', raw)
+    errorSpy.mockRestore()
+  })
+
+  it('an unrecognised rejection becomes the generic sentence, not its text', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    stubSearch(() => Promise.reject(new Error('query must be a string')))
+
+    await store().search('x')
+
+    expect(store().searchError).toBe('Search failed.')
+    errorSpy.mockRestore()
+  })
+})

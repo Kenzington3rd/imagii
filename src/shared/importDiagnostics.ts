@@ -1,3 +1,6 @@
+import { ipcErrorMessage } from './ipcError'
+import { userFacingError } from './userFacingError'
+
 export interface DropDiagnostic {
   hadFile: boolean
   hadPath: boolean
@@ -69,34 +72,75 @@ export function examineDroppedFile(file: File | undefined): DropDiagnostic {
   }
 }
 
+/** Which studio's importer is asking — the same failure reads differently to
+ *  someone who dropped a video and someone who dropped a sound. */
+export type ImportKind = 'video' | 'audio'
+
 /**
- * Format a thrown error from probe / loadSource into a user-facing message that
- * preserves the actual underlying detail (instead of swallowing it as "Failed
- * to load video"). Keeps the message bounded and adds an OS-specific hint when
- * the error pattern matches a known cause.
+ * Turn a thrown error from probe / loadSource / extraction into what the user
+ * should read when a file will not open.
+ *
+ * T-84: this used to print the raw message first ("ffprobe exit 1:
+ * /path/to/clip.mp4: No such file or directory") and the explanation after
+ * it, and an error that crossed the IPC bridge arrived with Electron's
+ * "Error invoking remote method 'video:probe':" in front of THAT. Now the
+ * user reads one sentence about their file, and the raw message goes to the
+ * console where a bug report can find it. The audio importer used the same
+ * function and so showed video wording ("The video uses a codec…") to
+ * someone who had dropped an mp3 — `kind` is the fix.
+ *
+ * Anything not recognised falls through to `userFacingError`: a sentence main
+ * wrote for the user (the text-file refusal) passes through whole, and the
+ * rest becomes "imagii couldn't open that file."
  */
-export function describeImportError(err: unknown, filePath?: string | null): string {
-  const baseMsg = err instanceof Error ? err.message : 'Import failed'
-  const truncated = baseMsg.length > 240 ? `${baseMsg.slice(0, 240)}…` : baseMsg
-
-  const lowered = baseMsg.toLowerCase()
+export function describeImportError(
+  err: unknown,
+  filePath?: string | null,
+  kind: ImportKind = 'video'
+): string {
+  const lowered = ipcErrorMessage(err, '').toLowerCase()
   const inCloud = pathLooksLikeCloudSync(filePath ?? '')
+  const known = (sentence: string): string => {
+    console.error('[imagii] could not open', filePath ?? '(no path)', err)
+    return sentence
+  }
 
-  if (lowered.includes('enoent') || lowered.includes('cannot find') || lowered.includes('no such file')) {
-    return `${truncated}\n\nThe file isn't where the app expected it. ${
+  if (
+    lowered.includes('enoent') ||
+    lowered.includes('cannot find') ||
+    lowered.includes('no such file') ||
+    lowered.includes('system cannot find')
+  ) {
+    return known(
       inCloud
-        ? 'It looks like a cloud-sync placeholder — right-click → Always keep on this device, then retry.'
-        : 'Try the file picker instead, or check that the file still exists at that path.'
-    }`
+        ? "imagii can't find that file. It looks like a cloud-sync placeholder — right-click it in Explorer, choose Always keep on this device, then try again."
+        : "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…."
+    )
   }
-  if (lowered.includes('access') && lowered.includes('denied')) {
-    return `${truncated}\n\nWindows denied read access to that file. Common causes: antivirus quarantined ffprobe.exe (add a folder exception for imagii's install location), or the file is locked by another program (close any app that has it open).`
+  if (
+    (lowered.includes('access') && lowered.includes('denied')) ||
+    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered)
+  ) {
+    return known('Windows blocked access. Close any app using the file, or check your antivirus.')
   }
-  if (lowered.includes('no video stream')) {
-    return 'This file has no video stream. If it\'s an audio file (.mp3, .wav, etc.), try the Audio Studio instead.'
+  if (kind === 'video' && lowered.includes('no video stream')) {
+    return known('This file has no picture, only sound. Open it in Audio Studio instead.')
   }
-  if (lowered.includes('codec') || lowered.includes('decoder')) {
-    return `${truncated}\n\nThe video uses a codec FFmpeg can't decode. H.264, H.265, VP9, ProRes, and AV1 should all work — older AVI files sometimes use codecs we don't support.`
+  if (kind === 'audio' && lowered.includes('no audio stream')) {
+    return known("This file has no sound, so there's nothing to clean. Pick a file with audio.")
   }
-  return truncated
+  if (
+    lowered.includes('codec') ||
+    lowered.includes('decoder') ||
+    lowered.includes('invalid data found') ||
+    lowered.includes('moov atom') ||
+    lowered.includes('no usable duration')
+  ) {
+    return known(
+      kind === 'video'
+        ? "imagii can't read this video format. Re-export it as MP4 from your recorder."
+        : "imagii can't read this audio format. Re-export it as WAV or MP3 and try again."
+    )
+  }
+  return userFacingError(err, "imagii couldn't open that file.").message
 }

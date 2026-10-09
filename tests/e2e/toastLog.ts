@@ -41,13 +41,23 @@ const TOAST_SELECTOR = '[data-rht-toaster] [role="status"]'
 export async function installToastLog(window: Page): Promise<void> {
   await window.evaluate((selector) => {
     const log: string[] = []
+    // T-84: parallel to `log` — for each entry, whether the toast drew a
+    // status icon beside its message. See `readToastEntries`.
+    const icons: boolean[] = []
     ;(window as unknown as { __toastLog: string[] }).__toastLog = log
+    ;(window as unknown as { __toastIcons: boolean[] }).__toastIcons = icons
     const seen = new WeakSet<Element>()
     const record = (el: Element): void => {
       if (seen.has(el)) return
       seen.add(el)
       const text = (el.textContent ?? '').trim()
-      if (text) log.push(text)
+      if (!text) return
+      log.push(text)
+      // The message node's siblings inside the toast bar: react-hot-toast
+      // draws a status icon (the red cross of toast.error, the check of
+      // toast.success) as a sibling of the message, and draws NOTHING for a
+      // plain toast(). Read at insertion, when the bar is first committed.
+      icons.push((el.parentElement?.childElementCount ?? 1) > 1)
     }
     new MutationObserver((records) => {
       for (const r of records) {
@@ -65,4 +75,22 @@ export async function installToastLog(window: Page): Promise<void> {
 /** Every toast text recorded since `installToastLog`, in order. */
 export function readToastLog(window: Page): Promise<string[]> {
   return window.evaluate(() => (window as unknown as { __toastLog?: string[] }).__toastLog ?? [])
+}
+
+/**
+ * T-84: every toast since `installToastLog` with its KIND, in order.
+ *
+ * `hasIcon` is false for a plain `toast(...)` and true for `toast.error` /
+ * `toast.success` / a toast given an explicit `icon`. It exists for one
+ * assertion the text cannot make: a Cancel is not a failure. "Export canceled"
+ * reads fine in a red error toast, and an assertion on the words alone passes
+ * it — the cancel specs pin that the toast that carried them is neutral.
+ */
+export async function readToastEntries(
+  window: Page
+): Promise<Array<{ text: string; hasIcon: boolean }>> {
+  return window.evaluate(() => {
+    const w = window as unknown as { __toastLog?: string[]; __toastIcons?: boolean[] }
+    return (w.__toastLog ?? []).map((text, i) => ({ text, hasIcon: w.__toastIcons?.[i] ?? false }))
+  })
 }

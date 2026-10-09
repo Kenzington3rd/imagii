@@ -5,6 +5,7 @@ import { countOf } from '@shared/plural'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
 
 export function CompilationPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -61,7 +62,7 @@ export function CompilationPanel(): JSX.Element | null {
         </span>
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Compilation failed')
+      reportFailure(err, { failed: 'Compilation failed.', canceled: 'Compilation canceled.' })
     } finally {
       setBusy(false)
       jobIdRef.current = null

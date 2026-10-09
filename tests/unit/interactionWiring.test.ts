@@ -312,7 +312,7 @@ describe('T-57 — discarding an autosave has an error path', () => {
 
   it('both banner buttons that start the clear are disabled while it runs', () => {
     const corruptionBanner = banner.slice(
-      banner.indexOf('An autosave was found'),
+      banner.indexOf('imagii found an autosave from'),
       banner.indexOf('imagii autosaved your work')
     )
     expect(corruptionBanner).toMatch(/>\s*Clear\s*</)

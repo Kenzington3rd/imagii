@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
+import { cancelledOr, killAsCancelled } from './cancelMark'
 
 export interface GifJobSpec {
   jobId: string
@@ -53,12 +54,12 @@ export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: stri
     })
     child.on('error', (e) => {
       activeJobs.delete(spec.jobId)
-      reject(e)
+      reject(cancelledOr(child, e))
     })
     child.on('close', (code) => {
       activeJobs.delete(spec.jobId)
       if (code === 0) resolve()
-      else reject(new Error(`gif exit ${code}: ${stderr.slice(-500)}`))
+      else reject(cancelledOr(child, new Error(`gif exit ${code}: ${stderr.slice(-500)}`)))
     })
   })
 
@@ -68,7 +69,7 @@ export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: stri
 export function cancelGifJob(jobId: string): boolean {
   const child = activeJobs.get(jobId)
   if (!child) return false
-  child.kill('SIGKILL')
+  killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
 }
@@ -76,12 +77,6 @@ export function cancelGifJob(jobId: string): boolean {
 // B2 fix (round 16): kill all in-flight gif jobs on app quit so an orphan
 // ffmpeg.exe can't keep encoding palette+gif after the window is gone.
 export function cancelAllGifJobs(): void {
-  for (const [, child] of activeJobs) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }

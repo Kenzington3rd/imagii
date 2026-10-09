@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
-import { applyProject } from '../modules/project/ProjectIO'
+import { applyProject, describeUnavailableSources } from '../modules/project/ProjectIO'
 import { suppressAutosave } from '../hooks/useAutosave'
 import { ipcErrorMessage } from '@shared/ipcError'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
+import { reportFailure } from '../lib/reportFailure'
 import { Icon } from './Icon'
 
 interface AutosaveSnapshot {
@@ -67,6 +69,9 @@ export function AutosaveRestore(): JSX.Element | null {
         // never render. Staleness is not a gate either: a corrupt autosave
         // is never restorable, so hiding an old one just leaves it on disk
         // with no way for the user to hear about it or clear it.
+        // T-84: the validator's reason ("invalid JSON: Unexpected end of JSON
+        // input") is for whoever debugs this, not for the banner.
+        console.error('[imagii] the autosave on disk failed validation:', result.reason)
         setSnapshot({ ...result, project: undefined })
       }
     })
@@ -95,9 +100,16 @@ export function AutosaveRestore(): JSX.Element | null {
     const release = suppressAutosave()
     let restored = false
     try {
-      await applyProject(snapshot.project)
+      const outcome = await applyProject(snapshot.project)
       restored = true
-      toast.success('Restored from autosave')
+      // T-84: same rule as Open project — what could be restored is, and the
+      // one message names the file that could not.
+      const missing = describeUnavailableSources(outcome.unavailable)
+      if (missing) {
+        toast(missing, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+      } else {
+        toast.success('Restored from autosave')
+      }
       setDismissed(true)
       // T-47: and back to the studio they were in, with the selections and
       // the playhead applyProject just put back. Only on the user's own
@@ -106,7 +118,7 @@ export function AutosaveRestore(): JSX.Element | null {
       const route = snapshot.project.place?.route
       if (route) navigate(route)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Restore failed')
+      reportFailure(err, { failed: "Couldn't restore the autosave." })
     } finally {
       // Bug-fix (Phase 2.14): on success, hold suppression for 1.5s so the
       // stores' applyProject side-effects flush before autosave re-engages.
@@ -141,6 +153,14 @@ export function AutosaveRestore(): JSX.Element | null {
 
   const ageText =
     snapshot.info.ageMs !== undefined ? formatAge(snapshot.info.ageMs) : 'unknown'
+  // "from just now" is not English; "from a moment ago" is. Only the damaged
+  // banner reads the age as the end of "an autosave from …" (T-84).
+  const damagedWhen =
+    snapshot.info.ageMs === undefined
+      ? 'earlier'
+      : snapshot.info.ageMs < 60 * 1000
+        ? 'a moment ago'
+        : ageText
 
   if (!snapshot.ok) {
     return (
@@ -149,8 +169,8 @@ export function AutosaveRestore(): JSX.Element | null {
           <Icon name="warning" size={18} />
         </span>
         <span className="flex-1">
-          An autosave was found ({ageText}) but failed validation: {snapshot.reason}. It will
-          not be loaded. You can clear it.
+          imagii found an autosave from {damagedWhen}, but it's damaged and can't be restored.
+          Clear it to get rid of it.
         </span>
         <button
           className="btn-ghost px-3 py-1 text-xs"

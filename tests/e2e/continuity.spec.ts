@@ -547,7 +547,7 @@ test.describe('T-47 session continuity', () => {
       // the corruption banner is for a file whose DATA failed, and this
       // one's data is fine.
       await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText(/but failed validation/)).toHaveCount(0)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
 
       await window.getByRole('button', { name: 'Restore' }).click()
       await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })

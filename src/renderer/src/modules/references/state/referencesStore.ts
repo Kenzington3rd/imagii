@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 import type { ReferencesTab } from '@shared/workspace'
+import { userFacingError } from '@shared/userFacingError'
 
 // One definition, in shared, because a session snapshot records the tab
 // (T-47) and the validator has to know the same list. Re-exported here so
@@ -126,8 +127,11 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
         const response = await window.api.search.images(query)
         set({ searchResponse: response })
       } catch (err) {
+        // T-84: a REJECTED search is a bug or a bridge fault — an outage comes
+        // back as a `notice` on a normal response (T-30) — so this is the
+        // generic card, in plain words, with the raw error in the console.
         set({
-          searchError: err instanceof Error ? err.message : 'Search failed',
+          searchError: userFacingError(err, 'Search failed.').message,
           searchResponse: null
         })
       } finally {
