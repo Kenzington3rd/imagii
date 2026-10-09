@@ -1421,6 +1421,329 @@ IMG-PREC.
   existing T-40 slider/drag coverage green.
 - **Status:** done (round 48 — see Done)
 
+## T-81 — captions burned over a clip range show the wrong part of the transcript
+
+- **Spec:** content review 2026-10-09 (streamer lens), T-74's sibling.
+  `whisperManager.ts` ~344-362: the clip-range burn pushes `-ss`/`-to`
+  BEFORE `-i` (input seek resets timestamps to 0) and then applies
+  `subtitles=<whole-source SRT>`, whose cues are in source-absolute
+  time. A clip cut from minute 40 is captioned with words from the
+  stream's first minutes. Every existing burn-in Layer 5 test uses
+  startSec 0 — the same blind spot that hid T-74.
+- **Acceptance criteria:** the burned window shows the cues for that
+  span (`-copyts` + output-side seek, or shift the cues — pick and
+  document at the seam, citing the T-74 LESSONS entry); Layer 5 case
+  with startSec > 0 proving real cue text/pixels land in-range
+  (red-first against today's code); LESSONS entry.
+- **Status:** open
+
+## T-82 — audio cuts + "Re-attach to video" desync the sound and cut the video's tail
+
+- **Spec:** content review (streamer lens). `audio/chain.ts` ~55-63
+  closes cut gaps (`aselect…asetpts` — audio shortens);
+  `audio/process.ts` ~231-256 muxes `-c:v copy` + `-shortest`. From
+  the first cut on, sound runs ahead of picture and the video's last
+  N seconds drop. The waveform copy ("Drag…to select a region to
+  cut") never says the video is untouched, and "Re-attach to video"
+  defaults ON. Rider: `ExportDialog.tsx:53` leaves
+  `<name>.cleaned.wav` (~0.7 GB/hour) beside the MP4 forever — no
+  unlink anywhere.
+- **Acceptance criteria:** decide per the usability tiebreaker —
+  either cut the video too when re-attaching (matching what a user
+  means by "cut"), or block/warn the cuts+re-attach combination with
+  honest copy; Layer 5 case proving the shipped behavior; the temp
+  WAV is deleted after a successful mux (and the failure path leaves
+  no litter); LESSONS entry.
+- **Status:** open
+
+## T-83 — a manual crop is applied to every ticked platform and stretched to fit
+
+- **Spec:** content review (streamer lens). `ffmpeg/filters.ts`
+  ~274-282: `clip.cropRect` is applied verbatim, then
+  `scaleFilter(preset)` forces the preset's exact WxH — a 9:16 crop
+  with YouTube still ticked (the default) stretches ~3x wide. Nothing
+  warns: `ExportPanel.tsx` passes `cropAspect={null}` so the
+  red/green grid never reflects the crop, the red label reads "Trim"
+  even when the reason is aspect ("Trim" says shorten the clip), and
+  the reason text is hover-only. The safe-zone modal uses "clip" as
+  noun and verb and fires on every Clip Kit run.
+- **Acceptance criteria:** a cropped clip exports without distortion
+  on every ticked platform (pad, per-platform crop, or refuse with a
+  clear message — pick per the tiebreaker and document); the grid
+  gets the real crop aspect; red labels say WHY ("Wrong shape" /
+  "Too long") with the reason visible, durations in minutes; the
+  safe-zone modal copy rewritten in plain words; Layer 5 case on a
+  cropped clip exported to a mismatched preset; LESSONS entry.
+- **Status:** open
+
+## T-84 — the failure path speaks ffmpeg, not English
+
+- **Spec:** content review (all three lenses agree; the largest
+  cluster). ~22 catch sites toast raw `err.message` — the user reads
+  "Error invoking remote method 'video:exportBatch': Error: FFmpeg
+  exit 1: …" for ~4 seconds (STYLE_GUIDE already mandates
+  `ipcErrorMessage`; only 3 sites comply). Worse classes: pressing
+  Cancel reports as a red failure (SIGKILL → nonzero exit → the same
+  catch) across export/ClipKit/GIF/compile/reframe/PiP/highlights/
+  audio/model-download; the corrupt-autosave banner and project-load
+  toast print validator strings ("videoStudio.clips not array");
+  a moved video file aborts project load half-restored with a raw
+  probe error; search failures name a "provider switch" that does
+  not exist; `importDiagnostics` prepends raw ENOENT text; the
+  ErrorBoundary says "render error" and asks the user to "report"
+  with no channel. Sites: Home.tsx:15,33; AutosaveRestore.tsx:109;
+  ExportPanel.tsx:312; ClipKitButton.tsx:160; GifPanel.tsx:66;
+  CompilationPanel.tsx:63; ReframePanel.tsx:95; PipPanel.tsx:66;
+  CaptionsPanel.tsx:91,139,161; HighlightPanel.tsx:105;
+  VideoStudio.tsx:81; audio+image ExportDialog; ImportPanel.tsx:77;
+  ThumbnailVariants.tsx:167; MoodBoardPanel.tsx:45;
+  RecordStudio.tsx:376,396; referencesStore.ts:130.
+- **Acceptance criteria:** one shared helper turns any error into
+  plain language (strips the IPC envelope, maps known failures,
+  keeps the raw text in the console); cancellation is neutral
+  ("Export canceled. Files already finished are in your folder."),
+  never a red error, across every cancellable job; failed export
+  rows show a visible failed state after the toast fades; error
+  toasts get a longer duration; the autosave banner / project-load /
+  search / import / crash-screen copy rewritten per the review's
+  suggested lines; project load keeps applying the studios it can
+  and names the missing file; E2E drives a cancel and a failure per
+  class and asserts the visible copy (discriminating negatives per
+  round-21); LESSONS entry.
+- **Status:** open
+
+## T-85 — copy that promises what the code does not do
+
+- **Spec:** content review (all three lenses). Confirmed falsehoods
+  reaching users: ReferencePanel ~93-98 "All thumbnails are screened
+  locally before display" (no screening code exists anywhere — only
+  DuckDuckGo's own SafeSearch parameter); the reframe tutorial/panel
+  "follow the action" / "Auto" (code: 'smart' === 'center', a fixed
+  strip); Home "Capture screen + webcam + mic … one-stop alternative
+  to OBS" (no game/desktop audio — `audio: false` on the screen
+  stream; webcam-only impossible; Esc-to-stop only with focus);
+  "the watermark field stamps your @handle on every export" while
+  Clip Kit passes `watermark: null` and GIF/reframe/compile/PiP take
+  none; absolute "Everything runs locally" while Reference Search
+  and the caption-model download go online (BRANDING honesty rule);
+  HotkeyOverlay "Save full app state" while mood boards are not in
+  the project file.
+- **Acceptance criteria:** per the usability tiebreaker, each item is
+  ruled code-to-promise or promise-to-truth and documented: Clip Kit
+  APPLIES the saved watermark (code fix + Layer 5 pixel check on one
+  kit output) and warns on over-limit durations; the rest are copy
+  fixes using the review's suggested lines (SafeSearch line names
+  DuckDuckGo as the filter and search as the one online feature;
+  reframe renamed a centered 9:16 crop with Left/Center/Right and
+  the duplicate "Auto (centered)" option dropped; Record copy names
+  what is and is not captured, incl. no game audio; local-first copy
+  names its two online exceptions, guide updated to match); E2E pins
+  the new copy where tests exist; LESSONS entry.
+- **Status:** open
+
+## T-86 — tutorials auto-run over empty screens, can't be skipped, and describe a different app
+
+- **Spec:** content review (all three lenses). `useTutorial.ts` opens
+  the tour on first visit, but with no media loaded the studios
+  render only the importer, so the coachmark floats over nothing and
+  tells the user to drag handles that don't exist. "Skip" calls
+  `onClose(false)` and never persists, so the tour returns every
+  visit. Step copy is stale or false: "pink line" (playhead is
+  ember), "Open Auto-Highlights" (no such control), captions "into
+  the export" (separate file), watermark claims (see T-85),
+  'Choose file…' / 'Duck under voice' / "Quick fix wizard" naming
+  mismatches, "Image Canvas" (see T-92), "Two tabs" (three), the
+  14-format list summarized as "pretty much anything", "New:" tags
+  on shipped features, and LUFS/whisper.cpp/FFmpeg jargon.
+- **Acceptance criteria:** a tour step only shows when its target
+  exists (or the tour starts after first import — pick per the
+  tiebreaker); Skip persists (or is labeled honestly); every step's
+  text matches the live UI's control names and real behavior, jargon
+  removed, "New:" dropped; E2E: tour on an empty studio shows no
+  orphaned steps, Skip then revisit shows no tour; existing tutorial
+  coverage green; LESSONS entry.
+- **Status:** open
+
+## T-87 — "Suggest 4 titles" writes broken English
+
+- **Spec:** content review (all three lenses, verified). PostChecklist
+  VERB_BANK is past tense ('clutched', 'reacted to') while patterns
+  append d/ing: "I clutchedd a boss fight so you don't have to",
+  "Day 41 of reacted toing glitch". The {game} bank is five random
+  titles the streamer may not play; "a achievement" breaks the
+  article.
+- **Acceptance criteria:** every generatable title is grammatical
+  (base-form verbs + correct conjugation, a/an handled, or patterns
+  that need none); the game comes from the user or is omitted;
+  button relabeled "Title starters" per the review; unit test
+  generates the full cross-product and asserts no "dd"/"toing"/
+  "a a" artifacts; E2E keeps the copy-to-clipboard path green.
+- **Status:** open
+
+## T-88 — Record: the recovery hint points at a button that can't help, and Cancel eats the take
+
+- **Spec:** content review (UX + streamer lenses). "No microphone
+  found. Click 'Refresh sources'…" but Refresh only re-lists
+  screens/windows; device lists load once on mount, and the single
+  combined `getUserMedia({audio:true, video:true})` probe means a
+  missing camera also blanks the mic list (silent catch). The
+  native save dialog is titled "Save recording" but Cancel discards
+  the take with no warning; "Discard recording" during a
+  non-convert save is a no-op; "converting and writing to disk…"
+  shows when nothing converts.
+- **Acceptance criteria:** Refresh re-scans devices; the mic and
+  camera probes are split so one missing device doesn't blank the
+  other; the save dialog says Cancel discards; discard/convert copy
+  tells the truth per state; the hints name the real recovery
+  (Windows privacy settings); E2E/unit per the standing bar for the
+  reachable parts, dispositions for the OS-dialog boundary;
+  LESSONS entry.
+- **Status:** open
+
+## T-89 — captions: setup copy, English-only truth, and "Font px" that isn't pixels
+
+- **Spec:** content review (streamer lens). The setup card sends the
+  user to fetch "whisper.exe" (current whisper.cpp builds ship
+  `whisper-cli.exe`; the internal resources path is shown raw); the
+  model download never says it goes online; "the model file you
+  choose determines languages" but the model and language are
+  hard-coded English; "Font px" is scaled by libass PlayResY 288 so
+  the default 32 renders ~120 px on 1080p (the LESSONS entry already
+  documents the scaling); progress shows raw phase ids
+  ("BUILDING-SRT") and a jittering fake percent (15 + random*10);
+  burn-in runs on the original file, which no copy says.
+- **Acceptance criteria:** setup copy matches the real binary name
+  and says in one line what is manual vs automatic and that the
+  download is online-once; English-only stated plainly; the size
+  control is honest (relabel + show the effective size, or map the
+  number to real pixels); phases get plain labels and the fake
+  percent becomes an indeterminate bar; a line says captions burn
+  into the original video, not the platform exports; existing
+  caption tests green; LESSONS entry.
+- **Status:** open
+
+## T-90 — audio studio copy: broadcast-engineer language, a wizard that misreports, presets that over-save
+
+- **Spec:** content review (all three lenses). LevelsPanel ships a
+  developer note ("fixed at −1.5 dBTP this round"); the −14 preset
+  pair snaps to the wrong entry (first-match lookup); FixWizard's
+  summary derives from different logic than the patch it applies
+  (highpass can read "off" while on) and "Start over" closes the
+  dialog; cleanup presets silently save cut regions and the
+  second-track file and re-impose old cut times on new recordings;
+  the waveform cut copy never says cuts apply at export only; hum
+  removal is fixed at 60 Hz (US mains); "AAC" exports a bare .aac;
+  save/delete preset calls have no catch. Jargon sweep: loudnorm/
+  LUFS/dBTP/highpass/de-ess/sidechain/mux in rendered copy.
+- **Acceptance criteria:** the summary renders from the exact patch
+  object applied; Start over restarts; presets save cleanup settings
+  only (or say exactly what they include); the merged −14 entry or a
+  fixed lookup; cut copy says "removed when you export"; loudness
+  copy in creator terms per the review's lines; 50 Hz available or
+  the label names 60 Hz mains; .m4a container or honest label;
+  failures toast; unit/E2E per the standing bar; LESSONS entry.
+- **Status:** open
+
+## T-91 — Stream Graphics: toasts before saves, template labels that mislead, exports that carry hints
+
+- **Spec:** content review (UX + streamer lenses). Export/variants
+  toast "saved" before the native Save dialog resolves (a canceled
+  dialog still gets a success toast; the emote pack means three
+  dialogs); "Generate 3 variants" then "Save all 4"; the Twitch
+  banner template's size story doesn't match what platforms accept;
+  the "4K thumbnail … crisp shorts" line mislabels a 16:9 asset; the
+  facecam "hole" is a tinted rect + hint text that BAKES INTO the
+  export with no warning, same for "@yourhandle"/"Game name"
+  placeholders and the 40%-opacity reference layer from mood boards;
+  export scale shows no output pixels/size (2x default can exceed
+  YouTube's thumbnail cap); the lower-third asset copy implies a
+  video overlay imagii doesn't do.
+- **Acceptance criteria:** success toasts fire only after a real
+  save (or main sets the path); counts say "3 + original"; template
+  and asset copy tells the truth about sizes and destinations; the
+  hint layers are named as to-delete (or stripped on export — pick
+  per the tiebreaker and document); the reference layer's copy says
+  delete before exporting (or export skips it — same ruling); a
+  pixel readout ("Output: 2560x1440") next to scale; E2E per the
+  standing bar for the reachable parts; LESSONS entry.
+- **Status:** open
+
+## T-92 — terminology and microcopy: one name per concept, plurals, jargon, toast mechanics
+
+- **Spec:** content review (voice audit's tables + both other
+  lenses). One studio, four names ("Stream Graphics" vs "Image
+  Canvas" on Home's last-undo line, tutorials, README/FOR_MIKE);
+  highlights under five names; posting log vs diary; delete vs
+  remove vs clear vs discard crossed between button and confirm;
+  "Top L/Bot R" vs "Top left"; "Rect" vs "Rectangle"; lowercase
+  outliers ("copy", "+ clip", "✕ delete"); "1 clip(s)" / "Found 1
+  candidates" plural bugs across six sites; completion verbs vary
+  (saved/exported/done — "PiP done."); success toasts carrying the
+  only action ("Edit in Video Studio") last ~2 s and "Show" doesn't
+  say "Show in folder"; raw ids and units in labels (BUILDING-SRT →
+  T-89, "sustained-loud", "ig reels general", h264 · aac, LUFS
+  tooltips, "Bucket sec"/"Pad sec", "V bitrate" + digits-only
+  bitrates read as bits/sec, "30fps" vs "30.00 fps", missing GIF
+  width unit, exports silently 30 fps with no label); highlight
+  scores cap at 40 without chat; dialog dismiss labels vary
+  (Esc/✕/Close/Done); dialect mix ("cancelled"/"tick" vs US
+  spelling); color-grade sliders have no preview and no copy saying
+  so; "Safe zones" means crop guides; Compilation hidden until 2
+  clips; bare "+" board button lacks an aria-label.
+- **Acceptance criteria:** BRANDING_GUIDE gains the copy-conventions
+  section the audit recommends (canonical name table, sentence case,
+  delete/remove rule, toast punctuation, voice) and the renderer is
+  swept to match it; plurals correct at every site; action toasts
+  get duration + "Show in folder"; digits-only bitrates rejected or
+  auto-suffixed (unit test); the jargon list relabeled per the
+  review; interactionWiring-style pin where cheap (e.g. the plural
+  helper); guide-sync's reviewers re-run clean on the sweep;
+  LESSONS entry.
+- **Status:** open
+
+## T-93 — USER_GUIDE and release notes: a feature list where a first session needs a walkthrough
+
+- **Spec:** content review (streamer lens, section B/C). The guide
+  starts at "Home" with no first-launch page (SmartScreen, the
+  10-15 s silent unpack, antivirus, where data lives, Windows-only);
+  no end-to-end "long recording → posted clip" recipe (pick folder,
+  Clip 1 behavior, Export runs all clips, Show reveals the file); no
+  "what imagii does not do" box (no game audio, no face tracking,
+  English-only captions, projects store paths not media); stale or
+  wrong lines: "or your webcam", "stamp your handle on every
+  export", template sizes "1080p, 2K, 4K", the export-scale
+  sentence, the cache bullet under the wrong studio, "no internet
+  required (except image search)" contradicting the captions
+  download; Chat spikes, Posting helpers, Compile, and the per-studio
+  tutorial button are uncovered. The release body omits the file
+  size, the slow first launch, the Windows requirement, and that
+  "Source code (zip)" sits beside the exe.
+- **Acceptance criteria:** the guide gains first-launch,
+  first-clip-out, and limitations sections and every stale line is
+  corrected against the code; the release body in release.yml
+  follows the review's suggested text (dispatch/tag triggers
+  untouched); claims spot-checked against handlers the way this
+  review did; LESSONS entry not required (docs), but guide-sync
+  re-run clean.
+- **Status:** open
+
+## T-94 — the whole-video "Clip 1" rides along in every export and compilation
+
+- **Spec:** content review (streamer lens, verified).
+  `videoStore.ts` ~147-156: loading a source creates Clip 1 spanning
+  the full duration with YouTube ticked; highlights add clips beside
+  it; Export and Compile run ALL clips. Scan a 3-hour VOD, add five
+  highlights, press Export — the full VOD re-encodes too, and the
+  button only says "Export 6".
+- **Acceptance criteria:** the user can tell and choose what
+  exports (per the tiebreaker: e.g. adding the first highlight
+  offers to drop/untick the whole-video clip, or export honors
+  selection); the button says what it will produce; E2E drives the
+  VOD+highlights path and asserts the full source is not silently
+  re-encoded (or is clearly chosen); existing export coverage
+  green; LESSONS entry.
+- **Status:** open
+
 ---
 
 ## Done
