@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
+import { AUDIO_FORMAT_LABELS, AUDIO_PASS_LABELS } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -36,18 +37,27 @@ export function ExportDialog(): JSX.Element | null {
 
   async function startExport(): Promise<void> {
     if (!source) return
-    const defaultName = await window.api.audio.suggestOutputName(
-      source.fromVideo?.videoPath ?? source.filePath,
-      source.fromVideo && muxBack ? 'mp4' : format
-    )
-    const outputPath = await window.api.audio.pickOutputFile({
-      defaultName,
-      format: source.fromVideo && muxBack ? 'mp4' : format
-    })
+    const saveFormat = source.fromVideo && muxBack ? 'mp4' : format
+    let outputPath: string | null
+    try {
+      const defaultName = await window.api.audio.suggestOutputName(
+        source.fromVideo?.videoPath ?? source.filePath,
+        saveFormat
+      )
+      outputPath = await window.api.audio.pickOutputFile({ defaultName, format: saveFormat })
+    } catch (err) {
+      // Before the first await this was outside any catch: a rejection here
+      // left the button looking fine and the user with no word at all.
+      reportFailure(err, { failed: 'Export failed.' })
+      return
+    }
     if (!outputPath) return
 
     const jobId = nanoid(10)
-    setJob({ jobId, pass: 'render', percent: 0 })
+    // The first phase is the measuring pass when loudness is on (the render
+    // can only start once it is done) — naming "Rendering…" first would say
+    // the wrong thing for as long as the measure takes.
+    setJob({ jobId, pass: chain.loudnorm ? 'measure' : 'render', percent: 0 })
     setRunning(true)
     try {
       if (source.fromVideo && muxBack) {
@@ -58,7 +68,7 @@ export function ExportDialog(): JSX.Element | null {
           outputPath,
           chain
         })
-        toast.success('Audio cleaned and muxed back to video')
+        toast.success('Cleaned audio attached to the video')
       } else {
         await window.api.audio.export({
           jobId,
@@ -109,7 +119,7 @@ export function ExportDialog(): JSX.Element | null {
           >
             {FORMATS.map((f) => (
               <option key={f} value={f}>
-                {f.toUpperCase()}
+                {AUDIO_FORMAT_LABELS[f]}
               </option>
             ))}
           </select>
@@ -140,6 +150,12 @@ export function ExportDialog(): JSX.Element | null {
             Re-attach to video (output .mp4)
           </label>
         ) : null}
+        {source.fromVideo && muxBack && chain.cutRegions.length > 0 ? (
+          <p className="basis-full text-xs text-ink-dim">
+            Parts you removed come out of the picture too, so imagii re-encodes the video to
+            match. That takes longer than attaching the sound alone.
+          </p>
+        ) : null}
 
         <button
           className="btn-primary px-4 py-1.5 ml-auto disabled:opacity-50"
@@ -161,9 +177,7 @@ export function ExportDialog(): JSX.Element | null {
 
       {job ? (
         <div className="flex items-center gap-3 text-sm">
-          <span className="text-xs uppercase tracking-wide text-ink-muted w-16">
-            {job.pass}
-          </span>
+          <span className="text-xs text-ink-muted w-36">{AUDIO_PASS_LABELS[job.pass]}</span>
           <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
             <div
               className="h-full bg-accent"

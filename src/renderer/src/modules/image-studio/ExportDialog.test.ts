@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { captureDocument, defaultExportScale } from './ExportDialog'
+import {
+  captureDocument,
+  defaultExportScale,
+  outputPixels,
+  thumbnailSizeNote
+} from './ExportDialog'
 
 /**
  * Resolution-fragility regression: previously the ExportDialog defaulted
@@ -96,24 +101,51 @@ describe('captureDocument', () => {
     }
   }
 
+  /**
+   * A node inside the document layer (T-91): a shape carrying whatever Konva
+   * `name` Canvas.tsx gave it — `hint` for a hint layer, nothing otherwise.
+   */
+  class FakeNode {
+    shown: boolean
+    constructor(
+      readonly label: string,
+      readonly names: string,
+      shown = true
+    ) {
+      this.shown = shown
+    }
+    visible(): boolean
+    visible(value: boolean): void
+    visible(value?: boolean): boolean | void {
+      if (value === undefined) return this.shown
+      this.shown = value
+    }
+  }
+
   const PNG_1PX = 'data:image/png;base64,AA=='
   const PNG_OPTS = { mimeType: 'image/png', quality: 0.92, pixelRatio: 1 }
 
   /** A stage at an arbitrary fit-to-container zoom, recording what it is asked. */
   function fakeStage(
     zoom: number,
-    opts: { layers?: FakeLayer[]; onCapture?: () => void } = {}
+    opts: { layers?: FakeLayer[]; nodes?: FakeNode[]; onCapture?: () => void } = {}
   ) {
     const layers = opts.layers ?? []
+    const nodes = opts.nodes ?? []
     const calls: Call[] = []
     const scaleSeen: number[] = []
     /** The layers still switched on at the moment Konva was asked to draw. */
     const drawnAtCapture: string[][] = []
+    /** The document-layer nodes still switched on at that moment. */
+    const nodesAtCapture: string[][] = []
+    const selectors: string[] = []
     let scale = { x: zoom, y: zoom }
     return {
       calls,
       scaleSeen,
       drawnAtCapture,
+      nodesAtCapture,
+      selectors,
       get scale$() {
         return scale
       },
@@ -124,10 +156,18 @@ describe('captureDocument', () => {
           scale = value
         },
         getLayers: () => layers,
+        // Konva's selector search, reduced to the one form the export uses:
+        // `.name` matches a node carrying that name TOKEN.
+        find: (selector: string) => {
+          selectors.push(selector)
+          const wanted = selector.startsWith('.') ? selector.slice(1) : '\u0000'
+          return nodes.filter((n) => n.names.split(' ').includes(wanted))
+        },
         toDataURL: (callOpts: Call) => {
           calls.push(callOpts)
           scaleSeen.push(scale.x)
           drawnAtCapture.push(layers.filter((l) => l.visible()).map((l) => l.names))
+          nodesAtCapture.push(nodes.filter((n) => n.visible()).map((n) => n.label))
           opts.onCapture?.()
           return PNG_1PX
         }
@@ -245,5 +285,112 @@ describe('captureDocument', () => {
     }
     expect(f.drawnAtCapture).toEqual([[''], [''], ['']])
     expect([grid.visible(), overlay.visible()]).toEqual([true, true])
+  })
+
+  // ── T-91: hint layers stay on the canvas and out of the file ─────────────
+
+  const hintNodes = (): FakeNode[] => [
+    new FakeNode('Title', ''),
+    new FakeNode('Face placeholder', 'hint'),
+    new FakeNode('Face hint', 'hint'),
+    new FakeNode('Accent bar', ''),
+    // A name that merely CONTAINS the word is not a hint (whole-token match,
+    // as Konva's own selector does).
+    new FakeNode('Hinterland', 'hinterland')
+  ]
+
+  it('draws the document without its hint nodes', () => {
+    const f = fakeStage(1, { nodes: hintNodes() })
+    captureDocument(f.stage, 1280, 720, PNG_OPTS)
+    expect(f.selectors).toEqual(['.hint'])
+    expect(f.nodesAtCapture).toEqual([['Title', 'Accent bar', 'Hinterland']])
+  })
+
+  it('puts every hint node back the way it found it, including one already off', () => {
+    const nodes = hintNodes()
+    const alreadyOff = new FakeNode('Handle', 'hint', false)
+    const f = fakeStage(1, { nodes: [...nodes, alreadyOff] })
+    captureDocument(f.stage, 1280, 720, PNG_OPTS)
+    expect(nodes.map((n) => n.visible())).toEqual([true, true, true, true, true])
+    // "Restore" is each node's PRIOR flag: a hidden layer stays hidden.
+    expect(alreadyOff.visible()).toBe(false)
+  })
+
+  it('restores the hint nodes even when the capture throws', () => {
+    const nodes = hintNodes()
+    const f = fakeStage(2.5, {
+      nodes,
+      onCapture: () => {
+        throw new Error('canvas is tainted')
+      }
+    })
+    expect(() => captureDocument(f.stage, 1280, 720, PNG_OPTS)).toThrow('canvas is tainted')
+    expect(nodes.every((n) => n.visible())).toBe(true)
+    expect(f.scale$).toEqual({ x: 2.5, y: 2.5 })
+  })
+
+  it('hides chrome layers and hint nodes together, and the emote pack captures all three times without them', () => {
+    const grid = new FakeLayer('grid chrome')
+    const nodes = hintNodes()
+    const f = fakeStage(4, { layers: [new FakeLayer(''), grid], nodes })
+    for (const size of [28, 56, 112]) {
+      captureDocument(f.stage, 112, 112, { ...PNG_OPTS, pixelRatio: size / 112 })
+    }
+    expect(f.drawnAtCapture).toEqual([[''], [''], ['']])
+    expect(f.nodesAtCapture).toEqual(Array(3).fill(['Title', 'Accent bar', 'Hinterland']))
+    expect(grid.visible()).toBe(true)
+    expect(nodes.every((n) => n.visible())).toBe(true)
+  })
+})
+
+/**
+ * T-91: the readout beside Scale. It is a measurement of the file, so it floors
+ * exactly as Konva's output canvas does (width * pixelRatio, truncated).
+ */
+describe('outputPixels', () => {
+  it('is the document times the scale', () => {
+    expect(outputPixels(1280, 720, 1)).toEqual({ width: 1280, height: 720 })
+    expect(outputPixels(1280, 720, 2)).toEqual({ width: 2560, height: 1440 })
+    expect(outputPixels(1280, 720, 3)).toEqual({ width: 3840, height: 2160 })
+    expect(outputPixels(1280, 720, 0.5)).toEqual({ width: 640, height: 360 })
+  })
+
+  it('truncates a fractional size the way the capture does', () => {
+    expect(outputPixels(1201, 801, 0.5)).toEqual({ width: 600, height: 400 })
+    expect(outputPixels(1, 1, 0.5)).toEqual({ width: 0, height: 0 })
+  })
+
+  it('the picker\'s default on a HiDPI screen is what the readout warns about', () => {
+    const scale = defaultExportScale(2)
+    expect(outputPixels(1280, 720, scale)).toEqual({ width: 2560, height: 1440 })
+  })
+})
+
+describe('thumbnailSizeNote', () => {
+  const NOTE = "Bigger than YouTube's thumbnail size (1280x720)."
+
+  it('stays quiet at YouTube\'s own size and below', () => {
+    expect(thumbnailSizeNote(1280, 720, false)).toBeNull()
+    expect(thumbnailSizeNote(640, 360, false)).toBeNull()
+  })
+
+  it('speaks up for a 16:9 export that is bigger', () => {
+    expect(thumbnailSizeNote(2560, 1440, false)).toBe(NOTE)
+    expect(thumbnailSizeNote(3840, 2160, false)).toBe(NOTE)
+    expect(thumbnailSizeNote(1920, 1080, false)).toBe(NOTE)
+  })
+
+  it('stays quiet for a shape that is not a thumbnail: square, vertical, wide banner', () => {
+    expect(thumbnailSizeNote(1080, 1080, false)).toBeNull()
+    expect(thumbnailSizeNote(1080, 1920, false)).toBeNull()
+    expect(thumbnailSizeNote(2560, 423, false)).toBeNull()
+  })
+
+  it('stays quiet for a transparent document — that is a stream overlay, not a thumbnail', () => {
+    expect(thumbnailSizeNote(1920, 1080, true)).toBeNull()
+  })
+
+  it('does not divide by zero', () => {
+    expect(thumbnailSizeNote(0, 0, false)).toBeNull()
   })
 })

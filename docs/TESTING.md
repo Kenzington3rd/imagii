@@ -59,7 +59,20 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1735 tests across 84 files (round 54 added four files —
+**Count.** 1955 tests across 95 files (round 55 added eleven files — `src/shared/audioPreset.test.ts`
+and `PresetPanel.test.ts`, the T-90 old-shape preset fixture driven through the real
+store (the cut times an older build saved must not come back); `fixWizard.test.ts`, all
+18 answer combinations held to the patch the wizard applies; `src/shared/audio.test.ts`;
+`src/main/ipc/audioSaveFormat.test.ts`, the real save-dialog handlers (AAC asks for
+`.m4a`, the re-attach `mp4` no longer throws); `tests/unit/audioStudioCopy.test.ts`, a
+syntax-tree scan for engineer's words in anything Audio Studio shows;
+`src/shared/canvas.test.ts`; `canvasStore.test.ts`, a retyped placeholder stops being a
+hint; `templateTruth.test.ts`, every template and asset card checked against its own
+data; and `src/main/imageSave.test.ts` plus `src/main/ipc/image.test.ts`, the
+renderer-to-disk trust boundary and the one-dialog-per-set contract — and grew
+`chain.test.ts` (the mains frequency), `presets.test.ts`, `LevelsPanel.test.ts` (every
+picker row round-trips) and `ExportDialog.test.ts` (hint nodes hidden for the capture,
+the output readout); round 54 added four files —
 `src/renderer/src/modules/record-studio/devices.test.ts`, the T-88 device scan
 against a fake `mediaDevices` that rejects a missing kind the way the real one
 does, so a combined probe fails it; `saveCard.test.ts`, the post-Stop card's
@@ -203,6 +216,24 @@ so these conventions are held by review and by the suite itself):
   under `<body>`, which meant a route change logged a studio's entire
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
+
+**Two more house patterns from round 55** (T-91 needed a save that can be canceled, and
+T-90 a frequency a string test cannot vouch for):
+
+- **Stand in for the OS dialog in MAIN, answer it both ways, and read the folder.**
+  `image.spec.ts`'s `installSaveStub` replaces `dialog.showSaveDialog` and
+  `showOpenDialog` and records every call; `answerDialogs` flips the next answer between
+  save, cancel and "a folder that is gone". The assertions are on files in a temp
+  directory and on the toast log, so "a canceled save raised no toast and wrote
+  nothing" is a state the suite can reach. (The old `<a download>` path was driven
+  through `will-download`, which cannot be canceled from a test — that is how the
+  cancel bug survived.) A folder has no order: tests that save a set key the files by
+  name, never by position.
+- **Measure the frequency, not the filter string.** The Layer 5 hum case exports a
+  pure tone per frequency (50, 60, 100, 120, 1000 Hz) through each mains setting and
+  asserts the tone's own level, so "the 50 Hz notch is at 50" is a drop of 20+ dB on
+  the 50 and 100 Hz tones and under 1.5 dB on the others. It was written red-first
+  against the fixed-60 chain (`dropped 0.1 dB`).
 
 **Three more house patterns from round 54** (T-88 and T-89 needed states the
 container cannot produce on its own):

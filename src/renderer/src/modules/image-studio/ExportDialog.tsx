@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
+import { HINT_NODE_NAME } from '@shared/canvas'
 import { ThumbnailVariants } from './ThumbnailVariants'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -7,15 +8,6 @@ import { reportFailure } from '../../lib/reportFailure'
 import { useCanvasStore } from './state/canvasStore'
 
 type FormatOption = 'png' | 'jpg'
-
-function downloadDataUrl(dataUrl: string, filename: string): void {
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-}
 
 /**
  * Pick a sensible default export scale for the user's display.
@@ -45,17 +37,60 @@ export function defaultExportScale(dpr: number): number {
 const EMOTE_PACK_SIZES = [28, 56, 112] as const
 
 /**
+ * The size of the file the Export button writes, in pixels (T-91). Konva sizes
+ * its output canvas `width * pixelRatio` and an HTML canvas truncates a
+ * fractional size, so 0.5x of a 1201-wide document is 600 — the readout floors
+ * the same way the capture does, which is what makes it a measurement of the
+ * file and not an estimate of it.
+ */
+export function outputPixels(
+  docWidth: number,
+  docHeight: number,
+  scale: number
+): { width: number; height: number } {
+  return { width: Math.floor(docWidth * scale), height: Math.floor(docHeight * scale) }
+}
+
+/** What YouTube asks of a custom thumbnail. */
+const YOUTUBE_THUMB = { width: 1280, height: 720 } as const
+
+/**
+ * The soft note under the size readout when a thumbnail-shaped export is bigger
+ * than YouTube's thumbnail size, or null. "Thumbnail-shaped" is 16:9 and not
+ * transparent: a document does not know it is a thumbnail, and a transparent
+ * 1920x1080 PNG is a stream overlay, not something that goes to YouTube. A
+ * 16:9 scene card will see the note too; it is a statement of fact about the
+ * size, not a warning that the export is wrong.
+ */
+export function thumbnailSizeNote(
+  width: number,
+  height: number,
+  transparent: boolean
+): string | null {
+  if (transparent || width <= 0 || height <= 0) return null
+  const sixteenNine = Math.abs(width / height - 16 / 9) < 0.01
+  const bigger = width > YOUTUBE_THUMB.width || height > YOUTUBE_THUMB.height
+  return sixteenNine && bigger
+    ? `Bigger than YouTube's thumbnail size (${YOUTUBE_THUMB.width}x${YOUTUBE_THUMB.height}).`
+    : null
+}
+
+/**
  * The Konva name Canvas.tsx tags its editor-only stage layers with — the grid
  * overlay and the selection/draw-preview overlay that carries the Transformer.
  * `captureDocument` switches every layer carrying it off for the capture.
  */
 const CHROME_LAYER = 'chrome'
 
-/** The slice of a Konva layer the export path drives. */
-interface ExportLayer {
-  hasName(name: string): boolean
+/** The slice of a Konva node the export path switches on and off. */
+interface ExportNode {
   visible(): boolean
   visible(value: boolean): void
+}
+
+/** The slice of a Konva layer the export path drives. */
+interface ExportLayer extends ExportNode {
+  hasName(name: string): boolean
 }
 
 /**
@@ -68,6 +103,8 @@ export interface ExportStage {
   scaleY(): number
   scale(value: { x: number; y: number }): void
   getLayers(): ExportLayer[]
+  /** Konva's selector search; `.hint` finds every hint layer's node (T-91). */
+  find(selector: string): ExportNode[]
   toDataURL: (opts: {
     mimeType?: string
     quality?: number
@@ -107,6 +144,15 @@ export interface ExportStage {
  * editor-only layer is chrome the moment it carries the tag, and invisible in
  * exports from that moment.
  *
+ * T-91. The same switch-off now covers HINT layers: the facecam hole and its
+ * "Facecam goes here", the "@yourhandle" and "Game name" placeholders, the
+ * safe-area frames, a 40%-opacity mood-board reference. They draw on the canvas
+ * so the person editing can see them, and are left out of the file they post.
+ * Their nodes carry `HINT_NODE_NAME` (Canvas.tsx tags them from `layer.hint`)
+ * and live INSIDE the document layer, so they are found by name rather than by
+ * layer — and put back by the same rule as the chrome: each one's PRIOR flag,
+ * in the `finally`.
+ *
  * Nothing the user can see is touched. Konva renders into a fresh off-screen
  * canvas; hide, capture and restore are one synchronous block, so the
  * `display:none` that Konva writes onto a hidden layer's canvas element
@@ -122,16 +168,17 @@ export function captureDocument(
 ): string {
   const scaleX = stage.scaleX()
   const scaleY = stage.scaleY()
-  const chrome = stage
-    .getLayers()
-    .filter((layer) => layer.hasName(CHROME_LAYER))
-    .map((layer) => ({ layer, visible: layer.visible() }))
+  const hidden: ExportNode[] = [
+    ...stage.getLayers().filter((layer) => layer.hasName(CHROME_LAYER)),
+    ...stage.find(`.${HINT_NODE_NAME}`)
+  ]
+  const priorFlags = hidden.map((node) => ({ node, visible: node.visible() }))
   try {
     stage.scale({ x: 1, y: 1 })
-    for (const { layer } of chrome) layer.visible(false)
+    for (const { node } of priorFlags) node.visible(false)
     return stage.toDataURL({ ...opts, width, height })
   } finally {
-    for (const { layer, visible } of chrome) layer.visible(visible)
+    for (const { node, visible } of priorFlags) node.visible(visible)
     stage.scale({ x: scaleX, y: scaleY })
   }
 }
@@ -147,6 +194,11 @@ export function ExportDialog(): JSX.Element {
   const [scale, setScale] = useState(() => defaultExportScale(window.devicePixelRatio))
   const [busy, setBusy] = useState(false)
   const [showVariants, setShowVariants] = useState(false)
+  // The Twitch emote template's 112×112 PNG exports as the 28/56/112 trio, at
+  // those sizes whatever Scale says.
+  const emotePack = doc.width === 112 && doc.height === 112 && format === 'png'
+  const out = outputPixels(doc.width, doc.height, scale)
+  const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
 
   async function exportImage(): Promise<void> {
     setBusy(true)
@@ -162,16 +214,28 @@ export function ExportDialog(): JSX.Element {
       // so the user gets the upload-ready pack in one click. Against the
       // document box (T-45) the pixelRatio is exact: 28 = 0.25, 56 = 0.5,
       // 112 = 1, so the bytes carry the sizes the filenames promise.
-      if (doc.width === 112 && doc.height === 112 && format === 'png') {
+      //
+      // T-91: saving goes through main, which answers only after the native
+      // dialog has and the files are on disk. The toast below is therefore
+      // raised AFTER a real save — and a canceled dialog (null) raises
+      // nothing, because the user changed their mind; it is not an error and
+      // not a success. The pack is ONE folder picker for the three files, not
+      // three Save dialogs in a row.
+      if (emotePack) {
         const stamp = Date.now()
-        for (const size of EMOTE_PACK_SIZES) {
-          const dataUrl = captureDocument(stage, doc.width, doc.height, {
+        const files = EMOTE_PACK_SIZES.map((size) => ({
+          name: `imagii-emote-${size}-${stamp}.png`,
+          dataUrl: captureDocument(stage, doc.width, doc.height, {
             mimeType: 'image/png',
             quality,
             pixelRatio: size / doc.width
           })
-          downloadDataUrl(dataUrl, `imagii-emote-${size}-${stamp}.png`)
-        }
+        }))
+        const saved = await window.api.image.saveMany({
+          title: 'Choose a folder for the emote pack (28, 56 and 112 px)',
+          files
+        })
+        if (saved === null) return
         toast.success(`Emote pack saved (3 PNGs: 28, 56, 112)`)
         return
       }
@@ -180,7 +244,12 @@ export function ExportDialog(): JSX.Element {
         quality,
         pixelRatio: scale
       })
-      downloadDataUrl(dataUrl, `imagii-${Date.now()}.${format}`)
+      const saved = await window.api.image.save({
+        dataUrl,
+        defaultName: `imagii-${Date.now()}.${format}`,
+        format
+      })
+      if (saved === null) return
       toast.success(`${format.toUpperCase()} saved`)
     } catch (err) {
       reportFailure(err, { failed: 'Export failed.' })
@@ -221,8 +290,10 @@ export function ExportDialog(): JSX.Element {
       <label className="flex items-center gap-1.5 text-xs">
         <span className="text-ink-muted">Scale</span>
         <select
-          className="bg-bg-base rounded px-1 py-0.5"
+          className="bg-bg-base rounded px-1 py-0.5 disabled:opacity-50"
           value={scale}
+          disabled={emotePack}
+          title={emotePack ? 'The emote pack is always 28, 56 and 112 px' : undefined}
           onChange={(e) => setScale(Number(e.target.value))}
         >
           <option value="0.5">0.5×</option>
@@ -231,6 +302,14 @@ export function ExportDialog(): JSX.Element {
           <option value="3">3× (HiDPI)</option>
         </select>
       </label>
+      {/* T-91: what the file will be, in pixels, from the same arithmetic the
+          capture uses — so "2× is the default on a HiDPI screen" is no longer
+          a surprise 2560x1440 thumbnail. */}
+      <span className="text-xs text-ink-muted font-mono" data-testid="export-output-size">
+        {emotePack
+          ? 'Output: 3 PNGs — 28x28, 56x56, 112x112'
+          : `Output: ${out.width}x${out.height}`}
+      </span>
       <button
         className="btn-ghost px-3 py-1 text-xs inline-flex items-center gap-1.5"
         onClick={() => setShowVariants(true)}
@@ -245,6 +324,7 @@ export function ExportDialog(): JSX.Element {
       >
         {busy ? 'Exporting…' : 'Export'}
       </button>
+      {sizeNote ? <p className="basis-full text-xs text-ink-muted">{sizeNote}</p> : null}
       <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
     </div>
   )

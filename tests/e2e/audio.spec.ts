@@ -10,7 +10,7 @@ import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { dragTo } from './drag'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
@@ -289,6 +289,65 @@ async function stubSaveDialog(app: ElectronApplication, filePath: string): Promi
 }
 
 /**
+ * The T-90 export tests need to know what the dialog was ASKED for (the AAC
+ * option must ask for `.m4a`), not just to answer it. Same stub, same place
+ * (main's `dialog`), plus a record of the options it was opened with.
+ */
+async function stubRecordingSaveDialog(app: ElectronApplication, filePath: string): Promise<void> {
+  await app.evaluate(({ dialog }, picked) => {
+    const g = globalThis as unknown as { __audioSaveOptions: unknown[] }
+    g.__audioSaveOptions = []
+    ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async (
+      _win: unknown,
+      options: unknown
+    ) => {
+      g.__audioSaveOptions.push(options)
+      return { canceled: false, filePath: picked }
+    }
+  }, filePath)
+}
+
+interface SaveOptions {
+  title?: string
+  defaultPath?: string
+  filters?: Array<{ name: string; extensions: string[] }>
+}
+
+function readSaveOptions(app: ElectronApplication): Promise<SaveOptions[]> {
+  return app.evaluate(
+    () => (globalThis as unknown as { __audioSaveOptions?: SaveOptions[] }).__audioSaveOptions ?? []
+  )
+}
+
+/** Container + stream facts of a media file, from the repo's own ffprobe. */
+function probeFile(file: string): Promise<{
+  format: string
+  duration: number
+  codecs: string[]
+}> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffprobePath, [
+      '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file
+    ])
+    let out = ''
+    child.stdout.on('data', (b) => (out += String(b)))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`ffprobe exit ${code} for ${file}`))
+      const j = JSON.parse(out) as {
+        format: { format_name: string; duration: string }
+        streams: Array<{ codec_name: string }>
+      }
+      resolve({
+        format: j.format.format_name,
+        duration: Number(j.format.duration),
+        codecs: j.streams.map((st) => st.codec_name)
+      })
+    })
+  })
+}
+
+/**
  * An hour of 8 kHz mono sound, small on disk (~14 MB) and cheap to decode, but
  * long enough that a two-pass loudness render is still measuring when Cancel
  * is clicked.
@@ -319,8 +378,12 @@ function expectNotSelected(locator: ReturnType<Page['locator']>): Promise<void> 
   return expect(locator).toHaveClass(/bg-bg-hover/)
 }
 
+/** T-90: says WHEN a marked part goes (at export) and how to undo the mark. */
+const WAVEFORM_HINT =
+  'Drag across the waveform to mark a part to remove — it comes out when you export. Click a mark to put it back.'
+
 function cutChips(window: Page) {
-  return window.locator('button[title="Click to remove this cut"]')
+  return window.locator('button[title="Click to put this part back"]')
 }
 
 /**
@@ -663,7 +726,7 @@ test.describe('imagii Audio Studio', () => {
     try {
       await dropAndWaitReady(studio)
       await expect(
-        window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
+        window.getByText(WAVEFORM_HINT)
       ).toBeVisible()
 
       // ── ONE GESTURE, ONE CUT (T-36) ──
@@ -673,6 +736,10 @@ test.describe('imagii Audio Studio', () => {
       // a single drag is what delivers it.
       await dragCut(window, 0.2, 0.4)
       await expect(cutChips(window)).toHaveCount(1)
+      // T-90: the marks are labelled for what they are — removed at export, not
+      // now — and the chip's own hint says clicking puts the part back.
+      await expect(window.locator(WAVEFORM)).toContainText('Removed when you export:')
+      await expect(cutChips(window).first()).toHaveAttribute('title', 'Click to put this part back')
 
       // Chip carries the real timestamps the pixels mapped to: 20%..40% of a
       // 3 s file (wavesurfer seeds the selection 5 px wide, so the end runs a
@@ -694,7 +761,7 @@ test.describe('imagii Audio Studio', () => {
       // (T-61 — see the drag that starts on top of one, below).
       await expect(cutRegion).toHaveCSS('pointer-events', 'none')
       await expect(
-        window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
+        window.getByText(WAVEFORM_HINT)
       ).toHaveCount(0)
 
       // ── a second cut, from its own single gesture ──
@@ -777,7 +844,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(cutChips(window)).toHaveCount(0)
       await expect(window.locator(`${WAVEFORM} [part~="cut-0"]`)).toHaveCount(0)
       await expect(
-        window.getByText('Drag on the waveform to select a region to cut. Click a cut tag to undo it.')
+        window.getByText(WAVEFORM_HINT)
       ).toBeVisible()
     } finally {
       await closeStudio(studio)
@@ -835,9 +902,9 @@ test.describe('imagii Audio Studio', () => {
       await expectSelected(option('Off'))
 
       // ── the three cleanup toggles ──
-      const rumble = cleanup.getByLabel('Remove low rumble (highpass 80 Hz)')
-      const hum = cleanup.getByLabel('Reduce 60 Hz hum / power-line buzz')
-      const deEss = cleanup.getByLabel('De-ess sibilance (dynamic)')
+      const rumble = cleanup.getByLabel('Remove low rumble (below 80 Hz)')
+      const hum = cleanup.getByLabel('Hum removal (60 Hz mains)')
+      const deEss = cleanup.getByLabel("Softer harsh 's' sounds")
       for (const box of [rumble, hum, deEss]) {
         await expect(box).not.toBeChecked()
         await box.check()
@@ -847,6 +914,29 @@ test.describe('imagii Audio Studio', () => {
         await box.uncheck()
         await expect(box).not.toBeChecked()
       }
+
+      // ── T-90: hum removal is tuned to the user's grid ──
+      // The picker is there exactly while hum removal is on, starts at the
+      // 60 Hz the filter always used, and relabels the box when it changes.
+      const mains = cleanup.getByLabel('Power-line frequency')
+      await expect(mains).toHaveCount(0)
+      await hum.check()
+      await expect(mains).toBeVisible()
+      await expect(mains).toHaveValue('60')
+      await expect(mains.locator('option')).toHaveText([
+        '60 Hz — US, Canada',
+        '50 Hz — most other regions'
+      ])
+      await mains.selectOption('50')
+      await expect(cleanup.getByLabel('Hum removal (50 Hz mains)')).toBeChecked()
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).toHaveCount(0)
+      await mains.selectOption('60')
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await hum.uncheck()
+      await expect(mains).toHaveCount(0)
+      // The strength row and the three boxes speak a streamer's language.
+      await expect(cleanup).toContainText('Quieter background (strength)')
+      await expect(cleanup).not.toContainText(/Denoise|highpass|De-ess|sibilance/i)
     } finally {
       await closeStudio(studio)
     }
@@ -872,7 +962,7 @@ test.describe('imagii Audio Studio', () => {
       await expectSelected(preset('Off'))
 
       // ── loudnorm + LUFS number + platform select ──
-      const lufs = levels.getByLabel('Loudness target in LUFS')
+      const lufs = levels.getByLabel('Loudness target (LUFS)')
       const loudnorm = levels.getByRole('checkbox')
       await expect(lufs).toBeDisabled()
       await expect(levels.getByLabel('Loudness platform preset')).toHaveCount(0)
@@ -883,10 +973,16 @@ test.describe('imagii Audio Studio', () => {
       // -16 is the podcast target, so the picker reads Podcast without anyone
       // having chosen it.
       await expect(platform).toHaveValue('podcast')
-      await expect(levels).toContainText('Two-pass loudnorm')
+      // T-90: the developer note ("Two-pass loudnorm… fixed at -1.5 dBTP this
+      // round") is a creator-facing explanation of what the number means.
+      await expect(levels).toContainText(
+        'Loudness target — how loud the finished audio is. −16 suits talking and podcasts; ' +
+          "−14 matches YouTube, Spotify, TikTok and Reels. imagii measures the whole file first, so exports take a little longer."
+      )
+      await expect(levels).not.toContainText(/loudnorm|dBTP|this round/)
 
       // Platform -> number, every option in the picker.
-      await platform.selectOption('youtube')
+      await platform.selectOption('streaming')
       await expect(lufs).toHaveValue('-14')
       await platform.selectOption('broadcast')
       await expect(lufs).toHaveValue('-23')
@@ -894,12 +990,21 @@ test.describe('imagii Audio Studio', () => {
       await expect(lufs).toHaveValue('-16')
       await platform.selectOption('broadcast')
       await expect(lufs).toHaveValue('-23')
-      // TikTok shares YouTube's -14 target, and lufsTargetToPresetId maps -14
-      // back to the FIRST match, so the picker snaps to YouTube. Documented
-      // behavior (LevelsPanel.tsx), pinned here so a change is deliberate.
-      await platform.selectOption('tiktok')
+      // T-90: YouTube/Spotify and TikTok/Reels were two rows with one number,
+      // so choosing the second snapped the picker back to the first. They are
+      // ONE row now, and the row you pick is the row that stays picked.
+      await expect(platform.locator('option')).toHaveText([
+        'Talking and podcasts (−16)',
+        'YouTube, Spotify, TikTok, Reels (−14)',
+        'Broadcast TV and radio (−23)',
+        'Custom'
+      ])
+      await platform.selectOption({ label: 'YouTube, Spotify, TikTok, Reels (−14)' })
       await expect(lufs).toHaveValue('-14')
-      await expect(platform).toHaveValue('youtube')
+      await expect(platform).toHaveValue('streaming')
+      await expect(platform.locator('option:checked')).toHaveText(
+        'YouTube, Spotify, TikTok, Reels (−14)'
+      )
 
       // Number -> "Custom" detection.
       await lufs.fill('-18')
@@ -1006,7 +1111,24 @@ test.describe('imagii Audio Studio', () => {
       await dialog.getByRole('button', { name: 'Yeah, kind of echoy' }).click()
       await dialog.getByRole('button', { name: 'Talking / voice' }).click()
       await expect(dialog).toContainText('Ready to apply')
+      // T-90: Start over RESTARTS — the dialog stays open on question one with
+      // nothing answered. (It used to close the dialog, which is Close's job.)
       await dialog.getByRole('button', { name: 'Start over' }).click()
+      await expect(dialog).toHaveCount(1)
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      await expect(dialog).toContainText('Is there background noise (HVAC, fan, traffic)?')
+      await expect(dialog).not.toContainText('Ready to apply')
+      // …and it is a real restart: a different run from here gives a different
+      // summary, not the first run's answers.
+      await dialog.getByRole('button', { name: 'None to speak of' }).click()
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await dialog.getByRole('button', { name: 'Music', exact: true }).click()
+      await expect(dialog).toContainText('Quieter background: off')
+      await expect(dialog).not.toContainText('Quieter background: on (aggressive)')
+      await dialog.getByRole('button', { name: 'Start over' }).click()
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      // Close is what closes: it leaves a fresh wizard behind for next time.
+      await dialog.getByRole('button', { name: 'Close' }).click()
       await expect(dialog).toHaveCount(0)
       await openWizard.click()
       await expect(dialog).toContainText('Quick fix · 1 of 3')
@@ -1015,12 +1137,17 @@ test.describe('imagii Audio Studio', () => {
       await dialog.getByRole('button', { name: 'Yes, pretty loud' }).click()
       await dialog.getByRole('button', { name: 'Yeah, kind of echoy' }).click()
       await dialog.getByRole('button', { name: 'Talking / voice' }).click()
-      // The summary names exactly what will be set…
-      await expect(dialog).toContainText('Denoise: aggressive')
-      await expect(dialog).toContainText('Highpass + 60 Hz hum reduction: on')
-      await expect(dialog).toContainText('De-ess: on')
+      // The summary names exactly what will be set, in a streamer's words
+      // (T-90) and in imagii's voice, not "I'll"…
+      await expect(dialog).toContainText('Based on your answers, imagii will set:')
+      await expect(dialog).not.toContainText("I'll")
+      await expect(dialog).toContainText('Quieter background: on (aggressive)')
+      await expect(dialog).toContainText('Low rumble removal: on')
+      await expect(dialog).toContainText('Hum removal: on')
+      await expect(dialog).toContainText("Softer harsh 's' sounds: on")
       await expect(dialog).toContainText('Compressor: voice')
-      await expect(dialog).toContainText('Loudnorm to −16 LUFS')
+      await expect(dialog).toContainText('Even volume: on (target −16)')
+      await expect(dialog).not.toContainText(/Denoise|Highpass|De-ess|Loudnorm|LUFS/)
       // …and the echoy answer produces the room-treatment tip (INIT-A) rather
       // than a filter that cannot exist.
       await expect(dialog).toContainText('room reverb is hard to remove after the fact')
@@ -1037,12 +1164,12 @@ test.describe('imagii Audio Studio', () => {
       const cleanup = window.locator(CLEANUP)
       const levels = window.locator(LEVELS)
       await expectSelected(cleanup.getByRole('button', { name: 'Aggressive', exact: true }))
-      await expect(cleanup.getByLabel('Remove low rumble (highpass 80 Hz)')).toBeChecked()
-      await expect(cleanup.getByLabel('Reduce 60 Hz hum / power-line buzz')).toBeChecked()
-      await expect(cleanup.getByLabel('De-ess sibilance (dynamic)')).toBeChecked()
+      await expect(cleanup.getByLabel('Remove low rumble (below 80 Hz)')).toBeChecked()
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await expect(cleanup.getByLabel("Softer harsh 's' sounds")).toBeChecked()
       await expectSelected(levels.getByRole('button', { name: 'Voice', exact: true }))
       await expect(levels.getByRole('checkbox')).toBeChecked()
-      await expect(levels.getByLabel('Loudness target in LUFS')).toHaveValue('-16')
+      await expect(levels.getByLabel('Loudness target (LUFS)')).toHaveValue('-16')
       await expect(levels.getByLabel('Loudness platform preset')).toHaveValue('podcast')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-03-wizard-applied.png') })
 
@@ -1071,39 +1198,56 @@ test.describe('imagii Audio Studio', () => {
       // Hand-set the three toggles first so "off" is a real change rather
       // than a default that never moved.
       await window.keyboard.press('Escape')
-      await cleanup.getByLabel('Remove low rumble (highpass 80 Hz)').check()
-      await cleanup.getByLabel('Reduce 60 Hz hum / power-line buzz').check()
-      await cleanup.getByLabel('De-ess sibilance (dynamic)').check()
+      await cleanup.getByLabel('Remove low rumble (below 80 Hz)').check()
+      await cleanup.getByLabel('Hum removal (60 Hz mains)').check()
+      await cleanup.getByLabel("Softer harsh 's' sounds").check()
       await openWizard.click()
       await dialog.getByRole('button', { name: 'None to speak of' }).click()
       await dialog.getByRole('button', { name: 'Sounds dry' }).click()
       await dialog.getByRole('button', { name: 'Music', exact: true }).click()
-      await expect(dialog).toContainText('Denoise: off')
-      await expect(dialog).toContainText('Highpass + 60 Hz hum reduction: off')
-      await expect(dialog).toContainText('De-ess: off')
+      await expect(dialog).toContainText('Quieter background: off')
+      await expect(dialog).toContainText('Low rumble removal: off')
+      await expect(dialog).toContainText('Hum removal: off')
+      await expect(dialog).toContainText("Softer harsh 's' sounds: off")
       await expect(dialog).toContainText('Compressor: music')
       // A dry room gets no reverb tip.
       await expect(dialog).not.toContainText('room reverb is hard to remove')
       await dialog.getByRole('button', { name: 'Apply' }).click()
       await expectSelected(cleanup.getByRole('button', { name: 'Off', exact: true }))
-      await expect(cleanup.getByLabel('Remove low rumble (highpass 80 Hz)')).not.toBeChecked()
-      await expect(cleanup.getByLabel('Reduce 60 Hz hum / power-line buzz')).not.toBeChecked()
-      await expect(cleanup.getByLabel('De-ess sibilance (dynamic)')).not.toBeChecked()
+      await expect(cleanup.getByLabel('Remove low rumble (below 80 Hz)')).not.toBeChecked()
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      await expect(cleanup.getByLabel("Softer harsh 's' sounds")).not.toBeChecked()
       await expectSelected(levels.getByRole('button', { name: 'Music', exact: true }))
       await expect(levels.getByRole('checkbox')).toBeChecked()
+
+      // ── T-90: the list and the apply step are ONE object ──
+      // A quiet room with a talking recording: the old summary printed
+      // "Highpass + 60 Hz hum reduction: off" and Apply then switched the
+      // highpass ON. Now the rumble line says on, the hum line says off, and
+      // the panels agree with both after Apply.
+      await openWizard.click()
+      await dialog.getByRole('button', { name: 'None to speak of' }).click()
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await dialog.getByRole('button', { name: 'Talking / voice' }).click()
+      await expect(dialog).toContainText('Low rumble removal: on')
+      await expect(dialog).toContainText('Hum removal: off')
+      await dialog.getByRole('button', { name: 'Apply' }).click()
+      await expect(cleanup.getByLabel('Remove low rumble (below 80 Hz)')).toBeChecked()
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      await expect(cleanup.getByLabel("Softer harsh 's' sounds")).toBeChecked()
 
       // ── the last two answers: mild noise, mixed content ──
       await openWizard.click()
       await dialog.getByRole('button', { name: 'A little' }).click()
       await dialog.getByRole('button', { name: 'Sounds dry' }).click()
       await dialog.getByRole('button', { name: 'Both, mixed' }).click()
-      await expect(dialog).toContainText('Denoise: medium')
+      await expect(dialog).toContainText('Quieter background: on (medium)')
       await expect(dialog).toContainText('Compressor: mixed')
       await dialog.getByRole('button', { name: 'Apply' }).click()
       await expectSelected(cleanup.getByRole('button', { name: 'Medium', exact: true }))
-      await expect(cleanup.getByLabel('Remove low rumble (highpass 80 Hz)')).toBeChecked()
-      await expect(cleanup.getByLabel('Reduce 60 Hz hum / power-line buzz')).toBeChecked()
-      await expect(cleanup.getByLabel('De-ess sibilance (dynamic)')).toBeChecked()
+      await expect(cleanup.getByLabel('Remove low rumble (below 80 Hz)')).toBeChecked()
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await expect(cleanup.getByLabel("Softer harsh 's' sounds")).toBeChecked()
       await expectSelected(levels.getByRole('button', { name: 'Mixed', exact: true }))
     } finally {
       await closeStudio(studio)
@@ -1122,7 +1266,12 @@ test.describe('imagii Audio Studio', () => {
       const levels = window.locator(LEVELS)
       const presetDir = path.join(studio.userDataDir, 'audio-presets')
 
-      await expect(presets).toContainText('Get the chain dialed in, name it, and save.')
+      // T-90: the panel says exactly what a preset keeps — before AND after
+      // the first one is saved, not only on the empty list.
+      const PRESET_HINT =
+        'Saves your cleanup settings — noise, levels, and voice treatments — so you can reuse them. ' +
+        'Cuts and the second track stay with the session.'
+      await expect(presets).toContainText(PRESET_HINT)
 
       // Naming nothing is refused before any IPC happens.
       await presets.getByRole('button', { name: 'Save current' }).click()
@@ -1133,10 +1282,25 @@ test.describe('imagii Audio Studio', () => {
 
       // ── dial a chain in, save it with Enter ──
       await cleanup.getByRole('button', { name: 'Medium', exact: true }).click()
-      await cleanup.getByLabel('De-ess sibilance (dynamic)').check()
+      await cleanup.getByLabel("Softer harsh 's' sounds").check()
       await levels.getByRole('button', { name: 'Voice', exact: true }).click()
       await levels.getByRole('checkbox').check()
-      await levels.getByLabel('Loudness target in LUFS').fill('-14')
+      await levels.getByLabel('Loudness target (LUFS)').fill('-14')
+      // …and the 50 Hz mains, chosen through the picker that appears with it.
+      await cleanup.getByLabel('Hum removal (60 Hz mains)').check()
+      await cleanup.getByLabel('Power-line frequency').selectOption('50')
+      await expect(cleanup.getByLabel('Hum removal (50 Hz mains)')).toBeChecked()
+      // THIS recording's own edits: one cut, and a music bed. Neither is a
+      // cleanup setting, and neither may end up in the preset (T-90).
+      await dragCut(window, 0.2, 0.4)
+      await expect(cutChips(window)).toHaveCount(1)
+      const todaysCut = (await cutChips(window).first().textContent()) ?? ''
+      await stubOpenDialog(studio.app, studio.fixture)
+      await window
+        .locator(MULTITRACK)
+        .getByRole('button', { name: /Background music/ })
+        .click()
+      await expect(window.locator(MULTITRACK)).toContainText('Background music: e2e-tone.wav')
       await nameInput.fill('Mic A')
       await nameInput.press('Enter')
       await expect
@@ -1155,12 +1319,21 @@ test.describe('imagii Audio Studio', () => {
         deEss: true,
         compressor: 'voice',
         loudnorm: true,
-        loudnormTargetLufs: -14
+        loudnormTargetLufs: -14,
+        hum60: true,
+        humHz: 50
       })
+      // T-90: cleanup settings ONLY. The cut and the music bed that were on
+      // screen when "Save current" was pressed are not in the file…
+      expect('cutRegions' in saved.chain).toBe(false)
+      expect('secondaryTrack' in saved.chain).toBe(false)
+      expect(readFileSync(path.join(presetDir, files[0] as string), 'utf8')).not.toContain(
+        'e2e-tone.wav'
+      )
 
       // ── a second preset, saved with the button ──
       await cleanup.getByRole('button', { name: 'Off', exact: true }).click()
-      await cleanup.getByLabel('De-ess sibilance (dynamic)').uncheck()
+      await cleanup.getByLabel("Softer harsh 's' sounds").uncheck()
       await levels.getByRole('button', { name: 'Music', exact: true }).click()
       await levels.getByRole('checkbox').uncheck()
       await nameInput.fill('Mic B')
@@ -1178,10 +1351,16 @@ test.describe('imagii Audio Studio', () => {
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
         .toContain('Applied "Mic A"')
       await expectSelected(cleanup.getByRole('button', { name: 'Medium', exact: true }))
-      await expect(cleanup.getByLabel('De-ess sibilance (dynamic)')).toBeChecked()
+      await expect(cleanup.getByLabel("Softer harsh 's' sounds")).toBeChecked()
       await expectSelected(levels.getByRole('button', { name: 'Voice', exact: true }))
       await expect(levels.getByRole('checkbox')).toBeChecked()
-      await expect(levels.getByLabel('Loudness target in LUFS')).toHaveValue('-14')
+      await expect(levels.getByLabel('Loudness target (LUFS)')).toHaveValue('-14')
+      await expect(cleanup.getByLabel('Hum removal (50 Hz mains)')).toBeChecked()
+      await expect(cleanup.getByLabel('Power-line frequency')).toHaveValue('50')
+      // Applying it did not touch this recording's own cut or music bed.
+      await expect(cutChips(window)).toHaveCount(1)
+      expect((await cutChips(window).first().textContent()) ?? '').toBe(todaysCut)
+      await expect(window.locator(MULTITRACK)).toContainText('Background music: e2e-tone.wav')
 
       // ── delete: declined, then accepted ──
       dialogs.action = 'dismiss'
@@ -1231,12 +1410,12 @@ test.describe('imagii Audio Studio', () => {
       await gain.press('ArrowRight')
       await expect(panel).toContainText('-9.5 dB')
 
-      const matchLoudness = panel.getByLabel('Match loudness with primary (auto-balance via loudnorm)')
+      const matchLoudness = panel.getByLabel('Match loudness with your voice')
       await expect(matchLoudness).not.toBeChecked()
       await matchLoudness.check()
       await expect(matchLoudness).toBeChecked()
 
-      const duck = panel.getByLabel('Duck under primary (sidechain compress)')
+      const duck = panel.getByLabel('Duck under your voice')
       await expect(duck).toBeChecked()
 
       // ── the four ducking sliders (DEFAULT_DUCK_PARAMS) ──
@@ -1272,14 +1451,14 @@ test.describe('imagii Audio Studio', () => {
       await panel.getByRole('button', { name: /Second mic/ }).click()
       await expect(panel).toContainText('Second mic: e2e-tone.wav')
       await expect(panel).toContainText('+0.0 dB')
-      await expect(panel.getByLabel('Duck under primary (sidechain compress)')).not.toBeChecked()
+      await expect(panel.getByLabel('Duck under your voice')).not.toBeChecked()
       await expect(panel.getByRole('slider', { name: 'Threshold' })).toHaveCount(0)
       await panel.getByRole('button', { name: /Remove/ }).click()
 
       await panel.getByRole('button', { name: /Game audio/ }).click()
       await expect(panel).toContainText('Game audio: e2e-tone.wav')
       await expect(panel).toContainText('-3.0 dB')
-      await expect(panel.getByLabel('Duck under primary (sidechain compress)')).toBeChecked()
+      await expect(panel.getByLabel('Duck under your voice')).toBeChecked()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-04-secondary.png') })
     } finally {
       await closeStudio(studio)
@@ -1470,6 +1649,211 @@ test.describe('imagii Audio Studio', () => {
       await expect(cancel).toHaveCount(0)
       expect(existsSync(out)).toBe(false)
       expect(entries.map((e) => e.text)).not.toContain('Cleaned audio exported')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the AAC option asks for, and writes, a real .m4a (T-90)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('aac')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const exportPanel = window.locator(EXPORT)
+      const format = exportPanel.getByRole('combobox').first()
+
+      // The option says what the file will be called.
+      await expect(format.locator('option')).toHaveText(['MP3', 'WAV', 'FLAC', 'AAC (.m4a)'])
+      await format.selectOption('aac')
+
+      const out = path.join(studio.root, 'voice-cleaned.m4a')
+      await stubRecordingSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] })
+        .toContain('Cleaned audio exported')
+
+      // The save dialog was opened for .m4a — name, extension filter, all of it.
+      const [opts] = await readSaveOptions(app)
+      expect(opts?.defaultPath).toBe('e2e-tone-cleaned.m4a')
+      expect(opts?.filters).toEqual([{ name: 'M4A', extensions: ['m4a'] }])
+
+      // And what landed is an MP4-family audio file, not a raw ADTS stream.
+      const facts = await probeFile(out)
+      expect(facts.format).toContain('m4a')
+      expect(facts.codecs).toEqual(['aac'])
+      const head = readFileSync(out).subarray(4, 12).toString('latin1')
+      expect(head).toBe('ftypM4A ')
+      await expect(exportPanel.getByRole('button', { name: 'Show' })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Re-attach to video exports a video with the cleaned sound, and says what it is doing (T-90)', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('reattach')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+
+      // Nothing is cut yet, so there is nothing extra to warn about.
+      await expect(exportPanel).not.toContainText('re-encodes the video')
+      await dragCut(window, 0.2, 0.4)
+      await expect(cutChips(window)).toHaveCount(1)
+      await expect(exportPanel).toContainText(
+        'Parts you removed come out of the picture too, so imagii re-encodes the video to match. ' +
+          'That takes longer than attaching the sound alone.'
+      )
+
+      const out = path.join(studio.root, 'e2e-clip-cleaned.mp4')
+      await stubRecordingSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      // The bar names the phase in words, never the pass id.
+      await expect(exportPanel).not.toContainText(/\b(measure|render|mux)\b/)
+      await expect
+        .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
+        .toContain('Cleaned audio attached to the video')
+
+      // The save dialog was opened for an .mp4 — this used to throw before the
+      // dialog could open at all (the validator did not know the format).
+      const [opts] = await readSaveOptions(app)
+      expect(opts?.defaultPath).toBe('e2e-clip-cleaned.mp4')
+      expect(opts?.filters).toEqual([{ name: 'MP4', extensions: ['mp4'] }])
+
+      const facts = await probeFile(out)
+      expect(facts.codecs.sort()).toEqual(['aac', 'h264'])
+      // The removed part came out of the picture AND the sound: shorter than
+      // the 3 s source by about the 0.6 s that was marked.
+      expect(facts.duration).toBeLessThan(2.9)
+      expect(facts.duration).toBeGreaterThan(1.8)
+      await expect(exportPanel).toContainText('Attaching to video…')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a preset that cannot be saved or deleted says so in plain words (T-90)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('presetfail')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+
+      // A preset that saves fine, so there is one to fail to delete.
+      await presets.getByPlaceholder('My mic preset').fill('Keeper')
+      await presets.getByRole('button', { name: 'Save current' }).click()
+      await expect(presets.getByText('Keeper')).toBeVisible()
+
+      // Main's handlers now fail the way a full disk does. The renderer's own
+      // catch is the thing under test, so the rejection is the real shape
+      // (Electron wraps a handler's throw in the "Error invoking remote
+      // method" envelope), produced by replacing the handler in MAIN.
+      await app.evaluate(({ ipcMain }) => {
+        for (const channel of ['audio:savePreset', 'audio:deletePreset']) {
+          ipcMain.removeHandler(channel)
+          ipcMain.handle(channel, () => {
+            throw new Error('ENOSPC: no space left on device, write')
+          })
+        }
+      })
+
+      await presets.getByPlaceholder('My mic preset').fill('Doomed')
+      await presets.getByRole('button', { name: 'Save current' }).click()
+      const SAVE_FAILED =
+        "Couldn't save that preset. Your disk is full. Free up some space and try again."
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain(SAVE_FAILED)
+      // The name stays in the box so the user can try again, and nothing says "Saved".
+      await expect(presets.getByPlaceholder('My mic preset')).toHaveValue('Doomed')
+      expect(await readToastLog(window)).not.toContain('Saved "Doomed"')
+
+      await presets.locator('li').filter({ hasText: 'Keeper' }).getByRole('button', { name: 'Remove preset' }).click()
+      const DELETE_FAILED =
+        "Couldn't delete that preset. Your disk is full. Free up some space and try again."
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain(DELETE_FAILED)
+      // Both are errors (an icon beside them), in words with no channel names.
+      const entries = await readToastEntries(window)
+      expect(entries.find((e) => e.text === SAVE_FAILED)?.hasIcon).toBe(true)
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(
+        /Error invoking remote method|audio:savePreset|ENOSPC/
+      )
+      // The preset that was already there is still listed and still on disk.
+      await expect(presets.getByText('Keeper')).toBeVisible()
+      expect(readdirSync(presetDir)).toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a preset an older build saved with cut times and a music file applies its cleanup and nothing else (T-90)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('oldpreset')
+    const { window } = studio
+    try {
+      // The file exactly as a pre-T-90 build wrote it: the WHOLE chain, last
+      // Monday's cut and last Monday's music included.
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+      mkdirSync(presetDir, { recursive: true })
+      writeFileSync(
+        path.join(presetDir, 'old1.json'),
+        JSON.stringify({
+          id: 'old1',
+          name: 'Monday mic',
+          createdAt: 1,
+          chain: {
+            denoise: 'aggressive',
+            hum60: true,
+            rumbleHighpass: true,
+            deEss: false,
+            compressor: 'mixed',
+            loudnorm: true,
+            loudnormTargetLufs: -14,
+            gainDb: 0,
+            cutRegions: [{ startSec: 0.5, endSec: 1.5 }],
+            secondaryTrack: {
+              filePath: studio.fixture,
+              fileName: 'monday-music.wav',
+              role: 'music',
+              gainDb: -10,
+              duckUnderPrimary: true
+            }
+          }
+        }),
+        'utf8'
+      )
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      await expect(presets.getByText('Monday mic')).toBeVisible()
+      await expect(cutChips(window)).toHaveCount(0)
+
+      await presets.locator('li').filter({ hasText: 'Monday mic' }).getByRole('button', { name: 'Apply' }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Applied "Monday mic"')
+
+      // The cleanup arrived…
+      const cleanup = window.locator(CLEANUP)
+      const levels = window.locator(LEVELS)
+      await expectSelected(cleanup.getByRole('button', { name: 'Aggressive', exact: true }))
+      await expect(cleanup.getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await expectSelected(levels.getByRole('button', { name: 'Mixed', exact: true }))
+      await expect(levels.getByLabel('Loudness target (LUFS)')).toHaveValue('-14')
+      // …and last Monday's cut and music did not.
+      await expect(cutChips(window)).toHaveCount(0)
+      await expect(window.locator(WAVEFORM)).toContainText('Drag across the waveform')
+      await expect(window.locator(MULTITRACK)).toContainText('Layer in background music')
+      await expect(window.locator(MULTITRACK)).not.toContainText('monday-music.wav')
     } finally {
       await closeStudio(studio)
     }

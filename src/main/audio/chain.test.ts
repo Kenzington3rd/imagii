@@ -3,6 +3,7 @@ import {
   buildChain,
   chainEndsWithLoudnorm,
   denoiseFilter,
+  humFrequency,
   parseLoudnormJson,
   vselectForCuts
 } from './chain'
@@ -136,6 +137,52 @@ describe('buildChain — hum60 (Bug round 15 B2)', () => {
   it('omits hum filters entirely when hum60 is disabled', () => {
     const result = buildChain(spec({ hum60: false, loudnorm: false }))
     expect(result.filterPass2).not.toMatch(/bandreject/)
+  })
+})
+
+describe('buildChain — hum frequency (T-90)', () => {
+  it('a chain with no humHz notches 60 and 120, as every project saved before 50 Hz existed did', () => {
+    const result = buildChain(spec({ hum60: true, loudnorm: false }))
+    expect(result.filterPass2).toBe(
+      'bandreject=f=60:width_type=h:w=2,bandreject=f=120:width_type=h:w=2'
+    )
+  })
+
+  it('humHz 50 notches 50 and 100 — and not 60 or 120', () => {
+    const result = buildChain(spec({ hum60: true, humHz: 50, loudnorm: false }))
+    expect(result.filterPass2).toBe(
+      'bandreject=f=50:width_type=h:w=2,bandreject=f=100:width_type=h:w=2'
+    )
+    expect(result.filterPass2).not.toMatch(/f=60|f=120/)
+  })
+
+  it('humHz 60 is the same graph as no humHz at all', () => {
+    expect(buildChain(spec({ hum60: true, humHz: 60, loudnorm: false })).filterPass2).toBe(
+      buildChain(spec({ hum60: true, loudnorm: false })).filterPass2
+    )
+  })
+
+  it('the frequency is the setting on a pass-1 loudness measure too, so it is measured as it will be rendered', () => {
+    const r = buildChain(spec({ hum60: true, humHz: 50, loudnorm: true }))
+    expect(r.filterPass1).toMatch(/bandreject=f=50.*bandreject=f=100.*loudnorm/)
+  })
+
+  it('a frequency that is not exactly 50 can never reach the filter string', () => {
+    for (const bad of [49, 51, 5000, '50', '60;x', '50,anull', null, undefined, NaN, {}, [50]]) {
+      expect(humFrequency(bad)).toBe(60)
+    }
+    const hostile = buildChain(
+      spec({ hum60: true, humHz: '60:w=0,anull' as unknown as 50, loudnorm: false })
+    )
+    expect(hostile.filterPass2).toBe(
+      'bandreject=f=60:width_type=h:w=2,bandreject=f=120:width_type=h:w=2'
+    )
+  })
+
+  it('hum off emits no notch whatever humHz says', () => {
+    expect(buildChain(spec({ hum60: false, humHz: 50, loudnorm: false })).filterPass2).not.toMatch(
+      /bandreject/
+    )
   })
 })
 

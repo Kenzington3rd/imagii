@@ -129,7 +129,7 @@ export function SecondaryTrackPanel(): JSX.Element {
               checked={Boolean(secondary.matchLoudness)}
               onChange={(e) => update({ matchLoudness: e.target.checked })}
             />
-            <span>Match loudness with primary (auto-balance via loudnorm)</span>
+            <span>Match loudness with your voice</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -137,7 +137,7 @@ export function SecondaryTrackPanel(): JSX.Element {
               checked={secondary.duckUnderPrimary}
               onChange={(e) => update({ duckUnderPrimary: e.target.checked })}
             />
-            <span>Duck under primary (sidechain compress)</span>
+            <span>Duck under your voice</span>
           </label>
           {/* Phase 3.2: ducking parameter sliders only when ducking is on. */}
           {secondary.duckUnderPrimary ? (
@@ -150,7 +150,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 step={1}
                 value={secondary.duckParams?.thresholdDb ?? DEFAULT_DUCK_PARAMS.thresholdDb}
                 onChange={(thresholdDb) => updateDuck({ thresholdDb })}
-                hint="Primary level above which secondary starts compressing."
+                hint="How loud your voice has to be before this track starts to dip."
               />
               <DuckSlider
                 label="Ratio"
@@ -160,7 +160,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 step={0.5}
                 value={secondary.duckParams?.ratio ?? DEFAULT_DUCK_PARAMS.ratio}
                 onChange={(ratio) => updateDuck({ ratio })}
-                hint="How aggressively to compress (8:1 is strong)."
+                hint="How far this track dips (8:1 is a strong dip)."
               />
               <DuckSlider
                 label="Attack"
@@ -170,7 +170,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 step={1}
                 value={secondary.duckParams?.attackMs ?? DEFAULT_DUCK_PARAMS.attackMs}
                 onChange={(attackMs) => updateDuck({ attackMs })}
-                hint="How fast ducking kicks in once primary is detected."
+                hint="How fast this track dips once you start talking."
               />
               <DuckSlider
                 label="Release"
@@ -180,13 +180,13 @@ export function SecondaryTrackPanel(): JSX.Element {
                 step={10}
                 value={secondary.duckParams?.releaseMs ?? DEFAULT_DUCK_PARAMS.releaseMs}
                 onChange={(releaseMs) => updateDuck({ releaseMs })}
-                hint="How fast secondary returns once primary stops."
+                hint="How fast this track comes back up once you stop talking."
               />
             </div>
           ) : null}
           <p className="text-xs text-ink-dim">
-            Sidechain compresses this track when the primary track has signal — your voice
-            cuts through automatically. Common for music beds.
+            This track dips whenever you talk, so your voice cuts through on its own.
+            Common for music beds.
           </p>
         </div>
       )}

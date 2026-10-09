@@ -1,8 +1,21 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
+import type { ChainSpec } from '@shared/audio'
+import { cleanupSettings } from '@shared/audioPreset'
 import type { ChainPreset } from '@shared/workspace'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { reportFailure } from '../../lib/reportFailure'
+
+/**
+ * What Apply puts on the recording in front of the user (T-90): the preset's
+ * cleanup settings, and nothing else. A preset written by an older build also
+ * holds that day's cut times and second track — `cleanupSettings` drops both,
+ * so applying it cannot re-impose them on a new take.
+ */
+export function presetPatch(preset: ChainPreset): Partial<ChainSpec> {
+  return cleanupSettings(preset.chain)
+}
 
 export function PresetPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
@@ -31,20 +44,32 @@ export function PresetPanel(): JSX.Element {
       toast.error('Name your preset first')
       return
     }
-    await window.api.audio.savePreset(trimmed, chain)
+    // T-90: a failed write (full disk, a locked folder) used to be an
+    // unhandled rejection — the button looked fine and nothing was saved.
+    try {
+      await window.api.audio.savePreset(trimmed, chain)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save that preset." })
+      return
+    }
     setName('')
     await refresh()
     toast.success(`Saved "${trimmed}"`)
   }
 
   async function apply(p: ChainPreset): Promise<void> {
-    patchChain(p.chain)
+    patchChain(presetPatch(p))
     toast.success(`Applied "${p.name}"`)
   }
 
   async function remove(p: ChainPreset): Promise<void> {
     if (!confirm(`Delete preset "${p.name}"?`)) return
-    await window.api.audio.deletePreset(p.id)
+    try {
+      await window.api.audio.deletePreset(p.id)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't delete that preset." })
+      return
+    }
     await refresh()
   }
 
@@ -64,11 +89,11 @@ export function PresetPanel(): JSX.Element {
           Save current
         </button>
       </div>
-      {presets.length === 0 ? (
-        <p className="text-xs text-ink-dim">
-          Get the chain dialed in, name it, and save. One click to re-apply next session.
-        </p>
-      ) : (
+      <p className="text-xs text-ink-dim">
+        Saves your cleanup settings — noise, levels, and voice treatments — so you can reuse
+        them. Cuts and the second track stay with the session.
+      </p>
+      {presets.length > 0 ? (
         <ul className="flex flex-col gap-1">
           {presets.map((p) => (
             <li
@@ -93,7 +118,7 @@ export function PresetPanel(): JSX.Element {
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
     </div>
   )
 }

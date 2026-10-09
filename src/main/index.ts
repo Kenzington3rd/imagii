@@ -7,6 +7,7 @@ import { flushAutosaveOnQuit } from './quitFlush'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerVideoIpc } from './ipc/video'
 import { registerAudioIpc } from './ipc/audio'
+import { registerImageIpc } from './ipc/image'
 import { registerSearchIpc } from './ipc/search'
 import { registerCaptionsIpc } from './ipc/captions'
 import { registerProjectIpc } from './ipc/project'
@@ -179,6 +180,7 @@ app.whenReady().then(async () => {
   registerSettingsIpc()
   registerVideoIpc()
   registerAudioIpc()
+  registerImageIpc()
   registerSearchIpc()
   registerCaptionsIpc()
   registerProjectIpc()

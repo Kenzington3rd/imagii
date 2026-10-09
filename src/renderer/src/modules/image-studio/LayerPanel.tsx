@@ -2,6 +2,7 @@ import { useCanvasStore } from './state/canvasStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { assertDefined } from '@shared/assert'
+import { hintTag } from '@shared/canvas'
 
 export function LayerPanel(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
@@ -86,7 +87,15 @@ export function LayerPanel(): JSX.Element {
               >
                 <Icon name={layer.locked ? 'lock' : 'unlock'} size={14} />
               </button>
-              <span className="flex-1 truncate">{layer.name}</span>
+              <span className="flex-1 min-w-0 flex flex-col">
+                <span className="truncate">{layer.name}</span>
+                {/* T-91: said where the user is looking, not only in docs — a
+                    hint or a reference stays on the canvas but is left out of
+                    every export. Text, not just color, and AA on the row. */}
+                {hintTag(layer) ? (
+                  <span className="text-xs text-ink-muted">{hintTag(layer)}</span>
+                ) : null}
+              </span>
               <button
                 onClick={(e) => {
                   e.stopPropagation()

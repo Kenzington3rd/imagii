@@ -85,6 +85,23 @@ function defaultDoc(): CanvasDocument {
   }
 }
 
+/**
+ * A layer with `patch` applied. One rule beyond the merge (T-91): a hint TEXT
+ * layer whose words are changed stops being a hint. "@yourhandle" is a
+ * placeholder only until the user types their own handle — after that it is
+ * their text, and an export that silently dropped it would ship a graphic
+ * missing the one thing they filled in.
+ */
+export function applyLayerPatch(layer: CanvasLayer, patch: Partial<CanvasLayer>): CanvasLayer {
+  const next = { ...layer, ...(patch as Partial<typeof layer>) } as CanvasLayer
+  const retyped =
+    layer.hint === true &&
+    layer.type === 'text' &&
+    'text' in patch &&
+    (patch as Partial<TextLayer>).text !== layer.text
+  return retyped ? { ...next, hint: false } : next
+}
+
 function pushHistory(history: History, prev: CanvasDocument): History {
   const past = [...history.past, prev]
   return {
@@ -121,9 +138,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       doc: {
         ...prev,
-        layers: prev.layers.map((l) =>
-          l.id === id ? ({ ...l, ...(patch as Partial<typeof l>) } as CanvasLayer) : l
-        )
+        layers: prev.layers.map((l) => (l.id === id ? applyLayerPatch(l, patch) : l))
       },
       history: pushHistory(get().history, prev)
     })
@@ -254,6 +269,25 @@ export function makeImageLayer(src: string, width: number, height: number): Imag
     src,
     width,
     height
+  }
+}
+
+/**
+ * A mood-board picture dropped on the canvas as a 40%-opacity reference to
+ * trace or match (T-91: a `hint`, so the export leaves it out — a faded
+ * competitor thumbnail is never part of what the user posts).
+ */
+export function makeReferenceLayer(
+  src: string,
+  width: number,
+  height: number,
+  title: string
+): ImageLayer {
+  return {
+    ...makeImageLayer(src, width, height),
+    name: title.slice(0, 40),
+    opacity: 0.4,
+    hint: true
   }
 }
 

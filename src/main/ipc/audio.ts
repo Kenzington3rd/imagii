@@ -10,6 +10,7 @@ import {
   deletePreset as deleteChainPreset
 } from '../audio/presets'
 import type { AudioExportSpec, AudioMuxSpec, ChainSpec } from '../../shared/audio'
+import { AUDIO_SAVE_FORMATS, audioFileExtension } from '../../shared/audio'
 import {
   assertNonEmptyString,
   assertEnum,
@@ -25,6 +26,11 @@ function validateChainSpec(chain: unknown): asserts chain is ChainSpec {
   assertPlainObject(chain, 'chain')
   assertRange(chain.loudnormTargetLufs, -70, 0, 'chain.loudnormTargetLufs')
   assertRange(chain.gainDb, -60, 60, 'chain.gainDb')
+  // T-90: the mains choice is one of two numbers or absent (older projects).
+  assert(
+    chain.humHz === undefined || chain.humHz === 50 || chain.humHz === 60,
+    'chain.humHz must be 50 or 60'
+  )
   assert(Array.isArray(chain.cutRegions), 'chain.cutRegions must be an array')
   // secondaryTrack.filePath reaches `ffmpeg -i`; a traversal path would
   // mix an arbitrary file into the export. Optional/null for back-compat.
@@ -68,10 +74,16 @@ export function registerAudioIpc(): void {
     async (_e, options: { defaultName?: string; format: string } | undefined) => {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (!win) return null
-      const ext = options?.format ?? 'mp3'
-      assertEnum(ext, AUDIO_FORMATS, 'audio:pickOutputFile format')
+      const format = options?.format ?? 'mp3'
+      // The Export panel asks for 'mp4' when it re-attaches the sound to a
+      // video; that is a save format as much as 'mp3' is, and the validator
+      // used to be the four audio ones only (T-90).
+      assertEnum(format, AUDIO_SAVE_FORMATS, 'audio:pickOutputFile format')
+      // AAC is saved as .m4a (T-90): a bare .aac is a raw stream most players
+      // and editors do not treat as a normal audio file.
+      const ext = audioFileExtension(format)
       const result = await dialog.showSaveDialog(win, {
-        title: 'Save cleaned audio',
+        title: format === 'mp4' ? 'Save video with cleaned audio' : 'Save cleaned audio',
         defaultPath: options?.defaultName ?? `cleaned.${ext}`,
         filters: [{ name: ext.toUpperCase(), extensions: [ext] }]
       })
@@ -120,9 +132,9 @@ export function registerAudioIpc(): void {
     'audio:suggestOutputName',
     (_e, sourcePath: string, format: string) => {
       assertSafeAbsolutePath(sourcePath, 'sourcePath')
-      assertEnum(format, AUDIO_FORMATS, 'format')
+      assertEnum(format, AUDIO_SAVE_FORMATS, 'format')
       const base = path.parse(sourcePath).name
-      return `${base}-cleaned.${format}`
+      return `${base}-cleaned.${audioFileExtension(format)}`
     }
   )
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { useReferencesStore } from './state/referencesStore'
-import { useCanvasStore, makeImageLayer } from '../image-studio/state/canvasStore'
+import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvasStore'
 import { NameDialog } from '../../components/NameDialog'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
@@ -34,13 +34,8 @@ export function MoodBoardPanel(): JSX.Element {
       const dims = await loadImageDimensions(src)
       const maxDim = 800
       const scale = Math.min(1, maxDim / Math.max(dims.width, dims.height))
-      const layer = {
-        ...makeImageLayer(src, dims.width * scale, dims.height * scale),
-        name: title.slice(0, 40),
-        opacity: 0.4
-      }
-      addCanvasLayer(layer)
-      toast.success('Added to canvas as overlay')
+      addCanvasLayer(makeReferenceLayer(src, dims.width * scale, dims.height * scale, title))
+      toast.success("Added to canvas as a reference — it won't be in your export")
       navigate('/image')
     } catch (err) {
       reportFailure(err, { failed: "Couldn't add that image to the canvas." })
@@ -242,7 +237,7 @@ export function MoodBoardPanel(): JSX.Element {
               </div>
             )}
             <p className="text-xs text-ink-dim mt-2">
-              Hover an item and click → Canvas to drop it as a 40%-opacity reference layer.
+              Hover an item and click → Canvas to drop it as a 40%-opacity reference layer. It is a guide only: exports leave it out.
             </p>
           </>
         ) : (

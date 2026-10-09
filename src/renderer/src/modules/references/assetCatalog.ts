@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import type { CanvasDocument, CanvasLayer } from '@shared/canvas'
+import { asHint, type CanvasDocument, type CanvasLayer } from '@shared/canvas'
 import type { IconName } from '../../components/Icon'
 
 /**
@@ -98,7 +98,8 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'frame-clean-corner',
     name: 'Clean corner frame',
-    description: 'Subtle 8px gradient bar across top + bottom-left handle slot.',
+    description:
+      '1920×1080 transparent PNG for OBS — thin 8px accent bars along the top and bottom edges, plus a bottom-left handle plate.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -109,14 +110,15 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         rect('Top bar', 0, 0, 1920, 8, '#ff3131'),
         rect('Bottom bar', 0, 1072, 1920, 8, '#ff3131'),
         rect('Handle slot', 48, 980, 320, 72, 'rgba(18,12,12,0.78)', '#ff3131', 2, 10),
-        txt('Handle', 64, 1000, '@yourhandle', 32, '#ffffff')
+        asHint(txt('Handle', 64, 1000, '@yourhandle', 32, '#ffffff'))
       ]
     }
   },
   {
     id: 'frame-just-chatting',
     name: 'Just-chatting frame',
-    description: 'Big webcam window with a chat-overlay strip on the right.',
+    description:
+      '1920×1080 transparent PNG for OBS — a big webcam frame with a chat strip on the right. The "CHAT" label does not export.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -126,7 +128,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       layers: [
         rect('Webcam frame', 60, 60, 1180, 960, 'transparent', '#ff3131', 6, 24),
         rect('Chat strip', 1280, 60, 580, 960, 'rgba(18,12,12,0.55)', '#ff3131', 2, 16),
-        txt('Chat hint', 1310, 100, 'CHAT', 36, '#ff3131')
+        asHint(txt('Chat hint', 1310, 100, 'CHAT', 36, '#ff3131'))
       ]
     }
   },
@@ -135,7 +137,8 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'lower-third-clean',
     name: 'Clean lower-third',
-    description: 'Single-line name plate with role subtitle. Drop into recordings.',
+    description:
+      'Name plate with a role line — a 1920×1080 transparent PNG for OBS or your editor. imagii does not add it to a video for you.',
     category: 'lower-third',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -154,7 +157,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'scene-brb',
     name: 'BRB screen',
-    description: '1920×1080 full-screen "be right back" with handle.',
+    description: '1920×1080 full-screen "be right back" screen with your handle.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -165,14 +168,14 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         rect('Accent', 0, 0, 12, 1080, '#ff3131'),
         txt('Brb', 200, 380, 'BE RIGHT BACK', 140, '#ffffff', 'Impact, Inter, sans-serif'),
         txt('Sub', 200, 560, "Grabbing a coffee — back in a few.", 36, '#a59a97'),
-        txt('Handle', 200, 980, '@yourhandle', 28, '#ff3131')
+        asHint(txt('Handle', 200, 980, '@yourhandle', 28, '#ff3131'))
       ]
     }
   },
   {
     id: 'scene-starting-soon',
     name: 'Starting soon',
-    description: 'Pre-stream waiting screen with a countdown placeholder.',
+    description: '1920×1080 pre-stream waiting screen with a static "0:00" countdown to replace.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -190,7 +193,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'scene-ending',
     name: 'Stream ending',
-    description: 'Goodbye screen with thank-you + socials placeholder.',
+    description: '1920×1080 goodbye screen with a thank-you and a socials line to fill in.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -201,7 +204,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         txt('Thanks', 200, 360, 'THANKS FOR HANGING OUT', 100, '#ffffff', 'Impact, Inter, sans-serif'),
         txt('Sub', 200, 500, 'See you next stream.', 36, '#a59a97'),
         rect('Socials', 200, 720, 800, 120, 'rgba(255,49,49,0.12)', '#ff3131', 2, 14),
-        txt('SocialsText', 232, 752, 'Twitch · YouTube · X · TikTok — @yourhandle', 28, '#ff3131')
+        asHint(txt('SocialsText', 232, 752, 'Twitch · YouTube · X · TikTok — @yourhandle', 28, '#ff3131'))
       ]
     }
   },
@@ -210,7 +213,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'frame-clean-corner-2k',
     name: 'Clean corner frame (2K)',
-    description: '2560×1440 transparent — same as the 1080p version, sharper for 1440p streams.',
+    description: '2560×1440 transparent PNG for OBS — the 1080p frame, for 1440p streams.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -221,14 +224,14 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         rect('Top bar', 0, 0, 2560, 11, '#ff3131'),
         rect('Bottom bar', 0, 1429, 2560, 11, '#ff3131'),
         rect('Handle slot', 64, 1307, 427, 96, 'rgba(18,12,12,0.78)', '#ff3131', 3, 14),
-        txt('Handle', 85, 1333, '@yourhandle', 42, '#ffffff')
+        asHint(txt('Handle', 85, 1333, '@yourhandle', 42, '#ffffff'))
       ]
     }
   },
   {
     id: 'frame-clean-corner-4k',
     name: 'Clean corner frame (4K)',
-    description: '3840×2160 transparent — for 4K capture pipelines / YouTube re-uploads.',
+    description: '3840×2160 transparent PNG for OBS — the 1080p frame, for 4K capture.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -239,7 +242,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         rect('Top bar', 0, 0, 3840, 16, '#ff3131'),
         rect('Bottom bar', 0, 2144, 3840, 16, '#ff3131'),
         rect('Handle slot', 96, 1960, 640, 144, 'rgba(18,12,12,0.78)', '#ff3131', 4, 20),
-        txt('Handle', 128, 2000, '@yourhandle', 64, '#ffffff')
+        asHint(txt('Handle', 128, 2000, '@yourhandle', 64, '#ffffff'))
       ]
     }
   },
@@ -248,7 +251,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'social-square-clip',
     name: 'Square clip card',
-    description: '1080×1080 — title bar + 9:16 video well placeholder.',
+    description: '1080×1080 square — a title bar and a 9:16 well for a vertical clip. The well and its label do not export.',
     category: 'social-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -258,8 +261,11 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       layers: [
         rect('Title bar', 0, 0, 1080, 140, '#ff3131'),
         txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#120c0c', 'Impact, Inter, sans-serif'),
-        rect('Video well', 280, 200, 520, 800, 'rgba(255,49,49,0.10)', '#ff3131', 4, 16),
-        txt('Hint', 350, 580, 'Drop clip here', 32, '#ff3131')
+        // T-91: the well was 520 wide — 13:20, not the 9:16 the description
+        // promised. 450 x 800 is 9:16 exactly (and 315 keeps it centered), so a
+        // vertical clip scaled to the well's height fills it with no bars.
+        asHint(rect('Video well', 315, 200, 450, 800, 'rgba(255,49,49,0.10)', '#ff3131', 4, 16)),
+        asHint(txt('Hint', 350, 580, 'Drop clip here', 32, '#ff3131'))
       ]
     }
   }

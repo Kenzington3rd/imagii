@@ -13,7 +13,8 @@ import { ROUTE_ENTRY, collectRouteSources, readAll } from './routeSources'
  * The tours had drifted into a different product: a "pink line" where the
  * playhead is amber, an "Open Auto-Highlights" control nothing renders,
  * captions burned "into the export" (they make a separate file), "Duck under
- * voice" for a checkbox that says "Duck under primary", a watermark claim
+ * voice" for a checkbox that said "Duck under primary" (T-90 has since renamed
+ * it "Duck under your voice"), a watermark claim
  * that was false for four of the five places a video leaves the app, and a
  * 14-format list summarized as "pretty much anything". Nothing could fail,
  * because a step is just a string.
@@ -84,7 +85,7 @@ describe('every control a step names is on the screen it is shown on', () => {
     const all = TUTORIALS.flatMap(({ def }) => def.steps.flatMap((s) => quotedNames(s.body)))
     expect(all.length).toBeGreaterThan(25)
     // Spot-checks on names that were renamed by this ticket.
-    expect(all).toContain('Duck under primary')
+    expect(all).toContain('Duck under your voice')
     expect(all).toContain('Help me fix this')
     expect(all).toContain('Scan VOD')
   })
@@ -102,7 +103,7 @@ describe('the words that were wrong, or were jargon, stay out of the tours', () 
     [/Image Canvas/i, 'the studio is Stream Graphics'],
     [/Auto-Highlights?/i, 'there is no such control: it is "Smart highlight finder"'],
     [/Quick fix wizard/i, 'the control is "Help me fix this"'],
-    [/Duck under voice/i, 'the checkbox is "Duck under primary"'],
+    [/Duck under (primary|voice)\b/i, 'the checkbox is "Duck under your voice"'],
     [/pretty much anything/i, 'the importer lists the formats it takes'],
     [/follows? the action/i, 'Reframe cuts a fixed strip; it tracks nothing'],
     [/\btwo tabs?\b/i, 'References has three tabs'],
@@ -173,7 +174,7 @@ describe('the control-name check discriminates', () => {
 
   it('a made-up name is NOT found in the studio source (so a green run is a real find)', () => {
     expect(routeText('/audio').includes('Duck under voice')).toBe(false)
-    expect(routeText('/audio').includes('Duck under primary')).toBe(true)
+    expect(routeText('/audio').includes('Duck under your voice')).toBe(true)
     // The tutorial files themselves are not searched: they hold every name.
     expect(routeText('/video').includes('Open Auto-Highlights')).toBe(false)
   })

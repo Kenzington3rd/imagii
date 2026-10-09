@@ -1645,7 +1645,7 @@ IMG-PREC.
   copy in creator terms per the review's lines; 50 Hz available or
   the label names 60 Hz mains; .m4a container or honest label;
   failures toast; unit/E2E per the standing bar; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 55 — see Done)
 
 ## T-91 — Stream Graphics: toasts before saves, template labels that mislead, exports that carry hints
 
@@ -1669,7 +1669,7 @@ IMG-PREC.
   delete before exporting (or export skips it — same ruling); a
   pixel readout ("Output: 2560x1440") next to scale; E2E per the
   standing bar for the reachable parts; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 55 — see Done)
 
 ## T-92 — terminology and microcopy: one name per concept, plurals, jargon, toast mechanics
 
@@ -1843,7 +1843,10 @@ IMG-PREC.
   gains the same Failed/Canceled labels; round-54 add: the captions
   progress row is cleared (or labeled) after a cancelled or failed
   burn-in instead of freezing at "Burning in… N%" with a dead
-  Cancel button; E2E pins each; LESSONS entry.
+  Cancel button; round-55 add: the audio export's measure and
+  render passes each restart the bar at 0 — label the passes or
+  make one continuous bar so it does not read as a stall; E2E pins
+  each; LESSONS entry.
 - **Status:** open
 
 ## T-101 — addClipFromRange has no caller: dead code or a missing control
@@ -1884,9 +1887,73 @@ IMG-PREC.
   checklist covers a captions setup on a clean Windows machine.
 - **Status:** open (blocked on the Windows hand-test)
 
+## T-103 — which template sample texts strip on export (owner ruling)
+
+- **Spec:** round-55 follow-on. The hint-layer mechanism now strips
+  guide layers and placeholders ("Facecam goes here", "@yourhandle",
+  safe-area frames, "Drop clip here") from exports, with a visible
+  "won't export" tag and a rule-based table check over all 21
+  template/asset cards. Three edges need the owner's call: (1)
+  design-copy samples deliberately left exporting ("YOUR TITLE
+  HERE", "Your Name", "TUTORIAL", the banner schedule line) — an
+  unedited one still ships in a user's export; (2) there is no
+  control to KEEP a hint layer in an export (workarounds: retype the
+  text, which clears the flag by design, or delete-and-redraw); (3)
+  mood-board reference layers saved in pre-round-55 projects carry
+  no flag and still export (indistinguishable from user images —
+  no reliable migration exists; documented disposition).
+- **Acceptance criteria:** owner rules each edge; whatever is ruled
+  gets the hint-table treatment (flag + tag + templateTruth row +
+  pixel E2E) or a documented disposition.
+- **Status:** open (needs owner ruling)
+
 ---
 
 ## Done
+
+Round 55 — content fix wave batch 8 (recovered through two container
+restarts with the tree intact): T-90 + T-91, plus a blocker found
+and fixed on the way. The found bug: EVERY audio export taken from a
+video threw before its Save dialog opened — the default "Re-attach
+to video" asks the name/pick IPC for format mp4, which both handlers
+rejected, and Layer 5 had always driven below the IPC so nothing
+caught it (AUDIO_SAVE_FORMATS now shared, E2E through the real
+panel, LESSONS'd). T-90: the FixWizard builds ONE patch and renders
+its summary from it (it can no longer report "off" while applying
+"on"); Start over restarts; presets save cleanup settings ONLY —
+stripped at save AND ignored at apply for old files on disk, so a
+pre-existing preset cannot re-impose cut times; the two −14 loudness
+entries merged (killing the snap-back); hum removal gained the 50 Hz
+mains option (red-first Layer 5: tones at five frequencies through
+both settings); AAC writes a real .m4a (Layer 5: container
+verified); the waveform cut copy says WHEN cuts apply; the
+engineer's vocabulary left the rendered copy under an AST scan with
+a discrimination block. T-91: image saves moved from the blind
+a[download] to main-owned IPC saves — the toast follows the WRITE, a
+canceled dialog toasts nothing, the emote pack is one folder picker;
+the new trust boundary validates magic bytes, caps allocation
+before decoding, and reduces names to traversal-proof leaves;
+template hint layers (facecam guide, "@yourhandle", safe-area
+frames) carry a visible "won't export" tag and are stripped by
+captureDocument's chrome mechanism — retyping a hint text layer
+clears the flag so a user's real handle can never silently vanish
+(worker's correct extension, mutation-proved); mood-board reference
+layers get the same flag at creation; every size/destination claim
+across all 21 template/asset cards is table-checked
+(templateTruth.test.ts), with the social clip card's well corrected
+to a true 9:16 and the "Twitch banner" renamed to the profile
+banner it actually is; the export dialog shows the real output
+pixels and warns past YouTube's thumbnail size. Expedite: verify
+1955/1955 (95 files), build clean, test:media 95/95 (+6 gates;
+mandatory — hum argv + .m4a container), full Playwright 164/164;
+worker's three mutations reviewed, one independent expediter
+mutation at the untouched sanitizer seam (separators survive into
+the file name -> the named traversal pin red, byte-identical
+restore -> 13/13). Findings routed: T-103 filed (owner ruling on
+design-sample copy in exports; keep-a-hint control; the documented
+no-migration disposition for pre-round-55 reference layers), the
+two-bars audio export note folded into T-100. hum60's stored name
+kept for project/preset compatibility, documented.
 
 Round 54 — content fix wave batch 7: T-88 + T-89. T-88: device
 scanning extracted pure (`devices.ts`) — the mic and camera probes

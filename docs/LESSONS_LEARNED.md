@@ -14,6 +14,215 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-90 + T-91 (round 55): a summary that was not what Apply did, a preset that carried last week's cuts, and a "saved" toast raised before anyone had saved
+
+Two tickets from the content review. T-90 is Audio Studio saying one thing and doing
+another in four places (the wizard's list, the presets, the loudness picker, the AAC
+export), plus the engineer's vocabulary the panels were built from. T-91 is Stream
+Graphics promising things its pixels did not keep (a "saved" toast, a "9:16" well, a
+facecam hole that shipped in the file). Same root both times: a sentence and the
+code under it were written separately and nothing made them agree.
+
+### Bug (T-90) — the wizard's list was its own arithmetic, and "Start over" closed the dialog
+
+- **Bug.** The Fix Wizard's last card printed "Highpass + 60 Hz hum reduction: off" for a
+  talking recording in a quiet room, and Apply then switched the highpass ON. "Start
+  over" closed the dialog (Close's job). The card said "I'll set".
+- **Root cause.** The list was computed inline in the JSX from the answers
+  (`noise !== 'none'`); the settings were computed in `applyResult` from the answers
+  (`noise !== 'none' || use === 'voice'`). Two derivations of one decision, one line
+  for what are two settings.
+- **Fix.** `audio-studio/fixWizard.ts` (new, pure): `fixPatch(answers)` builds the patch
+  ONCE; `fixSummary(patch)` renders one creator-words line per setting FROM that object
+  ("Quieter background: on (aggressive)", "Low rumble removal: on", "Hum removal: off",
+  "Softer harsh 's' sounds: on", "Even volume: on (target −16)"); the component builds
+  the patch once and hands the same object to both the list and `patchChain` — the T-82
+  `keepExpression` precedent. `restart()` resets the steps and answers and keeps the dialog
+  open; `close()` (Close, Esc, scrim, Apply) resets and closes. The card speaks as imagii.
+- **Test.** Unit: `fixWizard.test.ts` runs all 18 answer combinations and holds each line
+  to the patch field it describes, pins the quiet-room-voice case, and shows that changing
+  one patch field changes exactly its line. `interactionWiring.test.ts`: one `fixPatch(`
+  call in the component, no `answers.backgroundNoise` read there, Start over bound to
+  `restart` which never calls `onClose`. E2E (`audio.spec.ts` "Fix Wizard…"): Start over
+  leaves the dialog open on question one (and a different run gives a different summary);
+  the voice-in-a-quiet-room card says rumble on / hum off and the panels agree after Apply.
+- **Lesson.** **If a screen shows what will happen and a button does it, they read one
+  object.** A summary computed beside its action is a second implementation that happens to
+  agree today.
+
+### Bug (T-90) — a cleanup preset carried one recording's cuts and music
+
+- **Bug.** "Save current" wrote the whole chain, so a preset saved on Monday held Monday's
+  cut times and the path to Monday's music, and Apply put both on Tuesday's recording.
+- **Root cause.** A preset was typed as a `ChainSpec`; the chain is cleanup settings AND
+  that recording's edit (`cutRegions`, `secondaryTrack`), and nothing separated them.
+- **Fix.** `@shared/audioPreset`: `CleanupSettings = Omit<ChainSpec, 'cutRegions' |
+  'secondaryTrack'>` and `cleanupSettings(chain)`. Main's `savePreset` writes it (so the cut
+  times and the music path never reach disk), `parseChainPreset` normalizes through it (so a
+  file an older build wrote is read back without them), and the panel's Apply patches
+  `presetPatch(p)` = `cleanupSettings(p.chain)`. `ChainPreset.chain` is typed
+  `CleanupSettings`. The panel says what a preset keeps. `savePreset` / `deletePreset` sit in
+  a `try` and route a failure through `reportFailure` (they were unhandled rejections).
+- **Test.** Unit, red-first: `audioPreset.test.ts` and `PresetPanel.test.ts` (an OLD-SHAPE
+  fixture applied through the real store) failed 6 ways against today's whole-chain
+  behaviour (`expected [ { startSec: 400, endSec: 450 } ] to deeply equal [ { startSec: 3,
+  endSec: 4.5 } ]`, `expected { …(5) } to be null`); `presets.test.ts`: the file on disk has
+  no `cutRegions`/`secondaryTrack` and does not contain the music's name, and listing an old
+  file drops both. E2E: save with a cut and a music bed on screen (file has neither), apply
+  (this recording's cut and bed untouched); an old-shape file on disk applies its cleanup and
+  nothing else; ENOSPC from main's handler toasts "Couldn't save that preset. Your disk is
+  full…" and keeps the typed name. The three E2E fail against the HEAD build.
+  Mutation: `savePreset` stops stripping -> the named `presets.test.ts` case, byte-identical
+  restore (`d45c57e88bc9`).
+- **Lesson.** **Type the thing you mean to keep.** A preset typed as the whole chain keeps
+  whatever the chain holds next year; the narrower type turns "what belongs in a preset"
+  into a compile error instead of a review comment. And fix BOTH ends: stop writing it, and
+  stop believing the old files.
+
+### Bug (T-90) — the loudness picker could not stay on its second −14 row
+
+- **Bug.** YouTube/Spotify and TikTok/Reels were two rows with the same −14. Choosing the
+  second wrote −14, the picker looked the number up, found the FIRST row and snapped back.
+- **Root cause.** A select whose value is `find(target)` over a table with a duplicate key.
+- **Fix.** One row per distinct number ("YouTube, Spotify, TikTok, Reels (−14)"); the table
+  is exported. The developer note ("fixed at −1.5 dBTP this round") became the creator
+  explanation; `loudnorm`, `LUFS` outside parentheses, `highpass`, `de-ess`, `sidechain` and
+  `mux` left every string a user reads.
+- **Test.** `LevelsPanel.test.ts`: every row survives the round trip (the property that rules
+  the class out), one row per number. `tests/unit/audioStudioCopy.test.ts` reads the audio
+  studio's syntax trees (JSX text, attribute values, toast arguments, copy-named properties —
+  not identifiers) for the banned words, and proves on a bad snippet that it discriminates.
+- **Lesson.** **A lookup that inverts a table needs a table with unique keys — and a test
+  that round-trips every row.** And a vocabulary rule is only a rule if a test reads the
+  strings the user reads.
+
+### Bug (T-90) — 60 Hz only, AAC as a bare `.aac`, and a re-attach export that threw before its dialog
+
+- **Bug.** Hum removal was fixed at 60 Hz (a notch at the wrong grid removes nothing). The AAC
+  option saved a raw ADTS `.aac`. And, found while writing the m4a test: **every export from a
+  video threw before the Save dialog opened** — the Export panel asks `audio:suggestOutputName`
+  and `audio:pickOutputFile` for the format `mp4` when "Re-attach to video" is ticked (the
+  default), and both validated against the four audio formats only. The call was outside any
+  `catch`, so the button looked fine and did nothing.
+- **Root cause.** The format set was named once for exports and reused for save dialogs that
+  take a fifth value; Layer 5 drove `runAudioReattach` directly, so no test ever went through
+  the IPC the button uses.
+- **Fix.** `ChainSpec.humHz?: 50 | 60` (absent = 60, so every saved project and preset means
+  what it meant); `humFrequency()` accepts only the literal 50 and returns 60 for anything else,
+  because the value is interpolated into a filter string. A "Power-line frequency" picker
+  appears with hum removal and relabels the box. `AUDIO_SAVE_FORMATS` adds `mp4`;
+  `audioFileExtension('aac')` is `m4a`, used by the dialog's filter, the suggested name and the
+  Export panel's label "AAC (.m4a)". The codec arguments are unchanged — only the container
+  around them. The save is wrapped and reported. Phase names are plain words ("Measuring
+  loudness…", "Rendering…", "Attaching to video…"), and the first phase is the measuring pass
+  when loudness is on. With parts removed, the panel says the picture is re-encoded.
+- **Test.** Layer 5, red-first: "hum removal notches the mains the user chose" exports a pure
+  tone at 50, 60, 100, 120 and 1000 Hz through each setting and asserts the tone's own level —
+  against the fixed-60 chain it failed `50 Hz setting should remove the 50 Hz tone (dropped
+  0.1 dB)`; "AAC exports as a real .m4a container" asserts the codec is still aac at 48 kHz,
+  `format_name` contains `m4a`, the file opens `ftypM4A `, and the same encode named `.aac` is
+  headerless `aac`. Unit: `chain.test.ts` (graph per setting, a hostile `humHz` can never reach
+  the string), `audioSaveFormat.test.ts` (the real handlers: `aac` -> `.m4a`, `mp4` opens a
+  dialog — 4 cases fail against HEAD, 2 of them the mp4 rejection). E2E: the AAC option asks for
+  and writes a real m4a; a video drop exports through Re-attach with a cut, the picture and
+  sound both shorter, and the phase label reads "Attaching to video…"; a saved preset carries
+  `humHz: 50`.
+- **Lesson.** **Test the path the button takes, not only the function it eventually calls.**
+  The re-attach job was proven for a year; the call that reaches it was never made. And a
+  setting that becomes part of a command string is validated at the string, not only at the
+  edge.
+
+### Bug (T-91) — "PNG saved" was raised before any dialog had answered
+
+- **Bug.** Export, the emote pack and the variants dialog clicked a hidden `<a download>` and
+  toasted success in the same tick. A canceled Save dialog still got "PNG saved"; the emote
+  pack meant three dialogs; "Save all 4" said "Saving 4 variants…" first.
+- **Root cause.** `<a download>` hands the file to the browser and reports nothing back, so the
+  renderer had nothing to wait for — and the E2E harness drove it through `will-download`,
+  which cannot be canceled from a test, so the cancel path was unreachable by construction.
+- **Fix.** `image:save` and `image:saveMany` (main/ipc/image.ts): main opens the native Save
+  dialog (or ONE folder picker for a set) and writes the bytes, answering only afterwards —
+  the path / `{dir, count}`, or `null` for a cancel. The renderer toasts success on a non-null
+  answer, says nothing on `null`, and routes a rejection through `reportFailure`. The data URL
+  is untrusted now: `main/imageSave.ts` requires the declared format's magic bytes, caps the
+  size before decoding, and reduces names to a safe leaf. The emote pack is one folder picker
+  writing three files; Scale is disabled for it with the reason on screen. "Save all (3 +
+  original)" and "Saved 4 thumbnails" replace the count that did not match "Generate 3".
+- **Test.** E2E, red-first against the HEAD build (a canceled download still toasted):
+  `TOASTS=["PNG saved"] COMPLETED=[]`. New: a canceled Save writes nothing and raises no toast;
+  saved raises it only once the file exists; an unwritable folder is "Export failed…" and never
+  "saved"; the emote pack is one folder dialog and no Save dialog; Save all is one folder
+  dialog, canceled then saved. Unit: `imageSave.test.ts` (magic bytes, oversize, names that
+  climb out of a folder), `image.test.ts` (the real handlers with dialogs stubbed: a cancel
+  writes nothing, one bad file refuses the whole set before the picker),
+  `interactionWiring.test.ts` (no `.download =`, a toast only after `saved === null` is checked).
+- **Lesson.** **A success message belongs after the thing it reports, and the only way to know
+  is to be the one who did it.** If a component cannot find out whether the save happened, it
+  must not say it did — move the save to where the answer is. And a test that cannot reach the
+  failure branch is not a test of it.
+
+### Bug (T-91) — guidance baked into the file: facecam holes, placeholders, safe-area frames, references
+
+- **Bug.** The "Facecam hole" (a tinted rect), "Facecam goes here", "Drop face here",
+  "@yourhandle", "NOW PLAYING · Game name", the channel banner's safe-area frames and the
+  mood-board reference at 40% opacity were ordinary layers: all of them exported into the PNG a
+  streamer posts, with nothing saying they would.
+- **Root cause.** The document model had no notion of a layer that is for the editor. The T-53
+  `chrome` mechanism hid whole Konva LAYERS, and a document is one layer.
+- **Fix.** `BaseLayer.hint?: boolean` (absent = exports, so every saved project is unchanged);
+  `asHint()` in the template data; Canvas names a hint's node `hint`; `captureDocument` switches
+  off `stage.find('.hint')` beside the chrome layers and restores each node's PRIOR flag in the
+  `finally`; the Layers panel tags a row "hint — won't export" / "reference — won't export"
+  (text, not only a colour); `makeReferenceLayer` flags the mood-board picture. **Retyping a hint
+  text layer clears the flag** (`applyLayerPatch`): "@yourhandle" is a placeholder only until the
+  user types their own, and an export that dropped what they typed would be worse than the bug.
+- **Test.** Pixel, red-first against HEAD: the probe inside the face guide read `{r:76, g:26,
+  b:24}` against a `{36, 22, 20}` background; green now, with a positive control (the accent
+  bar's red is in the same file), and an overlay's facecam hole is alpha 0 where it was 26.
+  `ExportDialog.test.ts`: hint nodes hidden for the capture and restored, including one that
+  was already off and when the capture throws. `canvasStore.test.ts`: moving keeps a hint, new
+  words clear it, a duplicate keeps it. `templateTruth.test.ts` holds EVERY template and asset to
+  the rule (every guide and `@yourhandle`/`Game name`/`goes here` text is a hint; nothing else is;
+  a card with a guide says it does not export). `references.spec.ts`: the reference row carries
+  its tag and the exported pixel under the faded picture is plain white. Mutations: the strip
+  made pass-through -> 3 unit + 2 E2E reds (`ExportDialog.tsx`, `10684d4ee9bc`); retyping stops
+  clearing the flag -> 3 unit reds + the typed-handle E2E (`canvasStore.ts`, `be34a4653048`).
+  Both restored byte-identical.
+- **Lesson.** **When the editor has things the output must not, give the model a word for
+  them.** An enumerated exclusion (the `chrome` tag) scales; "remember to delete the hint" does
+  not. And the escape from a rule that hides things is a rule about when they stop being hidden.
+
+### Bug (T-91) — cards that described a different asset than the data beside them
+
+- **Bug.** The Twitch "video-player / offline banner" was 1200×480, Twitch's PROFILE banner size
+  (the offline screen is 16:9). The 4K thumbnail was sold for "crisp shorts" (it is 16:9; a Short
+  is vertical). The square clip card promised a "9:16 video well" and drew a 13:20 one (520×800).
+  The lower-third said "drop into recordings" of a PNG imagii cannot lay over a video. A
+  gradient bar was a flat colour.
+- **Fix.** Descriptions rewritten from the data: sizes first, destinations named ("transparent
+  PNG for OBS", "for OBS or your editor", "the banner on your Twitch channel page. Not the 16:9
+  offline screen", "16:9, so not for vertical Shorts"); the Twitch template is "Twitch · Profile
+  banner" (id kept — saved projects address it). The clip card's well is now 450×800 (exactly
+  9:16, centered), because the promise is a sensible one and the data was the part that was off.
+  The export panel shows `Output: WxH` from the capture's own arithmetic (floored, as Konva's
+  canvas is) and a soft note when a 16:9 non-transparent export is bigger than 1280×720.
+- **Test.** `templateTruth.test.ts` table-checks all 21 cards (12 templates, 9 assets): every W×H a card states is its own
+  (or YouTube's, if it says YouTube), a card that says 9:16 has a 9:16 rect, nothing sells 16:9
+  for Shorts, transparent docs say PNG for OBS. `ExportDialog.test.ts`: `outputPixels` and
+  `thumbnailSizeNote` tables. E2E: the readout moves with Scale and the note appears at 2×.
+- **Lesson.** **Copy that states a number must be generated from, or checked against, the thing
+  it is a number of.** A table-check over every entry is cheaper than finding the next one.
+
+**Found, not fixed (round 55).** (1) Other sample copy still exports unflagged — "YOUR TITLE
+HERE", "Your Name", "TUTORIAL", a schedule line — by ruling (design copy the user rewrites); an
+unedited one ships. (2) There is no way to keep a hint layer in the export except deleting it
+and drawing a copy, or retyping a text one; a "export this layer anyway" control was not asked
+for. (3) Projects saved before this round keep their mood-board references as ordinary layers
+(no `hint`), so they still export; no migration was written. (4) `ChainSpec.hum60` now means
+"hum removal on" at either frequency; the name is stored in projects, so it was kept. (5) The
+audio export progress for the measuring pass is `out_time` over the source duration — a real
+measurement, but the second pass restarts the bar at 0.
+
 ## 2026-10-09 — T-88 + T-89 (round 54): a hint that pointed at the wrong button, a Cancel that ate the take, and a "px" that was not pixels
 
 Two tickets from the content review, one root: the product said a thing — a

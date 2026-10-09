@@ -111,6 +111,30 @@ Repeated UI is a component, not copy-paste:
   make a bar move — the captions panel used to show `15 + Math.random() * 10`.
   Phase ids are never shown: a pure `captionPhaseLabel`-style table gives each a
   plain label ("Transcribing…", not "TRANSCRIBING").
+- **A success toast follows a real save (T-91).** Stream Graphics never clicks a
+  hidden `<a download>`: that hands the file to the browser and tells the
+  renderer nothing, which is how "PNG saved" was raised before the Save dialog
+  had answered (and for a Cancel). Saves go through main —
+  `window.api.image.save(...)` (one file, a native Save dialog) and
+  `window.api.image.saveMany(...)` (a set, ONE folder picker) — which answer only
+  after the bytes are on disk, with `null` for a canceled dialog. A caller toasts
+  success after a non-null answer, says **nothing** after `null` (the user changed
+  their mind: not a success, not an error), and routes a rejection through
+  `reportFailure`. The IPC payload is untrusted: `main/imageSave.ts` checks
+  magic bytes, size and file names before anything is written.
+- **A layer can be a hint (T-91).** `BaseLayer.hint` marks guidance for the
+  person editing — a facecam hole, "@yourhandle", a mood-board reference. It
+  draws and is saved in the project, and `captureDocument` leaves it out of every
+  export by switching off the nodes `Canvas.tsx` names `hint` (the same
+  mechanism as the editor `chrome` layers); the Layers panel tags it from the
+  shared `hintTag`. Retyping a hint TEXT layer clears the flag — a user's own
+  words are not a placeholder. Flag a template layer with `asHint(...)`;
+  `templateTruth.test.ts` holds every template and asset to the rule.
+- **A preset is `cleanupSettings(chain)` (T-90).** Audio presets save and apply
+  the noise, level and voice settings only; the cut times and the second
+  track's file belong to one recording and never enter a preset
+  (`@shared/audioPreset`). Both directions go through it, so a preset an older
+  build wrote cannot re-impose its cuts.
 - **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — the
   envelope-stripping step `userFacingError` starts with. Still the right
   call for a site that wants only main's own sentence (the T-30/T-59 sites:

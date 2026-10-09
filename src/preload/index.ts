@@ -8,6 +8,7 @@ import type {
   AudioMuxSpec,
   ChainSpec
 } from '../shared/audio'
+import type { ImageSaveManyRequest, ImageSaveRequest } from '../shared/canvas'
 import type { MoodBoardCollection, SearchResult } from '../shared/search'
 import type {
   CaptionsProgress,
@@ -114,6 +115,10 @@ const api: ImagiiApi = {
     savePreset: (name: string, chain: ChainSpec) =>
       ipcRenderer.invoke('audio:savePreset', name, chain),
     deletePreset: (id: string) => ipcRenderer.invoke('audio:deletePreset', id)
+  },
+  image: {
+    save: (req: ImageSaveRequest) => ipcRenderer.invoke('image:save', req),
+    saveMany: (req: ImageSaveManyRequest) => ipcRenderer.invoke('image:saveMany', req)
   },
   search: {
     images: (query: string) => ipcRenderer.invoke('search:images', query)

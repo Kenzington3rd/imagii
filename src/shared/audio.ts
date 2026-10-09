@@ -70,11 +70,27 @@ export interface SecondaryTrack {
   duckParams?: DuckingParams
 }
 
+/**
+ * T-90: the mains frequency the hum notch is tuned to. 60 Hz is the US/Canada
+ * grid, 50 Hz most of the rest of the world — a notch at the wrong one removes
+ * nothing. It is a TWO-value type on purpose: `chain.ts` interpolates it into
+ * a filter string, so only these literals may ever reach ffmpeg.
+ */
+export type MainsHz = 50 | 60
+
 export interface ChainSpec {
   denoise: DenoiseStrength
   /** Phase 3.3: parameters used when denoise === 'parametric'. */
   denoiseParams?: DenoiseParams
+  /**
+   * Hum removal on/off. The name is from when 60 Hz was the only choice and
+   * is kept because it is stored in saved projects and presets; the
+   * frequency is `humHz`.
+   */
   hum60: boolean
+  /** T-90: which mains the notch targets. Absent (every project and preset
+   *  saved before 50 Hz existed) means 60, which is what they always did. */
+  humHz?: MainsHz
   rumbleHighpass: boolean
   deEss: boolean
   compressor: CompressorPreset
@@ -99,6 +115,41 @@ export const DEFAULT_CHAIN_SPEC: ChainSpec = {
 }
 
 export type AudioOutputFormat = 'mp3' | 'wav' | 'flac' | 'aac'
+
+/**
+ * What the save dialog and the suggested file name are asked for: an export
+ * format, or `mp4` for "Re-attach to video" (the cleaned sound back on the
+ * picture). The renderer has always asked for the second with the first
+ * list's validator in the way — see `audio:pickOutputFile`.
+ */
+export const AUDIO_SAVE_FORMATS = ['mp3', 'wav', 'flac', 'aac', 'mp4'] as const
+export type AudioSaveFormat = (typeof AUDIO_SAVE_FORMATS)[number]
+
+/**
+ * The file extension a format is saved under (T-90). The AAC option writes
+ * `.m4a`: ffmpeg picks the container from the extension, and a bare `.aac` is
+ * a raw ADTS stream that most players, editors and upload forms do not treat
+ * as a normal audio file. The codec is the same either way — only the
+ * container around it changes.
+ */
+export function audioFileExtension(format: AudioSaveFormat): string {
+  return format === 'aac' ? 'm4a' : format
+}
+
+/** The Export panel's format names. AAC says what the file will be called. */
+export const AUDIO_FORMAT_LABELS: Record<AudioOutputFormat, string> = {
+  mp3: 'MP3',
+  wav: 'WAV',
+  flac: 'FLAC',
+  aac: 'AAC (.m4a)'
+}
+
+/** Plain words for the phase an audio export is in (never the raw pass id). */
+export const AUDIO_PASS_LABELS: Record<AudioJobProgress['pass'], string> = {
+  measure: 'Measuring loudness…',
+  render: 'Rendering…',
+  mux: 'Attaching to video…'
+}
 
 export interface AudioExportSpec {
   jobId: string

@@ -9,23 +9,28 @@ const COMPRESSOR_OPTIONS: Array<{ value: CompressorPreset; label: string }> = [
   { value: 'mixed', label: 'Mixed' }
 ]
 
-// INIT-H (round 16): platform LUFS targets per the most-commonly-cited
+// INIT-H (round 16): platform loudness targets per the most-commonly-cited
 // docs (Apple Podcasts / AES, YouTube, TikTok, EBU R128). 'custom' is the
-// escape hatch — when the user types a value into the LUFS input the
+// escape hatch — when the user types a value into the loudness input the
 // picker is implicitly switched to 'custom'.
-const LUFS_PRESETS: Array<{ value: string; label: string; target: number }> = [
-  { value: 'podcast', label: 'Podcast (−16 LUFS)', target: -16 },
-  { value: 'youtube', label: 'YouTube / Spotify (−14 LUFS)', target: -14 },
-  { value: 'tiktok', label: 'TikTok / Reels (−14 LUFS)', target: -14 },
-  { value: 'broadcast', label: 'Broadcast EBU R128 (−23 LUFS)', target: -23 }
+//
+// T-90: ONE entry per distinct number. The picker used to list YouTube/Spotify
+// and TikTok/Reels as two rows with the same −14: choosing the second wrote −14,
+// the picker looked the number up, found the FIRST row and snapped back to it,
+// so the second row could never stay selected. Two rows that mean the same
+// number are one row. The labels carry the number without the unit (the unit
+// is on the input beside it), and none of them says EBU or R128.
+export const LUFS_PRESETS: Array<{ value: string; label: string; target: number }> = [
+  { value: 'podcast', label: 'Talking and podcasts (\u221216)', target: -16 },
+  { value: 'streaming', label: 'YouTube, Spotify, TikTok, Reels (\u221214)', target: -14 },
+  { value: 'broadcast', label: 'Broadcast TV and radio (\u221223)', target: -23 }
 ]
 
 /**
- * Map a numeric LUFS target back to a preset id. When the user types a
- * value that doesn't match any preset, the picker reads 'custom'. Note
- * that −14 maps to YouTube (the first matching preset); the distinction
- * between YouTube/Spotify and TikTok/Reels is a documentation aid only,
- * since both target the same loudness.
+ * Map a numeric loudness target back to a preset id. When the user types a
+ * value that doesn't match any preset, the picker reads 'custom'. Every preset
+ * has its own number, so this is a true inverse of choosing one: picking a row
+ * and looking its number up again lands on the same row.
  */
 export function lufsTargetToPresetId(target: number): string {
   const match = LUFS_PRESETS.find((p) => p.target === target)
@@ -66,7 +71,7 @@ export function LevelsPanel(): JSX.Element {
           onChange={(e) => patchChain({ loudnorm: e.target.checked })}
         />
         <span>
-          Normalize to{' '}
+          Even volume (target{' '}
           <input
             type="number"
             value={chain.loudnormTargetLufs}
@@ -76,9 +81,9 @@ export function LevelsPanel(): JSX.Element {
             onClick={(e) => e.stopPropagation()}
             className="bg-bg-base rounded px-1 py-0.5 w-16 text-center font-mono disabled:opacity-50"
             disabled={!chain.loudnorm}
-            aria-label="Loudness target in LUFS"
+            aria-label="Loudness target (LUFS)"
           />{' '}
-          LUFS
+          LUFS)
         </span>
       </label>
       {chain.loudnorm ? (
@@ -109,8 +114,9 @@ export function LevelsPanel(): JSX.Element {
             </select>
           </label>
           <p className="text-xs text-ink-dim -mt-2">
-            Two-pass loudnorm — measures first, then renders. Adds ~30% to processing time.
-            True-peak ceiling is fixed at −1.5 dBTP this round; only the LUFS target is exposed.
+            Loudness target — how loud the finished audio is. −16 suits talking and podcasts;
+            −14 matches YouTube, Spotify, TikTok and Reels. imagii measures the whole file
+            first, so exports take a little longer.
           </p>
         </>
       ) : null}

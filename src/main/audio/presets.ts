@@ -5,6 +5,7 @@ import path from 'node:path'
 import { nanoid } from 'nanoid'
 import type { ChainPreset } from '../../shared/workspace'
 import type { ChainSpec } from '../../shared/audio'
+import { cleanupSettings } from '../../shared/audioPreset'
 
 function presetsDir(): string {
   return path.join(app.getPath('userData'), 'audio-presets')
@@ -33,11 +34,15 @@ export function parseChainPreset(raw: string): ChainPreset | null {
   const p = data as Record<string, unknown>
   if (typeof p.id !== 'string' || p.id.length === 0) return null
   if (typeof p.name !== 'string' || p.name.length === 0) return null
-  if (typeof p.chain !== 'object' || p.chain === null) return null
+  if (typeof p.chain !== 'object' || p.chain === null || Array.isArray(p.chain)) return null
   return {
     id: p.id,
     name: p.name,
-    chain: p.chain as ChainSpec,
+    // T-90: presets written before this ticket saved the whole chain, cut
+    // times and second track included. Reading one back drops both, so the
+    // panel — and anything else that lists presets — can never hand a stale
+    // cut list to a new recording.
+    chain: cleanupSettings(p.chain as ChainSpec),
     createdAt: typeof p.createdAt === 'number' ? p.createdAt : 0
   }
 }
@@ -68,7 +73,10 @@ export async function savePreset(name: string, chain: ChainSpec): Promise<ChainP
   const preset: ChainPreset = {
     id: nanoid(10),
     name: trimmed,
-    chain,
+    // T-90: a preset is the cleanup settings for a microphone, not a copy of
+    // one recording's edit. The caller hands over the live chain; the cut
+    // times and the second track's file path stop here and never reach disk.
+    chain: cleanupSettings(chain),
     createdAt: Date.now()
   }
   await writeFile(
