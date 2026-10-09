@@ -1435,7 +1435,7 @@ IMG-PREC.
   document at the seam, citing the T-74 LESSONS entry); Layer 5 case
   with startSec > 0 proving real cue text/pixels land in-range
   (red-first against today's code); LESSONS entry.
-- **Status:** open
+- **Status:** done (round 49 — see Done)
 
 ## T-82 — audio cuts + "Re-attach to video" desync the sound and cut the video's tail
 
@@ -1454,7 +1454,7 @@ IMG-PREC.
   honest copy; Layer 5 case proving the shipped behavior; the temp
   WAV is deleted after a successful mux (and the failure path leaves
   no litter); LESSONS entry.
-- **Status:** open
+- **Status:** done (round 49 — see Done)
 
 ## T-83 — a manual crop is applied to every ticked platform and stretched to fit
 
@@ -1744,9 +1744,63 @@ IMG-PREC.
   green; LESSONS entry.
 - **Status:** open
 
+## T-95 — the References "+" button overflows its column and the detail card eats the click
+
+- **Spec:** found at round-49 expedite: two long-green E2E tests red
+  in a fresh container. The sidebar's create row (`flex-1` input +
+  button) overflows the 220 px clamped column because a flex item's
+  default `min-width:auto` keeps the input at its placeholder's
+  intrinsic width — which is FONT-dependent, so the same build is
+  green or red per environment, and the shipped Windows app can hit
+  it at ordinary window widths. The button lands under the detail
+  card, which intercepts every click.
+- **Acceptance criteria:** `min-w-0` on the input; the same token on
+  every `flex-1` form control in the renderer (the class dies, not
+  the instance); the two catching tests green; LESSONS entry.
+- **Status:** done (round 49 — expediter fix; see Done)
+
 ---
 
 ## Done
+
+Round 49 — content fix wave batch 1: T-81 + T-82 + T-95 (the two
+wrong-file ffmpeg bugs, plus the layout bug the gate surfaced). First
+round under the amended routing: a Sonnet worker implemented from the
+expediter's pre-made mechanism decisions, with two scoped extensions
+mid-round. T-81: ranged caption burns now shift the SRT onto the clip
+clock (pure `shiftSrtToRange` in src/shared — drop outside, clamp
+straddlers, whole-ms arithmetic; a latent variable-length-fraction
+parse bug in tsToSeconds fixed in passing), temp copy unlinked in a
+finally and its orphan family swept by tempCleanup under a strict
+matcher so real transcripts are untouchable; the empty window burns
+uncaptioned (ffmpeg cannot open a cue-less SRT — documented ruling);
+`captions:burnIn` validates ranges at the IPC boundary. T-82: cuts
+now remove the same spans from the PICTURE — a shared keepExpression
+drives matching select/aselect so the streams cannot drift; with a
+secondary track the cut applies once, post-mix, so music is cut with
+the voice; re-encode only on the cut path (fps passthrough after the
+worker caught ffmpeg's silent 25 fps CFR fallback), stream-copy
+byte-identity proven on the no-cut path; `-shortest` kept as the
+long-music-bed bound with its true rationale documented; the
+intermediate WAV dies with the job in main (`runAudioReattach`),
+asserted against clobbering its own inputs. Worker's honest note of
+record: its first long-bed discriminator was ducked and already
+short — it split the cases rather than ship a weak proof. T-95
+(expediter): two long-green E2E went red in this fresh container
+because the References create row overflowed its 220 px column —
+flex min-width:auto makes placeholder-intrinsic width font-dependent
+— leaving the "+" button under the detail card; min-w-0 on every
+flex-1 form control kills the class. Expedite: verify 1178/1178,
+build clean, test:media 87/87 (+5 win32 gates), full Playwright
+131/131; the worker's thirteen mutations reviewed, one independent
+mutation re-executed personally at the untouched seam (the burn
+call-site wired back to the ORIGINAL SRT -> both ranged cases red,
+no-cue case rightly green, byte-identical restore -> 5/5). Noted,
+not ticketed (worker edge probes, no repro): unknown-frame-rate
+sources vs setpts, nonzero video start_time offsets, CRF 23 on very
+high-bitrate sources; "cuts + Re-attach take longer" UI hint folded
+into T-90's copy scope; the empty-window "Captions burned in" toast
+folded into T-89's.
 
 Round 48 — guide-sync QA follow-ons: T-79 + T-80, the same-day
 reversal of round 47's launch-LRU decision. The guide-sync reviewers

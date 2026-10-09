@@ -126,7 +126,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 5. **Levels panel:** voice/music/mixed compressor preset, two-pass loudnorm, ±12 dB manual gain.
 6. **Cleanup presets:** name and save your tuned chain ("My USB mic"), one-click re-apply next session.
 7. **Add a second track** for background music with optional ducking, a co-host's mic, or game audio.
-8. **Click Export.** MP3 / WAV / FLAC / AAC. If you imported audio from a video, you can re-attach the cleaned audio to a new MP4.
+8. **Click Export.** MP3 / WAV / FLAC / AAC. If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.
 
 ### 🖼 Image Canvas
 1. **Import.** Drop an image, paste with `Ctrl+V`, or pick a file. Or click **✨ Templates** for pre-made YouTube thumbnails and Twitch overlay frames with a facecam hole.

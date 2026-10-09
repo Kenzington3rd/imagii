@@ -109,11 +109,20 @@ export interface AudioExportSpec {
   bitrate?: string
 }
 
+/**
+ * "Re-attach to video": render `chain` over `sourcePath` (the video's own
+ * extracted track) and put the result back on `videoPath`'s picture as
+ * `outputPath` (.mp4). The intermediate audio file never crosses the IPC
+ * boundary — main names it, and main deletes it.
+ */
 export interface AudioMuxSpec {
   jobId: string
+  /** The recording whose picture is kept — and cut where the audio is. */
   videoPath: string
-  audioPath: string
+  /** The audio the chain is rendered from (the video's extracted track). */
+  sourcePath: string
   outputPath: string
+  chain: ChainSpec
 }
 
 export interface AudioJobProgress {

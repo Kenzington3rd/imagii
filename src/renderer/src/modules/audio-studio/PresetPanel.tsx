@@ -58,7 +58,7 @@ export function PresetPanel(): JSX.Element {
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && save()}
           placeholder="My mic preset"
-          className="flex-1 bg-bg-base rounded px-2 py-1 text-xs"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-xs"
         />
         <button className="btn-primary px-3 py-1 text-xs" onClick={save}>
           Save current

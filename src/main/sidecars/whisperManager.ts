@@ -29,9 +29,12 @@ import {
   WHISPER_MODEL_MIN_BYTES,
   WHISPER_MODEL_SHA256,
   WHISPER_MODEL_URL,
-  escapeSubtitlesPath
+  escapeSubtitlesPath,
+  shiftedSrtPath,
+  shiftSrtToRange,
+  tsToSeconds
 } from '../../shared/captions'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { assert } from '../../shared/assert'
 
@@ -48,25 +51,6 @@ export function getCaptionsStatus(): CaptionsInstallStatus {
     modelsDir: modelsDir(),
     ready: exe.exists && model.exists
   }
-}
-
-/**
- * Parse SRT-style timestamps. Supports the standard 3-digit fractional form
- * ("00:00:01,500") AND any variable-length fractional ("00:00:01,5",
- * "00:00:01,50", "00:00:01,1234") — Whisper and other tools occasionally
- * emit non-3-digit fractions and the original Number(m[4]) / 1000 was
- * silently wrong by orders of magnitude. parseFloat('0.' + frac) restores
- * the value regardless of digit count.
- */
-export function tsToSeconds(ts: string): number {
-  const m = ts.match(/(\d+):(\d+):(\d+)[.,](\d+)/)
-  if (!m) return 0
-  const h = m[1]
-  const min = m[2]
-  const s = m[3]
-  const frac = m[4]
-  if (!h || !min || !s || !frac) return 0
-  return Number(h) * 3600 + Number(min) * 60 + Number(s) + parseFloat('0.' + frac)
 }
 
 function parseSrt(content: string): CaptionSegment[] {
@@ -339,83 +323,133 @@ export async function runBurnIn(
 ): Promise<{ outputPath: string }> {
   onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 5 })
 
-  // Round 18: full two-level escaping, unquoted. The old single-quoted form
-  // broke on any SRT path containing an apostrophe (source filenames flow
-  // into the SRT name untouched), killing the burn-in with a parse error.
-  const escapedSrt = escapeSubtitlesPath(req.srtPath)
   const style = req.style ?? DEFAULT_CAPTION_STYLE
   const forceStyle = buildForceStyle(style, req.fontSizePct)
-  const filter = `subtitles=${escapedSrt}:force_style='${forceStyle}'`
 
   // Phase 3.1: when the renderer asks to burn over a trimmed range, use
   // -ss/-to on the input so the output covers only that span. Same trick
   // runReframe uses; the input stream is seekable so this is fast and
   // accurate to the keyframe.
-  const args: string[] = ['-y']
-  if (
-    req.startSec !== undefined &&
-    req.endSec !== undefined &&
-    req.endSec > req.startSec
-  ) {
-    args.push('-ss', req.startSec.toFixed(3), '-to', req.endSec.toFixed(3))
-  }
-  args.push(
-    '-i',
-    req.videoPath,
-    '-vf',
-    filter,
-    '-c:v',
-    'libx264',
-    '-preset',
-    'medium',
-    '-pix_fmt',
-    'yuv420p',
-    '-c:a',
-    'copy',
-    // B6 fix (round 15): the user-facing burn-in MP4 also needs faststart so
-    // web players can seek without buffering the moov atom from the tail.
-    '-movflags',
-    '+faststart',
-    '-progress',
-    'pipe:1',
-    '-nostats',
-    req.outputPath
-  )
+  const range =
+    req.startSec !== undefined && req.endSec !== undefined && req.endSec > req.startSec
+      ? { startSec: req.startSec, endSec: req.endSec }
+      : null
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegPath, args, { windowsHide: true })
-    activeBurnIn.set(req.jobId, child)
-    let stderr = ''
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      const m = chunk.match(/out_time_ms=(\d+)/)
-      if (m) {
-        const ms = Number(m[1]) / 1000
-        onProgress({
-          jobId: req.jobId,
-          phase: 'burning-in',
-          percent: Math.min(99, 5 + (ms / 1000) * 0.5)
-        })
+  // TWO TIMEBASES, ONE FILE (T-81 — the same bug class as T-74; see the
+  // 2026-08-26 "TWO TIMEBASES, ONE FIELD" entry in docs/LESSONS_LEARNED.md).
+  //
+  // The SRT is on the SOURCE clock: Whisper timestamps the whole video, and
+  // the Captions panel lists its cues that way. `-ss` BEFORE `-i` (input
+  // seeking, below) resets the filter graph's clock instead, so the clip's
+  // first frame reaches `subtitles=` at t=0. Handing that filter the whole
+  // SRT captioned a clip cut from minute 40 with the stream's first minutes
+  // (and with nothing at all once startSec outgrew the clip's own length).
+  // The bug is invisible at startSec 0, where both clocks read the same
+  // number, which is where every burn-in test was written.
+  //
+  // So the conversion happens here, at the one place that sees both clocks:
+  // a ranged burn gets a sibling temp SRT rewritten onto the clip clock
+  // (shifted by -startSec, clipped to the range; see shiftSrtToRange), and
+  // `-ss`/`-to` stay before `-i`. The alternative — `-copyts` plus an
+  // output-side seek — keeps the source clock but makes ffmpeg decode
+  // everything from the top of the file to reach minute 40. Unlike T-74 the
+  // stored field is not reinterpreted: the SRT on disk (and what Save .srt
+  // exports) stays source-absolute.
+  let tempSrt: string | null = null
+  try {
+    // The SRT the `subtitles` stage reads; null = no subtitle stage.
+    let burnSrt: string | null = range ? null : req.srtPath
+    if (range) {
+      const shifted = shiftSrtToRange(
+        await readFile(req.srtPath, 'utf8'),
+        range.startSec,
+        range.endSec
+      )
+      // An empty result is a real answer — nobody speaks in this span — and
+      // ffmpeg's `subtitles` cannot open a cue-less file ("Unable to open"),
+      // so that window burns with no subtitle stage at all: the clip,
+      // uncaptioned, exactly what a startSec-0 range with no cue in it has
+      // always produced.
+      if (shifted !== '') {
+        tempSrt = shiftedSrtPath(req.srtPath, randomUUID())
+        await writeFile(tempSrt, shifted, 'utf8')
+        burnSrt = tempSrt
       }
+    }
+
+    // Round 18: full two-level escaping, unquoted. The old single-quoted form
+    // broke on any SRT path containing an apostrophe (source filenames flow
+    // into the SRT name untouched), killing the burn-in with a parse error.
+    const filter =
+      burnSrt === null
+        ? null
+        : `subtitles=${escapeSubtitlesPath(burnSrt)}:force_style='${forceStyle}'`
+
+    const args: string[] = ['-y']
+    if (range) {
+      args.push('-ss', range.startSec.toFixed(3), '-to', range.endSec.toFixed(3))
+    }
+    args.push(
+      '-i',
+      req.videoPath,
+      ...(filter === null ? [] : ['-vf', filter]),
+      '-c:v',
+      'libx264',
+      '-preset',
+      'medium',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'copy',
+      // B6 fix (round 15): the user-facing burn-in MP4 also needs faststart so
+      // web players can seek without buffering the moov atom from the tail.
+      '-movflags',
+      '+faststart',
+      '-progress',
+      'pipe:1',
+      '-nostats',
+      req.outputPath
+    )
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, args, { windowsHide: true })
+      activeBurnIn.set(req.jobId, child)
+      let stderr = ''
+      child.stdout.setEncoding('utf8')
+      child.stdout.on('data', (chunk: string) => {
+        const m = chunk.match(/out_time_ms=(\d+)/)
+        if (m) {
+          const ms = Number(m[1]) / 1000
+          onProgress({
+            jobId: req.jobId,
+            phase: 'burning-in',
+            percent: Math.min(99, 5 + (ms / 1000) * 0.5)
+          })
+        }
+      })
+      child.stderr.setEncoding('utf8')
+      // B5 fix (round 16): bound the stderr accumulator at 16KB so an
+      // hour-long burn-in at verbose ffmpeg log levels can't accumulate tens
+      // of MB. Matches every other ffmpeg spawn in the codebase.
+      child.stderr.on('data', (c: string) => {
+        stderr += c
+        if (stderr.length > 16384) stderr = stderr.slice(-16384)
+      })
+      child.on('error', (err) => {
+        activeBurnIn.delete(req.jobId)
+        reject(err)
+      })
+      child.on('close', (code) => {
+        activeBurnIn.delete(req.jobId)
+        if (code === 0) resolve()
+        else reject(new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`))
+      })
     })
-    child.stderr.setEncoding('utf8')
-    // B5 fix (round 16): bound the stderr accumulator at 16KB so an
-    // hour-long burn-in at verbose ffmpeg log levels can't accumulate tens
-    // of MB. Matches every other ffmpeg spawn in the codebase.
-    child.stderr.on('data', (c: string) => {
-      stderr += c
-      if (stderr.length > 16384) stderr = stderr.slice(-16384)
-    })
-    child.on('error', (err) => {
-      activeBurnIn.delete(req.jobId)
-      reject(err)
-    })
-    child.on('close', (code) => {
-      activeBurnIn.delete(req.jobId)
-      if (code === 0) resolve()
-      else reject(new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`))
-    })
-  })
+  } finally {
+    // Success, ffmpeg failure, or cancel (SIGKILL rejects the promise above):
+    // the shifted copy is a means, never an output.
+    if (tempSrt) await unlink(tempSrt).catch(() => {})
+  }
 
   onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
   return { outputPath: req.outputPath }

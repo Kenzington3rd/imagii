@@ -3,7 +3,8 @@ import {
   buildChain,
   chainEndsWithLoudnorm,
   denoiseFilter,
-  parseLoudnormJson
+  parseLoudnormJson,
+  vselectForCuts
 } from './chain'
 import type { ChainSpec } from '../../shared/audio'
 import { DEFAULT_CHAIN_SPEC, DEFAULT_DENOISE_PARAMS } from '../../shared/audio'
@@ -158,5 +159,54 @@ describe('parseLoudnormJson', () => {
     expect(parseLoudnormJson('no json here')).toBeNull()
     expect(parseLoudnormJson('{ "input_i": "}')).toBeNull()
     expect(parseLoudnormJson('{ "input_i": "-23" }')).toBeNull() // missing other required keys
+  })
+})
+
+describe('cut regions — one expression for sound and picture (T-82)', () => {
+  const one = [{ startSec: 4, endSec: 7 }]
+  const two = [
+    { startSec: 2, endSec: 3.5 },
+    { startSec: 10.25, endSec: 13 }
+  ]
+  const audioCut = (cuts: ChainSpec['cutRegions']): string =>
+    buildChain(spec({ cutRegions: cuts })).filterPass2
+  /** The `not(between(...)+...)` keep-expression inside a select/aselect stage. */
+  const keepOf = (stage: string): string | undefined => /select='([^']*)'/.exec(stage)?.[1]
+
+  it('writes the audio cut as aselect/asetpts, unchanged by the refactor', () => {
+    expect(audioCut(one)).toBe("aselect='not(between(t\\,4.000\\,7.000))',asetpts=N/SR/TB")
+    expect(audioCut(two)).toBe(
+      "aselect='not(between(t\\,2.000\\,3.500)+between(t\\,10.250\\,13.000))',asetpts=N/SR/TB"
+    )
+  })
+
+  it('writes the picture cut as select/setpts over the same regions', () => {
+    expect(vselectForCuts(one)).toBe(
+      "select='not(between(t\\,4.000\\,7.000))',setpts=N/FRAME_RATE/TB"
+    )
+    expect(vselectForCuts(two)).toBe(
+      "select='not(between(t\\,2.000\\,3.500)+between(t\\,10.250\\,13.000))',setpts=N/FRAME_RATE/TB"
+    )
+  })
+
+  it('cuts sound and picture on the identical keep-expression, so they cannot drift', () => {
+    for (const cuts of [one, two]) {
+      const a = keepOf(audioCut(cuts))
+      const v = keepOf(vselectForCuts(cuts) ?? '')
+      expect(a).toBeDefined()
+      expect(v).toBe(a)
+    }
+  })
+
+  it('emits nothing for no regions, or only empty / inverted ones', () => {
+    expect(vselectForCuts([])).toBeNull()
+    expect(vselectForCuts([{ startSec: 5, endSec: 5 }, { startSec: 9, endSec: 8 }])).toBeNull()
+    expect(audioCut([])).toBe('anull')
+    expect(audioCut([{ startSec: 5, endSec: 5 }])).toBe('anull')
+  })
+
+  it('skips an empty region but keeps the real one beside it', () => {
+    const mixed = [{ startSec: 5, endSec: 5 }, ...one]
+    expect(keepOf(vselectForCuts(mixed) ?? '')).toBe(keepOf(vselectForCuts(one) ?? ''))
   })
 })

@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import path from 'node:path'
 import { existsSync, statSync } from 'node:fs'
+import { CAPTIONS_DIR_NAME } from '../../shared/captions'
 
 const isPackaged = (): boolean => app.isPackaged
 
@@ -61,5 +62,5 @@ export function whisperModelPath(modelFile = 'ggml-base.en.bin'): BinaryStatus {
 }
 
 export function captionsOutputDir(): string {
-  return userDataPath('captions')
+  return userDataPath(CAPTIONS_DIR_NAME)
 }

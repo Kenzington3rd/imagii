@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { unlink } from 'node:fs/promises'
 import { ffmpegPath } from '../ffmpeg/paths'
 import {
+  aselectForCuts,
   buildChain,
   chainEndsWithLoudnorm,
   parseLoudnormJson,
+  vselectForCuts,
   type LoudnormMeasurement
 } from './chain'
 import { probeAudio } from './probe'
@@ -11,9 +14,12 @@ import type {
   AudioExportSpec,
   AudioJobProgress,
   AudioJobResult,
-  AudioOutputFormat
+  AudioMuxSpec,
+  AudioOutputFormat,
+  CutRegion
 } from '../../shared/audio'
 import { DEFAULT_DUCK_PARAMS } from '../../shared/audio'
+import { assert } from '../../shared/assert'
 
 export type AudioProgressListener = (p: AudioJobProgress) => void
 
@@ -119,8 +125,23 @@ export async function runAudioExport(
     if (parsed) measurement = parsed
   }
 
-  const finalChain = buildChain(spec.chain, measurement)
   const secondary = spec.chain.secondaryTrack
+  // T-82: the cut belongs to the FINAL audio. With a secondary track the
+  // chain used to cut only the primary input, so the music ran uncut beside a
+  // cut voice (and the mix came out as long as the music). Here the primary's
+  // own stages are built without it and the cut is applied once, to the mix —
+  // the same `aselect` for voice and music, on one clock, so they cannot
+  // drift. Without a secondary track the primary IS the final audio and the
+  // cut stays first in its chain, ahead of the loudnorm that should measure
+  // only what is kept. (The measure pass above stays cut-first on purpose:
+  // loudnorm is linear there, so a gain measured on the kept audio is the
+  // right constant to apply before or after the cut.)
+  const cutAfterMix = Boolean(secondary)
+  const finalChain = buildChain(
+    cutAfterMix ? { ...spec.chain, cutRegions: [] } : spec.chain,
+    measurement
+  )
+  const mixCut = cutAfterMix ? aselectForCuts(spec.chain.cutRegions) : null
   const args: string[] = ['-y', '-i', spec.sourcePath]
   if (secondary) {
     args.push('-i', secondary.filePath)
@@ -178,10 +199,15 @@ export async function runAudioExport(
     // for a loudness target, restore it with a single-pass loudnorm on the
     // mix bus. Manual-gain mode is left un-normalized on purpose — the
     // user is gain-staging by hand there.
-    const postMix =
+    // The cut sits ahead of that mix-bus loudnorm, which should measure only
+    // what is kept.
+    const postMixStages = [
+      mixCut,
       matchLoudness || primaryAlreadyLoudnormed
-        ? `;[premix]loudnorm=I=${target}:TP=-1.5:LRA=11[mix]`
-        : ''
+        ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
+        : null
+    ].filter((stage): stage is string => stage !== null)
+    const postMix = postMixStages.length > 0 ? `;[premix]${postMixStages.join(',')}[mix]` : ''
     const mixLabel = postMix ? '[premix]' : '[mix]'
     const filterGraph = ducking
       ? `[0:a]${primaryStage},${primaryNormalize},asplit=2[primary][primary_sc];` +
@@ -220,14 +246,45 @@ export async function runAudioExport(
   }
 }
 
+/**
+ * Put `audioPath` on `videoPath`'s picture. `audioPath` is already the FINAL
+ * audio: when the chain closed cut regions in it (it is shorter by their total
+ * length), pass the same `cutRegions` here and the picture drops them too.
+ *
+ * T-82 — the two cases are different jobs:
+ *  - No cuts: the picture is stream-copied (byte-cheap, untouched).
+ *  - Cuts: the picture is cut with the SAME expression the audio was
+ *    (`vselectForCuts`, built from the same list by the same builder), which
+ *    needs a re-encode — select/setpts cannot run on copied packets.
+ *    Settings match the other whole-file re-encodes (burn-in, reframe):
+ *    libx264 medium, yuv420p, default CRF — no bitrate cap, so the file is
+ *    not squeezed to a platform preset the user never chose; frame rate is
+ *    left as the source's (see -fps_mode below).
+ *
+ * `-shortest` stays on BOTH paths, and its job is not the one it used to
+ * have. Before T-82 it papered over a mismatch: the audio was cut and the
+ * picture was not, so it silently threw away the video's last N seconds
+ * (N = the total cut length) while the sound ran N seconds ahead of the
+ * picture. Now the cut picture and the cut audio are equal by construction
+ * and `-shortest` hides nothing about the desync — the Layer 5 content reads
+ * (burst positions, frame luma) are what prove that. What it still bounds is
+ * a music bed LONGER than the picture: amix runs to its longest input, so the
+ * mix is max(voice, music) minus the cuts, which overruns the cut picture
+ * whenever the music outlasts the source; `-shortest` trims that tail (it
+ * trims the END of the audio, it moves nothing). With no cuts it also trims
+ * the few-millisecond tail difference between a video and the audio track
+ * extracted from it.
+ */
 export async function runAudioMux(
   jobId: string,
   videoPath: string,
   audioPath: string,
   outputPath: string,
-  onProgress: AudioProgressListener
+  onProgress: AudioProgressListener,
+  cutRegions: CutRegion[] = []
 ): Promise<AudioJobResult> {
   const startedAt = Date.now()
+  const pictureCut = vselectForCuts(cutRegions)
   const args = [
     '-y',
     '-i',
@@ -238,8 +295,25 @@ export async function runAudioMux(
     '0:v:0',
     '-map',
     '1:a:0',
-    '-c:v',
-    'copy',
+    ...(pictureCut
+      ? [
+          '-vf',
+          pictureCut,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'medium',
+          '-pix_fmt',
+          'yuv420p',
+          // `setpts` leaves the filter graph's output frame rate unknown, so
+          // by default ffmpeg warns "No information about the input
+          // framerate" and forces 25 fps CFR — duplicating frames, and
+          // turning a 60 fps recording into a 25 fps one. Passthrough keeps
+          // exactly the frames `select` kept, on the timestamps `setpts` gave.
+          '-fps_mode',
+          'passthrough'
+        ]
+      : ['-c:v', 'copy']),
     '-c:a',
     'aac',
     '-b:a',
@@ -254,9 +328,64 @@ export async function runAudioMux(
     '-nostats',
     outputPath
   ]
-  await runFfmpegJob(args, jobId, 0, 'mux', onProgress)
+  // A stream-copy mux is instant and needs no bar; the re-encode is minutes
+  // on a long recording, and the output is exactly as long as the (already
+  // cut) audio.
+  const total = pictureCut ? (await probeAudio(audioPath)).duration : 0
+  await runFfmpegJob(args, jobId, total, 'mux', onProgress)
   onProgress({ jobId, pass: 'mux', percent: 100 })
   return { jobId, outputPath, durationMs: Date.now() - startedAt }
+}
+
+/**
+ * "Re-attach to video" (the Export panel's mux-back branch): render the
+ * cleaned audio to an intermediate WAV beside the output, then mux it onto
+ * the video's picture — cutting the picture wherever the chain cut the sound
+ * (T-82; see runAudioMux).
+ *
+ * The WAV is an implementation detail of this one job (~0.7 GB per hour of
+ * audio), so it dies with the job: removed after the mux on success AND on
+ * any failure or cancel, whichever pass it came from. It lives here, in main,
+ * rather than in the renderer, because only main can delete it on every exit
+ * path — and because with mux-back OFF the exported audio file IS the
+ * deliverable, which never goes through this function.
+ */
+export async function runAudioReattach(
+  spec: AudioMuxSpec,
+  onProgress: AudioProgressListener
+): Promise<AudioJobResult> {
+  const startedAt = Date.now()
+  const tempAudioPath = `${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`
+  // The delete below is unconditional, so it must never be aimed at a file
+  // the job did not make. spec.outputPath cannot collide by construction
+  // (the suffix differs); the two inputs can, if a file already sits there.
+  assert(
+    tempAudioPath !== spec.sourcePath && tempAudioPath !== spec.videoPath,
+    `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
+  )
+  try {
+    await runAudioExport(
+      {
+        jobId: spec.jobId,
+        sourcePath: spec.sourcePath,
+        outputPath: tempAudioPath,
+        chain: spec.chain,
+        format: 'wav'
+      },
+      onProgress
+    )
+    await runAudioMux(
+      spec.jobId,
+      spec.videoPath,
+      tempAudioPath,
+      spec.outputPath,
+      onProgress,
+      spec.chain.cutRegions
+    )
+  } finally {
+    await unlink(tempAudioPath).catch(() => {})
+  }
+  return { jobId: spec.jobId, outputPath: spec.outputPath, durationMs: Date.now() - startedAt }
 }
 
 export function cancelAudioJob(jobId: string): boolean {

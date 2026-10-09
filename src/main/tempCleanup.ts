@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { assert } from '../shared/assert'
+import { CAPTIONS_DIR_NAME, isShiftedSrtName } from '../shared/captions'
 
 /**
  * Tech-debt fix: prune old temp files left behind by prior imagii sessions.
@@ -18,6 +19,11 @@ import { assert } from '../shared/assert'
  *
  * Both files are recoverable artifacts the user can regenerate. Reaping
  * anything older than the threshold is safe.
+ *
+ * Two userData folders are swept too (see userDataDir): recordings/, and
+ * captions/ — but captions/ also holds the user's real transcripts, so only
+ * the burn-in's leftover shifted copies (`*.srt.clip-<uuid>.srt`, T-81) are
+ * eligible there, matched by the same helper that names them.
  *
  * 6 hours is conservative — a concurrent imagii instance is unlikely to
  * have a session that long, and Windows Storage Sense would have reaped
@@ -36,7 +42,12 @@ const TEMP_SUBDIRS = ['imagii-audio', 'imagii-concat', 'imagii-import'] as const
  * if `app` (electron) is available — keeps the unit test working without
  * Electron loaded.
  */
-function recordingsCleanupDir(): string | null {
+// Test seam: the unit tests have no electron, so userData is unreachable
+// from them unless they point it somewhere.
+let userDataOverride: string | null = null
+
+function userDataDir(): string | null {
+  if (userDataOverride) return userDataOverride
   try {
     // Lazy import keeps the unit test (node-env, no electron) loading
     // this module without crashing. app.getPath throws if invoked before
@@ -44,7 +55,7 @@ function recordingsCleanupDir(): string | null {
     // dynamic-require avoids a top-level electron dependency for tests.
     const { app } =
       (eval('require') as NodeRequire)('electron') as typeof import('electron')
-    return path.join(app.getPath('userData'), 'recordings')
+    return app.getPath('userData')
   } catch {
     return null
   }
@@ -52,7 +63,10 @@ function recordingsCleanupDir(): string | null {
 
 async function pruneDir(
   dir: string,
-  now: number
+  now: number,
+  // Only names this accepts are candidates (and counted as scanned): for a
+  // folder that also holds files the user owns.
+  only: (name: string) => boolean = () => true
 ): Promise<{ scanned: number; removed: number }> {
   if (!existsSync(dir)) return { scanned: 0, removed: 0 }
   let scanned = 0
@@ -64,6 +78,7 @@ async function pruneDir(
     return { scanned: 0, removed: 0 }
   }
   for (const name of entries) {
+    if (!only(name)) continue
     scanned++
     const full = path.join(dir, name)
     try {
@@ -100,15 +115,27 @@ export async function pruneStaleTempFiles(now: number = Date.now()): Promise<{
     scanned += s
     removed += r
   }
-  const recordings = recordingsCleanupDir()
-  if (recordings) {
-    const { scanned: s, removed: r } = await pruneDir(recordings, now)
-    scanned += s
-    removed += r
+  const userData = userDataDir()
+  if (userData) {
+    const swept: Array<[string, ((name: string) => boolean) | undefined]> = [
+      [path.join(userData, 'recordings'), undefined],
+      [path.join(userData, CAPTIONS_DIR_NAME), isShiftedSrtName]
+    ]
+    for (const [dir, only] of swept) {
+      const { scanned: s, removed: r } = await pruneDir(dir, now, only)
+      scanned += s
+      removed += r
+    }
   }
   return { scanned, removed }
 }
 
 // Test-only export of the threshold so the test file doesn't have to
-// hardcode the same magic number.
-export const __testing__ = { STALE_THRESHOLD_MS, TEMP_SUBDIRS }
+// hardcode the same magic number, plus the userData seam.
+export const __testing__ = {
+  STALE_THRESHOLD_MS,
+  TEMP_SUBDIRS,
+  setUserDataDirForTest: (dir: string | null): void => {
+    userDataOverride = dir
+  }
+}

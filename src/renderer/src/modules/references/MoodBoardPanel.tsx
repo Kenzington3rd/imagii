@@ -116,7 +116,7 @@ export function MoodBoardPanel(): JSX.Element {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && onCreate()}
             placeholder="New board name…"
-            className="flex-1 bg-bg-base rounded px-2 py-1 text-sm"
+            className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-sm"
           />
           <button className="btn-ghost px-3 py-1 text-sm" onClick={onCreate}>
             +

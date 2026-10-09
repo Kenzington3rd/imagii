@@ -3,7 +3,7 @@ import path from 'node:path'
 import { probeAudio } from '../audio/probe'
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../shared/mediaFormats'
 import { extractAudioFromVideo } from '../audio/extract'
-import { runAudioExport, runAudioMux, cancelAudioJob } from '../audio/process'
+import { runAudioExport, runAudioReattach, cancelAudioJob } from '../audio/process'
 import {
   listPresets as listChainPresets,
   savePreset as saveChainPreset,
@@ -100,11 +100,10 @@ export function registerAudioIpc(): void {
     assertPlainObject(spec, 'audio:mux spec')
     assertNonEmptyString(spec.jobId, 'spec.jobId')
     assertSafeAbsolutePath(spec.videoPath, 'spec.videoPath')
-    assertSafeAbsolutePath(spec.audioPath, 'spec.audioPath')
+    assertSafeAbsolutePath(spec.sourcePath, 'spec.sourcePath')
     assertSafeAbsolutePath(spec.outputPath, 'spec.outputPath')
-    return runAudioMux(spec.jobId, spec.videoPath, spec.audioPath, spec.outputPath, (p) =>
-      e.sender.send('audio:progress', p)
-    )
+    validateChainSpec(spec.chain)
+    return runAudioReattach(spec, (p) => e.sender.send('audio:progress', p))
   })
 
   ipcMain.handle('audio:cancel', (_e, jobId: string) => {

@@ -23,7 +23,7 @@ export function PropertiesPanel(): JSX.Element | null {
           type="text"
           value={layer.name}
           onChange={(e) => updateLayer(layer.id, { name: e.target.value })}
-          className="flex-1 bg-bg-base rounded px-2 py-1"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1"
         />
       </label>
 
@@ -34,7 +34,7 @@ export function PropertiesPanel(): JSX.Element | null {
             type="number"
             value={Math.round(layer.x)}
             onChange={(e) => updateLayer(layer.id, { x: Number(e.target.value) })}
-            className="flex-1 bg-bg-base rounded px-1 py-0.5 font-mono"
+            className="flex-1 min-w-0 bg-bg-base rounded px-1 py-0.5 font-mono"
           />
         </label>
         <label className="flex items-center gap-1.5">
@@ -43,7 +43,7 @@ export function PropertiesPanel(): JSX.Element | null {
             type="number"
             value={Math.round(layer.y)}
             onChange={(e) => updateLayer(layer.id, { y: Number(e.target.value) })}
-            className="flex-1 bg-bg-base rounded px-1 py-0.5 font-mono"
+            className="flex-1 min-w-0 bg-bg-base rounded px-1 py-0.5 font-mono"
           />
         </label>
       </div>
@@ -119,7 +119,7 @@ function FillStrokeFields({
           type="text"
           value={layer.fill}
           onChange={(e) => updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>)}
-          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono text-xs"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />
       </label>
       <label className="flex items-center gap-2">
@@ -130,7 +130,7 @@ function FillStrokeFields({
           onChange={(e) =>
             updateLayer(layer.id, { stroke: e.target.value } as Partial<CanvasLayer>)
           }
-          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono text-xs"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />
       </label>
       <label className="flex items-center gap-2">
@@ -162,7 +162,7 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
           onChange={(e) =>
             updateLayer(layer.id, { text: e.target.value } as Partial<CanvasLayer>)
           }
-          className="flex-1 bg-bg-base rounded px-2 py-1 min-h-[60px] resize-none"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 min-h-[60px] resize-none"
         />
       </label>
       <label className="flex items-center gap-2">
@@ -187,7 +187,7 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
           onChange={(e) =>
             updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>)
           }
-          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono text-xs"
+          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />
       </label>
     </>

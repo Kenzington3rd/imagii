@@ -1323,3 +1323,56 @@ existing control's end state is allowed to be.
 - **Video 4i ColorGradePanel ([T-80], verified not changed):** sliders,
   two checkboxes and a button only — no text entry — so its bare
   `onPointerUp={endGesture}` is already correct and was left alone.
+
+
+## Dispositions — round 49 (T-81 + T-82: two ffmpeg exports that were valid and wrong)
+
+No new interactive elements. Both tickets change what an existing
+control's end state is allowed to be, and both end states cross the same
+OS boundary as before (the save dialog), so the deepest layer is still
+Layer 5 on the production job runner — now with cases that read CONTENT
+at an offset, which the earlier cases at startSec 0 / "shorter by the
+cut" could not.
+
+- **Video 4o Captions - "Burn into video" button + "Burn captions over
+  selected clip range only" checkbox ([T-81]):** end state extended from
+  "an MP4 with captions" to "the captions of THE BURNED SPAN, on the clip
+  clock". The click stays HL-dialog (`pickBurnInOutput`) plus HL-whisper
+  (an SRT needs a transcribe to exist); the end state is proven at
+  `runBurnIn` by media.spec.ts, flat-gray source cut 2 -> 5 s: the cue
+  inside the range is painted at its shifted output time, the cue before
+  it paints nothing where the bug put it, edge-straddling cues keep their
+  visible half, a window nobody speaks in yields the clip uncaptioned, and
+  the shifted temp SRT is gone after success AND after an ffmpeg failure.
+  Pure shifter: src/shared/captions.test.ts. Red-first against the old
+  `runBurnIn`; mutation (shifter returns its input) red in both layers.
+  The burn's refusal states are covered below the click too: a bad range
+  (lone/empty/inverted/NaN/string) is rejected at the `captions:burnIn`
+  boundary with a plain message before any work
+  (src/main/ipc/captionsBurnIn.test.ts drives the real handler), and the
+  shifted temp copy a hard kill could strand is swept at the next launch
+  (tempCleanup.test.ts, name-filtered so real transcripts are never touched).
+- **Audio - "Re-attach to video" checkbox + Export button ([T-82]):** end
+  state extended from "an MP4 with the cleaned sound" to "picture and
+  sound cut at the same instants, ending together, with no intermediate
+  file left beside it". The Export click stays HL-dialog; its mux-back
+  branch is now ONE `audio:mux` call into `runAudioReattach` (the
+  renderer no longer names or writes the `.cleaned.wav`), so the whole
+  branch below the dialog is exercised by media.spec.ts "audio cuts
+  re-attached to video (real ffmpeg, T-82)": stream durations vs source
+  minus cut, the frame under a known sound, the sound's burst position,
+  frame rate preserved, mux progress moving, the no-cut path
+  stream-copied byte for byte, directory contents after success and after
+  a failed mux, and the refusal to delete a file the job reads. With the
+  checkbox OFF the exported audio file is the deliverable and never goes
+  through that function. Red-first against the old behaviour; six
+  mutations each red. A secondary (music) track is cut together with the
+  voice — one `aselect` on the mix: a burst in the music AFTER the cut
+  lands at its shifted output time and all three durations match
+  source-minus-cut (media.spec.ts, same block; red-first, and the pre-mix
+  cut restored as a mutation -> red).
+- **Audio - Cancel button ([T-82], verified not changed):** still kills
+  the active ffmpeg child by `jobId` (round-17 units). A cancel now also
+  reaches the intermediate WAV's `finally`, which is the same cleanup path
+  the failed-mux case covers; a cancel landing in the instant between the
+  render and mux passes has no child to kill, as before.
