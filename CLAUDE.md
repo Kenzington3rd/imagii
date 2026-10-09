@@ -172,7 +172,7 @@ Rules that follow:
 
 ---
 
-## Model routing — owner's standing workflow (2026-08-14)
+## Model routing — owner's standing workflow (2026-08-14, amended 2026-10-09)
 
 Makenah's directive for how agent work on this repo is organized:
 
@@ -180,11 +180,17 @@ Makenah's directive for how agent work on this repo is organized:
   session runs on Fable. It reads the specs (the guides above +
   `docs/PRODUCT_GUIDE.md`), writes tickets into `docs/TICKETS.md`
   (format defined there: ID, spec reference, acceptance criteria), and
-  owns the definition of done.
-- **Opus (`claude-opus-5`) implements.** Each ticket is delegated to an
-  Opus worker — an `Agent` call with `model: "opus"`, or a child
-  session on `claude-opus-5` for large tickets. Workers get the ticket
-  text verbatim, including acceptance criteria.
+  owns the definition of done. Tickets are authored by Fable or Opus,
+  never by the implementation tier.
+- **Sonnet or Haiku implements (owner amendment, 2026-10-09;
+  previously Opus).** Each ticket is delegated to a worker — an
+  `Agent` call with `model: "sonnet"` (default for behavior changes
+  and anything touching ffmpeg or state) or `model: "haiku"`
+  (self-contained, low-risk work such as docs and isolated copy
+  fixes). Workers get the ticket text verbatim, including acceptance
+  criteria, plus the expediter's implementation direction — the
+  dispatch prompt carries the mechanism decisions so the worker does
+  not have to make design calls.
 - **Fable expedites before anything merges.** The Fable session checks
   the implementation against the ticket's acceptance criteria, runs
   `npm run verify` (and `test:media` when IMG-PREC requires it), and
