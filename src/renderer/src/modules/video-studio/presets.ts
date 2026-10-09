@@ -118,7 +118,7 @@ export interface SuccessReason {
  * not a whole number of minutes (the typical 140 s X limit is "2:20"), and
  * hours only for the multi-hour caps, where "720-minute" would be absurd.
  */
-function spanAdjective(sec: number): string {
+export function spanAdjective(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}-second`
   if (sec % 60 !== 0) {
     const s = Math.round(sec % 60)

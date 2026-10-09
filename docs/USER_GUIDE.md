@@ -1,11 +1,19 @@
 # imagii — User Guide
 
-How to use imagii. imagii runs entirely on your computer — no account,
-no subscription, no internet required (except image search in
-References). Everything you make is saved to your own disk.
+How to use imagii. imagii runs on your computer — no account, no
+subscription, and no internet required, except for image search in
+References and the one-time caption model download. Everything you make
+is saved to your own disk.
 
 Press **`?`** anywhere to see the keyboard shortcuts for the current
 screen.
+
+Each studio has a short tour. It opens the first time you load something
+into the studio (not before — there is nothing to point at on an empty
+one), and the **?** button in the studio's header replays it. **Skip**,
+**Esc**, and **Done** all close it for good; it only points at what is on
+screen, so it covers more once you have a video, audio file, or canvas
+loaded.
 
 ---
 
@@ -28,7 +36,8 @@ controls:
 
 ## Record
 
-Capture your screen, a window, or your webcam to a single video file.
+Capture your screen or a window to a single video file, with your webcam
+and mic if you want them. Game and desktop sound are not captured.
 
 1. Click **Pick a screen or window** and choose a source.
 2. Under **Audio**, choose whether to record your microphone.
@@ -64,16 +73,22 @@ Drop a video in (or use the file picker), then:
   well your clip fits there. A red one says why — **Wrong shape** or
   **Too long** — and the reason is printed on the card. The button says
   how many files it will write ("Export 3 files"). Add a **watermark**
-  to stamp your handle on every export — your handle and the corner you
-  put it in are remembered for your next batch.
+  to stamp your handle on the batch export — your handle and the corner
+  you put it in are remembered for your next batch. GIF, reframe,
+  compilation and picture-in-picture don't take one.
 - **Clip Kit** — one click exports a clip for all five platforms plus
-  thumbnails into a single folder.
+  thumbnails into a single folder. It stamps the watermark you last
+  exported with, and asks once before it starts if the clip is longer
+  than a platform's typical limit (it never asks about cropping: each
+  platform takes a centered cut of your picture).
 - **Smart highlight finder** — scans the audio for loud, exciting
   moments and suggests clips. The first highlight you add replaces the
   untouched whole-video "Clip 1" (so Export doesn't re-encode your whole
   VOD beside your excerpts); `Ctrl+Z` brings it back. The chat-spike
   finder works the same way.
-- **Auto-reframe** — crops a clip to vertical 9:16 for TikTok / Reels.
+- **Reframe to 9:16 (center crop)** — cuts a vertical 9:16 strip for
+  TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**; it
+  doesn't track faces or action.
 - **Captions** — auto-transcribes speech and burns styled captions in.
   The first use downloads a transcription model (~141 MB, one time).
 - **Color & motion**, **GIF export**, **compilation**, and
@@ -132,9 +147,10 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
 
 Gather inspiration and grab ready-made stream assets.
 
-- **Reference Search** — search images (SafeSearch is permanently on;
-  thumbnails are screened locally). Click **Save** to add an image to a
-  mood board.
+- **Reference Search** — search images. SafeSearch is always on
+  (strict): DuckDuckGo does the filtering, and imagii doesn't scan images
+  itself. It is the one feature that goes online. Click **Save** to add
+  an image to a mood board.
 - **Mood Boards** — your saved collections. Hover an item and send it
   to the Stream Graphics canvas as a reference layer.
 - **Asset Library** — curated, free-to-use stream assets (overlay

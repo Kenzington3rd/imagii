@@ -92,8 +92,9 @@ export function ReferencePanel(): JSX.Element {
       <p className="text-xs text-ink-dim inline-flex items-start gap-1.5">
         <Icon name="shield" size={13} className="mt-0.5 flex-shrink-0" />
         <span>
-          SafeSearch is permanently on. All thumbnails are screened locally before
-          display. Powered by DuckDuckGo image search.
+          SafeSearch is always on (strict) — DuckDuckGo does the filtering; imagii
+          doesn&apos;t scan images itself. Reference Search is the one feature that goes
+          online.
         </span>
       </p>
 

@@ -13,7 +13,7 @@ That's it. Everything's local — no install, no setup. Run it from anywhere on 
 ## What's inside
 
 ### 🔴 Record
-Capture screen + window + mic + (preview-only) webcam straight to MP4. Replaces the OBS dependency for simple recordings — pick a screen or window, optionally a microphone, hit ● Start.
+Capture a screen or window straight to MP4, with an optional microphone and webcam (the webcam is composited into a corner you pick). Game and desktop sound are not captured — pick a screen or window, optionally a microphone, hit ● Start.
 
 ### 🎬 Video Studio
 Drag a video in, trim it, export for **YouTube / Reels / TikTok / X / Facebook**. Each platform gets the right aspect ratio and resolution automatically. Multiple clips per source, batch export, crop overlay with snap-to-aspect, watermark with your @handle, text overlays.
@@ -22,7 +22,7 @@ Plus, in the side panels:
 - **Output preview** — live snapshot of what the chosen platform crop looks like
 - **Auto-highlight finder** — finds loud moments in a long VOD and offers them as clip ranges
 - **Chat highlight reel** — paste a Twitch chat log, finds bursts in message density
-- **Auto-reframe to 9:16** — one-click vertical export from horizontal source
+- **Reframe to 9:16 (center crop)** — one-click vertical export from a horizontal source: a fixed strip you place Left, Center, or Right (it does not track faces or action)
 - **GIF export** — width / fps / speed selectors for the trimmed range
 - **Compile clips** — stitch your clip list into one montage MP4 with crossfades
 - **Picture-in-picture composite** — overlay one video on another (e.g. webcam on screen)
@@ -59,7 +59,7 @@ Press **?** anywhere in the app for a context-aware keyboard shortcut overlay.
 
 ## Privacy
 
-Everything runs on your computer. No telemetry, no analytics, no accounts. The only feature that touches the internet is reference image search (DuckDuckGo — they don't track). All your videos, audio, images, recordings, mood boards, and projects stay local.
+Everything runs on your computer. No telemetry, no analytics, no accounts. Only two things touch the internet: reference image search (DuckDuckGo) and the one-time caption model download. All your videos, audio, images, recordings, mood boards, and projects stay local.
 
 App data lives at `%APPDATA%\imagii\`.
 

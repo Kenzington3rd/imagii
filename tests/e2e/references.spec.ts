@@ -254,7 +254,14 @@ test.describe('imagii References studio', () => {
 
       // Default tab: Reference Search.
       await expect(searchInput).toBeVisible()
-      await expect(window.getByText(/Powered by DuckDuckGo image search/)).toBeVisible()
+      // T-85: the panel says WHO filters (DuckDuckGo's SafeSearch — imagii
+      // screens nothing itself) and that search is the one online feature.
+      await expect(
+        window.getByText(
+          "SafeSearch is always on (strict) — DuckDuckGo does the filtering; imagii doesn't scan images itself. Reference Search is the one feature that goes online."
+        )
+      ).toBeVisible()
+      await expect(window.getByText(/screened locally/)).toHaveCount(0)
       await expect(boardsPanel).toHaveCount(0)
       await expect(assetsPanel).toHaveCount(0)
 
@@ -296,12 +303,12 @@ test.describe('imagii References studio', () => {
       const coachmark = window.getByRole('dialog')
       await expect(coachmark).toHaveAttribute(
         'aria-label',
-        'References tutorial — step 1 of 4: Welcome'
+        'References tutorial — step 1 of 4: Welcome to References'
       )
       await coachmark.getByRole('button', { name: 'Next' }).click()
       await expect(coachmark).toHaveAttribute(
         'aria-label',
-        'References tutorial — step 2 of 4: The two tabs'
+        'References tutorial — step 2 of 4: The three tabs'
       )
       const highlight = window.locator('svg rect[stroke]')
       await expect(highlight).toHaveCount(1)

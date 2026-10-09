@@ -65,7 +65,8 @@ export function AudioStudio(): JSX.Element {
   const redo = useAudioStore((s) => s.redo)
   const canUndo = useAudioStore((s) => s.canUndo())
   const canRedo = useAudioStore((s) => s.canRedo())
-  const tutorial = useTutorial(audioTutorial)
+  // T-86: held until there is audio loaded — see VideoStudio.
+  const tutorial = useTutorial(audioTutorial, source !== null)
   const [showFixWizard, setShowFixWizard] = useState(false)
 
   // B11 fix (round 15): HotkeyOverlay documented Ctrl+Z / Ctrl+Y for Audio
@@ -148,10 +149,13 @@ export function AudioStudio(): JSX.Element {
                 panels above build, so it sits directly under them. */}
             <PresetPanel />
             {/* T-16: the tutorial's multi-track step pointed at a selector
-                nothing rendered. The panel root already carries
-                `audio-music` for the ducking step, so the host wrapper
-                carries the multi-track one — same convention as the
-                siblings above. */}
+                nothing rendered, so the host wrapper carries this one — same
+                convention as the siblings above. T-86 merged that step into
+                the single "Add a second track" step (it pointed at this very
+                panel, and "load both tracks" was false: the panel adds ONE
+                second track), which targets the root's `audio-music`; this
+                attribute stays because audio.spec.ts addresses the panel by
+                it. */}
             <div data-tutorial="audio-multitrack">
               <SecondaryTrackPanel />
             </div>
@@ -165,7 +169,7 @@ export function AudioStudio(): JSX.Element {
       <FixWizard open={showFixWizard} onClose={() => setShowFixWizard(false)} />
 
       {tutorial.active ? (
-        <Tutorial def={audioTutorial} onClose={tutorial.stop} />
+        <Tutorial def={tutorial.def} onClose={tutorial.stop} />
       ) : null}
     </div>
   )

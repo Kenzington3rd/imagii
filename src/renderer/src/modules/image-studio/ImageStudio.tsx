@@ -34,7 +34,9 @@ export function ImageStudio(): JSX.Element {
   const removeLayer = useCanvasStore((s) => s.removeLayer)
   const selectedLayerId = useCanvasStore((s) => s.selectedLayerId)
   const layers = useCanvasStore((s) => s.doc.layers)
-  const tutorial = useTutorial(imageTutorial)
+  // T-86: held until the canvas has a layer (a template picked, an image
+  // imported) — the picker alone is not a canvas to tour.
+  const tutorial = useTutorial(imageTutorial, layers.length > 0)
 
   // T-15: undo/redo moved to the shared hook; this listener keeps the
   // canvas-only bindings (delete + tool switching).
@@ -120,7 +122,7 @@ export function ImageStudio(): JSX.Element {
       )}
 
       {tutorial.active ? (
-        <Tutorial def={imageTutorial} onClose={tutorial.stop} />
+        <Tutorial def={tutorial.def} onClose={tutorial.stop} />
       ) : null}
     </div>
   )

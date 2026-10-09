@@ -2049,17 +2049,15 @@ test.describe('ClipKit', () => {
       const kit = kitButton(window)
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
 
-      // ── the same safe-zone pre-flight ExportPanel runs, on the kit's own
-      //    fixed 5-platform mix (both 16:9 and 9:16 are in it, always) ──
+      // ── no safe-zone question (T-85) ──
+      // The kit IS "all five platforms": picking it already answered the
+      // question the safe-zone modal asks, and every platform's centered cut
+      // is made on purpose (T-83). The old kit raised that modal on every
+      // run, on a 4:3-ish source and on every other, so a user clicked
+      // through the same warning each time. The click goes straight to the
+      // run; there is no dialog to answer.
       await kit.click()
-      const modal = window.getByRole('dialog')
-      await expect(
-        modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()
-      ).toBeVisible()
-      await expect(modal.locator('li')).toHaveCount(1)
-      await expect(modal.locator('li')).toContainText('Reels frame → cut down for YouTube')
-      await expect(modal.locator('li')).toContainText('Facebook frame → cut down for Reels')
-      await modal.getByRole('button', { name: 'Export anyway' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
 
       // ── the run: the button becomes its own progress readout ──
       await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
@@ -2111,19 +2109,18 @@ test.describe('ClipKit', () => {
     const studio = await launchWithVideo('kitcancel')
     const { app, window, outDir } = studio
     try {
-      await stubDialogs(app, { open: [outDir] })
+      // The first chooser is dismissed (null), the second answers. A kit with
+      // no folder starts nothing: no job, no folder, no toast — and no
+      // safe-zone question stands between the click and the chooser (T-85).
+      await stubDialogs(app, { open: [null, outDir] })
       const kit = kitButton(window)
 
-      // ── the kit's OWN safe-zone modal, declined: nothing starts, and the
-      //    output folder is never even asked for ──
       await kit.click()
-      await window.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
       expect(readdirSync(outDir)).toEqual([])
 
       await kit.click()
-      await window.getByRole('dialog').getByRole('button', { name: 'Export anyway' }).click()
       await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
 
       // ── the confirm, in the kit's own words ──
@@ -2160,6 +2157,109 @@ test.describe('ClipKit', () => {
       const left = readdirSync(kitDir)
       expect(left.filter((f) => f.endsWith('.mp4')).length).toBeLessThan(5)
       expect(left.filter((f) => f.endsWith('.jpg'))).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a clip over a platform\'s typical limit asks once before the kit starts, names that platform, and both answers are honoured (T-85)', async () => {
+    test.setTimeout(600_000)
+    // The 20-minute source: Clip 1 spans all of it, which is past Reels'
+    // typical 3-minute limit and inside every other platform's.
+    const studio = await launchWithVideo('kitlong', longSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const kit = kitButton(window)
+
+      await kit.click()
+      const modal = window.getByRole('dialog')
+      await expect(
+        modal.getByRole('heading', { name: 'This clip is long for some platforms' }).last()
+      ).toBeVisible()
+      await expect(modal).toContainText(/This clip is 20:0\d\./)
+      // Exactly the platform that is over — not the four that are not.
+      await expect(modal.locator('li')).toHaveCount(1)
+      await expect(modal.locator('li')).toContainText('Reels')
+      await expect(modal.locator('li')).toContainText('the typical 3-minute limit')
+      // It is advice, never a fact: nothing says an upload would be refused.
+      await expect(modal).not.toContainText(/rejected|refuse|not allowed|will fail/i)
+
+      // ── declined: nothing starts and the folder is never even asked for ──
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
+      expect(readdirSync(outDir)).toEqual([])
+
+      // ── accepted: the kit runs. One question, asked once — no safe-zone
+      //    modal follows it (T-85). ──
+      await kit.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Export anyway' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
+
+      // Wind it down: the point was the question, not a 20-minute encode.
+      const cancelButton = clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })
+      await cancelButton.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(
+        window,
+        'Clip Kit canceled. Files already finished are in your folder.'
+      )
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the kit stamps the SAVED watermark on every platform file (T-85)', async () => {
+    test.setTimeout(600_000)
+    // The handle and corner an earlier Export saved. The kit passed
+    // `watermark: null` and never read them, so a user who had set up a
+    // watermark got an unmarked kit while the Export panel next door stamped
+    // the same clip.
+    const studio = await launchWithVideo('kitwatermark', clipSrc, {
+      streamerHandle: '@kit_e2e',
+      watermarkPosition: 'top-left'
+    })
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const kit = kitButton(window)
+      const consoleLines: string[] = []
+      window.on('console', (message) => consoleLines.push(message.text()))
+      await kit.click()
+
+      const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
+      if (process.platform === 'win32') {
+        // The shipping platform: five watermarked files render for real.
+        await expect
+          .poll(() => (existsSync(kitDir) ? readdirSync(kitDir).filter((f) => f.endsWith('.mp4')).length : 0), {
+            timeout: 540_000,
+            intervals: [500]
+          })
+          .toBe(5)
+        await expectToast(window, 'Clip kit ready')
+      } else {
+        // PLATFORM PIN, same as the Export panel's watermark test: the bundled
+        // Linux ffmpeg has no `drawtext`, so a kit that really carries the
+        // watermark dies at graph init. The old kit finished with 'Clip kit
+        // ready' because it carried none. The toast is a plain sentence; the
+        // raw words are in the console, and they name the filter (T-84).
+        await expectToast(window, 'Clip Kit failed.')
+        expect((await readToastLog(window)).join(' | ')).not.toMatch(/drawtext|FFmpeg exit/)
+        await expect
+          .poll(() => consoleLines.join('\n'), { timeout: 30_000 })
+          .toContain("No such filter: 'drawtext'")
+        expect(
+          existsSync(kitDir) ? readdirSync(kitDir).filter((f) => f.endsWith('.mp4')) : []
+        ).toEqual([])
+      }
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      // Reading the saved watermark does not rewrite it.
+      const config = readConfig(userDataDir)
+      expect(config.streamerHandle).toBe('@kit_e2e')
+      expect(config.watermarkPosition).toBe('top-left')
     } finally {
       await app.close()
     }
@@ -2248,7 +2348,7 @@ test.describe('PipPanel', () => {
 // ══════════════ ReframePanel (4k) · GifPanel (4l) · Compilation (4m) ═══════
 
 test.describe('single-output panels', () => {
-  test('reframe: the four positions are real state, and 9:16 comes out square-pixelled', async () => {
+  test('reframe: the three positions are real state, and 9:16 comes out square-pixelled', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('reframe')
     const { app, window, outDir } = studio
@@ -2257,10 +2357,17 @@ test.describe('single-output panels', () => {
       const card = reframeCard(window)
       // The header states the transform the panel will perform.
       await expect(card.getByText(`${CLIP_WIDTH}×${CLIP_HEIGHT} → 1080×1920`)).toBeVisible()
+      // T-85: and says what it is — a fixed strip, not a tracker.
+      await expect(card.getByText('Reframe to 9:16 (center crop)')).toBeVisible()
+      await expect(card.getByText('it does not track faces or action', { exact: false })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Auto (centered)' })).toHaveCount(0)
+      await expect(card.getByText('Auto-reframe')).toHaveCount(0)
 
-      // ── the four position buttons: exactly one is active at a time ──
-      // `exact` throughout: "Center" is a substring of "Auto (centered)".
-      const labels = ['Center', 'Left', 'Right', 'Auto (centered)']
+      // ── the three position buttons: exactly one is active at a time ──
+      // T-85: there used to be a fourth, "Auto (centered)", which was Center
+      // under another name — and the panel promised an "Auto-reframe" that
+      // does not exist. `exact` stays: a label is not a prefix of another.
+      const labels = ['Center', 'Left', 'Right']
       const posButton = (label: string): Locator =>
         card.getByRole('button', { name: label, exact: true })
       await expect(posButton('Center')).toHaveClass(/bg-accent/)

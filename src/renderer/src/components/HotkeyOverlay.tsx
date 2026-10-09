@@ -58,7 +58,10 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/home': [
     { keys: '?', description: 'Toggle this overlay' },
     { keys: 'Click any card', description: 'Open studio' },
-    { keys: 'Save project', description: 'Save full app state to .imagii.json' },
+    {
+      keys: 'Save project',
+      description: 'Save your project (studios and layout; mood boards live outside projects)'
+    },
     { keys: 'Open project', description: 'Restore from a saved project file' }
   ]
 }

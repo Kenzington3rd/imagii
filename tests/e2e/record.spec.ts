@@ -401,7 +401,7 @@ test.describe('T-27 Record Studio', () => {
 
       // The route's own copy, so a silent swap of the NavCard target fails here.
       await expect(
-        window.getByText('Capture a screen, window, or webcam — saved locally as MP4 (or WebM).')
+        window.getByText('Capture a screen or window, with optional webcam and mic — saved locally as MP4 (or WebM).')
       ).toBeVisible()
       // All four panels of the idle layout.
       await expect(window.getByText('What to record')).toBeVisible()

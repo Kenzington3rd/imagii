@@ -4,7 +4,7 @@ import { probeVideo } from './probe'
 import { even } from './filters'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 
-export type ReframePosition = 'left' | 'center' | 'right' | 'smart'
+export type ReframePosition = 'left' | 'center' | 'right'
 
 export interface ReframeJobSpec {
   jobId: string
@@ -64,7 +64,6 @@ function computeCropOffset(
     case 'right':
       return Math.max(0, even(margin * 0.85))
     case 'center':
-    case 'smart':
     default:
       return Math.max(0, even(margin / 2))
   }

@@ -35,7 +35,7 @@ import { assert } from '../../shared/assert'
 import { assertSafeAbsolutePath } from '../../shared/pathSafety'
 import { isValidTextOverlay } from '../../shared/projectValidation'
 
-const REFRAME_POSITIONS = ['left', 'center', 'right', 'smart'] as const
+const REFRAME_POSITIONS = ['left', 'center', 'right'] as const
 const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
 
 // Round 17 B2/B4/B5: validate a renderer-supplied job id (same alphabet as
@@ -183,7 +183,7 @@ export function registerVideoIpc(): void {
         jobId?: string
         sourcePath: string
         outDir: string
-        position: 'left' | 'center' | 'right' | 'smart'
+        position: 'left' | 'center' | 'right'
         startSec: number
         endSec: number
         targetWidth: number

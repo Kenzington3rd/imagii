@@ -502,7 +502,7 @@ export function RecordStudio(): JSX.Element {
           </span>
           <h1 className="text-2xl font-semibold mt-1">Record</h1>
           <p className="text-xs text-ink-muted mt-1">
-            Capture a screen, window, or webcam — saved locally as MP4 (or WebM).
+            Capture a screen or window, with optional webcam and mic — saved locally as MP4 (or WebM).
           </p>
         </div>
         {phase === 'recording' ? (

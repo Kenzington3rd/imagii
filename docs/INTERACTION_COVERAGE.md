@@ -243,7 +243,8 @@ format. HomeLink COV.
   (button, `aria-label="Select clip …"`), name input (sibling of the
   select button since T-17, `aria-label="Rename clip …"`), remove (NAT).
 - **ClipKit (6):** start (HL dir dialog+shell), cancel, keep-running,
-  cancel-jobs, safe-zone modal cancel/continue.
+  cancel-jobs, long-clip confirm cancel/continue (T-85; it was the safe-zone
+  modal until the kit stopped asking that — see round 52).
 - **OutputPreview (1):** platform select (canvas redraw).
 - **ColorGrade (7):** 4 sliders, reset, auto-zoom + hype-shake boxes.
 - **HighlightPanel (5):** scan, chat disclosure, chat textarea
@@ -1604,3 +1605,129 @@ with the right words goes red (mutation below).
   or an image decoder that fails on cue; their happy paths are unchanged and
   already driven. Each catch is routed through the helper (structural test)
   and the helper is unit-tested on every shape those errors take.
+
+
+## Dispositions — round 52 (T-85 + T-86: truth in copy, and tours that wait for something to point at)
+
+Two NEW interactive elements (the Clip Kit long-clip confirm's Cancel and
+Export anyway) and a changed END STATE for the Clip Kit button, the tutorial's
+Skip / Esc, and the first-visit tour of every studio. The rest is copy: no
+control changed what it does, so what is asserted is the words on screen and
+that the old ones are gone.
+
+- **Video 4p ClipKit - the button ([T-85], end state changed twice):**
+  (1) it no longer raises the safe-zone modal — "all five platforms" IS the
+  answer to that question, and each platform's centered cut is made on purpose
+  (T-83). video-pipelines.spec.ts "one click produces the whole kit…" asserts
+  `getByRole('dialog')` has count 0 straight after the click and that the run
+  starts without an answer; "cancelling a kit asks first…" no longer has a
+  safe-zone decline, and uses a dismissed folder chooser instead (a kit with no
+  folder starts nothing, writes nothing, toasts nothing). The manual Export
+  path keeps its pre-flight exactly (the T-83 safe-zone tests are untouched).
+  Red-first: the old kit raised the modal on every run — the cancel test failed
+  with `getByRole('dialog')  Expected: 0  Received: 1`, and the whole-kit test
+  failed against the same build.
+  (2) it stamps the SAVED watermark (`streamerHandle` + `watermarkPosition`,
+  read where the Export panel reads them) on all five platform files. E2E "the
+  kit stamps the SAVED watermark on every platform file (T-85)": linux — the
+  kit fails in the plain sentence 'Clip Kit failed.', the raw
+  `No such filter: 'drawtext'` is in the console and not on screen, no .mp4 is
+  written, the saved handle and corner are not rewritten; win32 — five files.
+  Deepest layers beneath it: Layer 5 `media.spec.ts` inside the T-51 block
+  (the real `runExportJob` driven by the job `buildKitQueue` builds — a win32
+  pixel case and a linux pin whose two jobs differ in exactly one field),
+  `tests/unit/clipKitWatermark.test.ts` (all five jobs through main's real
+  filter graph), `clipKit.test.ts`, `watermark.test.ts`.
+  DISPOSITION (OS boundary, not a gap): the win32 pixel case cannot execute on
+  the linux runner that builds this repo — the bundled linux ffmpeg has no
+  `drawtext`. It is gated exactly like the T-51 cases and runs where the
+  product ships (the windows-latest release run); the linux pin beside it fails
+  the day drawtext appears, which is what forces the gate to be lifted.
+- **Video 4p ClipKit - long-clip confirm: Cancel / Export anyway (NEW,
+  [T-85]):** E2E "a clip over a platform's typical limit asks once…" on the
+  20-minute source — heading 'This clip is long for some platforms', "This
+  clip is 20:0x.", exactly ONE row (Reels — the typical 3-minute limit), no word
+  that an upload would be refused; **Cancel** starts nothing, writes nothing and
+  never asks for the output folder; **Export anyway** runs the kit with no
+  second question (no safe-zone modal follows it) and the run is then cancelled
+  through the existing Cancel / Cancel jobs. A clip inside every limit gets no
+  question at all (the first kit test). The platform-selection rule is pure and
+  unit-tested (`platformsOverLimit`: exactly-at-the-cap is not over, one second
+  over names Reels alone, an hour-plus adds TikTok, a vertical source lists
+  Reels once, the same caps as the grid's "Too long"). The modal's Escape and
+  scrim behaviours are the shared Modal contract (home-chrome.spec.ts), not
+  re-asserted per dialog.
+- **Video 4t ExportPanel - Watermark field + corner select ([T-85]):**
+  unchanged end state, but the spec is now built by the shared
+  `buildWatermark` (Export and the kit cannot stamp different looks). The
+  T-49 E2E ("the watermark reaches the filter graph, and both halves of it
+  survive a relaunch") is green unchanged; interactionWiring.test.ts's pin on
+  the handle-and-corner persistence block is green unchanged.
+  FOUND, NOT FIXED (candidate ticket): a handle TYPED in the Export panel but
+  not yet exported is not "saved", so Clip Kit does not stamp it — the kit uses
+  what the last export wrote. The tutorial and USER_GUIDE say so ("After you
+  have exported with one, Clip Kit stamps it too"). Saving on blur would close
+  it; it was not in the ruling.
+- **Video 4k ReframePanel - position buttons ([T-85]):** three buttons
+  (Left / Center / Right) where there were four; the fourth, "Auto (centered)",
+  was Center under another name. video-pipelines.spec.ts "reframe: the three
+  positions are real state…" cycles all three (exactly one active at a time),
+  asserts the title 'Reframe to 9:16 (center crop)' and the sentence that it
+  does not track faces or action, and that neither 'Auto (centered)' nor
+  'Auto-reframe' is on the panel. The `'smart'` position is deleted from the
+  renderer type, `shared/api.ts`, main's `ReframePosition` and the IPC
+  validator. NOTHING PERSISTS a reframe position (panel-local state, never in a
+  project or an autosave), so there is no stored value to migrate — verified by
+  grep, not assumed. Layer 5 "left and right positions keep different parts of
+  the frame" is unchanged and green.
+- **References - Reference Search, the SafeSearch line ([T-85]):** copy only.
+  references.spec.ts "the three tabs swap panels…" asserts the exact sentence
+  (DuckDuckGo does the filtering; imagii does not scan images itself; search is
+  the one feature that goes online) and that "screened locally" is gone.
+- **Home - Record NavCard, footer; Welcome - "Let's go" screen ([T-85]):**
+  copy only. home-chrome.spec.ts "Welcome \"Let's go\"…" asserts the Welcome
+  clause naming the two online exceptions, then on Home the Record card's exact
+  sentence (no "one-stop", no "alternative to OBS") and the footer's clause.
+- **Record - header ([T-85]):** record.spec.ts asserts the new header ("Capture
+  a screen or window, with optional webcam and mic — saved locally as MP4 (or
+  WebM)."). DISPOSITION: the behaviour behind it — no game or desktop audio,
+  webcam-only impossible, Esc-to-stop only with focus — is T-88's, deliberately
+  untouched; RecordStudio's device logic is unchanged.
+- **HotkeyOverlay - the Home "Save project" row ([T-85]):** copy only.
+  home-chrome.spec.ts "HotkeyOverlay: ? opens the route table…" asserts the new
+  description and that "Save full app state" is gone; hotkeyTable.test.ts
+  classifies the row by its key and is green unchanged.
+- **Tutorial - Skip button, Esc, Done ([T-86], end state changed):** all three
+  are one act now and all three PERSIST the first-visit flag. home-chrome.spec.ts
+  "Skip persists…" and "Escape persists…" (one test each): import a video, the
+  tour opens, close it, poll config.json until `tutorialSeen.video === true`
+  (red-first: `Expected: true  Received: undefined` — the old Skip never wrote
+  it), leave for Home and come back (no tour), then relaunch on the same
+  userData and import again (no tour). The old test "Skip and Escape close it
+  WITHOUT persisting" asserted the bug and was deleted.
+- **Tutorial - the first-visit tour of every studio ([T-86], end state
+  changed):** it waits for something to point at, and shows only steps whose
+  target is on the page. "an empty video studio gets no tour; the first import
+  opens it…": two seconds on the empty studio with no dialog and the flag
+  untouched (red-first: `getByRole('dialog')  Expected: 0  Received: 1`), the
+  drop opens it, and walking it visits exactly the steps whose target is on
+  screen — each targeted step draws its cutout, the importer's step is absent
+  (the importer is gone), the tour is shorter than its definition. "Audio Studio
+  and Stream Graphics hold their tours until there is content; References has
+  one from the first visit" does the same for the other three studios (a dropped
+  wav; a clicked template). Unit: `useTutorial.test.ts` (the rule as pure
+  functions against a fake page), `tutorialCopy.test.ts` and
+  `tutorialTargets.test.ts` (every step still resolves on its route).
+- **Tutorial - TutorialButton '?' ([T-86]):** unchanged control; on an empty
+  studio it opens the three-step tour (welcome, importer, sign-off) rather than
+  the full one — the T-34 clamp test, the T-64 Tab-trap/focus-restore and
+  scroll-once tests and the T-73 stacked-Escape test now start it from this
+  button, and are otherwise unchanged in what they assert. Nothing in the
+  coachmark chrome (Next, Back, scrim advance, arrows, Enter, the claim stack)
+  changed: the run-through test is the same assertions over a loaded studio
+  (11 steps, not 12 — the importer's step drops out).
+- **Tutorial copy ([T-86]):** every control a step names in 'single quotes' is
+  looked up in the studio's own source (the tutorial files themselves excluded),
+  and the words that were wrong or were jargon are banned. DISPOSITION: that
+  proves the NAME exists on the route, not that the control is on screen at that
+  moment — the E2E walk proves the cutouts, and only for the fixtures it loads.

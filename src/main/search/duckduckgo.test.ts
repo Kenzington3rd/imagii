@@ -153,7 +153,9 @@ describe('searchDuckduckgoImages — happy parse', () => {
     )
     expect(jsonInit.headers.Accept).toBe('application/json')
     // SafeSearch: `f=,,,,,` is the default-filters marker DDG expects; the
-    // panel's "SafeSearch is permanently on" copy rests on this string.
+    // panel's "SafeSearch is always on (strict) — DuckDuckGo does the
+    // filtering" copy rests on this string (T-85: it is the ONLY filter —
+    // imagii screens nothing itself).
     expect(jsonUrl).toContain('&f=,,,,,')
   })
 

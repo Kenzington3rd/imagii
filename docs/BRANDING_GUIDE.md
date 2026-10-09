@@ -24,8 +24,12 @@ Every piece of copy should be consistent with three promises:
 
 1. **Free.** No subscriptions, no accounts, no upsell. Never imply a
    paid tier exists.
-2. **Local-first.** Everything runs on the user's computer. No cloud,
-   no telemetry, no upload. Say so when it reassures the user.
+2. **Local-first.** Everything runs on the user's computer, except
+   Reference Search and the one-time caption model download, which go
+   online. No cloud, no telemetry, no upload. Say so when it reassures
+   the user — and never say "everything" without the exceptions: an
+   absolute that is false in two places is a promise the user can
+   catch us breaking (T-85).
 3. **For streamers.** The audience is Twitch / YouTube / TikTok
    creators. Examples and defaults should reflect that.
 
@@ -47,7 +51,9 @@ corporation, not a hype machine.
 - **Warm, not cutesy.** Encouraging is good; baby-talk and exclamation
   spam are not.
 - **Honest about limits.** If a feature has a caveat, say it. "Off =
-  save as WebM (instant, but some apps don't accept WebM)."
+  save as WebM (instant, but some apps don't accept WebM)." Copy
+  promises only what the code does: a fixed crop is a "center crop", not
+  an "auto" reframe; SafeSearch is DuckDuckGo's filter, not ours (T-85).
 - **Action-first in controls.** Buttons are verbs: "Start recording",
   "Save project", "Export".
 - **No emoji in the product UI** (see `STYLE_GUIDE.md`). Emoji are
@@ -66,6 +72,12 @@ corporation, not a hype machine.
 - A crash screen says what is safe and where it is, and never asks the user
   to "report" anything — a local-first app has no channel to report to.
 - Empty states invite the next action: "Drop a video here".
+- A tutorial step names a control exactly as the screen does ("Duck under
+  primary", not "Duck under voice"), says what the code does and no more,
+  and is two short sentences in plain words: "loudness", not "LUFS"; "the
+  captions engine", not a binary's name. No "New:" tags — a shipped feature
+  is not new — and no "Step 4:" numbers; the coachmark counts, and a step
+  whose target is off the page is skipped (T-86).
 - Destructive actions are explicit and never silent.
 
 ---
