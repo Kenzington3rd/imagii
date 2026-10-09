@@ -45,14 +45,29 @@ re-run loop).
   found in that route's tree or a listed mouse hint; `interactionWiring`
   pins that each control the sweep found orphaned is actually mounted.
   `routeSources.ts` (a helper, not a spec) does the import-graph walk
-  they share. Two rules for this style: it cannot see conditional
+  they share. Round 52 added two more in the same style: `tutorialCopy`
+  (every control a tutorial step names in 'single quotes' is a real label in
+  the studio it is shown in, none of the words that were once wrong or were
+  jargon comes back, a step is two short sentences with no number of its own)
+  and `truthInCopy` (the six promises of T-85 — screened thumbnails, a
+  reframe that follows action, a one-stop OBS replacement, a watermark on
+  every export, an absolute "runs locally", "full app state" — stay out of
+  the source and out of the guides). Two rules for this style: it cannot see conditional
   rendering, so a green run means "reachable", not "on screen"; and it
   reads source text, so **always run it against the broken state first**
   — `tutorialTargets` initially passed with both missing attributes
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1449 tests across 72 files (round 51 added four files —
+**Count.** 1641 tests across 78 files (round 52 added six files —
+`src/shared/watermark.test.ts`, the one constructor of a `WatermarkSpec` that
+the Export panel and Clip Kit now share, fed the untrusted values a settings
+file can hold; `clipKit.test.ts`, the jobs Clip Kit queues (the saved watermark
+on all five, the vertical-source YouTube Short swap) and its one long-clip
+question; `tests/unit/clipKitWatermark.test.ts`, those jobs followed into main's
+real filter graph; `useTutorial.test.ts`, the target-gating rule as two pure
+functions against a fake page; and the two structural files named above;
+round 51 added four files —
 `src/main/ffmpeg/cancelSentinel.test.ts`, the table that drives twelve real
 cancellable runners (video export, GIF, compile, PiP, reframe, highlight
 scan, audio export and re-attach, caption burn-in, transcription, convert,
@@ -233,6 +248,14 @@ produces. Both follow the same shape — `it.skipIf(process.platform
 !== 'win32')` positives, plus a **linux pin that fails the moment the
 capability appears**, so an ffmpeg-static upgrade forces the gate to be
 lifted instead of leaving dead coverage behind.
+
+T-85's Clip Kit case has the same two halves, driven through the job the
+kit REALLY builds (`buildKitQueue`, imported from the renderer — the module
+is pure): a win32 positive that the saved corner is painted and a kit with no
+saved watermark stays flat, and a linux pin in which the same kit job fails at
+`drawtext` WITH the watermark and encodes a 1080p file WITHOUT it — two jobs
+that differ in exactly one field, so a kit that drops the watermark fails the
+first assertion.
 
 A gated positive is not the only option, though: where what is under
 test is an ARGUMENT rather than the filter itself, a stand-in runs

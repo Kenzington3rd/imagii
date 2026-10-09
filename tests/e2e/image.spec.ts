@@ -850,12 +850,12 @@ test.describe('Image Studio — tools and drawing', () => {
 
       // ── the header's TutorialButton replays the image tutorial ──
       // The seed marks it seen, so the only way a coachmark appears is the
-      // button; Skip closes it without writing the flag back.
+      // button. (Skip writes the flag — T-86 — but it is already true here.)
       await window.getByRole('button', { name: 'Show tutorial' }).click()
       const coachmark = window.locator('[role="dialog"]')
-      await expect(coachmark).toContainText('Welcome to the Image Canvas')
+      await expect(coachmark).toContainText('Welcome to Stream Graphics')
       await coachmark.getByRole('button', { name: 'Next' }).click()
-      await expect(coachmark).toContainText('Step 1: Get an image in')
+      await expect(coachmark).toContainText('Start your canvas')
       await coachmark.getByRole('button', { name: 'Skip' }).click()
       await expect(coachmark).toHaveCount(0)
     } finally {

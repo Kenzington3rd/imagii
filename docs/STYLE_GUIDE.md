@@ -114,6 +114,25 @@ Repeated UI is a component, not copy-paste:
   one Escape closes one dialog (T-73). `Modal` and the tutorial
   coachmark both call it; a third copy of a trap is a bug. Its pure
   `isTopmostClaim` half is what the unit test drives.
+- **`useTutorial(def, ready)`** (`hooks/useTutorial.ts`) — drives a studio's
+  coachmark tour (T-86). `ready` is "the studio has content for a tour to
+  describe" (a loaded video or audio file, a layer on the canvas): until it
+  is true the first-visit tour does not open and its flag is left alone, so
+  the first import is what opens it. The result's `def` is the tour cut to
+  the steps whose target is on the page — render THAT, never the raw
+  definition, and never a coachmark over nothing. **Every way out (Skip,
+  Esc, Done) is `stop()`, and `stop()` persists the first-visit flag**: a
+  Skip that does not makes the tour come back on every visit. A step names a
+  control exactly as the screen does, in 'single quotes', and claims only
+  what the code does; `tests/unit/tutorialCopy.test.ts` looks each quoted
+  name up in the studio's own source and scans for the words that were once
+  wrong. Its pure halves (`resolvableSteps`, `pointsAtSomething`,
+  `gateTutorial`) are what `useTutorial.test.ts` drives.
+- **`buildWatermark(text, position)`** (`@shared/watermark`) — the one place a
+  handle and a corner become a `WatermarkSpec`. The Export panel calls it on
+  what is typed; Clip Kit calls it on what an earlier export SAVED
+  (`streamerHandle`, `watermarkPosition`), so the two cannot stamp different
+  looks (T-85). Both inputs are untrusted (the saved ones come off disk).
 - **`<NameDialog>`** (`components/NameDialog.tsx`) — "ask the user for
   one name", the whole of it: Modal chrome, a labelled field, Enter or
   the confirm button, a blank name refused, Cancel/Escape/scrim leaving

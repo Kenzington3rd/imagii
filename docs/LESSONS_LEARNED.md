@@ -14,6 +14,168 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-85 + T-86 (round 52): copy that promised what the code does not do, and tours that described a different app
+
+Two tickets with one root: a string in the product is a claim, and nothing
+held it to the code. T-85 audited the claims the content review proved false;
+T-86 fixed the tutorial system that carried the most of them — and that opened
+over empty screens and could not be dismissed.
+
+### Bug (T-85) — six promises no code kept (and two Clip Kit behaviours that fell out of the watermark ruling); each ruled one way or the other
+
+The usability tiebreaker decided each: when promise and code disagree, the user
+expects the promise, so the CODE moves unless the promise was never reasonable.
+
+| Promise (where) | Truth | Ruling |
+|---|---|---|
+| "The watermark field stamps your @handle on every export" (tutorial, README, USER_GUIDE) | Export stamped; Clip Kit passed `watermark: null`; GIF / reframe / compile / PiP take none | **Code to promise** for Clip Kit (it applies the SAVED watermark); copy to truth for the four panels that take none |
+| Clip Kit asked the safe-zone question on every run | The kit IS all five platforms; each cut is made on purpose (T-83) | **Code**: the kit no longer raises the modal at all. The manual Export path keeps its pre-flight exactly |
+| Clip Kit exported a 20-minute clip for Reels without a word | the grid already calls it "Too long" | **Code**: one confirm, only when a kit platform is over its typical limit, listing those platforms |
+| "All thumbnails are screened locally before display" (ReferencePanel, USER_GUIDE) | no screening code anywhere; the only filter is DuckDuckGo's SafeSearch (`p=1`) | **Copy**: names DuckDuckGo as the filter; "Reference Search is the one feature that goes online" |
+| "Auto-reframe … follow the action" / "Auto (centered)" (panel, tutorial) | `'smart'` was the centered case of a fixed strip; the "Left third" hint was a 15% offset | **Copy**: "Reframe to 9:16 (center crop)", Left / Center / Right, says plainly it tracks nothing; `'smart'` deleted from the type, validator and crop maths |
+| "Capture screen + webcam + mic … your one-stop alternative to OBS" (Home, README, FOR_MIKE) | `audio: false` on the screen stream (no game/desktop sound); webcam-only is not a source | **Copy**: names what is and is not captured. The behaviour fixes are T-88's, deliberately not done here |
+| "Everything runs locally" (Welcome, Home, BRANDING_GUIDE) | Reference Search and the one-time caption model download go online | **Copy, guide first**: the clause "except Reference Search and the one-time caption model download, which go online" — in BRANDING_GUIDE itself (the guide was wrong, so the guide changed), then Welcome/Home/USER_GUIDE/PRODUCT_GUIDE/FOR_MIKE |
+| HotkeyOverlay "Save full app state" | mood boards are not in a project file | **Copy**: "Save your project (studios and layout; mood boards live outside projects)" |
+
+- **Root cause.** Claims lived in strings, and a string has no test. The same
+  false sentence also lived in three or four places (a tutorial step, a panel, a
+  guide, the README), so fixing the one the review quoted left the rest. The
+  watermark was the sharp case: `ExportPanel` and `ClipKitButton` each built
+  their own `WatermarkSpec` (the kit's was a literal `null`), so the feature
+  worked in one place and not the one beside it.
+- **Fix.** `src/shared/watermark.ts` — `buildWatermark(text, position)` is the
+  only constructor of the spec; the panel calls it on what is typed and Clip Kit
+  on what an earlier export SAVED (`streamerHandle`, `watermarkPosition`), both
+  untrusted (a hand-edited settings file can hold anything: blank, overlong, an
+  unknown corner). `modules/video-studio/clipKit.ts` — the pure half of the kit
+  (`buildKitQueue`, `platformsOverLimit`, `describeKitLimit`) pulled out of the
+  button so the exact jobs it queues can be driven through the real export
+  runner. `ClipKitButton` now: no safe-zone modal; resolve the saved watermark;
+  one `<Modal>` confirm ("This clip is long for some platforms … Reels — the
+  typical 3-minute limit", Cancel / Export anyway) only when a kit platform's
+  typical limit is exceeded — the same limits and the same "typical" wording as
+  the grid's red "Too long", and never a claim an upload would be refused. All
+  the copy rows above. Docs moved in the same change: BRANDING, PRODUCT, USER,
+  README, FOR_MIKE (and `HOW_IMAGII_WAS_MADE.md`, a history document, was left
+  alone).
+- **Test.** Red-first against the shipped code, quoted. `tests/unit/clipKitWatermark.test.ts`
+  follows the kit's jobs into main's real `buildVideoFilter`:
+  `youtube graph: expected 'scale=1920:1080:flags=lanczos,setsar=1' to match /drawtext=/`;
+  `clipKit.test.ts`: `youtube carries the watermark: expected null to deeply equal
+  { text: '@imagii', … }`. Layer 5 (`media.spec.ts`, inside the T-51 block, same
+  platform rule): a win32 case — a kit file paints the SAVED corner, the other
+  three quadrants stay flat, a kit with nothing saved is flat everywhere — and a
+  linux pin driven through `buildKitQueue` and the real `runExportJob`: the kit
+  job WITH the saved watermark must die naming `drawtext`, the same job without
+  it must encode 1920x1080; against the old kit `promise resolved "{ …(3) }"
+  instead of rejecting`. E2E (`video-pipelines.spec.ts`): the kit starts with NO
+  dialog; a 20-minute clip asks once, names exactly Reels, declining starts
+  nothing and never asks for the folder, accepting runs and cancels; with a saved
+  handle the linux kit fails in plain words with `No such filter: 'drawtext'` in
+  the console (win32: five files) — against the old build, with its safe-zone
+  modal clicked through so the watermark was the only variable, `Expected:
+  ArrayContaining [StringContaining "Clip Kit failed."]  Received: ["Video
+  loaded", "Clip kit ready"]`. `tests/unit/truthInCopy.test.ts` keeps each
+  falsehood out of the source and the guides (comments stripped, so a comment
+  explaining what a line used to say does not trip it); `watermark.test.ts` pins
+  the constructor. The E2E pins that held the old copy moved with it
+  (`record.spec` header, `home-chrome` overlay row, `references.spec` SafeSearch
+  line, `video-pipelines` reframe buttons) and new ones assert the new copy on
+  Welcome, Home and the Reframe panel. Mutations, each restored byte-identically
+  (sha256 shown): `buildKitQueue` back to `watermark: null`
+  (`fe7192c4727e` -> `99b9af848f49` -> `fe7192c4727e`) -> 3 unit red, the Layer 5
+  pin red, the E2E red; the Home card's OBS line restored (`374aeaf5e86e` ->
+  `11c7a0a1b36c` -> `374aeaf5e86e`) -> `truthInCopy` red.
+- **Lesson.** **A claim without a test is a bug waiting for its first reader.**
+  Copy that states what the app does needs the same owner a function has — and
+  the cheap owner is a test that reads the source and fails on the sentence.
+  **A value that rides to an external program needs ONE builder both callers
+  share:** two hand-built `WatermarkSpec`s agreed by luck until one was a
+  literal `null`. **When a guide is wrong, fix the guide first** — BRANDING_GUIDE
+  said "Everything runs on the user's computer", and every agent that read it
+  would have kept writing the absolute.
+
+### Bug (T-86) — tours opened over empty screens, could not be skipped, and described a different app
+
+- **Bug.** `useTutorial` opened a studio's tour on a first visit whatever the
+  studio showed. Video, Audio and Stream Graphics render only an importer (or a
+  template picker) until something is loaded, so the coachmark floated over
+  nothing and told the user to "drag the red handles" that did not exist. Skip
+  and Esc called `onClose(false)`, which never wrote the first-visit flag, so a
+  user who dismissed the tour got it back on every visit — a tour you cannot
+  dismiss, behind a button labelled Skip. And the copy had drifted into another
+  product: a "pink line" (the playhead is amber), "Open Auto-Highlights" (no such
+  control), captions "into the export" (they make a separate file), "Duck under
+  voice" (the checkbox says "Duck under primary"), "Quick fix wizard" (the button
+  is "Help me fix this"), "Multi-track import" for a panel that adds ONE second
+  track, "Choose file…" on a canvas whose button is "Import image", the Stream
+  Graphics studio called "Image Canvas", "Two tabs" where there are three, "New:"
+  on features that shipped long ago, a 14-format list summarised as "pretty much
+  anything", and "LUFS", "whisper.cpp" and "FFmpeg chain" for a streamer.
+- **Root cause.** Three things in one hook and its data. (1) *Nothing asked
+  whether a step had anything to point at.* The coachmark already tolerated a
+  missing target by centering the card — a deliberate design for the welcome and
+  sign-off — which made a broken step and a deliberate one indistinguishable at
+  runtime (T-16 said so, and fixed only the two attributes it found). (2) *Closing
+  and finishing were two acts*: `stop(didFinish)` persisted only the second. (3)
+  *Copy is data*, so nothing could fail when it drifted; T-16's target table
+  proved a selector existed and said nothing about the words around it.
+- **Fix.** `hooks/useTutorial.ts`: `useTutorial(def, ready)`. `ready` is "the
+  studio has content" (a loaded video or audio file, a layer on the canvas;
+  References passes nothing — its tab strip is there from the first frame). Until
+  it is true the first-visit tour does not open and the flag is NOT consumed, so
+  the first import opens it. When it opens, the definition is cut to the steps
+  whose target is on the page (an element that is mounted but laid out nowhere is
+  not on the page) and THAT is what the coachmark counts, so "3 of 7" is a tour
+  the user can walk; an automatic tour with nothing pointed at does not open. The
+  '?' button always opens, with whatever is on screen — on an empty studio that
+  is the welcome, the importer and the sign-off. `stop()` persists, for Skip, Esc
+  and Done alike (`onClose` lost its `didFinish` argument: there is one way out).
+  Every step rewritten against the live control names; the "Multi-track import"
+  step was dropped rather than reworded (it and "Background music" pointed at the
+  same panel, and "load both" was false); "Step N:" and "New:" prefixes are gone
+  (a gated tour skips a step, so a baked-in number would skip with it).
+  **Deviation, deliberate:** the importer's own target resolves on an empty
+  studio, so "no step resolves" alone could not hold the tour off an empty one;
+  the studios therefore also pass `ready`, and the resolvable-step rule does the
+  rest.
+- **Test.** Red-first against the shipped build, quoted. E2E
+  (`home-chrome.spec.ts`, "T-86 tours wait for something to point at"): an empty
+  video studio gets no tour — `expect(getByRole('dialog')).toHaveCount(0)`
+  `Expected: 0  Received: 1` — and its flag survives; the first import opens it,
+  and walking it visits exactly the steps whose target is on the page (each with
+  its cutout, the importer's step absent, shorter than the definition); Skip and
+  Escape each persist — `expect.poll(tutorialSeen.video).toBe(true)`
+  `Expected: true  Received: undefined` — and the tour is not back on the next
+  visit nor the next launch; Audio Studio and Stream Graphics hold their tours
+  until a file or a template; References opens from the first frame. The existing
+  coachmark tests (Tab trap and restore, one Escape one dialog, scroll once per
+  step, Next/Back/arrows/Enter/scrim to Done, the 1280x800 clamp) are unchanged
+  in what they assert — they now start the tour from the '?' button (or after an
+  import) because the first-visit tour no longer opens over an empty studio; the
+  one that asserted "Skip does NOT persist" was the bug and is gone.
+  `useTutorial.test.ts` (12) drives the rule against a fake page.
+  `tests/unit/tutorialCopy.test.ts` (141): every control a step names in 'single
+  quotes' is a real label on its route (the tutorial files are EXCLUDED from the
+  text searched — T-16's lesson, applied at once), a banned-words scan, two
+  sentences a step, unique ids and titles, centered first and last steps; against
+  the old copy it is `25 failed | 96 passed` including `'Duck under voice'` and
+  `'Choose file…'` on /image. Mutation: `resolvableSteps` made pass-through
+  (`cae6625d2d0b` -> `8453023cb3ba` -> `cae6625d2d0b`, restored byte-identically)
+  -> 8 unit red, and 7 E2E red (every tour then shows all twelve steps: `Video
+  Studio · 1 of 3` is never found).
+- **Lesson.** **A label is a promise about its effect.** Skip that does not
+  remember is not "skip" — the cheapest honest fix was to make it remember, not
+  to relabel it. **Do not use up a one-shot flag until the thing it gates has
+  been shown:** the first-visit flag is consumed by showing the tour, so a tour
+  that cannot show must leave it alone. **A step that cannot find its target
+  should not exist, rather than be tolerated** — T-16's centered fallback was
+  right for the welcome and wrong for everything else, and runtime cannot tell
+  them apart. And **the way to keep copy honest is a test that looks each name up
+  in the code and excludes the copy's own file** from the search.
+
+---
+
 ## 2026-10-09 — T-84: the failure path spoke ffmpeg, not English
 
 One symptom, four mechanisms. A streamer who pressed Cancel read a red

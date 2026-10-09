@@ -43,7 +43,9 @@ export function sameRect(a: Rect | null, b: Rect | null): boolean {
 
 interface TutorialProps {
   def: TutorialDef
-  onClose: (didFinish: boolean) => void
+  /** Called for every way out — Done, Skip, Esc. They are one act (T-86): the
+   *  host persists "seen" for all three, so Skip means skip. */
+  onClose: () => void
 }
 
 export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
@@ -154,7 +156,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       // against whatever is focused once the step has changed — see
       // tutorialKeyIntent for the double-advance that produced (T-34).
       e.preventDefault()
-      if (intent === 'close') onClose(false)
+      if (intent === 'close') onClose()
       else if (intent === 'next') next()
       else prev()
     }
@@ -165,7 +167,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
 
   function next(): void {
     if (stepIndex < def.steps.length - 1) setStepIndex(stepIndex + 1)
-    else onClose(true)
+    else onClose()
   }
 
   function prev(): void {
@@ -240,7 +242,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           </span>
           <button
             className="text-xs text-ink-dim hover:text-ink-base"
-            onClick={() => onClose(false)}
+            onClick={() => onClose()}
             title="Skip tutorial (Esc)"
           >
             Skip

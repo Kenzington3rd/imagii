@@ -2,13 +2,18 @@ import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
-import type { Clip, ExportJobSpec, PlatformId, WatermarkSpec } from '@shared/clip'
+import type { Clip } from '@shared/clip'
 import { sanitizeFilename } from '@shared/filename'
-import { ALL_PLATFORM_IDS } from './presets'
+import { buildWatermark } from '@shared/watermark'
+import { ALL_PLATFORM_IDS, type PlatformInfo } from './presets'
+import {
+  buildKitQueue,
+  describeKitLimit,
+  formatClipLength,
+  kitEffectivePresets,
+  platformsOverLimit
+} from './clipKit'
 import { useVideoStore } from './store/videoStore'
-import { findSafeZoneIssues } from './ExportPanel'
-import type { SafeZoneRow } from './ExportPanel'
-import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { reportFailure } from '../../lib/reportFailure'
@@ -36,10 +41,12 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   // INIT-I (round 16): confirm before cancelling. Clip Kit always has at
   // least 5 platform exports + 3 thumbs queued, so we always confirm here.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
-  // Same Phase 3.4 pre-flight as ExportPanel: if the kit's platform mix
-  // has safe-zone collisions, warn first and defer the run to the modal's
-  // "Continue anyway".
-  const [pendingSafeZoneRows, setPendingSafeZoneRows] = useState<SafeZoneRow[] | null>(null)
+  // T-85: the kit's one question. It used to raise the safe-zone modal on
+  // every run — picking "all five platforms" IS the answer to that question,
+  // and each platform's centered cut is made on purpose (T-83) — so what a
+  // user is asked now is the thing the kit cannot know for them: that the
+  // clip is past a platform's typical upload limit.
+  const [pendingOver, setPendingOver] = useState<PlatformInfo[] | null>(null)
 
   if (!source) return null
 
@@ -47,21 +54,18 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
   function startKit(): void {
     if (!source) return
-    // Mirror the queue below: on vertical sources the YouTube slot exports
-    // reels geometry (INIT-B), so check the effective preset set.
-    const isVertical = source.probe.height > source.probe.width
-    const effectivePresets: PlatformId[] = Array.from(
-      new Set(
-        ALL_PLATFORM_IDS.map((p) => (p === 'youtube' && isVertical ? 'reels' : p))
-      )
+    // The effective set, not the five names: a vertical source's YouTube slot
+    // is exported as Reels geometry (INIT-B), so Reels is asked about once.
+    const over = platformsOverLimit(
+      clipDuration,
+      kitEffectivePresets({
+        filePath: source.filePath,
+        width: source.probe.width,
+        height: source.probe.height
+      })
     )
-    const issues = findSafeZoneIssues(
-      [{ ...clip, selectedPresets: effectivePresets }],
-      source.probe.width,
-      source.probe.height
-    )
-    if (issues.length > 0) {
-      setPendingSafeZoneRows(issues)
+    if (over.length > 0) {
+      setPendingOver(over)
       return
     }
     void runKit()
@@ -91,26 +95,26 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
       // Build a 5-platform queue for this single clip.
       setPhase('Exporting 5 platform versions…')
-      // INIT-B (round 15): when the source is vertical (height > width), the
-      // YouTube target should be a 1080×1920 Short instead of the default
-      // 1920×1080 landscape — landscape on vertical material wastes 75% of
-      // the frame. There's no separate "youtube-short" preset yet, so reuse
-      // the reels preset's 9:16 geometry and just relabel the output file.
+      // T-85: the watermark an earlier Export SAVED, read where the Export
+      // panel reads it (`streamerHandle` + `watermarkPosition`). The kit
+      // queued `watermark: null`, so the panel next door stamped a clip and
+      // the kit made from the same clip did not.
+      const watermark = buildWatermark(
+        await window.api.settings.get<string>('streamerHandle'),
+        await window.api.settings.get<string>('watermarkPosition')
+      )
       const isVertical = source.probe.height > source.probe.width
-      const queue: ExportJobSpec[] = ALL_PLATFORM_IDS.map((preset: PlatformId) => {
-        const effectivePreset: PlatformId =
-          preset === 'youtube' && isVertical ? 'reels' : preset
-        const filenameSuffix =
-          preset === 'youtube' && isVertical ? 'youtube_short' : preset
-        return {
-          jobId: nanoid(10),
-          sourcePath: source.filePath,
-          outDir: kitDir,
-          clip: { ...clip, selectedPresets: [effectivePreset] },
-          preset: effectivePreset,
-          watermark: null as WatermarkSpec | null,
-          outputFilename: `${safeName}_${filenameSuffix}.mp4`
-        }
+      const queue = buildKitQueue({
+        source: {
+          filePath: source.filePath,
+          width: source.probe.width,
+          height: source.probe.height
+        },
+        clip,
+        kitDir,
+        safeName,
+        watermark,
+        newJobId: () => nanoid(10)
       })
       await window.api.video.exportBatch(queue)
 
@@ -191,15 +195,41 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           Cancel
         </button>
       ) : null}
-      <SafeZoneWarningModal
-        open={pendingSafeZoneRows !== null}
-        affectedClips={pendingSafeZoneRows ?? []}
-        onCancel={() => setPendingSafeZoneRows(null)}
-        onContinue={() => {
-          setPendingSafeZoneRows(null)
-          void runKit()
-        }}
-      />
+      <Modal
+        open={pendingOver !== null}
+        onClose={() => setPendingOver(null)}
+        title="This clip is long for some platforms"
+        className="max-w-md w-full p-5 ring-1 ring-ember/40"
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-warn">
+            <Icon name="warning" size={18} />
+          </span>
+          <h2 className="text-lg font-semibold">This clip is long for some platforms</h2>
+        </div>
+        <p className="text-sm text-ink-base mb-3">
+          This clip is {formatClipLength(clipDuration)}. It is longer than the typical limit for:
+        </p>
+        <ul className="bg-bg-hover rounded p-2 text-xs flex flex-col gap-1.5 mb-4">
+          {(pendingOver ?? []).map((info) => (
+            <li key={info.id}>{describeKitLimit(info)}</li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setPendingOver(null)}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary px-4 py-1.5 text-sm"
+            onClick={() => {
+              setPendingOver(null)
+              void runKit()
+            }}
+          >
+            Export anyway
+          </button>
+        </div>
+      </Modal>
       <Modal
         open={showCancelConfirm}
         onClose={() => setShowCancelConfirm(false)}

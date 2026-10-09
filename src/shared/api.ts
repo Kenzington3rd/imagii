@@ -96,7 +96,7 @@ export interface ImagiiApi {
       jobId?: string
       sourcePath: string
       outDir: string
-      position: 'left' | 'center' | 'right' | 'smart'
+      position: 'left' | 'center' | 'right'
       startSec: number
       endSec: number
       targetWidth: number

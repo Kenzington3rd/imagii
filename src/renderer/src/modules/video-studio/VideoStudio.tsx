@@ -46,7 +46,9 @@ export function VideoStudio(): JSX.Element {
   // on playback, so the preview stayed a blank 300x150 canvas until the first
   // undoable edit.
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
-  const tutorial = useTutorial(videoTutorial)
+  // T-86: the first-visit tour waits for a video — an empty studio is only the
+  // importer, and a coachmark over it points at trim handles that are not there.
+  const tutorial = useTutorial(videoTutorial, source !== null)
 
   // T-15: videoStore has had full history since round 18, but the studio
   // exposed no way to reach it — trims, clip removal, and color grades were
@@ -156,7 +158,7 @@ export function VideoStudio(): JSX.Element {
       )}
 
       {tutorial.active ? (
-        <Tutorial def={videoTutorial} onClose={tutorial.stop} />
+        <Tutorial def={tutorial.def} onClose={tutorial.stop} />
       ) : null}
     </div>
   )

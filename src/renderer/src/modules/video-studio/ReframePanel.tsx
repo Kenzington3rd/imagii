@@ -6,17 +6,19 @@ import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
 
-type ReframePosition = 'left' | 'center' | 'right' | 'smart'
+type ReframePosition = 'left' | 'center' | 'right'
 
-// INIT-B (round 15): "Smart" implied true content-aware reframing which
-// the underlying ffmpeg code does not do — it's just a centered crop with
-// a hopeful name. Rename to match what the code actually does so users
-// aren't misled. Real face/saliency detection is a future-round item.
+// This is a FIXED strip, not a tracker (T-85). Round 15 renamed "Smart" to
+// "Auto (centered)" because it was only ever a centered crop, but the panel
+// still said "Auto-reframe", the tutorial said it would "follow the action",
+// and the fourth button duplicated Center. The code decides where the strip
+// sits from the side you pick and nothing else, so the copy says that: three
+// sides, no 'smart' value left to mislead (main's type and validator dropped
+// it too — nothing ever persisted a position, so there is nothing to migrate).
 const POSITIONS: Array<{ id: ReframePosition; label: string; hint: string }> = [
-  { id: 'center', label: 'Center', hint: 'Middle 9:16 strip' },
-  { id: 'left', label: 'Left', hint: 'Left third (action camera)' },
-  { id: 'right', label: 'Right', hint: 'Right third' },
-  { id: 'smart', label: 'Auto (centered)', hint: 'Centered crop (saliency detection coming later)' }
+  { id: 'left', label: 'Left', hint: 'A 9:16 strip nearer the left edge' },
+  { id: 'center', label: 'Center', hint: 'The middle 9:16 strip' },
+  { id: 'right', label: 'Right', hint: 'A 9:16 strip nearer the right edge' }
 ]
 
 export function ReframePanel(): JSX.Element | null {
@@ -116,12 +118,13 @@ export function ReframePanel(): JSX.Element | null {
           </span>
         }
       >
-        Auto-reframe to 9:16
+        Reframe to 9:16 (center crop)
       </PanelHeader>
       <p className="text-xs text-ink-dim">
-        Crop the trimmed range to a vertical version for TikTok / Reels.
+        Cuts the trimmed range into a vertical 9:16 version for TikTok, Reels, and Shorts.
+        It takes a fixed strip — it does not track faces or action.
       </p>
-      <div className="grid grid-cols-4 gap-1.5">
+      <div className="grid grid-cols-3 gap-1.5">
         {POSITIONS.map((p) => (
           <button
             key={p.id}

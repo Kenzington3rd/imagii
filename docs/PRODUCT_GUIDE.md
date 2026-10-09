@@ -30,8 +30,8 @@ imagii is a `react-router` app; each studio is a route.
 
 | Studio | Route | What it does |
 |---|---|---|
-| **Record** | `/record` | Capture screen + webcam + mic to one video. Webcam composites into the recording (picture-in-picture, user-chosen corner). Saves MP4 or WebM locally. |
-| **Video Studio** | `/video` | Trim and clip video; export per-platform (YouTube, Reels, TikTok, X, Facebook). Smart highlight finder, chat-highlight reel, auto-reframe to 9:16, captions, color grading, GIF export, compilation, picture-in-picture, Clip Kit batch export. |
+| **Record** | `/record` | Capture a screen or window to one video, with an optional webcam and mic. The webcam composites into the recording (picture-in-picture, user-chosen corner). Game and desktop sound are not captured. Saves MP4 or WebM locally. |
+| **Video Studio** | `/video` | Trim and clip video; export per-platform (YouTube, Reels, TikTok, X, Facebook). Smart highlight finder, chat-highlight reel, reframe to 9:16 (a fixed center/left/right strip — it tracks nothing), captions, color grading, GIF export, compilation, picture-in-picture, Clip Kit batch export. |
 | **Audio Studio** | `/audio` | Clean noise, level volume, denoise, sidechain-duck a secondary track, and polish raw audio to podcast quality. A "fix wizard" picks settings for non-experts. |
 | **Stream Graphics** | `/image` | A Konva canvas editor for thumbnails, Twitch overlays, banners, and emotes. Templates-first: pick a preset (1080p / 2K / 4K), edit, export PNG/JPG. |
 | **References** | `/references` | Search inspiration (DuckDuckGo image search, SafeSearch locked on), save mood boards, and drop a curated CC0 stream asset straight onto the Stream Graphics canvas. |
@@ -45,8 +45,8 @@ and round-trips through Save / Open and autosave.
 
 1. **$0 to the user, forever.** No paid services, no subscriptions, no
    cloud spend. If a feature would cost money to run, it doesn't ship.
-2. **Local-first.** Everything runs on the user's machine. No accounts,
-   no telemetry, no upload. FFmpeg and Whisper.cpp run as local
+2. **Local-first.** Everything runs on the user's machine, except the two
+   online things named below. No accounts, no telemetry, no upload. FFmpeg and Whisper.cpp run as local
    sidecars. The only network traffic is user-triggered: References
    searches (DuckDuckGo), the search-result thumbnails those return
    (loaded over https, no referrer), saving a result to a mood board

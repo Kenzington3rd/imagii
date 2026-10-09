@@ -113,7 +113,7 @@ export function Home(): JSX.Element {
         <NavCard
           to="/record"
           title="Record"
-          description="Capture screen + webcam + mic to a single video — your one-stop alternative to OBS."
+          description="Record your screen or a window, with your webcam and mic, to one video file. Game and desktop sound are not captured."
           icon={<Icon name="record" size={26} />}
           accent="rgba(244, 63, 94, 0.18)"
         />
@@ -148,7 +148,8 @@ export function Home(): JSX.Element {
       </div>
 
       <footer className="mt-12 text-xs text-ink-dim">
-        imagii runs locally on your computer. No accounts. No subscriptions.
+        imagii runs locally on your computer, except Reference Search and the one-time
+        caption model download, which go online. No accounts. No subscriptions.
       </footer>
     </div>
   )

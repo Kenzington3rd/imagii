@@ -72,7 +72,7 @@ export function ReferencesStudio(): JSX.Element {
         )}
       </div>
 
-      {tutorial.active ? <Tutorial def={aiTutorial} onClose={tutorial.stop} /> : null}
+      {tutorial.active ? <Tutorial def={tutorial.def} onClose={tutorial.stop} /> : null}
     </div>
   )
 }

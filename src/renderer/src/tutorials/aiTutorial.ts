@@ -1,33 +1,34 @@
 import type { TutorialDef } from './types'
 
+// Copy rules: see the header of videoTutorial.ts (T-86).
 export const aiTutorial: TutorialDef = {
   id: 'ai',
   title: 'References',
-  intro: 'Reference search + mood boards, both fully local-first.',
+  intro: 'Search for inspiration, save mood boards, and drop in ready-made stream assets.',
   steps: [
     {
       id: 'welcome',
-      title: 'Welcome',
-      body: "Two tabs: Reference Search for finding inspiration, and Mood Boards for saving the things you like for later.",
+      title: 'Welcome to References',
+      body: 'Three tabs: Reference Search to find inspiration, Mood Boards to save what you like, and Asset Library for free stream assets. Press the ? button in the header to replay this tour.',
       placement: 'center'
     },
     {
       id: 'tabs',
-      title: 'The two tabs',
-      body: "Reference Search hits DuckDuckGo with strict SafeSearch on. Mood Boards stores your saved references locally — no account needed.",
+      title: 'The three tabs',
+      body: 'Reference Search uses DuckDuckGo with strict SafeSearch — it is the one feature that goes online. Your mood boards are saved on your computer, no account needed.',
       targetSelector: '[data-tutorial="ai-tabs"]',
       placement: 'bottom'
     },
     {
       id: 'canvas',
-      title: 'Drop into the canvas',
-      body: "On any saved mood-board item, hover and click '→ Canvas' to drop it as a 40%-opacity reference layer in the Image Canvas — perfect for tracing or composition.",
+      title: 'Drop into Stream Graphics',
+      body: "Hover a saved mood-board item and click '→ Canvas' to add it to Stream Graphics as a 40%-opacity reference layer — handy for tracing or composition.",
       placement: 'center'
     },
     {
       id: 'done',
       title: 'All set',
-      body: "Replay this tour anytime via the ? button in the header.",
+      body: 'The ? button in the header replays this tour any time.',
       placement: 'center'
     }
   ]

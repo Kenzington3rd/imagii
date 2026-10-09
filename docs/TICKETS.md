@@ -1542,7 +1542,7 @@ IMG-PREC.
   what is and is not captured, incl. no game audio; local-first copy
   names its two online exceptions, guide updated to match); E2E pins
   the new copy where tests exist; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 52 — see Done)
 
 ## T-86 — tutorials auto-run over empty screens, can't be skipped, and describe a different app
 
@@ -1565,7 +1565,7 @@ IMG-PREC.
   removed, "New:" dropped; E2E: tour on an empty studio shows no
   orphaned steps, Skip then revisit shows no tour; existing tutorial
   coverage green; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 52 — see Done)
 
 ## T-87 — "Suggest 4 titles" writes broken English
 
@@ -1784,7 +1784,11 @@ IMG-PREC.
   this output" check still reads the FULL source size, so a quarter-
   frame crop exported at 1080p upscales 2x and the card still says
   "Great". The crop now defines the frame everywhere else (T-83);
-  this check is the straggler.
+  this check is the straggler. Round-52 add: duration checks (the
+  grid's and Clip Kit's shared limits) read SOURCE seconds and
+  ignore `speedMultiplier`, so a 2x clip is warned "Too long" at
+  half its real output length — same honesty straggler, same fix
+  shape (evaluate the effective value).
 - **Acceptance criteria:** the resolution check reads the effective
   frame (`cropFrameSize`); the reason copy says what happens
   ("smaller than this output — it will be scaled up and look soft");
@@ -1841,6 +1845,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 52 — content fix wave batch 5: T-85 + T-86. T-85, ruled item
+by item (the table is in LESSONS): Clip Kit now STAMPS the saved
+watermark (code-to-promise — buildWatermark in src/shared is the
+one WatermarkSpec constructor; the kit's pure half extracted to
+clipKit.ts so Layer 5 drives the exact jobs it queues; linux pin +
+win32-gated pixel case in the T-51 pattern, the pixel case's first
+real run is the next release dispatch, by design), asks its one
+honest question (a long-clip confirm naming the platforms over
+their typical limits) and no longer raises the safe-zone modal at
+all — choosing all five platforms IS that answer; 'smart' is gone
+from the reframe API end to end (panel: "Reframe to 9:16 (center
+crop)", Left/Center/Right, says plainly it does not track faces);
+SafeSearch copy tells the truth (DuckDuckGo filters; imagii does
+not scan); Record copy names what is and is not captured (no game/
+desktop sound); "Everything runs locally" carries its two honest
+exceptions everywhere including BRANDING_GUIDE itself (the guide
+was wrong; ruled and fixed); HotkeyOverlay's save line stops
+claiming mood boards. T-86: tours are target-gated AND
+content-gated (the worker's correct extension: the importer's own
+target resolves on an empty studio, so `ready` carries "content
+loaded"); an auto-tour never opens over an empty studio and the
+first-visit flag survives until content exists; Skip/Escape/Done
+all persist; all four tutorial files rewritten against live
+control names with the false steps dead and one false step
+deleted outright; tutorialCopy.test.ts structurally pins every
+quoted control name against the route's source and bans the stale
+words. Expedite: verify 1641/1641 (78 files), build clean,
+test:media 93/93 (+6 gates), full Playwright 149/149; worker's
+three mutations reviewed, one independent expediter mutation at
+the untouched limit seam (platformsOverLimit never fires -> 5
+named unit reds incl. the kit-grid shared-limits cross-pin,
+byte-identical restore -> 15/15). Accepted deviations: the `ready`
+flag, "one feature" over my "one part" (more honest — the model
+download is online too), a false multi-track step deleted, kit
+coachmark E2Es now start from `?`. Noted: a handle typed but never
+exported is not stamped (tutorial says so honestly — acceptable
+semantics); kit/grid duration checks ignore speedMultiplier
+(amended into T-97); README "Image Canvas" + FOR_MIKE naming
+belong to T-92 as filed.
 
 Round 51 — content fix wave batch 3: T-84, the failure-path
 overhaul (the review's largest cluster). Cancellation is now a fact

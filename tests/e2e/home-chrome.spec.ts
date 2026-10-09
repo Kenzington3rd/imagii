@@ -6,6 +6,10 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { videoTutorial } from '../../src/renderer/src/tutorials/videoTutorial'
+import { audioTutorial } from '../../src/renderer/src/tutorials/audioTutorial'
+import { imageTutorial } from '../../src/renderer/src/tutorials/imageTutorial'
+import { aiTutorial } from '../../src/renderer/src/tutorials/aiTutorial'
+import type { TutorialDef } from '../../src/renderer/src/tutorials/types'
 import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -54,6 +58,15 @@ const SCREENSHOTS = path.join(__dirname, 'screenshots')
 
 /** All four tutorial flags — the seed that keeps a coachmark off the page. */
 const ALL_TUTORIALS_SEEN = { video: true, audio: true, image: true, ai: true }
+
+/**
+ * The video tour on an EMPTY studio (T-86): the centered cards, plus the
+ * importer — the one target an empty studio has. Started from the '?' button;
+ * the first-visit tour does not open on an empty studio at all.
+ */
+const EMPTY_VIDEO_TOUR = videoTutorial.steps.filter(
+  (s) => s.targetSelector === undefined || s.targetSelector === '[data-tutorial="video-import"]'
+)
 
 interface SeedConfig {
   welcomeSeen?: boolean
@@ -341,6 +354,12 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       const window = await app.firstWindow()
       await window.waitForLoadState('domcontentloaded')
       await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toBeVisible({ timeout: 30_000 })
+      // T-85: "Everything runs locally" names its two exceptions.
+      await expect(
+        window.getByText(
+          /Everything runs locally on your computer — no accounts, no subscriptions, no cloud — except Reference Search and the one-time caption model download, which go online\./
+        )
+      ).toBeVisible()
       // The version line is filled over IPC, so it also proves the preload
       // bridge is live on the very first screen the user ever sees.
       await expect(window.getByText(/^imagii v\d/)).toBeVisible({ timeout: 15_000 })
@@ -352,6 +371,19 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
       await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
       await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toHaveCount(0)
+      // T-85: Home's Record card says what it captures (and what it does not),
+      // and its footer carries the same two exceptions as the welcome.
+      await expect(
+        window.getByText(
+          'Record your screen or a window, with your webcam and mic, to one video file. Game and desktop sound are not captured.'
+        )
+      ).toBeVisible()
+      await expect(window.getByText(/one-stop|alternative to OBS/)).toHaveCount(0)
+      await expect(
+        window.getByText(
+          'imagii runs locally on your computer, except Reference Search and the one-time caption model download, which go online. No accounts. No subscriptions.'
+        )
+      ).toBeVisible()
       // 2. And the flag is on disk, so the next launch skips Welcome.
       await expect
         .poll(() => readConfig(userDataDir).welcomeSeen, { timeout: 15_000, intervals: [200] })
@@ -381,7 +413,12 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(dialog).toBeVisible({ timeout: 10_000 })
       // Home's rows, not another route's — shortcutsForRoute('/home').
       await expect(dialog.getByText('Open studio')).toBeVisible()
-      await expect(dialog.getByText('Save full app state to .imagii.json')).toBeVisible()
+      // T-85: the row says what a project holds — not "full app state", which
+      // left a user to assume their mood boards were in it.
+      await expect(
+        dialog.getByText('Save your project (studios and layout; mood boards live outside projects)')
+      ).toBeVisible()
+      await expect(dialog.getByText('Save full app state', { exact: false })).toHaveCount(0)
       await expect(dialog.getByText('Press ? again to close.')).toBeVisible()
 
       // The overlay's own close control.
@@ -424,18 +461,18 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     test.setTimeout(180_000)
     const root = makeRoot('stacked-escape')
     const userDataDir = path.join(root, 'userData')
-    // Only the video tutorial is unseen, so Video Studio auto-starts it.
-    seedUserData(userDataDir, {
-      welcomeSeen: true,
-      tutorialSeen: { audio: true, image: true, ai: true }
-    })
-    const total = videoTutorial.steps.length
+    // T-86: the first-visit tour waits for a video, so this one is started
+    // from the '?' button on the empty studio — the claim stack under test is
+    // the same however the coachmark got there.
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
 
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
       await waitForHome(window)
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
 
       const counter = (n: number): ReturnType<Page['getByText']> =>
         window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
@@ -474,8 +511,6 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.keyboard.press('Escape')
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(counter(1)).toHaveCount(0)
-      // Escape is a dismissal, not a completion — nothing is persisted.
-      expect(readConfig(userDataDir).tutorialSeen?.video).toBeFalsy()
     } finally {
       await app.close()
       cleanup(root)
@@ -498,7 +533,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     // Every tutorial seen: this one is STARTED from the header button, so the
     // opener that focus must come back to is a real element.
     seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
-    const total = videoTutorial.steps.length
+    const total = EMPTY_VIDEO_TOUR.length
 
     const app = await launchApp(userDataDir)
     try {
@@ -544,7 +579,9 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Skip' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       expect((await focusInfo(window)).label).toBe('Show tutorial')
-      // Neither way out is a completion.
+      // Both ways out persist the flag now (T-86). It was seeded true, so this
+      // only proves neither one cleared it; the persistence itself is driven in
+      // "T-86 … Skip persists" / "Escape persists".
       expect(readConfig(userDataDir).tutorialSeen?.video).toBe(true)
     } finally {
       await app.close()
@@ -566,11 +603,9 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     test.setTimeout(180_000)
     const root = makeRoot('tutorial-poll')
     const userDataDir = path.join(root, 'userData')
-    seedUserData(userDataDir, {
-      welcomeSeen: true,
-      tutorialSeen: { audio: true, image: true, ai: true }
-    })
-    const total = videoTutorial.steps.length
+    // Started from the '?' button: the first-visit tour waits for a video (T-86).
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
 
     const app = await launchApp(userDataDir)
     try {
@@ -594,6 +629,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.reload()
       await waitForHome(window)
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
 
       const counter = (n: number): ReturnType<Page['getByText']> =>
         window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
@@ -605,8 +641,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
           )
         ).filter((n) => n === name).length
 
-      // Step 2 is the first step with a target that the unloaded studio
-      // actually renders.
+      // Step 2 is the first step with a target — the empty studio's importer.
       await window.getByRole('button', { name: 'Next' }).click()
       await expect(counter(2)).toBeVisible()
       await expect.poll(() => scrollsOn('video-import'), { timeout: 10_000 }).toBe(1)
@@ -1260,23 +1295,35 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     ensureScreenshots()
     const root = makeRoot('tutorial-run')
     const userDataDir = path.join(root, 'userData')
-    // Every tutorial flag EXCEPT video — the coachmark auto-starts on /video.
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-run.mp4')
+    await makeFixtureMp4(fixture)
+    // Every tutorial flag EXCEPT video — the coachmark auto-starts on /video,
+    // once there is a video to tour (T-86: not over the bare importer).
     seedUserData(userDataDir, {
       welcomeSeen: true,
       tutorialSeen: { audio: true, image: true, ai: true }
     })
-    const total = videoTutorial.steps.length
 
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
       await waitForHome(window)
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-run.mp4')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+
+      // The loaded studio's tour: every step but the importer's, which is gone.
+      const total = (await stepsWithATarget(window, videoTutorial)).length
+      expect(total).toBe(videoTutorial.steps.length - 1)
+      expect(total).toBeGreaterThanOrEqual(6)
 
       const counter = (n: number): ReturnType<Page['getByText']> =>
         window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
 
-      // Auto-start on first visit, at step 1 with the real step copy.
+      // Auto-start after the first import, at step 1 with the real step copy.
       await expect(counter(1)).toBeVisible({ timeout: 20_000 })
       await expect(window.getByText('Welcome to Video Studio')).toBeVisible()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'home-04-tutorial.png') })
@@ -1287,12 +1334,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // ArrowRight binding.
       await window.keyboard.press('ArrowRight')
       await expect(counter(3)).toBeVisible()
-      // Back button, clicked from step 3. Step 2 is the one step whose target
-      // ([data-tutorial="video-import"]) exists in the unloaded studio; its
-      // 'right' placement used to put the whole coachmark past the right edge
-      // of the window, which is what T-34 fixed and what the clamp test below
-      // drives directly. Every other step here has no rendered target and
-      // centers.
+      // Back button, clicked from step 3.
       await window.getByRole('button', { name: 'Back' }).click()
       await expect(counter(2)).toBeVisible()
       // ArrowLeft binding.
@@ -1364,11 +1406,11 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     ensureScreenshots()
     const root = makeRoot('tutorial-clamp')
     const userDataDir = path.join(root, 'userData')
-    seedUserData(userDataDir, {
-      welcomeSeen: true,
-      tutorialSeen: { audio: true, image: true, ai: true }
-    })
-    const total = videoTutorial.steps.length
+    // Started from the '?' button: the empty studio is where the importer — the
+    // wide target this test needs — is on screen, and the first-visit tour
+    // waits for a video (T-86).
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
 
     const app = await launchApp(userDataDir)
     try {
@@ -1379,6 +1421,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await setContentSize(app, window, 1280, 800)
 
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
       const counter = (n: number): ReturnType<Page['getByText']> =>
         window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
       await expect(counter(1)).toBeVisible({ timeout: 20_000 })
@@ -1442,50 +1485,6 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // And it is clickable for real: Next advances the tour.
       await window.getByRole('button', { name: 'Next' }).click()
       await expect(counter(3)).toBeVisible()
-    } finally {
-      await app.close()
-      cleanup(root)
-    }
-  })
-
-  test('Video tutorial: Skip and Escape close it WITHOUT persisting tutorialSeen.video', async () => {
-    test.setTimeout(180_000)
-    const root = makeRoot('tutorial-skip')
-    const userDataDir = path.join(root, 'userData')
-    seedUserData(userDataDir, {
-      welcomeSeen: true,
-      tutorialSeen: { audio: true, image: true, ai: true }
-    })
-    const total = videoTutorial.steps.length
-
-    const app = await launchApp(userDataDir)
-    try {
-      const window = await app.firstWindow()
-      await waitForHome(window)
-      await window.locator('a', { hasText: 'Video Studio' }).first().click()
-
-      const step1 = window.getByText(`Video Studio · 1 of ${total}`, { exact: true })
-      await expect(step1).toBeVisible({ timeout: 20_000 })
-
-      // ── Escape closes without finishing ──
-      await window.keyboard.press('Escape')
-      await expect(step1).toHaveCount(0)
-      // Settle long enough that a settings write would have landed.
-      await window.waitForTimeout(1200)
-      expect(readConfig(userDataDir).tutorialSeen?.video).toBeUndefined()
-
-      // ── The header's "?" button replays it ──
-      await window.getByRole('button', { name: 'Show tutorial' }).click()
-      await expect(step1).toBeVisible({ timeout: 10_000 })
-
-      // ── Skip closes without finishing either ──
-      await window.getByRole('button', { name: 'Skip' }).click()
-      await expect(step1).toHaveCount(0)
-      await window.waitForTimeout(1200)
-      expect(readConfig(userDataDir).tutorialSeen?.video).toBeUndefined()
-      // The other three flags are untouched — the write that did not happen
-      // was specific to this tutorial, not a wholesale config failure.
-      expect(readConfig(userDataDir).tutorialSeen?.audio).toBe(true)
     } finally {
       await app.close()
       cleanup(root)
@@ -1881,6 +1880,251 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // And the studio is still on the loaded source, not back at the importer.
       await expect(window.getByText('Drop audio or video here')).toHaveCount(0)
       await expect(window.getByText('fixwizard-source.wav')).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+
+/**
+ * T-86 — a tour needs something to point at, and Skip means skip.
+ *
+ * Two defects shared one hook. `useTutorial` opened the tour on a first visit
+ * whatever the studio was showing, and on an EMPTY studio (nothing but the
+ * importer) that put a coachmark over nothing, telling the user to drag
+ * handles that were not there. And `onClose(false)` — Skip and Escape — never
+ * wrote the first-visit flag, so a user who dismissed the tour got it back on
+ * every visit, forever.
+ *
+ * The rule now: a tour is held until the studio has content (the first import
+ * opens it), it shows only the steps whose target is on the page, and any way
+ * out of it — Skip, Escape, Done — persists. The tests read the expected step
+ * list off the DOM (the same "is there a target" question the app asks) AND
+ * pin it from outside: the importer's own step must be missing once the
+ * importer is gone, and the tour must be shorter than the definition.
+ */
+
+/** Titles of the steps a tour should show right now: untargeted ones, plus those whose target is on screen. */
+async function stepsWithATarget(window: Page, def: TutorialDef): Promise<string[]> {
+  return window.evaluate(
+    (steps) =>
+      steps
+        .filter((s) => {
+          if (s.sel === null) return true
+          const el = document.querySelector(s.sel)
+          return el !== null && el.getClientRects().length > 0
+        })
+        .map((s) => s.title),
+    def.steps.map((s) => ({ sel: s.targetSelector ?? null, title: s.title }))
+  )
+}
+
+/** Walk the open tour to Done, asserting each step against `expected` (title, counter, cutout). */
+async function walkTour(window: Page, def: TutorialDef, expected: string[]): Promise<void> {
+  const dialog = window.getByRole('dialog')
+  for (let i = 0; i < expected.length; i++) {
+    await expect(
+      window.getByText(`${def.title} · ${i + 1} of ${expected.length}`, { exact: true })
+    ).toBeVisible()
+    await expect(dialog.locator('h3')).toHaveText(expected[i] ?? '')
+    const step = def.steps.find((s) => s.title === expected[i])
+    // A targeted step draws its cutout; an untargeted one is a plain card. A
+    // targeted step with NO cutout is the orphan this ticket exists to remove.
+    await expect(window.locator('svg rect[stroke]')).toHaveCount(step?.targetSelector ? 1 : 0)
+    await window
+      .getByRole('button', { name: i === expected.length - 1 ? 'Done' : 'Next' })
+      .click()
+  }
+  await expect(window.getByRole('dialog')).toHaveCount(0)
+}
+
+test.describe('T-86 tours wait for something to point at', () => {
+  test('an empty video studio gets no tour; the first import opens it, and it shows only steps with a target', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tour-gated')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-source.mp4')
+    await makeFixtureMp4(fixture)
+    // Only the video tour is unseen, as on a first visit.
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: { audio: true, image: true, ai: true }
+    })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+
+      // ── empty studio: no coachmark over the importer, and the flag survives ──
+      // The old build opened the tour within one settings round trip of the
+      // studio mounting; two seconds is far past that.
+      await window.waitForTimeout(2_000)
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      expect(readConfig(userDataDir).tutorialSeen?.video).toBeUndefined()
+
+      // ── the first import opens it ──
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-source.mp4')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+
+      const expected = await stepsWithATarget(window, videoTutorial)
+      const importTitle = videoTutorial.steps.find((s) => s.id === 'import')?.title
+      expect(importTitle).toBeDefined()
+      expect(expected, 'the importer is gone, so its step is not in the tour').not.toContain(
+        importTitle
+      )
+      expect(expected.length).toBeLessThan(videoTutorial.steps.length)
+      expect(expected.length).toBeGreaterThan(3)
+
+      await walkTour(window, videoTutorial, expected)
+      // Done persists, as it always has.
+      await expect
+        .poll(() => readConfig(userDataDir).tutorialSeen?.video, { timeout: 15_000 })
+        .toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  for (const exit of ['Skip', 'Escape'] as const) {
+    test(`${exit} persists: the tour is not back on the next visit or the next launch`, async () => {
+      test.setTimeout(240_000)
+      const root = makeRoot(`tour-${exit.toLowerCase()}`)
+      const userDataDir = path.join(root, 'userData')
+      const sourceDir = path.join(root, 'source')
+      mkdirSync(sourceDir, { recursive: true })
+      const fixture = path.join(sourceDir, 'tour-source.mp4')
+      await makeFixtureMp4(fixture)
+      seedUserData(userDataDir, {
+        welcomeSeen: true,
+        tutorialSeen: { audio: true, image: true, ai: true }
+      })
+
+      const openVideoStudioWithClip = async (app: ElectronApplication): Promise<Page> => {
+        const window = await app.firstWindow()
+        await waitForHome(window)
+        await window.locator('a', { hasText: 'Video Studio' }).first().click()
+        await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+        await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-source.mp4')
+        return window
+      }
+
+      const first = await launchApp(userDataDir)
+      try {
+        const window = await openVideoStudioWithClip(first)
+        const tour = window.getByRole('dialog')
+        await expect(tour).toBeVisible({ timeout: 30_000 })
+
+        if (exit === 'Skip') await window.getByRole('button', { name: 'Skip' }).click()
+        else await window.keyboard.press('Escape')
+        await expect(tour).toHaveCount(0)
+
+        // The write is what makes the label honest. On the old build this stayed
+        // undefined for as long as the poll was willing to wait.
+        await expect
+          .poll(() => readConfig(userDataDir).tutorialSeen?.video, { timeout: 15_000 })
+          .toBe(true)
+
+        // ── the next visit, same session: Home and back ──
+        await window.locator('a[href="#/home"]').first().click()
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+        await window.locator('a', { hasText: 'Video Studio' }).first().click()
+        // The loaded studio is still there (the store outlives the route)…
+        await expect(window.getByRole('button', { name: /^Export/ }).first()).toBeVisible({
+          timeout: 20_000
+        })
+        // …and no tour opens over it.
+        await window.waitForTimeout(2_000)
+        await expect(window.getByRole('dialog')).toHaveCount(0)
+
+        // The other flags were seeded, and nothing else was written.
+        expect(readConfig(userDataDir).tutorialSeen?.audio).toBe(true)
+      } finally {
+        await first.close()
+      }
+
+      // ── the next LAUNCH, same userData ──
+      const second = await launchApp(userDataDir)
+      try {
+        const window = await openVideoStudioWithClip(second)
+        await expect(window.getByRole('button', { name: /^Export/ }).first()).toBeVisible({
+          timeout: 30_000
+        })
+        await window.waitForTimeout(2_000)
+        await expect(window.getByRole('dialog')).toHaveCount(0)
+      } finally {
+        await second.close()
+        cleanup(root)
+      }
+    })
+  }
+
+  test('Audio Studio and Stream Graphics hold their tours until there is content; References has one from the first visit', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('tour-others')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const wav = path.join(sourceDir, 'tour-audio.wav')
+    await makeFixtureWav(wav)
+    // Nothing seen: every studio is on its first visit.
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: {} })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const goHome = async (): Promise<void> => {
+        await window.locator('a[href="#/home"]').first().click()
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      }
+
+      // ── References: its tab strip is on screen from the first frame ──
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 20_000 })
+      await walkTour(window, aiTutorial, await stepsWithATarget(window, aiTutorial))
+      await expect
+        .poll(() => readConfig(userDataDir).tutorialSeen?.ai, { timeout: 15_000 })
+        .toBe(true)
+      await goHome()
+
+      // ── Audio Studio: the importer alone is nothing to tour ──
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+      await window.waitForTimeout(2_000)
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      expect(readConfig(userDataDir).tutorialSeen?.audio).toBeUndefined()
+      await dropOnZone(window, '[data-tutorial="audio-importer"] .card', wav, 'tour-audio.wav')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const audioSteps = await stepsWithATarget(window, audioTutorial)
+      expect(audioSteps.length).toBeLessThan(audioTutorial.steps.length)
+      await walkTour(window, audioTutorial, audioSteps)
+      await expect
+        .poll(() => readConfig(userDataDir).tutorialSeen?.audio, { timeout: 15_000 })
+        .toBe(true)
+      await goHome()
+
+      // ── Stream Graphics: the template picker is not a canvas ──
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
+      await window.waitForTimeout(2_000)
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      expect(readConfig(userDataDir).tutorialSeen?.image).toBeUndefined()
+      await window.locator('[data-tutorial="image-import"] button.card').first().click()
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const imageSteps = await stepsWithATarget(window, imageTutorial)
+      expect(imageSteps.length).toBeGreaterThan(3)
+      await walkTour(window, imageTutorial, imageSteps)
+      await expect
+        .poll(() => readConfig(userDataDir).tutorialSeen?.image, { timeout: 15_000 })
+        .toBe(true)
     } finally {
       await app.close()
       cleanup(root)

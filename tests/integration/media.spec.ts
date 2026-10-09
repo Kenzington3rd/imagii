@@ -33,6 +33,8 @@ import type { CustomPreset } from '../../src/shared/customPresets'
 import { DEFAULT_CHAIN_SPEC, type AudioExportSpec, type ChainSpec } from '../../src/shared/audio'
 import { escapeSubtitlesPath } from '../../src/shared/captions'
 import { ALL_PRESET_IDS, PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
+import { buildWatermark } from '../../src/shared/watermark'
+import { buildKitQueue } from '../../src/renderer/src/modules/video-studio/clipKit'
 
 /**
  * Layer 5: real-media integration tests.
@@ -1293,6 +1295,114 @@ describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
       ).rejects.toThrow(/No such filter: 'drawtext'/)
     },
     120_000
+  )
+
+  /**
+   * T-85 — Clip Kit and the saved watermark.
+   *
+   * The kit queued `watermark: null` on all five jobs, so a user who had saved
+   * a handle got a watermarked Export and an unmarked kit from the same clip.
+   * It resolves the saved handle and corner now, and these cases drive the job
+   * the kit really builds — `buildKitQueue`, the same function the button
+   * calls — through the real `runExportJob`, because a unit test of the filter
+   * string cannot say whether ffmpeg accepts the spec the kit produces.
+   *
+   * One kit-representative export (the YouTube slot, at the preset's own
+   * geometry so the crop/scale stage is a no-op on the flat fixture): the
+   * other four slots differ only in their preset, and the unit test
+   * (tests/unit/clipKitWatermark.test.ts) shows all five carry the watermark
+   * into the graph. Same platform rule as the block above: the pixels are
+   * win32-only, and the linux pin below fails the moment drawtext appears.
+   */
+  async function kitYoutubeJob(
+    watermark: WatermarkSpec | null,
+    name: string
+  ): Promise<ExportJobSpec> {
+    const kitDir = path.join(workDir, `kit-${name}`)
+    await mkdir(kitDir, { recursive: true })
+    const jobs = buildKitQueue({
+      source: { filePath: flatGraySrc, width: 1920, height: 1080 },
+      clip: watermarkClip(),
+      kitDir,
+      safeName: 'Kit',
+      watermark,
+      newJobId: () => `job-kit-${name}-${Math.random().toString(36).slice(2, 8)}`
+    })
+    const job = jobs.find((j) => j.preset === 'youtube')
+    if (!job) throw new Error('the kit queued no YouTube slot')
+    return job
+  }
+
+  // What ClipKitButton does with what an earlier Export saved.
+  const SAVED_CORNER: WatermarkSpec['position'] = 'top-right'
+  const savedWatermark = (): WatermarkSpec | null => buildWatermark(WATERMARK_TEXT, SAVED_CORNER)
+
+  it.skipIf(process.platform !== 'win32')(
+    'a Clip Kit file carries the saved watermark in the saved corner, and a kit with none saved stays clean',
+    async () => {
+      const spec = savedWatermark()
+      expect(spec, 'the saved handle builds a watermark').not.toBeNull()
+      expect(spec?.position).toBe(SAVED_CORNER)
+
+      // ── watermark saved: its own corner is painted, the other three are flat ──
+      const marked = await runExportJob(await kitYoutubeJob(spec, 'marked'), () => {})
+      const own = await regionLuma(marked.outputPath, SAMPLE_T, QUADRANT[SAVED_CORNER])
+      expect(
+        own.max,
+        `kit file: white glyph pixels in the ${SAVED_CORNER} quadrant (max luma ${own.max}, flat ${flatLuma})`
+      ).toBeGreaterThan(flatLuma + 60)
+      expect(
+        own.min,
+        `kit file: the watermark's dark box in the ${SAVED_CORNER} quadrant (min luma ${own.min}, flat ${flatLuma})`
+      ).toBeLessThan(flatLuma - 15)
+      for (const other of POSITIONS.filter((p) => p !== SAVED_CORNER)) {
+        const q = await regionLuma(marked.outputPath, SAMPLE_T, QUADRANT[other])
+        expect(q.max, `kit file: ${other} quadrant untouched (luma ${q.min}..${q.max})`).toBeLessThanOrEqual(flatLuma + 4)
+        expect(q.min, `kit file: ${other} quadrant untouched (luma ${q.min}..${q.max})`).toBeGreaterThanOrEqual(flatLuma - 4)
+      }
+      // Against the control render of the same clip: the saved corner differs,
+      // the opposite one does not.
+      const ownPsnr = await regionPsnr(marked.outputPath, controlOut, QUADRANT[SAVED_CORNER])
+      const farPsnr = await regionPsnr(marked.outputPath, controlOut, QUADRANT[DIAGONAL[SAVED_CORNER]])
+      expect(ownPsnr, `kit file: saved corner differs from the control (${ownPsnr} dB)`).toBeLessThan(45)
+      expect(farPsnr, `kit file: opposite corner matches the control (${farPsnr} dB)`).toBeGreaterThan(60)
+
+      // ── nothing saved: the same kit job is the control, pixel for pixel flat ──
+      const clean = await runExportJob(await kitYoutubeJob(null, 'clean'), () => {})
+      for (const position of POSITIONS) {
+        const q = await regionLuma(clean.outputPath, SAMPLE_T, QUADRANT[position])
+        expect(
+          q.max - q.min,
+          `a kit with no saved watermark paints nothing in ${position} (luma ${q.min}..${q.max})`
+        ).toBeLessThanOrEqual(4)
+        const psnr = await regionPsnr(clean.outputPath, controlOut, QUADRANT[position])
+        expect(psnr, `kit with none saved matches the control in ${position} (${psnr} dB)`).toBeGreaterThan(60)
+      }
+    },
+    600_000
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'KNOWN linux-binary gap: a Clip Kit job that carries the saved watermark dies at graph init naming drawtext, and the same job without it renders (same obsolescence condition as the pins above)',
+    async () => {
+      // The linux-runnable half of the kit's evidence. The two jobs below
+      // differ in exactly one field, and that field is what decides whether
+      // ffmpeg reaches `drawtext` at all: with the watermark the real runner
+      // dies naming the filter (so the kit's job spec DID carry it into the
+      // graph), without it the very same kit job encodes a 1080p file. A kit
+      // that drops the watermark — the pre-T-85 behaviour — fails the first
+      // assertion.
+      await expect(
+        runExportJob(await kitYoutubeJob(savedWatermark(), 'pin-marked'), () => {})
+      ).rejects.toThrow(/No such filter: 'drawtext'/)
+
+      const clean = await runExportJob(await kitYoutubeJob(null, 'pin-clean'), () => {})
+      const probe = await ffprobeJson(clean.outputPath)
+      const video = probe.streams.find((st) => st.codec_type === 'video')
+      expect(video?.width).toBe(1920)
+      expect(video?.height).toBe(1080)
+    },
+    180_000
   )
 })
 

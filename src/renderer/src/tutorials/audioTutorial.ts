@@ -1,5 +1,6 @@
 import type { TutorialDef } from './types'
 
+// Copy rules: see the header of videoTutorial.ts (T-86).
 export const audioTutorial: TutorialDef = {
   id: 'audio',
   title: 'Audio Studio',
@@ -8,69 +9,62 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'welcome',
       title: 'Welcome to Audio Studio',
-      body: "This studio cleans up audio: removes background noise, evens out levels, polishes voice for streaming and podcasts. Replay this anytime with the ? button.",
+      body: 'Audio Studio cleans up a recording: it removes background noise, evens out loudness, and polishes a voice for streaming or podcasts. Press the ? button in the header to replay this tour.',
       placement: 'center'
     },
     {
       id: 'import',
-      title: 'Step 1: Import audio (or extract from video)',
-      body: "Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (we'll extract its audio automatically).",
+      title: 'Drop audio in',
+      body: "Drop in an audio file — or a video, and imagii pulls out its audio. Or click 'Choose file…'.",
       targetSelector: '[data-tutorial="audio-importer"]',
       placement: 'right'
     },
     {
       id: 'waveform',
-      title: 'Step 2: The waveform',
-      body: "Click and drag on the waveform to mark regions you want to cut out. Click any cut tag to undo it.",
+      title: 'The waveform',
+      body: 'Drag across the waveform to mark a region to cut. Click a cut tag under it to undo that cut.',
       targetSelector: '[data-tutorial="audio-waveform"]',
       placement: 'bottom'
     },
     {
       id: 'fix-wizard',
-      title: 'New: Quick fix wizard',
-      body: "If you're not sure what to enable, click 'Help me fix this' for a 3-question walkthrough that auto-configures the chain. Three clicks to podcast-grade.",
+      title: 'Not sure where to start?',
+      body: "Click 'Help me fix this' and answer three quick questions. imagii picks the cleanup settings for you.",
       targetSelector: '[data-tutorial="audio-fixwizard"]',
       placement: 'left'
     },
     {
       id: 'cleanup',
-      title: 'Step 3: Cleanup panel',
-      body: "Pick a denoise strength (light / medium / aggressive), and toggle the targeted filters: low rumble, 60 Hz hum, de-essing. Each toggle independently adds to the FFmpeg chain.",
+      title: 'Cleanup',
+      body: "Pick a Denoise strength: Light, Medium, Aggressive, or Custom. Then tick 'Remove low rumble', 'Reduce 60 Hz hum', or 'De-ess' as needed.",
       targetSelector: '[data-tutorial="audio-cleanup"]',
       placement: 'left'
     },
     {
       id: 'levels',
-      title: 'Step 4: Levels',
-      body: "Pick a compressor preset (voice for streaming, music for songs), set Normalize to LUFS to −16 (podcast standard). The two-pass loudnorm makes everything sound consistent.",
+      title: 'Levels',
+      body: "Pick a Compressor preset: Voice for streaming, Music for songs. Tick 'Normalize to' and choose a Platform so every export lands at the same loudness.",
       targetSelector: '[data-tutorial="audio-levels"]',
       placement: 'left'
     },
     {
-      id: 'music',
-      title: 'New: Background music + ducking',
-      body: "Add a music track to play under your voice. The 'Duck under voice' option side-chains the music down when you talk, so you cut through.",
+      id: 'second-track',
+      title: 'Add a second track',
+      body: "Layer in 'Background music', a 'Second mic', or 'Game audio' alongside your voice. Tick 'Duck under primary' to turn it down whenever you talk.",
       targetSelector: '[data-tutorial="audio-music"]',
       placement: 'left'
     },
     {
-      id: 'multitrack',
-      title: 'New: Multi-track import',
-      body: "If you record mic and game on separate tracks (OBS does this), you can load both, level them independently, then mix down.",
-      targetSelector: '[data-tutorial="audio-multitrack"]',
-      placement: 'left'
-    },
-    {
       id: 'export',
-      title: 'Step 5: Export',
-      body: "Pick a format (MP3 / WAV / FLAC / AAC) and bitrate, then click Export. If you imported audio from a video, you can re-attach the cleaned audio to the original.",
+      title: 'Export',
+      body: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For audio taken from a video, 'Re-attach to video' puts the cleaned sound back on the original.",
       targetSelector: '[data-tutorial="audio-export"]',
       placement: 'top'
     },
     {
       id: 'done',
       title: 'All set',
-      body: "Use the ? button in the header to revisit this tour anytime.",
+      body: 'The ? button in the header replays this tour any time. It only points at what is on screen, so it covers more once audio is loaded.',
       placement: 'center'
     }
   ]

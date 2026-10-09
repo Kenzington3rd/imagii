@@ -38,7 +38,8 @@ export function Welcome({ onContinue }: WelcomeProps): JSX.Element {
           you post to, an audio studio that polishes raw recordings to podcast quality, a
           Stream Graphics editor for thumbnails and overlays, and a References tab for
           mood boards and ready-made stream assets. Everything runs locally on your
-          computer — no accounts, no subscriptions, no cloud.
+          computer — no accounts, no subscriptions, no cloud — except Reference Search
+          and the one-time caption model download, which go online.
         </p>
         <button
           className="btn-primary text-lg px-8 py-3 inline-flex items-center gap-2"

@@ -12,6 +12,7 @@ import { expandFilenameTemplate } from '@shared/filename'
 import { countOf } from '@shared/plural'
 import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/safeZone'
 import { assertDefined } from '@shared/assert'
+import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
@@ -28,17 +29,6 @@ export interface SafeZoneRow {
   clippedZones: string[]
 }
 
-/**
- * The four corners a watermark can sit in, in the order the picker offers
- * them. T-49: the list is also the guard for the stored value — a corner
- * read back off disk is only applied if it is still one of these.
- */
-const WATERMARK_POSITIONS: ReadonlyArray<WatermarkSpec['position']> = [
-  'bottom-right',
-  'bottom-left',
-  'top-right',
-  'top-left'
-]
 const WATERMARK_POSITION_LABELS: Record<WatermarkSpec['position'], string> = {
   'bottom-right': 'Bottom right',
   'bottom-left': 'Bottom left',
@@ -81,8 +71,9 @@ function queuedPresets(
  * and named the wrong platform as the one losing picture: with a 9:16 crop
  * the tall platforms keep all of it and the wide one is the one cut down.
  *
- * Exported so ClipKitButton can run the same pre-flight before its
- * 5-platform batch. T-50: custom presets are export targets too, so they
+ * Exported for ExportPanel.test.ts. (Clip Kit no longer runs this pre-flight
+ * at all: choosing "all five platforms" already answers the question it asks,
+ * T-85.) T-50: custom presets are export targets too, so they
  * take part in the pre-flight — a 16:9 custom preset beside Reels loses
  * the same safe zone a platform 16:9 preset would.
  */
@@ -175,7 +166,7 @@ export function ExportPanel(): JSX.Element | null {
       .get<WatermarkSpec['position']>('watermarkPosition')
       .then((position) => {
         if (cancelled || !position) return
-        if (WATERMARK_POSITIONS.includes(position)) setWatermarkPosition(position)
+        if (isWatermarkPosition(position)) setWatermarkPosition(position)
       })
     window.api.settings.get<string>('filenameTemplate').then((tpl) => {
       if (cancelled) return
@@ -259,14 +250,9 @@ export function ExportPanel(): JSX.Element | null {
   async function runExportQueue(): Promise<void> {
     if (!source) return
     if (!outDir) return
-    const watermark: WatermarkSpec | null = watermarkText.trim()
-      ? {
-          text: watermarkText.trim(),
-          position: watermarkPosition,
-          opacity: 0.85,
-          fontSizePct: 3.5
-        }
-      : null
+    // T-85: the same constructor Clip Kit uses on the saved values, so the
+    // panel and the kit cannot stamp two different looks.
+    const watermark: WatermarkSpec | null = buildWatermark(watermarkText, watermarkPosition)
     if (watermark) {
       await window.api.settings.set('streamerHandle', watermark.text)
       await window.api.settings.set('watermarkPosition', watermark.position)

@@ -2,8 +2,8 @@
 
 A free, local-first creative studio for Windows. One app, five studios:
 
-- **🔴 Record** — capture screen + webcam + mic straight to MP4 (replaces OBS for simple recording)
-- **🎬 Video Studio** — trim and clip video, export sized for YouTube, Reels, TikTok, X, or Facebook; auto-reframe, GIF export, captions, picture-in-picture, multi-clip compilation, chat-spike highlight finder
+- **🔴 Record** — capture a screen or window, with an optional webcam and mic, straight to MP4 (no game or desktop audio)
+- **🎬 Video Studio** — trim and clip video, export sized for YouTube, Reels, TikTok, X, or Facebook; reframe to 9:16, GIF export, captions, picture-in-picture, multi-clip compilation, chat-spike highlight finder
 - **🎚 Audio Studio** — clean noise, normalize loudness, multi-track + ducking, save reusable cleanup presets
 - **🖼 Image Canvas** — layered design with streamer templates for thumbnails and overlay frames
 - **✨ References** — DuckDuckGo image search with strict SafeSearch + local mood boards that drag onto the canvas
@@ -110,11 +110,11 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 3. **Optional: crop.** Tick "Crop" above the player to draw a box; pick an aspect ratio preset (16:9 / 9:16 / 1:1 / 4:5). Your crop is the picture: each platform you export to takes a centered cut of it in its own shape, never stretched.
 4. **Optional: enable safe-zones.** "Safe zones" toggle in the player overlays ghosted 9:16 / 1:1 / 4:5 rectangles so you can frame the action to survive future crops.
 5. **Optional: per-clip color, speed, effects.** The Color & motion panel has brightness / contrast / saturation / temperature sliders plus auto-zoom and hype-shake toggles. The clip list has a speed slider (0.25× to 4×) per selected clip.
-6. **Optional: text overlays + watermark.** Watermark field stamps your @handle on every export. Filename template controls how exports are named (tokens: `{source} {clip} {preset} {date} {time} {handle}`).
+6. **Optional: text overlays + watermark.** Watermark field stamps your @handle on the batch export and, once you have exported with one, on Clip Kit (GIF, reframe, compilation and PiP take none). Filename template controls how exports are named (tokens: `{source} {clip} {preset} {date} {time} {handle}`).
 7. **Pick platforms.** Tick the platforms you want; success indicator shows green/yellow/red per platform, and a red one says why ("Wrong shape", "Too long").
 8. **Click Export.** The button says how many files it will write ("Export 3 files"). Sequential render with a progress bar; cancel any time.
 
-The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-spike finder (paste a Twitch chat log), Auto-reframe to 9:16, GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
+The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-spike finder (paste a Twitch chat log), Reframe to 9:16 (center crop), GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
 
 **Player hotkeys:** `Space` play/pause · `← →` nudge 0.1s · `, .` frame step · `I O` set in/out · `?` show all shortcuts
 
