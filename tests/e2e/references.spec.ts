@@ -255,12 +255,15 @@ test.describe('imagii References studio', () => {
       // Default tab: Reference Search.
       await expect(searchInput).toBeVisible()
       // T-85: the panel says WHO filters (DuckDuckGo's SafeSearch — imagii
-      // screens nothing itself) and that search is the one online feature.
+      // screens nothing itself). T-89: and that search goes online while the
+      // saved boards stay on this computer — it is NOT "the one feature that
+      // goes online" (the caption-model download is online too).
       await expect(
         window.getByText(
-          "SafeSearch is always on (strict) — DuckDuckGo does the filtering; imagii doesn't scan images itself. Reference Search is the one feature that goes online."
+          "SafeSearch is always on (strict) — DuckDuckGo does the filtering; imagii doesn't scan images itself. Reference Search goes online; your saved boards stay on your computer."
         )
       ).toBeVisible()
+      await expect(window.getByText(/the one feature that goes online/)).toHaveCount(0)
       await expect(window.getByText(/screened locally/)).toHaveCount(0)
       await expect(boardsPanel).toHaveCount(0)
       await expect(assetsPanel).toHaveCount(0)

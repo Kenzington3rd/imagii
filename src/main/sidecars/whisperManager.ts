@@ -161,7 +161,12 @@ async function runTranscribeBody(
   const startedAt = Date.now()
   await mkdir(captionsOutputDir(), { recursive: true })
 
-  onProgress({ jobId: req.jobId, phase: 'extracting', percent: 5 })
+  // T-89: no `percent` on the phases whose length main cannot know. The
+  // transcribe phase used to send `15 + Math.random() * 10` — a number that
+  // jittered between 15 and 25 for as long as the engine ran — and extraction
+  // and the SRT write a fixed 5 and 95 that measured nothing either. An absent
+  // percent is the indeterminate bar in the panel; only `done` is a fact.
+  onProgress({ jobId: req.jobId, phase: 'extracting' })
   const extracted = await extractAudioFromVideo(req.sourcePath)
 
   // Bug fix: try/finally ensures the temp WAV is deleted on every exit
@@ -169,7 +174,7 @@ async function runTranscribeBody(
   // throw) would leak the WAV file — for a long VOD that's 100+ MB
   // per failed run accumulating in %TEMP%.
   try {
-    onProgress({ jobId: req.jobId, phase: 'transcribing', percent: 15 })
+    onProgress({ jobId: req.jobId, phase: 'transcribing' })
 
     const outputBase = path.join(
       captionsOutputDir(),
@@ -204,7 +209,6 @@ async function runTranscribeBody(
           onProgress({
             jobId: req.jobId,
             phase: 'transcribing',
-            percent: Math.min(95, 15 + Math.random() * 10),
             message: m[m.length - 1]
           })
         }
@@ -225,7 +229,7 @@ async function runTranscribeBody(
       })
     })
 
-    onProgress({ jobId: req.jobId, phase: 'building-srt', percent: 95 })
+    onProgress({ jobId: req.jobId, phase: 'building-srt' })
     const srtPath = `${outputBase}.srt`
     if (!existsSync(srtPath)) {
       throw new Error(`Whisper did not produce ${srtPath}`)
@@ -306,7 +310,7 @@ function buildForceStyle(style: CaptionStyle, legacyFontSizePct: number): string
 export async function runBurnIn(
   req: BurnInRequest,
   onProgress: CaptionsProgressListener
-): Promise<{ outputPath: string }> {
+): Promise<{ outputPath: string; captioned: boolean }> {
   onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 5 })
 
   const style = req.style ?? DEFAULT_CAPTION_STYLE
@@ -342,6 +346,10 @@ export async function runBurnIn(
   // stored field is not reinterpreted: the SRT on disk (and what Save .srt
   // exports) stays source-absolute.
   let tempSrt: string | null = null
+  // Whether the written file carries any caption — false is the cue-less
+  // window below. The renderer says so instead of toasting "Captions burned in"
+  // over a clip with none (T-89).
+  let captioned = true
   try {
     // The SRT the `subtitles` stage reads; null = no subtitle stage.
     let burnSrt: string | null = range ? null : req.srtPath
@@ -360,6 +368,8 @@ export async function runBurnIn(
         tempSrt = shiftedSrtPath(req.srtPath, randomUUID())
         await writeFile(tempSrt, shifted, 'utf8')
         burnSrt = tempSrt
+      } else {
+        captioned = false
       }
     }
 
@@ -438,7 +448,7 @@ export async function runBurnIn(
   }
 
   onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
-  return { outputPath: req.outputPath }
+  return { outputPath: req.outputPath, captioned }
 }
 
 export async function exportSrt(srtPath: string, destPath: string): Promise<void> {

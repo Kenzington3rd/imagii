@@ -10,7 +10,14 @@ import type {
   CaptionPosition,
   ModelInstallProgress
 } from '@shared/captions'
-import { DEFAULT_CAPTION_STYLE, CAPTION_STYLE_PRESETS } from '@shared/captions'
+import {
+  DEFAULT_CAPTION_STYLE,
+  CAPTION_STYLE_PRESETS,
+  burnInDoneMessage,
+  captionPhaseLabel,
+  captionSizeReadout,
+  captionsReadyMessage
+} from '@shared/captions'
 import { useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -87,7 +94,7 @@ export function CaptionsPanel(): JSX.Element | null {
       })
       setSegments(result.segments)
       setSrtPath(result.srtPath)
-      toast.success(`Captioned ${result.segments.length} segments`)
+      toast.success(captionsReadyMessage(result.segments.length))
     } catch (err) {
       reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
     } finally {
@@ -121,7 +128,7 @@ export function CaptionsPanel(): JSX.Element | null {
     }
     setRunning(true)
     try {
-      await window.api.captions.burnIn({
+      const result = await window.api.captions.burnIn({
         jobId: nanoid(10),
         videoPath: source.filePath,
         srtPath,
@@ -135,7 +142,13 @@ export function CaptionsPanel(): JSX.Element | null {
           endSec: selectedClip.endSec
         })
       })
-      toast.success('Captions burned in')
+      // T-89: a ranged burn over a stretch nobody speaks in still writes the
+      // clip, with nothing on it. Say that, not "Captions burned in".
+      if (result.captioned) {
+        toast.success(burnInDoneMessage(true))
+      } else {
+        toast(burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: 6000 })
+      }
     } catch (err) {
       reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
     } finally {
@@ -153,7 +166,7 @@ export function CaptionsPanel(): JSX.Element | null {
     try {
       const result = await window.api.captions.installModel()
       if (result.ok) {
-        toast.success('Whisper model installed')
+        toast.success('Caption model downloaded')
         await refreshStatus()
       } else {
         // `reason` is a string, not a thrown error: main resolves a failed or
@@ -176,6 +189,11 @@ export function CaptionsPanel(): JSX.Element | null {
       setInstallProgress(null)
     }
   }
+
+  // T-89: a phase main cannot measure sends no percent, and gets an
+  // indeterminate bar rather than a number that means nothing.
+  const percent = progress?.percent
+  const determinate = typeof percent === 'number'
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-captions">
@@ -205,8 +223,15 @@ export function CaptionsPanel(): JSX.Element | null {
           </button>
           {showSetup ? (
             <div className="mt-2 flex flex-col gap-1.5 text-ink-muted">
+              {/* T-89: what is manual and what is automatic, in one line, and
+                  which part goes online. */}
+              <p className="text-ink-base">
+                You download the captions engine once (<code>whisper-cli.exe</code>); imagii
+                downloads the English model (~141 MB) for you — that download goes online,
+                once.
+              </p>
               <div>
-                1. Download <code>whisper.exe</code> from{' '}
+                1. Download <code>whisper-cli.exe</code> from the{' '}
                 <a
                   href="https://github.com/ggerganov/whisper.cpp/releases"
                   className="text-accent hover:underline"
@@ -215,7 +240,7 @@ export function CaptionsPanel(): JSX.Element | null {
                 >
                   whisper.cpp releases
                 </a>{' '}
-                and place at:
+                (the Windows build) and save it exactly here:
                 <button
                   className="ml-1 text-accent hover:underline"
                   onClick={() => window.api.captions.openBinFolder()}
@@ -225,8 +250,8 @@ export function CaptionsPanel(): JSX.Element | null {
               </div>
               <div className="font-mono break-all">{status?.exePath}</div>
               <div>
-                2. The Whisper model file (~141 MB). imagii can download
-                it for you, or you can grab it from{' '}
+                2. The English model (~141 MB). The button below downloads it for you, or
+                you can grab it from{' '}
                 <a
                   href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
                   className="text-accent hover:underline"
@@ -235,7 +260,7 @@ export function CaptionsPanel(): JSX.Element | null {
                 >
                   Hugging Face
                 </a>{' '}
-                manually and place at:
+                yourself and save it exactly here:
               </div>
               <div className="font-mono break-all">{status?.modelPath}</div>
               {/* Round 17 B9: surface the models-folder shortcut next to the
@@ -304,16 +329,24 @@ export function CaptionsPanel(): JSX.Element | null {
 
       {progress ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <span className="uppercase tracking-wide">{progress.phase}</span>
-          <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${Math.round(progress.percent)}%` }}
-            />
+          <span>{captionPhaseLabel(progress.phase)}</span>
+          <div
+            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label={captionPhaseLabel(progress.phase)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={determinate ? Math.round(percent) : undefined}
+          >
+            {determinate ? (
+              <div className="h-full bg-accent" style={{ width: `${Math.round(percent)}%` }} />
+            ) : (
+              <div className="h-full bg-accent progress-indeterminate" />
+            )}
           </div>
-          <span className="font-mono w-10 text-right">
-            {Math.round(progress.percent)}%
-          </span>
+          {determinate ? (
+            <span className="font-mono w-10 text-right">{Math.round(percent)}%</span>
+          ) : null}
           {/* Round 17 B6: burn-in is the only phase the user can usefully
               abort (transcribe is short). Show Cancel while the burn-in
               phase is in flight. */}
@@ -361,23 +394,30 @@ export function CaptionsPanel(): JSX.Element | null {
             ))}
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <label className="flex items-center gap-1.5">
-              <span className="text-ink-muted w-14">Font px</span>
-              <input
-                type="range"
-                min={16}
-                max={96}
-                step={1}
-                value={style.fontSize}
-                onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
-                className="flex-1"
-                // M11 fix (round 15)
-                aria-label="Caption font size in pixels"
-                aria-valuetext={`${style.fontSize} pixels`}
-              />
-              <span className="font-mono w-8">{style.fontSize}</span>
-            </label>
-            <label className="flex items-center gap-1.5">
+            {/* T-89: this was "Font px", and it is not pixels — libass scales
+                the number against a 288-line script, so the default 32 paints
+                ~120 px tall on 1080p. The stored value is unchanged; the label
+                says what it is and the line under it says what it comes to. */}
+            <div className="col-span-2 flex flex-col gap-0.5">
+              <label className="flex items-center gap-1.5">
+                <span className="text-ink-muted w-14">Size</span>
+                <input
+                  type="range"
+                  min={16}
+                  max={96}
+                  step={1}
+                  value={style.fontSize}
+                  onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
+                  className="flex-1"
+                  // M11 fix (round 15)
+                  aria-label="Caption size"
+                  aria-valuetext={`${style.fontSize}, ${captionSizeReadout(style.fontSize)}`}
+                />
+                <span className="font-mono w-8">{style.fontSize}</span>
+              </label>
+              <span className="text-ink-dim pl-[3.875rem]">{captionSizeReadout(style.fontSize)}</span>
+            </div>
+            <label className="col-span-2 flex items-center gap-1.5">
               <span className="text-ink-muted w-14">Position</span>
               <select
                 className="bg-bg-base rounded px-2 py-0.5 flex-1"
@@ -441,10 +481,17 @@ export function CaptionsPanel(): JSX.Element | null {
 
       {!segments && status?.ready ? (
         <p className="text-xs text-ink-dim">
-          Transcribe the source video, then save as .srt or burn captions into a new MP4
-          export. English only by default; the model file you choose determines languages.
+          Transcribe the source video, then save the text as .srt or burn it into a new MP4.
         </p>
       ) : null}
+      {/* T-89: two things the panel never said. The language is fixed (the
+          model is English-only), and a burn-in reads the ORIGINAL file — the
+          platform exports (Export, Clip Kit) are made separately and carry no
+          captions. */}
+      <p className="text-xs text-ink-dim">
+        Captions are English only. Captions burn into the original video, not the platform
+        exports.
+      </p>
     </div>
   )
 }

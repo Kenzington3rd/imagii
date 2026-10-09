@@ -21,6 +21,9 @@ const handlers = new Map<string, (...args: unknown[]) => unknown>()
 
 const fakeWin = { webContents: { send: vi.fn() } }
 let saveDialogResult: { canceled: boolean; filePath?: string } = { canceled: true }
+// T-88: every options object the save dialog was opened with, so the title the
+// user reads can be asserted without an OS dialog.
+let saveDialogOptions: Array<{ title?: string; defaultPath?: string }> = []
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -29,7 +32,12 @@ vi.mock('electron', () => ({
     }
   },
   desktopCapturer: { getSources: vi.fn() },
-  dialog: { showSaveDialog: async () => saveDialogResult },
+  dialog: {
+    showSaveDialog: async (_win: unknown, options: { title?: string; defaultPath?: string }) => {
+      saveDialogOptions.push(options)
+      return saveDialogResult
+    }
+  },
   BrowserWindow: {
     getFocusedWindow: () => fakeWin,
     getAllWindows: () => [fakeWin]
@@ -114,6 +122,7 @@ beforeEach(() => {
   TMP = mkdtempSync(path.join(tmpdir(), 'imagii-rec-cancel-'))
   convertOutcome = 'ok'
   saveDialogResult = { canceled: true }
+  saveDialogOptions = []
   fakeWin.webContents.send.mockClear()
   mainLog.mockClear()
 })
@@ -272,5 +281,41 @@ describe('recordingConvertFailureMessage — what the user is told (T-59)', () =
       expect(msg).not.toContain('/tmp/')
       expect(msg).not.toContain('libx264')
     }
+  })
+})
+
+describe('the save dialog says what Cancel does (T-88)', () => {
+  // The dialog was titled "Save recording" while its Cancel button threw the
+  // take away — the stream is closed and the temp file reaped the moment the
+  // dialog returns without a path. The OS chrome is untestable, but the options
+  // object it is opened with is not: this is the deepest layer that reaches it.
+  it('titles the dialog so that Cancel reads as discarding the take', async () => {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('webm chunk'))
+    await invoke('recording:finalize', id, { filename: 'take.mp4', convertToMp4: true })
+
+    expect(saveDialogOptions).toHaveLength(1)
+    expect(saveDialogOptions[0]?.title).toBe('Save recording (Cancel discards it)')
+  })
+
+  it('says the same for a WebM save — Cancel discards that take too', async () => {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('webm chunk'))
+    await invoke('recording:finalize', id, { filename: 'take.webm', convertToMp4: false })
+
+    expect(saveDialogOptions[0]?.title).toMatch(/Cancel discards it/)
+    expect(saveDialogOptions[0]?.defaultPath).toMatch(/\.webm$/)
+  })
+
+  it('and the claim is true: Cancel in the dialog resolves null and reaps the take', async () => {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('webm chunk'))
+    saveDialogResult = { canceled: true }
+    const result = await invoke('recording:finalize', id, {
+      filename: 'take.mp4',
+      convertToMp4: true
+    })
+    expect(result).toBeNull()
+    expect(existsSync(tempPathFor(id))).toBe(false)
   })
 })

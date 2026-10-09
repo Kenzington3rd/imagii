@@ -1601,7 +1601,7 @@ IMG-PREC.
   (Windows privacy settings); E2E/unit per the standing bar for the
   reachable parts, dispositions for the OS-dialog boundary;
   LESSONS entry.
-- **Status:** open
+- **Status:** done (round 54 — see Done)
 
 ## T-89 — captions: setup copy, English-only truth, and "Font px" that isn't pixels
 
@@ -1623,7 +1623,7 @@ IMG-PREC.
   percent becomes an indeterminate bar; a line says captions burn
   into the original video, not the platform exports; existing
   caption tests green; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 54 — see Done)
 
 ## T-90 — audio studio copy: broadcast-engineer language, a wizard that misreports, presets that over-save
 
@@ -1840,8 +1840,10 @@ IMG-PREC.
   was cancelled/failed is deleted (finished files stay; respect the
   T-59-era partial-output conventions and document any deliberate
   exception); Canceled rows drop the danger tint; the audio dialog
-  gains the same Failed/Canceled labels; E2E pins each; LESSONS
-  entry.
+  gains the same Failed/Canceled labels; round-54 add: the captions
+  progress row is cleared (or labeled) after a cancelled or failed
+  burn-in instead of freezing at "Burning in… N%" with a dead
+  Cancel button; E2E pins each; LESSONS entry.
 - **Status:** open
 
 ## T-101 — addClipFromRange has no caller: dead code or a missing control
@@ -1851,6 +1853,9 @@ IMG-PREC.
   old USER_GUIDE line about "mark ranges and add them" was stale
   for the same reason). Either the ladder's deletion rule applies,
   or a range-to-clip control was always intended and never wired.
+  Round-54 add: `recording.save` (the legacy buffered save handler)
+  is still exposed through preload and api.ts with no renderer
+  caller — same class, same ruling.
 - **Acceptance criteria:** decide (owner may rule): delete the
   action and retarget its tests at `addScannedClip`'s shared
   `appendRange`, OR wire a real "add range as clip" control with
@@ -1858,9 +1863,68 @@ IMG-PREC.
   without a caller survives; ledger updated.
 - **Status:** open
 
+## T-102 — the captions setup path may not exist or survive on the portable exe
+
+- **Spec:** round-54 worker finding, the wave's most important
+  open question for the shipped build. The setup card tells the
+  user to place whisper-cli.exe at
+  `process.resourcesPath/app.asar.unpacked/resources/bin`, but
+  electron-builder.yml does not unpack `resources/bin`, and the
+  portable exe unpacks itself to %TEMP% — so the folder may not
+  exist, and a binary placed there may not survive a relaunch or an
+  app update. If so, the entire captions feature is impossible to
+  set up on the shipped artifact while the card claims otherwise.
+  NEEDS A WINDOWS HAND-TEST first (owner checklist); the likely fix
+  is a stable user-writable location (userData/bin) checked first
+  by the resolver, plus the card naming that path.
+- **Acceptance criteria:** hand-test confirms or denies; the
+  resolver prefers a per-user stable directory that survives
+  relaunch; the setup card names a path that is real on the
+  portable build; unit tests for the resolver order; the release
+  checklist covers a captions setup on a clean Windows machine.
+- **Status:** open (blocked on the Windows hand-test)
+
 ---
 
 ## Done
+
+Round 54 — content fix wave batch 7: T-88 + T-89. T-88: device
+scanning extracted pure (`devices.ts`) — the mic and camera probes
+are SEPARATE, each in its own try/catch, so a missing camera can no
+longer blank the mic list; "Refresh sources" re-scans devices too
+(with a scan-sequence guard so racing clicks cannot interleave
+state); stale device picks are dropped on every scan; the hints
+name the real recoveries (plug it in / Windows privacy settings /
+Refresh); the native save dialog says "Save recording (Cancel
+discards it)"; the post-Stop card tells the truth per state
+("converting…" only when converting, Discard disabled when nothing
+cancellable remains) via pure `saveCard.ts`. T-89: the resolver
+accepts whisper-cli.exe (current builds) first and whisper.exe
+second; the setup card divides the manual and automatic steps in
+one honest line and says the model download goes online once;
+"Captions are English only." stated plainly; "Font px" is now
+"Size" with the true rendered height beside it ("about 120 px tall
+on 1080p" for the default 32 — PlayResY 288, stored semantics
+untouched); the made-up progress percents are GONE — phases without
+a measurement render an indeterminate bar (reduced-motion safe),
+per the new STYLE_GUIDE rule "a progress number is a measurement or
+absent"; a ranged burn with no cues toasts "No captions in this
+range — exported without captions" (runBurnIn reports `captioned`);
+the References online line re-ruled and fixed in panel AND tour.
+Expedite: verify 1735/1735 (84 files), build clean, test:media
+93/93 (+6 gates; no argv changed — the caption block re-asserted
+with `captioned`), full Playwright 155/155; worker's six mutations
+reviewed, one independent expediter mutation at the untouched
+reconcile seam (stale picks survive -> 2 named reds, byte-identical
+restore -> 18/18). Deviations accepted: the discard path was
+already sentinel-safe via T-44 (belt-and-braces branch kept), the
+other two invented percents removed as the same family. Findings:
+T-102 filed (the portable exe's captions setup path may not exist
+or survive — NEEDS the Windows hand-test; flagged for the owner
+checklist), the frozen progress row after a cancelled burn folded
+into T-100, the dead legacy `recording.save` export folded into
+T-101. Residual noted: a user with only the deprecated whisper.exe
+stub reads as ready and fails at transcribe with a plain error.
 
 Round 53 — content fix wave batch 6, the first HAIKU round: T-87 +
 T-93. T-87: the title generator is table-driven — every verb form

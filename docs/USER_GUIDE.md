@@ -108,11 +108,17 @@ and webcam if you want them. Game and desktop sound are not captured.
    better compatibility), or untick it for an instant WebM, which some apps do
    not accept.
 5. Click **Start recording**. Click **Stop** when you are done, then pick where
-   to save.
+   to save. **Cancel** in the save dialog discards the take — the dialog's title
+   says so. With **Convert to MP4** on, **Discard recording** stops the
+   conversion; with it off, saving a WebM is a plain copy and there is nothing
+   to stop.
 
 Your webcam corner and your MP4 choice are remembered for next time. If no
 screens or windows turn up, the panel says so — grant screen recording
-permission for imagii, then click **Refresh sources**.
+permission for imagii, then click **Refresh sources**. **Refresh sources** also
+re-checks your microphone and camera, each on its own, so a missing webcam never
+hides your microphone. If one is missing, plug it in or allow its access in
+Windows privacy settings, then click **Refresh sources** again.
 
 ---
 
@@ -153,8 +159,10 @@ Drop a video in (or click **Choose file…**), then:
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action.
 - **Captions** — transcribes the speech, then saves an `.srt` or burns styled
-  captions into a new MP4. Captions need a one-time setup; see **Captions
-  setup** below.
+  captions into a new MP4. Captions are English only. They burn into the
+  original video, not the platform exports. **Size** is a scale, not pixels:
+  the readout beside it says how tall the text comes out on a 1080p video.
+  Captions need a one-time setup; see **Captions setup** below.
 - **Color & motion**, **Export as GIF**, **Compile clips**, and
   **Picture-in-picture composite** are the other panels.
 - **Cancel any long render.** Reframe, GIF, Compile, PiP, highlight scan, and
@@ -183,14 +191,21 @@ whole-video **Clip 1**.
 ### Captions setup
 
 Until the caption engine and model are in place, **Auto-captions** says
-**Captions need setup**. Both steps are one-time:
+**Captions need setup**. You download the captions engine once; imagii
+downloads the English model for you, and that download goes online, once. Both
+steps are one-time:
 
-1. Get `whisper.exe` from the whisper.cpp releases page, and put it at the path
-   the panel shows. The panel's **open folder** button opens that folder.
-   imagii does not download this file for you.
+1. Get `whisper-cli.exe` from the whisper.cpp releases page, and put it at the
+   path the panel shows. The panel's **open folder** button opens that folder.
+   (The older name, `whisper.exe`, also works.) imagii does not download this
+   file for you.
 2. Click **Download model (~141 MB)**. imagii downloads the English model and
    keeps it. You can also fetch the model file yourself and put it at the model
    path the panel shows.
+
+While it works, the panel shows the step it is on (extracting audio,
+transcribing, building captions). Transcribing has no percentage — nobody can
+know how long speech will take — so its bar slides instead of filling.
 
 ### Compile
 

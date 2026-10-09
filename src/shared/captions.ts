@@ -1,4 +1,5 @@
 import { assert } from './assert'
+import { countOf } from './plural'
 
 export interface CaptionsInstallStatus {
   exeInstalled: boolean
@@ -31,7 +32,13 @@ export interface TranscribeResult {
 export type CaptionPosition = 'top' | 'middle' | 'bottom'
 
 export interface CaptionStyle {
-  /** Pixel font size used directly in libass force_style. Min 16, max 96. */
+  /**
+   * The size handed to libass `force_style` FontSize, 16-96. NOT pixels:
+   * libass measures it against a 288-line script, so the picture scales it —
+   * `effectiveCaptionPx` is what it comes to on a given frame (the default 32
+   * is ~120 px on 1080p). Stored as-is; only its label and the readout beside
+   * it changed in T-89.
+   */
   fontSize: number
   /** Vertical placement: top/middle/bottom of the frame. */
   position: CaptionPosition
@@ -130,8 +137,75 @@ export interface BurnInRequest {
 export interface CaptionsProgress {
   jobId: string
   phase: 'extracting' | 'transcribing' | 'building-srt' | 'burning-in' | 'done'
-  percent: number
+  /**
+   * 0-100, only when main KNOWS how far along the phase is. Absent means the
+   * phase has no measurable progress (extracting audio, running the speech
+   * engine, writing the SRT) and the UI shows an indeterminate bar — T-89: the
+   * transcribe phase used to send `15 + Math.random() * 10`, a number that
+   * jittered between 15 and 25 and meant nothing.
+   */
+  percent?: number
   message?: string
+}
+
+/** What each phase is called to the user — never the id ("BUILDING-SRT"). */
+const PHASE_LABELS: Record<CaptionsProgress['phase'], string> = {
+  extracting: 'Extracting audio…',
+  transcribing: 'Transcribing…',
+  'building-srt': 'Building captions…',
+  'burning-in': 'Burning in…',
+  done: 'Done'
+}
+
+export function captionPhaseLabel(phase: CaptionsProgress['phase']): string {
+  return PHASE_LABELS[phase]
+}
+
+/**
+ * libass's default script height (PlayResY). An SRT carries no script size, so
+ * libass scales every `force_style` FontSize against a 288-line frame: the
+ * number is a fraction of the picture, not a pixel count (T-11's lesson, where
+ * a nominal 24 measured ~90 px on 1080p).
+ */
+export const ASS_PLAY_RES_Y = 288
+
+/** The frame height the Size readout speaks in. */
+export const CAPTION_REFERENCE_HEIGHT = 1080
+
+/**
+ * What a caption `fontSize` comes to in real pixels on a frame
+ * `frameHeight` px tall: `fontSize * frameHeight / 288`. The default 32 is
+ * ~120 px on 1080p and the slider's maximum, 96, is 360 px — a label that said
+ * "px" was off by a factor of 3.75 at every setting.
+ */
+export function effectiveCaptionPx(
+  fontSize: number,
+  frameHeight: number = CAPTION_REFERENCE_HEIGHT
+): number {
+  assert(Number.isFinite(fontSize) && fontSize > 0, 'fontSize must be a positive number')
+  assert(Number.isFinite(frameHeight) && frameHeight > 0, 'frameHeight must be a positive number')
+  return Math.round((fontSize * frameHeight) / ASS_PLAY_RES_Y)
+}
+
+/** The readout beside the Size slider. */
+export function captionSizeReadout(fontSize: number): string {
+  return `about ${effectiveCaptionPx(fontSize)} px tall on ${CAPTION_REFERENCE_HEIGHT}p`
+}
+
+/** The toast after a transcription: lines of caption, counted properly. */
+export function captionsReadyMessage(segmentCount: number): string {
+  return `Captions ready (${countOf(segmentCount, 'line')})`
+}
+
+/**
+ * The toast after a burn-in. A ranged burn over a stretch nobody speaks in
+ * still writes the clip — without a subtitle stage (T-81) — and "Captions
+ * burned in" over a file with none is a false success.
+ */
+export function burnInDoneMessage(captioned: boolean): string {
+  return captioned
+    ? 'Captions burned in'
+    : 'No captions in this range — exported without captions.'
 }
 
 /** Phase 4E: Whisper model auto-install progress events. */

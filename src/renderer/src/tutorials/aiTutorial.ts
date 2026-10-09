@@ -15,7 +15,7 @@ export const aiTutorial: TutorialDef = {
     {
       id: 'tabs',
       title: 'The three tabs',
-      body: 'Reference Search uses DuckDuckGo with strict SafeSearch — it is the one feature that goes online. Your mood boards are saved on your computer, no account needed.',
+      body: 'Reference Search uses DuckDuckGo with strict SafeSearch and goes online. Your mood boards are saved on your computer, no account needed.',
       targetSelector: '[data-tutorial="ai-tabs"]',
       placement: 'bottom'
     },

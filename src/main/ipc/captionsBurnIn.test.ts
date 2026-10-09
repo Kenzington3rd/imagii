@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os'
 // mocked out: "rejected" and "runner never called" are the two halves of
 // "before any work".
 const handlers = new Map<string, (e: unknown, req: unknown) => Promise<unknown>>()
-const runBurnIn = vi.fn(async (req: { outputPath: string }) => ({ outputPath: req.outputPath }))
+const runBurnIn = vi.fn(async (req: { outputPath: string }) => ({
+  outputPath: req.outputPath,
+  captioned: true
+}))
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -54,8 +57,13 @@ beforeEach(() => {
 
 describe('captions:burnIn range validation (T-81)', () => {
   it('passes an unranged request and a real range through to the runner', async () => {
-    await expect(burn({})).resolves.toEqual({ outputPath: base.outputPath })
-    await expect(burn({ startSec: 0, endSec: 3 })).resolves.toEqual({ outputPath: base.outputPath })
+    // T-89: the runner's `captioned` flag crosses the bridge untouched — the
+    // panel's "No captions in this range" toast reads it.
+    await expect(burn({})).resolves.toEqual({ outputPath: base.outputPath, captioned: true })
+    await expect(burn({ startSec: 0, endSec: 3 })).resolves.toEqual({
+      outputPath: base.outputPath,
+      captioned: true
+    })
     await expect(burn({ startSec: 2400.5, endSec: 2460 })).resolves.toBeDefined()
     expect(runBurnIn).toHaveBeenCalledTimes(3)
   })

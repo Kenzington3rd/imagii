@@ -226,12 +226,41 @@ async function launchApp(userDataDir: string): Promise<ElectronApplication> {
  * branch. Every other byte of the save path — the write stream, the
  * temp-file promotion, the ffmpeg convert, the stat — runs for real.
  */
-async function stubSaveDialog(app: ElectronApplication, filePath: string | null): Promise<void> {
-  await app.evaluate(async ({ dialog }, chosen) => {
-    const target = dialog as unknown as { showSaveDialog: unknown }
-    target.showSaveDialog = async () =>
-      chosen === null ? { canceled: true, filePath: undefined } : { canceled: false, filePath: chosen }
-  }, filePath)
+async function stubSaveDialog(
+  app: ElectronApplication,
+  filePath: string | null,
+  delayMs = 0
+): Promise<void> {
+  await app.evaluate(
+    async ({ dialog }, { chosen, delay }) => {
+      const g = globalThis as unknown as { __saveDialogOptions: Array<{ title?: string }> }
+      g.__saveDialogOptions = []
+      const target = dialog as unknown as { showSaveDialog: unknown }
+      // T-88: the options the OS dialog would have been opened with are
+      // recorded (its title is what tells the user Cancel discards the take),
+      // and `delay` holds the "dialog" open the way a person reading it does —
+      // the saving card is on screen for exactly that long, which makes its
+      // per-state copy assertable without racing a copy that takes ms.
+      target.showSaveDialog = async (_win: unknown, options: { title?: string }) => {
+        g.__saveDialogOptions.push(options)
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+        return chosen === null
+          ? { canceled: true, filePath: undefined }
+          : { canceled: false, filePath: chosen }
+      }
+    },
+    { chosen: filePath, delay: delayMs }
+  )
+}
+
+/** The titles every stubbed save dialog was opened with, in order (T-88). */
+function readSaveDialogTitles(app: ElectronApplication): Promise<Array<string | undefined>> {
+  return app.evaluate(() =>
+    (
+      (globalThis as unknown as { __saveDialogOptions?: Array<{ title?: string }> })
+        .__saveDialogOptions ?? []
+    ).map((o) => o.title)
+  )
 }
 
 /**
@@ -336,12 +365,22 @@ async function stubCameras(window: Page): Promise<void> {
       getUserMedia: (c?: MediaStreamConstraints) => Promise<MediaStream>
       enumerateDevices: () => Promise<unknown[]>
     }
-    const realGetUserMedia = md.getUserMedia.bind(navigator.mediaDevices)
+    const w = window as unknown as { __realMediaDevices?: typeof md }
+    // Keep the real implementations once, so unstubDevices can put them back.
+    w.__realMediaDevices ??= {
+      getUserMedia: md.getUserMedia.bind(navigator.mediaDevices),
+      enumerateDevices: md.enumerateDevices.bind(navigator.mediaDevices)
+    }
+    const realGetUserMedia = w.__realMediaDevices.getUserMedia
     md.getUserMedia = async (c?: MediaStreamConstraints) => {
-      // refreshDevices' probe: `{ audio: true, video: true }`. Anything
-      // else (the desktop-capture constraints, a specific deviceId) goes
-      // to the real API.
-      if (c && c.audio === true && c.video === true) return new MediaStream()
+      // refreshDevices' CAMERA probe: `{ video: true }` and nothing else. T-88
+      // split the old combined `{ audio: true, video: true }` probe in two, so
+      // the microphone probe (`{ audio: true }`) goes to the real API — which,
+      // with no microphone in this container, rejects. That is the point: a
+      // camera that is there must be listed even though the mic is not.
+      // Anything else (the desktop-capture constraints, a specific deviceId)
+      // also goes to the real API.
+      if (c && c.video === true && !c.audio) return new MediaStream()
       return realGetUserMedia(c)
     }
     md.enumerateDevices = async () => [
@@ -349,6 +388,81 @@ async function stubCameras(window: Page): Promise<void> {
       { deviceId: 'fake-cam-2', kind: 'videoinput', label: 'Fake Cam B', groupId: 'g1' }
     ]
   })
+}
+
+/**
+ * The mirror of `stubCameras` (T-88): one microphone and NO camera, which is
+ * the commonest streamer setup that is not "everything plugged in". The
+ * `{ video: true }` probe goes to the real API, which rejects here — the case
+ * the combined probe turned into "No microphone found".
+ */
+async function stubMicrophones(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const md = navigator.mediaDevices as unknown as {
+      getUserMedia: (c?: MediaStreamConstraints) => Promise<MediaStream>
+      enumerateDevices: () => Promise<unknown[]>
+    }
+    const w = window as unknown as { __realMediaDevices?: typeof md }
+    w.__realMediaDevices ??= {
+      getUserMedia: md.getUserMedia.bind(navigator.mediaDevices),
+      enumerateDevices: md.enumerateDevices.bind(navigator.mediaDevices)
+    }
+    const realGetUserMedia = w.__realMediaDevices.getUserMedia
+    md.getUserMedia = async (c?: MediaStreamConstraints) => {
+      if (c && c.audio === true && !c.video) return new MediaStream()
+      return realGetUserMedia(c)
+    }
+    md.enumerateDevices = async () => [
+      { deviceId: 'fake-mic-1', kind: 'audioinput', label: 'Fake Mic A', groupId: 'g2' },
+      { deviceId: 'fake-mic-2', kind: 'audioinput', label: 'Fake Mic B', groupId: 'g2' }
+    ]
+  })
+}
+
+/** Put the real `mediaDevices` back: the device was unplugged (T-88). */
+async function unstubDevices(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const md = navigator.mediaDevices as unknown as Record<string, unknown>
+    const real = (window as unknown as { __realMediaDevices?: Record<string, unknown> })
+      .__realMediaDevices
+    if (!real) throw new Error('no stub was installed')
+    md.getUserMedia = real.getUserMedia
+    md.enumerateDevices = real.enumerateDevices
+  })
+}
+
+/**
+ * Count every device-scan call the renderer makes, delegating to whatever
+ * implementation is installed (real, or a stub installed LATER replaces this
+ * wrapper — install the spy last, or read counts from a spy-only test). T-88's
+ * Refresh test asks the one question the DOM cannot answer directly: did the
+ * click re-run the device scan? `gum` holds the constraints of each
+ * `getUserMedia` call as JSON; `enumerations` counts `enumerateDevices` calls.
+ */
+async function spyOnDeviceScans(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const md = navigator.mediaDevices
+    const g = window as unknown as { __deviceScans: { gum: string[]; enumerations: number } }
+    g.__deviceScans = { gum: [], enumerations: 0 }
+    const realGum = md.getUserMedia.bind(md)
+    const realEnum = md.enumerateDevices.bind(md)
+    md.getUserMedia = (c?: MediaStreamConstraints) => {
+      g.__deviceScans.gum.push(JSON.stringify(c ?? {}))
+      return realGum(c)
+    }
+    md.enumerateDevices = () => {
+      g.__deviceScans.enumerations += 1
+      return realEnum()
+    }
+  })
+}
+
+function readDeviceScans(window: Page): Promise<{ gum: string[]; enumerations: number }> {
+  return window.evaluate(
+    () =>
+      (window as unknown as { __deviceScans: { gum: string[]; enumerations: number } })
+        .__deviceScans
+  )
 }
 
 async function waitForHome(window: Page): Promise<void> {
@@ -418,7 +532,7 @@ test.describe('T-27 Record Studio', () => {
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeDisabled()
       // Idle shows neither the REC header nor the saving card.
       await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
-      await expect(window.getByText('Finishing up — converting and writing to disk…')).toHaveCount(0)
+      await expect(window.getByText(/Finishing up/)).toHaveCount(0)
 
       await window.screenshot({ path: path.join(SCREENSHOTS, 'record-01-idle.png') })
     } finally {
@@ -426,6 +540,13 @@ test.describe('T-27 Record Studio', () => {
       cleanup(root)
     }
   })
+
+  // T-88: the hints name the two real recoveries (plug one in, or allow access
+  // in Windows privacy settings) and the button that re-checks.
+  const CAM_WARNING =
+    'No camera found. Plug one in, or allow camera access in Windows privacy settings, then click Refresh sources.'
+  const MIC_WARNING =
+    'No microphone found. Plug one in, or allow microphone access in Windows privacy settings, then click Refresh sources.'
 
   test('mic checkbox toggles the microphone row; with no device it is the warning, not a select', async () => {
     test.setTimeout(120_000)
@@ -439,7 +560,7 @@ test.describe('T-27 Record Studio', () => {
       await gotoRecordFromHome(window)
 
       const micBox = window.getByRole('checkbox').nth(0)
-      const micWarning = window.getByText('No microphone found. Click "Refresh sources" after granting permission.')
+      const micWarning = window.getByText(MIC_WARNING)
       const micSelect = window.locator('select[aria-label="Microphone"]')
 
       // Checked by default -> the mic row is revealed. There is no audio input
@@ -465,9 +586,6 @@ test.describe('T-27 Record Studio', () => {
       cleanup(root)
     }
   })
-
-  const CAM_WARNING = 'No camera found. Click "Refresh sources" after granting permission.'
-  const MIC_WARNING = 'No microphone found. Click "Refresh sources" after granting permission.'
 
   test('webcam checkbox with no camera warns exactly like the mic, and offers no Corner (T-42)', async () => {
     test.setTimeout(120_000)
@@ -558,6 +676,11 @@ test.describe('T-27 Record Studio', () => {
       // No warning, because there IS a camera.
       await expect(window.getByText(CAM_WARNING)).toHaveCount(0)
 
+      // T-88: and the microphone that is NOT there says so on its own card —
+      // the camera is listed anyway. The old combined `{ audio, video }`
+      // probe rejected for the missing mic and blanked this select too.
+      await expect(window.getByText(MIC_WARNING)).toBeVisible()
+
       // ...and now the Corner picker, with its four exact labels. A renamed
       // option is a user-visible change and fails here.
       const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
@@ -634,6 +757,109 @@ test.describe('T-27 Record Studio', () => {
         timeout: 30_000
       })
       expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // ------------------------------------------------------------------
+  // T-88: the device hints point at a button that has to work
+  // ------------------------------------------------------------------
+
+  test('Refresh sources re-scans the microphone and camera, not just the screens (T-88)', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('rescan')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Installed BEFORE the route mounts, so the mount scan is counted too.
+      await spyOnDeviceScans(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+
+      // The scan the route runs on arrival. An enumeration is the LAST thing a
+      // scan does, so once it has happened the scan is over and the click
+      // below cannot overlap it.
+      await expect.poll(async () => (await readDeviceScans(window)).enumerations).toBe(1)
+      const mount = await readDeviceScans(window)
+      // Two probes, one per kind of device — never one call that needs both.
+      expect([...mount.gum].sort()).toEqual(['{"audio":true}', '{"video":true}'])
+
+      // The container has no microphone and no camera, so this is the state the
+      // hints exist for. Both name the real recovery and the button.
+      await window.getByRole('checkbox').nth(1).check()
+      await expect(window.getByText(MIC_WARNING)).toBeVisible()
+      await expect(window.getByText(CAM_WARNING)).toBeVisible()
+
+      // ── the click re-runs the scan (red against a Refresh that only re-lists
+      //    screens and windows: nothing here would move) ──
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect.poll(async () => (await readDeviceScans(window)).enumerations).toBe(2)
+      const after = await readDeviceScans(window)
+      expect([...after.gum.slice(mount.gum.length)].sort()).toEqual([
+        '{"audio":true}',
+        '{"video":true}'
+      ])
+      // ...and it still re-lists the screens, which is what it always did.
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+
+      // ── plug a camera in, click Refresh: it is listed, and the mic that is
+      //    still missing still says so ──
+      await stubCameras(window)
+      const camSelect = window.locator('select[aria-label="Webcam"]')
+      await expect(camSelect).toHaveCount(0)
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(camSelect).toBeVisible({ timeout: 15_000 })
+      await expect(camSelect.locator('option')).toHaveText(['Fake Cam A', 'Fake Cam B'])
+      await expect(window.getByText(CAM_WARNING)).toHaveCount(0)
+      await expect(window.getByText(MIC_WARNING)).toBeVisible()
+
+      // ── unplug it: Refresh takes the stale list away rather than keeping it ──
+      await camSelect.selectOption('fake-cam-2')
+      await unstubDevices(window)
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.getByText(CAM_WARNING)).toBeVisible({ timeout: 15_000 })
+      await expect(camSelect).toHaveCount(0)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-11-rescan.png') })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a microphone and NO camera: the mic is listed and only the camera warns (T-88)', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('micnocam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await stubMicrophones(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+
+      // The headline case of the ticket. The old build probed both kinds in
+      // one call; with no camera that call rejected, the rejection was
+      // swallowed, and a streamer with a perfectly good microphone read
+      // "No microphone found".
+      const micSelect = window.locator('select[aria-label="Microphone"]')
+      await expect(micSelect).toBeVisible({ timeout: 15_000 })
+      await expect(micSelect.locator('option')).toHaveText(['Fake Mic A', 'Fake Mic B'])
+      await expect(window.getByText(MIC_WARNING)).toHaveCount(0)
+
+      // The camera is genuinely absent, and the Webcam card says so.
+      await window.getByRole('checkbox').nth(1).check()
+      await expect(window.getByText(CAM_WARNING)).toBeVisible()
+      await expect(window.locator('select[aria-label="Webcam"]')).toHaveCount(0)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-12-micnocam.png') })
     } finally {
       await app.close()
       cleanup(root)
@@ -1192,10 +1418,12 @@ test.describe('T-27 Record Studio', () => {
       await window.keyboard.press('Escape')
 
       // The saving card is the conversion's own UI: progress bar + abort.
-      await expect(window.getByText('Finishing up — converting and writing to disk…')).toBeVisible({
+      await expect(window.getByText('Finishing up — converting to MP4…')).toBeVisible({
         timeout: 20_000
       })
-      await expect(window.getByRole('button', { name: 'Discard recording' })).toBeVisible()
+      // T-88: Convert to MP4 is on, so the convert is the thing that can be
+      // stopped — Discard is a live button here (and not in the WebM take).
+      await expect(window.getByRole('button', { name: 'Discard recording' })).toBeEnabled()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'record-06-saving.png') })
 
       await expect
@@ -1254,7 +1482,7 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('button', { name: 'Stop' }).click()
 
       const bar = window.locator('div.bg-accent').first()
-      await expect(window.getByText('Finishing up — converting and writing to disk…')).toBeVisible({
+      await expect(window.getByText('Finishing up — converting to MP4…')).toBeVisible({
         timeout: 20_000
       })
 
@@ -1348,6 +1576,129 @@ test.describe('T-27 Record Studio', () => {
       // Nothing was pushed to recents, and the partial webm is gone.
       expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
       expect(leftoverTemps(userDataDir)).toEqual([])
+
+      // T-88: the dialog whose Cancel just threw the take away said so up
+      // front. The OS chrome is HL-dialog; the title it is opened with is not.
+      expect(await readSaveDialogTitles(app)).toEqual(['Save recording (Cancel discards it)'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a WebM take: the card says "saving", has nothing to stop, and the dialog title warns that Cancel discards (T-88)', async () => {
+    test.setTimeout(180_000)
+    ensureScreenshots()
+    const root = makeRoot('webmcard')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'take.webm')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      // The "dialog" stays open for 6 s, the way it does while a person reads
+      // it — and the saving card is on screen for exactly that long.
+      await stubSaveDialog(app, outPath, 6_000)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('checkbox').nth(2).uncheck() // WebM: nothing converts
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      const card = window.locator('div.card', { hasText: 'Finishing up' })
+      // It says what is happening — saving — and never "converting": with
+      // Convert to MP4 off nothing converts (the old line said "converting and
+      // writing to disk…" regardless).
+      await expect(card.getByText('Finishing up — saving to disk…')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText(/convert/i)).toHaveCount(0)
+      // The one step that reports progress is the convert, so there is no bar
+      // to sit on its 2% floor.
+      await expect(card.locator('div.bg-accent')).toHaveCount(0)
+      // "Discard recording" used to be live here and do nothing at all. It is
+      // off, with the reason on screen.
+      await expect(card.getByRole('button', { name: 'Discard recording' })).toBeDisabled()
+      await expect(
+        card.getByText('Saving a WebM is a plain file copy, so there is nothing to stop.')
+      ).toBeVisible()
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'record-13-webm-saving.png') })
+
+      // The dialog the card is waiting behind told the user Cancel discards.
+      expect(await readSaveDialogTitles(app)).toEqual(['Save recording (Cancel discards it)'])
+
+      // And the save still completes: the dialog "returns", the file lands.
+      await expect
+        .poll(() => (existsSync(outPath) ? statSync(outPath).size : 0), {
+          timeout: 60_000,
+          intervals: [250]
+        })
+        .toBeGreaterThan(1000)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
+        timeout: 20_000
+      })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a save that comes back as the cancel sentinel is a discard, not "Save failed" (T-88)', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('sentinel')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      // Main answers a discard with null today (T-44), so the rejection form of
+      // the same fact cannot be reached by clicking. Replace the handler IN
+      // MAIN with one that rejects the way the runners do — the shared
+      // sentinel message — and let the renderer's real catch decide. Electron
+      // wraps the rejection in "Error invoking remote method …" on the way
+      // across, exactly as it would for the real thing.
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('recording:finalize')
+        ipcMain.handle('recording:finalize', async () => {
+          throw new Error('imagii:cancelled')
+        })
+      })
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // The calm line, in the neutral kind (the trash icon is the discard
+      // branch's own; a toast.error draws react-hot-toast's red cross instead).
+      await expect(
+        window
+          .locator('div:has(> [role="status"])')
+          .filter({ hasText: 'Recording discarded.' })
+          .locator('path[d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"]')
+      ).toBeVisible({ timeout: 60_000 })
+      const toasts = (await readToastLog(window)).join(' | ')
+      expect(toasts).not.toMatch(/imagii:cancelled|Save failed|Error invoking remote method/)
+
+      // Back to idle, and the session the stubbed handler never finalized was
+      // abandoned by the catch, so nothing is stranded on disk.
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
+        timeout: 20_000
+      })
+      await expect.poll(() => leftoverTemps(userDataDir), { timeout: 15_000 }).toEqual([])
     } finally {
       await app.close()
       cleanup(root)

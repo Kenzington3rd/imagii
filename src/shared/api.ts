@@ -181,7 +181,8 @@ export interface ImagiiApi {
   captions: {
     status(): Promise<CaptionsInstallStatus>
     transcribe(req: TranscribeRequest): Promise<TranscribeResult>
-    burnIn(req: BurnInRequest): Promise<{ outputPath: string }>
+    /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). */
+    burnIn(req: BurnInRequest): Promise<{ outputPath: string; captioned: boolean }>
     saveSrt(srtPath: string, defaultName: string): Promise<string | null>
     copySrtTo(params: {
       srcPath: string

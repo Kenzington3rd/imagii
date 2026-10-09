@@ -45,6 +45,20 @@
   to   { transform: rotate(360deg); }
 }
 
+/* T-89: a bar for work whose length nobody knows (the speech engine). A third
+   of the track slides across it. Under "Reduce motion" the animation collapses
+   to one instant frame and the element falls back to its base style — a static
+   third of the bar — so it still reads as "working", not "done". */
+@keyframes imagii-indeterminate {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+
+.progress-indeterminate {
+  width: 33.333%;
+  animation: imagii-indeterminate 1.4s ease-in-out infinite;
+}
+
 /* B10 fix (round 15): honor the OS-level "Reduce motion" preference. Disables
    animations, transitions and smooth scrolling across the whole app so that
    spinners, opacity transitions and the like don't trigger vestibular issues. */
