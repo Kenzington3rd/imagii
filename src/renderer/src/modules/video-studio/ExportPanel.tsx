@@ -9,7 +9,8 @@ import type {
 } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
 import { expandFilenameTemplate } from '@shared/filename'
-import { computeCropBox, findClippedSafeZones } from '@shared/safeZone'
+import { countOf } from '@shared/plural'
+import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/safeZone'
 import { assertDefined } from '@shared/assert'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
@@ -72,6 +73,13 @@ function queuedPresets(
  * other selected preset. The bound is `clips.length × presets.length`,
  * with hard caps in the validators.
  *
+ * T-83: "the frame" is the clip's EFFECTIVE frame — the manual crop's
+ * rectangle when it has one, the whole source otherwise — because that is what
+ * the export pipeline cuts every platform's shape out of. Asking the question
+ * of the source instead warned about edges the user had already cropped away,
+ * and named the wrong platform as the one losing picture: with a 9:16 crop
+ * the tall platforms keep all of it and the wide one is the one cut down.
+ *
  * Exported so ClipKitButton can run the same pre-flight before its
  * 5-platform batch. T-50: custom presets are export targets too, so they
  * take part in the pre-flight — a 16:9 custom preset beside Reels loses
@@ -90,17 +98,20 @@ export function findSafeZoneIssues(
     if (!clip) continue
     const selected = queuedPresets(clip, customPresets).map((p) => p.info)
     if (selected.length < 2) continue
+    const frame = cropFrameSize(sourceWidth, sourceHeight, clip.cropRect)
     // For each target the user picked for this clip, compute its centered
-    // crop, then check whether any of the OTHER selected targets' safe
-    // zones would fall outside that crop.
+    // crop of the frame, then check whether any of the OTHER selected
+    // targets' safe zones would fall outside that crop.
     const clippedSet = new Set<string>()
     for (const preset of selected) {
-      const userCrop = computeCropBox(sourceWidth, sourceHeight, preset.aspectRatio)
+      const userCrop = computeCropBox(frame.w, frame.h, preset.aspectRatio)
       const others = selected
         .filter((p) => p !== preset)
         .map((p) => ({ label: p.label, aspect: p.aspectRatio }))
-      for (const lost of findClippedSafeZones(sourceWidth, sourceHeight, userCrop, others)) {
-        clippedSet.add(`${preset.label} → ${lost}`)
+      for (const lost of findClippedSafeZones(frame.w, frame.h, userCrop, others)) {
+        // Read as: the picture this other platform shows is cut down when
+        // `preset` is made. The modal prints it as-is, so it has to be plain.
+        clippedSet.add(`${lost} frame → cut down for ${preset.label}`)
       }
     }
     if (clippedSet.size > 0) {
@@ -304,7 +315,7 @@ export function ExportPanel(): JSX.Element | null {
     setRunning(true)
     try {
       await window.api.video.exportBatch(queue)
-      toast.success(`Exported ${queue.length} file${queue.length === 1 ? '' : 's'}`)
+      toast.success(`Exported ${countOf(queue.length, 'file')}`)
       // INIT-E (round 15): persist the choice on success so the next batch
       // defaults to the same folder.
       void window.api.settings.set('export.lastOutputDir', outDir)
@@ -334,6 +345,14 @@ export function ExportPanel(): JSX.Element | null {
   ]
 
   const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
+
+  // T-83: the indicator judges the shape the export STARTS from, and for a
+  // cropped clip that is the crop — the pipeline cuts each platform's shape
+  // out of it. `null` means "no manual crop, use the source's own aspect".
+  const cropFrame = selectedClip?.cropRect
+    ? cropFrameSize(source.probe.width, source.probe.height, selectedClip.cropRect)
+    : null
+  const cropAspect = cropFrame ? cropFrame.w / cropFrame.h : null
 
   return (
     <>
@@ -395,7 +414,10 @@ export function ExportPanel(): JSX.Element | null {
               disabled={running || totalQueued === 0}
               onClick={startExport}
             >
-              {running ? 'Exporting…' : `Export ${totalQueued || ''}`}
+              {/* T-94: the button says what it will produce. "Export 6" left a
+                  user who had scanned a VOD for highlights to guess whether
+                  that meant their five excerpts or five plus the whole video. */}
+              {running ? 'Exporting…' : totalQueued === 0 ? 'Export' : `Export ${countOf(totalQueued, 'file')}`}
             </button>
             {running ? (
               // B8 fix (round 15) + INIT-I (round 16): a long batch had no
@@ -509,7 +531,7 @@ export function ExportPanel(): JSX.Element | null {
                       clipDuration={clipDuration}
                       sourceWidth={source.probe.width}
                       sourceHeight={source.probe.height}
-                      cropAspect={null}
+                      cropAspect={cropAspect}
                     />
                   </div>
                 </div>

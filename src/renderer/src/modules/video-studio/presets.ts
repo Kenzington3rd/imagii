@@ -102,9 +102,43 @@ export type SuccessLevel = 'green' | 'yellow' | 'red'
 
 export interface SuccessReason {
   level: SuccessLevel
+  /** The word beside the dot. Green and yellow are "Great" and "OK"; a red
+   *  one NAMES what is wrong ("Too long", "Wrong shape") instead of the old
+   *  catch-all "Trim", which read as "shorten the clip" even when the problem
+   *  was the picture's shape (T-83). */
+  label: string
+  /** Plain-language reasons, shown on screen under the label — not behind a
+   *  hover (T-83). */
   reasons: string[]
 }
 
+/**
+ * A duration as the adjective the reasons use ("the 10-minute sweet spot"):
+ * seconds under a minute, minutes otherwise, a bare m:ss for a span that is
+ * not a whole number of minutes (the typical 140 s X limit is "2:20"), and
+ * hours only for the multi-hour caps, where "720-minute" would be absurd.
+ */
+function spanAdjective(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}-second`
+  if (sec % 60 !== 0) {
+    const s = Math.round(sec % 60)
+    return `${Math.floor(sec / 60)}:${String(s).padStart(2, '0')}`
+  }
+  const minutes = sec / 60
+  if (minutes >= 120 && minutes % 60 === 0) return `${minutes / 60}-hour`
+  return `${minutes}-minute`
+}
+
+/**
+ * How well a clip fits a platform, judged on the frame the export STARTS
+ * from — `cropAspect` is the manual crop's own aspect when the clip has one
+ * (the pipeline cuts each platform's shape out of the crop, T-83), the
+ * source's when it does not.
+ *
+ * Platform lengths are "typical" limits, never facts: an account's real cap
+ * depends on the account, so a clip over one is told it is over the TYPICAL
+ * limit, and the wording never claims the upload will be refused.
+ */
 export function evaluateSuccess(
   platform: PlatformInfo,
   clipDuration: number,
@@ -113,42 +147,57 @@ export function evaluateSuccess(
   cropAspect: number | null
 ): SuccessReason {
   const reasons: string[] = []
+  const redLabels: string[] = []
   let level: SuccessLevel = 'green'
 
   const sourceAspect = sourceWidth > 0 && sourceHeight > 0 ? sourceWidth / sourceHeight : 1
   const effectiveAspect = cropAspect ?? sourceAspect
 
   if (clipDuration > platform.durationHardLimit) {
-    reasons.push(`Over ${platform.label} hard limit (${platform.durationHardLimit}s)`)
+    reasons.push(`Longer than the typical ${spanAdjective(platform.durationHardLimit)} limit`)
+    redLabels.push('Too long')
     level = 'red'
   } else if (clipDuration < platform.durationSweetSpot.min) {
-    reasons.push(`Under ${platform.label} sweet spot (${platform.durationSweetSpot.min}s+)`)
+    reasons.push(`Under the ${spanAdjective(platform.durationSweetSpot.min)} sweet spot`)
     if (level === 'green') level = 'yellow'
   } else if (clipDuration > platform.durationSweetSpot.max) {
     // INIT-B (round 15): special-case X so Premium users see honest copy
-    // instead of a red flag. Free tier cliffs at 2:20; Premium up to 3 h.
+    // instead of a red flag. The free tier's usual ceiling is 2:20; Premium
+    // accounts go much longer.
     if (platform.id === 'twitter') {
-      reasons.push('Free tier caps at 2:20; X Premium allows up to 4 h')
+      reasons.push(
+        `Over the typical free-account limit of ${spanAdjective(platform.durationSweetSpot.max)} — longer videos need X Premium`
+      )
     } else {
-      reasons.push(`Over ${platform.label} sweet spot (${platform.durationSweetSpot.max}s)`)
+      reasons.push(`Over the ${spanAdjective(platform.durationSweetSpot.max)} sweet spot`)
     }
     if (level === 'green') level = 'yellow'
   }
 
+  // The export cuts a centered strip of the frame to reach this shape, so the
+  // honest number is how much of the frame's width (or height) survives.
   const aspectDiff = Math.abs(effectiveAspect - platform.aspectRatio) / platform.aspectRatio
+  const keptPct = Math.round(
+    (Math.min(effectiveAspect, platform.aspectRatio) /
+      Math.max(effectiveAspect, platform.aspectRatio)) *
+      100
+  )
+  const axis = effectiveAspect > platform.aspectRatio ? 'width' : 'height'
   if (aspectDiff > 0.5) {
-    reasons.push('Aspect ratio mismatch — heavy crop needed')
+    reasons.push(`Only the middle ${keptPct}% of the picture's ${axis} fits this shape`)
+    redLabels.push('Wrong shape')
     level = 'red'
   } else if (aspectDiff > 0.05) {
-    reasons.push('Aspect ratio off — minor crop')
+    reasons.push(`${100 - keptPct}% of the picture's ${axis} is trimmed to fit this shape`)
     if (level === 'green') level = 'yellow'
   }
 
   if (sourceWidth < platform.width || sourceHeight < platform.height) {
-    reasons.push('Source resolution lower than target — will upscale')
+    reasons.push('Picture is smaller than this output — it will be enlarged')
     if (level === 'green') level = 'yellow'
   }
 
   if (reasons.length === 0) reasons.push('Looks great for this platform')
-  return { level, reasons }
+  const label = level === 'green' ? 'Great' : level === 'yellow' ? 'OK' : redLabels.join(' · ')
+  return { level, label, reasons }
 }

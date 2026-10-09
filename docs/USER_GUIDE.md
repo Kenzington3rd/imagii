@@ -52,16 +52,27 @@ Drop a video in (or use the file picker), then:
 
 - **Trim** with the timeline — `Space` to play, `←/→` to nudge, `I`/`O`
   to set the in/out points.
-- **Clips** — mark ranges and add them to the Clips list.
+- **Clips** — mark ranges and add them to the Clips list. Loading a
+  video starts you with one clip spanning all of it ("Clip 1").
+- **Crop** — tick **Crop** above the player and draw a box. Your crop
+  becomes the picture: each platform you export to takes a centered cut
+  of it in that platform's own shape, so nothing is ever stretched. A
+  tall crop on a wide platform (or the reverse) loses its edges, and the
+  export tells you so before it starts.
 - **Export** — tick the platforms you post to (YouTube, Reels, TikTok,
   X, Facebook); each shows a green/yellow/red indicator predicting how
-  well your clip fits there. Add a **watermark** to stamp your handle on
-  every export — your handle and the corner you put it in are remembered
-  for your next batch.
+  well your clip fits there. A red one says why — **Wrong shape** or
+  **Too long** — and the reason is printed on the card. The button says
+  how many files it will write ("Export 3 files"). Add a **watermark**
+  to stamp your handle on every export — your handle and the corner you
+  put it in are remembered for your next batch.
 - **Clip Kit** — one click exports a clip for all five platforms plus
   thumbnails into a single folder.
 - **Smart highlight finder** — scans the audio for loud, exciting
-  moments and suggests clips.
+  moments and suggests clips. The first highlight you add replaces the
+  untouched whole-video "Clip 1" (so Export doesn't re-encode your whole
+  VOD beside your excerpts); `Ctrl+Z` brings it back. The chat-spike
+  finder works the same way.
 - **Auto-reframe** — crops a clip to vertical 9:16 for TikTok / Reels.
 - **Captions** — auto-transcribes speech and burns styled captions in.
   The first use downloads a transcription model (~141 MB, one time).

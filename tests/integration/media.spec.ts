@@ -688,6 +688,194 @@ describe('video export presets (real ffmpeg)', () => {
 })
 
 /**
+ * T-83 — a manual crop is the new source frame, so nothing is ever stretched.
+ *
+ * The bug shipped with every dimension right: `buildVideoFilter` applied
+ * `clip.cropRect` verbatim and then `scale` forced the preset's exact WxH, so
+ * a 4:3 crop exported to Reels came out 1080x1920 with the picture squeezed
+ * ~2.4x tall. ffprobe saw nothing wrong — a stretched file is a valid file.
+ * The only instrument that can tell is a marker whose true shape is known.
+ *
+ * The fixtures are black frames carrying one white SQUARE, centered where
+ * every crop below is centered. A square that comes out non-square was
+ * resampled by different factors on its two axes, which is the definition of
+ * a stretch; and because the square sits at the crop's centre, a sub-crop
+ * that was centered keeps it at the output's centre (a sub-crop taken from
+ * the corner would not). The output frame is decoded whole and the marker's
+ * bounding box is measured from the pixels: no filter string is read, so the
+ * test cannot agree with a wrong implementation about what it should say.
+ *
+ * Rect fractions carry a quarter-pixel nudge (`px(480, 1920)`) because
+ * `cropToFilter` floors to an even pixel, and a fraction like 960 / 1080
+ * lands a hair under 960 in floating point and would floor to 958.
+ */
+describe('manual crop exported to a mismatched preset (real ffmpeg, T-83)', () => {
+  const MARKER = 160
+  let markerSrc = '' // 1920x1080, marker centered at (960, 540)
+  let oddMarkerSrc = '' // 1919x1079 yuv444p, same marker — odd source dimensions
+
+  const px = (pixels: number, of: number): number => (pixels + 0.25) / of
+  const cropOf = (x: number, y: number, w: number, h: number, srcW = 1920, srcH = 1080) => ({
+    x: px(x, srcW),
+    y: px(y, srcH),
+    w: px(w, srcW),
+    h: px(h, srcH)
+  })
+
+  beforeAll(async () => {
+    markerSrc = path.join(workDir, 'marker.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi',
+      '-i', `color=c=black:s=1920x1080:r=30:d=3,drawbox=x=880:y=460:w=${MARKER}:h=${MARKER}:color=white:t=fill`,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', markerSrc
+    ])
+    oddMarkerSrc = path.join(workDir, 'marker-odd.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi',
+      '-i', `color=c=black:s=1919x1079:r=30:d=3,format=yuv444p,drawbox=x=880:y=460:w=${MARKER}:h=${MARKER}:color=white:t=fill`,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv444p', oddMarkerSrc
+    ])
+  }, 60_000)
+
+  /** Bounding box of the bright (> 128 luma) region of the output's frame at 0.5 s. */
+  async function markerBox(
+    file: string,
+    width: number,
+    height: number
+  ): Promise<{ w: number; h: number; cx: number; cy: number }> {
+    const buf = await samplePixels(file, 0.5, 'null', 'gray')
+    expect(buf.length, 'the whole output frame was decoded').toBe(width * height)
+    let minX = width
+    let maxX = -1
+    let minY = height
+    let maxY = -1
+    for (let i = 0; i < buf.length; i++) {
+      if ((buf[i] ?? 0) <= 128) continue
+      const x = i % width
+      const y = (i - x) / width
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    expect(maxX, 'a bright marker exists in the output at all').toBeGreaterThan(-1)
+    return {
+      w: maxX - minX + 1,
+      h: maxY - minY + 1,
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2
+    }
+  }
+
+  const CASES: ReadonlyArray<{
+    label: string
+    src: () => string
+    srcW: number
+    srcH: number
+    /** The user's crop, in source pixels, centered on the marker. */
+    crop: [number, number, number, number]
+    preset: PlatformId
+    /** The side of the marker once the crop's full width or height has been
+     *  mapped onto the preset (derived by hand, not from the filter). */
+    expectedMarker: number
+  }> = [
+    {
+      // 4:3 crop -> 9:16 preset. The sub-crop is the crop's full height
+      // (720 px) mapped onto 1920 px: 160 * 1920 / 720.
+      label: '4:3 crop -> Reels',
+      src: () => markerSrc,
+      srcW: 1920,
+      srcH: 1080,
+      crop: [480, 180, 960, 720],
+      preset: 'reels',
+      expectedMarker: (MARKER * 1920) / 720
+    },
+    {
+      // 9:16 crop -> 16:9 preset. The sub-crop is the crop's full width
+      // (540 px) mapped onto 1920 px: 160 * 1920 / 540.
+      label: '9:16 crop -> YouTube',
+      src: () => markerSrc,
+      srcW: 1920,
+      srcH: 1080,
+      crop: [690, 60, 540, 960],
+      preset: 'youtube',
+      expectedMarker: (MARKER * 1920) / 540
+    },
+    {
+      // 1:1 crop -> 16:9 preset: a square crop is the worst case for a
+      // stretch (1.78x on one axis).
+      label: '1:1 crop -> X / Twitter',
+      src: () => markerSrc,
+      srcW: 1920,
+      srcH: 1080,
+      crop: [420, 0, 1080, 1080],
+      preset: 'twitter',
+      expectedMarker: (MARKER * 1280) / 1080
+    },
+    {
+      // The control, and the identity the fix must not disturb: a crop that
+      // already has the preset's shape is scaled and nothing else. Green on
+      // the old code too; it is here so a fix that "solves" the mismatch by
+      // cropping everything cannot pass.
+      label: '16:9 crop -> YouTube (matching shape, untouched)',
+      src: () => markerSrc,
+      srcW: 1920,
+      srcH: 1080,
+      crop: [480, 270, 960, 540],
+      preset: 'youtube',
+      expectedMarker: (MARKER * 1920) / 960
+    },
+    {
+      // Odd source dimensions: every crop in the chain has to land on an even
+      // pixel or libx264 refuses the frame. 4:3 crop -> Reels again.
+      label: '4:3 crop of an odd-sized source -> Reels',
+      src: () => oddMarkerSrc,
+      srcW: 1919,
+      srcH: 1079,
+      crop: [480, 180, 960, 720],
+      preset: 'reels',
+      expectedMarker: (MARKER * 1920) / 720
+    }
+  ]
+
+  it.each(CASES)(
+    '$label keeps the marker square, centered, and at the right scale',
+    async ({ src, srcW, srcH, crop, preset, expectedMarker }) => {
+      const clip = makeClip({
+        startSec: 0,
+        endSec: 2,
+        cropRect: cropOf(crop[0], crop[1], crop[2], crop[3], srcW, srcH),
+        selectedPresets: [preset]
+      })
+      const res = await runExportJob(
+        makeJob(src(), preset, clip, `job-t83-${preset}-${crop[2]}x${crop[3]}-${srcW}`),
+        () => {}
+      )
+      const target = PLATFORM_PRESETS[preset]
+      const info = await ffprobeJson(res.outputPath)
+      const v = info.streams.find((s) => s.codec_type === 'video')
+      expect(v?.width).toBe(target.width)
+      expect(v?.height).toBe(target.height)
+      expect(v?.sample_aspect_ratio).toBe('1:1')
+
+      const box = await markerBox(res.outputPath, target.width, target.height)
+      const message = `marker came out ${box.w}x${box.h} (expected a ${Math.round(expectedMarker)}px square)`
+      // The squareness is the point: a stretch scales the two axes differently.
+      expect(box.w / box.h, message).toBeGreaterThan(0.97)
+      expect(box.w / box.h, message).toBeLessThan(1.03)
+      expect(box.w, message).toBeGreaterThan(expectedMarker * 0.97)
+      expect(box.w, message).toBeLessThan(expectedMarker * 1.03)
+      // A centered sub-crop of a crop centered on the marker keeps it central.
+      expect(Math.abs(box.cx - target.width / 2), 'marker horizontal offset from centre').toBeLessThan(8)
+      expect(Math.abs(box.cy - target.height / 2), 'marker vertical offset from centre').toBeLessThan(8)
+    },
+    120_000
+  )
+})
+
+/**
  * T-51 — watermark and text-overlay PIXELS.
  *
  * PER-PLATFORM CAVEAT, same class as the mpegts segfault further down:

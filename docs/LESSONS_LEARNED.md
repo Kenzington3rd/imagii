@@ -14,6 +14,179 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-83 + T-94: the export did something the screen never said
+
+Both bugs produced files that opened, played and were the right size. T-83's
+were the right size and the wrong SHAPE (a picture squeezed 2-3x on one
+axis); T-94's were all correct and one too many (the whole source,
+re-encoded beside the excerpts the user asked for). In both, the app had a
+word on screen that was not about what the export would do — a green dot
+judged on the file instead of the crop, a button that said "Export 6"
+without saying six of what — so nothing the user could see told them
+anything was wrong.
+
+### Bug (T-83) — a manual crop was applied to every ticked platform and stretched to fit
+
+- **Bug.** Draw a 4:3 crop, tick Reels, export: a 1080x1920 file with the
+  picture ~2.4x too tall. Leave YouTube ticked (the default) beside a 9:16
+  crop and it stretched ~3x wide. ffprobe saw nothing wrong — a stretched
+  file is a valid file. The Export grid could not have warned: it passed
+  `cropAspect={null}`, so its indicators judged the uncropped source; its red
+  label said "Trim" (which reads as "shorten the clip") when the reason was
+  aspect; the reason text lived in a hover-only `title`; and the safe-zone
+  modal used "clip" as noun and verb in one sentence and fired on every
+  Clip Kit run describing geometry the pipeline no longer had.
+- **Root cause.** `buildVideoFilter` took ONE of two branches: apply
+  `cropRect` verbatim, OR auto-crop the source to the preset's aspect.
+  After a manual crop nothing reconciled the crop's shape with the
+  platform's, so `scale` forced the preset's exact WxH on whatever the user
+  had drawn. And four consumers each held their own idea of "the frame": the
+  filter (the source, or the crop, never both), the grid (the source), the
+  safe-zone pre-flight (the source — so with a 9:16 crop it named the TALL
+  platform as the one losing picture, backwards), and OutputPreview (the
+  crop squeezed onto the platform's canvas, previewing the stretch).
+- **Fix.** The crop is the new source frame. Chain: crop (the user's) ->
+  `autoCropForAspect` against the CROPPED size -> scale. The no-crop path is
+  the same call with the whole source as the frame, so there is one
+  implementation of "cut this frame to that shape" and two callers (the T-82
+  keep-expression precedent); a crop that already has the platform's shape
+  adds no second stage. Every crop dimension and offset stays even
+  (yuv420p), and an odd source works. Of the three honest options — pad,
+  per-platform centered crop, refuse — the usability tiebreaker picks the
+  crop: padding puts bars on screen the user did not draw, and refusing
+  blocks the app's default multi-platform workflow; a centered cut keeps the
+  user's content and never distorts it, and its cost (edges lost on the
+  other shape) is exactly what the grid and the modal now say. On the
+  screen: `cropFrameSize` (shared/safeZone.ts) is the renderer's one
+  reading of "the frame an export starts from", used by the grid (the real
+  crop aspect instead of `null`), by `findSafeZoneIssues` (rows now name the
+  platform whose picture is cut down: "TikTok frame -> cut down for YouTube"),
+  and by OutputPreview (your crop, then the platform's shape cut from it).
+  `SuccessIndicator` labels are reason-specific — "Great", "OK", "Too long",
+  "Wrong shape", or both joined — and the reasons print on the card, under
+  the label, instead of in a tooltip; durations are words ("the 10-minute
+  sweet spot", "the typical 3-minute limit", "2:20" for a non-whole minute,
+  hours only for the multi-hour caps where "720-minute" would be absurd) and
+  every platform cap is a "typical" limit, because an account's real cap
+  depends on the account. The modal reads "Some platforms will crop the
+  picture", says why in plain words, lists each line as "X frame -> cut down
+  for Y", and its buttons are Cancel / Export anyway.
+- **Test.** Layer 5 (`npm run test:media`), "manual crop exported to a
+  mismatched preset (real ffmpeg, T-83)": a black frame carrying a white
+  160 px SQUARE centered where every crop is centered, five real
+  `runExportJob` runs, the output decoded whole and the marker's bounding box
+  measured from pixels — square (0.97-1.03), the hand-derived scale
+  (e.g. 160 x 1920 / 720 for a 4:3 crop into Reels), and centered, for
+  4:3 -> Reels, 9:16 -> YouTube, 1:1 -> X, an odd 1919x1079 source, and the
+  matching-shape control (a 16:9 crop into YouTube, green on the old code
+  too, there so a fix that over-crops cannot pass). Red-first against the old
+  filter, quoted: "marker came out 180x426 (expected a 427px square):
+  expected 0.4225 to be greater than 0.97", "568x180", "190x106". Unit:
+  `src/main/ffmpeg/filters.test.ts` "a manual crop is the frame each
+  platform is cut from (T-83)" (exact crop strings both ways, no second
+  stage when the shape already matches, the no-crop path unchanged, a
+  last-crop-has-the-preset's-aspect invariant over six rects x five presets,
+  every dimension and offset even over three source sizes, a custom preset's
+  aspect); `src/shared/safeZone.test.ts` `cropFrameSize`;
+  `src/renderer/src/modules/video-studio/presets.test.ts` (new —
+  `evaluateSuccess` had no test: labels, both-red, minutes wording, "typical"
+  on every platform's cap, no reason names a platform, a 9:16 crop turning
+  TikTok/Reels green and the rest red); `ExportPanel.test.ts` (new —
+  `findSafeZoneIssues` against the crop's frame: the direction flips, a crop of
+  the platforms' own shape silences it, per-clip crops, custom presets).
+  E2E (`video-pipelines.spec.ts`): "the grid judges the crop, not the file"
+  on a 4K 26 s fixture (no crop: TikTok/Reels "Wrong shape" with the reason
+  visible; a 9:16 crop drawn through the real Crop control: TikTok and Reels
+  "Great", the other three "Wrong shape"; unchecking Crop gives the source
+  back and no "Trim" anywhere), "with a crop in place the safe-zone
+  pre-flight reads the crop", and "a cropped clip exports at every ticked
+  platform's own size with square pixels". Mutation, quoted: the post-crop
+  `autoCropForAspect` stage skipped when `cropRect` is set -> 4 unit cases
+  and 4 of the 5 Layer 5 cases red (the matching-shape control stays green,
+  as it should); restored byte-identically (sha256 87a825828f42acce before
+  and after).
+- **Lesson.** **A stretch is invisible to every probe — measure a shape
+  whose truth you know.** ffprobe, dimensions, codecs and durations all
+  agreed with a picture squeezed 2.4x; only a square that stopped being
+  square said so (the third time this layer has been right where the
+  container was not: T-65's SAR, T-81/T-82's content at an offset). Second:
+  **when several surfaces answer one question, give them one source for the
+  answer.** The filter, the grid, the pre-flight and the preview each
+  decided what "the frame" was, and the fix is the shared reading
+  (`cropFrameSize`), not four patches. Third: **a label that names a
+  remedy ("Trim") instead of the problem sends the user to the wrong
+  control**; say what is wrong, and put the reason where the eyes already
+  are, not behind a hover.
+
+### Bug (T-94) — the whole-video "Clip 1" rode along in every export and compilation
+
+- **Bug.** Loading a source creates Clip 1 spanning the full duration with
+  YouTube ticked. Scan a three-hour VOD, add five highlights, press Export:
+  six clips run, so the full VOD is re-encoded beside the five excerpts — and
+  the button only said "Export 6". Compile likewise stitched the whole video
+  in, behind a button that only said "Compile".
+- **Root cause.** The editor needs a clip to select the moment a file loads,
+  so `loadSource` makes one; nothing ever distinguished that placeholder from
+  a clip the user chose to make, and Export / Compile run ALL clips. The two
+  buttons printed a number (or nothing) with no noun, so the user had no way
+  to read the surprise off the screen before it happened.
+- **Fix.** The placeholder steps aside, and only for the people who have said
+  they want excerpts. `isPristineWholeVideoClip` (videoStore.ts) defines the
+  placeholder exactly — named "Clip 1", `[0, duration]`, no crop, no overlays,
+  no grade, no speed / auto-zoom / hype-shake, exactly `['youtube']` and no
+  custom presets; a field set back to its default counts as untouched, since
+  the export would not change. The highlight scanners (audio and chat-spike)
+  add through the new `addScannedClip`, which shares ONE `appendRange`
+  with `addClipFromRange` (same guards, same single `snapshot(null)`), so
+  retiring the placeholder and adding the highlight are one undo step: Ctrl+Z
+  puts the whole-video clip back and takes the highlight away together. The
+  scanner answers 'refused' / 'added' / 'added-dropped-whole-video' and the
+  panel toasts the last one neutrally — "Removed the whole-video clip — the
+  highlights are your clips now. Press Ctrl+Z to keep it." — beside the usual
+  "Clip added". The manual "+ Add clip" and `addClipFromRange` never retire
+  anything: that is the user making a clip on purpose. Export reads
+  "Export {n} file(s)" and Compile "Compile {n} clip(s)" through a new
+  `countOf` helper (`src/shared/plural.ts`), which also builds the "Exported
+  N file(s)" toast — the plural bug class on file ("Export 1 files") is
+  closed at these sites by construction.
+- **Test.** `videoStore.test.ts`: the predicate table-driven — every field
+  that breaks pristineness flips it, set-back-to-default does not, the
+  duration is judged as given, and the clip `loadSource` really creates IS
+  pristine (the predicate and the creator cannot drift) — and the scanner
+  action: retire + add, ONE undo restores both and the selection, redo
+  re-applies, later adds just add, a touched / renamed clip is left alone,
+  only the pristine one goes when the user also made another, a refused range
+  changes nothing (and costs no undo step), an open coalescing key does not
+  swallow the step, and the manual paths never retire.
+  `src/shared/plural.test.ts`. `tests/unit/interactionWiring.test.ts`: who
+  calls what (both scanners through `addScannedClip`, ClipList through
+  `addClip`, the T-59 refusal gate re-pinned on the new shape). E2E
+  (`video-pipelines.spec.ts`): the VOD path end to end on the burst fixture —
+  button "Export 1 file", scan, + Clip, the whole-video clip gone, the toast
+  exactly once, ONE Ctrl+Z restores "Clip 1" (Undo then disabled), Ctrl+Y
+  takes it away again, a second platform makes it "Export 2 files", and the
+  export writes exactly two files from "Highlight 1", each ~11 s of a 14 s
+  source, none from "Clip 1"; the chat scanner retires it too while a
+  manual "Clip 2" of the same range survives; a renamed clip is left alone
+  with no removal toast. Red-first against the shipped build, quoted:
+  `Expected: "Clips (1)"  Received: "Clips (2)"` after the first + Clip (the
+  whole-video clip still there), and the chat case's toast poll timing out
+  with `["Video loaded", "Found 1 hype moments", "Clip added"]`. Mutations,
+  each red: predicate forced false -> 8 unit cases and both retire E2Es red
+  (the renamed-clip test stays green, as it must); predicate forced true ->
+  25 unit cases and the renamed-clip E2E red (`Clips (2)`, received
+  `Clips (1)`); restored byte-identically (sha256 cd1ef8da94a15b27 before and
+  after).
+- **Lesson.** **A default the app creates for its own convenience must be
+  distinguishable from a choice the user made, or the first batch operation
+  runs it as one.** "Untouched since creation" is a checkable property —
+  define it field by field in one predicate, and test that the creator
+  satisfies it. Second: **a button that prints a number owes the noun** — the
+  surprise was readable on screen the whole time as "6", and unreadable
+  because nothing said six of what. Third: when an action does two things the
+  user would want to take back together, make it one history entry in the
+  store, not two in the caller (T-40's `snapshot(null)` is the seam).
+
 ## 2026-10-09 — the References "+" button was unclickable: flex-1 without min-w-0 in a clamped column
 
 - **Bug.** In the References sidebar (a grid column clamped to 220 px),

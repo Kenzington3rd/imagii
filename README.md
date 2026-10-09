@@ -107,12 +107,12 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 ### 🎬 Video Studio
 1. **Import.** Drop a video onto the window or click "Choose file…". Recent files dropdown remembers the last 10. Supports MP4, MOV, AVI, MKV, WEBM, M4V.
 2. **Trim.** Drag the timeline handles, or hit `I` (in) / `O` (out) at the playhead.
-3. **Optional: crop.** Tick "Crop" above the player to draw a box; pick an aspect ratio preset (16:9 / 9:16 / 1:1 / 4:5).
+3. **Optional: crop.** Tick "Crop" above the player to draw a box; pick an aspect ratio preset (16:9 / 9:16 / 1:1 / 4:5). Your crop is the picture: each platform you export to takes a centered cut of it in its own shape, never stretched.
 4. **Optional: enable safe-zones.** "Safe zones" toggle in the player overlays ghosted 9:16 / 1:1 / 4:5 rectangles so you can frame the action to survive future crops.
 5. **Optional: per-clip color, speed, effects.** The Color & motion panel has brightness / contrast / saturation / temperature sliders plus auto-zoom and hype-shake toggles. The clip list has a speed slider (0.25× to 4×) per selected clip.
 6. **Optional: text overlays + watermark.** Watermark field stamps your @handle on every export. Filename template controls how exports are named (tokens: `{source} {clip} {preset} {date} {time} {handle}`).
-7. **Pick platforms.** Tick the platforms you want; success indicator shows green/yellow/red per platform.
-8. **Click Export.** Sequential render with a progress bar; cancel any time.
+7. **Pick platforms.** Tick the platforms you want; success indicator shows green/yellow/red per platform, and a red one says why ("Wrong shape", "Too long").
+8. **Click Export.** The button says how many files it will write ("Export 3 files"). Sequential render with a progress bar; cancel any time.
 
 The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-spike finder (paste a Twitch chat log), Auto-reframe to 9:16, GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
 

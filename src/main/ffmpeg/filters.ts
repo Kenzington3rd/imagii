@@ -46,16 +46,26 @@ function escapeDrawtext(text: string): string {
 
 export const __testing__ = { escapeDrawtext, safeOverlaySize, safeOverlayColor }
 
-function cropToFilter(crop: CropRect, source: SourceDimensions): string {
+/** The user's manual crop as an even-pixel rectangle of the source. */
+function manualCropRegion(
+  crop: CropRect,
+  source: SourceDimensions
+): { w: number; h: number; x: number; y: number } {
   // M4 fix (round 15): force every crop dimension to an even integer so
   // yuv420p subsampling and libx264 strict-mode both accept the output.
-  const w = Math.max(2, even(crop.w * source.width))
-  const h = Math.max(2, even(crop.h * source.height))
-  const x = Math.max(0, even(crop.x * source.width))
-  const y = Math.max(0, even(crop.y * source.height))
-  return `crop=${w}:${h}:${x}:${y}`
+  return {
+    w: Math.max(2, even(crop.w * source.width)),
+    h: Math.max(2, even(crop.h * source.height)),
+    x: Math.max(0, even(crop.x * source.width)),
+    y: Math.max(0, even(crop.y * source.height))
+  }
 }
 
+/**
+ * The centered crop that brings `source` (the frame in front of this stage:
+ * the whole video, or the user's manual crop of it — T-83) to `targetAspect`,
+ * or '' when it is already there.
+ */
 function autoCropForAspect(
   source: SourceDimensions,
   targetAspect: number
@@ -271,12 +281,25 @@ export function buildVideoFilter(
   const parts: string[] = []
   const speed = clip.speedMultiplier && clip.speedMultiplier > 0 ? clip.speedMultiplier : 1
   if (speed !== 1) parts.push(`setpts=PTS/${speed.toFixed(4)}`)
+  // T-83 — the manual crop is the new SOURCE FRAME, not the final picture.
+  //
+  // Chain: crop (the user's) -> autoCropForAspect (against the CROPPED size)
+  // -> scale. The user's crop says what the content is; each platform then
+  // takes a centered cut of it to reach its own shape, so the `scale` below
+  // only ever resizes — it never changes the aspect. Before this, a manual
+  // crop skipped the aspect step and `scale` forced the preset's exact WxH on
+  // whatever shape the user had drawn: a 4:3 crop exported to Reels came out
+  // 2.4x too tall, on every ticked platform at once. The no-crop path is the
+  // same code with the whole source as the frame, so there is one
+  // implementation of "cut this frame to that shape" and two callers.
+  let frame = source
   if (clip.cropRect) {
-    parts.push(cropToFilter(clip.cropRect, source))
-  } else {
-    const auto = autoCropForAspect(source, preset.aspectRatio)
-    if (auto) parts.push(auto)
+    const region = manualCropRegion(clip.cropRect, source)
+    parts.push(`crop=${region.w}:${region.h}:${region.x}:${region.y}`)
+    frame = { width: region.w, height: region.h }
   }
+  const aspectCut = autoCropForAspect(frame, preset.aspectRatio)
+  if (aspectCut) parts.push(aspectCut)
   if (clip.hypeShake) parts.push(hypeShakeFilter())
   parts.push(scaleFilter(preset))
   if (clip.colorGrade) {

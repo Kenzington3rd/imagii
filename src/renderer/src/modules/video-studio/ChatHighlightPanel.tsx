@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog, type ChatMessage } from '@shared/chatLog'
-import { useVideoStore } from './store/videoStore'
+import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 
@@ -56,7 +56,7 @@ function formatTime(seconds: number): string {
 
 export function ChatHighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
-  const addClipFromRange = useVideoStore((s) => s.addClipFromRange)
+  const addScannedClip = useVideoStore((s) => s.addScannedClip)
   const [chatText, setChatText] = useState('')
   const [bucketSec, setBucketSec] = useState(10)
   const [padSec, setPadSec] = useState(15)
@@ -86,18 +86,24 @@ export function ChatHighlightPanel(): JSX.Element | null {
     // T-48: BOTH ends are clamped to the source. A chat log routinely runs
     // past the video it is pasted against (a trimmed VOD, a clip of one
     // segment, the wrong file), and clamping only the end turned those
-    // peaks into a reversed range — which addClipFromRange refuses in
-    // silence while the toast below claimed a clip that never existed.
+    // peaks into a reversed range — which the store refuses in silence
+    // while the toast below claimed a clip that never existed.
     const start = Math.min(Math.max(0, p.bucketStart), duration)
     const end = Math.min(duration, p.bucketStart + bucketSec + padSec * 2)
     // Success is reported from what the store actually did, never assumed.
-    if (!addClipFromRange(`Chat hype ${i + 1}`, start, end)) {
+    // T-94: the scanner's add also retires the untouched whole-video clip
+    // (one undo step with the add), and the user is told.
+    const added = addScannedClip(`Chat hype ${i + 1}`, start, end)
+    if (added === 'refused') {
       toast.error(
         'That spike is past the end of this video — check the log matches this source.'
       )
       return
     }
     toast.success('Clip added')
+    if (added === 'added-dropped-whole-video') {
+      toast(WHOLE_VIDEO_DROPPED_MESSAGE, { icon: <Icon name="undo" size={18} />, duration: 8000 })
+    }
   }
 
   return (

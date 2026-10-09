@@ -1,4 +1,5 @@
 import { assert } from './assert'
+import type { CropRect } from './clip'
 
 /**
  * Phase 3.4: pure geometry helpers shared between SafeZoneOverlay (renderer
@@ -45,6 +46,55 @@ export function computeCropBox(
   const x = (sourceW - cropW) / 2
   const y = (sourceH - cropH) / 2
   return { x, y, w: cropW, h: cropH }
+}
+
+/**
+ * The frame an export STARTS from (T-83): the whole source, or — when the
+ * user drew a manual crop — that crop's rectangle in source pixels.
+ *
+ * The export pipeline treats a manual crop as the new source frame and cuts
+ * each platform's shape out of it (`buildVideoFilter`), so every question the
+ * UI asks about a platform's fit — the grid's indicator, the safe-zone
+ * pre-flight, the output preview — is a question about THIS frame, not about
+ * the file on disk. `crop` is the stored rect (fractions of the source). A
+ * rect that is not a usable size (NaN from a hand-edited project) is treated
+ * as no crop, since the renderer must not throw while drawing; main clamps the
+ * same rect to a 2-px minimum, which is a different failure for a different
+ * file.
+ */
+export function cropFrameSize(
+  sourceW: number,
+  sourceH: number,
+  crop: { w: number; h: number } | null | undefined
+): { w: number; h: number } {
+  assert(sourceW > 0 && sourceH > 0, 'sourceW/H must be positive')
+  if (!crop) return { w: sourceW, h: sourceH }
+  const w = Math.max(2, crop.w * sourceW)
+  const h = Math.max(2, crop.h * sourceH)
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return { w: sourceW, h: sourceH }
+  return { w, h }
+}
+
+/**
+ * The part of the source that ends up in an output of shape `aspect` (T-83),
+ * in source pixels: the manual crop's rectangle (or the whole frame when there
+ * is none) with the centered cut to `aspect` taken out of it. The same two
+ * steps `buildVideoFilter` runs — crop, then cut to the platform's shape —
+ * without its even-pixel rounding, since the only reader is a preview canvas.
+ */
+export function outputSourceRect(
+  sourceW: number,
+  sourceH: number,
+  crop: CropRect | null | undefined,
+  aspect: number
+): CropBox {
+  const frame = cropFrameSize(sourceW, sourceH, crop)
+  const offsetX = crop ? crop.x * sourceW : 0
+  const offsetY = crop ? crop.y * sourceH : 0
+  const fx = Number.isFinite(offsetX) ? Math.max(0, offsetX) : 0
+  const fy = Number.isFinite(offsetY) ? Math.max(0, offsetY) : 0
+  const cut = computeCropBox(frame.w, frame.h, aspect)
+  return { x: fx + cut.x, y: fy + cut.y, w: cut.w, h: cut.h }
 }
 
 /**

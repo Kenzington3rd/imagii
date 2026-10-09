@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { endsGestureOnPointerUp, playableDuration, useVideoStore } from './videoStore'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import {
+  endsGestureOnPointerUp,
+  isPristineWholeVideoClip,
+  playableDuration,
+  useVideoStore
+} from './videoStore'
 import type { VideoSource } from './videoStore'
+import type { Clip } from '@shared/clip'
 
 const FAKE_SOURCE: VideoSource = {
   filePath: '/fake/path.mp4',
@@ -647,5 +653,248 @@ describe('custom presets as export targets (T-50)', () => {
     expect(useVideoStore.getState().history.past.length).toBe(depth)
     useVideoStore.getState().undo()
     expect(useVideoStore.getState().clips[0]?.customPresetIds ?? []).toEqual([])
+  })
+})
+
+// ── T-94 — the untouched whole-video clip steps aside for the scanners ────────
+//
+// loadSource gives the editor a "Clip 1" spanning the whole file. Scan a
+// three-hour VOD, add five highlights, press Export, and that clip rode along
+// in every export and compilation: the full VOD re-encoded beside the five
+// excerpts the user actually wanted. Only the highlight scanners retire it —
+// their intent to work with excerpts is unambiguous — and only while it is
+// still exactly what loadSource made.
+
+const DURATION = FAKE_SOURCE.probe.duration
+
+/** The clip loadSource makes, as a value (the real creator is exercised below). */
+function pristine(overrides: Partial<Clip> = {}): Clip {
+  return {
+    id: 'whole',
+    name: 'Clip 1',
+    startSec: 0,
+    endSec: DURATION,
+    cropRect: null,
+    textOverlays: [],
+    selectedPresets: ['youtube'],
+    ...overrides
+  }
+}
+
+describe('isPristineWholeVideoClip — exactly what loadSource makes (T-94)', () => {
+  it('is true for the default clip', () => {
+    expect(isPristineWholeVideoClip(pristine(), DURATION)).toBe(true)
+  })
+
+  // Every field a user could have touched, each one alone. If any of these
+  // stayed true the scanner would delete work.
+  const TOUCHED: ReadonlyArray<readonly [string, Partial<Clip>]> = [
+    ['renamed', { name: 'Intro' }],
+    ['renamed to the next default', { name: 'Clip 2' }],
+    ['trimmed at the start', { startSec: 0.5 }],
+    ['trimmed at the end', { endSec: DURATION - 1 }],
+    ['extended past the probe', { endSec: DURATION + 1 }],
+    ['cropped', { cropRect: { x: 0, y: 0, w: 0.5, h: 0.5 } }],
+    [
+      'carrying a text overlay',
+      {
+        textOverlays: [
+          {
+            id: 'o1',
+            text: 'hi',
+            font: 'Arial',
+            sizePx: 48,
+            colorHex: '#ffffff',
+            x: 0.1,
+            y: 0.1,
+            startSec: 0,
+            endSec: 5
+          }
+        ]
+      }
+    ],
+    ['brightness changed', { colorGrade: { brightness: 0.1, contrast: 1, saturation: 1, temperature: 0 } }],
+    ['contrast changed', { colorGrade: { brightness: 0, contrast: 1.2, saturation: 1, temperature: 0 } }],
+    ['saturation changed', { colorGrade: { brightness: 0, contrast: 1, saturation: 0.5, temperature: 0 } }],
+    ['temperature changed', { colorGrade: { brightness: 0, contrast: 1, saturation: 1, temperature: -0.3 } }],
+    ['sped up', { speedMultiplier: 2 }],
+    ['slowed down', { speedMultiplier: 0.5 }],
+    ['auto-zoom on', { autoZoom: true }],
+    ['hype-shake on', { hypeShake: true }],
+    ['YouTube unticked', { selectedPresets: [] }],
+    ['a platform added', { selectedPresets: ['youtube', 'reels'] }],
+    ['a different platform', { selectedPresets: ['reels'] }],
+    ['a custom preset queued', { customPresetIds: ['cp-a'] }]
+  ]
+
+  it.each(TOUCHED)('is false once it is %s', (_label, change) => {
+    expect(isPristineWholeVideoClip(pristine(change), DURATION)).toBe(false)
+  })
+
+  it('a field set BACK to its default is the default (the export would not change)', () => {
+    expect(
+      isPristineWholeVideoClip(
+        pristine({
+          speedMultiplier: 1,
+          autoZoom: false,
+          hypeShake: false,
+          customPresetIds: [],
+          colorGrade: { brightness: 0, contrast: 1, saturation: 1, temperature: 0 }
+        }),
+        DURATION
+      )
+    ).toBe(true)
+  })
+
+  it('judges the end against the duration it is given, and refuses a duration that is no duration', () => {
+    expect(isPristineWholeVideoClip(pristine(), DURATION + 10)).toBe(false)
+    expect(isPristineWholeVideoClip(pristine({ endSec: 0 }), 0)).toBe(false)
+    expect(isPristineWholeVideoClip(pristine(), NaN)).toBe(false)
+    expect(isPristineWholeVideoClip(pristine(), Infinity)).toBe(false)
+  })
+
+  describe('the real creator', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('the clip loadSource creates IS pristine (the predicate and the creator cannot drift)', async () => {
+      vi.stubGlobal('window', {
+        api: {
+          video: {
+            probe: async () => FAKE_SOURCE.probe,
+            fileUrl: (p: string) => `imagii-file://${p}`
+          }
+        }
+      })
+      await useVideoStore.getState().loadSource('/fake/path.mp4')
+      const clips = useVideoStore.getState().clips
+      expect(clips).toHaveLength(1)
+      expect(isPristineWholeVideoClip(clips[0]!, DURATION)).toBe(true)
+    })
+
+    it('the clip addClip creates after the first is NOT pristine (it is named Clip N)', () => {
+      useVideoStore.setState({
+        source: FAKE_SOURCE,
+        clips: [pristine()],
+        selectedClipId: 'whole',
+        history: { past: [], future: [] },
+        historyKey: null
+      })
+      useVideoStore.getState().addClip()
+      const second = useVideoStore.getState().clips[1]!
+      expect(second.name).toBe('Clip 2')
+      expect(isPristineWholeVideoClip(second, DURATION)).toBe(false)
+    })
+  })
+})
+
+describe('addScannedClip — the scanner\'s add retires the untouched whole-video clip (T-94)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [pristine()],
+      selectedClipId: 'whole',
+      srtPath: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+  })
+
+  const names = (): string[] => useVideoStore.getState().clips.map((c) => c.name)
+
+  it('the first highlight replaces the whole-video clip, and says so', () => {
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe(
+      'added-dropped-whole-video'
+    )
+    expect(names()).toEqual(['Highlight 1'])
+    const added = useVideoStore.getState().clips[0]!
+    expect([added.startSec, added.endSec]).toEqual([5, 15])
+    expect(useVideoStore.getState().selectedClipId).toBe(added.id)
+  })
+
+  it('ONE undo restores the whole-video clip, the selection, and removes the highlight', () => {
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips).toEqual(before)
+    expect(useVideoStore.getState().selectedClipId).toBe('whole')
+    expect(useVideoStore.getState().canUndo()).toBe(false)
+
+    // ...and redo re-applies both halves together.
+    useVideoStore.getState().redo()
+    expect(names()).toEqual(['Highlight 1'])
+  })
+
+  it('later highlights just add: there is nothing left to retire', () => {
+    useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)
+    expect(useVideoStore.getState().addScannedClip('Highlight 2', 20, 30)).toBe('added')
+    expect(names()).toEqual(['Highlight 1', 'Highlight 2'])
+    // Two scanner adds, two undo steps.
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+  })
+
+  it('leaves the clip alone once the user has touched it', () => {
+    const id = 'whole'
+    useVideoStore.getState().setClipRange(id, 10, 50)
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe('added')
+    expect(names()).toEqual(['Clip 1', 'Highlight 1'])
+  })
+
+  it('leaves a renamed whole-video clip alone', () => {
+    useVideoStore.getState().renameClip('whole', 'Full VOD')
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe('added')
+    expect(names()).toEqual(['Full VOD', 'Highlight 1'])
+  })
+
+  it('keeps any other clip the user made, and retires only the pristine one', () => {
+    useVideoStore.setState({
+      clips: [pristine(), pristine({ id: 'mine', name: 'My cut', startSec: 3, endSec: 9 })]
+    })
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 20, 30)).toBe(
+      'added-dropped-whole-video'
+    )
+    expect(names()).toEqual(['My cut', 'Highlight 1'])
+  })
+
+  it('a refused range changes nothing: no clip added, none retired, no undo step', () => {
+    const before = useVideoStore.getState().clips
+    for (const [a, b] of [
+      [15, 5],
+      [5, 5],
+      [NaN, 5],
+      [0, Infinity]
+    ] as const) {
+      expect(useVideoStore.getState().addScannedClip('bad', a, b)).toBe('refused')
+    }
+    expect(useVideoStore.getState().clips).toBe(before)
+    expect(useVideoStore.getState().history.past).toHaveLength(0)
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().addScannedClip('orphan', 5, 15)).toBe('refused')
+  })
+
+  it('an open coalescing run does not swallow the step', () => {
+    // Speed dragged away and back leaves the clip pristine with a speed:
+    // history key still open — the scanner add must still be its own step.
+    useVideoStore.getState().setClipSpeed('whole', 2)
+    useVideoStore.getState().setClipSpeed('whole', 1)
+    expect(useVideoStore.getState().historyKey).toBe('speed:whole')
+    const depth = useVideoStore.getState().history.past.length
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe(
+      'added-dropped-whole-video'
+    )
+    expect(useVideoStore.getState().history.past.length).toBe(depth + 1)
+    useVideoStore.getState().undo()
+    expect(names()).toEqual(['Clip 1'])
+    expect(useVideoStore.getState().clips[0]?.speedMultiplier).toBe(1)
+  })
+
+  it('the manual paths never retire it: "+ Add clip" and addClipFromRange', () => {
+    useVideoStore.getState().addClip()
+    expect(names()).toEqual(['Clip 1', 'Clip 2'])
+    expect(useVideoStore.getState().addClipFromRange('Hand-made', 5, 15)).toBe(true)
+    expect(names()).toEqual(['Clip 1', 'Clip 2', 'Hand-made'])
   })
 })

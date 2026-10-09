@@ -187,6 +187,147 @@ describe('text-overlay enable window (T-74)', () => {
   })
 })
 
+/**
+ * T-83 — a manual crop is the new SOURCE FRAME: crop (the user's) ->
+ * aspect cut (against the CROPPED size, the same code the no-crop path runs
+ * against the source) -> scale. These pin the geometry of that chain; the
+ * Layer 5 marker tests prove real ffmpeg agrees and that nothing is stretched.
+ */
+describe('a manual crop is the frame each platform is cut from (T-83)', () => {
+  function clipWithCrop(cropRect: Clip['cropRect']): Clip {
+    return {
+      id: 'c1',
+      name: 'clip',
+      startSec: 0,
+      endSec: 3,
+      cropRect,
+      textOverlays: [],
+      selectedPresets: ['youtube']
+    }
+  }
+
+  /** Every `crop=w:h:x:y` in a chain, in order. */
+  function crops(chain: string): Array<{ w: number; h: number; x: number; y: number }> {
+    return [...chain.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)].map((m) => ({
+      w: Number(m[1]),
+      h: Number(m[2]),
+      x: Number(m[3]),
+      y: Number(m[4])
+    }))
+  }
+
+  const src = { width: 1920, height: 1080 }
+
+  it('cuts the platform shape out of the crop: a 4:3 crop for Reels gets a second, centered crop', () => {
+    // 960x720 at (480, 180); 9:16 of that is 404x720, centered at x = 278.
+    const chain = buildVideoFilter(
+      clipWithCrop({ x: 0.25, y: 180.25 / 1080, w: 960.25 / 1920, h: 720.25 / 1080 }),
+      PLATFORM_PRESETS.reels,
+      src
+    )
+    expect(crops(chain)).toEqual([
+      { w: 960, h: 720, x: 480, y: 180 },
+      { w: 404, h: 720, x: 278, y: 0 }
+    ])
+    // crop, aspect cut, scale — in that order, and nothing between the two crops.
+    expect(chain).toMatch(/^crop=960:720:480:180,crop=404:720:278:0,scale=1080:1920:/)
+  })
+
+  it('cuts the other way for a tall crop on a wide platform', () => {
+    // 540x960 at (690, 60); 16:9 of that is 540x302 (even), centered at y = 328.
+    const chain = buildVideoFilter(
+      clipWithCrop({ x: 690 / 1920, y: 60 / 1080, w: 540 / 1920, h: 960.25 / 1080 }),
+      PLATFORM_PRESETS.youtube,
+      src
+    )
+    expect(crops(chain)).toEqual([
+      { w: 540, h: 960, x: 690, y: 60 },
+      { w: 540, h: 302, x: 0, y: 328 }
+    ])
+  })
+
+  it('adds nothing when the crop already has the platform shape', () => {
+    const chain = buildVideoFilter(
+      clipWithCrop({ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }),
+      PLATFORM_PRESETS.youtube,
+      src
+    )
+    expect(crops(chain)).toEqual([{ w: 960, h: 540, x: 480, y: 270 }])
+  })
+
+  it('leaves the no-crop path as it was: one aspect cut, against the source', () => {
+    const chain = buildVideoFilter(clipWithCrop(null), PLATFORM_PRESETS.reels, src)
+    expect(crops(chain)).toEqual([{ w: 606, h: 1080, x: 656, y: 0 }])
+  })
+
+  it('every chain ends in a frame of the preset shape, whatever was cropped', () => {
+    // The invariant the bug broke: the last crop before `scale` has the
+    // preset's aspect, so `scale` only resizes. Within one even pixel of
+    // rounding (a ~200 px frame is the smallest tested).
+    const rects: Array<NonNullable<Clip['cropRect']>> = [
+      { x: 0.1, y: 0.1, w: 0.5, h: 0.5 },
+      { x: 0, y: 0, w: 1, h: 1 },
+      { x: 0.3, y: 0.05, w: 0.28, h: 0.89 },
+      { x: 0.2, y: 0.2, w: 0.6, h: 0.3 },
+      { x: 0.4, y: 0.4, w: 0.13, h: 0.5 },
+      { x: 0.05, y: 0.45, w: 0.9, h: 0.1 }
+    ]
+    for (const rect of rects) {
+      for (const preset of Object.values(PLATFORM_PRESETS)) {
+        const chain = buildVideoFilter(clipWithCrop(rect), preset, src)
+        const list = crops(chain)
+        const last = list[list.length - 1]
+        expect(last, `a crop exists for ${JSON.stringify(rect)} / ${preset.id}`).toBeDefined()
+        if (!last) continue
+        const tolerance = 2 / Math.min(last.w, last.h)
+        expect(
+          Math.abs(last.w / last.h / preset.aspectRatio - 1),
+          `${JSON.stringify(rect)} -> ${preset.id}: ${last.w}x${last.h}`
+        ).toBeLessThan(Math.max(tolerance, 0.01))
+        // ...and each crop sits inside the frame the one before it left.
+        let frame = { w: src.width, h: src.height }
+        for (const c of list) {
+          expect(c.x + c.w).toBeLessThanOrEqual(frame.w)
+          expect(c.y + c.h).toBeLessThanOrEqual(frame.h)
+          frame = { w: c.w, h: c.h }
+        }
+      }
+    }
+  })
+
+  it('every dimension and offset of every crop is even, on an odd source too', () => {
+    // yuv420p / libx264 refuse odd values; the cropped size feeds the second
+    // crop, so an odd intermediate would only fail at runtime.
+    const rect = { x: 0.137, y: 0.061, w: 0.4413, h: 0.7219 }
+    for (const dims of [
+      { width: 1920, height: 1080 },
+      { width: 1919, height: 1079 },
+      { width: 1281, height: 721 }
+    ]) {
+      for (const preset of Object.values(PLATFORM_PRESETS)) {
+        for (const c of crops(buildVideoFilter(clipWithCrop(rect), preset, dims))) {
+          for (const n of [c.w, c.h, c.x, c.y]) {
+            expect(n % 2, `${dims.width}x${dims.height} -> ${preset.id}: ${JSON.stringify(c)}`).toBe(0)
+          }
+        }
+      }
+    }
+  })
+
+  it('works through a custom-preset aspect too (the aspect is whatever the preset resolves to)', () => {
+    const custom = { ...PLATFORM_PRESETS.youtube, width: 1000, height: 1000, aspectRatio: 1 }
+    const chain = buildVideoFilter(
+      clipWithCrop({ x: 0.25, y: 180.25 / 1080, w: 960.25 / 1920, h: 720.25 / 1080 }),
+      custom,
+      src
+    )
+    expect(crops(chain)).toEqual([
+      { w: 960, h: 720, x: 480, y: 180 },
+      { w: 720, h: 720, x: 120, y: 0 }
+    ])
+  })
+})
+
 describe('safeOverlayColor', () => {
   it('passes through a well-formed hex color', () => {
     expect(safeOverlayColor('#ffffff')).toBe('#ffffff')

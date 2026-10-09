@@ -1474,7 +1474,7 @@ IMG-PREC.
   "Too long") with the reason visible, durations in minutes; the
   safe-zone modal copy rewritten in plain words; Layer 5 case on a
   cropped clip exported to a mismatched preset; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 50 — see Done)
 
 ## T-84 — the failure path speaks ffmpeg, not English
 
@@ -1531,8 +1531,11 @@ IMG-PREC.
 - **Acceptance criteria:** per the usability tiebreaker, each item is
   ruled code-to-promise or promise-to-truth and documented: Clip Kit
   APPLIES the saved watermark (code fix + Layer 5 pixel check on one
-  kit output) and warns on over-limit durations; the rest are copy
-  fixes using the review's suggested lines (SafeSearch line names
+  kit output) and warns on over-limit durations; Clip Kit also stops
+  asking the safe-zone question on every run — the kit's whole point
+  is all five platforms, so the answer is already given (round-50
+  note: only the modal's copy changed; the frequency is this
+  ticket's); the rest are copy fixes using the review's suggested lines (SafeSearch line names
   DuckDuckGo as the filter and search as the one online feature;
   reframe renamed a centered 9:16 crop with Left/Center/Right and
   the duplicate "Auto (centered)" option dropped; Record copy names
@@ -1689,7 +1692,10 @@ IMG-PREC.
   (Esc/✕/Close/Done); dialect mix ("cancelled"/"tick" vs US
   spelling); color-grade sliders have no preview and no copy saying
   so; "Safe zones" means crop guides; Compilation hidden until 2
-  clips; bare "+" board button lacks an aria-label.
+  clips; bare "+" board button lacks an aria-label. Round-50 add:
+  the export grid's visible reason text now sits inside each
+  platform `<label>`, bloating the checkbox's accessible name —
+  restructure so AT hears the platform, not the paragraph.
 - **Acceptance criteria:** BRANDING_GUIDE gains the copy-conventions
   section the audit recommends (canonical name table, sentence case,
   delete/remove rule, toast punctuation, voice) and the renderer is
@@ -1742,7 +1748,7 @@ IMG-PREC.
   VOD+highlights path and asserts the full source is not silently
   re-encoded (or is clearly chosen); existing export coverage
   green; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 50 — see Done)
 
 ## T-95 — the References "+" button overflows its column and the detail card eats the click
 
@@ -1759,9 +1765,76 @@ IMG-PREC.
   the instance); the two catching tests green; LESSONS entry.
 - **Status:** done (round 49 — expediter fix; see Done)
 
+## T-96 — a cropped clip compiled or GIF'd comes out uncropped
+
+- **Spec:** round-50 worker finding, the wrong-file class. `concat`
+  segments carry only start/end/name, and GIF export takes no
+  cropRect either — a clip the user cropped to 9:16 is compiled or
+  GIF'd at the full frame, silently. The T-83 fix covers platform
+  exports only.
+- **Acceptance criteria:** Compile and GIF honor the clip's crop
+  through the same crop-is-the-new-frame chain T-83 built (one
+  implementation — extend, don't copy); Layer 5 case each
+  (red-first); existing concat/GIF coverage green; LESSONS entry.
+- **Status:** open
+
+## T-97 — the export grid can say "Great" while upscaling a small crop
+
+- **Spec:** round-50 worker finding. The "picture is smaller than
+  this output" check still reads the FULL source size, so a quarter-
+  frame crop exported at 1080p upscales 2x and the card still says
+  "Great". The crop now defines the frame everywhere else (T-83);
+  this check is the straggler.
+- **Acceptance criteria:** the resolution check reads the effective
+  frame (`cropFrameSize`); the reason copy says what happens
+  ("smaller than this output — it will be scaled up and look soft");
+  unit cases in presets.test.ts both ways; the grid E2E extended
+  with a small-crop row; existing grid coverage green.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 50 — content fix wave batch 2: T-83 + T-94. T-83: a manual
+crop is now the new SOURCE FRAME — crop (user's) ->
+autoCropForAspect against the CROPPED size -> scale, one
+implementation with two callers, so nothing is ever stretched: each
+platform takes a centered cut of the user's chosen content. Layer 5
+proves it with a known white square measured from decoded pixels
+across 4:3->Reels, 9:16->YouTube, 1:1->X, an odd-sized source, and
+a matching-shape control (red-first: the old filter returned
+180x426 for a 427 px square). The grid tells the truth to match:
+the real crop aspect flows in (cropAspect was hard-coded null),
+labels are reason-specific ("Wrong shape" / "Too long") with the
+reasons visible on the card rather than hover-only, durations read
+as words, caps read "typical limit", and a 9:16 crop can now turn
+TikTok/Reels green (E2E-pinned). Shared geometry readers
+(cropFrameSize / outputSourceRect in src/shared/safeZone.ts) give
+the grid, pre-flight, and OutputPreview one answer; the safe-zone
+modal got its plain-words rewrite ("Some platforms will crop the
+picture"). T-94: a PRISTINE whole-video Clip 1 (table-driven
+predicate) steps aside when a SCANNER adds its first clip — removed
+in the same undo step as the add, neutral toast with the Ctrl+Z
+path; manual adds never trigger it, a touched or renamed clip is
+the user's and stays. Export/Compile buttons say what they produce
+("Export {n} files", plural-correct via the new shared countOf).
+Expedite: verify 1259/1259 (68 files), build clean, test:media
+92/92 (+5 win32 gates), full Playwright 137/137; the worker's three
+mutations reviewed (incl. red-first E2E driven against a clean
+HEAD build), one independent expediter mutation at the untouched
+shared-geometry seam (platform cut dropped from outputSourceRect ->
+3 named unit reds, pre-flight E2E rightly unaffected — the
+containment half is its reader; byte-identical restore -> 25/25).
+Worker findings filed as T-96 (Compile/GIF ignore cropRect — the
+wrong-file class again) and T-97 (the resolution check still reads
+the full source size, so a small crop upscales under a "Great"
+card); the Clip Kit ask-every-run modal folded into T-85's
+criteria, the checkbox accessible-name bloat into T-92's. Worker
+deviations accepted: hour wording for 2h+ caps, both toasts on a
+scanner retire, OutputPreview re-pointed in-scope (its caption
+promised the fixed behavior), the shared plural helper T-92 will
+reuse.
 
 Round 49 — content fix wave batch 1: T-81 + T-82 + T-95 (the two
 wrong-file ffmpeg bugs, plus the layout bug the gate surfaced). First

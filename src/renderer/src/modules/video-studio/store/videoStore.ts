@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { VideoProbe } from '@shared/api'
+import { DEFAULT_COLOR_GRADE } from '@shared/clip'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
 
 export interface VideoSource {
@@ -75,6 +76,16 @@ interface VideoStudioState {
    *  assuming one — a refusal used to be silent while the caller toasted
    *  "Clip added" anyway (T-48). */
   addClipFromRange: (name: string, startSec: number, endSec: number) => boolean
+  /** T-94 — the highlight scanners' add. Same range rules and the same one
+   *  undo step as `addClipFromRange`, plus one more thing the scanners are
+   *  entitled to: if the untouched whole-video clip that `loadSource` created
+   *  is still in the list, it steps aside IN THE SAME ACTION. Someone who
+   *  scans a VOD for highlights and presses "+ Clip" wants those excerpts, not
+   *  the 3-hour original re-encoded beside them in every export. The answer
+   *  says which of the three things happened so the caller can tell the user:
+   *  'refused' (nothing changed), 'added', or 'added-dropped-whole-video'. One
+   *  Ctrl+Z restores the whole-video clip and removes the highlight together. */
+  addScannedClip: (name: string, startSec: number, endSec: number) => ScannedClipResult
   removeClip: (id: string) => void
   selectClip: (id: string) => void
   renameClip: (id: string, name: string) => void
@@ -144,16 +155,67 @@ export function playableDuration(
   return source?.probe.duration ?? 0
 }
 
+function defaultClipName(index: number): string {
+  return `Clip ${index}`
+}
+
 function makeDefaultClip(duration: number, index: number): Clip {
   return {
     id: nanoid(8),
-    name: `Clip ${index}`,
+    name: defaultClipName(index),
     startSec: 0,
     endSec: duration,
     cropRect: null,
     textOverlays: [],
     selectedPresets: ['youtube']
   }
+}
+
+/** What `addScannedClip` did (T-94). */
+export type ScannedClipResult = 'refused' | 'added' | 'added-dropped-whole-video'
+
+/** The toast a scanner shows when `addScannedClip` answers
+ *  'added-dropped-whole-video'. Neutral on purpose — nothing was lost, and the
+ *  last clause is how to say "no, keep it". */
+export const WHOLE_VIDEO_DROPPED_MESSAGE =
+  'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+
+/**
+ * T-94 — is this the whole-video clip `loadSource` made, untouched since?
+ *
+ * "Pristine" is exact: `makeDefaultClip(duration, 1)` and nothing else. It is
+ * the one clip in the list the user never chose to make — loading a file
+ * creates it so the editor has something to select — which is what lets a
+ * highlight scan retire it without second-guessing anyone. Every field a user
+ * could have touched breaks it: a trim, a rename, a crop, an overlay, a grade,
+ * speed, auto-zoom, hype-shake, or any change to the platforms it will
+ * export to. A field set BACK to its default (speed dragged to 1x again, the
+ * grade reset) is the default, and counts as untouched — what matters is what
+ * the export would do, and it would do the same.
+ */
+export function isPristineWholeVideoClip(clip: Clip, durationSec: number): boolean {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return false
+  const grade = clip.colorGrade
+  const gradeUntouched =
+    grade === undefined ||
+    (grade.brightness === DEFAULT_COLOR_GRADE.brightness &&
+      grade.contrast === DEFAULT_COLOR_GRADE.contrast &&
+      grade.saturation === DEFAULT_COLOR_GRADE.saturation &&
+      grade.temperature === DEFAULT_COLOR_GRADE.temperature)
+  return (
+    clip.name === defaultClipName(1) &&
+    clip.startSec === 0 &&
+    clip.endSec === durationSec &&
+    !clip.cropRect &&
+    clip.textOverlays.length === 0 &&
+    gradeUntouched &&
+    (clip.speedMultiplier === undefined || clip.speedMultiplier === 1) &&
+    !clip.autoZoom &&
+    !clip.hypeShake &&
+    clip.selectedPresets.length === 1 &&
+    clip.selectedPresets[0] === 'youtube' &&
+    (clip.customPresetIds ?? []).length === 0
+  )
 }
 
 const HISTORY_LIMIT = 50
@@ -194,6 +256,42 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         c.id === id ? { ...c, startSec: safeStart, endSec: safeEnd } : c
       )
     })
+  }
+
+  /** The one add-a-clip-from-a-range path: `addClipFromRange` (manual and
+   *  programmatic callers) and `addScannedClip` (the highlight scanners) share
+   *  it, so the guards and the single undo step cannot drift apart. */
+  function appendRange(
+    name: string,
+    startSec: number,
+    endSec: number,
+    retirePristine: boolean
+  ): ScannedClipResult {
+    const { source, clips } = get()
+    if (!source) return 'refused'
+    // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
+    // panel, future scripts) sometimes hand us a reversed range. Reject
+    // outright rather than producing a clip with negative duration that
+    // breaks export math downstream.
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return 'refused'
+    if (endSec <= startSec) return 'refused'
+    const duration = source.probe.duration
+    const safeStart = Math.max(0, Math.min(startSec, duration))
+    const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
+    const base = makeDefaultClip(duration, clips.length + 1)
+    const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
+    const kept = retirePristine
+      ? clips.filter((c) => !isPristineWholeVideoClip(c, duration))
+      : clips
+    // ONE snapshot of the state before either change: the retirement and the
+    // add are a single undo step, so Ctrl+Z puts the whole-video clip back and
+    // takes the highlight away together (T-94).
+    set({
+      ...snapshot(null),
+      clips: [...kept, next],
+      selectedClipId: next.id
+    })
+    return kept.length < clips.length ? 'added-dropped-whole-video' : 'added'
   }
 
   return {
@@ -280,27 +378,9 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         selectedClipId: next.id
       })
     },
-    addClipFromRange: (name, startSec, endSec) => {
-      const { source, clips } = get()
-      if (!source) return false
-      // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
-      // panel, future scripts) sometimes hand us a reversed range. Reject
-      // outright rather than producing a clip with negative duration that
-      // breaks export math downstream.
-      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return false
-      if (endSec <= startSec) return false
-      const duration = source.probe.duration
-      const safeStart = Math.max(0, Math.min(startSec, duration))
-      const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
-      const base = makeDefaultClip(duration, clips.length + 1)
-      const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
-      set({
-        ...snapshot(null),
-        clips: [...clips, next],
-        selectedClipId: next.id
-      })
-      return true
-    },
+    addClipFromRange: (name, startSec, endSec) =>
+      appendRange(name, startSec, endSec, false) !== 'refused',
+    addScannedClip: (name, startSec, endSec) => appendRange(name, startSec, endSec, true),
     removeClip: (id) => {
       const { clips, selectedClipId } = get()
       const filtered = clips.filter((c) => c.id !== id)
