@@ -13,20 +13,55 @@ const HASHTAG_TEMPLATES: Record<string, string[]> = {
   yt_long: ['#YouTube', '#Gaming', '#FullStream', '#Vlog']
 }
 
-const TITLE_PATTERNS = [
-  '{verb} {subject} on {game}!',
-  'When you {verb} {subject}...',
-  'POV: {subject} happens',
-  'I {verb}d a {subject} so you don\'t have to',
-  '{subject} is the hardest thing in {game}',
-  'Why {subject} broke me',
-  'Day {n} of {verb}ing {subject}',
-  'Nobody told me {subject} would do this'
+/**
+ * A title starter is a pattern with slots. Each slot names the FORM it needs:
+ * `{base}` the bare verb, `{past}` the simple past, `{gerund}` the -ing form,
+ * `{a_subject}` the subject with its article, `{n}` a day of the year. Every
+ * verb form comes from the VERBS table; nothing is built by appending letters
+ * to a string (T-87). The game is not in any pattern: it is the user's to name.
+ */
+export interface TitleVerb {
+  base: string
+  past: string
+  gerund: string
+}
+
+export const VERBS: readonly TitleVerb[] = [
+  { base: 'clutch', past: 'clutched', gerund: 'clutching' },
+  { base: 'beat', past: 'beat', gerund: 'beating' },
+  { base: 'react to', past: 'reacted to', gerund: 'reacting to' },
+  { base: 'discover', past: 'discovered', gerund: 'discovering' },
+  { base: 'fail', past: 'failed', gerund: 'failing' },
+  { base: 'try', past: 'tried', gerund: 'trying' }
 ]
 
-const VERB_BANK = ['clutched', 'beat', 'reacted to', 'discovered', 'failed', 'tried']
-const SUBJECT_BANK = ['boss fight', 'speedrun', 'PvP match', 'achievement', 'glitch']
-const GAME_BANK = ['Elden Ring', 'Valorant', 'Fortnite', 'Minecraft', 'Apex']
+export const SUBJECTS: readonly string[] = ['boss fight', 'speedrun', 'PvP match', 'glitch']
+
+export const TITLE_PATTERNS: readonly string[] = [
+  'Still thinking about the way I {past} {a_subject}',
+  'When you {base} {a_subject}...',
+  'POV: {a_subject} happens',
+  'I {past} {a_subject} so you don\'t have to',
+  'Honestly, {a_subject} is the hardest thing I {past} this week',
+  'Why {a_subject} broke me',
+  'Day {n} of {gerund} {a_subject}',
+  'Nobody told me {a_subject} would do this'
+]
+
+/** 'a' or 'an', by the first letter of the word that follows it. */
+export function article(word: string): 'a' | 'an' {
+  return /^[aeiou]/i.test(word) ? 'an' : 'a'
+}
+
+/** Fills one pattern. Every slot takes a table value, its article, or the day number. */
+export function fillTitle(pattern: string, verb: TitleVerb, subject: string, n: number): string {
+  return pattern
+    .replaceAll('{base}', verb.base)
+    .replaceAll('{past}', verb.past)
+    .replaceAll('{gerund}', verb.gerund)
+    .replaceAll('{a_subject}', `${article(subject)} ${subject}`)
+    .replaceAll('{n}', String(n))
+}
 
 interface PostChecklistProps {}
 
@@ -110,13 +145,10 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
       return bank[i] ?? fallback
     }
     for (let i = 0; i < 4; i++) {
-      const pattern = pick(TITLE_PATTERNS, TITLE_PATTERNS[0] ?? '{verb} {subject}')
-      const t = pattern
-        .replace('{verb}', pick(VERB_BANK, ''))
-        .replace('{subject}', pick(SUBJECT_BANK, ''))
-        .replace('{game}', pick(GAME_BANK, ''))
-        .replace('{n}', String(Math.floor(Math.random() * 365) + 1))
-      out.push(t)
+      const pattern = pick(TITLE_PATTERNS, TITLE_PATTERNS[0] ?? '')
+      const verb = pick(VERBS, VERBS[0] ?? { base: '', past: '', gerund: '' })
+      const subject = pick(SUBJECTS, '')
+      out.push(fillTitle(pattern, verb, subject, Math.floor(Math.random() * 365) + 1))
     }
     setTitles(out)
   }
@@ -145,7 +177,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
         <PanelHeader icon="text">Title ideas</PanelHeader>
         <div className="flex items-center gap-2">
           <button className="btn-ghost px-3 py-1 text-xs" onClick={generateTitles}>
-            Suggest 4 titles
+            Title starters
           </button>
         </div>
         {titles.length > 0 ? (

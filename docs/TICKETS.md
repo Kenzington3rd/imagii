@@ -1581,7 +1581,7 @@ IMG-PREC.
   button relabeled "Title starters" per the review; unit test
   generates the full cross-product and asserts no "dd"/"toing"/
   "a a" artifacts; E2E keeps the copy-to-clipboard path green.
-- **Status:** open
+- **Status:** done (round 53 — see Done)
 
 ## T-88 — Record: the recovery hint points at a button that can't help, and Cancel eats the take
 
@@ -1731,7 +1731,9 @@ IMG-PREC.
   untouched); claims spot-checked against handlers the way this
   review did; LESSONS entry not required (docs), but guide-sync
   re-run clean.
-- **Status:** open
+- **Status:** done (round 53 — see Done; the guide-sync criterion is
+  satisfied by the wave-close guide-sync pass, scheduled after the
+  last fix round)
 
 ## T-94 — the whole-video "Clip 1" rides along in every export and compilation
 
@@ -1842,9 +1844,61 @@ IMG-PREC.
   entry.
 - **Status:** open
 
+## T-101 — addClipFromRange has no caller: dead code or a missing control
+
+- **Spec:** round-53 worker finding. `videoStore.addClipFromRange`
+  is exercised by tests only — no renderer control calls it (the
+  old USER_GUIDE line about "mark ranges and add them" was stale
+  for the same reason). Either the ladder's deletion rule applies,
+  or a range-to-clip control was always intended and never wired.
+- **Acceptance criteria:** decide (owner may rule): delete the
+  action and retarget its tests at `addScannedClip`'s shared
+  `appendRange`, OR wire a real "add range as clip" control with
+  full interaction coverage. Either way, no exported store action
+  without a caller survives; ledger updated.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 53 — content fix wave batch 6, the first HAIKU round: T-87 +
+T-93. T-87: the title generator is table-driven — every verb form
+(base/past/gerund) comes from a conjugation table, patterns name
+the form they need, articles come from article(), the random game
+bank is gone (the game is the user's to name), and the button says
+"Title starters". The old generator's quoted output ("I clutchedd a
+boss fight", "Day 41 of reacted toing glitch") is pinned
+unreproducible by a full 8x6x4 cross-product test (no dd/toing/
+"a a"/placeholders/exclamations); the worker also caught that the
+old code's single .replace only ever filled a pattern's FIRST slot
+occurrence — replaceAll now. T-93: USER_GUIDE gains "First launch"
+(SmartScreen path, the 10-15 s silent unpack, ~170 MB, data in
+%APPDATA%\imagii), "Your first clip" (a walkthrough verified
+against the post-wave app), "What imagii does not do" (no game
+audio, center-crop reframe, English-only captions, projects store
+paths), coverage for chat spikes / posting helpers / Compile / the
+two different "?" controls, and every stale line re-checked against
+current source; the release.yml body follows the review's text with
+the captions line softened to "one-time setup" (expediter edit —
+the setup is a manual exe fetch plus a download, not one download);
+releaseWorkflowShape.test.ts pins the dispatch/tag-only triggers so
+the standing CI-cost rule cannot be silently widened (fixture-
+proven to reject a widened trigger). Expedite (closer line review
+for the first Haiku round — the diffs held up): verify 1665/1665
+(80 files), build clean, full Playwright 149/149, no ffmpeg surface
+so no test:media; worker's two mutations reviewed (its glued-suffix
+pattern test is sharper than the suggested mutation), one
+independent expediter mutation (article() always 'a' -> 4 named
+reds, byte-identical restore -> 20/20). Haiku deviations accepted:
+'achievement' removed from SUBJECTS (article() still built and
+tested), my ungrammatical sample pattern corrected, bare {subject}
+replaced by {a_subject} everywhere. Worker findings: the References
+"one feature that goes online" line conflicts with the two-
+exceptions ruling (re-ruled; fix rides round 54 with T-89), the
+CaptionsPanel language line is T-89's as filed, T-101 filed
+(addClipFromRange has no caller). T-93's guide-sync criterion is
+deferred to the wave-close guide-sync pass by design.
 
 Round 52 — content fix wave batch 5: T-85 + T-86. T-85, ruled item
 by item (the table is in LESSONS): Clip Kit now STAMPS the saved

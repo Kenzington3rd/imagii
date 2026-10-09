@@ -59,7 +59,7 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1641 tests across 78 files (round 52 added six files —
+**Count.** 1665 tests across 80 files (round 53 added two files — `src/renderer/src/modules/video-studio/PostChecklist.test.ts`, the T-87 cross-product of every title starter (patterns x verbs x subjects) with its article and placeholder checks, and `tests/unit/releaseWorkflowShape.test.ts`, which pins the release workflow's `on:` block to `workflow_dispatch` and a `v*` tag push; round 52 added six files —
 `src/shared/watermark.test.ts`, the one constructor of a `WatermarkSpec` that
 the Export panel and Clip Kit now share, fed the untrusted values a settings
 file can hold; `clipKit.test.ts`, the jobs Clip Kit queues (the saved watermark
