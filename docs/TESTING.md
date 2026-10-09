@@ -59,7 +59,18 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1665 tests across 80 files (round 53 added two files — `src/renderer/src/modules/video-studio/PostChecklist.test.ts`, the T-87 cross-product of every title starter (patterns x verbs x subjects) with its article and placeholder checks, and `tests/unit/releaseWorkflowShape.test.ts`, which pins the release workflow's `on:` block to `workflow_dispatch` and a `v*` tag push; round 52 added six files —
+**Count.** 1735 tests across 84 files (round 54 added four files —
+`src/renderer/src/modules/record-studio/devices.test.ts`, the T-88 device scan
+against a fake `mediaDevices` that rejects a missing kind the way the real one
+does, so a combined probe fails it; `saveCard.test.ts`, the post-Stop card's
+copy and Discard availability per state; `src/main/sidecars/paths.test.ts`, the
+captions engine found under either of its two names; and
+`src/main/sidecars/captionsProgress.test.ts`, the real `runTranscribe` and
+`runBurnIn` driven through a fake child to prove that no progress number is
+invented and that a burn says whether it was captioned — and grew
+`captions.test.ts` (the size derivation, the phase labels, the toasts),
+`recordingCancel.test.ts` (the save dialog's title), `truthInCopy.test.ts` and
+`interactionWiring.test.ts`; round 53 added two files — `src/renderer/src/modules/video-studio/PostChecklist.test.ts`, the T-87 cross-product of every title starter (patterns x verbs x subjects) with its article and placeholder checks, and `tests/unit/releaseWorkflowShape.test.ts`, which pins the release workflow's `on:` block to `workflow_dispatch` and a `v*` tag push; round 52 added six files —
 `src/shared/watermark.test.ts`, the one constructor of a `WatermarkSpec` that
 the Export panel and Clip Kit now share, fed the untrusted values a settings
 file can hold; `clipKit.test.ts`, the jobs Clip Kit queues (the saved watermark
@@ -192,6 +203,28 @@ so these conventions are held by review and by the suite itself):
   under `<body>`, which meant a route change logged a studio's entire
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
+
+**Three more house patterns from round 54** (T-88 and T-89 needed states the
+container cannot produce on its own):
+
+- **Hold the native dialog open to make a state assertable.** `stubSaveDialog`
+  (record.spec.ts) records the options the OS dialog would have been opened with
+  and can delay its answer. The card the renderer shows while a save is pending
+  is on screen for exactly that long, so its per-state copy (and the dialog's own
+  title) is readable without racing a copy that takes milliseconds.
+- **Count the calls instead of guessing what a click did.** A wrapper around
+  `navigator.mediaDevices` installed in the page (`spyOnDeviceScans`) turns "did
+  Refresh re-run the device scan?" into a number the test can read before and
+  after. Stubs for a device that is "plugged in" are installed AFTER the spy so
+  they delegate to it, and `unstubDevices` puts the originals back.
+- **Drive a renderer listener from MAIN on the real channel.** The captions
+  progress row is only ever fed by `captions:progress` messages; with no whisper
+  binary the engine cannot produce them, but
+  `BrowserWindow.getAllWindows()[0].webContents.send('captions:progress', …)`
+  from `app.evaluate` runs the same preload listener and the same render a real
+  transcription would. The same trick replaces an `ipcMain` handler
+  (`removeHandler` then `handle`) to make the renderer's real `catch` see a
+  rejection shape that main never produces on its own.
 
 **A picture the RENDERER has to load cannot come from the test's HTTP
 server.** `index.html`'s CSP allows `img-src 'self' data: blob: https:

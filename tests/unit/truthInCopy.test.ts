@@ -54,7 +54,16 @@ describe('Reference Search says who does the filtering', () => {
   it('names DuckDuckGo as the filter, and says imagii does not scan images', () => {
     expect(panel).toMatch(/SafeSearch is always on \(strict\) — DuckDuckGo does the filtering/)
     expect(panel).toMatch(/scan images itself/)
-    expect(panel).toMatch(/Reference Search is the one feature that goes\s+online/)
+    // T-89: not "the one feature that goes online" — the caption-model download
+    // is online too (the two exceptions are named in the next describe).
+    expect(panel).toMatch(
+      /Reference Search goes\s+online; your saved boards\s+stay on your computer\./
+    )
+  })
+
+  it('"the one feature that goes online" is gone everywhere it was said — panel, tutorial, source', () => {
+    expect(stripComments(panel)).not.toMatch(/one feature that goes/i)
+    expect(ALL_CODE).not.toMatch(/one feature that goes/i)
   })
 
   it('no longer claims thumbnails are screened locally — there is no screening code', () => {
@@ -158,5 +167,59 @@ describe('the watermark claim matches what carries one', () => {
     expect(guide).not.toMatch(/stamp your handle on every export/i)
     expect(guide).toMatch(/Clip Kit/)
     expect(guide).toMatch(/GIF, reframe, compilation and picture-in-picture don.t take one/)
+  })
+})
+
+describe('Captions say what they do (T-89)', () => {
+  const panelSource = read('src/renderer/src/modules/video-studio/CaptionsPanel.tsx')
+  const panel = stripComments(panelSource).replace(/\s+/g, ' ')
+  const whisper = stripComments(read('src/main/sidecars/whisperManager.ts'))
+
+  it('the setup card asks for the binary current whisper.cpp builds ship, never the old name', () => {
+    expect(panel).toMatch(/<code>whisper-cli\.exe<\/code>/)
+    expect(panel).not.toMatch(/whisper\.exe/)
+    // Main accepts both names, so a user who already set up under the old one is not stranded.
+    expect(stripComments(read('src/main/sidecars/paths.ts'))).toMatch(
+      /WHISPER_EXE_NAMES = \['whisper-cli\.exe', 'whisper\.exe'\]/
+    )
+  })
+
+  it('says in one line what is manual, what is automatic, and that the download goes online', () => {
+    expect(panel).toMatch(
+      /You download the captions engine once \(<code>whisper-cli\.exe<\/code>\); imagii downloads the English model \(~141 MB\) for you — that download goes online, once\./
+    )
+  })
+
+  it('states plainly that captions are English only, and no longer says the model decides', () => {
+    expect(panel).toMatch(/Captions are English only\./)
+    expect(panel).not.toMatch(/determines languages|English only by default/)
+  })
+
+  it('says captions burn into the original video, not the platform exports', () => {
+    expect(panel).toMatch(/Captions burn into the original video, not the platform exports\./)
+  })
+
+  it('the size control is "Size" with the real height beside it — not "Font px", not "pixels"', () => {
+    expect(panel).not.toMatch(/Font px|size in pixels|\d+ pixels/)
+    expect(panel).toMatch(/>Size</)
+    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize\)/)
+  })
+
+  it('progress prints a plain label, never the phase id, and has an indeterminate branch', () => {
+    expect(panel).toMatch(/captionPhaseLabel\(progress\.phase\)/)
+    expect(panel).not.toMatch(/\{progress\.phase\}/)
+    expect(panel).toMatch(/progress-indeterminate/)
+  })
+
+  it('main sends no invented progress number', () => {
+    expect(whisper).not.toMatch(/Math\.random/)
+  })
+
+  it('the toasts say what happened: lines of captions, and whether the burn had any', () => {
+    expect(panel).toMatch(/captionsReadyMessage\(result\.segments\.length\)/)
+    expect(panel).not.toMatch(/Captioned \$\{|segments`/)
+    expect(panel).toMatch(/if \(result\.captioned\)/)
+    expect(panel).toMatch(/'Caption model downloaded'/)
+    expect(panel).not.toMatch(/Whisper model installed/)
   })
 })

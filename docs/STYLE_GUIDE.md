@@ -98,6 +98,19 @@ Repeated UI is a component, not copy-paste:
   needs both halves and a row in
   `src/main/ffmpeg/cancelSentinel.test.ts`. Rows that stopped (the export
   queue) keep saying "Failed" or "Canceled" after the toast fades.
+- **A progress number is a measurement, or it is absent (T-89).** A progress
+  event carries `percent` only when main KNOWS how far along the work is — a
+  download's byte count, `done` = 100. (The burn-in and MP4-convert percentages
+  are still estimates from encode time — a known gap, listed in the round-54
+  section of `INTERACTION_COVERAGE.md`.) A phase of unknown
+  length (extracting audio, running the speech engine, writing the SRT) sends
+  the phase with NO `percent`, and the renderer draws an indeterminate bar:
+  `role="progressbar"` with no `aria-valuenow`, and the `.progress-indeterminate`
+  segment from `styles/index.css` (a third of the track sliding across; under
+  Reduce motion it is a static third, never a full bar). Never invent a number to
+  make a bar move — the captions panel used to show `15 + Math.random() * 10`.
+  Phase ids are never shown: a pure `captionPhaseLabel`-style table gives each a
+  plain label ("Transcribing…", not "TRANSCRIBING").
 - **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — the
   envelope-stripping step `userFacingError` starts with. Still the right
   call for a site that wants only main's own sentence (the T-30/T-59 sites:

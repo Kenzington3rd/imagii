@@ -136,8 +136,11 @@ async function promoteTempWebm(
     const baseName = spec.filename.replace(/\.(webm|mp4)$/i, '')
     const targetExt = spec.convertToMp4 ? 'mp4' : 'webm'
 
+    // T-88: Cancel here throws the take away (the stream is already closed and
+    // the temp file is reaped below) — the title says so, because "Save
+    // recording" with a Cancel button reads as "not now", not "gone".
     const result = await dialog.showSaveDialog(win, {
-      title: 'Save recording',
+      title: 'Save recording (Cancel discards it)',
       defaultPath: `${baseName}.${targetExt}`,
       filters: [
         spec.convertToMp4

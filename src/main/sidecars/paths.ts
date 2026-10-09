@@ -53,8 +53,28 @@ export function thumbsCacheDir(): string {
 // anywhere in main/renderer (verified via grep). Keep the file lean so a
 // future reader doesn't think a logs/ or ai-output/ tree exists.
 
+/**
+ * The names the captions engine goes by, in the order they are looked for.
+ * Current whisper.cpp builds ship `whisper-cli.exe`; older ones shipped the
+ * same program as `whisper.exe` (and later builds keep a `whisper.exe` that
+ * only prints a deprecation notice). Both names are accepted — a user who put
+ * either in the folder is set up — and the new one wins when both are there.
+ * T-89: the setup card told people to fetch a file current releases do not
+ * contain.
+ */
+export const WHISPER_EXE_NAMES = ['whisper-cli.exe', 'whisper.exe'] as const
+
+/**
+ * Where the captions engine is. The first name in `WHISPER_EXE_NAMES` that
+ * exists wins; when none does, the answer is the PREFERRED name's path (not
+ * found), because that is the file the setup card asks the user to put there.
+ */
 export function whisperExePath(): BinaryStatus {
-  return probe(resourcePath('bin', 'whisper.exe'))
+  for (const name of WHISPER_EXE_NAMES) {
+    const found = probe(resourcePath('bin', name))
+    if (found.exists) return found
+  }
+  return probe(resourcePath('bin', WHISPER_EXE_NAMES[0]))
 }
 
 export function whisperModelPath(modelFile = 'ggml-base.en.bin'): BinaryStatus {

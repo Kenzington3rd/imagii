@@ -1040,8 +1040,19 @@ test.describe('CaptionsPanel', () => {
       // "whisper.exe" too, in a <code>.
       const paths = card.locator('div.font-mono.break-all')
       await expect(paths).toHaveCount(2)
-      await expect(paths.nth(0)).toHaveText(/whisper\.exe$/)
+      // T-89: current whisper.cpp builds ship `whisper-cli.exe`, so that is the
+      // file the card asks for (main also accepts the old `whisper.exe`).
+      await expect(paths.nth(0)).toHaveText(/whisper-cli\.exe$/)
       await expect(paths.nth(1)).toHaveText(/ggml-base\.en\.bin$/)
+      // T-89: the card says in ONE line what is manual and what is automatic,
+      // and that the download goes online — and never names the old binary.
+      await expect(
+        card.getByText(
+          'You download the captions engine once (whisper-cli.exe); imagii downloads the English model (~141 MB) for you — that download goes online, once.'
+        )
+      ).toBeVisible()
+      await expect(card.locator('code')).toHaveText(['whisper-cli.exe', 'whisper-cli.exe'])
+      await expect(card.getByText(/whisper\.exe/)).toHaveCount(0)
       // Both shell shortcuts and both doc links are rendered (their OS side
       // is dispositioned; what is asserted is that they exist and are
       // reachable from this branch).
@@ -1054,7 +1065,7 @@ test.describe('CaptionsPanel', () => {
       await expect(
         card.getByRole('button', { name: /Download model \(~141 MB\) automatically/ })
       ).toBeVisible()
-      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-04-captions-setup.png') })
+      await card.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-04-captions-setup.png') })
 
       // ── refresh status: re-asks the main process, same answer ──
       await card.getByRole('button', { name: 'Refresh status' }).click()
@@ -1071,13 +1082,23 @@ test.describe('CaptionsPanel', () => {
       await expect(card.getByRole('button', { name: 'Refresh status' })).toBeVisible()
       await expect(card.getByRole('button', { name: 'Transcribing…' })).toHaveCount(0)
       expect(await readToastLog(window)).not.toEqual(
-        expect.arrayContaining([expect.stringContaining('Captioned')])
+        expect.arrayContaining([expect.stringContaining('Captions ready')])
       )
+
+      // T-89: two facts the panel never stated, visible before and after any
+      // setup. The language is fixed (the model is English-only), and a
+      // burn-in reads the ORIGINAL file — the platform exports are separate.
+      await expect(card.getByText('Captions are English only.')).toBeVisible()
+      await expect(
+        card.getByText('Captions burn into the original video, not the platform exports.')
+      ).toBeVisible()
+      await expect(card.getByText(/determines languages/)).toHaveCount(0)
+      await expect(card.getByText(/English only by default/)).toHaveCount(0)
 
       // With no srtPath the whole style + output subtree stays unmounted.
       await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
-      await expect(card.getByRole('slider', { name: 'Caption font size in pixels' })).toHaveCount(0)
+      await expect(card.getByRole('slider', { name: 'Caption size' })).toHaveCount(0)
     } finally {
       await app.close()
     }
@@ -1130,12 +1151,17 @@ test.describe('CaptionsPanel', () => {
       })
 
       const card = captionsCard(window)
-      const fontSlider = card.getByRole('slider', { name: 'Caption font size in pixels' })
+      // T-89: "Font px" was not pixels (libass scales it against a 288-line
+      // script), so it is "Size", with what it comes to read out beside it.
+      const fontSlider = card.getByRole('slider', { name: 'Caption size' })
       const position = card.locator('select')
       const colors = card.locator('input[type="color"]')
       // The subtree only exists because srtPath survived the project load.
       await expect(fontSlider).toBeVisible()
       await expect(fontSlider).toHaveValue('32')
+      await expect(card.getByText('Size', { exact: true })).toBeVisible()
+      await expect(card.getByText('Font px')).toHaveCount(0)
+      await expect(card.getByText('about 120 px tall on 1080p')).toBeVisible()
       await expect(position).toHaveValue('bottom')
       await expect(colors.nth(0)).toHaveValue('#ffffff')
       await expect(colors.nth(1)).toHaveValue('#000000')
@@ -1143,8 +1169,10 @@ test.describe('CaptionsPanel', () => {
       // ── the four style presets, each a complete CaptionStyle ──
       await card.getByRole('button', { name: 'TikTok bold' }).click()
       await expect(fontSlider).toHaveValue('56')
+      await expect(card.getByText('about 210 px tall on 1080p')).toBeVisible()
       await card.getByRole('button', { name: 'Reels minimal' }).click()
       await expect(fontSlider).toHaveValue('28')
+      await expect(card.getByText('about 105 px tall on 1080p')).toBeVisible()
       await expect(colors.nth(0)).toHaveValue('#f5f5f5')
       await expect(colors.nth(1)).toHaveValue('#222222')
       await card.getByRole('button', { name: 'Big-outline accessibility' }).click()
@@ -1156,6 +1184,8 @@ test.describe('CaptionsPanel', () => {
       // ── the dials stay editable after a preset (the panel's promise) ──
       await fontSlider.fill('72')
       await expect(card.getByText('72', { exact: true })).toBeVisible()
+      await expect(card.getByText('about 270 px tall on 1080p')).toBeVisible()
+      await expect(fontSlider).toHaveAttribute('aria-valuetext', '72, about 270 px tall on 1080p')
       await position.selectOption('middle')
       await expect(position).toHaveValue('middle')
       await position.selectOption('top')
@@ -1172,7 +1202,7 @@ test.describe('CaptionsPanel', () => {
       await expect(trim).not.toBeChecked()
       await trim.check()
       await expect(trim).toBeChecked()
-      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-05-caption-style.png') })
+      await card.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-05-caption-style.png') })
 
       // ── Save .srt: a real copy through the main process's confinement
       //    check, landing on disk where the (stubbed) chooser said ──
@@ -1182,8 +1212,157 @@ test.describe('CaptionsPanel', () => {
       expect(existsSync(savedSrt)).toBe(true)
       expect(readFileSync(savedSrt, 'utf8')).toBe(readFileSync(srtPath, 'utf8'))
 
-      // Burn-in is NOT clicked — see DISPOSITIONS (Layer 5 owns runBurnIn).
+      // Burn-in is NOT clicked in this test — the ranged-burn test below drives it
+      // for real (ffmpeg only; no whisper, no model).
       await expect(card.getByRole('button', { name: 'Burn into video' })).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('progress reads in plain words, and a phase with no measurable progress is an indeterminate bar (T-89)', async () => {
+    test.setTimeout(120_000)
+    // Whisper is not installed here (HL-whisper), so the engine cannot produce
+    // the events. The panel only knows them as messages on the real
+    // `captions:progress` channel, so MAIN sends them — the same channel, the
+    // same preload listener, the same render a real transcription drives.
+    const { app, window } = await launchWithVideo('captionprogress')
+    try {
+      const card = captionsCard(window)
+      const bar = card.getByRole('progressbar')
+      const send = (payload: Record<string, unknown>): Promise<void> =>
+        app.evaluate(({ BrowserWindow }, p) => {
+          BrowserWindow.getAllWindows()[0]?.webContents.send('captions:progress', p)
+        }, payload)
+
+      await expect(bar).toHaveCount(0)
+
+      // ── a phase main cannot measure: no percent on the event ──
+      await send({ jobId: 'j', phase: 'extracting' })
+      await expect(card.getByText('Extracting audio…')).toBeVisible()
+      await send({ jobId: 'j', phase: 'transcribing', message: '00:00:07.500' })
+      await expect(card.getByText('Transcribing…', { exact: true })).toBeVisible()
+      await expect(bar).toHaveAccessibleName('Transcribing…')
+      // Indeterminate: no value on the bar, the sliding segment is drawn, and
+      // there is no percentage text anywhere in the row.
+      await expect(bar).not.toHaveAttribute('aria-valuenow', /.*/)
+      await expect(bar.locator('.progress-indeterminate')).toHaveCount(1)
+      await expect(card.getByText(/\d+%/)).toHaveCount(0)
+      // The raw ids the row used to print, upper-cased, are gone.
+      await expect(card.getByText(/TRANSCRIBING|EXTRACTING|BUILDING-SRT|BURNING-IN/)).toHaveCount(0)
+      await card.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-07-captions-progress.png') })
+
+      // Many events in one phase never put a number on the bar: the old jitter
+      // (15 + Math.random() * 10) reached the row as a changing percentage.
+      for (let i = 0; i < 5; i += 1) {
+        await send({ jobId: 'j', phase: 'transcribing', message: `00:00:0${i}.000` })
+      }
+      await expect(bar).not.toHaveAttribute('aria-valuenow', /.*/)
+      await expect(card.getByText(/\d+%/)).toHaveCount(0)
+
+      await send({ jobId: 'j', phase: 'building-srt' })
+      await expect(card.getByText('Building captions…')).toBeVisible()
+      await expect(bar.locator('.progress-indeterminate')).toHaveCount(1)
+
+      // ── a phase main CAN measure keeps its real bar, number and Cancel ──
+      await send({ jobId: 'j', phase: 'burning-in', percent: 40 })
+      await expect(card.getByText('Burning in…')).toBeVisible()
+      await expect(bar).toHaveAttribute('aria-valuenow', '40')
+      await expect(bar.locator('.progress-indeterminate')).toHaveCount(0)
+      await expect(card.getByText('40%', { exact: true })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+
+      await send({ jobId: 'j', phase: 'done', percent: 100 })
+      await expect(card.getByText('Done', { exact: true })).toBeVisible()
+      await expect(bar).toHaveAttribute('aria-valuenow', '100')
+      await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a ranged burn with no cue in its range says so; with a cue it says "burned in" (T-89)', async () => {
+    test.setTimeout(240_000)
+    // burn-in is ffmpeg-only (no whisper, no model), so it runs for real: the
+    // project route supplies an SRT and two clips, the save chooser is stubbed
+    // in MAIN, and the toast is read against the bytes that were written.
+    const studio = await launchHome('captionrange')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'range.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      // ONE cue, 0.0-0.5 s of the 2 s source.
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,500\nearly words\n', 'utf8')
+      const clip = (id: string, name: string, startSec: number, endSec: number) => ({
+        id,
+        name,
+        startSec,
+        endSec,
+        cropRect: null,
+        textOverlays: [],
+        selectedPresets: ['youtube']
+      })
+      const projectPath = path.join(root, `captionrange-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: {
+            sourcePath: clipSrc,
+            // Selected: "Late", 1.0-2.0 s, where nobody speaks. "Early" holds the cue.
+            clips: [clip('late', 'Late', 1, 2), clip('early', 'Early', 0, 1)],
+            selectedClipId: 'late',
+            watermark: null,
+            srtPath
+          }
+        }),
+        'utf8'
+      )
+      const outLate = path.join(outDir, 'late-captioned.mp4')
+      const outEarly = path.join(outDir, 'early-captioned.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [outLate, outEarly] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await card.getByRole('checkbox').check()
+
+      // ── the range nobody speaks in: the clip is written, and the toast does
+      //    not claim captions (red against "Captions burned in") ──
+      await burn.click()
+      await expectToast(window, 'No captions in this range — exported without captions.')
+      const late = (await readToastEntries(window)).find((e) =>
+        e.text.startsWith('No captions in this range')
+      )
+      // A heads-up, not a success tick and not a failure cross: it drew its
+      // own (warning) icon rather than react-hot-toast's.
+      expect(late?.hasIcon).toBe(true)
+      expect((await readToastLog(window)).join(' | ')).not.toContain('Captions burned in')
+      await expect.poll(() => existsSync(outLate), { timeout: 60_000 }).toBe(true)
+      const lateProbe = await ffprobeJson(outLate)
+      // The file is the range (1 s), uncaptioned — what the toast said.
+      expect(Number(lateProbe.format?.duration)).toBeGreaterThan(0.8)
+      expect(Number(lateProbe.format?.duration)).toBeLessThan(1.3)
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+
+      // ── the control: select the clip that HAS the cue, same button ──
+      await clipListCard(window).getByRole('button', { name: 'Select clip Early' }).click()
+      await burn.click()
+      await expectToast(window, 'Captions burned in')
+      await expect.poll(() => existsSync(outEarly), { timeout: 60_000 }).toBe(true)
+      // The earlier toast was not reused: exactly one of each, in order.
+      const texts = (await readToastLog(window)).filter(
+        (t) => t.startsWith('No captions in this range') || t === 'Captions burned in'
+      )
+      expect(texts).toEqual([
+        'No captions in this range — exported without captions.',
+        'Captions burned in'
+      ])
     } finally {
       await app.close()
     }

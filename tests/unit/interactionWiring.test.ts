@@ -575,3 +575,43 @@ describe('T-28 — nothing in src/ calls the DOM prompt', () => {
     }
   })
 })
+
+describe('T-88 — Record: Refresh sources re-checks what its hints send people to it for', () => {
+  // E2E: tests/e2e/record.spec.ts — "Refresh sources re-scans the microphone and
+  // camera" counts the scan's calls through the click; "a microphone and NO
+  // camera" and "with a camera attached" prove the lists are independent; the
+  // saving-card and sentinel tests drive the post-Stop copy. These pins are the
+  // shape underneath them: the button is wired to the function that does both
+  // jobs, and the combined probe that blanked a list is not coming back.
+  const studio = read('modules/record-studio/RecordStudio.tsx')
+  const code = studio.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('the button runs refreshAll, and refreshAll runs BOTH the source list and the device scan', () => {
+    expect(code).toMatch(/onClick=\{refreshAll\}/)
+    const body = /function refreshAll\(\): void \{([\s\S]*?)\n  \}/.exec(code)?.[1] ?? ''
+    expect(body).toMatch(/chooseSource\(\)/)
+    expect(body).toMatch(/refreshDevices\(\)/)
+  })
+
+  it('scans through scanDevices (one probe per kind) and never asks for audio and video in one call', () => {
+    expect(code).toMatch(/scanDevices\(navigator\.mediaDevices\)/)
+    expect(code).not.toMatch(/audio:\s*true,\s*video:\s*true/)
+  })
+
+  it('both hints come from noDeviceHint, and the old "after granting permission" hint is gone', () => {
+    expect(code).toMatch(/noDeviceHint\('microphone'\)/)
+    expect(code).toMatch(/noDeviceHint\('camera'\)/)
+    expect(code).not.toMatch(/after granting permission/)
+  })
+
+  it('the save card is the saveCard() copy, and Discard is gated on it', () => {
+    expect(code).toMatch(/const save = saveCard\(convertToMp4, discarding\)/)
+    expect(code).toMatch(/disabled=\{!save\.canDiscard\}/)
+    expect(code).not.toMatch(/converting and writing to disk/)
+  })
+
+  it('a rejected discard goes through the one failure helper, and a sentinel rejection is a discard', () => {
+    expect(code).toMatch(/\.cancelSave\(\)[\s\S]*?\.catch\(\(err\) => \{[\s\S]*?reportFailure\(err/)
+    expect(code).toMatch(/if \(isCancelledError\(err\)\) \{/)
+  })
+})

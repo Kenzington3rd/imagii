@@ -14,6 +14,187 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-88 + T-89 (round 54): a hint that pointed at the wrong button, a Cancel that ate the take, and a "px" that was not pixels
+
+Two tickets from the content review, one root: the product said a thing — a
+button name, a status line, a dialog title, a unit, a percentage — and nothing
+held the thing to what the code did. Both are fixed by making the code and the
+sentence come from the same place, and by testing the sentence.
+
+### Bug (T-88) — Record's recovery path did not recover, and its save copy lied about three states
+
+- **Bug.** "No microphone found. Click 'Refresh sources' after granting
+  permission." — but Refresh re-listed screens and windows only; the device
+  lists loaded once, on arrival, and never again. They came from ONE
+  `getUserMedia({ audio: true, video: true })` probe, which rejects if ANY
+  requested kind is missing, into a `catch` that said nothing — so a streamer
+  with a microphone and no webcam (the common case) read "No microphone found".
+  The native save dialog was titled "Save recording" while its Cancel button
+  threw the take away. The card after Stop said "converting and writing to
+  disk…" with Convert to MP4 OFF (nothing converts), drew a progress bar that sat
+  on its 2% floor, and offered "Discard recording", which in that state called a
+  cancel with nothing behind it and did nothing at all.
+- **Root cause.** Four unrelated strings had each been written once, for the
+  case the author was looking at, and never re-read against the others. The
+  hint named a control by what it USED to do; the combined probe was a
+  convenience that made two independent questions one all-or-nothing answer;
+  the dialog title was the verb for the happy path; the card was one sentence
+  for three states.
+- **Fix.** `modules/record-studio/devices.ts` (new, pure): `scanDevices` probes
+  the microphone and the camera SEPARATELY and releases each probe stream at
+  once, then lists a kind only if its own probe succeeded (a device Windows will
+  not let the app open is not offered, even though the enumeration names it);
+  `reconcileDeviceId` drops a pick for a device that has gone (T-69's rule for
+  screens, applied to devices); `noDeviceHint` is the one sentence for both
+  hints — "No microphone found. Plug one in, or allow microphone access in
+  Windows privacy settings, then click Refresh sources." — naming the two real
+  recoveries and the button. "Refresh sources" now runs `chooseSource()` AND
+  `refreshDevices()`; only the newest scan may write state, because two clicks
+  now start two scans. `modules/record-studio/saveCard.ts` (new, pure): the
+  card's status line, bar and Discard availability per state — converting
+  (bar, Discard live), plain WebM copy ("saving to disk…", no bar, Discard
+  disabled with the reason on screen), a discard in flight ("Discarding the
+  recording…"). `RecordStudio` keeps a `discarding` flag so the button cannot be
+  clicked twice, and re-enables it if the click found nothing to kill.
+  `ipc/recording.ts`: the dialog title is "Save recording (Cancel discards it)".
+  A save that rejects with the cancel sentinel is announced as the calm
+  discard, not a red "Save failed" (main already answers a killed convert with
+  `null` since T-44; the sentinel is the same fact in rejection form).
+- **Test.** Unit: `devices.test.ts` (18) drives `scanDevices` against a fake
+  `mediaDevices` that behaves like the real one where it matters — a request for
+  a missing kind rejects, and a request for several kinds rejects if ANY is
+  missing — so the test is the machine and a combined probe fails it.
+  `saveCard.test.ts` (6): Discard is offered in exactly one state; "converting"
+  appears only with Convert on. `recordingCancel.test.ts`: the dialog's options
+  object carries the title (MP4 and WebM), and Cancel then resolves `null` and
+  reaps the take, so the title's claim is true. `interactionWiring.test.ts`:
+  the button is wired to the function that does both jobs, no
+  `audio: true, video: true` literal, Discard is gated on the card. E2E
+  (`record.spec.ts`): "Refresh sources re-scans the microphone and camera, not
+  just the screens" — a spy in the page counts the scan through the click, then a
+  camera is plugged in and unplugged by stub; "a microphone and NO camera: the
+  mic is listed and only the camera warns"; "a WebM take: the card says "saving",
+  has nothing to stop, and the dialog title warns that Cancel discards" (the
+  stubbed save dialog now records its options and can be held open, which is
+  what makes the card assertable at all); "a save that comes back as the cancel
+  sentinel is a discard, not "Save failed"" (the `recording:finalize` handler is
+  replaced in main). The existing T-42 stub moved from the combined probe to the
+  per-kind one, and the "with a camera attached" test now also asserts the mic
+  warning beside the camera list. Red-first: 6 of the 18 device cases fail
+  against the combined probe (`expected [] to deeply equal [ { deviceId:
+  'mic-1', … } ]`); all four new E2E fail against the old build; and with
+  `refreshAll` re-listing screens only the Refresh test fails at the click
+  (`Expected: 2  Received: 1`). Mutations (each byte-identical on restore):
+  probes recombined into one call -> the 6 device cases; title reverted -> 2
+  `recordingCancel` cases; Discard live for a WebM save -> 2 `saveCard` cases.
+- **Lesson.** **A recovery hint is a promise about a control: re-read it
+  whenever the control changes, and test that the control does what the hint
+  says it does** — the Refresh test asks the one question the DOM cannot
+  answer (did the click re-run the scan?) by counting calls. **Do not ask two
+  independent questions in one call.** An all-or-nothing probe turns "one thing
+  is missing" into "everything is missing", and a swallowed `catch` hides it:
+  probe each thing alone and let each answer decide only its own list. **A
+  button that cannot act should say so, not pretend**: Discard is disabled with
+  its reason on screen when there is nothing to stop. And a dialog whose Cancel
+  is destructive must say so in its title — the OS chrome is untestable, but the
+  options it is opened with are not.
+
+### Bug (T-89) — the captions panel sent people to a file that does not exist, said it was English-only in neither place, and called a scale "px"
+
+- **Bug.** The setup card told the user to fetch `whisper.exe`; current
+  whisper.cpp builds ship `whisper-cli.exe`. It never said the model download
+  goes online, nor which half of setup is manual. "The model file you choose
+  determines languages" — the model and the language are hard-coded English.
+  "Font px" is not pixels: libass scales `force_style` FontSize against a
+  288-line script (the T-11 entry measured it), so the default 32 paints ~120 px
+  on 1080p and the slider's maximum, 96, paints 360. Progress printed raw phase
+  ids in capitals ("BUILDING-SRT") and, during transcription, a percentage that
+  was `15 + Math.random() * 10` — it jittered between 15 and 25 for as long as
+  the engine ran and measured nothing. A burn over a range nobody speaks in wrote
+  the clip with no captions and toasted "Captions burned in". Nothing said that
+  a burn-in reads the ORIGINAL file, not the platform exports. The References
+  panel said Reference Search "is the one feature that goes online", which the
+  model download makes false.
+- **Root cause.** The same as T-88's, in a panel that had grown by phases: copy
+  written for the author's own machine (the old binary name), a unit taken from
+  a variable's doc comment ("Pixel font size") instead of from the renderer that
+  consumes it, and a progress number invented to make a bar move because the
+  type required a `percent`. The ranged burn already KNEW when the shifted SRT
+  was empty (T-81 added that branch) and returned a result that could not say so.
+- **Fix.** `sidecars/paths.ts`: `WHISPER_EXE_NAMES = ['whisper-cli.exe',
+  'whisper.exe']` — the first that exists wins, and with neither the answer is
+  the preferred name's path (the file the card asks for); a user who set up under
+  the old name is not stranded. `CaptionsPanel`: the card leads with "You
+  download the captions engine once (whisper-cli.exe); imagii downloads the
+  English model (~141 MB) for you — that download goes online, once." and frames
+  the resources path as "save it exactly here"; "Font px" is "Size", with "about
+  N px tall on 1080p" under it (`effectiveCaptionPx` = size x 1080 / 288 in
+  `shared/captions.ts`; the STORED value and every preset are unchanged — a
+  label and a derived readout, no reinterpretation, per the T-74 lesson);
+  the slider's accessible name no longer claims pixels. Two lines are always on
+  the panel: "Captions are English only." and "Captions burn into the original
+  video, not the platform exports." `CaptionsProgress.percent` is optional: main
+  sends it only when it is true (`done` is 100; burn-in keeps the encode-time
+  estimate it always had — see the ledger's found-not-fixed note) and sends NO percent for extracting, transcribing and building the
+  SRT — extraction's fixed 5 and the SRT write's fixed 95 measured nothing
+  either, which the ticket did not name; the panel draws an indeterminate bar
+  (`role="progressbar"`, no `aria-valuenow`, `.progress-indeterminate` in
+  `styles/index.css`, a static third under Reduce motion) and a plain label from
+  `captionPhaseLabel`. `runBurnIn` resolves `{ outputPath, captioned }`;
+  `captioned` is false exactly when a ranged burn had no cue in range, and the
+  panel toasts "No captions in this range — exported without captions." with its
+  own warning icon instead of "Captions burned in". "Captioned N segments"
+  became "Captions ready (N lines)" through the shared `countOf`;
+  "Whisper model installed" became "Caption model downloaded". The References
+  note reads "Reference Search goes online; your saved boards stay on your
+  computer." (and the tutorial step that said the same false thing). No ffmpeg
+  or whisper argv changed: the burn's command line is byte-for-byte what it was.
+- **Test.** Unit: `captions.test.ts` — `effectiveCaptionPx`, with expected values
+  worked by hand from 1080/288 and the two numbers the T-11 entry measured from
+  real renders, `captionSizeReadout`, `captionPhaseLabel`, both toast helpers;
+  `sidecars/paths.test.ts` (new) — either name resolves, both prefers
+  `whisper-cli.exe`, neither reports it as the missing path;
+  `sidecars/captionsProgress.test.ts` (new) — the real `runTranscribe` and
+  `runBurnIn` driven through a fake child: no event but `done` carries a
+  number across 60 engine lines, and `captioned` is true/false for a whole
+  burn, an in-range cue, an empty window and a window ending where the only cue
+  starts; `truthInCopy.test.ts` — the panel's setup, English-only, placement,
+  Size and toast strings, no `Math.random` in the transcribe path, and "one
+  feature that goes online" gone from every source file. E2E
+  (`video-pipelines.spec.ts`): the setup card, the Size readout (default, three
+  presets, a dragged value), the progress row driven from main on the REAL
+  `captions:progress` channel (plain labels, indeterminate bar, six transcribing
+  events never put a number on it, burn-in keeps its 40% and its Cancel), and a
+  real ranged burn through the panel — a clip with no cue in range writes a ~1 s
+  file and toasts the no-captions line, the clip WITH the cue toasts "Captions
+  burned in". Layer 5 (`tests/integration/media.spec.ts`): `captioned` is
+  asserted beside the luma reads it must agree with. Red-first: the old
+  whisperManager fails 6 of the 7 new main cases (`expected [ 'extracting',
+  'transcribing', …(5) ] to deeply equal [ 'done' ]`; `expected undefined to be
+  false`); the old build fails all five E2E, and the empty-range one reads
+  `Received: ["Captions burned in"]`. Mutations (byte-identical on restore): the
+  derivation returns the raw size -> 5 named reds (`expected 24 to be 90`,
+  `expected 'about 32 px tall on 1080p' to be 'about 120 px tall on 1080p'`);
+  `whisper-cli.exe` dropped from the resolver -> 6 reds across `paths.test.ts`
+  and `truthInCopy.test.ts`.
+- **Lesson.** **A unit is a claim; derive it from the consumer, not from a
+  comment.** "Pixel size" was true of the variable and false of the picture, and
+  the two numbers differ by 3.75 at every setting — the fix is a derived readout
+  (the stored number is untouched, so no saved value is reinterpreted) and a test
+  whose expected values are worked from the geometry, not read back from the
+  helper. **A progress number is a measurement or it is absent**: an invented
+  value that moves is worse than a bar that says "working" — make the field
+  optional so "unknown" is representable, and let the renderer's two branches be
+  the two honest states. **When a runner already knows a fact, put it in its
+  result**: T-81 made `runBurnIn` skip the subtitle stage for an empty window and
+  returned nothing to say so, which is how a success toast came to describe a
+  file that did not match it. **A claim about "the only" is a claim about every
+  other feature**: "the one feature that goes online" was written before the
+  model download existed and was copied into a tutorial step; grep every site
+  that repeats a superlative when the set it ranges over grows.
+
+---
+
 ## 2026-10-09 — T-87 (round 53): a generator that glued letters onto words, and a subject that broke the article
 
 One ticket, found by the content review rather than by a user: the "Suggest 4

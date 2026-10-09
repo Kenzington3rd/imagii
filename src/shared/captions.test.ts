@@ -2,11 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import {
+  ASS_PLAY_RES_Y,
+  burnInDoneMessage,
+  captionPhaseLabel,
+  captionsReadyMessage,
+  captionSizeReadout,
+  DEFAULT_CAPTION_STYLE,
+  effectiveCaptionPx,
   escapeSubtitlesPath,
   isShiftedSrtName,
   shiftedSrtPath,
   shiftSrtToRange,
-  tsToSeconds
+  tsToSeconds,
+  type CaptionsProgress
 } from './captions'
 
 describe('tsToSeconds — variable-length fractional seconds (Phase 2.13)', () => {
@@ -193,5 +201,99 @@ describe('shiftedSrtPath / isShiftedSrtName — the temp copy and its sweep agre
 
   it('refuses an id that the sweep could not recognise', () => {
     expect(() => shiftedSrtPath('a.srt', 'not-a-uuid')).toThrow(/UUID/)
+  })
+})
+
+describe('effectiveCaptionPx — the size control says what it makes (T-89)', () => {
+  // libass scales force_style FontSize against a 288-line script (PlayResY),
+  // so the number on the slider is a fraction of the frame, not pixels. The
+  // expected values below are worked by hand from the ratio 1080 / 288 = 3.75
+  // — NOT read back from the helper — and the first two are the measurements
+  // the T-11 entry recorded from real renders (a nominal 24 painted ~90 px on
+  // 1080p).
+  it('is size x 1080 / 288 on a 1080p frame', () => {
+    expect(effectiveCaptionPx(24)).toBe(90)
+    expect(effectiveCaptionPx(32)).toBe(120)
+    expect(effectiveCaptionPx(16)).toBe(60)
+    expect(effectiveCaptionPx(56)).toBe(210)
+    expect(effectiveCaptionPx(96)).toBe(360)
+  })
+
+  it('is never the raw number — the label that said "px" was wrong at every setting', () => {
+    for (let size = 16; size <= 96; size += 8) {
+      expect(effectiveCaptionPx(size)).not.toBe(size)
+      expect(effectiveCaptionPx(size)).toBeGreaterThan(size)
+    }
+  })
+
+  it('scales with the frame, because the 288 is the script and the frame is the picture', () => {
+    expect(effectiveCaptionPx(32, 720)).toBe(80)
+    expect(effectiveCaptionPx(32, 2160)).toBe(240)
+    expect(effectiveCaptionPx(32, 288)).toBe(32)
+  })
+
+  it('rounds to whole pixels', () => {
+    // 17 x 3.75 = 63.75
+    expect(effectiveCaptionPx(17)).toBe(64)
+    expect(Number.isInteger(effectiveCaptionPx(33))).toBe(true)
+  })
+
+  it('pins the constant it is built on', () => {
+    expect(ASS_PLAY_RES_Y).toBe(288)
+  })
+
+  it('refuses a size or a frame that is not a positive number', () => {
+    expect(() => effectiveCaptionPx(0)).toThrow()
+    expect(() => effectiveCaptionPx(Number.NaN)).toThrow()
+    expect(() => effectiveCaptionPx(32, 0)).toThrow()
+  })
+
+  it('the readout beside the slider says it in words, for the default and the extremes', () => {
+    expect(captionSizeReadout(DEFAULT_CAPTION_STYLE.fontSize)).toBe('about 120 px tall on 1080p')
+    expect(captionSizeReadout(16)).toBe('about 60 px tall on 1080p')
+    expect(captionSizeReadout(96)).toBe('about 360 px tall on 1080p')
+  })
+})
+
+describe('captionPhaseLabel — plain words for each phase (T-89)', () => {
+  const PHASES: Array<[CaptionsProgress['phase'], string]> = [
+    ['extracting', 'Extracting audio…'],
+    ['transcribing', 'Transcribing…'],
+    ['building-srt', 'Building captions…'],
+    ['burning-in', 'Burning in…'],
+    ['done', 'Done']
+  ]
+
+  it.each(PHASES)('%s reads %s', (phase, label) => {
+    expect(captionPhaseLabel(phase)).toBe(label)
+  })
+
+  it('no label is the raw id', () => {
+    for (const [phase] of PHASES) {
+      expect(captionPhaseLabel(phase)).not.toBe(phase)
+      expect(captionPhaseLabel(phase)).not.toMatch(/-/)
+      // The panel used to upper-case the id ("BUILDING-SRT"); a label is
+      // sentence case, not a shouted identifier.
+      expect(captionPhaseLabel(phase)).toMatch(/^[A-Z][a-z]/)
+    }
+  })
+})
+
+describe('the captions toasts say what happened (T-89)', () => {
+  it('a transcription reports lines of caption with the singular handled', () => {
+    expect(captionsReadyMessage(0)).toBe('Captions ready (0 lines)')
+    expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
+    expect(captionsReadyMessage(42)).toBe('Captions ready (42 lines)')
+    expect(captionsReadyMessage(42)).not.toMatch(/segment/i)
+  })
+
+  it('a burn-in that put captions on the picture says so', () => {
+    expect(burnInDoneMessage(true)).toBe('Captions burned in')
+  })
+
+  it('a burn-in over a range nobody speaks in does NOT claim captions', () => {
+    const msg = burnInDoneMessage(false)
+    expect(msg).toBe('No captions in this range — exported without captions.')
+    expect(msg).not.toMatch(/burned in/i)
   })
 })

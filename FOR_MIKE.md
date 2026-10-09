@@ -26,7 +26,7 @@ Plus, in the side panels:
 - **GIF export** — width / fps / speed selectors for the trimmed range
 - **Compile clips** — stitch your clip list into one montage MP4 with crossfades
 - **Picture-in-picture composite** — overlay one video on another (e.g. webcam on screen)
-- **Auto-captions** — Whisper-based transcription, save SRT or burn into video (needs whisper.exe install)
+- **Auto-captions** — Whisper-based transcription, save SRT or burn into video (needs a one-time whisper-cli.exe install; English only)
 - **Color & motion** — per-clip brightness / contrast / saturation / temperature, plus auto-zoom and hype-shake toggles
 - **Posting helpers** — title pattern suggester, hashtag packs, posting log + performance diary
 
@@ -68,6 +68,6 @@ App data lives at `%APPDATA%\imagii\`.
 - **SmartScreen warning** — see install step 2
 - **Antivirus might flag it** — unsigned Electron portables sometimes trip heuristics; the source code is fully readable in this folder if you want to verify
 - **First launch is slow** — Electron unpacks the bundle to `%TEMP%`; subsequent launches are fast
-- **Captions need a one-time install** — whisper.exe + a model file from whisper.cpp releases. The Captions panel walks you through it. Everything else works without that.
+- **Captions need a one-time install** — you download whisper-cli.exe from the whisper.cpp releases once; imagii downloads the English model for you (that download goes online, once). The Captions panel walks you through it. Everything else works without that.
 
 ## Made by Makenah · enjoy! ❤️

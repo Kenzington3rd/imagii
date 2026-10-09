@@ -23,7 +23,7 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 
 **Hardware notes:**
 - No GPU is required. The previous AI image-generation feature was removed in the refit; nothing in imagii now needs CUDA / VRAM.
-- Auto-captions are optional and use [whisper.cpp](https://github.com/ggerganov/whisper.cpp). The captions panel inside Video Studio walks you through downloading `whisper.exe` and a small model file (~150 MB).
+- Auto-captions are optional and use [whisper.cpp](https://github.com/ggerganov/whisper.cpp). The captions panel inside Video Studio walks you through it: you download `whisper-cli.exe` once, and imagii downloads the English model (~141 MB) for you — that download goes online, once. Captions are English only.
 
 ---
 
@@ -102,7 +102,7 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 2. Tick "Record microphone" and pick your input device. Optionally enable webcam preview.
 3. Choose whether to convert to MP4 on save (slower; better compatibility) or keep WebM.
 4. Click ● Start. Stop button appears in the header.
-5. On stop, save the recording somewhere (skip the dialog to discard).
+5. On stop, save the recording somewhere. Cancel in the save dialog discards the take.
 
 ### 🎬 Video Studio
 1. **Import.** Drop a video onto the window or click "Choose file…". Recent files dropdown remembers the last 10. Supports MP4, MOV, AVI, MKV, WEBM, M4V.
@@ -165,7 +165,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 
 **Image canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. The preview downsamples to 2048 px; very large originals still take memory.
 
-**Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps to drop `whisper.exe` and a `ggml-*.bin` model in place. Restart imagii.
+**Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps to drop `whisper-cli.exe` (the older name, `whisper.exe`, also works) and the `ggml-base.en.bin` model in place — or let imagii download the model for you. Then click "Refresh status".
 
 **Reference search returns nothing** → DuckDuckGo's image endpoint is undocumented and occasionally rate-limits. Wait a minute.
 

@@ -8,10 +8,13 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import type { RecordingSource } from '@shared/workspace'
+import { isCancelledError } from '@shared/cancel'
 import { ipcErrorMessage } from '@shared/ipcError'
 import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
 import { reportFailure } from '../../lib/reportFailure'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
+import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
+import { saveCard } from './saveCard'
 
 type Phase = 'idle' | 'recording' | 'saving'
 
@@ -33,16 +36,6 @@ const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
   'bottom-right': 'Bottom-right'
 }
 
-interface MicDevice {
-  deviceId: string
-  label: string
-}
-
-interface CamDevice {
-  deviceId: string
-  label: string
-}
-
 export function RecordStudio(): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle')
   const [sources, setSources] = useState<RecordingSource[]>([])
@@ -50,9 +43,9 @@ export function RecordStudio(): JSX.Element {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [includeMic, setIncludeMic] = useState(true)
   const [convertToMp4, setConvertToMp4] = useState(true)
-  const [mics, setMics] = useState<MicDevice[]>([])
+  const [mics, setMics] = useState<DeviceOption[]>([])
   const [selectedMicId, setSelectedMicId] = useState<string | null>(null)
-  const [cams, setCams] = useState<CamDevice[]>([])
+  const [cams, setCams] = useState<DeviceOption[]>([])
   const [selectedCamId, setSelectedCamId] = useState<string | null>(null)
   const [showCam, setShowCam] = useState(false)
   const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
@@ -60,6 +53,9 @@ export function RecordStudio(): JSX.Element {
 
   // M6 fix (round 15): surface webm→mp4 progress + give the user an abort button.
   const [savePercent, setSavePercent] = useState(0)
+  // T-88: "Discard recording" has been pressed and the convert has not yet
+  // rejected. Lets the card say so, and keeps the button from being clicked twice.
+  const [discarding, setDiscarding] = useState(false)
 
   // Round 18 D: record → clip handoff. The saved file is pushed into the
   // shared recentFiles.video bucket (same one Video Studio's Importer
@@ -94,6 +90,7 @@ export function RecordStudio(): JSX.Element {
   const previewRef = useRef<HTMLVideoElement>(null)
   const camPreviewRef = useRef<HTMLVideoElement>(null)
   const startTimeRef = useRef<number>(0)
+  const deviceScanRef = useRef(0)
   const elapsedTimerRef = useRef<number | null>(null)
 
   // T-43: restore the Record preferences, and READ ONLY. Each control writes
@@ -148,24 +145,30 @@ export function RecordStudio(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [phase])
 
+  /**
+   * T-88: re-scan the microphones and cameras. Runs on mount AND whenever the
+   * user clicks "Refresh sources" — the hint under an empty device list sends
+   * them there, and the button used to re-list only screens and windows.
+   * `scanDevices` probes the two kinds separately, so a machine with no
+   * webcam still gets its microphone; the selections are reconciled against
+   * the new lists the way T-69 reconciles the screen pick.
+   */
   async function refreshDevices(): Promise<void> {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true })
-      stream.getTracks().forEach((t) => t.stop())
-      const all = await navigator.mediaDevices.enumerateDevices()
-      setMics(
-        all
-          .filter((d) => d.kind === 'audioinput')
-          .map((d) => ({ deviceId: d.deviceId, label: d.label || 'Microphone' }))
-      )
-      setCams(
-        all
-          .filter((d) => d.kind === 'videoinput')
-          .map((d) => ({ deviceId: d.deviceId, label: d.label || 'Camera' }))
-      )
-    } catch {
-      /* user may decline; can still record screen-only without mic/cam */
-    }
+    // Two clicks in a row start two scans; only the newest may write, or a
+    // slow older scan could put a stale list back over a fresh one.
+    const mine = ++deviceScanRef.current
+    const next = await scanDevices(navigator.mediaDevices)
+    if (mine !== deviceScanRef.current) return
+    setMics(next.mics)
+    setCams(next.cams)
+    setSelectedMicId((current) => reconcileDeviceId(current, next.mics))
+    setSelectedCamId((current) => reconcileDeviceId(current, next.cams))
+  }
+
+  /** Everything "Refresh sources" re-checks: the screens and windows, and the devices. */
+  function refreshAll(): void {
+    void chooseSource()
+    void refreshDevices()
   }
 
   /**
@@ -446,13 +449,21 @@ export function RecordStudio(): JSX.Element {
           </span>
         )
       } else {
-        toast('Recording discarded.', { icon: <Icon name="trash" size={18} /> })
+        announceDiscarded()
       }
     } catch (err) {
-      // T-59: main names the failure in the studio's own words; this side
-      // strips the "Error invoking remote method 'recording:finalize':"
-      // envelope Electron staples on, which used to reach the toast in full.
-      toast.error(ipcErrorMessage(err, 'Save failed'))
+      if (isCancelledError(err)) {
+        // T-88: a take the user threw away is not a failed save. Main answers
+        // a discard with null (above); the shared sentinel is the same fact in
+        // rejection form, so it gets the same calm line instead of a red toast
+        // reading "imagii:cancelled".
+        announceDiscarded()
+      } else {
+        // T-59: main names the failure in the studio's own words; this side
+        // strips the "Error invoking remote method 'recording:finalize':"
+        // envelope Electron staples on, which used to reach the toast in full.
+        toast.error(ipcErrorMessage(err, 'Save failed'))
+      }
       // Failure path: reap the partial temp file. Reached when an append
       // failed mid-recording or finalize itself threw; in the latter case
       // main already deleted the session and abandon is a false no-op.
@@ -463,8 +474,33 @@ export function RecordStudio(): JSX.Element {
     } finally {
       setElapsed(0)
       setSavePercent(0)
+      setDiscarding(false)
       setPhase('idle')
     }
+  }
+
+  function announceDiscarded(): void {
+    toast('Recording discarded.', { icon: <Icon name="trash" size={18} /> })
+  }
+
+  /**
+   * T-88: "Discard recording" kills the running convert (the one thing in the
+   * save that can be stopped); the convert's cancel comes back from main as a
+   * discard, which `finalizeRecording` announces. If there was nothing to
+   * kill — the click landed before the convert started or after it finished —
+   * the button comes back instead of sitting on "Discarding…" forever.
+   */
+  function discardRecording(): void {
+    setDiscarding(true)
+    window.api.recording
+      .cancelSave()
+      .then((hadConvert) => {
+        if (!hadConvert) setDiscarding(false)
+      })
+      .catch((err) => {
+        setDiscarding(false)
+        reportFailure(err, { failed: "Couldn't discard the recording." })
+      })
   }
 
   function formatElapsed(ms: number): string {
@@ -473,6 +509,8 @@ export function RecordStudio(): JSX.Element {
     const s = total % 60
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   }
+
+  const save = saveCard(convertToMp4, discarding)
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
@@ -523,7 +561,11 @@ export function RecordStudio(): JSX.Element {
             <PanelHeader
               icon="video"
               actions={
-                <button className="btn-ghost px-3 py-1 text-xs" onClick={chooseSource}>
+                <button
+                  className="btn-ghost px-3 py-1 text-xs"
+                  onClick={refreshAll}
+                  title="Re-list screens and windows, and re-check your microphone and camera"
+                >
                   Refresh sources
                 </button>
               }
@@ -602,9 +644,7 @@ export function RecordStudio(): JSX.Element {
                 </select>
               ) : null}
               {includeMic && mics.length === 0 ? (
-                <p className="text-xs text-warn">
-                  No microphone found. Click "Refresh sources" after granting permission.
-                </p>
+                <p className="text-xs text-warn">{noDeviceHint('microphone')}</p>
               ) : null}
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">
@@ -637,9 +677,7 @@ export function RecordStudio(): JSX.Element {
                   watched a Corner picker appear, and got a screen-only
                   recording that never mentioned the webcam. */}
               {showCam && cams.length === 0 ? (
-                <p className="text-xs text-warn">
-                  No camera found. Click "Refresh sources" after granting permission.
-                </p>
+                <p className="text-xs text-warn">{noDeviceHint('camera')}</p>
               ) : null}
               {/* The corner only means something once there is a camera to
                   put in it, so it is gated the same way the device select
@@ -730,23 +768,26 @@ export function RecordStudio(): JSX.Element {
           <div className="text-accent">
             <Icon name="save" size={28} />
           </div>
-          <p className="text-sm">Finishing up — converting and writing to disk…</p>
-          {/* M6 fix (round 15): show coarse progress + give the user a way
-              to abort if they realize they don't want to wait. */}
-          <div className="w-64 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${Math.max(2, Math.round(savePercent))}%` }}
-            />
-          </div>
+          <p className="text-sm">{save.status}</p>
+          {/* M6 fix (round 15): coarse progress for the convert. T-88: only
+              the convert reports progress, so only the convert gets a bar —
+              a WebM save used to sit on this bar's 2% floor. */}
+          {save.showProgress ? (
+            <div className="w-64 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+              <div
+                className="h-full bg-accent"
+                style={{ width: `${Math.max(2, Math.round(savePercent))}%` }}
+              />
+            </div>
+          ) : null}
           <button
-            className="btn-ghost px-3 py-1.5 text-sm"
-            onClick={() => {
-              void window.api.recording.cancelSave()
-            }}
+            className="btn-ghost px-3 py-1.5 text-sm disabled:opacity-50"
+            disabled={!save.canDiscard}
+            onClick={discardRecording}
           >
             Discard recording
           </button>
+          {save.note ? <p className="text-xs text-ink-dim">{save.note}</p> : null}
         </div>
       ) : null}
     </div>

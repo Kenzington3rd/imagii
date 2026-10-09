@@ -93,8 +93,8 @@ export function ReferencePanel(): JSX.Element {
         <Icon name="shield" size={13} className="mt-0.5 flex-shrink-0" />
         <span>
           SafeSearch is always on (strict) — DuckDuckGo does the filtering; imagii
-          doesn&apos;t scan images itself. Reference Search is the one feature that goes
-          online.
+          doesn&apos;t scan images itself. Reference Search goes online; your saved boards
+          stay on your computer.
         </span>
       </p>
 

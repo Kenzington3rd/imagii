@@ -3020,6 +3020,9 @@ describe('caption burn-in (real ffmpeg)', () => {
       (p) => phases.push(p.phase)
     )
     expect(res.outputPath).toBe(outputPath)
+    // T-89: cues in range, so the file is captioned (the band-diff below is
+    // the bytes this flag has to agree with).
+    expect(res.captioned).toBe(true)
     expect(phases[0]).toBe('burning-in')
     expect(phases[phases.length - 1]).toBe('done')
 
@@ -3173,7 +3176,7 @@ describe('caption burn-in (real ffmpeg)', () => {
       'utf8'
     )
     const outputPath = path.join(workDir, 'burnin-range.mp4')
-    await runBurnIn(
+    const burned = await runBurnIn(
       {
         jobId: 'burnin-range',
         videoPath: flatGraySrc,
@@ -3185,6 +3188,10 @@ describe('caption burn-in (real ffmpeg)', () => {
       },
       () => {}
     )
+
+    // T-89: cue A lands in the range, so the result says captioned — and the
+    // luma reads below are what that claim has to be true of.
+    expect(burned.captioned).toBe(true)
 
     const info = await ffprobeJson(outputPath)
     expect(Number(info.format.duration)).toBeGreaterThan(2.7)
@@ -3247,7 +3254,7 @@ describe('caption burn-in (real ffmpeg)', () => {
     const srt = path.join(workDir, 'range-no-cues.srt')
     await writeFile(srt, '1\n00:00:00,200 --> 00:00:01,000\nONLY BEFORE THE CLIP\n', 'utf8')
     const outputPath = path.join(workDir, 'burnin-range-none.mp4')
-    await runBurnIn(
+    const burned = await runBurnIn(
       {
         jobId: 'burnin-range-none',
         videoPath: flatGraySrc,
@@ -3266,6 +3273,10 @@ describe('caption burn-in (real ffmpeg)', () => {
     for (const t of [0.6, 1.5, 2.5]) {
       expect(await captionSpread(outputPath, t), `no caption at output ${t} s`).toBe(0)
     }
+    // T-89: and the result SAYS so — the renderer's "No captions in this range"
+    // toast is this flag, and it is only honest because the pixels above agree
+    // with it (nothing painted at any of the three instants).
+    expect(burned.captioned).toBe(false)
     expect(await srtSiblings(srt)).toEqual([])
   })
 
