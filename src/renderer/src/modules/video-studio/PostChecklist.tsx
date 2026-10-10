@@ -14,6 +14,22 @@ const HASHTAG_TEMPLATES: Record<string, string[]> = {
 }
 
 /**
+ * What the pack picker shows for each key (T-92). The keys are ids the code
+ * and the tests use; "ig reels general" and "yt long" are what the picker
+ * printed when it spelled them by replacing underscores. Every key needs a row
+ * here — the copyConventions test lists the keys against this table.
+ */
+export const HASHTAG_PACK_LABELS: Readonly<Record<keyof typeof HASHTAG_TEMPLATES, string>> = {
+  twitch_clip: 'Twitch clip',
+  gaming_short: 'Gaming short',
+  reaction: 'Reaction',
+  ig_reels_general: 'Instagram Reels, general',
+  tiktok_general: 'TikTok, general',
+  yt_long: 'YouTube, long video'
+}
+export const HASHTAG_PACK_KEYS: readonly string[] = Object.keys(HASHTAG_TEMPLATES)
+
+/**
  * A title starter is a pattern with slots. Each slot names the FORM it needs:
  * `{base}` the bare verb, `{past}` the simple past, `{gerund}` the -ing form,
  * `{a_subject}` the subject with its article, `{n}` a day of the year. Every
@@ -103,14 +119,14 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
         /* ignore */
       }
     } catch {
-      toast.error('Could not load your posting diary')
+      toast.error("Couldn't load your posting log.")
     }
   }
 
   function save(next: DiaryEntry[]): void {
     setDiary(next)
     void window.api.settings.set('postingDiary', next).catch(() => {
-      toast.error('Could not save your posting diary')
+      toast.error("Couldn't save your posting log.")
     })
   }
 
@@ -130,7 +146,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     setOutputName('')
     setPlatforms([])
     setNotes('')
-    toast.success('Logged to diary')
+    toast.success('Added to your posting log')
   }
 
   function togglePlatform(p: string): void {
@@ -165,8 +181,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     save(next)
   }
 
-  function deleteEntry(id: string): void {
-    save(diary.filter((e) => e.id !== id))
+  function deleteEntry(entry: DiaryEntry): void {
+    // Delete = gone for good, so it asks first (docs/BRANDING_GUIDE.md): the
+    // log keeps a person's own view counts, which nothing else has.
+    if (!confirm(`Delete "${entry.outputName}" from your posting log?`)) return
+    save(diary.filter((e) => e.id !== entry.id))
   }
 
   return (
@@ -174,7 +193,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
       <PanelHeader icon="clipboard">Posting helpers</PanelHeader>
 
       <div className="border-b border-ink-dim/30 pb-3 flex flex-col gap-2">
-        <PanelHeader icon="text">Title ideas</PanelHeader>
+        <PanelHeader icon="text">Title starters</PanelHeader>
         <div className="flex items-center gap-2">
           <button className="btn-ghost px-3 py-1 text-xs" onClick={generateTitles}>
             Title starters
@@ -186,7 +205,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
               <li key={i} className="flex items-center gap-2">
                 <span className="flex-1">{t}</span>
                 <button className="text-accent hover:underline" onClick={() => copy(t)}>
-                  copy
+                  Copy
                 </button>
               </li>
             ))}
@@ -202,9 +221,9 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
           onChange={(e) => setHashtagPick(e.target.value as keyof typeof HASHTAG_TEMPLATES)}
           aria-label="Hashtag pack"
         >
-          {Object.keys(HASHTAG_TEMPLATES).map((k) => (
+          {HASHTAG_PACK_KEYS.map((k) => (
             <option key={k} value={k}>
-              {k.replaceAll('_', ' ')}
+              {HASHTAG_PACK_LABELS[k] ?? k}
             </option>
           ))}
         </select>
@@ -216,7 +235,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
             className="text-accent hover:underline"
             onClick={() => copy((HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' '))}
           >
-            copy
+            Copy
           </button>
         </div>
       </div>
@@ -261,7 +280,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
 
       {diary.length > 0 ? (
         <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
-          <PanelHeader icon="clipboard">Diary ({diary.length})</PanelHeader>
+          <PanelHeader icon="clipboard">Logged posts ({diary.length})</PanelHeader>
           {diary.map((e) => (
             <div
               key={e.id}
@@ -271,7 +290,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                 <span className="font-medium flex-1 truncate">{e.outputName}</span>
                 <span className="text-ink-dim">{e.platforms.join(' · ')}</span>
                 <button
-                  onClick={() => deleteEntry(e.id)}
+                  onClick={() => deleteEntry(e)}
                   className="text-ink-dim hover:text-danger"
                   title="Delete entry"
                   aria-label="Delete entry"

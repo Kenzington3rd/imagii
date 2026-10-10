@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { toastSaved } from '../../lib/savedToast'
 
 type Position = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
@@ -52,17 +53,7 @@ export function PipPanel(): JSX.Element {
         position,
         margin
       })
-      toast.success(
-        <span>
-          PiP done.{' '}
-          <button
-            className="underline"
-            onClick={() => window.api.video.revealInFolder(result.outputPath)}
-          >
-            Show
-          </button>
-        </span>
-      )
+      toastSaved('Saved the picture-in-picture video', result.outputPath)
     } catch (err) {
       reportFailure(err, {
         failed: 'Picture-in-picture failed.',
@@ -111,7 +102,7 @@ export function PipPanel(): JSX.Element {
       </div>
       <div className="grid grid-cols-3 gap-2 text-xs">
         <label className="flex flex-col gap-1">
-          <span className="text-ink-muted">Overlay width</span>
+          <span className="text-ink-muted">Overlay width (px)</span>
           <input
             type="number"
             min={120}
@@ -123,7 +114,7 @@ export function PipPanel(): JSX.Element {
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-ink-muted">Margin</span>
+          <span className="text-ink-muted">Margin (px)</span>
           <input
             type="number"
             min={0}
@@ -141,10 +132,10 @@ export function PipPanel(): JSX.Element {
             value={position}
             onChange={(e) => setPosition(e.target.value as Position)}
           >
-            <option value="top-left">Top L</option>
-            <option value="top-right">Top R</option>
-            <option value="bottom-left">Bot L</option>
-            <option value="bottom-right">Bot R</option>
+            <option value="top-left">Top left</option>
+            <option value="top-right">Top right</option>
+            <option value="bottom-left">Bottom left</option>
+            <option value="bottom-right">Bottom right</option>
           </select>
         </label>
       </div>

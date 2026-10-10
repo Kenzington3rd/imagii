@@ -552,10 +552,13 @@ test.describe('Video Studio core editing surface', () => {
       // Imported and parked at the start, not playing.
       expect(await videoState(window)).toMatchObject({ t: 0, paused: true })
       // The probe the main process returned drives the player's own readout.
+      // T-92: a whole frame rate has no decimals ("15 fps", not "15.00 fps"),
+      // and each codec says which stream it is ("video h264 · audio aac").
       await expect(
-        window.getByText(`${FIXTURE_WIDTH}×${FIXTURE_HEIGHT} · ${FIXTURE_FPS.toFixed(2)} fps`, {
-          exact: false
-        })
+        window.getByText(
+          `${FIXTURE_WIDTH}×${FIXTURE_HEIGHT} · ${FIXTURE_FPS} fps · video h264 · audio aac`,
+          { exact: true }
+        )
       ).toBeVisible()
 
       // ── play/pause button ──
@@ -603,7 +606,7 @@ test.describe('Video Studio core editing surface', () => {
       // one keypress. The other shortcuts are not button keys and stay
       // available from anywhere in the column (asserted below).
       const cropRow = window.locator('[data-tutorial="video-crop"]')
-      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       const preset = cropRow.getByRole('button', { name: '1:1', exact: true })
       await expect(preset).not.toHaveClass(/bg-accent/)
       const beforeSpace = (await videoState(window)).t
@@ -622,17 +625,17 @@ test.describe('Video Studio core editing surface', () => {
       // The non-button keys still reach the transport from inside the row.
       await window.keyboard.press('ArrowRight')
       await expectScrubbedTo(window, beforeSpace + 0.1, 'ArrowRight from a focused crop preset')
-      await window.getByRole('checkbox', { name: 'Crop' }).uncheck()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).uncheck()
 
       // ── safe zones ──
       const guides = window.locator('[data-tutorial="video-player"] svg > g > text')
       await expect(guides).toHaveCount(0)
-      await window.getByRole('checkbox', { name: 'Safe zones' }).check()
+      await window.getByRole('checkbox', { name: 'Crop guides' }).check()
       await expect(guides).toHaveCount(3)
       // SVG <text> has no innerText, so read the text nodes themselves.
       expect(await guides.allTextContents()).toEqual(['9:16', '1:1', '4:5'])
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-01-safezones.png') })
-      await window.getByRole('checkbox', { name: 'Safe zones' }).uncheck()
+      await window.getByRole('checkbox', { name: 'Crop guides' }).uncheck()
       await expect(guides).toHaveCount(0)
 
       // ── the media element's own events drive the UI ──
@@ -1382,7 +1385,7 @@ test.describe('Video Studio core editing surface', () => {
     try {
       const cropRow = window.locator('[data-tutorial="video-crop"]')
       const cropRect = window.locator('[data-tutorial="video-player"] .pointer-events-auto.border-2')
-      const cropToggle = window.getByRole('checkbox', { name: 'Crop' })
+      const cropToggle = window.getByRole('checkbox', { name: 'Crop', exact: true })
 
       // OutputPreview can only prove the STORE rect cleared if it has
       // something other than black to draw. Since T-38 the first frame is
@@ -1543,8 +1546,8 @@ test.describe('Video Studio core editing surface', () => {
         'the crop control row must clear the top of the player box'
       ).toBeLessThanOrEqual(frameBefore.y + 1)
 
-      await window.getByRole('checkbox', { name: 'Safe zones' }).check()
-      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window.getByRole('checkbox', { name: 'Crop guides' }).check()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       await expect(guides).toHaveCount(1)
       await expect(cropRect).toHaveCount(1)
 
@@ -1599,6 +1602,11 @@ test.describe('Video Studio core editing surface', () => {
     try {
       const gradeCard = window.locator('.card').filter({ hasText: 'Color & motion' })
       const readouts = gradeCard.locator('span.font-mono.w-12')
+      // T-92: the player never shows the grade (the encoder applies it), and
+      // the card says so before anyone drags a slider looking for a preview.
+      await expect(
+        gradeCard.getByText('Color changes show up in the exported file, not in this preview.')
+      ).toBeVisible()
       // Defaults from DEFAULT_COLOR_GRADE, rendered from the store.
       await expect(readouts).toHaveText(['0.00', '1.00', '1.00', '+0.00'])
 
@@ -1813,7 +1821,7 @@ test.describe('Video Studio core editing surface', () => {
       await expect(waveform).toBeVisible({ timeout: 30_000 })
       // The wav that landed in Audio Studio was probed by the main process:
       // 48 kHz stereo PCM is exactly what extractAudioFromVideo writes.
-      await expect(waveform.getByText('48000 Hz · 2ch', { exact: false })).toBeVisible({
+      await expect(waveform.getByText('48000 Hz · 2 ch', { exact: false })).toBeVisible({
         timeout: 30_000
       })
       // ...and it carries the same 2 s of audio the video did.
@@ -1849,7 +1857,7 @@ test.describe('Video Studio core editing surface', () => {
       // ── declined: everything stays ──
       await window.getByRole('button', { name: 'Close' }).click()
       await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
-      expect(messages[0]).toBe('Close this video? 1 clip(s) and their edits will be discarded.')
+      expect(messages[0]).toBe('Close this video? 1 clip and their edits will be discarded.')
       await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
       await expect(window.locator('video')).toHaveCount(1)
       await expect(window.getByText('Drop a video here')).toHaveCount(0)

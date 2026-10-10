@@ -457,7 +457,7 @@ test.describe('T-47 session continuity', () => {
     cleanup(root)
   })
 
-  test('Later and Discard leave a fresh-start session untouched — continuity is opt-in', async () => {
+  test('Later and Clear leave a fresh-start session untouched — continuity is opt-in', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('continuity-declined')
     const userDataDir = path.join(root, 'userData')
@@ -505,11 +505,11 @@ test.describe('T-47 session continuity', () => {
       // The offer is still on disk for next time — Later is not a delete.
       expect(existsSync(autosaveFile(userDataDir))).toBe(true)
 
-      // ── Discard ──
+      // ── Clear ──
       await window.reload()
       await waitForHome(window)
       await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
-      await window.getByRole('button', { name: 'Discard' }).click()
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
       await expect
         .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
         .toBe(false)

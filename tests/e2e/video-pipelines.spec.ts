@@ -20,6 +20,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
+import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -314,6 +315,70 @@ async function expectCanceledNotFailed(window: Page, copy: string): Promise<void
 }
 
 /**
+ * T-92: a live toast must not catch the click meant for the control beneath it.
+ *
+ * react-hot-toast draws each card with `pointer-events: auto`, so an 8-second
+ * action toast over the Export button blocked it for its whole life (and a
+ * pointer parked on the card paused the timer, so it never left): the emote-pack
+ * test timed out clicking Export. The card is click-through now. This presses a
+ * point on the card's own padding — clear of its text and of its button — and
+ * reads where the click LANDED (a capture listener that swallows it, so the app
+ * beneath is not actually pressed): it must be something other than the toaster.
+ */
+async function expectToastClickThrough(window: Page): Promise<void> {
+  const card = window.locator('[data-rht-toaster] [role="status"]').first().locator('xpath=..')
+  const box = await card.boundingBox()
+  if (!box) throw new Error('no toast card on screen')
+  await window.evaluate(() => {
+    const w = window as unknown as { __landedInToaster: boolean | null }
+    w.__landedInToaster = null
+    window.addEventListener(
+      'click',
+      (e) => {
+        e.stopImmediatePropagation()
+        e.preventDefault()
+        w.__landedInToaster = (e.target as Element).closest('[data-rht-toaster]') !== null
+      },
+      { capture: true, once: true }
+    )
+  })
+  await window.mouse.click(box.x + 3, box.y + box.height / 2)
+  expect(
+    await window.evaluate(
+      () => (window as unknown as { __landedInToaster: boolean | null }).__landedInToaster
+    ),
+    'the click reached the control under the toast, not the toast'
+  ).toBe(false)
+}
+
+/**
+ * T-92: a toast that carries the ONLY way to do something (Show in folder,
+ * Edit in Video Studio) has to outlive react-hot-toast's 2 s default, or the
+ * button is gone before a person who looked away can reach it. Asserted by
+ * waiting past that default and finding the button still there — the one
+ * place in this suite where a fixed wait IS the assertion — and then pressing
+ * it: the shell (stubbed in main by `stubShellReveal`, installed before the
+ * job) must receive exactly the file that was written.
+ */
+async function expectRevealToast(
+  window: Page,
+  app: ElectronApplication,
+  written: string
+): Promise<void> {
+  const button = window
+    .locator('[data-rht-toaster]')
+    .getByRole('button', { name: 'Show in folder', exact: true })
+  await expect(button, '"Show in folder" is on the toast').toBeVisible()
+  await window.waitForTimeout(3500)
+  await expect(button, '"Show in folder" is still there 3.5 s later').toBeVisible()
+  await expectToastClickThrough(window)
+  await button.click()
+  await expect
+    .poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] })
+    .toEqual([written])
+}
+
+/**
  * Dispatch a synthetic `drop` on Video Studio's drop zone carrying a File
  * with the absolute `path` expando Electron adds to real dropped files
  * (export.spec.ts explains why this is the only way to drive the import).
@@ -509,6 +574,22 @@ function chatLogWithNoSpike(): string {
 }
 
 /**
+ * Chat that exists but says nothing about the burst (T-92): a quiet bed from
+ * 30 s to 90 s, none of it inside the candidate's window (1.3-12.7 s). With
+ * chat in play the moment is judged by all three signals, and chat was silent
+ * for it — audio 1 x 0.4 of a total 1.0 = 40. It is what separates "no chat
+ * pasted" (the score is the audio alone, 100) from "chat pasted, and it did
+ * not light up here" (40).
+ */
+function chatLogSilentAtBurst(): string {
+  const lines: string[] = []
+  for (const t of [30, 33, 40, 43, 50, 53, 60, 63, 70, 73]) {
+    lines.push(`[${mmss(t)}] viewer${t}: quiet chatter ${t}`)
+  }
+  return lines.join('\n')
+}
+
+/**
  * Chat for the HighlightPanel's rescoring: 12 hype messages inside the
  * burst candidate's window (1.3-12.7 s) and a thin tail out to 90 s so
  * `chatDensityMedian` has more than one bucket to take a median of (it
@@ -623,7 +704,11 @@ test.describe('ChatHighlightPanel', () => {
     const { app, window } = await launchWithVideo('chat', longSrc)
     try {
       const card = chatCard(window)
-      await expect(card.getByText('Chat highlight reel')).toBeVisible()
+      await expect(card.getByText('Chat spike finder')).toBeVisible()
+      // T-92: the two number fields say what they are in a streamer's words
+      // ("Bucket sec" / "Pad sec" were the labels).
+      await expect(card.getByLabel('Spike window (s)')).toHaveValue('10')
+      await expect(card.getByLabel('Extra seconds around each clip')).toHaveValue('15')
       // Nothing rendered before an analysis: no peak rows, no + clip.
       await expect(card.locator('li')).toHaveCount(0)
 
@@ -632,12 +717,12 @@ test.describe('ChatHighlightPanel', () => {
 
       // ── one peak, with the numbers the log's density dictates ──
       await expect(card.locator('li')).toHaveCount(1)
-      await expectToast(window, 'Found 1 hype moments')
+      await expectToast(window, 'Found 1 chat spike')
       const row = card.locator('li').first()
       // bucketStart 30 s, minus the 15 s pad = 0:15. The count is the
       // spike bucket's own size, and the preview is its first 3 messages.
       await expect(row.locator('span.font-mono')).toHaveText('0:15')
-      await expect(row.getByText('9 msgs')).toBeVisible()
+      await expect(row.getByText('9 messages')).toBeVisible()
       await expect(row).toContainText('POG that was insane · POG that was insane')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-01-chat-peaks.png') })
 
@@ -646,32 +731,32 @@ test.describe('ChatHighlightPanel', () => {
       // "Clip 1" (the dedicated tests below drive that end to end), so the
       // list goes from the one default clip to the one excerpt.
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
-      await row.getByRole('button', { name: '+ clip' }).click()
+      await row.getByRole('button', { name: '+ Clip' }).click()
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       await expectToast(window, 'Clip added')
       // start = bucketStart (15), end = bucketStart + bucket + 2 * pad = 55.
-      expect(await clipRows(window)).toEqual([{ name: 'Chat hype 1', range: '0:15 → 0:55' }])
+      expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '0:15 → 0:55' }])
 
       // ── the two number inputs change the arithmetic, not just the UI ──
       // Pad 15 -> 0 moves the peak's start from 0:15 to the bucket itself.
       await card.getByRole('spinbutton').nth(1).fill('0')
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30')
-      await expect(card.locator('li').first().getByText('9 msgs')).toBeVisible()
+      await expect(card.locator('li').first().getByText('9 messages')).toBeVisible()
 
       // Bucket 10 -> 5 splits the 9-message spike across two 5 s buckets;
       // only the first still clears the threshold, so the count drops to 5.
       await card.getByRole('spinbutton').first().fill('5')
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
-      await expect(card.locator('li').first().getByText('5 msgs')).toBeVisible()
+      await expect(card.locator('li').first().getByText('5 messages')).toBeVisible()
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30')
 
       // And the re-run's + clip uses the NEW numbers: 30 -> 30 + 5 + 0. By now
       // there is no whole-video clip left to retire, so this one just adds.
-      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
       expect((await clipRows(window))[1]).toEqual({
-        name: 'Chat hype 1',
+        name: 'Chat spike 1',
         range: '0:30 → 0:35'
       })
     } finally {
@@ -695,7 +780,7 @@ test.describe('ChatHighlightPanel', () => {
       await analyze.click()
       // The parser's exact copy, not a paraphrase.
       const PARSE_ERROR =
-        'No timestamped messages found. Each line should start like [12:34] username: msg'
+        'No timestamped messages found. Each line should start like [12:34] username: message'
       await expectToast(window, PARSE_ERROR)
       await expect(window.getByText(PARSE_ERROR).first()).toBeVisible()
       await expect(card.locator('li')).toHaveCount(0)
@@ -707,7 +792,7 @@ test.describe('ChatHighlightPanel', () => {
       // pinned to the parse branch rather than to "some toast appeared".
       await card.locator('textarea').fill(chatLogWithNoSpike())
       await analyze.click()
-      await expectToast(window, 'No chat spikes detected.')
+      await expectToast(window, 'No chat spikes detected')
       await expect(card.locator('li')).toHaveCount(0)
       const toasts = await readToastLog(window)
       expect(toasts.filter((t) => t.includes(PARSE_ERROR))).toHaveLength(1)
@@ -726,7 +811,7 @@ test.describe('ChatHighlightPanel', () => {
       await expect(card.locator('li')).toHaveCount(1)
       // The peak itself is real: 0:15, past the end of this 2 s source.
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:15')
-      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       const REFUSAL =
         'That spike is past the end of this video — check the log matches this source.'
       await expectToast(window, REFUSAL)
@@ -745,12 +830,12 @@ test.describe('ChatHighlightPanel', () => {
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
       await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00')
-      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(window, 'Clip added')
       // T-94: it replaced the untouched whole-video clip (also 0:00 → 0:02 on
       // this 2 s source, which is why the NAME is what tells them apart).
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
-      expect(await clipRows(window)).toEqual([{ name: 'Chat hype 1', range: '0:00 → 0:02' }])
+      expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '0:00 → 0:02' }])
     } finally {
       await app.close()
     }
@@ -775,13 +860,13 @@ test.describe('ChatHighlightPanel — the whole-video clip (T-94)', () => {
 
       // ── scanner: retires the untouched "Clip 1" and ONLY that one ──
       // "Clip 2" is the same whole-video range, but the user asked for it.
-      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(
         window,
         'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
       )
       await expect(list.locator('h3')).toHaveText('Clips (2)')
-      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 2', 'Chat hype 1'])
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 2', 'Chat spike 1'])
 
       // ── one undo puts back exactly the state before the scanner's add ──
       await window.keyboard.press('Control+z')
@@ -801,10 +886,10 @@ test.describe('ChatHighlightPanel — the whole-video clip (T-94)', () => {
       await list.locator('li').first().getByRole('textbox').fill('Whole stream')
       await card.locator('textarea').fill(chatLogWithOneSpike())
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
-      await card.locator('li').first().getByRole('button', { name: '+ clip' }).click()
+      await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(window, 'Clip added')
       await expect(list.locator('h3')).toHaveText('Clips (2)')
-      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Whole stream', 'Chat hype 1'])
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Whole stream', 'Chat spike 1'])
       // No removal, so no removal toast.
       expect(
         (await readToastLog(window)).some((t) => t.includes('Removed the whole-video clip'))
@@ -830,7 +915,7 @@ test.describe('HighlightPanel', () => {
       // ── the real ebur128 pass over the real file ──
       await scan.click()
       await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
-      await expectToast(window, 'Found 1 candidates')
+      await expectToast(window, 'Found 1 highlight')
       // Re-scan is the button's post-scan identity.
       await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible()
 
@@ -838,9 +923,11 @@ test.describe('HighlightPanel', () => {
       // 5 s, so the window brackets it without swallowing the whole 14 s.
       const row = card.locator('li').first()
       await expect(row.locator('span.font-mono').first()).toHaveText('0:01 → 0:12')
-      // Combined score with no chat = audio (saturated at 1) x 0.4.
-      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('40')
-      await expect(row).toContainText('loud audio peak')
+      // T-92: with no chat the audio signal is the whole average, so a saturated
+      // peak is a full 100 (it was audio x 0.4 = 40, a ceiling the panel's own
+      // "0–100" never mentioned).
+      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('100')
+      await expect(row).toContainText('Loud audio peak')
 
       // ── SignalBars: three of them, and only audio has fired ──
       const bars = row.locator('div[title$="%"]')
@@ -941,7 +1028,10 @@ test.describe('HighlightPanel', () => {
       await card.getByRole('button', { name: 'Scan VOD' }).click()
       await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
       const row = card.locator('li').first()
-      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('40')
+      const score = row.getByTitle('Combined score (0–100)')
+      // T-92: no chat, so audio is the whole average and this saturated peak is
+      // a full 100.
+      await expect(score).toHaveText('100')
 
       // ── disclosure opens the textarea ──
       await card.getByRole('button', { name: 'Add chat log (optional)' }).click()
@@ -952,15 +1042,20 @@ test.describe('HighlightPanel', () => {
       // fill() sets the value in one event, so watch the 300 ms window
       // directly: immediately after the input the panel still shows the
       // audio-only score, and only the debounced value triggers a rescore.
-      await textarea.fill(chatLogOverBurst())
-      expect(await row.getByTitle('Combined score (0–100)').innerText()).toBe('40')
+      await textarea.fill(chatLogSilentAtBurst())
+      expect(await score.innerText()).toBe('100')
 
-      // ── after the debounce every signal is in ──
-      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('100', { timeout: 5_000 })
+      // ── chat in play but silent at this moment weighs against it ──
+      await expect(score).toHaveText('40', { timeout: 5_000 })
+      await expect(row.locator('div[title$="%"]').nth(1)).toHaveAttribute('title', 'Chat: 0%')
+
+      // ── a log that lights up the moment brings every signal in ──
+      await textarea.fill(chatLogOverBurst())
+      await expect(score).toHaveText('100', { timeout: 5_000 })
       const bars = row.locator('div[title$="%"]')
       await expect(bars.nth(1)).toHaveAttribute('title', 'Chat: 100%')
       await expect(bars.nth(2)).toHaveAttribute('title', 'Hype: 100%')
-      await expect(row).toContainText('loud audio peak · chat spike · hype keywords')
+      await expect(row).toContainText('Loud audio peak · Chat spike · Hype keywords')
       // The messages that earned it are quoted back.
       await expect(row).toContainText('POGGERS no way')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-03-rescored.png') })
@@ -968,12 +1063,14 @@ test.describe('HighlightPanel', () => {
       // ── collapsing hides the input without discarding the score ──
       await card.getByRole('button', { name: 'Add chat log (optional)' }).click()
       await expect(card.locator('textarea')).toHaveCount(0)
-      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('100')
+      await expect(score).toHaveText('100')
 
-      // Clearing the log takes the chat signals back out.
+      // Clearing the log takes the chat signals back out, and the score is
+      // the audio alone again.
       await card.getByRole('button', { name: 'Add chat log (optional)' }).click()
       await card.locator('textarea').fill('')
-      await expect(row.getByTitle('Combined score (0–100)')).toHaveText('40', { timeout: 5_000 })
+      await expect(bars.nth(1)).toHaveAttribute('title', 'Chat: 0%', { timeout: 5_000 })
+      await expect(score).toHaveText('100')
     } finally {
       await app.close()
     }
@@ -1437,7 +1534,13 @@ test.describe('ExportPanel', () => {
       await expectToast(window, 'Exported 4 files')
       // Per-row Show only renders once that row carries an outputPath, so
       // four of them IS the four jobComplete events arriving.
-      await expect(card.getByRole('button', { name: 'Show', exact: true })).toHaveCount(4)
+      await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(4)
+      // T-92: the first row's button reveals the first row's file.
+      await stubShellReveal(app)
+      await card.getByRole('button', { name: 'Show in folder', exact: true }).first().click()
+      await expect
+        .poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] })
+        .toEqual([path.join(outDir, 'Clip 1-youtube.mp4')])
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-06-queue.png') })
 
       // ── the bytes: each preset's own geometry ──
@@ -1490,7 +1593,7 @@ test.describe('ExportPanel', () => {
       await numbers.nth(2).fill('24')
       await modal.getByRole('button', { name: '+ Save preset' }).click()
       await expectToast(window, 'Saved "Discord 540p"')
-      await modal.getByRole('button', { name: 'Done' }).click()
+      await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
 
       // ── queue it alongside a platform preset ──
@@ -1514,10 +1617,10 @@ test.describe('ExportPanel', () => {
       // click lands or not, the assertions below hold — the file is at the
       // custom size either way.
       await card.getByRole('button', { name: 'Presets' }).click()
-      await modal.getByRole('button', { name: '✕ delete' }).click()
+      await modal.getByRole('button', { name: 'Delete' }).click()
       await expect(modal.getByText('No custom presets yet.')).toBeVisible()
       expect(readdirSync(presetsDir)).toEqual([])
-      await modal.getByRole('button', { name: 'Done' }).click()
+      await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
 
       // The queue row keeps the name it was queued under. It is a log of
@@ -1726,7 +1829,12 @@ test.describe('ExportPanel', () => {
     const { app, window } = await launchWithVideo('t83grid', bigSrc)
     try {
       const card = exportCard(window)
-      const platform = (name: string): Locator => card.locator('label').filter({ hasText: name })
+      // The tile is the whole card (T-92: the verdict is the checkbox's
+      // description, outside its label), found by the checkbox it holds.
+      const platform = (name: string): Locator =>
+        card
+          .locator('[data-export-target]')
+          .filter({ has: window.getByRole('checkbox', { name, exact: true }) })
       const cropRow = window.locator('[data-tutorial="video-crop"]')
       const TALL_ON_WIDE = "Only the middle 32% of the picture's width fits this shape"
       const WIDE_ON_TALL = "Only the middle 32% of the picture's height fits this shape"
@@ -1743,7 +1851,7 @@ test.describe('ExportPanel', () => {
       await expect(platform('YouTube').getByText('Under the 1-minute sweet spot')).toBeVisible()
 
       // ── draw a 9:16 crop: the grid now judges THAT frame ──
-      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       await cropRow.getByRole('button', { name: '9:16', exact: true }).click()
       for (const tall of ['TikTok', 'Reels']) {
         await expect(platform(tall).getByText('Great', { exact: true })).toBeVisible()
@@ -1756,7 +1864,7 @@ test.describe('ExportPanel', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-14-grid-crop.png') })
 
       // ── clearing the crop gives the source back, and the grid follows ──
-      await window.getByRole('checkbox', { name: 'Crop' }).uncheck()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).uncheck()
       await expect(platform('TikTok').getByText('Wrong shape', { exact: true })).toBeVisible()
       await expect(platform('TikTok').getByText(TALL_ON_WIDE)).toBeVisible()
     } finally {
@@ -1784,7 +1892,7 @@ test.describe('ExportPanel', () => {
 
       // A 9:16 crop is the new frame. TikTok's shape IS the frame, so it keeps
       // all of it; YouTube takes a wide strip out of it. One platform loses.
-      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       await window
         .locator('[data-tutorial="video-crop"]')
         .getByRole('button', { name: '9:16', exact: true })
@@ -1809,7 +1917,7 @@ test.describe('ExportPanel', () => {
       await stubDialogs(app, { open: [outDir] })
       const card = exportCard(window)
       await card.getByRole('button', { name: 'Choose folder…' }).click()
-      await window.getByRole('checkbox', { name: 'Crop' }).check()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       await window
         .locator('[data-tutorial="video-crop"]')
         .getByRole('button', { name: '1:1', exact: true })
@@ -1879,7 +1987,7 @@ test.describe('ExportPanel', () => {
       // Show only renders for a row that reported an outputPath, so there
       // are strictly fewer of them than the three jobs that were queued.
       expect(
-        await card.getByRole('button', { name: 'Show', exact: true }).count()
+        await card.getByRole('button', { name: 'Show in folder', exact: true }).count()
       ).toBeLessThan(3)
       // The cancelled rows are painted (danger bar), not left at a hopeful
       // accent-coloured percentage — and T-84 gives them WORDS that outlive
@@ -1887,7 +1995,7 @@ test.describe('ExportPanel', () => {
       // "Failed" (a cancel is the user's decision, not a fault), and the rows
       // that did finish say neither.
       await expect(card.locator('.bg-danger-strong')).not.toHaveCount(0)
-      const shown = await card.getByRole('button', { name: 'Show', exact: true }).count()
+      const shown = await card.getByRole('button', { name: 'Show in folder', exact: true }).count()
       await expect(card.getByText('Canceled', { exact: true })).toHaveCount(3 - shown)
       await expect(card.getByText('Failed', { exact: true })).toHaveCount(0)
       // Outlives the toast: wait for the toaster to empty, then look again.
@@ -2074,7 +2182,7 @@ test.describe('CustomPresetManager', () => {
       await numbers.nth(2).fill('60')
       await modal.locator('input[type="text"]').nth(1).fill('8 Mbps')
       await save.click()
-      await expectToast(window, 'Bitrates look like 8M or 192k')
+      await expectToast(window, 'Video bitrate needs a number and a unit, like 8M or 8000k.')
       await expect(modal.getByText('Saved presets (0)')).toBeVisible()
       expect(existsSync(presetsDir) ? readdirSync(presetsDir) : []).toEqual([])
       // The audio field is checked too, not just the video one.
@@ -2082,8 +2190,10 @@ test.describe('CustomPresetManager', () => {
       await modal.locator('input[type="text"]').nth(2).fill('loud')
       await save.click()
       expect(
-        (await readToastLog(window)).filter((t) => t.includes('Bitrates look like'))
-      ).toHaveLength(2)
+        (await readToastLog(window)).filter((t) =>
+          t.includes('Audio bitrate needs a number and a unit, like 192k or 128k.')
+        )
+      ).toHaveLength(1)
       expect(existsSync(presetsDir) ? readdirSync(presetsDir) : []).toEqual([])
 
       // ── save ──
@@ -2093,7 +2203,7 @@ test.describe('CustomPresetManager', () => {
       await expect(modal.getByText('Saved presets (1)')).toBeVisible()
       await expect(modal.locator('li')).toHaveCount(1)
       await expect(modal.locator('li')).toContainText('Discord 1080p')
-      await expect(modal.locator('li')).toContainText('1280×720 · 60fps · 5M · Reels')
+      await expect(modal.locator('li')).toContainText('1280×720 · 60 fps · 5 Mbps · Reels')
       // The form clears its name so the next save is not a silent duplicate.
       await expect(nameInput).toHaveValue('')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-08-presets.png') })
@@ -2119,7 +2229,7 @@ test.describe('CustomPresetManager', () => {
       // exports use the base platform's encoder settings"). Pinned in both
       // directions so the promise cannot quietly regress.
       await expect(modal).toContainText(
-        'Saved presets join the platform presets in the Export panel — tick one to export a clip at its own size and bitrate.'
+        'Saved presets join the platform presets in the Export panel — check one to export a clip at its own size and bitrate.'
       )
       await expect(modal.getByText(/scaffold metadata only/)).toHaveCount(0)
 
@@ -2128,17 +2238,21 @@ test.describe('CustomPresetManager', () => {
       // its own name, its stored geometry and a "custom" tag — the same
       // checkbox, one more row. Pinned in both directions: the count went
       // 5 -> 6, and the entry that used to be absent is present.
-      await modal.getByRole('button', { name: 'Done' }).click()
+      await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       const card = exportCard(window)
       await expect(card.getByRole('checkbox')).toHaveCount(6)
       const customTile = card.locator('label').filter({ hasText: 'Discord 1080p' })
       await expect(customTile).toHaveCount(1)
-      await expect(customTile).toContainText('1280×720')
-      await expect(customTile).toContainText('custom')
+      await expect(customTile).toContainText('Custom')
+      // The geometry and the preset's OWN frame rate (60, not the platform's
+      // 30) are the checkbox's description (T-92), not part of its name.
+      await expect(presetBox(window, 'Discord 1080p')).toHaveAccessibleDescription(
+        /1280×720 · 60 fps/
+      )
       // No platform tile wears the tag — it is what separates the groups.
       await expect(card.locator('label').filter({ hasText: 'YouTube' })).not.toContainText(
-        'custom'
+        'Custom'
       )
 
       // ── and it is a live checkbox: the export count follows it ──
@@ -2150,18 +2264,18 @@ test.describe('CustomPresetManager', () => {
       // ── delete, both branches — with the preset QUEUED on a clip ──
       await card.getByRole('button', { name: 'Presets' }).click()
       await expect(modal.getByText('Saved presets (1)')).toBeVisible()
-      await modal.getByRole('button', { name: '✕ delete' }).click()
+      await modal.getByRole('button', { name: 'Delete' }).click()
       await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
       expect(messages[0]).toBe('Delete preset "Discord 1080p"?')
       await expect(modal.getByText('Saved presets (1)')).toBeVisible()
       expect(readdirSync(presetsDir)).toHaveLength(1)
       // Dismissed: nothing was unqueued either.
-      await modal.getByRole('button', { name: 'Done' }).click()
+      await modal.getByRole('button', { name: 'Close' }).click()
       await expect(presetBox(window, 'Discord 1080p')).toBeChecked()
       await card.getByRole('button', { name: 'Presets' }).click()
 
       answer = 'accept'
-      await modal.getByRole('button', { name: '✕ delete' }).click()
+      await modal.getByRole('button', { name: 'Delete' }).click()
       await expect(modal.getByText('Saved presets (0)')).toBeVisible()
       await expect(modal.getByText('No custom presets yet.')).toBeVisible()
       expect(readdirSync(presetsDir)).toEqual([])
@@ -2174,7 +2288,7 @@ test.describe('CustomPresetManager', () => {
       // is gone from the grid rather than lingering as a ghost, the export
       // count drops back to the platform presets alone, and the studio is
       // still alive and interactive (no crash boundary, no dead panel).
-      await modal.getByRole('button', { name: 'Done' }).click()
+      await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(card.getByRole('checkbox')).toHaveCount(5)
       await expect(card.getByText('Discord 1080p')).toHaveCount(0)
@@ -2257,7 +2371,7 @@ test.describe('ClipKit', () => {
           'Clip_1_twitter.mp4',
           'Clip_1_youtube.mp4'
         ])
-      await expectToast(window, 'Clip kit ready')
+      await expectToast(window, 'Saved your Clip Kit')
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 30_000 })
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-09-clipkit.png') })
 
@@ -2418,7 +2532,7 @@ test.describe('ClipKit', () => {
             intervals: [500]
           })
           .toBe(5)
-        await expectToast(window, 'Clip kit ready')
+        await expectToast(window, 'Saved your Clip Kit')
       } else {
         // PLATFORM PIN, same as the Export panel's watermark test: the bundled
         // Linux ffmpeg has no `drawtext`, so a kit that really carries the
@@ -2457,6 +2571,7 @@ test.describe('PipPanel', () => {
       // Three choosers in a row, then a fourth for the cancel case — the
       // queue is why stubDialogs takes a list.
       await stubDialogs(app, { open: [clipSrc, pipSrc, outDir, longSrc] })
+      await stubShellReveal(app)
 
       // ── negative first: no inputs, no job ──
       await expect(card.getByRole('button', { name: 'Base: none' })).toBeVisible()
@@ -2483,6 +2598,16 @@ test.describe('PipPanel', () => {
       await numbers.nth(1).fill('8')
       const position = card.locator('select')
       await expect(position).toHaveValue('bottom-right')
+      // T-92: corners are spelled out ("Top L" / "Bot R" were the labels), and
+      // the two number fields name their unit.
+      await expect(position.locator('option')).toHaveText([
+        'Top left',
+        'Top right',
+        'Bottom left',
+        'Bottom right'
+      ])
+      await expect(card.getByText('Overlay width (px)')).toBeVisible()
+      await expect(card.getByText('Margin (px)')).toBeVisible()
       await position.selectOption('top-left')
       await expect(position).toHaveValue('top-left')
 
@@ -2495,7 +2620,8 @@ test.describe('PipPanel', () => {
       await expect
         .poll(() => existsSync(composite), { timeout: 540_000, intervals: [500] })
         .toBe(true)
-      await expectToast(window, 'PiP done.')
+      await expectToast(window, 'Saved the picture-in-picture video')
+      await expectRevealToast(window, app, composite)
       // The base's geometry survives; the overlay is scaled into it.
       const v = videoStream(await ffprobeJson(composite))
       expect(v.width).toBe(CLIP_WIDTH)
@@ -2533,6 +2659,7 @@ test.describe('single-output panels', () => {
     const { app, window, outDir } = studio
     try {
       await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
       const card = reframeCard(window)
       // The header states the transform the panel will perform.
       await expect(card.getByText(`${CLIP_WIDTH}×${CLIP_HEIGHT} → 1080×1920`)).toBeVisible()
@@ -2567,7 +2694,8 @@ test.describe('single-output panels', () => {
       await expect
         .poll(() => existsSync(output), { timeout: 540_000, intervals: [500] })
         .toBe(true)
-      await expectToast(window, 'Vertical version saved.')
+      await expectToast(window, 'Saved the vertical version')
+      await expectRevealToast(window, app, output)
       const v = videoStream(await ffprobeJson(output))
       expect(v.width).toBe(1080)
       expect(v.height).toBe(1920)
@@ -2587,14 +2715,31 @@ test.describe('single-output panels', () => {
     const { app, window, outDir } = studio
     try {
       await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
       const card = gifCard(window)
       const selects = card.locator('select')
       await expect(selects).toHaveCount(3)
       await expect(selects.nth(0)).toHaveValue('480')
       await expect(selects.nth(1)).toHaveValue('15')
       await expect(selects.nth(2)).toHaveValue('1')
+      // T-92: the width and the frame rate carry their units.
+      await expect(selects.nth(0).locator('option')).toHaveText([
+        '240 px',
+        '320 px',
+        '480 px',
+        '640 px',
+        '800 px'
+      ])
+      await expect(selects.nth(1).locator('option')).toHaveText([
+        '10 fps',
+        '12 fps',
+        '15 fps',
+        '20 fps',
+        '24 fps',
+        '30 fps'
+      ])
       // A 2 s clip is nowhere near the 10 s warning threshold.
-      await expect(card.getByText('GIF exports over ~10s get huge. Trim the clip first.')).toHaveCount(
+      await expect(card.getByText('GIF exports over about 10 s get huge. Trim the clip first.')).toHaveCount(
         0
       )
 
@@ -2611,7 +2756,8 @@ test.describe('single-output panels', () => {
       await expect
         .poll(() => existsSync(output), { timeout: 540_000, intervals: [500] })
         .toBe(true)
-      await expectToast(window, 'GIF saved.')
+      await expectToast(window, 'Saved the GIF')
+      await expectRevealToast(window, app, output)
       const probe = await ffprobeJson(output)
       expect(probe.format?.format_name).toContain('gif')
       const v = videoStream(probe)
@@ -2629,17 +2775,27 @@ test.describe('single-output panels', () => {
     }
   })
 
-  test('compilation: appears only with two clips, and its output is the sum of their ranges', async () => {
+  test('compilation: says what it needs at one clip, works at two, and its output is the sum of their ranges', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('compile')
     const { app, window, outDir } = studio
     try {
       await stubDialogs(app, { open: [outDir] })
-      // One clip: nothing to compile, so the panel is not rendered at all.
-      await expect(compileCard(window)).toHaveCount(0)
+      await stubShellReveal(app)
+      // One clip: nothing to compile — but the card is THERE (T-92; it used to
+      // vanish, so nobody with one clip learned compiling existed) and says what
+      // it is waiting for, with its button disabled.
+      const lonely = compileCard(window)
+      await expect(lonely).toHaveCount(1)
+      await expect(lonely.getByText('Compile clips (1)')).toBeVisible()
+      await expect(lonely.getByText('Add a second clip to compile.')).toBeVisible()
+      await expect(lonely.getByRole('button', { name: 'Compile 1 clip', exact: true })).toBeDisabled()
       await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
 
       const card = compileCard(window)
+      // ...and the note goes with the second clip.
+      await expect(card.getByText('Add a second clip to compile.')).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled()
       await expect(card.getByText('Compile clips (2)')).toBeVisible()
       const fade = card.getByRole('slider', { name: 'Crossfade duration in milliseconds' })
       await expect(fade).toHaveValue('300')
@@ -2660,7 +2816,8 @@ test.describe('single-output panels', () => {
       await expect
         .poll(() => existsSync(output), { timeout: 540_000, intervals: [500] })
         .toBe(true)
-      await expectToast(window, 'Compilation saved.')
+      await expectToast(window, 'Saved the compilation')
+      await expectRevealToast(window, app, output)
       const probe = await ffprobeJson(output)
       const v = videoStream(probe)
       expect(v.width).toBe(1920)
@@ -2814,19 +2971,19 @@ test.describe('PostChecklist', () => {
       const card = postCard(window)
       await expect(card.getByText('Posting helpers')).toBeVisible()
       // Nothing generated yet.
-      await expect(card.getByRole('button', { name: 'copy' })).toHaveCount(1)
+      await expect(card.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1)
 
       // ── four titles, each with its own copy button ──
       await card.getByRole('button', { name: 'Title starters' }).click()
       const titleRows = card.locator('li')
       await expect(titleRows).toHaveCount(4)
-      const first = (await titleRows.first().innerText()).replace(/\s*copy$/, '').trim()
+      const first = (await titleRows.first().innerText()).replace(/\s*Copy$/, '').trim()
       expect(first.length).toBeGreaterThan(0)
 
       // ── the copy button really writes to the OS clipboard ──
       // Read back from the MAIN process, so no page permission is involved.
       await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel-before-copy'))
-      await titleRows.first().getByRole('button', { name: 'copy' }).click()
+      await titleRows.first().getByRole('button', { name: 'Copy', exact: true }).click()
       await expectToast(window, 'Copied')
       await expect.poll(() => systemClipboard(app), { timeout: 10_000 }).toBe(first)
 
@@ -2842,7 +2999,7 @@ test.describe('PostChecklist', () => {
       )
       // The pack's copy button is the last one in the card — the four
       // title rows above it are the others.
-      await card.getByRole('button', { name: 'copy' }).last().click()
+      await card.getByRole('button', { name: 'Copy', exact: true }).last().click()
       await expect
         .poll(() => systemClipboard(app), { timeout: 10_000 })
         .toBe('#Shorts #Gaming #Gameplay #FYP #StreamerLife')
@@ -2853,12 +3010,22 @@ test.describe('PostChecklist', () => {
         await pack.selectOption(id)
         await expect(card.locator('code')).toContainText('#')
       }
+      // T-92: the picker shows names a person would say, not the ids behind
+      // them ("ig reels general", "yt long").
+      await expect(pack.locator('option')).toHaveText([
+        'Twitch clip',
+        'Gaming short',
+        'Reaction',
+        'Instagram Reels, general',
+        'TikTok, general',
+        'YouTube, long video'
+      ])
     } finally {
       await app.close()
     }
   })
 
-  test('logging a post writes a diary entry to the settings store, and deleting it takes it back out', async () => {
+  test('logging a post writes a posting-log entry to the settings store, and deleting it (after a confirm) takes it back out', async () => {
     test.setTimeout(120_000)
     const studio = await launchWithVideo('diary')
     const { app, window, userDataDir } = studio
@@ -2871,7 +3038,7 @@ test.describe('PostChecklist', () => {
       // ── negative: an unnamed post is refused in the app's own words ──
       await log.click()
       await expectToast(window, 'Add a clip name first')
-      await expect(card.getByText(/^Diary \(/)).toHaveCount(0)
+      await expect(card.getByText(/^Logged posts \(/)).toHaveCount(0)
       expect(readConfig(userDataDir).postingDiary).toBeUndefined()
 
       // ── all six platform toggles are multi-select and reversible ──
@@ -2895,8 +3062,8 @@ test.describe('PostChecklist', () => {
       await name.fill('First Blood clip')
       await notes.fill('posted after the 8pm stream')
       await log.click()
-      await expectToast(window, 'Logged to diary')
-      await expect(card.getByText('Diary (1)')).toBeVisible()
+      await expectToast(window, 'Added to your posting log')
+      await expect(card.getByText('Logged posts (1)')).toBeVisible()
       const entry = card.locator('div.bg-bg-hover').filter({ hasText: 'First Blood clip' })
       await expect(entry).toContainText('YouTube · TikTok')
       await expect(entry).toContainText('posted after the 8pm stream')
@@ -2906,7 +3073,7 @@ test.describe('PostChecklist', () => {
       await expect(toggle('YouTube')).not.toHaveClass(/bg-accent/)
       await expect(toggle('TikTok')).not.toHaveClass(/bg-accent/)
 
-      // ── T-20: the diary lives in the settings store, not localStorage ──
+      // ── T-20: the posting log lives in the settings store, not localStorage ──
       await expect
         .poll(() => (readConfig(userDataDir).postingDiary as unknown[])?.length, {
           timeout: 15_000
@@ -2942,7 +3109,7 @@ test.describe('PostChecklist', () => {
       // ── a second entry goes on top (newest first) ──
       await name.fill('Second clip')
       await log.click()
-      await expect(card.getByText('Diary (2)')).toBeVisible()
+      await expect(card.getByText('Logged posts (2)')).toBeVisible()
       await expect
         .poll(() => {
           const d = readConfig(userDataDir).postingDiary as Array<{ outputName: string }>
@@ -2950,9 +3117,24 @@ test.describe('PostChecklist', () => {
         })
         .toEqual(['Second clip', 'First Blood clip'])
 
-      // ── delete ──
+      // ── delete: Delete means gone for good, so it asks first (T-92) ──
+      const asked: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        asked.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
       await card.getByRole('button', { name: 'Delete entry' }).first().click()
-      await expect(card.getByText('Diary (1)')).toBeVisible()
+      await expect
+        .poll(() => asked, { timeout: 10_000 })
+        .toEqual(['Delete "Second clip" from your posting log?'])
+      // Cancel keeps it: still two on screen and on disk.
+      await expect(card.getByText('Logged posts (2)')).toBeVisible()
+      expect((readConfig(userDataDir).postingDiary as unknown[]).length).toBe(2)
+      answer = 'accept'
+      await card.getByRole('button', { name: 'Delete entry' }).first().click()
+      await expect(card.getByText('Logged posts (1)')).toBeVisible()
       await expect
         .poll(() => {
           const d = readConfig(userDataDir).postingDiary as Array<{ outputName: string }>
@@ -2960,7 +3142,7 @@ test.describe('PostChecklist', () => {
         })
         .toEqual(['First Blood clip'])
       await card.getByRole('button', { name: 'Delete entry' }).first().click()
-      await expect(card.getByText(/^Diary \(/)).toHaveCount(0)
+      await expect(card.getByText(/^Logged posts \(/)).toHaveCount(0)
       await expect.poll(() => readConfig(userDataDir).postingDiary).toEqual([])
     } finally {
       await app.close()
@@ -3094,6 +3276,123 @@ test.describe('Open project with a moved file', () => {
       await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({
         timeout: 30_000
       })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════ T-92: terminology and microcopy mechanics ═════════════════
+
+test.describe('T-92 microcopy mechanics', () => {
+  test('each export checkbox is named for its platform; the size, fps and verdict are its description', async () => {
+    test.setTimeout(120_000)
+    // The reason text moved INTO each platform <label> in round 50 (T-83), so a
+    // screen reader announced "YouTube 1920×1080 Great Picture is smaller than
+    // this output — it will be enlarged, checkbox" for what is one tick box.
+    const { app, window } = await launchWithVideo('t92name')
+    try {
+      const card = exportCard(window)
+      const platforms: Array<[string, string]> = [
+        ['YouTube', '1920×1080 · 30 fps'],
+        ['Reels', '1080×1920 · 30 fps'],
+        ['TikTok', '1080×1920 · 30 fps'],
+        ['X / Twitter', '1280×720 · 30 fps'],
+        ['Facebook', '1280×720 · 30 fps']
+      ]
+      for (const [name, facts] of platforms) {
+        const box = card.getByRole('checkbox', { name, exact: true })
+        await expect(box, `a checkbox named exactly "${name}"`).toHaveCount(1)
+        await expect(box).toHaveAccessibleName(name)
+        // The geometry (and the 30 fps every export is encoded at) and the
+        // verdict are what it is DESCRIBED by, not what it is called.
+        await expect(box).toHaveAccessibleDescription(new RegExp(facts))
+      }
+      // The verdict is part of the description too: this 320x240 fixture is
+      // smaller than every output, and the card says so.
+      await expect(card.getByRole('checkbox', { name: 'YouTube', exact: true })).toHaveAccessibleDescription(
+        /will be enlarged/
+      )
+
+      // The whole card is still one big hit area, as it was when it was a
+      // <label>: a click on the size line ticks the platform.
+      // (YouTube is the platform a freshly loaded clip starts on.)
+      const youtube = card.getByRole('checkbox', { name: 'YouTube', exact: true })
+      await expect(youtube).toBeChecked()
+      const sizeLine = card.getByText('1920×1080 · 30 fps', { exact: true })
+      const at = await sizeLine.boundingBox()
+      if (!at) throw new Error('size line has no box')
+      await window.mouse.click(at.x + at.width / 2, at.y + at.height / 2)
+      await expect(youtube).not.toBeChecked()
+      await window.mouse.click(at.x + at.width / 2, at.y + at.height / 2)
+      await expect(youtube).toBeChecked()
+      await card.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-15-export-grid.png') })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the hook badge says what it measures, in words, with no unit a streamer has never seen', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t92hook')
+    try {
+      const badge = clipListCard(window).locator('span[title*="first 3 seconds"]')
+      await expect(badge).toHaveCount(1, { timeout: 30_000 })
+      const title = (await badge.getAttribute('title')) ?? ''
+      expect(title).toMatch(/Based on how loud the first 3 seconds are, not what's on screen$/)
+      expect(title).not.toMatch(/LUFS|peak/i)
+      // "First 3 s:", not "First 3s:" — units are spaced.
+      await expect(clipListCard(window).getByText('First 3 s:')).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the custom-preset form saves a bare bitrate with its unit and refuses one too big to be kilobits', async () => {
+    test.setTimeout(120_000)
+    // ffmpeg reads a bare "192" as 192 BITS per second, so the form that took
+    // exactly that saved an audio rate nothing could hear. The labels never
+    // said which unit the field wanted either.
+    const { app, window, userDataDir } = await launchWithVideo('t92bitrate')
+    try {
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      const text = modal.locator('input[type="text"]')
+      const save = modal.getByRole('button', { name: '+ Save preset' })
+
+      await nameInput.fill('Bare numbers')
+      await text.nth(1).fill('8000')
+      await text.nth(2).fill('192')
+      await save.click()
+      await expectToast(window, 'Saved "Bare numbers"')
+      const files = readdirSync(presetsDir)
+      expect(files).toHaveLength(1)
+      const onDisk = JSON.parse(
+        readFileSync(path.join(presetsDir, files[0] as string), 'utf8')
+      ) as Record<string, unknown>
+      expect(onDisk).toMatchObject({ videoBitrate: '8000k', audioBitrate: '192k' })
+      // The list reads the units out loud, and says fps with a space.
+      await expect(modal.locator('li')).toContainText('1920×1080 · 30 fps · 8000 kbps · YouTube')
+
+      // The fields show what was saved, so the unit the form assumed is visible.
+      await expect(text.nth(1)).toHaveValue('8000k')
+      await expect(text.nth(2)).toHaveValue('192k')
+
+      // ── a number that can only be bits per second is refused, with the fix ──
+      await nameInput.fill('Too big')
+      await text.nth(1).fill('5000000')
+      await save.click()
+      await expectToast(
+        window,
+        '5000000 is too big to be kilobits per second. Write 5M instead.'
+      )
+      expect(readdirSync(presetsDir)).toHaveLength(1)
+
+      // ── the labels say what the field wants ──
+      await expect(modal.getByLabel('Video bitrate (e.g. 8M)')).toBeVisible()
+      await expect(modal.getByLabel('Audio bitrate (e.g. 192k)')).toBeVisible()
     } finally {
       await app.close()
     }

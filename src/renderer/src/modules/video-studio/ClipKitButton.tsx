@@ -153,7 +153,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         }
       }
 
-      toast.success('Clip kit ready', { duration: 6000 })
+      toast.success('Saved your Clip Kit', { duration: 6000 })
       // INIT-E (round 15): persist the parent on success.
       void window.api.settings.set('clipKit.lastOutputDir', parentDir)
       // Reveal the folder so the user can grab it for posting. Match the

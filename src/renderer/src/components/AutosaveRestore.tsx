@@ -5,6 +5,7 @@ import type { ImagiiProject } from '@shared/workspace'
 import { applyProject, describeUnavailableSources } from '../modules/project/ProjectIO'
 import { suppressAutosave } from '../hooks/useAutosave'
 import { ipcErrorMessage } from '@shared/ipcError'
+import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
 import { Icon } from './Icon'
@@ -28,7 +29,7 @@ function formatAge(ms: number): string {
   if (ms < 60 * 1000) return 'just now'
   if (ms < 60 * 60 * 1000) return `${Math.floor(ms / 60000)} min ago`
   if (ms < 24 * 60 * 60 * 1000) return `${Math.floor(ms / 3600000)} hr ago`
-  return `${Math.floor(ms / 86400000)} day(s) ago`
+  return `${countOf(Math.floor(ms / 86400000), 'day')} ago`
 }
 
 export function AutosaveRestore(): JSX.Element | null {
@@ -131,11 +132,14 @@ export function AutosaveRestore(): JSX.Element | null {
     }
   }
 
-  async function discard(): Promise<void> {
+  // "Clear" on both buttons and in the toast (T-92): it empties the one
+  // autosave file, the same call whether the file is good or damaged. The
+  // healthy banner used to call it Discard and the damaged one Clear.
+  async function clearAutosave(): Promise<void> {
     setBusy(true)
     try {
       await window.api.autosave.clear()
-      toast('Autosave discarded.', { icon: <Icon name="trash" size={18} /> })
+      toast('Autosave cleared', { icon: <Icon name="trash" size={18} /> })
       setDismissed(true)
     } catch (err) {
       // T-57: a clear that failed leaves the file exactly where it was, so
@@ -174,8 +178,9 @@ export function AutosaveRestore(): JSX.Element | null {
         </span>
         <button
           className="btn-ghost px-3 py-1 text-xs"
-          onClick={() => void discard()}
+          onClick={() => void clearAutosave()}
           disabled={busy}
+          title="Clear the autosave"
         >
           Clear
         </button>
@@ -206,10 +211,11 @@ export function AutosaveRestore(): JSX.Element | null {
       </button>
       <button
         className="btn-ghost px-3 py-1 text-xs"
-        onClick={() => void discard()}
+        onClick={() => void clearAutosave()}
         disabled={busy}
+        title="Clear the autosave"
       >
-        Discard
+        Clear
       </button>
       <button
         className="btn-ghost px-3 py-1 text-xs"

@@ -5,7 +5,7 @@ A free, local-first creative studio for Windows. One app, five studios:
 - **🔴 Record** — capture a screen or window, with an optional webcam and mic, straight to MP4 (no game or desktop audio)
 - **🎬 Video Studio** — trim and clip video, export sized for YouTube, Reels, TikTok, X, or Facebook; reframe to 9:16, GIF export, captions, picture-in-picture, multi-clip compilation, chat-spike highlight finder
 - **🎚 Audio Studio** — clean noise, normalize loudness, multi-track + ducking, save reusable cleanup presets
-- **🖼 Image Canvas** — layered design with streamer templates for thumbnails and overlay frames
+- **🖼 Stream Graphics** — layered design with streamer templates for thumbnails and overlay frames
 - **✨ References** — DuckDuckGo image search with strict SafeSearch + local mood boards that drag onto the canvas
 
 Crash-safe autosave plus full project save / load. No accounts, no subscriptions, no cloud uploads.
@@ -89,7 +89,7 @@ Some antivirus engines flag unsigned Electron apps the first time they see them.
 You'll see a personalized welcome the first time. Click "Let's go →" to enter the home screen.
 
 ### 5. Home screen
-Five cards: **Record**, **Video Studio**, **Audio Studio**, **Image Canvas**, **References**. Plus 💾 **Save project** and 📂 **Open project** buttons in the header.
+Five cards: **Record**, **Video Studio**, **Audio Studio**, **Stream Graphics**, **References**. Plus 💾 **Save project** and 📂 **Open project** buttons in the header.
 
 If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"imagii autosaved your work N minutes ago — Restore?"* — click it to pick up where you left off.
 
@@ -99,7 +99,7 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 
 ### 🔴 Record
 1. Click "Pick a screen or window" → choose from the live thumbnail grid.
-2. Tick "Record microphone" and pick your input device. Optionally enable webcam preview.
+2. Check "Record microphone" and pick your input device. Optionally enable webcam preview.
 3. Choose whether to convert to MP4 on save (slower; better compatibility) or keep WebM.
 4. Click ● Start. Stop button appears in the header.
 5. On stop, save the recording somewhere. Cancel in the save dialog discards the take.
@@ -107,16 +107,16 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 ### 🎬 Video Studio
 1. **Import.** Drop a video onto the window or click "Choose file…". Recent files dropdown remembers the last 10. Supports MP4, MOV, AVI, MKV, WEBM, M4V.
 2. **Trim.** Drag the timeline handles, or hit `I` (in) / `O` (out) at the playhead.
-3. **Optional: crop.** Tick "Crop" above the player to draw a box; pick an aspect ratio preset (16:9 / 9:16 / 1:1 / 4:5). Your crop is the picture: each platform you export to takes a centered cut of it in its own shape, never stretched.
-4. **Optional: enable safe-zones.** "Safe zones" toggle in the player overlays ghosted 9:16 / 1:1 / 4:5 rectangles so you can frame the action to survive future crops.
+3. **Optional: crop.** Check "Crop" above the player to draw a box; pick an aspect ratio preset (16:9 / 9:16 / 1:1 / 4:5). Your crop is the picture: each platform you export to takes a centered cut of it in its own shape, never stretched.
+4. **Optional: crop guides.** The "Crop guides" toggle in the player overlays ghosted 9:16 / 1:1 / 4:5 rectangles so you can frame the action to survive future crops.
 5. **Optional: per-clip color, speed, effects.** The Color & motion panel has brightness / contrast / saturation / temperature sliders plus auto-zoom and hype-shake toggles. The clip list has a speed slider (0.25× to 4×) per selected clip.
 6. **Optional: text overlays + watermark.** Watermark field stamps your @handle on the batch export and, once you have exported with one, on Clip Kit (GIF, reframe, compilation and PiP take none). Filename template controls how exports are named (tokens: `{source} {clip} {preset} {date} {time} {handle}`).
-7. **Pick platforms.** Tick the platforms you want; success indicator shows green/yellow/red per platform, and a red one says why ("Wrong shape", "Too long").
+7. **Pick platforms.** Check the platforms you want; success indicator shows green/yellow/red per platform, and a red one says why ("Wrong shape", "Too long").
 8. **Click Export.** The button says how many files it will write ("Export 3 files"). Sequential render with a progress bar; cancel any time.
 
-The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-spike finder (paste a Twitch chat log), Reframe to 9:16 (center crop), GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
+The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat spike finder (paste a Twitch chat log), Reframe to 9:16 (center crop), GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
 
-**Player hotkeys:** `Space` play/pause · `← →` nudge 0.1s · `, .` frame step · `I O` set in/out · `?` show all shortcuts
+**Player hotkeys:** `Space` play/pause · `← →` nudge 0.1 s · `, .` frame step · `I O` set in/out · `?` show all shortcuts
 
 ### 🎚 Audio Studio
 1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown.
@@ -128,17 +128,17 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 7. **Add a second track** for background music with optional ducking, a co-host's mic, or game audio.
 8. **Click Export.** MP3 / WAV / FLAC / AAC (saved as `.m4a`). If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.
 
-### 🖼 Image Canvas
+### 🖼 Stream Graphics
 1. **Import.** Drop an image, paste with `Ctrl+V`, or pick a file. Or click **✨ Templates** for pre-made YouTube thumbnails and Twitch overlay frames with a facecam hole.
-2. **Tools:** `V` Select · `R` Rect · `O` Ellipse · `L` Line · `P` Pencil.
-3. **Layers panel** for reorder / hide / lock / duplicate / delete.
+2. **Tools:** `V` Select · `R` Rectangle · `O` Ellipse · `L` Line · `P` Pencil.
+3. **Layers panel** for reorder / hide / lock / duplicate / remove.
 4. **Grid** + snap-to-grid for alignment.
 5. **Properties panel** for exact-degree rotation, opacity, fill/stroke, text editing.
 6. **Export** PNG or JPG with HiDPI scale (0.5×–3×).
 
 ### ✨ References
 - **Reference Search** — DuckDuckGo image search with strict SafeSearch hard-coded ON. Click ★ on any result to save to a mood board.
-- **Mood Boards** — local JSON-persisted boards. Hover an item and click **→ Canvas** to drop it as a 40%-opacity reference layer in the Image Canvas.
+- **Mood boards** — local JSON-persisted boards. Hover an item and click **→ Canvas** to drop it as a 40%-opacity reference layer in Stream Graphics.
 
 ---
 
@@ -146,7 +146,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 
 - **💾 Save project / 📂 Open project** in the home header serialize the entire workspace (all studios, all clips, all audio chain settings, the canvas) to a single `.imagii.json` file.
 - **Autosave** runs every few seconds in the background while you work. It writes atomically (temp file → fsync → atomic rename) and keeps one rolling backup file. If the primary autosave gets corrupted, recovery falls through to the backup automatically.
-- On launch, if a recent autosave exists you'll see a banner: *"imagii autosaved your work N minutes ago"* with **Restore / Discard / Later** buttons.
+- On launch, if a recent autosave exists you'll see a banner: *"imagii autosaved your work N minutes ago"* with **Restore / Clear / Later** buttons.
 - 28 unit tests cover the validation + atomic-write paths (`npm test`).
 
 ---
@@ -163,7 +163,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 
 **Audio export is slow** → If "Even volume" is on, imagii measures the whole file first and then renders. Turn it off for a faster export.
 
-**Image canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. The preview downsamples to 2048 px; very large originals still take memory.
+**The Stream Graphics canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. The preview downsamples to 2048 px; very large originals still take memory.
 
 **Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps to drop `whisper-cli.exe` (the older name, `whisper.exe`, also works) and the `ggml-base.en.bin` model in place — or let imagii download the model for you. Then click "Refresh status".
 
@@ -186,7 +186,7 @@ The sidebar also has: Output preview, Auto-highlight finder (audio peaks), Chat-
 - Electron 31 + React 18 + TypeScript + Tailwind, packaged with electron-builder
 - FFmpeg-static for all video and audio processing
 - wavesurfer.js for audio waveform display
-- Konva for image canvas
+- Konva for the Stream Graphics canvas
 - Vitest for the autosave + validation test suite (28 tests)
 - Zustand for state management
 

@@ -214,7 +214,7 @@ function readBoardsFromDisk(boardsDir: string): MoodBoardCollection[] {
 /** Locators shared by several tests. */
 const searchPlaceholder = 'Search for inspiration'
 /** MoodBoardPanel's delete toast, verbatim — it names the undo path (T-66). */
-const DELETED_TOAST = 'Deleted — press Ctrl+Z to undo.'
+const DELETED_TOAST = 'Deleted — press Ctrl+Z to undo'
 const boardsHeading = /^Boards \(\d+\)$/
 
 /**
@@ -371,7 +371,7 @@ test.describe('imagii References studio', () => {
       await moodBoardTab(window).click()
 
       const nameInput = window.getByPlaceholder('New board name', { exact: false })
-      const addButton = window.getByRole('button', { name: '+', exact: true })
+      const addButton = window.getByRole('button', { name: 'Create board', exact: true })
       const detailTitle = window.locator('h3.text-lg')
 
       await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
@@ -424,7 +424,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', dismisser)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 item(s)?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
       // Cancel means cancel: still two boards, still selected, still on disk.
       await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
       await expect(detailTitle).toHaveText('Alpha board')
@@ -442,7 +442,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', accepter)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 item(s)?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
       await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
       await expect(window.locator('li', { hasText: 'Alpha board' })).toHaveCount(0)
       // Selection falls back to the surviving board rather than emptying out.
@@ -530,7 +530,7 @@ test.describe('imagii References studio', () => {
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
       await expect
         .poll(() => dialogs)
-        .toEqual(['confirm: Delete "Undo board" and all 1 item(s)?'])
+        .toEqual(['confirm: Delete "Undo board" and all 1 item?'])
       await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
       await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
       // The confirm still guards a real deletion — but not the picture.

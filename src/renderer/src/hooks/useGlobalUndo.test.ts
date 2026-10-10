@@ -114,7 +114,7 @@ describe('the tracker arms without Home being mounted', () => {
     expect(globalUndoState()).toEqual({
       canUndo: true,
       canRedo: false,
-      lastLabel: 'Image Canvas'
+      lastLabel: 'Stream Graphics'
     })
   })
 
@@ -125,7 +125,7 @@ describe('the tracker arms without Home being mounted', () => {
     editAudio(3)
     expect(globalUndoState().lastLabel).toBe('Audio Studio')
     editCanvas()
-    expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    expect(globalUndoState().lastLabel).toBe('Stream Graphics')
     // T-58: the fourth. Before it, work done in References was invisible
     // here — Home's Undo could never target a mood board.
     await editReferences()
@@ -168,7 +168,7 @@ describe('cross-studio ordering', () => {
     expect(layerCount()).toBe(1)
 
     // Newest change was the canvas one, so that is what goes first…
-    expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    expect(globalUndoState().lastLabel).toBe('Stream Graphics')
     globalUndo()
     expect(layerCount()).toBe(0)
     expect(clipCount()).toBe(1)
@@ -194,7 +194,7 @@ describe('cross-studio ordering', () => {
     expect(layerCount()).toBe(1)
 
     // Newest first: the canvas, then the board, then the clip.
-    expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    expect(globalUndoState().lastLabel).toBe('Stream Graphics')
     globalUndo()
     expect(layerCount()).toBe(0)
 
@@ -235,7 +235,7 @@ describe('cross-studio ordering', () => {
     expect(globalUndoState()).toEqual({
       canUndo: true,
       canRedo: false,
-      lastLabel: 'Image Canvas'
+      lastLabel: 'Stream Graphics'
     })
   })
 
@@ -271,7 +271,7 @@ describe('cross-studio ordering', () => {
     expect(globalUndoState()).toEqual({
       canUndo: true,
       canRedo: false,
-      lastLabel: 'Image Canvas'
+      lastLabel: 'Stream Graphics'
     })
   })
 
@@ -285,7 +285,7 @@ describe('cross-studio ordering', () => {
     expect(globalUndoState().lastLabel).toBe('Video Studio')
 
     editCanvas(200)
-    expect(globalUndoState().lastLabel).toBe('Image Canvas')
+    expect(globalUndoState().lastLabel).toBe('Stream Graphics')
     const layers = layerCount()
     globalUndo()
     expect(layerCount()).toBe(layers - 1)

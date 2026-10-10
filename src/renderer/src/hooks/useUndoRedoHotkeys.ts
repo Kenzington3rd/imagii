@@ -14,7 +14,7 @@ export interface UndoRedoKey {
 }
 
 /**
- * T-15: Audio Studio (round 15) and Image Canvas each carried their own copy
+ * T-15: Audio Studio (round 15) and Stream Graphics each carried their own copy
  * of this branch, and Video Studio — the studio with the most undoable
  * actions — carried none, so Ctrl+Z did nothing there. Third copy is where
  * the STYLE_GUIDE says to extract, and a pure decision function is the only
@@ -40,7 +40,7 @@ export function undoRedoIntent(e: UndoRedoKey): 'undo' | 'redo' | null {
 
 /**
  * Window-level Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z for a studio's own history.
- * Used by Video Studio, Audio Studio, and the Image Canvas.
+ * Used by Video Studio, Audio Studio, and Stream Graphics.
  */
 export function useUndoRedoHotkeys(undo: () => void, redo: () => void): void {
   useEffect(() => {

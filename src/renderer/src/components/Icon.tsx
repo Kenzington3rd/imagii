@@ -281,7 +281,7 @@ const ICON_PATHS: Record<IconName, JSX.Element> = {
   download: (
     <path d="M12 4v11M8 11l4 4 4-4M5 19h14" />
   ),
-  // Speech bubble — chat highlight reel.
+  // Speech bubble — chat spike finder.
   chat: (
     <path d="M4 5h16v11H8l-4 4V5z" />
   ),

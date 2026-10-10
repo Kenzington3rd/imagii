@@ -1705,7 +1705,8 @@ IMG-PREC.
   review; interactionWiring-style pin where cheap (e.g. the plural
   helper); guide-sync's reviewers re-run clean on the sweep;
   LESSONS entry.
-- **Status:** open
+- **Status:** done (round 56 — see Done; the guide-sync criterion
+  rides the wave-close pass with T-93's)
 
 ## T-93 — USER_GUIDE and release notes: a feature list where a first session needs a walkthrough
 
@@ -1845,7 +1846,11 @@ IMG-PREC.
   burn-in instead of freezing at "Burning in… N%" with a dead
   Cancel button; round-55 add: the audio export's measure and
   render passes each restart the bar at 0 — label the passes or
-  make one continuous bar so it does not read as a stall; E2E pins
+  make one continuous bar so it does not read as a stall; round-56
+  adds (same microcopy class, found by the sweep):
+  ClipKitButton's `SRT not bundled (reason)` toast carries main's
+  raw fragment; the audio waveform readout prints the raw codec id
+  (pcm_s16le); reframe's progress prints raw phase ids; E2E pins
   each; LESSONS entry.
 - **Status:** open
 
@@ -1907,9 +1912,71 @@ IMG-PREC.
   pixel E2E) or a documented disposition.
 - **Status:** open (needs owner ruling)
 
+## T-104 — raw palette hex in the highlight bars and safe-zone overlays
+
+- **Spec:** round-56 worker finding, a non-negotiable breach found
+  in passing (not copy, so not fixed in the sweep):
+  `HighlightPanel.tsx` draws its two signal bars with raw hex
+  (#f472b6, #fbbf24) and `SafeZoneOverlay.tsx` its three overlay
+  colors (#f472b6, #fbbf24, #22d3ee) — the colors-from-tokens rule
+  says these come from tokens.ts, and designTokensInSync cannot see
+  them where they are.
+- **Acceptance criteria:** the five literals come from tokens.ts
+  (new tokens if no existing ones match, WCAG-checked per the
+  rule); a structural pin keeps raw hex out of renderer source the
+  way the no-prompt scanner works (scoped to src/renderer, test
+  files excluded); existing visual coverage green.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 56 — content fix wave batch 9: T-92, the terminology sweep,
+plus a latent click-eater fixed at its root. BRANDING_GUIDE now has
+the Copy conventions section (canonical name table, sentence case,
+Delete/Remove/Clear/Discard verb rules — the worker's sharper
+definitions accepted: Delete = a saved thing, always confirms;
+Remove = an item in what you're editing — toast rules, voice,
+dismiss labels) and the renderer was swept to match: Stream
+Graphics everywhere at last (Home's last-undo line, README,
+FOR_MIKE, the history doc), highlight naming unified ("Chat spike
+finder"; "Found 1 highlight" plural-correct via countOf at ten
+pinned sites), posting log unified, corners spelled out, verbs
+paired between button and confirm (the posting-log delete gained
+the confirm its verb requires), dismiss labels one "Close" per
+dialog (two duplicate footers deleted), US spelling, units spaced,
+"Crop guides", the compile card visible-but-disabled at one clip
+with its reason, the board "+" labeled for AT. Behavior fixes
+inside the sweep: digits-only bitrates auto-suffix to kilobits
+(and a lowercase m becomes M — ffmpeg reads m as MILLIbits; bare
+numbers over 100000 are refused with the working spelling);
+highlight scores renormalize over the weights in play, so a
+chatless scan can reach 100 instead of capping at 40; the export
+grid's reason text moved to aria-describedby so a checkbox's
+accessible name is "YouTube", not a paragraph (plus the
+pointer-interception fix that made the tiles clickable for
+Playwright and mice alike). The send-back: my gate run caught the
+emote-pack E2E timing out under a success toast — the worker proved
+the interception LATENT at HEAD (react-hot-toast cards take pointer
+events; run order had hidden it) and fixed it at the root: every
+toast card is pointer-events none, only the reveal buttons are
+auto, with unit + click-through E2E pins and a mutation proving
+both layers (accepted cost, documented: hover no longer pauses a
+toast). Enforcement: copyConventions.test.ts scans rendered strings
+(and all literals for the name rules — the original "Image Canvas"
+hid in a Record value) with a discrimination block; 35 reds against
+HEAD source. Expedite: verify 2113/2113 (99 files), build clean, no
+main/preload changes so no test:media (claim verified by diff),
+full Playwright 167/167; worker's five mutations reviewed, one
+independent expediter mutation at the untouched suffix seam
+(normalization dropped -> the named m-is-mega pin red,
+byte-identical restore -> 18/18). Findings: T-104 filed (raw hex in
+the highlight bars and safe-zone overlays — a token-rule breach the
+sweep could not touch), three microcopy stragglers folded into
+T-100, main's lenient isValidBitrate boundary kept deliberately
+(old preset files still load; the form is the strict layer) and
+documented.
 
 Round 55 — content fix wave batch 8 (recovered through two container
 restarts with the tree intact): T-90 + T-91, plus a blocker found

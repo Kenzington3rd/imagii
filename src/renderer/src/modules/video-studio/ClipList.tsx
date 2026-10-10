@@ -79,7 +79,7 @@ export function ClipList(): JSX.Element {
               for the selected clip. Hover for the explanation. */}
           {source ? (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-ink-muted">First 3s:</span>
+              <span className="text-ink-muted">First 3 s:</span>
               <HookIndicator sourcePath={source.filePath} startSec={selected.startSec} />
             </div>
           ) : null}

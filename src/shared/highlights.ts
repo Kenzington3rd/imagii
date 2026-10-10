@@ -8,9 +8,13 @@ import type { ChatMessage } from './chatLog'
  *   - hype-keyword detection (Twitch-flavored emote/exclamation list)
  *
  * Each signal contributes a 0..1 normalized score; combinedScore is a
- * weighted average. Per-signal scores stay attached to each highlight so
- * the UI can show *why* a moment was flagged — the AI clippers do this and
- * users find it persuasive.
+ * weighted average OF THE SIGNALS IN PLAY (T-92): with no chat log pasted
+ * the chat weights have nothing to weigh, so the audio signal alone is the
+ * whole average and a saturated peak scores 100, as the panel's "0-100"
+ * promises. (It used to divide nothing: audio x 0.4 + 0 + 0 capped every
+ * scan without chat at 40.) Per-signal scores stay attached to each
+ * highlight so the UI can show *why* a moment was flagged — the AI clippers
+ * do this and users find it persuasive.
  *
  * Signals deferred to a future round (would each need a separate FFmpeg
  * pass): speech-energy peaks (astats), scene-change frequency (scdet).
@@ -50,6 +54,16 @@ export const DEFAULT_WEIGHTS: ScoringWeights = {
   audio: 0.4,
   chatDensity: 0.4,
   hypeWord: 0.2
+}
+
+/**
+ * What a streamer reads when no signal cleared its own threshold and the only
+ * thing left to say is the scanner's own classification. The ids
+ * ('sustained-loud') are the scanner's vocabulary, not the user's.
+ */
+const FALLBACK_REASON: Record<AudioCandidate['reason'], string> = {
+  loud: 'Loud peak',
+  'sustained-loud': 'Long loud stretch'
 }
 
 /**
@@ -138,9 +152,14 @@ function messagesInWindow(
 
 /**
  * For each audio candidate, compute combined signals using chat data when
- * available. If chat is empty, chat-driven signals are 0 and combined
- * score collapses to the audio score (still useful — preserves the old
- * audio-only behavior as a strict subset).
+ * available. If chat is empty, chat-driven signals are 0 and the combined
+ * score IS the audio score: the average is taken over the weights actually in
+ * play, so the 0..1 scale (the panel's 0-100) is reachable without a chat log
+ * (T-92). With chat present all three weights apply, as before.
+ *
+ * "Chat present" means there are messages, not that they scored — a log that
+ * never mentions this moment is evidence the moment was quiet in chat, and
+ * should weigh against it.
  *
  * The bound on the outer loop is candidates.length, captured at start.
  */
@@ -154,10 +173,18 @@ export function scoreHighlights(
   // Establish a chat-density baseline (msgs per 10s bucket) over the
   // entire chat span so per-window density can be normalized.
   const baseline = chatDensityMedian(chatMessages, 10)
+  const chatInPlay = chatMessages.length > 0
+  const weightInPlay = chatInPlay
+    ? weights.audio + weights.chatDensity + weights.hypeWord
+    : weights.audio
+  assert(weightInPlay > 0, 'the weights in play must add up to more than zero')
   const out: ScoredHighlight[] = []
   const len = audioCandidates.length
   for (let i = 0; i < len; i++) {
-    const c = audioCandidates[i]
+    // Typed on purpose: `assert(Array.isArray(...))` above narrows a readonly
+    // array to `any[]`, which would make `c.reason` an `any` and let the
+    // reason lookup below compile without proving the key is one of the two.
+    const c: AudioCandidate | undefined = audioCandidates[i]
     if (!c) continue
     const window = messagesInWindow(chatMessages, c.startSec, c.endSec)
     const durationSec = Math.max(0.1, c.endSec - c.startSec)
@@ -167,15 +194,17 @@ export function scoreHighlights(
     const hypeCount = countHypeWords(window)
     const hypeWordScore = Math.min(1, hypeCount / 5)
     const audioScore = audioPeakToScore(c.peakDb)
-    const combined =
-      audioScore * weights.audio +
-      chatDensityScore * weights.chatDensity +
-      hypeWordScore * weights.hypeWord
+    const weighted = chatInPlay
+      ? audioScore * weights.audio +
+        chatDensityScore * weights.chatDensity +
+        hypeWordScore * weights.hypeWord
+      : audioScore * weights.audio
+    const combined = weighted / weightInPlay
     const reasons: string[] = []
-    if (audioScore >= 0.6) reasons.push('loud audio peak')
-    if (chatDensityScore >= 0.5) reasons.push('chat spike')
-    if (hypeWordScore >= 0.4) reasons.push('hype keywords')
-    if (reasons.length === 0) reasons.push(c.reason)
+    if (audioScore >= 0.6) reasons.push('Loud audio peak')
+    if (chatDensityScore >= 0.5) reasons.push('Chat spike')
+    if (hypeWordScore >= 0.4) reasons.push('Hype keywords')
+    if (reasons.length === 0) reasons.push(FALLBACK_REASON[c.reason])
     out.push({
       startSec: c.startSec,
       endSec: c.endSec,

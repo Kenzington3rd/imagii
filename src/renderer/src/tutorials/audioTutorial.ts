@@ -36,21 +36,21 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'cleanup',
       title: 'Cleanup',
-      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then tick 'Remove low rumble', 'Hum removal', or 'Softer harsh' sounds as needed.",
+      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then check 'Remove low rumble', 'Hum removal', or 'Softer harsh' sounds as needed.",
       targetSelector: '[data-tutorial="audio-cleanup"]',
       placement: 'left'
     },
     {
       id: 'levels',
       title: 'Levels',
-      body: "Pick a Compressor preset: Voice for streaming, Music for songs. Tick 'Even volume' and choose a Platform so every export lands at the same loudness.",
+      body: "Pick a Compressor preset: Voice for streaming, Music for songs. Check 'Even volume' and choose a Platform so every export lands at the same loudness.",
       targetSelector: '[data-tutorial="audio-levels"]',
       placement: 'left'
     },
     {
       id: 'second-track',
       title: 'Add a second track',
-      body: "Layer in 'Background music', a 'Second mic', or 'Game audio' alongside your voice. Tick 'Duck under your voice' to turn it down whenever you talk.",
+      body: "Layer in 'Background music', a 'Second mic', or 'Game audio' alongside your voice. Check 'Duck under your voice' to turn it down whenever you talk.",
       targetSelector: '[data-tutorial="audio-music"]',
       placement: 'left'
     },

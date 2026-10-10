@@ -12,6 +12,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { dragTo } from './drag'
+import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -524,7 +525,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(window.getByText('e2e-tone.wav')).toBeVisible()
       // Probe readout — these numbers came back over IPC from ffprobe.
       await expect(window.locator(WAVEFORM)).toContainText('44100 Hz')
-      await expect(window.locator(WAVEFORM)).toContainText('1ch')
+      await expect(window.locator(WAVEFORM)).toContainText('1 ch')
       await expect(window.locator(WAVEFORM)).toContainText('pcm_s16le')
       const transport = window.locator(`${WAVEFORM} .font-mono`).first()
       await expect(transport).toHaveText(`0:00.00 / 0:0${FIXTURE_SECONDS}.00`)
@@ -641,7 +642,7 @@ test.describe('imagii Audio Studio', () => {
         .toContain('Loaded')
       // The extract writes 48 kHz stereo pcm_s16le regardless of the source.
       await expect(window.locator(WAVEFORM)).toContainText('48000 Hz')
-      await expect(window.locator(WAVEFORM)).toContainText('2ch')
+      await expect(window.locator(WAVEFORM)).toContainText('2 ch')
 
       // fromVideo is set, so the Export panel offers the re-attach path and
       // locks the format select to mp4 while it is ticked.
@@ -1365,7 +1366,7 @@ test.describe('imagii Audio Studio', () => {
       // ── delete: declined, then accepted ──
       dialogs.action = 'dismiss'
       const rowB = presets.locator('li').filter({ hasText: 'Mic B' })
-      await rowB.getByRole('button', { name: 'Remove preset' }).click()
+      await rowB.getByRole('button', { name: 'Delete preset' }).click()
       await expect
         .poll(() => dialogs.messages, { timeout: 15_000, intervals: [200] })
         .toContain('Delete preset "Mic B"?')
@@ -1373,7 +1374,7 @@ test.describe('imagii Audio Studio', () => {
       expect(readdirSync(presetDir)).toHaveLength(2)
 
       dialogs.action = 'accept'
-      await rowB.getByRole('button', { name: 'Remove preset' }).click()
+      await rowB.getByRole('button', { name: 'Delete preset' }).click()
       await expect(presets.getByRole('button', { name: 'Apply' })).toHaveCount(1)
       await expect(presets.getByText('Mic B')).toHaveCount(0)
       await expect(presets.getByText('Mic A')).toBeVisible()
@@ -1490,7 +1491,7 @@ test.describe('imagii Audio Studio', () => {
       await window.getByRole('button', { name: 'Close', exact: true }).click()
       await expect
         .poll(() => dialogs.messages, { timeout: 15_000, intervals: [200] })
-        .toEqual(['Close this audio? your cleanup settings will be discarded.'])
+        .toEqual(['Close this audio? Your cleanup settings will be discarded.'])
       // Declined means nothing happened: same source, same chain.
       await expect(window.getByText('e2e-tone.wav')).toBeVisible()
       await expectSelected(medium)
@@ -1504,7 +1505,7 @@ test.describe('imagii Audio Studio', () => {
         .poll(() => dialogs.messages.length, { timeout: 15_000, intervals: [200] })
         .toBe(2)
       expect(dialogs.messages[1]).toBe(
-        'Close this audio? your cleanup settings, 1 cut region(s) will be discarded.'
+        'Close this audio? Your cleanup settings, 1 cut will be discarded.'
       )
       await expect(window.getByText('e2e-tone.wav')).toBeVisible()
 
@@ -1560,7 +1561,7 @@ test.describe('imagii Audio Studio', () => {
 
       // No job has started, so no progress row and no Cancel.
       await expect(exportPanel.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
-      await expect(exportPanel.getByRole('button', { name: 'Show' })).toHaveCount(0)
+      await expect(exportPanel.getByRole('button', { name: 'Show in folder' })).toHaveCount(0)
       // A source-less studio has no Export panel at all.
       await window.getByRole('button', { name: 'Close', exact: true }).click()
       await expect(window.locator(EXPORT)).toHaveCount(0)
@@ -1685,7 +1686,13 @@ test.describe('imagii Audio Studio', () => {
       expect(facts.codecs).toEqual(['aac'])
       const head = readFileSync(out).subarray(4, 12).toString('latin1')
       expect(head).toBe('ftypM4A ')
-      await expect(exportPanel.getByRole('button', { name: 'Show' })).toBeVisible()
+      await expect(exportPanel.getByRole('button', { name: 'Show in folder' })).toBeVisible()
+      // T-92: and pressing it reaches the shell with the file that was written.
+      await stubShellReveal(app)
+      await exportPanel.getByRole('button', { name: 'Show in folder' }).click()
+      await expect
+        .poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] })
+        .toEqual([out])
     } finally {
       await closeStudio(studio)
     }
@@ -1776,7 +1783,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(presets.getByPlaceholder('My mic preset')).toHaveValue('Doomed')
       expect(await readToastLog(window)).not.toContain('Saved "Doomed"')
 
-      await presets.locator('li').filter({ hasText: 'Keeper' }).getByRole('button', { name: 'Remove preset' }).click()
+      await presets.locator('li').filter({ hasText: 'Keeper' }).getByRole('button', { name: 'Delete preset' }).click()
       const DELETE_FAILED =
         "Couldn't delete that preset. Your disk is full. Free up some space and try again."
       await expect

@@ -130,6 +130,12 @@ UIs that DON'T use it are the image-studio and audio-studio export bars,
 which are inline panels, not dialogs. If you find yourself writing
 `fixed inset-0 bg-black/70` again, stop — that's a bug.
 
+**A dialog with nothing to decide has one dismiss control, and it says "Close"**
+(T-92). Not "Esc", "✕", "Done" or "Cancel": the header's Close is the control, and
+the Esc hint lives only in the shortcuts dialog's footer. A dialog that asks a
+question pairs a verb with "Cancel" (`Export anyway` / `Cancel`). "Done" belongs to
+the end of the tutorial tour. `BRANDING_GUIDE.md` has the full copy rules.
+
 **Ask for one value with `<NameDialog>`** (`components/NameDialog.tsx`)
 rather than building another one-field dialog: title, labelled field,
 Cancel and a confirm button, Enter to submit, blank refused. It is what

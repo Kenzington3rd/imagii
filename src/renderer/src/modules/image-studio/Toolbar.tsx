@@ -16,7 +16,7 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   { id: 'select', label: 'Select', icon: 'cursor', shortcut: 'V' },
-  { id: 'rect', label: 'Rect', icon: 'square', shortcut: 'R' },
+  { id: 'rect', label: 'Rectangle', icon: 'square', shortcut: 'R' },
   { id: 'ellipse', label: 'Ellipse', icon: 'circle', shortcut: 'O' },
   { id: 'line', label: 'Line', icon: 'line', shortcut: 'L', advanced: true },
   { id: 'pencil', label: 'Pencil', icon: 'pencil', shortcut: 'P', advanced: true }

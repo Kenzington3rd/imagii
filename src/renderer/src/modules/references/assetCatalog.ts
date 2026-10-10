@@ -7,7 +7,7 @@ import type { IconName } from '../../components/Icon'
  *
  * **All assets in this catalog are imagii-authored** and released into
  * the public domain (CC0). They're stored as Konva canvas documents
- * (the same format as the Image Canvas template engine) so they:
+ * (the same format as the Stream Graphics template engine) so they:
  *   - render to a tiny preview in the asset library tab
  *   - drop directly into the Stream Graphics editor when picked
  *   - cost zero bytes of bundled binary assets (no PNG/MP3 bloat)
@@ -99,7 +99,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     id: 'frame-clean-corner',
     name: 'Clean corner frame',
     description:
-      '1920×1080 transparent PNG for OBS — thin 8px accent bars along the top and bottom edges, plus a bottom-left handle plate.',
+      '1920×1080 transparent PNG for OBS — thin 8 px accent bars along the top and bottom edges, plus a bottom-left handle plate.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {

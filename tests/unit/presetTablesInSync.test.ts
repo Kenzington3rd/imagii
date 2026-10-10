@@ -29,6 +29,8 @@ describe('platform preset tables stay in sync', () => {
     const renderer = PLATFORM_INFO[id]
     expect(main.width).toBe(renderer.width)
     expect(main.height).toBe(renderer.height)
+    // T-92: the grid prints the fps, so the grid and the encoder must agree.
+    expect(main.fps).toBe(renderer.fps)
     expect(main.aspectRatio).toBeCloseTo(renderer.aspectRatio, 10)
     expect(main.durationSweetSpot).toEqual(renderer.durationSweetSpot)
     expect(main.durationHardLimit).toBe(renderer.durationHardLimit)
@@ -66,6 +68,9 @@ describe('custom-preset resolution stays in sync across the two tables', () => {
     const shown = customPresetInfo(custom)
     expect(shown.width).toBe(encoder.width)
     expect(shown.height).toBe(encoder.height)
+    // The custom preset's own frame rate, not the base platform's 30 (T-92).
+    expect(shown.fps).toBe(encoder.fps)
+    expect(shown.fps).toBe(60)
     expect(shown.aspectRatio).toBeCloseTo(encoder.aspectRatio, 10)
     expect(shown.label).toBe(encoder.label)
     // The advisories still come from the base platform on both sides.

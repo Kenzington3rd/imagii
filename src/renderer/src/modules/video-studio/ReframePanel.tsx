@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { toastSaved } from '../../lib/savedToast'
 
 type ReframePosition = 'left' | 'center' | 'right'
 
@@ -83,17 +83,7 @@ export function ReframePanel(): JSX.Element | null {
         targetWidth: 1080,
         targetHeight: 1920
       })
-      toast.success(
-        <span>
-          Vertical version saved.{' '}
-          <button
-            className="underline"
-            onClick={() => window.api.video.revealInFolder(result.outputPath)}
-          >
-            Show
-          </button>
-        </span>
-      )
+      toastSaved('Saved the vertical version', result.outputPath)
     } catch (err) {
       reportFailure(err, { failed: 'Reframe failed.', canceled: 'Reframe canceled.' })
     } finally {

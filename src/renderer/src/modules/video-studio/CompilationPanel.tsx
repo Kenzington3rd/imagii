@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import toast from 'react-hot-toast'
 import { countOf } from '@shared/plural'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { toastSaved } from '../../lib/savedToast'
 
 export function CompilationPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -16,7 +16,11 @@ export function CompilationPanel(): JSX.Element | null {
   // Round 17 B4: track the in-flight jobId for the Cancel button.
   const jobIdRef = useRef<string | null>(null)
 
-  if (!source || clips.length < 2) return null
+  if (!source) return null
+  // T-92: the card used to appear only at the second clip, so a person with one
+  // clip never learned that compiling existed. It is always here now; with one
+  // clip it says what it is waiting for instead of vanishing.
+  const needsSecondClip = clips.length < 2
 
   async function pickDir(): Promise<void> {
     const picked = await window.api.video.pickOutputDir()
@@ -50,17 +54,7 @@ export function CompilationPanel(): JSX.Element | null {
         width: targetW,
         height: targetH
       })
-      toast.success(
-        <span>
-          Compilation saved.{' '}
-          <button
-            className="underline"
-            onClick={() => window.api.video.revealInFolder(result.outputPath)}
-          >
-            Show
-          </button>
-        </span>
-      )
+      toastSaved('Saved the compilation', result.outputPath)
     } catch (err) {
       reportFailure(err, { failed: 'Compilation failed.', canceled: 'Compilation canceled.' })
     } finally {
@@ -82,6 +76,9 @@ export function CompilationPanel(): JSX.Element | null {
         Stitch all clips into one 1920×1080 montage MP4 with optional crossfades. Order = clip
         list order.
       </p>
+      {needsSecondClip ? (
+        <p className="text-xs text-warn">Add a second clip to compile.</p>
+      ) : null}
       <label className="flex items-center gap-2 text-xs">
         <span className="text-ink-muted w-16">Fade</span>
         <input
@@ -104,7 +101,7 @@ export function CompilationPanel(): JSX.Element | null {
         </button>
         <button
           className="btn-primary px-3 py-1.5 text-xs ml-auto disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || needsSecondClip}
           onClick={exportCompilation}
         >
           {busy ? 'Stitching…' : `Compile ${countOf(clips.length, 'clip')}`}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ChainSpec } from '@shared/audio'
 import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
+import { countOf } from '@shared/plural'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
@@ -29,11 +30,12 @@ export function audioCloseMessage(chain: ChainSpec): string | null {
   if (!cuts && !hasSecondary && !chainEdited) return null
   const parts: string[] = []
   if (chainEdited) parts.push('your cleanup settings')
-  if (cuts > 0) parts.push(`${cuts} cut region(s)`)
+  if (cuts > 0) parts.push(countOf(cuts, 'cut'))
   if (hasSecondary) parts.push('the second track')
   // Mirrors VideoStudio.tsx's confirm copy: name what is lost, then say it
   // is discarded.
-  return `Close this audio? ${parts.join(', ')} will be discarded.`
+  const list = parts.join(', ')
+  return `Close this audio? ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
 }
 
 /** Field-by-field so a re-ordered object literal can't read as "edited". */

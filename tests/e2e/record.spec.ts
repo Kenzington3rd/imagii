@@ -6,6 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffprobePath } from '../../src/main/ffmpeg/paths'
 import { installToastLog, readToastLog } from './toastLog'
+import { readRevealCalls, stubShellReveal } from './shellReveal'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -96,7 +97,7 @@ const __dirname = path.dirname(__filename)
  *      promoteTempWebm reaps the half-written .mp4 at the user's chosen
  *      path, and finalize resolves null — the same "nothing was saved"
  *      answer the cancelled save dialog gives, which the renderer already
- *      renders as the calm "Recording discarded." A real convert failure
+ *      renders as the calm "Recording discarded". A real convert failure
  *      still rejects; since T-59 it reaps its partial too and rejects in
  *      the studio's own words, driven by the crash test below.
  *   D. Visiting /record wrote to config.json with no user action. The
@@ -260,28 +261,6 @@ function readSaveDialogTitles(app: ElectronApplication): Promise<Array<string | 
       (globalThis as unknown as { __saveDialogOptions?: Array<{ title?: string }> })
         .__saveDialogOptions ?? []
     ).map((o) => o.title)
-  )
-}
-
-/**
- * Record every `shell.showItemInFolder` call in main. The OS file manager is
- * genuinely untestable, but "the Show button reached the shell with the right
- * path" is not — that is the deepest layer this element has.
- */
-async function stubShellReveal(app: ElectronApplication): Promise<void> {
-  await app.evaluate(async ({ shell }) => {
-    const g = globalThis as unknown as { __revealCalls: string[] }
-    g.__revealCalls = []
-    const target = shell as unknown as { showItemInFolder: unknown }
-    target.showItemInFolder = (p: string) => {
-      g.__revealCalls.push(p)
-    }
-  })
-}
-
-function readRevealCalls(app: ElectronApplication): Promise<string[]> {
-  return app.evaluate(
-    async () => (globalThis as unknown as { __revealCalls?: string[] }).__revealCalls ?? []
   )
 }
 
@@ -752,7 +731,7 @@ test.describe('T-27 Record Studio', () => {
           timeout: 60_000,
           intervals: [200]
         })
-        .toContain('Recording discarded.')
+        .toContain('Recording discarded')
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({
         timeout: 30_000
       })
@@ -1350,10 +1329,10 @@ test.describe('T-27 Record Studio', () => {
       // Toast names the size and offers both actions.
       await expect
         .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 30_000, intervals: [200] })
-        .toMatch(/Saved \d+\.\d MB\./)
+        .toMatch(/Saved \d+\.\d MB/)
 
       // The Show action reaches the shell with the file that was just written.
-      await window.getByRole('button', { name: 'Show', exact: true }).click()
+      await window.getByRole('button', { name: 'Show in folder', exact: true }).click()
       await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([outPath])
 
       // Back to idle, and the recording is in the same recent-videos bucket
@@ -1406,7 +1385,7 @@ test.describe('T-27 Record Studio', () => {
       // keypress also ended the recording, so a user who opened the
       // shortcut list to check something lost the take to closing it.
       await window.keyboard.press('?')
-      await expect(window.getByText('Press ? again to close.')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByText('Press Esc or ? to close.')).toBeVisible({ timeout: 10_000 })
       await window.keyboard.press('Escape')
       await expect(window.getByRole('dialog')).toHaveCount(0)
       // Still recording: the phase never changed.
@@ -1511,7 +1490,7 @@ test.describe('T-27 Record Studio', () => {
       await expect(
         window
           .locator('div:has(> [role="status"])')
-          .filter({ hasText: 'Recording discarded.' })
+          .filter({ hasText: 'Recording discarded' })
           .locator('path[d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"]')
       ).toBeVisible({ timeout: 60_000 })
 
@@ -1536,7 +1515,7 @@ test.describe('T-27 Record Studio', () => {
       // convert-to-mp4 exit signal SIGKILL: <stderr tail>"). A deliberate
       // cancel is not a crash, and it must not read like one.
       const toasts = (await readToastLog(window)).join(' | ')
-      expect(toasts).toContain('Recording discarded.')
+      expect(toasts).toContain('Recording discarded')
       expect(toasts).not.toMatch(/Error invoking remote method|convert-to-mp4 exit|SIGKILL/)
       expect(toasts).not.toMatch(/Save failed/)
     } finally {
@@ -1570,7 +1549,7 @@ test.describe('T-27 Record Studio', () => {
       // The discard branch has its own copy — it must not read as a failure.
       await expect
         .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 60_000, intervals: [200] })
-        .toContain('Recording discarded.')
+        .toContain('Recording discarded')
 
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 20_000 })
       // Nothing was pushed to recents, and the partial webm is gone.
@@ -1687,7 +1666,7 @@ test.describe('T-27 Record Studio', () => {
       await expect(
         window
           .locator('div:has(> [role="status"])')
-          .filter({ hasText: 'Recording discarded.' })
+          .filter({ hasText: 'Recording discarded' })
           .locator('path[d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"]')
       ).toBeVisible({ timeout: 60_000 })
       const toasts = (await readToastLog(window)).join(' | ')
@@ -1755,7 +1734,7 @@ test.describe('T-27 Record Studio', () => {
       expect(toasts).not.toMatch(/libx264|yuv420p|movflags|No such file or directory/)
       // And it is a failure, not the calm discard — those two must never
       // read alike (T-44's copy is the contrast).
-      expect(toasts).not.toContain('Recording discarded.')
+      expect(toasts).not.toContain('Recording discarded')
       expect(toasts).not.toMatch(/Saved \d/)
 
       // Back to idle with nothing left over: no file at the chosen path, no

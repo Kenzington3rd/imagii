@@ -370,7 +370,7 @@ export function ExportPanel(): JSX.Element | null {
     >
       <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
       <p className="text-sm text-ink-base mb-4">
-        Cancel {remainingJobCount} running jobs?
+        Cancel {countOf(remainingJobCount, 'running job')}?
       </p>
       <div className="flex justify-end gap-2">
         <button
@@ -490,36 +490,51 @@ export function ExportPanel(): JSX.Element | null {
               ? (selectedClip.customPresetIds ?? []).includes(target.key)
               : selectedClip.selectedPresets.includes(target.info.id)
             const clipDuration = selectedClip.endSec - selectedClip.startSec
+            const detailId = `export-target-${target.key}-detail`
             return (
-              <label
+              // T-92: the label wraps the checkbox and the platform's NAME and
+              // nothing else. Round 50 (T-83) put the verdict's reasons inside
+              // the label to make them visible, and a screen reader then read
+              // the whole paragraph as the checkbox's name ("YouTube 1920×1080
+              // OK Under the 1-minute sweet spot · 25% of the picture's height
+              // is trimmed…"). The size, frame rate and verdict sit beside it
+              // as the checkbox's DESCRIPTION (aria-describedby): announced
+              // after the name, never part of it. The label's ::after stretches
+              // over the card, so the whole card is still one hit area.
+              <div
                 key={target.key}
-                className={`flex items-start gap-2 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
+                data-export-target={target.key}
+                className={`relative px-3 py-2 rounded-md border transition-colors ${
                   checked
                     ? 'border-accent bg-accent/10'
                     : 'border-ink-dim/30 hover:bg-bg-hover'
                 }`}
               >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() =>
-                    target.custom
-                      ? toggleCustomPreset(selectedClip.id, target.key)
-                      : togglePreset(selectedClip.id, target.info.id)
-                  }
-                  className="mt-1"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium truncate">{target.info.label}</span>
-                    {target.custom ? (
-                      <span className="text-xs uppercase tracking-wide text-ink-dim border border-ink-dim/40 rounded px-1 shrink-0">
-                        custom
-                      </span>
-                    ) : null}
-                  </div>
+                <label className="flex items-center gap-2 text-sm cursor-pointer after:absolute after:inset-0 after:content-['']">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    aria-describedby={detailId}
+                    // Above the label's stretched ::after, so a click on the box
+                    // itself lands on the box (a pointer, a test) rather than on
+                    // an overlay that forwards it.
+                    className="relative z-10"
+                    onChange={() =>
+                      target.custom
+                        ? toggleCustomPreset(selectedClip.id, target.key)
+                        : togglePreset(selectedClip.id, target.info.id)
+                    }
+                  />
+                  <span className="font-medium truncate">{target.info.label}</span>
+                  {target.custom ? (
+                    <span className="text-xs uppercase tracking-wide text-ink-dim border border-ink-dim/40 rounded px-1 shrink-0">
+                      Custom
+                    </span>
+                  ) : null}
+                </label>
+                <div id={detailId} className="pl-7 min-w-0">
                   <div className="text-xs text-ink-dim mt-0.5">
-                    {target.info.width}×{target.info.height}
+                    {target.info.width}×{target.info.height} · {target.info.fps} fps
                   </div>
                   <div className="mt-1">
                     <SuccessIndicator
@@ -531,7 +546,7 @@ export function ExportPanel(): JSX.Element | null {
                     />
                   </div>
                 </div>
-              </label>
+              </div>
             )
           })}
         </div>
@@ -580,7 +595,7 @@ export function ExportPanel(): JSX.Element | null {
                     )
                   }
                 >
-                  Show
+                  Show in folder
                 </button>
               ) : null}
             </div>

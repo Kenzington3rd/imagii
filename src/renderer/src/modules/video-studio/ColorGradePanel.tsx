@@ -31,6 +31,12 @@ export function ColorGradePanel(): JSX.Element | null {
       onBlur={endGesture}
     >
       <PanelHeader icon="palette">Color & motion</PanelHeader>
+      {/* T-92: the player shows the source as it was imported; the grade is
+          applied by the encoder, so the sliders move nothing the person can
+          see. Said once, here, instead of discovered after an export. */}
+      <p className="text-xs text-ink-dim">
+        Color changes show up in the exported file, not in this preview.
+      </p>
       <Slider
         label="Brightness"
         value={grade.brightness}

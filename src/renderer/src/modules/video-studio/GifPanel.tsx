@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { OutputDirLabel } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { toastSaved } from '../../lib/savedToast'
 
 export function GifPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -52,17 +52,7 @@ export function GifPanel(): JSX.Element | null {
         fps,
         speed
       })
-      toast.success(
-        <span>
-          GIF saved.{' '}
-          <button
-            className="underline"
-            onClick={() => window.api.video.revealInFolder(result.outputPath)}
-          >
-            Show
-          </button>
-        </span>
-      )
+      toastSaved('Saved the GIF', result.outputPath)
     } catch (err) {
       reportFailure(err, { failed: 'GIF export failed.', canceled: 'GIF canceled.' })
     } finally {
@@ -82,7 +72,7 @@ export function GifPanel(): JSX.Element | null {
       <PanelHeader icon="image">Export as GIF</PanelHeader>
       {tooLong ? (
         <p className="text-xs text-warn">
-          GIF exports over ~10s get huge. Trim the clip first.
+          GIF exports over about 10 s get huge. Trim the clip first.
         </p>
       ) : null}
       <div className="grid grid-cols-3 gap-2">
@@ -93,26 +83,26 @@ export function GifPanel(): JSX.Element | null {
             value={width}
             onChange={(e) => setWidth(Number(e.target.value))}
           >
-            <option value="240">240</option>
-            <option value="320">320</option>
-            <option value="480">480</option>
-            <option value="640">640</option>
-            <option value="800">800</option>
+            <option value="240">240 px</option>
+            <option value="320">320 px</option>
+            <option value="480">480 px</option>
+            <option value="640">640 px</option>
+            <option value="800">800 px</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">
-          <span className="text-ink-muted">FPS</span>
+          <span className="text-ink-muted">Frame rate</span>
           <select
             className="bg-bg-base rounded px-1 py-0.5"
             value={fps}
             onChange={(e) => setFps(Number(e.target.value))}
           >
-            <option value="10">10</option>
-            <option value="12">12</option>
-            <option value="15">15</option>
-            <option value="20">20</option>
-            <option value="24">24</option>
-            <option value="30">30</option>
+            <option value="10">10 fps</option>
+            <option value="12">12 fps</option>
+            <option value="15">15 fps</option>
+            <option value="20">20 fps</option>
+            <option value="24">24 fps</option>
+            <option value="30">30 fps</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">

@@ -419,10 +419,10 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         dialog.getByText('Save your project (studios and layout; mood boards live outside projects)')
       ).toBeVisible()
       await expect(dialog.getByText('Save full app state', { exact: false })).toHaveCount(0)
-      await expect(dialog.getByText('Press ? again to close.')).toBeVisible()
+      await expect(dialog.getByText('Press Esc or ? to close.')).toBeVisible()
 
       // The overlay's own close control.
-      await window.getByRole('button', { name: 'Close shortcuts' }).click()
+      await window.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
 
       // Reopen and close with Modal's Escape instead.
@@ -484,22 +484,22 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // still 0, which is exactly the shape T-72 left in place.
       await window.keyboard.press('?')
       await expect(window.getByRole('dialog')).toHaveCount(2)
-      const overlay = window.getByRole('dialog').filter({ hasText: 'Press ? again to close.' })
+      const overlay = window.getByRole('dialog').filter({ hasText: 'Press Esc or ? to close.' })
       await expect(overlay).toHaveCount(1)
       // The topmost dialog is topmost on screen too, not dimmed under the
       // coachmark's scrim: its close control is what a click at its own
       // centre actually hits.
-      const box = await overlay.getByRole('button', { name: 'Close shortcuts' }).boundingBox()
+      const box = await overlay.getByRole('button', { name: 'Close' }).boundingBox()
       expect(box).not.toBeNull()
       if (!box) throw new Error('unreachable')
       const hit = await window.evaluate(
         (point) => {
           const el = document.elementFromPoint(point.x, point.y) as HTMLElement | null
-          return el?.getAttribute('aria-label') ?? el?.tagName ?? null
+          return el?.getAttribute('aria-label') ?? el?.textContent?.trim() ?? el?.tagName ?? null
         },
         { x: box.x + box.width / 2, y: box.y + box.height / 2 }
       )
-      expect(hit).toBe('Close shortcuts')
+      expect(hit).toBe('Close')
 
       // ── ONE Escape: the overlay closes, the tutorial survives ──
       await window.keyboard.press('Escape')
@@ -802,7 +802,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // happened, and the tracker still has it.
       await window.locator('a[href="#/home"]').first().click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
-      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+      await expect(window.getByText('last: Stream Graphics')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeEnabled()
       await window.getByRole('button', { name: 'Undo' }).click()
 
@@ -851,7 +851,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Duplicate layer' }).click()
       await expect(window.getByText('Layers (2)')).toBeVisible()
       await window.locator('a[href="#/home"]').first().click()
-      await expect(window.getByText('last: Image Canvas')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('last: Stream Graphics')).toBeVisible({ timeout: 20_000 })
       await window.getByRole('button', { name: 'Undo' }).click()
 
       // T-32 (was T-21 finding C): the click itself re-derives enablement.
@@ -864,7 +864,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // And Redo is reachable through the UI, not just enabled: the click
       // puts the duplicated layer back on the canvas.
       await window.getByRole('button', { name: 'Redo' }).click()
-      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+      await expect(window.getByText('last: Stream Graphics')).toBeVisible()
       await expect(window.getByRole('button', { name: 'Undo' })).toBeEnabled()
       await expect(window.getByRole('button', { name: 'Redo' })).toBeDisabled()
 
@@ -936,7 +936,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.locator('a', { hasText: 'References' }).first().click()
       await window.getByRole('button', { name: 'Mood Boards', exact: true }).click()
       await window.getByPlaceholder('New board name', { exact: false }).fill('Ordered board')
-      await window.getByRole('button', { name: '+', exact: true }).click()
+      await window.getByRole('button', { name: 'Create board', exact: true }).click()
       await expect(
         window.getByRole('heading', { name: 'Boards (1)', exact: true })
       ).toBeVisible({ timeout: 20_000 })
@@ -948,7 +948,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Start with text' }).click()
       await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
       await goHome()
-      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+      await expect(window.getByText('last: Stream Graphics')).toBeVisible()
 
       // ── first Undo takes the canvas step, the newest one ──
       await undo.click()
@@ -1000,7 +1000,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await goHome()
 
       await redo.click()
-      await expect(window.getByText('last: Image Canvas')).toBeVisible()
+      await expect(window.getByText('last: Stream Graphics')).toBeVisible()
       await expect(redo).toBeDisabled()
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
@@ -1010,7 +1010,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
-  test('AutosaveRestore: Later only hides the banner, Discard deletes the file', async () => {
+  test('AutosaveRestore: Later only hides the banner, Clear deletes the file', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('autosave-dismiss')
     const userDataDir = path.join(root, 'userData')
@@ -1042,8 +1042,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await waitForHome(window)
       await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
 
-      // ── Discard: file deleted from disk ──
-      await window.getByRole('button', { name: 'Discard' }).click()
+      // ── Clear: file deleted from disk ──
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
       await expect
         .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
         .toBe(false)
@@ -1100,7 +1100,6 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // not the restore one.
       await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Restore' })).toHaveCount(0)
-      await expect(window.getByRole('button', { name: 'Discard' })).toHaveCount(0)
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 20_000 })
       await window.locator('a[href="#/home"]').first().click()
@@ -1137,7 +1136,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
         .toBe(false)
       await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
-      expect(await readToastLog(window)).toContain('Autosave discarded.')
+      expect(await readToastLog(window)).toContain('Autosave cleared')
 
       // And it stays gone: nothing to warn about after a reload.
       await window.reload()
@@ -1198,8 +1197,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       expect(failedToasts).toContain('could not delete autosave.json')
       expect(failedToasts).toContain("It's still on disk")
       // The success copy must NOT appear — a failed delete that says
-      // "Autosave discarded." is the lie this ticket exists to remove.
-      expect(failedToasts).not.toContain('Autosave discarded.')
+      // "Autosave cleared" is the lie this ticket exists to remove.
+      expect(failedToasts).not.toContain('Autosave cleared')
       // Nor Electron's invoke envelope (T-30/T-59: same disease).
       expect(failedToasts).not.toMatch(/Error invoking remote method/)
 
@@ -1226,7 +1225,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       })
       await clearButton.click()
       await expect(window.getByText(/but it's damaged/)).toHaveCount(0, { timeout: 20_000 })
-      expect(await readToastLog(window)).toContain('Autosave discarded.')
+      expect(await readToastLog(window)).toContain('Autosave cleared')
       expect(existsSync(autosaveFile(userDataDir))).toBe(false)
     } finally {
       await app.close()
@@ -1699,7 +1698,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
       expect(dialogMessages).toContain(
-        'Close this video? 1 clip(s) and their edits will be discarded.'
+        'Close this video? 1 clip and their edits will be discarded.'
       )
 
       // ── Clear empties the list, in the UI and on disk ──
@@ -1749,18 +1748,20 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(footer).toBeVisible()
       const opened = await focusInfo(window)
       expect(opened.insideDialog).toBe(true)
-      expect(opened.label).toBe('Close templates dialog')
+      expect(opened.label).toBe('Close')
 
       // ── focus trap: Shift+Tab off the first element wraps to the last ──
       await window.keyboard.press('Shift+Tab')
       const wrappedBack = await focusInfo(window)
       expect(wrappedBack.insideDialog).toBe(true)
-      expect(wrappedBack.label).toBe('Cancel')
+      // The dialog has ONE dismiss control now (T-92: the footer's second
+      // "Cancel" went), so the last focusable is the last template card.
+      expect(wrappedBack.label).not.toBe('Close')
       // …and Tab off the last wraps to the first.
       await window.keyboard.press('Tab')
       const wrappedForward = await focusInfo(window)
       expect(wrappedForward.insideDialog).toBe(true)
-      expect(wrappedForward.label).toBe('Close templates dialog')
+      expect(wrappedForward.label).toBe('Close')
       // A run of plain Tabs never escapes either.
       for (let i = 0; i < 8; i++) {
         await window.keyboard.press('Tab')

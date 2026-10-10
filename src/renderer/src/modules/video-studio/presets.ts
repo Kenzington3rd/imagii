@@ -6,6 +6,10 @@ export interface PlatformInfo {
   label: string
   width: number
   height: number
+  /** The frame rate the export is encoded at — shown on the grid, because
+   *  every export used to run at 30 fps and nothing said so (T-92). Mirrors
+   *  main's table; `presetTablesInSync.test.ts` holds the two together. */
+  fps: number
   aspectRatio: number
   durationSweetSpot: { min: number; max: number }
   durationHardLimit: number
@@ -17,6 +21,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     label: 'YouTube',
     width: 1920,
     height: 1080,
+    fps: 30,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
     durationHardLimit: 12 * 60 * 60
@@ -26,6 +31,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     label: 'Reels',
     width: 1080,
     height: 1920,
+    fps: 30,
     aspectRatio: 9 / 16,
     // B4 fix (round 15): Meta extended Reels to 3 minutes in 2024; sweet spot
     // bumped to 90 s to match the longer-form Reels norm.
@@ -37,6 +43,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     label: 'TikTok',
     width: 1080,
     height: 1920,
+    fps: 30,
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 21, max: 34 },
     // B3 fix (round 15): TikTok extended uploads to 60 minutes in late 2024.
@@ -48,6 +55,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     label: 'X / Twitter',
     width: 1280,
     height: 720,
+    fps: 30,
     aspectRatio: 16 / 9,
     // INIT-B (round 15): free tier caps at 2:20 (140 s); Premium subscribers
     // upload longer. Setting the hard limit at 140 s red-flagged Premium
@@ -62,6 +70,7 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     label: 'Facebook',
     width: 1280,
     height: 720,
+    fps: 30,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 15, max: 240 },
     durationHardLimit: 240 * 60
@@ -94,6 +103,7 @@ export function customPresetInfo(preset: CustomPreset): PlatformInfo {
     label: preset.name,
     width: preset.width,
     height: preset.height,
+    fps: preset.fps,
     aspectRatio: preset.width / preset.height
   }
 }

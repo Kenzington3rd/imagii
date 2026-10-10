@@ -245,7 +245,7 @@ export function CaptionsPanel(): JSX.Element | null {
                   className="ml-1 text-accent hover:underline"
                   onClick={() => window.api.captions.openBinFolder()}
                 >
-                  open folder
+                  Open folder
                 </button>
               </div>
               <div className="font-mono break-all">{status?.exePath}</div>

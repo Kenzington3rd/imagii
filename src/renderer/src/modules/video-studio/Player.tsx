@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { computeCropBox, type CropBox } from '@shared/safeZone'
+import { formatFps } from '@shared/units'
 import { playableDuration, useVideoStore } from './store/videoStore'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
@@ -335,14 +336,14 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
           onClick={() => step(-1)}
           title="Previous frame (,)"
         >
-          <Icon name="step-back" size={15} /> frame
+          <Icon name="step-back" size={15} /> Frame
         </button>
         <button
           className="btn-ghost px-3 py-2 inline-flex items-center gap-1.5"
           onClick={() => step(1)}
           title="Next frame (.)"
         >
-          frame <Icon name="step-forward" size={15} />
+          Frame <Icon name="step-forward" size={15} />
         </button>
         <div className="ml-2 font-mono text-ink-muted">
           {formatTime(time)} / {formatTime(duration)}
@@ -353,19 +354,19 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
             checked={showSafeZones}
             onChange={(e) => setShowSafeZones(e.target.checked)}
           />
-          Safe zones
+          Crop guides
         </label>
         <div className="text-xs text-ink-dim">
-          {source.probe.width}×{source.probe.height} · {fps.toFixed(2)} fps ·{' '}
+          {source.probe.width}×{source.probe.height} · {formatFps(fps)} · video{' '}
           {source.probe.videoCodec}
-          {source.probe.audioCodec ? ` · ${source.probe.audioCodec}` : ' · (no audio)'}
+          {source.probe.audioCodec ? ` · audio ${source.probe.audioCodec}` : ' · no audio'}
         </div>
       </div>
 
       <p className="text-xs text-ink-dim">
         <kbd className="px-1 bg-bg-hover rounded">Space</kbd> play/pause ·{' '}
         <kbd className="px-1 bg-bg-hover rounded">←</kbd>/<kbd className="px-1 bg-bg-hover rounded">→</kbd>{' '}
-        nudge 0.1s · <kbd className="px-1 bg-bg-hover rounded">,</kbd>/<kbd className="px-1 bg-bg-hover rounded">.</kbd>{' '}
+        nudge 0.1 s · <kbd className="px-1 bg-bg-hover rounded">,</kbd>/<kbd className="px-1 bg-bg-hover rounded">.</kbd>{' '}
         frame step · <kbd className="px-1 bg-bg-hover rounded">I</kbd>/
         <kbd className="px-1 bg-bg-hover rounded">O</kbd> set in/out
       </p>
