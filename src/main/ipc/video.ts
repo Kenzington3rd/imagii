@@ -20,7 +20,7 @@ import {
   deleteCustomPreset
 } from '../customPresets'
 import { nanoid } from 'nanoid'
-import type { ExportJobSpec, ExportResult } from '../../shared/clip'
+import type { CropRect, ExportJobSpec, ExportResult } from '../../shared/clip'
 import type { CustomPreset } from '../../shared/customPresets'
 import { isValidBitrate } from '../../shared/customPresets'
 import {
@@ -29,6 +29,7 @@ import {
   assertRange,
   assertEnum,
   assertArray,
+  assertOptionalCropRect,
   assertPlainObject
 } from '../../shared/validators'
 import { assert } from '../../shared/assert'
@@ -318,7 +319,12 @@ export function registerVideoIpc(): void {
         jobId?: string
         sourcePath: string
         outDir: string
-        segments: Array<{ startSec: number; endSec: number; name: string }>
+        segments: Array<{
+          startSec: number
+          endSec: number
+          name: string
+          cropRect?: CropRect | null
+        }>
         fadeMs: number
         width: number
         height: number
@@ -340,6 +346,8 @@ export function registerVideoIpc(): void {
         assertFiniteNonNeg(seg.startSec, `segments[${i}].startSec`)
         assertFiniteNonNeg(seg.endSec, `segments[${i}].endSec`)
         assert(seg.endSec > seg.startSec, `segments[${i}] range invalid (endSec must exceed startSec)`)
+        // T-96: the clip's crop becomes `crop=` arguments in the filter graph.
+        assertOptionalCropRect(seg.cropRect, `segments[${i}].cropRect`)
       }
       assertFiniteNonNeg(params.fadeMs, 'fadeMs')
       assertRange(params.width, 16, 16384, 'width')
@@ -412,6 +420,7 @@ export function registerVideoIpc(): void {
         width: number
         fps: number
         speed: number
+        cropRect?: CropRect | null
       }
     ) => {
       assertPlainObject(params, 'video:exportGif params')
@@ -426,6 +435,8 @@ export function registerVideoIpc(): void {
       assertRange(params.width, 16, 4096, 'width')
       assertRange(params.fps, 1, 60, 'fps')
       assertRange(params.speed, 0.1, 10, 'speed')
+      // T-96: the clip's crop becomes `crop=` arguments in the filter graph.
+      assertOptionalCropRect(params.cropRect, 'cropRect')
       return runGifExport({
         // Round 17 B2: per-job cancel from GifPanel needs a renderer-known id.
         jobId: pickJobId(params.jobId),
@@ -435,7 +446,8 @@ export function registerVideoIpc(): void {
         endSec: params.endSec,
         width: params.width,
         fps: params.fps,
-        speed: params.speed
+        speed: params.speed,
+        cropRect: params.cropRect
       })
     }
   )

@@ -1873,3 +1873,89 @@ HL-dialog — unchanged from round 55: native `confirm()` dialogs ARE driven (a 
 - `assetCatalog.ts` / `templates.ts` layer names (`name:`) are not read by the copyConventions scan (they are document content). Only the one catalog description with "8px" was spaced.
 - Projects saved before this round keep their old clip names ("Chat hype 1", "Highlight 1"); names are data.
 - Home's "last: Stream Graphics" status keeps its lowercase prefix (a status annotation, not a button, label or header).
+
+## Dispositions — round 57 (T-96 + T-97: the crop reaches Compile and GIF; the grid judges the file, not the source)
+
+No new interactive element. Six existing controls change what their end state is allowed to be. Every end
+state below is reachable without an OS boundary: the output folder chooser is the house main-process stub,
+and the bytes on disk are decoded by the bundled ffmpeg and read as pixels. **This round touches ffmpeg
+filter graphs** (Compile's per-segment graph and the GIF's), so Layer 5 is part of every T-96 row
+(IMG-PREC). T-97 changes no graph and no argument: its rows are unit and E2E.
+
+- **Video 4l GifPanel - Export GIF ([T-96], end state changed):** from "a GIF of the clip's range, always the
+  whole frame" to "a GIF of the clip's range in the crop the user drew, in the crop's own shape". E2E
+  (video-pipelines.spec.ts "gif: the crop drawn for the clip reaches the GIF"): a 1:1 crop drawn through the
+  real Crop control -> a 320x320 GIF whose decoded frame has NO red (the fixture's red block is outside the
+  crop); Crop unchecked and exported again -> 320x180, red present. Red-first against the HEAD build: `Received:
+  1600` red pixels where 0 was expected. Beneath it: Layer 5 "a cropped clip compiled or GIF'd keeps its crop"
+  (4:3 and 9:16 crops, marker square and at the hand-derived scale, uncropped control beside each; HEAD:
+  `1154 red pixels came out`), `gif.test.ts` (the graph, an uncropped one byte for byte),
+  `videoCropPayload.test.ts` (the IPC gate: ten malformed crops refused before ffmpeg). Mutation: the crop
+  stage out of `buildGifFilter` alone -> 5 unit + 2 Layer 5 reds, compile green.
+- **Video 4m CompilationPanel - Compile N clips ([T-96], end state changed):** from "every clip's range at the
+  full frame, scaled to 1920x1080" to "every clip's range in its own crop, cut to 16:9 around the middle,
+  scaled to 1920x1080". E2E ("compilation: every clip keeps the crop it was drawn with"): Clip 1 cropped 1:1,
+  Clip 2 not -> the first 2 s of the file have no red, the next 2 s have the red block (the control); 1920x1080.
+  Red-first: `Received: 58549` red pixels in the cropped half. Layer 5: three crops (4:3, 9:16, and a 16:9
+  control) each in a two-segment compile with an uncropped segment beside it, plus an uncropped 4:3 source
+  that must come out un-stretched (HEAD: `17956 red pixels came out`, `marker came out 240x180`). Mutation: the
+  crop stage out of `buildSegmentFilter` alone -> 6 unit + 4 Layer 5 reds, GIF green.
+  **BEHAVIOR CHANGE, flagged:** an UNCROPPED clip of a source that is not 16:9 is now cut to 16:9 around the
+  middle instead of being stretched to fit (one chain, no "only when cropped" branch; a 16:9 source is
+  unchanged). The panel's sentence ("Stitch all clips into one 1920×1080 montage") is still true.
+- **Video 4d CropOverlay - enable checkbox, aspect presets, drag, resize, Reset ([T-96], end state extended
+  again):** the rect now reaches three exports, not one (platform exports T-83, GIF and Compile T-96). The two
+  E2E rows above draw it through the real control (the `1:1` preset button).
+- **Video 4t ExportPanel - platform checkboxes and their SuccessIndicator ([T-97], end state changed twice):**
+  (1) the "smaller than this output" reason reads the frame the export starts from, so a crop smaller than a
+  platform's size says "The picture is smaller than this output — it will be scaled up and look soft"
+  (video-pipelines.spec.ts "a crop smaller than the output says…": a 1920x1080 source, the 16:9 crop button ->
+  YouTube "OK" with the reason, X / Twitter and Facebook still "Great" without it, Crop unchecked -> "Great").
+  Red-first: the YouTube tile never left "Great". (2) the length checks read the length of the FILE at the clip's
+  speed ("the grid judges the length of the file at the clip's speed": a 300 s source — Reels "Too long" at 1x,
+  the reason gone and "Over the 1:30 sweet spot" in its place at 2x, "Too long" again at 0.5x; and "a 9:16 clip
+  over TikTok's sweet spot at 1x is inside it at 2x": "OK" -> "Great"). Red-first: Reels still read "Longer than
+  the typical 3-minute limit" at 2x, TikTok never reached "Great". The old copy ("will be enlarged") is gone from
+  the source and from the one E2E assertion that pinned it (the accessible-description test). Unit:
+  `presets.test.ts` (both directions of the size check, the boundary and the rounding hair, a custom preset;
+  `outputDurationSec` at 0.5x / 1x / 2x; the limit walked across its boundary at each speed) — existing grid
+  cases kept their assertions and moved to the clip signature. Mutations: the speed division dropped -> 8 unit
+  reds + 3 E2E; the size comparison reading the source again -> 4 unit reds + 1 E2E, T-83 green.
+- **Video 4f ClipList - Speed slider ([T-97], end state extended):** was "the clip's speed lands in the store and
+  the export"; now also "the grid's length verdicts and Clip Kit's question follow it". The slider is driven
+  (`fill('2')`, `fill('0.5')`) in the three E2E rows above and the kit row below.
+- **Video 4p ClipKit - the button and the long-clip confirm ([T-97], end state changed):** the question compares
+  the length of the files the kit will write, and says it ("This clip is 5:00."). E2E ("the long-clip question
+  quotes the length of the file"): a 300 s source at 1x -> the modal names Reels only and quotes 5:00; Cancel;
+  speed 2x -> the click goes straight to "Exporting 5 platform versions…" with no dialog, then wound down by
+  Cancel jobs. Red-first: at 2x the HEAD build raised the modal. Unit: `clipKit.test.ts` (`platformsOverLimit` at
+  0.5x / 1x / 2x on both sides of each platform's cap, and agreeing with the grid's "Too long" across all five
+  platforms and three speeds). The confirm's own Cancel / Export anyway are unchanged and still driven by the T-85
+  test.
+- **DISPOSITIONS, restated:** none new. The folder chooser is the house stub (HL-dialog); "Show in folder" is
+  unchanged (HL-shell, `expectRevealToast`).
+
+### Found, not fixed
+
+- **Compile still ignores everything about a clip but its range and its crop.** `segments` carry no speed, no
+  colour grade, no text overlays, no auto zoom or hype shake, so a clip set to 2x compiles at 1x with its
+  audio at 1x. The same wrong-file class as T-96, one property over; a ticket of its own, since the audio chain
+  (`atempo`) is part of it.
+- **The GIF panel's "over about 10 s" warning reads the clip's source seconds.** A 20 s clip at 3x makes a ~7 s
+  GIF and is told it will "get huge" (and a 6 s clip at 0.5x makes a 12 s one and is not). The T-97 fix shape:
+  `outputDurationSec(clip) / speed` with the panel's own speed.
+- **`video:exportBatch` does not validate `clip.cropRect`** (`validateExportJob` checks the overlays only).
+  `assertOptionalCropRect` is the gate Compile and GIF now use; applying it to the batch changes what a
+  hand-edited project's export does, so it was left for a decision.
+- **Output names do not carry the crop.** `<source>_<width>px_<fps>fps.gif` and `<source>_compilation.mp4` are
+  overwritten by the next job with the same settings, whatever its crop; a second GIF of one clip with a
+  different shape replaces the first without a word.
+- **The Compile panel says nothing about the edges a crop loses.** A 9:16 crop in a 1920x1080 compilation keeps
+  only its middle 32% in height, which the export grid says in words for a platform; the compile card has no
+  verdict row.
+- **The speed rule has four copies.** `runExportJob` twice, `buildVideoFilter` and `outputDurationSec` (renderer)
+  each normalize "missing, zero or negative is 1x"; a shared `clipSpeed` would be one. Left alone to keep this
+  diff out of `export.ts`.
+- **A cancel in the first moments of a Compile or a cropped GIF finds nothing to kill.** Both now probe the source
+  before they spawn, and the job id is registered only at the spawn (a platform export and Reframe already
+  behave this way); the window is the length of an ffprobe call.

@@ -137,12 +137,17 @@ Drop a video in (or click **Choose file…**), then:
   platform's own shape, so nothing is ever stretched. A tall crop on a wide
   platform (or the reverse) loses its edges, and the export tells you so before
   it starts. **Crop guides**, beside the player, draws the 9:16, 1:1 and 4:5
-  shapes over the picture so you can see what each one keeps.
+  shapes over the picture so you can see what each one keeps. **Export as GIF**
+  and **Compile clips** use the same crop: a GIF keeps the shape you drew, and a
+  compilation takes the same centered cut of it to reach 16:9.
 - **Export** — check the platforms you post to: **YouTube**, **Reels**,
   **TikTok**, **X / Twitter**, and **Facebook**. Each shows a green, yellow, or
   red mark predicting how well your clip fits there. A red one says why —
   **Wrong shape** or **Too long** — and the reason is printed on the card. The
-  button says how many files it will write (**Export 3 files**). Every export
+  card judges the picture and the file you will really get: a crop smaller than a
+  platform's size is marked as one that will be scaled up and look soft, and a
+  clip's length counts at its speed, so a 6-minute clip at 2x is a 3-minute
+  video. The button says how many files it will write (**Export 3 files**). Every export
   is encoded at 30 fps (a custom preset uses its own frame rate), and each
   platform's card shows its size and rate (**1920×1080 · 30 fps**).
   Add a **watermark** by typing your handle in the **Watermark** field and
@@ -216,7 +221,8 @@ know how long speech will take — so its bar slides instead of filling.
 ### Compile
 
 **Compile clips** stitches every clip in the list, in list order, into one
-1920×1080 MP4. Set **Fade** to blend neighboring clips with a crossfade (in
+1920×1080 MP4. Each clip keeps the crop you drew for it, and a clip that is not
+16:9 is cut to 16:9 around its middle rather than stretched. Set **Fade** to blend neighboring clips with a crossfade (in
 milliseconds), pick a folder, and click **Compile N clips**. **Cancel** stops it.
 
 ### Posting helpers

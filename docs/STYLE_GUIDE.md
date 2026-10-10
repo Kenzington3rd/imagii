@@ -185,6 +185,15 @@ Repeated UI is a component, not copy-paste:
   name up in the studio's own source and scans for the words that were once
   wrong. Its pure halves (`resolvableSteps`, `pointsAtSomething`,
   `gateTutorial`) are what `useTutorial.test.ts` drives.
+- **`evaluateSuccess(platform, clip, sourceW, sourceH)` and `platformsOverLimit(clip, presets)`**
+  (`video-studio/presets.ts`, `clipKit.ts`) — a verdict about an export takes the CLIP and reads the
+  frame and the length itself (T-97): the frame through `cropFrameSize` (the crop when there is one, else
+  the source — used for the shape AND the "smaller than this output" check), the length through
+  `outputDurationSec(clip)` (the range at the clip's speed, since a platform's limit is on the file).
+  Never hand a verdict the source's size or the source's seconds; the grid and Clip Kit must not be able
+  to disagree about either. The main-process counterpart for the crop is `cropToFrame` (filters.ts, T-96):
+  a platform export, a compilation segment and a GIF all build their crop stages through it, so a new
+  runner that cuts a clip out of a source calls it rather than writing a `crop=`.
 - **`buildWatermark(text, position)`** (`@shared/watermark`) — the one place a
   handle and a corner become a `WatermarkSpec`. The Export panel calls it on
   what is typed; Clip Kit calls it on what an earlier export SAVED

@@ -76,6 +76,14 @@ const __dirname = path.dirname(__filename)
  *              90 s and would clamp against a short source) and the
  *              cancel-mid-scan test (whose ebur128 pass has to still be
  *              running when Cancel is clicked).
+ *   fullHdSrc, bigLongSrc, midSrc (T-97) — flat-colour sources whose SIZE or
+ *              LENGTH sits exactly on a threshold the export grid judges: a
+ *              1920x1080 source that a 16:9 crop shrinks below YouTube's output,
+ *              a 4K 50 s one that a 2x clip brings inside TikTok's sweet spot, and
+ *              a 300 s one that a 2x clip brings inside Reels' 3-minute limit.
+ *   cropMarkerSrc (T-96) — 640x360 / 2 s: a red block that a 1:1 crop excludes
+ *              and a white square it keeps, so "the crop reached the output" is a
+ *              question about the colour of pixels, not about a filename.
  *
  * ── Timeouts ──────────────────────────────────────────────────────────
  *
@@ -117,6 +125,14 @@ let pipSrc = ''
 let burstSrc = ''
 let longSrc = ''
 let bigSrc = ''
+/** 1920x1080 / 90 s flat colour (T-97): exactly YouTube's size, so a crop of it is smaller than the output. */
+let fullHdSrc = ''
+/** 3840x2160 / 50 s flat colour (T-97): past TikTok's 34 s sweet spot at 1x, inside it at 2x. */
+let bigLongSrc = ''
+/** 64x48 / 300 s (T-97): past Reels' 3-minute limit at 1x, inside it at 2x. */
+let midSrc = ''
+/** 640x360 / 2 s (T-96): a red block the 1:1 crop excludes, a white square it keeps. */
+let cropMarkerSrc = ''
 /** Real duration of longSrc, read back from ffprobe after the loop. */
 let longSeconds = 0
 
@@ -191,6 +207,37 @@ async function ffprobeFrameCount(file: string): Promise<number> {
     throw new Error(`ffprobe -count_frames exit ${result.code}: ${result.stderr.slice(-400)}`)
   }
   return Number(result.stdout.trim())
+}
+
+/**
+ * How many pixels of one decoded frame are strongly red (R more than 60 levels
+ * above both G and B), read by the bundled ffmpeg into a scratch file — the
+ * same bytes-not-names idea as image.spec.ts' `samplePixel`. T-96 needs it
+ * because a compilation or GIF that ignored the crop is the right size and
+ * length either way; only the colour of its pixels says which one it is.
+ */
+async function redPixelCount(file: string, timeSec: number): Promise<number> {
+  const raw = path.join(root, `red-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.raw`)
+  const result = await runBinary(ffmpegPath, [
+    '-y',
+    '-ss', String(timeSec),
+    '-i', file,
+    '-vf', 'format=rgb24',
+    '-frames:v', '1',
+    '-f', 'rawvideo',
+    raw
+  ])
+  if (result.code !== 0) {
+    throw new Error(`pixel read exit ${result.code} for ${file}: ${result.stderr.slice(-400)}`)
+  }
+  const buf = readFileSync(raw)
+  rmSync(raw, { force: true })
+  let red = 0
+  for (let i = 0; i + 2 < buf.length; i += 3) {
+    const r = buf[i] ?? 0
+    if (r - Math.max(buf[i + 1] ?? 0, buf[i + 2] ?? 0) > 60) red++
+  }
+  return red
 }
 
 function videoStream(probe: ProbeJson): ProbeStream {
@@ -678,6 +725,31 @@ test.beforeAll(async () => {
     '-f', 'lavfi', '-i', 'color=c=0x303a4a:size=3840x2160:rate=1:duration=26',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     bigSrc
+  ])
+  fullHdSrc = path.join(sourceDir, 'fullhd.mp4')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi', '-i', 'color=c=0x303a4a:size=1920x1080:rate=1:duration=90',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    fullHdSrc
+  ])
+  bigLongSrc = path.join(sourceDir, 'biglong.mp4')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi', '-i', 'color=c=0x303a4a:size=3840x2160:rate=1:duration=50',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    bigLongSrc
+  ])
+  midSrc = path.join(sourceDir, 'mid.mp4')
+  await ffmpeg(['-y', '-stream_loop', '19', '-i', loopBase, '-c', 'copy', midSrc])
+  cropMarkerSrc = path.join(sourceDir, 'cropmarker.mp4')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi',
+    '-i',
+    `color=c=black:s=640x360:r=15:d=${CLIP_SECONDS},drawbox=x=20:y=20:w=80:h=80:color=red:t=fill,drawbox=x=290:y=150:w=60:h=60:color=white:t=fill`,
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    cropMarkerSrc
   ])
   await ffmpeg(['-y', '-stream_loop', '79', '-i', loopBase, '-c', 'copy', longSrc])
   longSeconds = Number((await ffprobeJson(longSrc)).format?.duration ?? 0)
@@ -1940,6 +2012,122 @@ test.describe('ExportPanel', () => {
     }
   })
 
+  test('a crop smaller than the output says the picture will be scaled up and look soft; the same source with no crop says nothing (T-97)', async () => {
+    test.setTimeout(120_000)
+    // fullHdSrc is 1920x1080 and 90 s: its own size meets YouTube's output
+    // exactly and its length sits inside every sweet spot, so size is the ONLY
+    // thing a crop can change. The 16:9 button draws a crop 90% of each side
+    // (1728x972): smaller than YouTube's 1920x1080, bigger than the 1280x720
+    // platforms. The check used to read the FILE's size, so it stayed "Great".
+    const { app, window } = await launchWithVideo('t97soft', fullHdSrc)
+    try {
+      const card = exportCard(window)
+      const platform = (name: string): Locator =>
+        card
+          .locator('[data-export-target]')
+          .filter({ has: window.getByRole('checkbox', { name, exact: true }) })
+      const SOFT = 'The picture is smaller than this output — it will be scaled up and look soft'
+
+      // ── no crop: the source is the frame, and it is big enough for the three
+      //    landscape outputs (the tall ones need 1920 rows it does not have,
+      //    which they said before this ticket and still say) ──
+      for (const name of ['YouTube', 'X / Twitter', 'Facebook']) {
+        await expect(platform(name).getByText('Great', { exact: true })).toBeVisible()
+        await expect(platform(name).getByText(SOFT)).toHaveCount(0)
+      }
+
+      // ── a 16:9 crop: YouTube's output is now bigger than the picture ──
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '16:9', exact: true })
+        .click()
+      await expect(platform('YouTube').getByText('OK', { exact: true })).toBeVisible()
+      await expect(platform('YouTube').getByText(SOFT)).toBeVisible()
+      // The 1280x720 platforms are still fed more than they need: no warning,
+      // so the reason is about THIS output and not a blanket on every card.
+      for (const name of ['X / Twitter', 'Facebook']) {
+        await expect(platform(name).getByText('Great', { exact: true })).toBeVisible()
+        await expect(platform(name).getByText(SOFT)).toHaveCount(0)
+      }
+      // The old wording is gone, and the reason is part of the checkbox's
+      // description (T-92), not its name.
+      await expect(card.getByText('will be enlarged')).toHaveCount(0)
+      await expect(card.getByRole('checkbox', { name: 'YouTube', exact: true })).toHaveAccessibleDescription(
+        /scaled up and look soft/
+      )
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-16-grid-soft-crop.png') })
+
+      // ── clearing the crop gives the source back ──
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).uncheck()
+      await expect(platform('YouTube').getByText('Great', { exact: true })).toBeVisible()
+      await expect(platform('YouTube').getByText(SOFT)).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the grid judges the length of the file at the clip\'s speed: a 2x clip a platform calls too long at 1x is not, and one inside a sweet spot at 2x says Great (T-97)', async () => {
+    test.setTimeout(120_000)
+    // midSrc is 300 s: past Reels' typical 3-minute limit at 1x, 150 s (inside
+    // it) at 2x. The grid read SOURCE seconds, so a 2x clip was warned "Too
+    // long" at half of what its file would really be.
+    const { app, window } = await launchWithVideo('t97speed', midSrc)
+    try {
+      const card = exportCard(window)
+      const platform = (name: string): Locator =>
+        card
+          .locator('[data-export-target]')
+          .filter({ has: window.getByRole('checkbox', { name, exact: true }) })
+      const speed = window.getByRole('slider', { name: 'Clip playback speed' })
+      const OVER_REELS = 'Longer than the typical 3-minute limit'
+
+      await expect(platform('Reels').getByText('Too long', { exact: false })).toBeVisible()
+      await expect(platform('Reels').getByText(OVER_REELS)).toBeVisible()
+
+      // ── 2x: 150 s of file. Over Reels' 1:30 sweet spot, not over its limit ──
+      await speed.fill('2')
+      await expect(window.getByText('2.00×', { exact: true })).toBeVisible()
+      await expect(platform('Reels').getByText(OVER_REELS)).toHaveCount(0)
+      await expect(platform('Reels').getByText('Too long', { exact: false })).toHaveCount(0)
+      await expect(platform('Reels').getByText('Over the 1:30 sweet spot')).toBeVisible()
+
+      // ── 0.5x puts it back past the limit (600 s of file) — the other way ──
+      await speed.fill('0.5')
+      await expect(platform('Reels').getByText(OVER_REELS)).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a 9:16 clip over TikTok\'s sweet spot at 1x is inside it at 2x, and the card turns Great (T-97)', async () => {
+    test.setTimeout(120_000)
+    // bigLongSrc: 4K and 50 s. A 9:16 crop is TikTok-shaped and still 1093x1944
+    // of picture, so length is all that can keep the card from green: 50 s is
+    // past TikTok's 34 s sweet spot, the 25 s of file a 2x clip makes is not.
+    const { app, window } = await launchWithVideo('t97green', bigLongSrc)
+    try {
+      const card = exportCard(window)
+      const tiktok = card
+        .locator('[data-export-target]')
+        .filter({ has: window.getByRole('checkbox', { name: 'TikTok', exact: true }) })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '9:16', exact: true })
+        .click()
+      await expect(tiktok.getByText('OK', { exact: true })).toBeVisible()
+      await expect(tiktok.getByText('Over the 34-second sweet spot')).toBeVisible()
+
+      await window.getByRole('slider', { name: 'Clip playback speed' }).fill('2')
+      await expect(tiktok.getByText('Great', { exact: true })).toBeVisible()
+      await expect(tiktok.getByText('Over the 34-second sweet spot')).toHaveCount(0)
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-17-grid-speed.png') })
+    } finally {
+      await app.close()
+    }
+  })
+
   test('cancelling a multi-job batch asks first — Keep running resumes it, Cancel jobs kills it', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('cancelbatch', clipSrc)
@@ -2505,6 +2693,45 @@ test.describe('ClipKit', () => {
     }
   })
 
+  test('the long-clip question quotes the length of the file: a 2x clip is not asked about a limit its file is under (T-97)', async () => {
+    test.setTimeout(600_000)
+    // midSrc: 300 s, so Clip 1 is 5:00 at 1x (past Reels' typical 3 minutes) and
+    // 2:30 of file at 2x. The kit compared SOURCE seconds, so it asked about a
+    // limit the file was well inside.
+    const studio = await launchWithVideo('kitspeed', midSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const kit = kitButton(window)
+
+      // ── 1x: the question names Reels, and quotes the file's length ──
+      await kit.click()
+      const modal = window.getByRole('dialog')
+      await expect(modal).toContainText(/This clip is 5:0\d\./)
+      await expect(modal.locator('li')).toHaveCount(1)
+      await expect(modal.locator('li')).toContainText('Reels')
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // ── 2x: 2:30 of file, inside Reels' limit: no question, the kit starts ──
+      await window.getByRole('slider', { name: 'Clip playback speed' }).fill('2')
+      await kit.click()
+      await expect(kit).toHaveText('Exporting 5 platform versions…', { timeout: 30_000 })
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // Wind it down: the point was that nothing was asked.
+      await clipListCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(
+        window,
+        'Clip Kit canceled. Files already finished are in your folder.'
+      )
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+    } finally {
+      await app.close()
+    }
+  })
+
   test('the kit stamps the SAVED watermark on every platform file (T-85)', async () => {
     test.setTimeout(600_000)
     // The handle and corner an earlier Export saved. The kit passed
@@ -2826,6 +3053,95 @@ test.describe('single-output panels', () => {
       expect(Number(probe.format?.duration)).toBeGreaterThan(2 * CLIP_SECONDS - 0.5)
       expect(Number(probe.format?.duration)).toBeLessThan(2 * CLIP_SECONDS + 0.5)
       await expect(card.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('gif: the crop drawn for the clip reaches the GIF — a 1:1 crop comes out square without the red block, and clearing it brings the whole frame back (T-96)', async () => {
+    test.setTimeout(600_000)
+    // cropMarkerSrc: 640x360, a red block at the top-left that a 1:1 crop
+    // (324x324, centered) excludes. The GIF took only a start and an end, so it
+    // came out 16:9 with the red in it, whatever was drawn in the player.
+    const { app, window, outDir } = await launchWithVideo('t96gif', cropMarkerSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = gifCard(window)
+      const selects = card.locator('select')
+      await selects.nth(0).selectOption('320')
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+
+      // ── cropped: 1:1 at 10 fps ──
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '1:1', exact: true })
+        .click()
+      await selects.nth(1).selectOption('10')
+      await card.getByRole('button', { name: 'Export GIF' }).click()
+      const cropped = path.join(outDir, 'cropmarker_320px_10fps.gif')
+      await expect
+        .poll(() => existsSync(cropped), { timeout: 540_000, intervals: [500] })
+        .toBe(true)
+      await expectToast(window, 'Saved the GIF')
+      await expect(card.getByRole('button', { name: 'Export GIF' })).toBeEnabled()
+      expect(await redPixelCount(cropped, 0.3), 'the crop excludes the red block').toBe(0)
+      const square = videoStream(await ffprobeJson(cropped))
+      expect(square.width).toBe(320)
+      expect(Math.abs((square.height ?? 0) - 320)).toBeLessThanOrEqual(1)
+
+      // ── the crop cleared: the same clip is the whole 16:9 frame again ──
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).uncheck()
+      await selects.nth(1).selectOption('12')
+      await card.getByRole('button', { name: 'Export GIF' }).click()
+      const whole = path.join(outDir, 'cropmarker_320px_12fps.gif')
+      await expect
+        .poll(() => existsSync(whole), { timeout: 540_000, intervals: [500] })
+        .toBe(true)
+      await expect(card.getByRole('button', { name: 'Export GIF' })).toBeEnabled()
+      const wide = videoStream(await ffprobeJson(whole))
+      expect([wide.width, wide.height]).toEqual([320, 180])
+      expect(await redPixelCount(whole, 0.3), 'the whole frame has its red block').toBeGreaterThan(100)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('compilation: every clip keeps the crop it was drawn with — the cropped clip has no red block, the uncropped one beside it does (T-96)', async () => {
+    test.setTimeout(600_000)
+    // Clip 1 is cropped 1:1 (excluding the red block); Clip 2, added after, has
+    // no crop. The compilation is 1920x1080 either way, 4 s long: the first 2 s
+    // are Clip 1, the next 2 s Clip 2.
+    const { app, window, outDir } = await launchWithVideo('t96compile', cropMarkerSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window
+        .locator('[data-tutorial="video-crop"]')
+        .getByRole('button', { name: '1:1', exact: true })
+        .click()
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+
+      const card = compileCard(window)
+      await card.getByRole('slider', { name: 'Crossfade duration in milliseconds' }).fill('0')
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+
+      const output = path.join(outDir, 'cropmarker_compilation.mp4')
+      await expect
+        .poll(() => existsSync(output), { timeout: 540_000, intervals: [500] })
+        .toBe(true)
+      await expectToast(window, 'Saved the compilation')
+      await expect(card.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled()
+      const probe = await ffprobeJson(output)
+      const v = videoStream(probe)
+      expect([v.width, v.height]).toEqual([1920, 1080])
+      expect(Number(probe.format?.duration)).toBeGreaterThan(2 * CLIP_SECONDS - 0.5)
+      // Clip 1 (0-2 s): cropped, so no red anywhere in the frame.
+      expect(await redPixelCount(output, 1), 'Clip 1 is cropped: no red block').toBe(0)
+      // Clip 2 (2-4 s): no crop, so the red block is there — the control that
+      // makes the absence above mean something.
+      expect(await redPixelCount(output, 3), 'Clip 2 is not cropped: red block present').toBeGreaterThan(5000)
     } finally {
       await app.close()
     }
@@ -3290,6 +3606,7 @@ test.describe('T-92 microcopy mechanics', () => {
     // The reason text moved INTO each platform <label> in round 50 (T-83), so a
     // screen reader announced "YouTube 1920×1080 Great Picture is smaller than
     // this output — it will be enlarged, checkbox" for what is one tick box.
+    // (T-97 reworded the reason: "...scaled up and look soft".)
     const { app, window } = await launchWithVideo('t92name')
     try {
       const card = exportCard(window)
@@ -3309,9 +3626,10 @@ test.describe('T-92 microcopy mechanics', () => {
         await expect(box).toHaveAccessibleDescription(new RegExp(facts))
       }
       // The verdict is part of the description too: this 320x240 fixture is
-      // smaller than every output, and the card says so.
+      // smaller than every output, and the card says so (T-97: in the words of
+      // what will happen to the picture).
       await expect(card.getByRole('checkbox', { name: 'YouTube', exact: true })).toHaveAccessibleDescription(
-        /will be enlarged/
+        /scaled up and look soft/
       )
 
       // The whole card is still one big hit area, as it was when it was a

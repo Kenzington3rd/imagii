@@ -1,7 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
+import { cropToFrame, type SourceDimensions } from './filters'
+import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { assertDefined } from '../../shared/assert'
+import type { CropRect } from '../../shared/clip'
 
 export interface GifJobSpec {
   jobId: string
@@ -12,6 +16,33 @@ export interface GifJobSpec {
   width: number
   fps: number
   speed: number
+  /** The clip's manual crop (T-96): the GIF is made from that rectangle. */
+  cropRect?: CropRect | null
+}
+
+/**
+ * The GIF's whole filter graph. The clip's crop comes FIRST (`cropToFrame`,
+ * the chain a platform export uses, T-83/T-96) so the frame rate, the scale and
+ * the palette are all computed on the picture the user chose; with
+ * `targetAspect` null the GIF keeps the crop's own shape and `scale=W:-1`
+ * derives its height. `source` is required only when there is a crop (a crop
+ * is a fraction of the frame), and an uncropped GIF's graph is byte-for-byte
+ * what it was.
+ */
+export function buildGifFilter(
+  spec: Pick<GifJobSpec, 'width' | 'fps' | 'speed' | 'cropRect'>,
+  source?: SourceDimensions
+): string {
+  const chain: string[] = []
+  if (spec.speed !== 1) chain.push(`setpts=PTS/${spec.speed}`)
+  if (spec.cropRect) {
+    chain.push(...cropToFrame(spec.cropRect, assertDefined(source, 'source dimensions'), null))
+  }
+  chain.push(`fps=${spec.fps}`, `scale=${spec.width}:-1:flags=lanczos`)
+  return (
+    `${chain.join(',')},split[s0][s1];[s0]palettegen=stats_mode=diff[p];` +
+    `[s1][p]paletteuse=dither=bayer:bayer_scale=5`
+  )
 }
 
 const activeJobs = new Map<string, ChildProcess>()
@@ -23,10 +54,9 @@ export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: stri
     `${base}_${spec.width}px_${Math.round(spec.fps)}fps.gif`
   )
 
-  const speedFilter = spec.speed === 1 ? '' : `setpts=PTS/${spec.speed},`
-  const filter =
-    `${speedFilter}fps=${spec.fps},scale=${spec.width}:-1:flags=lanczos,` +
-    `split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5`
+  // Only a crop needs the frame's pixels; an uncropped GIF starts no extra process.
+  const probe = spec.cropRect ? await probeVideo(spec.sourcePath) : null
+  const filter = buildGifFilter(spec, probe ? { width: probe.width, height: probe.height } : undefined)
 
   const args = [
     '-y',

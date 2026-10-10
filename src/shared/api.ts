@@ -1,4 +1,4 @@
-import type { ExportJobSpec, ExportProgress, ExportResult } from './clip'
+import type { CropRect, ExportJobSpec, ExportProgress, ExportResult } from './clip'
 import type {
   AudioProbe,
   AudioExportSpec,
@@ -138,6 +138,8 @@ export interface ImagiiApi {
       width: number
       fps: number
       speed: number
+      /** The clip's manual crop (T-96): the GIF is made from that rectangle. */
+      cropRect?: CropRect | null
     }): Promise<{ outputPath: string }>
     listCustomPresets(): Promise<CustomPreset[]>
     saveCustomPreset(preset: Omit<CustomPreset, 'id'>): Promise<CustomPreset>
@@ -146,7 +148,13 @@ export interface ImagiiApi {
       jobId?: string
       sourcePath: string
       outDir: string
-      segments: Array<{ startSec: number; endSec: number; name: string }>
+      segments: Array<{
+        startSec: number
+        endSec: number
+        name: string
+        /** The clip's manual crop (T-96): the segment is made from that rectangle. */
+        cropRect?: CropRect | null
+      }>
       fadeMs: number
       width: number
       height: number

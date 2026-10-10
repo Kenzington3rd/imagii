@@ -14,6 +14,122 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-10 — T-96 + T-97 (round 57): a crop that stopped at the export grid, and a grid that judged the file instead of the picture
+
+Both tickets are the stragglers of round 50. T-83 made a manual crop "the frame an export starts from" and
+fixed `buildVideoFilter` and the grid's SHAPE check; a worker's report said the idea had not reached every
+place that already knew a clip's crop. Neither bug produced a broken file or a red error: a GIF and a
+compilation opened, played, and were the size they were asked to be, and a green "Great" was printed
+beside a picture that would be scaled up 2x. Every one of those surfaces was telling the truth about a
+clip it was not exporting. **This round touches ffmpeg filter graphs** (Compile's per-segment graph and the
+GIF's), so `npm run test:media` was part of it (IMG-PREC); the transcripts are below.
+
+### Bug (T-96) — a clip cropped to 9:16 was compiled and GIF'd at the full frame
+
+- **Bug.** Draw a 9:16 crop, press Export GIF: the GIF is the whole 16:9 frame. Compile the same clip: the
+  whole frame again, and anything that was not 16:9 (a 4:3 source, a phone recording) was STRETCHED to
+  1920x1080 by a bare `scale=1920:1080`. The Export panel next to them cut the same crop correctly.
+- **Root cause.** The crop-is-the-new-frame chain lived inside `buildVideoFilter`, so the only way for a
+  runner to use it was to be a platform export. The two other runners that cut a clip out of a source were
+  specified by what they TOOK: `video:concat` segments carried `{ startSec, endSec, name }` and
+  `video:exportGif` took no crop at all, so there was nothing to apply and each built its own graph from
+  scratch. T-83 grepped for callers of the function it was fixing; the bug was in the callers of the
+  *concept* (a clip's crop) that were not callers of the function.
+- **Fix.** The crop stages are one function, `cropToFrame(cropRect, source, targetAspect)` (filters.ts),
+  extracted from `buildVideoFilter` byte for byte, with THREE callers (the T-82 `keepExpression`
+  precedent): a platform export; `buildSegmentFilter` (concat.ts: the clip's crop, then a centered cut of
+  it to the compilation's 16:9, then the same normalizing `scale`); and `buildGifFilter` (gif.ts: the crop
+  first, then `fps`, `scale=W:-1` and the palette; `targetAspect: null`, because a GIF keeps the shape the
+  user drew). The payloads carry the clip's `cropRect` (`CompilationPanel` per segment, `GifPanel`);
+  `assertOptionalCropRect` (shared/validators.ts) refuses a string, `NaN`, a rect with no area or one
+  outside the frame at the IPC boundary, before any ffmpeg is spawned — the numbers become `crop=` filter
+  arguments. Main probes the source's size itself (a platform export does the same); an uncropped GIF
+  starts no extra process and its graph is byte-for-byte what it was.
+  **One behavior change beyond the ticket, flagged for the owner:** `cropToFrame` has no "only when
+  cropped" branch (T-83: "the no-crop path is the same call with the whole source as the frame"), so an
+  UNCROPPED segment whose source is not 16:9 is now cut to 16:9 around the middle instead of stretched. A
+  16:9 source's graph is unchanged. By the usability tiebreaker a stretch is the worse default, and
+  keeping it only for uncropped clips would mean drawing a crop of the whole frame changed the output.
+- **Test.** Layer 5 (`media.spec.ts`, "a cropped clip compiled or GIF'd keeps its crop (real ffmpeg,
+  T-96)"): a black 1920x1080 frame with a RED block every crop excludes and a white SQUARE at every crop's
+  centre. Compile: a cropped segment beside an uncropped one for a 4:3 crop, a 9:16 crop and a 16:9 control
+  — the cropped half contains no red at all, its white square is square (0.97-1.03), the hand-derived size
+  (the cut's full width onto 1280) and centered, and the uncropped half still has its red (the control); plus
+  an uncropped 4:3 source that comes out un-stretched. GIF: 4:3 and 9:16 crops come out in the crop's shape
+  with no red, the marker square, and an uncropped GIF beside each still has the red. **Red-first against
+  HEAD's ffmpeg sources, quoted:** `the crop excludes the red block, but 17956 red pixels came out` (compile,
+  all three crops), `marker came out 240x180 (expected a 240px square)` (uncropped 4:3), `the crop excludes
+  the red block, but 1154 red pixels came out` (GIF, both). Unit: `filters.test.ts` (`cropToFrame` in both
+  modes, and `buildVideoFilter` starts with its stages for every preset), the new `concat.test.ts`
+  (`buildSegmentFilter`) and `gif.test.ts` (`buildGifFilter`, an uncropped graph byte for byte, the crop's
+  place after `setpts` and before `fps`), `validators.test.ts` (`assertOptionalCropRect`) and the new
+  `src/main/ipc/videoCropPayload.test.ts` (both handlers refuse ten malformed crops before the runner is
+  called, and pass a good one through). E2E (`video-pipelines.spec.ts`): "gif: the crop drawn for the
+  clip reaches the GIF" (1:1 crop through the real Crop control -> a square GIF with no red; cleared ->
+  320x180 with red) and "compilation: every clip keeps the crop it was drawn with" (Clip 1 cropped, Clip 2
+  not: no red in the first 2 s, the red block back in the next 2 s). Both red against the HEAD build:
+  `Received: 1600` / `Received: 58549` red pixels where 0 was expected. **Mutations**, python content
+  replace, count==1, byte-identical restores: (a) `buildSegmentFilter` stops calling `cropToFrame`
+  (concat.ts `b7dd46394526`) -> 6 unit reds and the 4 Layer 5 compile cases red (`17956 red pixels came
+  out`), the 2 GIF cases and `gif.test.ts` green; (b) `buildGifFilter` stops calling it (gif.ts
+  `4e9e1ea22828`) -> 5 unit reds and the 2 Layer 5 GIF cases red (`1154 red pixels came out`), compile
+  green — the two paths are pinned independently; (c) each IPC gate removed (video.ts `e8704e671234`) -> 10
+  and 11 named reds in `videoCropPayload.test.ts`.
+- **Lesson.** **When a fix lands in one consumer of a shared concept, search for the other consumers of the
+  INPUT, not of the function.** "Who else cuts a clip out of this source?" finds `concat` and `gif`;
+  "who calls `buildVideoFilter`?" never could. Second: **assert what an output LEFT OUT.** A frame the
+  right size and length is no evidence a crop happened; a colour that is present in the control and absent
+  from the output is. The fixture needs a region the crop excludes, a shape that keeps its proportions, and
+  the same call uncropped beside it, so a test cannot pass because the marker was never visible.
+
+### Bug (T-97) — a quarter-frame crop was "Great" at 1080p, and a 2x clip was "Too long" at half its length
+
+- **Bug.** The export grid's "picture is smaller than this output" check read the FULL source's size, so a
+  crop a quarter of a 4K frame (1080p of picture) ticked for a 1080p platform said "Great" while the export
+  scaled it up 2x. And every duration check (the grid's "Too long" and sweet-spot reasons, Clip Kit's
+  long-clip question) read SOURCE seconds and ignored the clip's speed: a 6-minute range at 2x is a 3-minute
+  file, and it was warned against Reels' 3-minute limit as though it were six.
+- **Root cause.** `evaluateSuccess(platform, clipDuration, sourceWidth, sourceHeight, cropAspect)` took five
+  numbers the CALLER had to get right, and T-83 corrected only one of them (the aspect, from `cropFrameSize`).
+  The size and the length were the same kind of mistake, one argument over. `platformsOverLimit(durationSec,
+  presets)` took a bare number for the same reason, so the kit's question and the grid's verdict agreed on
+  the limits and not on what they were limits ON.
+- **Fix.** The verdict takes the CLIP: `evaluateSuccess(platform, clip, sourceWidth, sourceHeight)` reads the
+  frame through `cropFrameSize` (the one reading of "the picture an export starts from", used for the aspect
+  and now the resolution check, in whole pixels so a crop drawn as a fraction does not fail by a rounding
+  hair) and the length through the new `outputDurationSec(clip)` (the range divided by the speed, a
+  missing, zero, negative or non-finite speed being 1x, as the encoder reads it). `platformsOverLimit(clip,
+  presets)` takes the clip too, so the grid and the kit cannot disagree about the file's length, and the
+  kit's question quotes that length ("This clip is 3:00"). The reason reads "The picture is smaller than this
+  output — it will be scaled up and look soft" (it said "will be enlarged", and named neither the cause nor
+  what the viewer would see).
+- **Test.** Unit (`presets.test.ts`, `clipKit.test.ts`): a small crop of a big source is soft and the same
+  source uncropped says nothing; each platform judged on its own size; a custom preset on ITS size; the
+  whole-pixel rounding both ways; a probe with no size never throws; `outputDurationSec` at 0.5x / 1x / 2x
+  and for a nonsense speed; and a limit walked at 0.5x / 1x / 2x against Reels' 180 s on both sides of the
+  boundary (360 s at 2x is not over, 360.2 s is), for the grid, for Clip Kit, and for both against each other
+  across all five platforms. Existing grid cases kept their assertions and moved to the clip signature.
+  E2E: "a crop smaller than the output says the picture will be scaled up and look soft" (a 1920x1080 source;
+  the 16:9 crop button -> YouTube "OK" with the reason, X and Facebook still "Great", cleared -> "Great"),
+  "the grid judges the length of the file at the clip's speed" (a 300 s source: Reels "Too long" at 1x, gone
+  at 2x with the 1:30 sweet-spot reason in its place, back at 0.5x), "a 9:16 clip over TikTok's sweet spot at
+  1x is inside it at 2x" (OK -> Great), and "the long-clip question quotes the length of the file" (the kit
+  asks about 5:00 at 1x and starts without a question at 2x). **Red-first against the HEAD build:** the
+  YouTube tile never reached "OK" with the crop, Reels still read "Longer than the typical 3-minute limit" at
+  2x, TikTok never reached "Great", and at 2x the kit raised the modal (its button never reached "Exporting 5
+  platform versions…"); against HEAD's `presets.ts` / `clipKit.ts` the new unit file fails 30 cases (about
+  half of them from the signature, which is why the mutations below are the discrimination proof).
+  **Mutations** (byte-identical restores, `presets.ts` `6882f2883be6`): (a) the speed division dropped ->
+  8 named unit reds across `outputDurationSec`, `evaluateSuccess` and `platformsOverLimit`, and 3 of the 4
+  T-97 E2E cases red (the soft-crop case stays green); (b) only the resolution comparison reading the source's
+  size again -> 4 unit reds and the soft-crop E2E red, every T-83 case green.
+- **Lesson.** **Hand a verdict the thing, not the numbers read off it.** Five numeric arguments are five
+  chances for the caller to read the wrong field, and each of the three bugs here (aspect, size, seconds)
+  was one of them. The function that decides "does this fit" should be given the clip and read what it needs
+  through the shared helpers, so a new property that matters (a speed, a crop) is one change in one place.
+  And **a limit is a limit on the OUTPUT**: every threshold in the grid is about the file the person will
+  upload, which is the clip's range at its speed, in the crop's frame.
+
 ## 2026-10-09 — T-92 (round 56): one name per idea, a plural that read wrong at 1, a button on a two-second toast, and a score that could not reach its own scale
 
 One ticket from the content review, the last planned copy round of the wave. The thread

@@ -1,5 +1,6 @@
-import type { PlatformId } from '@shared/clip'
+import type { Clip, PlatformId } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
+import { cropFrameSize } from '@shared/safeZone'
 
 export interface PlatformInfo {
   id: PlatformId
@@ -139,11 +140,35 @@ export function spanAdjective(sec: number): string {
   return `${minutes}-minute`
 }
 
+/** The parts of a clip an export is judged on: its range, its speed, its crop. */
+export type JudgedClip = Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier' | 'cropRect'>
+
 /**
- * How well a clip fits a platform, judged on the frame the export STARTS
- * from — `cropAspect` is the manual crop's own aspect when the clip has one
- * (the pipeline cuts each platform's shape out of the crop, T-83), the
- * source's when it does not.
+ * How long the exported file runs (T-97): the clip's source range divided by
+ * its speed. A 6-minute range at 2x is a 3-minute video, and 3 minutes is what
+ * a platform's limit is a limit ON. The grid's verdict and Clip Kit's long-clip
+ * question both read the clip's length through this, so neither can warn "too
+ * long" at half of what the file will really be. The same speed rule
+ * `buildVideoFilter` and `runExportJob` apply: a missing, zero, negative or
+ * non-finite multiplier is 1x.
+ */
+export function outputDurationSec(
+  clip: Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier'>
+): number {
+  const speed =
+    typeof clip.speedMultiplier === 'number' && Number.isFinite(clip.speedMultiplier) && clip.speedMultiplier > 0
+      ? clip.speedMultiplier
+      : 1
+  return Math.max(0, clip.endSec - clip.startSec) / speed
+}
+
+/**
+ * How well a clip fits a platform, judged on what the export will really make:
+ * the frame it STARTS from — the manual crop when the clip has one (the
+ * pipeline cuts each platform's shape out of the crop, T-83), else the whole
+ * source — and the length of the file it will write (T-97: at the clip's speed).
+ * Both are read from the clip here, once, so a caller cannot hand this the
+ * source's size or the source's seconds by mistake.
  *
  * Platform lengths are "typical" limits, never facts: an account's real cap
  * depends on the account, so a clip over one is told it is over the TYPICAL
@@ -151,17 +176,22 @@ export function spanAdjective(sec: number): string {
  */
 export function evaluateSuccess(
   platform: PlatformInfo,
-  clipDuration: number,
+  clip: JudgedClip,
   sourceWidth: number,
-  sourceHeight: number,
-  cropAspect: number | null
+  sourceHeight: number
 ): SuccessReason {
   const reasons: string[] = []
   const redLabels: string[] = []
   let level: SuccessLevel = 'green'
 
-  const sourceAspect = sourceWidth > 0 && sourceHeight > 0 ? sourceWidth / sourceHeight : 1
-  const effectiveAspect = cropAspect ?? sourceAspect
+  const clipDuration = outputDurationSec(clip)
+  // A probe that reported no size (cropFrameSize refuses it) is judged as it
+  // always was: aspect 1, and smaller than every output.
+  const frame =
+    sourceWidth > 0 && sourceHeight > 0
+      ? cropFrameSize(sourceWidth, sourceHeight, clip.cropRect)
+      : { w: sourceWidth, h: sourceHeight }
+  const effectiveAspect = frame.w > 0 && frame.h > 0 ? frame.w / frame.h : 1
 
   if (clipDuration > platform.durationHardLimit) {
     reasons.push(`Longer than the typical ${spanAdjective(platform.durationHardLimit)} limit`)
@@ -202,8 +232,11 @@ export function evaluateSuccess(
     if (level === 'green') level = 'yellow'
   }
 
-  if (sourceWidth < platform.width || sourceHeight < platform.height) {
-    reasons.push('Picture is smaller than this output — it will be enlarged')
+  // The FRAME, not the file (T-97): a quarter-frame crop of a 4K recording is
+  // 1080p of picture, and exporting it at 1080p scales it up 2x. Whole pixels,
+  // since a crop drawn as a fraction of the frame is rarely a whole number.
+  if (Math.round(frame.w) < platform.width || Math.round(frame.h) < platform.height) {
+    reasons.push('The picture is smaller than this output — it will be scaled up and look soft')
     if (level === 'green') level = 'yellow'
   }
 

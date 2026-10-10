@@ -7,7 +7,7 @@ import {
   kitEffectivePresets,
   platformsOverLimit
 } from './clipKit'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { ALL_PLATFORM_IDS, PLATFORM_INFO, evaluateSuccess } from './presets'
 
 /**
  * T-85. The kit's queue used to be built inline in ClipKitButton with
@@ -100,38 +100,74 @@ describe('buildKitQueue — one job per platform slot', () => {
 
 describe('platformsOverLimit — the kit asks once, and only about a platform that is over', () => {
   const kit = kitEffectivePresets(LANDSCAPE)
+  /** A clip whose range is `sec` source seconds, at `speed`. */
+  const range = (sec: number, speed?: number) => ({
+    startSec: 5,
+    endSec: 5 + sec,
+    speedMultiplier: speed
+  })
 
   it('a short clip is inside every typical limit', () => {
-    expect(platformsOverLimit(30, kit)).toEqual([])
-    expect(platformsOverLimit(PLATFORM_INFO.reels.durationHardLimit, kit)).toEqual([])
+    expect(platformsOverLimit(range(30), kit)).toEqual([])
+    expect(platformsOverLimit(range(PLATFORM_INFO.reels.durationHardLimit), kit)).toEqual([])
   })
 
   it('one second past Reels\' 3 minutes names Reels alone', () => {
-    const over = platformsOverLimit(181, kit)
+    const over = platformsOverLimit(range(181), kit)
     expect(over.map((p) => p.id)).toEqual(['reels'])
   })
 
   it('a 20-minute clip is still only Reels; an hour-plus adds TikTok', () => {
-    expect(platformsOverLimit(1200, kit).map((p) => p.id)).toEqual(['reels'])
-    expect(platformsOverLimit(3601, kit).map((p) => p.id)).toEqual(['reels', 'tiktok'])
+    expect(platformsOverLimit(range(1200), kit).map((p) => p.id)).toEqual(['reels'])
+    expect(platformsOverLimit(range(3601), kit).map((p) => p.id)).toEqual(['reels', 'tiktok'])
   })
 
   it('a long enough clip names all five, in the kit order', () => {
-    const over = platformsOverLimit(13 * 3600, kit)
+    const over = platformsOverLimit(range(13 * 3600), kit)
     expect(over.map((p) => p.id)).toEqual(ALL_PLATFORM_IDS.slice().sort((a, b) => kit.indexOf(a) - kit.indexOf(b)))
     expect(over).toHaveLength(5)
   })
 
   it('a vertical source lists Reels once, not once per slot that uses it', () => {
-    const over = platformsOverLimit(1200, kitEffectivePresets(PORTRAIT))
+    const over = platformsOverLimit(range(1200), kitEffectivePresets(PORTRAIT))
     expect(over.map((p) => p.id)).toEqual(['reels'])
   })
 
   it('uses the same limits as the export grid\'s "Too long"', () => {
     // Exactly at the cap is not over; the grid says "Longer than" for more.
     for (const p of Object.values(PLATFORM_INFO)) {
-      expect(platformsOverLimit(p.durationHardLimit, [p.id])).toEqual([])
-      expect(platformsOverLimit(p.durationHardLimit + 1, [p.id])).toEqual([p])
+      expect(platformsOverLimit(range(p.durationHardLimit), [p.id])).toEqual([])
+      expect(platformsOverLimit(range(p.durationHardLimit + 1), [p.id])).toEqual([p])
+    }
+  })
+
+  // T-97: the limit is about the file, and the file runs at the clip's speed.
+  it('a 2x clip is judged at half its range: 6 minutes at 2x is 3 minutes, not over Reels', () => {
+    expect(platformsOverLimit(range(360, 1), kit).map((p) => p.id)).toEqual(['reels'])
+    expect(platformsOverLimit(range(360, 2), kit)).toEqual([])
+    // A second of output past the boundary is over again.
+    expect(platformsOverLimit(range(362, 2), kit).map((p) => p.id)).toEqual(['reels'])
+  })
+
+  it('a 0.5x clip is judged at double its range: 100 s at 0.5x is 200 s, over Reels', () => {
+    expect(platformsOverLimit(range(100, 1), kit)).toEqual([])
+    expect(platformsOverLimit(range(100, 0.5), kit).map((p) => p.id)).toEqual(['reels'])
+    expect(platformsOverLimit(range(90, 0.5), kit)).toEqual([])
+  })
+
+  it('agrees with the grid at every speed and every platform, at the boundary and a second past', () => {
+    // The kit's question and the grid's red "Too long" are one fact. Walk each
+    // platform's cap at 0.5x / 1x / 2x and ask both.
+    for (const speed of [0.5, 1, 2]) {
+      for (const p of Object.values(PLATFORM_INFO)) {
+        for (const outputSec of [p.durationHardLimit, p.durationHardLimit + 1]) {
+          const c = { ...range(outputSec * speed, speed), cropRect: null }
+          const kitSaysOver = platformsOverLimit(c, [p.id]).length === 1
+          const gridSaysOver = evaluateSuccess(p, c, 3840, 2160).label.includes('Too long')
+          expect(kitSaysOver, `${p.id} at ${speed}x, ${outputSec} s out`).toBe(gridSaysOver)
+          expect(kitSaysOver).toBe(outputSec > p.durationHardLimit)
+        }
+      }
     }
   })
 })
