@@ -230,7 +230,7 @@ test.describe('imagii Video Studio import -> export', () => {
       // only renders once a queue row carries an outputPath. `exact` because
       // the page also carries "Show tutorial" / "Show setup instructions".
       await expect(
-        window.getByRole('button', { name: 'Show', exact: true })
+        window.getByRole('button', { name: 'Show in folder', exact: true })
       ).toBeVisible({ timeout: 30_000 })
       await window.screenshot({ path: path.join(SCREENSHOTS, 'export-02-complete.png') })
 
@@ -299,7 +299,7 @@ test.describe('imagii Video Studio import -> export', () => {
       //    anyway"), which is what puts the probe floor under test.
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
-        .toContain('stream-notes.txt may not be a supported video — trying anyway.')
+        .toContain('stream-notes.txt may not be a supported video — trying anyway')
 
       // 2. Then the refusal itself, visible and specific: probeVideo's codec
       //    floor, passed through describeImportError unchanged (it carries

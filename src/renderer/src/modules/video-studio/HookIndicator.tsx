@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { scoreHookQuality, type HookScore } from '@shared/highlights'
+import { countOf } from '@shared/plural'
 import { Icon } from '../../components/Icon'
 
 /**
@@ -65,7 +66,7 @@ export function HookIndicator(props: HookIndicatorProps): JSX.Element | null {
         className="text-xs text-ink-dim font-mono inline-flex items-center gap-1.5"
         title="Analyzing first 3 seconds…"
       >
-        <Icon name="spinner" size={12} className="animate-spin" /> hook…
+        <Icon name="spinner" size={12} className="animate-spin" /> Hook…
       </span>
     )
   }
@@ -73,7 +74,7 @@ export function HookIndicator(props: HookIndicatorProps): JSX.Element | null {
   return (
     <span
       className={`text-xs font-mono px-1.5 py-0.5 rounded border ${TIER_COLOR[score.tier]}`}
-      title={`${score.reasons.join('; ')} — peak ${score.audioEnergyDb.toFixed(1)} LUFS in first ${durationSec}s`}
+      title={`${score.reasons.join('; ')}. Based on how loud the first ${countOf(durationSec, 'second')} are, not what's on screen`}
     >
       {TIER_LABEL[score.tier]}
     </span>

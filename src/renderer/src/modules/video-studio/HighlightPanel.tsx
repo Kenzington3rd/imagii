@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
+import { countOf } from '@shared/plural'
 import {
   scoreHighlights,
   type AudioCandidate,
@@ -99,9 +100,10 @@ export function HighlightPanel(): JSX.Element | null {
       }))
       setAudioCandidates(narrowed)
       if (narrowed.length === 0) {
-        toast('No standout moments detected.', { icon: <Icon name="search" size={18} /> })
+        toast('No standout moments detected', { icon: <Icon name="search" size={18} /> })
+      } else {
+        toast.success(`Found ${countOf(narrowed.length, 'highlight')}`)
       }
-      else toast.success(`Found ${narrowed.length} candidates`)
     } catch (err) {
       reportFailure(err, { failed: 'Scan failed.', canceled: 'Scan canceled.' })
     } finally {
@@ -147,7 +149,7 @@ export function HighlightPanel(): JSX.Element | null {
       </PanelHeader>
       <p className="text-xs text-ink-dim">
         Combines audio-loudness peaks with optional chat density and hype-keyword
-        detection. Each candidate shows you <em>why</em> it scored — paste a chat log
+        detection. Each highlight shows you <em>why</em> it scored — paste a chat log
         below to enrich the ranking.
       </p>
 

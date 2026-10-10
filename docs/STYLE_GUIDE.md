@@ -62,7 +62,12 @@ Repeated UI is a component, not copy-paste:
 - **`HomeLink`** — the "back to Home" link in every studio header.
 - **`OutputDirLabel`** — the folder-icon + basename chip in export
   panels. Its `basename()` helper is pure and unit-tested.
-- **`AppToaster`** — the app-wide toast surface. Mounted exactly once, in
+- **`AppToaster`** — the app-wide toast surface. Its cards are **click-through**
+  (`TOAST_STYLE.pointerEvents: 'none'`, T-92): react-hot-toast draws each card with
+  `pointer-events: auto`, so a toast over the Export button swallowed the click for its
+  whole life (2 s plain, 8 s for an action toast) and, because the library pauses a
+  hovered toast, indefinitely while the pointer rested on it. A button inside a toast
+  opts back in with `pointer-events-auto` (`lib/savedToast.tsx` does). Mounted exactly once, in
   `App.tsx` beside `HotkeyOverlay`, so every route has it. Never mount a
   second one in a studio: react-hot-toast keeps one toast store per
   toaster id and each `<Toaster>` draws all of it, so two mounts render
@@ -135,6 +140,21 @@ Repeated UI is a component, not copy-paste:
   track's file belong to one recording and never enter a preset
   (`@shared/audioPreset`). Both directions go through it, so a preset an older
   build wrote cannot re-impose its cuts.
+- **`toastSaved(message, outputPath, extra?)`** (`lib/savedToast.tsx`) — a success
+  toast that carries the only way on from a finished file (T-92). The GIF,
+  picture-in-picture, reframe and compilation panels and Record all raised a
+  `toast.success` holding a bare "Show" button, which react-hot-toast removes after
+  2 s. The helper gives the toast `ACTION_TOAST_MS` (8 s) and the button the full
+  name "Show in folder"; `extra` adds Record's "Edit in Video Studio". `message`
+  is a completion sentence with no trailing period ("Saved the GIF"). A panel never
+  builds its own reveal button inside a toast —
+  `tests/unit/copyConventions.test.ts` fails on a bare "Show" button and pins the
+  panels to the helper. The wording rules (verbs, names, toast punctuation) are
+  `BRANDING_GUIDE.md`, "Copy conventions".
+- **`countOf(n, singular, plural?)`** (`@shared/plural`) — the only way a number and
+  its noun meet in copy. "1 clip(s)", "Found 1 candidates" and "5 msgs" were each
+  a hand-written plural that read wrong at 1; `copyConventions.test.ts` fails on a
+  "(s)" in anything rendered and pins the call at every site that once got it wrong.
 - **`ipcErrorMessage(err, fallback)`** (`@shared/ipcError`) — the
   envelope-stripping step `userFacingError` starts with. Still the right
   call for a site that wants only main's own sentence (the T-30/T-59 sites:

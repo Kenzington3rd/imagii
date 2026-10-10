@@ -816,12 +816,11 @@ test.describe('Image Studio — templates', () => {
       await expect(dialog).toHaveCount(0)
       await expectTemplateApplied(window, second)
 
-      // ── the four dismissals, each proven not to change the document ──
+      // ── the three dismissals, each proven not to change the document ──
       const dismissals: Array<[string, () => Promise<void>]> = [
-        ['Cancel', async () => dialog.getByRole('button', { name: 'Cancel' }).click()],
         [
           'close button',
-          async () => dialog.getByRole('button', { name: 'Close templates dialog' }).click()
+          async () => dialog.getByRole('button', { name: 'Close', exact: true }).click()
         ],
         ['Escape', async () => window.keyboard.press('Escape')],
         ['scrim', async () => window.mouse.click(8, 8)]
@@ -855,12 +854,12 @@ test.describe('Image Studio — tools and drawing', () => {
       await expect(window.getByText('Tool: Select')).toBeVisible()
 
       // ── buttons ──
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await expect(window.getByText('Tool: Rectangle')).toBeVisible()
-      await expect(toolbar.getByRole('button', { name: 'Rect' })).toHaveClass(/bg-accent/)
+      await expect(toolbar.getByRole('button', { name: 'Rectangle' })).toHaveClass(/bg-accent/)
       await toolbar.getByRole('button', { name: 'Ellipse' }).click()
       await expect(window.getByText('Tool: Ellipse')).toBeVisible()
-      await expect(toolbar.getByRole('button', { name: 'Rect' })).not.toHaveClass(/bg-accent/)
+      await expect(toolbar.getByRole('button', { name: 'Rectangle' })).not.toHaveClass(/bg-accent/)
 
       // ── + More ──
       await toolbar.getByRole('button', { name: '+ More' }).click()
@@ -883,7 +882,7 @@ test.describe('Image Studio — tools and drawing', () => {
         await window.keyboard.press(key)
         await expect(window.getByText(`Tool: ${label}`)).toBeVisible()
         await expect(
-          toolbar.getByRole('button', { name: label === 'Rectangle' ? 'Rect' : label })
+          toolbar.getByRole('button', { name: label })
         ).toHaveClass(/bg-accent/)
       }
 
@@ -920,7 +919,7 @@ test.describe('Image Studio — tools and drawing', () => {
       await toolbar.getByRole('button', { name: '+ More' }).click()
 
       // ── rect: x/y is the top-left of the drag, w/h its extent ──
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 200, y: 150 }, { x: 400, y: 300 })
       await expectLayerCount(window, 2)
       expect(await layerNames(window)).toEqual(['Rectangle', 'Text'])
@@ -996,7 +995,7 @@ test.describe('Image Studio — tools and drawing', () => {
       ])
 
       // ── a drag under the 4px floor commits nothing (Canvas.tsx:230) ──
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 }, { expectPreview: false })
       await expectLayerCount(window, 6)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-02-drawn.png') })
@@ -1029,7 +1028,7 @@ test.describe('Image Studio — tools and drawing', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-03-grid.png') })
 
       // ── snap OFF: the draw lands where the mouse was ──
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 133, y: 93 }, { x: 333, y: 253 })
       await expectLayerCount(window, 2)
       const free = await lastShape(window)
@@ -1075,7 +1074,7 @@ test.describe('Image Studio — selection', () => {
     const { window } = studio
     try {
       await startBlank(window)
-      await window.locator(TOOLBAR).getByRole('button', { name: 'Rect' }).click()
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 300, y: 300 }, { x: 600, y: 500 })
       await expectLayerCount(window, 2)
       // Drawing selects what it just drew (canvasStore.addLayer).
@@ -1105,7 +1104,7 @@ test.describe('Image Studio — selection', () => {
     const { window } = studio
     try {
       await startBlank(window)
-      await window.locator(TOOLBAR).getByRole('button', { name: 'Rect' }).click()
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 300, y: 300 }, { x: 600, y: 500 })
       await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
       await clickDoc(window, { x: 450, y: 400 })
@@ -1188,7 +1187,7 @@ test.describe('Image Studio — selection', () => {
     try {
       await startBlank(window)
       const toolbar = window.locator(TOOLBAR)
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 200, y: 200 }, { x: 400, y: 350 })
       await dragOnStage(window, { x: 500, y: 200 }, { x: 700, y: 350 })
       await expectLayerCount(window, 3)
@@ -1236,7 +1235,7 @@ test.describe('Image Studio — selection', () => {
     try {
       await startBlank(window)
       const toolbar = window.locator(TOOLBAR)
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 200, y: 200 }, { x: 400, y: 350 })
       await dragOnStage(window, { x: 500, y: 200 }, { x: 700, y: 350 })
       await toolbar.getByRole('button', { name: 'Select' }).click()
@@ -1279,7 +1278,7 @@ test.describe('Image Studio — selection', () => {
       //    covering the dialog they had opened on purpose. ──
       await window.keyboard.press('?')
       await expect(window.locator('[role="dialog"]')).toHaveCount(1)
-      await expect(window.getByText('Press ? again to close.')).toHaveCount(0)
+      await expect(window.getByText('Press Esc or ? to close.')).toHaveCount(0)
       // …and the one dialog still up is the one the user opened.
       await expect(dialog.getByRole('button', { name: 'Generate 3 variants' })).toBeVisible()
 
@@ -1304,7 +1303,7 @@ test.describe('Image Studio — selection', () => {
       //    overlay it opened — the self-exemption. A blanket isModalOpen()
       //    guard would have trapped the overlay open forever. ──
       await window.keyboard.press('?')
-      await expect(window.getByText('Press ? again to close.')).toBeVisible()
+      await expect(window.getByText('Press Esc or ? to close.')).toBeVisible()
       await window.keyboard.press('?')
       await expect(window.locator('[role="dialog"]')).toHaveCount(0)
     } finally {
@@ -1321,7 +1320,7 @@ test.describe('Image Studio — layer panel', () => {
     try {
       await startBlank(window)
       const toolbar = window.locator(TOOLBAR)
-      await toolbar.getByRole('button', { name: 'Rect' }).click()
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 200, y: 200 }, { x: 400, y: 350 })
       await toolbar.getByRole('button', { name: 'Ellipse' }).click()
       await dragOnStage(window, { x: 600, y: 200 }, { x: 800, y: 350 })
@@ -1402,7 +1401,7 @@ test.describe('Image Studio — layer panel', () => {
       expectNear(copy.y, 220, 'duplicate y')
 
       // ── delete: no confirm dialog (the documented design), row gone ──
-      await layerRow(window, 'Rectangle copy').getByRole('button', { name: 'Delete layer' }).click()
+      await layerRow(window, 'Rectangle copy').getByRole('button', { name: 'Remove layer' }).click()
       await expectLayerCount(window, 3)
       expect(studio.dialogs.messages).toEqual([])
       expect(await layerNames(window)).toEqual(['Ellipse', 'Rectangle', 'Text'])
@@ -1420,7 +1419,7 @@ test.describe('Image Studio — properties panel', () => {
     const { window } = studio
     try {
       await startBlank(window)
-      await window.locator(TOOLBAR).getByRole('button', { name: 'Rect' }).click()
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
       await expectLayerCount(window, 2)
 
@@ -1585,7 +1584,7 @@ test.describe('Image Studio — import', () => {
       // ── emptying the canvas returns the templates-first empty state, whose
       //    own primary CTA drives the same picker ──
       for (let i = 5; i > 0; i -= 1) {
-        await window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Delete layer' }).click()
+        await window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' }).click()
       }
       await expect(window.getByText('Pick a template to start')).toBeVisible()
       await expect(window.locator(TOOLBAR)).toHaveCount(0)
@@ -2420,12 +2419,12 @@ test.describe('Image Studio — history', () => {
       const redo = window.getByRole('button', { name: 'Redo' })
       await expect(redo).toBeDisabled()
 
-      await window.locator(TOOLBAR).getByRole('button', { name: 'Rect' }).click()
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 250, y: 250 }, { x: 550, y: 450 })
       await expectLayerCount(window, 2)
       await expect(undo).toBeEnabled()
 
-      await layerRow(window, 'Text').getByRole('button', { name: 'Delete layer' }).click()
+      await layerRow(window, 'Text').getByRole('button', { name: 'Remove layer' }).click()
       await expectLayerCount(window, 1)
       expect(await layerNames(window)).toEqual(['Rectangle'])
 

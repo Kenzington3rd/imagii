@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
+import { countOf } from '@shared/plural'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useVideoStore } from './store/videoStore'
@@ -52,7 +53,7 @@ export function VideoStudio(): JSX.Element {
 
   // T-15: videoStore has had full history since round 18, but the studio
   // exposed no way to reach it — trims, clip removal, and color grades were
-  // un-undoable in place. Same binding as Audio Studio and Image Canvas.
+  // un-undoable in place. Same binding as Audio Studio and Stream Graphics.
   useUndoRedoHotkeys(undo, redo)
 
   function handleClose(): void {
@@ -62,7 +63,7 @@ export function VideoStudio(): JSX.Element {
     // so this is unrecoverable).
     if (clipCount > 0) {
       const ok = confirm(
-        `Close this video? ${clipCount} clip(s) and their edits will be discarded.`
+        `Close this video? ${countOf(clipCount, 'clip')} and their edits will be discarded.`
       )
       if (!ok) return
     }

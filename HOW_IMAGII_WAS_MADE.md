@@ -51,7 +51,7 @@ This guide is the chronological development story, pulled from the commit log an
 
 **Two-pass loudnorm.** FFmpeg's `loudnorm` filter is most accurate when run twice: first pass measures, second pass applies with the measurements baked in. The chain logic at `src/main/audio/chain.ts` produces both filter strings; `src/main/audio/process.ts` runs them sequentially with progress events for each pass.
 
-**Image Canvas.** Konva for the canvas surface. Tools: select / rect / ellipse / line / pencil. Layers. Templates for streamer thumbnails and overlays. Export to PNG/JPG with HiDPI scale.
+**Stream Graphics.** Konva for the canvas surface. Tools: select / rect / ellipse / line / pencil. Layers. Templates for streamer thumbnails and overlays. Export to PNG/JPG with HiDPI scale.
 
 **Cross-cutting decisions made here:**
 - **Recent files** persisted per-bucket (video / audio / image) via electron-store.
@@ -64,7 +64,7 @@ This guide is the chronological development story, pulled from the commit log an
 
 **Goal:** Let users grab visual references without leaving imagii.
 
-**Approach:** A renderer panel calls `window.api.search.images(query)`. Main process queries DuckDuckGo's undocumented image endpoint, filters thumbnails locally with strict SafeSearch, returns to the renderer. Saved references go into named "mood boards" stored as JSON under `%APPDATA%/imagii/moodboards/`. Hover an item, click "→ Canvas" — drops it into the Image Canvas at 40% opacity for tracing.
+**Approach:** A renderer panel calls `window.api.search.images(query)`. Main process queries DuckDuckGo's undocumented image endpoint, filters thumbnails locally with strict SafeSearch, returns to the renderer. Saved references go into named "mood boards" stored as JSON under `%APPDATA%/imagii/moodboards/`. Hover an item, click "→ Canvas" — drops it into Stream Graphics at 40% opacity for tracing.
 
 **Privacy decision:** the only feature that touches the network. Hard-coded SafeSearch on. No user data leaves the machine.
 
@@ -87,14 +87,14 @@ This guide is the chronological development story, pulled from the commit log an
 **The 13-feature push.** Identified pain points small-audience streamers hit, then built features for each:
 
 - **A1 Compilation panel** — concat clips with crossfades into a montage.
-- **A2 Chat highlight reel** — paste a Twitch chat log, finds bursts in message density.
+- **A2 Chat spike finder** — paste a Twitch chat log, finds bursts in message density.
 - **A3 Output preview** — live snapshot of what the chosen platform crop will look like.
 - **A4 PiP composite** — overlay one video on another (e.g. webcam on screen).
 - **B2 Hotkey overlay** — `?` for context-aware shortcuts.
 - **B3 + B5 Auto-zoom + hype shake** — per-clip toggles, FFmpeg `zoompan` + jittered crop on export.
 - **C4 Color grading** — per-clip brightness / contrast / saturation / temperature, baked into export.
 - **D1 Title pattern suggester** — 8 templates with random verb/subject/game banks.
-- **D2 + D3 Posting checklist + diary** — log clips, manually track views/likes/comments.
+- **D2 + D3 Posting checklist + posting log** — log clips, manually track views/likes/comments.
 - **E1 Recent files**, **E2 Filename templates** — quality-of-life persistence.
 
 Each feature is a focused component (`HighlightPanel`, `ChatHighlightPanel`, etc.) that talks to either an existing store or a small new IPC handler.
@@ -183,7 +183,7 @@ Built four "extend FOR_MIKE" items the market research called out:
 
 - **4A.1** — `ai-studio/` module renamed to `references/`. The directory name was misleading (AI gen had been removed); URL `/ai-art` and settings key `tutorialSeen.ai` kept for backward compat.
 - **4A.2** — Caption styling presets. Four named one-clicks: TikTok bold, Reels minimal, Subtle subtitle, Big-outline accessibility.
-- **4A.3** — Line/Pencil tools moved behind a "+ More" disclosure. The primary toolbar now shows only Select / Rect / Ellipse — what 95% of streamer thumbnail work actually uses.
+- **4A.3** — Line/Pencil tools moved behind a "+ More" disclosure. The primary toolbar now shows only Select / Rectangle / Ellipse — what 95% of streamer thumbnail work actually uses.
 - **4B** — **Smart highlight scoring**. Combined audio peaks + chat density + Twitch-flavored hype-keyword detection (`POG`, `KEKW`, `LMAO`, `clip it`, etc.) into a unified ranked list with per-signal mini-bars. Each highlight shows *why* it scored, addressing the AI-clipper's monetization moat.
 - **4C** — **First-3s hook indicator**. Single fast FFmpeg ebur128 pass on the opening of the selected clip. Green / amber / rose badge mapped to peak loudness thresholds. Heuristic-only; no ML.
 - **4D** — **One-click "Clip Kit" export**. One button → all 5 platforms + 3 thumbnail JPGs in a named subfolder. Pure orchestration of existing capabilities.
@@ -229,7 +229,7 @@ Two rounds catching bugs surfaced after the feature work:
 
 ## What ships today
 
-- **5 studios**: Record, Video, Audio, Image Canvas, References.
+- **5 studios**: Record, Video, Audio, Stream Graphics, References.
 - **163 passing tests** across 14 test files covering autosave, validation, audio chain, highlights scoring, geometry, project schema migration, filename sanitization, tempdir cleanup, more.
 - **Both typechecks clean** — `tsconfig.node.json` and `tsconfig.web.json`, both with full strict flags.
 - **`dist/imagii.exe`** — ~173 MB portable Windows binary, built via `npm run dist`.

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
+import { countOf } from '@shared/plural'
 import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvasStore'
 import { NameDialog } from '../../components/NameDialog'
@@ -81,14 +82,16 @@ export function MoodBoardPanel(): JSX.Element {
 
   async function onDelete(): Promise<void> {
     if (!collection) return
-    const ok = confirm(`Delete "${collection.name}" and all ${collection.items.length} item(s)?`)
+    const ok = confirm(
+      `Delete "${collection.name}" and all ${countOf(collection.items.length, 'item')}?`
+    )
     if (!ok) return
     await deleteCollection(collection.id)
     // T-66: reversible since T-58, and the toast is the only place the user is
     // looking when it happens. The header's Undo button says the same thing,
     // but a board that just vanished is exactly when nobody is reading a
     // toolbar.
-    toast.success('Deleted — press Ctrl+Z to undo.')
+    toast.success('Deleted — press Ctrl+Z to undo')
   }
 
   return (
@@ -114,7 +117,12 @@ export function MoodBoardPanel(): JSX.Element {
             placeholder="New board name…"
             className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-sm"
           />
-          <button className="btn-ghost px-3 py-1 text-sm" onClick={onCreate}>
+          <button
+            className="btn-ghost px-3 py-1 text-sm"
+            onClick={onCreate}
+            title="Create board"
+            aria-label="Create board"
+          >
             +
           </button>
         </div>

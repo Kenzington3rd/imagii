@@ -31,14 +31,14 @@ describe('audioCloseMessage', () => {
     ['gainDb', { gainDb: 3 }]
   ])('names the cleanup settings when %s is edited', (_field, patch) => {
     const message = audioCloseMessage(edited(patch))
-    expect(message).toBe('Close this audio? your cleanup settings will be discarded.')
+    expect(message).toBe('Close this audio? Your cleanup settings will be discarded.')
   })
 
   it('counts cut regions', () => {
     const message = audioCloseMessage(
       edited({ cutRegions: [{ startSec: 1, endSec: 2 }, { startSec: 4, endSec: 5 }] })
     )
-    expect(message).toBe('Close this audio? 2 cut region(s) will be discarded.')
+    expect(message).toBe('Close this audio? 2 cuts will be discarded.')
   })
 
   it('names a loaded second track', () => {
@@ -53,7 +53,7 @@ describe('audioCloseMessage', () => {
         }
       })
     )
-    expect(message).toBe('Close this audio? the second track will be discarded.')
+    expect(message).toBe('Close this audio? The second track will be discarded.')
   })
 
   it('lists everything at risk when several kinds of edit exist', () => {
@@ -61,7 +61,7 @@ describe('audioCloseMessage', () => {
       edited({ denoise: 'light', cutRegions: [{ startSec: 0, endSec: 1 }] })
     )
     expect(message).toBe(
-      'Close this audio? your cleanup settings, 1 cut region(s) will be discarded.'
+      'Close this audio? Your cleanup settings, 1 cut will be discarded.'
     )
   })
 })
@@ -77,7 +77,7 @@ describe('confirmAudioClose', () => {
     const ask = vi.fn(() => true)
     expect(confirmAudioClose(edited({ deEss: true }), ask)).toBe(true)
     expect(ask).toHaveBeenCalledTimes(1)
-    expect(ask).toHaveBeenCalledWith('Close this audio? your cleanup settings will be discarded.')
+    expect(ask).toHaveBeenCalledWith('Close this audio? Your cleanup settings will be discarded.')
   })
 
   it('REFUSES to close when the confirm is declined (the whole point)', () => {

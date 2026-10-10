@@ -29,14 +29,14 @@ export const imageTutorial: TutorialDef = {
     {
       id: 'tools',
       title: 'Tools',
-      body: "Pick Select, Rect, or Ellipse here, or press V, R, or O. Click '+ More' for Line (L) and Pencil (P).",
+      body: "Pick Select, Rectangle, or Ellipse here, or press V, R, or O. Click '+ More' for Line (L) and Pencil (P).",
       targetSelector: '[data-tutorial="image-toolbar"]',
       placement: 'bottom'
     },
     {
       id: 'layers',
       title: 'Layers',
-      body: 'Reorder, hide, lock, duplicate, or delete layers from this panel. Click a layer to select it.',
+      body: 'Reorder, hide, lock, duplicate, or remove layers from this panel. Click a layer to select it.',
       targetSelector: '[data-tutorial="image-layers"]',
       placement: 'left'
     },

@@ -40,7 +40,10 @@ describe('T-13 — the hotkey overlay is mounted app-wide', () => {
 
   it('keeps a close control besides the Escape key', () => {
     const overlay = read('components/HotkeyOverlay.tsx')
-    expect(overlay).toMatch(/aria-label="Close shortcuts"/)
+    // T-92: the dismiss control says "Close" (not "Esc"); the Esc hint is the
+    // footer line, and a copy of it on the button is the label that varied.
+    expect(overlay).toMatch(/>\s*Close\s*<\/button>/)
+    expect(overlay).toMatch(/Press Esc or \? to close/)
     expect(overlay).toMatch(/onClick=\{\(\) => setOpen\(false\)\}/)
   })
 })
@@ -291,14 +294,15 @@ describe('T-94 — only the highlight scanners retire the whole-video clip', () 
   })
 })
 
-describe('T-57 — discarding an autosave has an error path', () => {
+describe('T-57 — clearing an autosave has an error path', () => {
   // E2E: tests/e2e/home-chrome.spec.ts drives a failing autosave:clear and
   // reads the toast plus the banner that stays.
   const banner = read('components/AutosaveRestore.tsx')
 
-  it('discard() catches a failed clear', () => {
+  it('clearAutosave() catches a failed clear', () => {
+    // T-92: renamed from discard() when both banners' buttons became "Clear".
     const discard = banner.slice(
-      banner.indexOf('async function discard'),
+      banner.indexOf('async function clearAutosave'),
       banner.indexOf('const ageText')
     )
     expect(discard).toMatch(/await window\.api\.autosave\.clear\(\)/)
@@ -319,6 +323,12 @@ describe('T-57 — discarding an autosave has an error path', () => {
     )
     expect(corruptionBanner).toMatch(/>\s*Clear\s*</)
     expect(corruptionBanner).toMatch(/disabled=\{busy\}/)
+    // T-92: the healthy banner's button is "Clear" too (it was "Discard"), and
+    // starts the same call, so it is held to the same disabled-while-busy rule.
+    const healthyBanner = banner.slice(banner.indexOf('imagii autosaved your work'))
+    expect(healthyBanner).toMatch(/onClick=\{\(\) => void clearAutosave\(\)\}\s*disabled=\{busy\}/)
+    expect(healthyBanner).toMatch(/>\s*Clear\s*</)
+    expect(healthyBanner).not.toMatch(/Discard/)
   })
 })
 

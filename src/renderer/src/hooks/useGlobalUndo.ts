@@ -9,7 +9,7 @@ type StoreId = 'video' | 'audio' | 'image' | 'references'
 const STORE_LABEL: Record<StoreId, string> = {
   video: 'Video Studio',
   audio: 'Audio Studio',
-  image: 'Image Canvas',
+  image: 'Stream Graphics',
   references: 'References'
 }
 

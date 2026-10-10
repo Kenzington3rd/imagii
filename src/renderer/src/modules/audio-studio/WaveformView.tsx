@@ -168,7 +168,7 @@ export function WaveformView(): JSX.Element | null {
           {formatTime(time)} / {formatTime(source.probe.duration)}
         </div>
         <div className="ml-auto text-xs text-ink-dim">
-          {source.probe.sampleRate} Hz · {source.probe.channels}ch · {source.probe.codec}
+          {source.probe.sampleRate} Hz · {source.probe.channels} ch · {source.probe.codec}
         </div>
       </div>
       <VolumeMeter audioElement={mediaEl} />

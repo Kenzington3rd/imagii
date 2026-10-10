@@ -12,6 +12,7 @@ import { isCancelledError } from '@shared/cancel'
 import { ipcErrorMessage } from '@shared/ipcError'
 import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
 import { reportFailure } from '../../lib/reportFailure'
+import { toastSaved } from '../../lib/savedToast'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
 import { saveCard } from './saveCard'
@@ -425,29 +426,14 @@ export function RecordStudio(): JSX.Element {
         // Round 18 D: recordings join the same recent-videos bucket the
         // Video Studio Importer reads, closing the record → clip loop.
         void pushRecentVideo(result.outputPath)
-        toast.success(
-          <span>
-            Saved {(result.sizeBytes / 1e6).toFixed(1)} MB.{' '}
-            <button
-              className="underline"
-              onClick={() => {
-                if (window.api.video?.revealInFolder) {
-                  window.api.video.revealInFolder(result.outputPath)
-                }
-              }}
-            >
-              Show
-            </button>{' '}
-            <button
-              className="underline"
-              onClick={() => {
-                void editInVideoStudio(result.outputPath)
-              }}
-            >
-              Edit in Video Studio
-            </button>
-          </span>
-        )
+        // T-92: "Show in folder" and "Edit in Video Studio" are the only ways
+        // on from here, so this toast stays up long enough to use them.
+        toastSaved(`Saved ${(result.sizeBytes / 1e6).toFixed(1)} MB`, result.outputPath, {
+          label: 'Edit in Video Studio',
+          onClick: () => {
+            void editInVideoStudio(result.outputPath)
+          }
+        })
       } else {
         announceDiscarded()
       }
@@ -480,7 +466,7 @@ export function RecordStudio(): JSX.Element {
   }
 
   function announceDiscarded(): void {
-    toast('Recording discarded.', { icon: <Icon name="trash" size={18} /> })
+    toast('Recording discarded', { icon: <Icon name="trash" size={18} /> })
   }
 
   /**

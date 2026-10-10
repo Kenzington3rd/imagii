@@ -63,7 +63,7 @@ export function Importer(): JSX.Element {
       return
     }
     if (!isVideoFilename(file.name)) {
-      toast(`${file.name} may not be a supported video — trying anyway.`, {
+      toast(`${file.name} may not be a supported video — trying anyway`, {
         icon: <Icon name="warning" size={18} />
       })
     }

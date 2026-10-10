@@ -19,7 +19,7 @@ export interface Shortcut {
 export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/video': [
     { keys: 'Space', description: 'Play / pause (player focused)' },
-    { keys: '← / →', description: 'Nudge 0.1s (player or timeline focused)' },
+    { keys: '← / →', description: 'Nudge 0.1 s (player or timeline focused)' },
     { keys: 'Home / End', description: 'Jump to start / end (timeline focused)' },
     { keys: 'Click timeline', description: 'Scrub the playhead to that point' },
     { keys: ', / .', description: 'Frame step back / forward' },
@@ -147,10 +147,8 @@ export function HotkeyOverlay(): JSX.Element | null {
         <button
           onClick={() => setOpen(false)}
           className="text-ink-dim hover:text-ink-base text-sm"
-          title="Close shortcuts"
-          aria-label="Close shortcuts"
         >
-          Esc
+          Close
         </button>
       </div>
       <ul className="flex flex-col gap-1.5 text-sm">
@@ -163,7 +161,7 @@ export function HotkeyOverlay(): JSX.Element | null {
           </li>
         ))}
       </ul>
-      <p className="text-xs text-ink-dim mt-4">Press ? again to close.</p>
+      <p className="text-xs text-ink-dim mt-4">Press Esc or ? to close.</p>
     </Modal>
   )
 }

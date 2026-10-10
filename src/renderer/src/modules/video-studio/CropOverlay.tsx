@@ -23,7 +23,7 @@ interface CropControlsProps {
 
 /**
  * The Crop control row. Rendered ABOVE the player box (T-39): the tutorial's
- * crop step tells the user to "tick 'Crop' above the player", and the row
+ * crop step tells the user to "check 'Crop' above the player", and the row
  * used to render as a flex sibling of the <video> INSIDE the player's black
  * box — beside the picture, squeezing it sideways.
  *
@@ -87,7 +87,7 @@ export function CropControls({
 
   return (
     // T-16: the tutorial's crop step highlighted nothing — this control
-    // row is what its copy describes ("tick 'Crop' above the player").
+    // row is what its copy describes ("check 'Crop' above the player").
     <div className="flex items-center gap-2 text-xs" data-tutorial="video-crop">
       <label className="flex items-center gap-1.5 text-ink-muted">
         <input

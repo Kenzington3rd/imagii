@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
-import { isValidBitrate } from '@shared/customPresets'
+import { formatBitrate, normalizeBitrate } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -65,17 +65,29 @@ export function CustomPresetManager({
     // T-50: these two strings become the encoder's `-b:v` / `-b:a`, so a
     // preset with a bitrate ffmpeg can't read is a preset that can't export.
     // Refuse it here rather than let the user find out at export time.
-    if (!isValidBitrate(videoBitrate) || !isValidBitrate(audioBitrate)) {
-      toast.error('Bitrates look like 8M or 192k')
+    // T-92: and a bare "192" is not refused but READ — as kilobits, the way the
+    // field's example teaches — because ffmpeg would read it as bits per second.
+    // What was understood is written back into the field, so the unit the form
+    // assumed is on screen.
+    const video = normalizeBitrate(videoBitrate, 'video')
+    if (!video.ok) {
+      toast.error(video.problem)
       return
     }
+    const audio = normalizeBitrate(audioBitrate, 'audio')
+    if (!audio.ok) {
+      toast.error(audio.problem)
+      return
+    }
+    setVideoBitrate(video.value)
+    setAudioBitrate(audio.value)
     await window.api.video.saveCustomPreset({
       name: trimmed,
       width,
       height,
       fps,
-      videoBitrate,
-      audioBitrate,
+      videoBitrate: video.value,
+      audioBitrate: audio.value,
       basePlatformId: base
     })
     setName('')
@@ -150,55 +162,59 @@ export function CustomPresetManager({
                 </select>
               </label>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <label className="flex items-center gap-1.5">
-                  <span className="text-ink-muted w-16">Width</span>
+                <label className="flex flex-col gap-1">
+                  <span className="text-ink-muted">Width (px)</span>
                   <input
                     type="number"
                     min={64}
                     value={width}
                     onChange={(e) => setWidth(Number(e.target.value) || 64)}
-                    className="bg-bg-base rounded px-2 py-1 flex-1"
+                    className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
-                <label className="flex items-center gap-1.5">
-                  <span className="text-ink-muted w-16">Height</span>
+                <label className="flex flex-col gap-1">
+                  <span className="text-ink-muted">Height (px)</span>
                   <input
                     type="number"
                     min={64}
                     value={height}
                     onChange={(e) => setHeight(Number(e.target.value) || 64)}
-                    className="bg-bg-base rounded px-2 py-1 flex-1"
+                    className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
-                <label className="flex items-center gap-1.5">
-                  <span className="text-ink-muted w-16">FPS</span>
+                <label className="flex flex-col gap-1">
+                  <span className="text-ink-muted">Frame rate (fps)</span>
                   <input
                     type="number"
                     min={1}
                     max={120}
                     value={fps}
                     onChange={(e) => setFps(Number(e.target.value) || 30)}
-                    className="bg-bg-base rounded px-2 py-1 flex-1"
+                    className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
-                <label className="flex items-center gap-1.5">
-                  <span className="text-ink-muted w-16">V bitrate</span>
+                <label className="flex flex-col gap-1">
+                  <span className="text-ink-muted">Video bitrate (e.g. 8M)</span>
                   <input
                     type="text"
                     value={videoBitrate}
                     onChange={(e) => setVideoBitrate(e.target.value)}
-                    className="bg-bg-base rounded px-2 py-1 flex-1 font-mono"
+                    className="bg-bg-base rounded px-2 py-1 font-mono"
                   />
                 </label>
-                <label className="flex items-center gap-1.5 col-span-2">
-                  <span className="text-ink-muted w-16">A bitrate</span>
+                <label className="flex flex-col gap-1">
+                  <span className="text-ink-muted">Audio bitrate (e.g. 192k)</span>
                   <input
                     type="text"
                     value={audioBitrate}
                     onChange={(e) => setAudioBitrate(e.target.value)}
-                    className="bg-bg-base rounded px-2 py-1 flex-1 font-mono"
+                    className="bg-bg-base rounded px-2 py-1 font-mono"
                   />
                 </label>
+                <p className="self-end text-ink-dim">
+                  M is megabits per second, k is kilobits per second. A bare number counts as
+                  kilobits.
+                </p>
               </div>
               <button className="btn-primary px-4 py-1.5 text-sm self-start" onClick={save}>
                 + Save preset
@@ -221,14 +237,14 @@ export function CustomPresetManager({
                   >
                     <span className="font-medium">{p.name}</span>
                     <span className="text-xs text-ink-dim font-mono">
-                      {p.width}×{p.height} · {p.fps}fps · {p.videoBitrate} ·{' '}
+                      {p.width}×{p.height} · {p.fps} fps · {formatBitrate(p.videoBitrate)} ·{' '}
                       {PLATFORM_INFO[p.basePlatformId].label}
                     </span>
                     <button
                       className="ml-auto text-ink-dim hover:text-danger text-xs"
                       onClick={() => remove(p)}
                     >
-                      ✕ delete
+                      Delete
                     </button>
                   </li>
                 ))}
@@ -237,11 +253,8 @@ export function CustomPresetManager({
           </section>
         </div>
 
-      <div className="p-3 border-t border-ink-dim/30 flex justify-between items-center text-xs text-ink-dim">
-        <span>Saved presets join the platform presets in the Export panel — tick one to export a clip at its own size and bitrate.</span>
-        <button className="text-accent hover:underline" onClick={onClose}>
-          Done
-        </button>
+      <div className="p-3 border-t border-ink-dim/30 text-xs text-ink-dim">
+        Saved presets join the platform presets in the Export panel — check one to export a clip at its own size and bitrate.
       </div>
     </Modal>
   )

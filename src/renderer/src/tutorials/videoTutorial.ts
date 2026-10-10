@@ -44,7 +44,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'crop',
       title: 'Crop (optional)',
-      body: "Tick 'Crop' above the player, then drag the box or pick a shape: free, 16:9, 9:16, 1:1, or 4:5. Each platform takes a centered cut of your crop.",
+      body: "Check 'Crop' above the player, then drag the box or pick a shape: free, 16:9, 9:16, 1:1, or 4:5. Each platform takes a centered cut of your crop.",
       targetSelector: '[data-tutorial="video-crop"]',
       placement: 'top'
     },
@@ -72,7 +72,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'platforms',
       title: 'Pick your platforms',
-      body: 'Tick the platforms you post to. Each shows Great, OK, or what is wrong, like Too long or Wrong shape.',
+      body: 'Check the platforms you post to. Each shows Great, OK, or what is wrong, like Too long or Wrong shape.',
       targetSelector: '[data-tutorial="video-export"]',
       placement: 'top'
     },
@@ -86,7 +86,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'export',
       title: 'Export',
-      body: "Click 'Choose folder…', then click the Export button — it says how many files it will write. 'Show' beside a finished file reveals it in Explorer.",
+      body: "Click 'Choose folder…', then click the Export button — it says how many files it will write. 'Show in folder' beside a finished file reveals it in Explorer.",
       targetSelector: '[data-tutorial="video-export"]',
       placement: 'top'
     },

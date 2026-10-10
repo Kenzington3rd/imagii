@@ -200,7 +200,7 @@ export function ExportDialog(): JSX.Element | null {
                 )
               }
             >
-              Show
+              Show in folder
             </button>
           ) : null}
         </div>

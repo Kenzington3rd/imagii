@@ -187,7 +187,7 @@ export function TextOverlayEditor(): JSX.Element | null {
                   className="bg-bg-base rounded px-1 py-0.5 w-20"
                   aria-label="Overlay end second"
                 />
-                <span className="text-ink-dim">sec</span>
+                <span className="text-ink-dim">s</span>
                 <button
                   onClick={() => removeTextOverlay(clip.id, overlay.id)}
                   className="ml-auto text-ink-dim hover:text-danger px-2"

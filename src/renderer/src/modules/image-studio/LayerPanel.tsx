@@ -135,8 +135,8 @@ export function LayerPanel(): JSX.Element {
                   removeLayer(layer.id)
                 }}
                 className="text-ink-dim hover:text-danger px-1 flex"
-                title="Delete"
-                aria-label="Delete layer"
+                title="Remove layer"
+                aria-label="Remove layer"
               >
                 <Icon name="close" size={14} />
               </button>

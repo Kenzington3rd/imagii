@@ -21,29 +21,29 @@ Drag a video in, trim it, export for **YouTube / Reels / TikTok / X / Facebook**
 Plus, in the side panels:
 - **Output preview** — live snapshot of what the chosen platform crop looks like
 - **Auto-highlight finder** — finds loud moments in a long VOD and offers them as clip ranges
-- **Chat highlight reel** — paste a Twitch chat log, finds bursts in message density
+- **Chat spike finder** — paste a Twitch chat log, finds bursts in message density
 - **Reframe to 9:16 (center crop)** — one-click vertical export from a horizontal source: a fixed strip you place Left, Center, or Right (it does not track faces or action)
 - **GIF export** — width / fps / speed selectors for the trimmed range
 - **Compile clips** — stitch your clip list into one montage MP4 with crossfades
 - **Picture-in-picture composite** — overlay one video on another (e.g. webcam on screen)
 - **Auto-captions** — Whisper-based transcription, save SRT or burn into video (needs a one-time whisper-cli.exe install; English only)
 - **Color & motion** — per-clip brightness / contrast / saturation / temperature, plus auto-zoom and hype-shake toggles
-- **Posting helpers** — title pattern suggester, hashtag packs, posting log + performance diary
+- **Posting helpers** — title pattern suggester, hashtag packs, posting log with view, like and comment counts
 
-Hotkeys: `Space` play/pause · `← →` nudge 0.1s · `, .` frame-step · `I O` set in/out · `?` show shortcut overlay
+Hotkeys: `Space` play/pause · `← →` nudge 0.1 s · `, .` frame-step · `I O` set in/out · `?` show shortcut overlay
 
 ### 🎚 Audio Studio
 Import an audio file, or extract audio from any video. One-click denoise (light/medium/aggressive), hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds, voice/music/mixed compressor presets, two-pass loudnorm to podcast-standard −16 LUFS. Drag on the waveform to mark cuts. Live volume meter so you can see clipping. Save/load named cleanup presets ("My USB mic"). Add a second track for background music with sidechain ducking, or mix in a co-host's mic. Export MP3/WAV/FLAC/AAC, or re-attach cleaned audio to the original video.
 
 The Video Studio has a **🎚 Clean audio** button that pipes a clip through here automatically.
 
-### 🖼 Image Canvas
+### 🖼 Stream Graphics
 Paste / drop / import images. Layers, exact-degree rotation (15/30/45/90/180/270 presets, or type any number). Streamer templates for YouTube thumbnails and Twitch overlay frames with a webcam hole (the guides and placeholders show while you design and are left out of the export). Grid + snap. Drawing tools: rectangle, ellipse, line, freehand. Export PNG / JPG with HiDPI scale.
 
 Hotkeys: `V R O L P` tools · `Ctrl+Z` undo · `Ctrl+Y` redo · `Delete` remove layer
 
 ### ✨ References
-DuckDuckGo image search with strict SafeSearch. Save references to local mood boards. Hover any saved item and click **→ Canvas** to drop it as a 40%-opacity reference layer in the Image Canvas (great for tracing or composition).
+DuckDuckGo image search with strict SafeSearch. Save references to local mood boards. Hover any saved item and click **→ Canvas** to drop it as a 40%-opacity reference layer in Stream Graphics (great for tracing or composition).
 
 ## Project save / load + crash-safe autosave
 

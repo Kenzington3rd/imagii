@@ -69,8 +69,9 @@ describe('scoreHighlights — audio-only baseline', () => {
     expect(result[0]?.signals.audioScore).toBe(1)
     expect(result[0]?.signals.chatDensityScore).toBe(0)
     expect(result[0]?.signals.hypeWordScore).toBe(0)
-    // Combined = audio * 0.4 + 0 + 0 = 0.4
-    expect(result[0]?.combinedScore).toBeCloseTo(DEFAULT_WEIGHTS.audio, 6)
+    // T-92: with no chat, audio is the only signal in play, so a saturated
+    // peak is a full 1 (the panel says "0-100"), not audio x 0.4 = 40.
+    expect(result[0]?.combinedScore).toBeCloseTo(1, 6)
   })
 
   it('returns empty list when no audio candidates', () => {
@@ -82,6 +83,86 @@ describe('scoreHighlights — audio-only baseline', () => {
     for (const h of result) {
       expect(h.reasons.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('scoreHighlights — the 0-100 the header promises (T-92)', () => {
+  const loud: AudioCandidate = { startSec: 10, endSec: 20, peakDb: -8, reason: 'loud' }
+
+  it('an audio-only moment scores by its audio alone, so the loudest reaches 1', () => {
+    const [only] = scoreHighlights([loud], [])
+    expect(only?.combinedScore).toBeCloseTo(1, 6)
+  })
+
+  it('an audio-only score is the audio signal itself at every loudness', () => {
+    for (const peakDb of [-45, -40, -32, -25, -18, -10, -3]) {
+      const [h] = scoreHighlights([{ ...loud, peakDb }], [])
+      expect(h?.combinedScore, `peak ${peakDb}`).toBeCloseTo(h?.signals.audioScore ?? NaN, 6)
+    }
+  })
+
+  it('the old audio-only score was capped at the audio weight (the bug)', () => {
+    // Before T-92 combined = audio x 0.4 + 0 + 0, so no scan without a chat
+    // log could show more than 40. Pin the new ceiling against the old one.
+    const [h] = scoreHighlights([loud], [])
+    const oldScore = (h?.signals.audioScore ?? 0) * DEFAULT_WEIGHTS.audio
+    expect(oldScore).toBeCloseTo(0.4, 6)
+    expect(h?.combinedScore).toBeGreaterThan(oldScore * 2)
+  })
+
+  it('with chat present the three weights still apply as before', () => {
+    const chat: ChatMessage[] = []
+    for (let t = 0; t < 90; t += 30) chat.push({ tSec: t, text: 'baseline' })
+    for (let t = 10; t < 20; t += 0.5) chat.push({ tSec: t, text: 'POG' })
+    const [h] = scoreHighlights([loud], chat)
+    const s = h?.signals
+    expect(s?.chatDensityScore).toBeGreaterThan(0)
+    expect(h?.combinedScore).toBeCloseTo(
+      ((s?.audioScore ?? 0) * 0.4 + (s?.chatDensityScore ?? 0) * 0.4 + (s?.hypeWordScore ?? 0) * 0.2) /
+        (0.4 + 0.4 + 0.2),
+      6
+    )
+  })
+
+  it('a chat log that scores nothing still counts as chat: the weights do not collapse', () => {
+    // Chat is "in play" when there are messages, not when they scored.
+    const quiet: ChatMessage[] = [{ tSec: 500, text: 'unrelated' }]
+    const [h] = scoreHighlights([loud], quiet)
+    expect(h?.combinedScore).toBeCloseTo(0.4, 6)
+  })
+
+  it('never exceeds 1, even with weights that do not sum to 1', () => {
+    const [h] = scoreHighlights([loud], [], { audio: 2, chatDensity: 3, hypeWord: 5 })
+    expect(h?.combinedScore).toBeLessThanOrEqual(1)
+    expect(h?.combinedScore).toBeCloseTo(1, 6)
+  })
+
+  it('rejects weights that cannot be normalized', () => {
+    expect(() => scoreHighlights([loud], [], { audio: 0, chatDensity: 0, hypeWord: 0 })).toThrow()
+  })
+})
+
+describe('scoreHighlights — reasons in plain words (T-92)', () => {
+  it('the fallback reason is a phrase a streamer would say, never the internal id', () => {
+    // Quiet enough that no signal clears its reason threshold.
+    const quiet: AudioCandidate[] = [
+      { startSec: 0, endSec: 10, peakDb: -38, reason: 'sustained-loud' },
+      { startSec: 50, endSec: 60, peakDb: -38, reason: 'loud' }
+    ]
+    const reasons = scoreHighlights(quiet, []).flatMap((h) => h.reasons)
+    expect(reasons).toContain('Long loud stretch')
+    expect(reasons).toContain('Loud peak')
+    for (const r of reasons) expect(r).not.toMatch(/sustained-loud|^loud$/)
+  })
+
+  it('every reason starts with a capital (sentence case)', () => {
+    const chat: ChatMessage[] = []
+    for (let t = 0; t < 600; t += 30) chat.push({ tSec: t, text: 'normal chat' })
+    for (let t = 10; t < 20; t += 0.5) chat.push({ tSec: t, text: 'POGGERS no way' })
+    const all = scoreHighlights([{ startSec: 10, endSec: 20, peakDb: -8, reason: 'loud' }], chat)
+    const reasons = all.flatMap((h) => h.reasons)
+    expect(reasons.length).toBeGreaterThan(1)
+    for (const r of reasons) expect(r[0]).toBe(r[0]?.toUpperCase())
   })
 })
 
@@ -111,8 +192,8 @@ describe('scoreHighlights — multi-signal', () => {
     expect(h?.signals.chatDensityScore).toBeGreaterThan(0.4)
     expect(h?.signals.hypeWordScore).toBeGreaterThan(0.5)
     expect(h?.combinedScore).toBeGreaterThan(0.3)
-    expect(h?.reasons).toContain('chat spike')
-    expect(h?.reasons).toContain('hype keywords')
+    expect(h?.reasons).toContain('Chat spike')
+    expect(h?.reasons).toContain('Hype keywords')
   })
 
   it('keeps signals when chat is plenty but audio is weak', () => {

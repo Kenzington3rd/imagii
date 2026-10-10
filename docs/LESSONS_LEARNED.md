@@ -14,6 +14,229 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-09 — T-92 (round 56): one name per idea, a plural that read wrong at 1, a button on a two-second toast, and a score that could not reach its own scale
+
+One ticket from the content review, the last planned copy round of the wave. The thread
+through all of it: the same fact was written by hand in several places (a studio's name, a
+noun's plural, a button's label, a scale's top) and nothing made the places agree. The
+sweep is wide (about thirty files); the five bugs below are the ones with a mechanism, and
+the rest is held by `tests/unit/copyConventions.test.ts` reading every string a person can
+see. **Nothing here touches ffmpeg**: no filter, argument or chain changed, so
+`npm run test:media` was not part of this round (IMG-PREC applies to those changes only).
+
+### Bug (T-92) — four names for the studio, five for a found moment, and a diary that was a log
+
+- **Bug.** Stream Graphics was "Image Canvas" on Home's last-undo line, in the README,
+  FOR_MIKE and HOW_IMAGII_WAS_MADE. A found moment was a "candidate", a "hype moment", a
+  "Highlight N" and a "Chat hype N"; the chat panel was a "Chat highlight reel". The posting
+  log was a "diary" in its toasts, errors and list header. Corners were "Top L / Bot R" in one
+  panel and "Top left" in the next; "Rect" sat in the toolbar above a status line that said
+  "Tool: Rectangle"; "copy", "+ clip", "open folder" and "✕ delete" were the lowercase
+  outliers; the Player's "Safe zones" were crop guides.
+- **Root cause.** A name was typed wherever it was needed, so there was no single place to be
+  wrong in — and the E2E suite repeated each string a second time, which made the old name
+  *load-bearing*: five assertions read `last: Image Canvas`, and one test pinned "Rect"
+  against "Rectangle" in the same loop.
+- **Fix.** `docs/BRANDING_GUIDE.md` gained "Copy conventions" (the canonical-name table,
+  sentence case, the four destruction verbs, toast punctuation, voice, dismiss labels). The
+  renderer was swept to it: Stream Graphics everywhere, Smart highlight finder / Chat spike
+  finder / highlight / chat spike, Posting log ("Logged posts (N)" for the list), spelled-out
+  corners and shapes, `Copy` / `+ Clip` / `Open folder` / `Delete`, **Crop guides**, hashtag
+  packs named for people ("Instagram Reels, general", not `ig_reels_general`). Dialect: US
+  spelling, and "check" a box, never "tick" it (the tutorials said "Tick" five times).
+- **Test.** `tests/unit/copyConventions.test.ts` (new) parses every renderer source and runs
+  its rules over the strings a person reads (JSX text, copy attributes and properties, toast
+  and confirm arguments, the strings a JSX expression chooses between — never an identifier, a
+  comment or a comparison): the retired names, `(s)`, unspaced units, cut-short words, "done"
+  on a toast, British spelling, "tick", the first person, an exclamation mark, a lowercase
+  button or panel header, a bare "Show" button, an "Esc" / "Done" dismiss button, a trailing
+  period on a one-sentence result toast. Its discrimination block runs the scanner over the copy
+  that shipped and over copy that must pass. **Run against HEAD's source it fails 35 ways**
+  (`AutosaveRestore.tsx:138 [a result toast with a trailing period] "Autosave discarded."`,
+  `PipPanel.tsx:57 ["done" as a completion word] "PiP done."`, `ChatHighlightPanel.tsx:111
+  ["Chat highlight reel" …]`, `PipPanel.tsx:144 ["Top L" / "Bot R" …] "Top L"`…); green after.
+- **Lesson.** **A name needs one owner and a scanner that reads what the screen shows.** A
+  grep of the source cannot tell `'sustained-loud'` the id from `sustained-loud` the label,
+  and a test that repeats a string freezes it — the fix for the second is the same as for the
+  first: one table, one scan, and tests that find a control by what it is (its role and
+  accessible name), not by a phrase that was a mistake the day it was copied.
+
+### Bug (T-92) — "1 clip(s)", "Found 1 candidates", "5 msgs", "3 day(s) ago", "1 cut region(s)"
+
+- **Bug.** Six hand-written plurals read wrong at 1 (and two E2E assertions pinned the
+  wrong text: `'Close this video? 1 clip(s) and their edits will be discarded.'`). One more,
+  `audioCloseMessage`, began its sentence in lower case ("Close this audio? your cleanup
+  settings…").
+- **Root cause.** `countOf` (round 50) existed; each site predated it or never met it.
+- **Fix.** Every site goes through `countOf`: highlights, chat spikes, messages, clips, cuts,
+  items, days, templates, running jobs. The audio close sentence capitalizes its list.
+- **Test.** `copyConventions.test.ts` bans `\w(s)` in anything rendered and pins the
+  `countOf(...)` call at each of the ten sites the review and the sweep found (a pin of the
+  call, not the output — the output is `plural.test.ts`'s). The two E2E assertions that
+  pinned the bug now pin the singular.
+- **Lesson.** **A helper only prevents the bug at the call sites that use it.** The scan is
+  what turns "we have `countOf`" into "no number meets a noun without it".
+
+### Bug (T-92) — a success toast carried the only way on, and lasted two seconds
+
+- **Bug.** GIF, picture-in-picture, reframe and compilation raised `toast.success` holding a
+  bare "Show"; Record's held "Show" and "Edit in Video Studio". react-hot-toast removes a
+  success toast after 2 s. Look away and the way to the file was gone. The completion verb
+  was whatever the panel's author felt like: "PiP done.", "GIF saved.", "Vertical version
+  saved.", "Clip kit ready".
+- **Root cause.** Five hand-built copies of the same toast, none with a duration.
+- **Fix.** `lib/savedToast.tsx`: `toastSaved(message, outputPath, extra?)` — one sentence with
+  no trailing period, "Show in folder", `ACTION_TOAST_MS` (8 s). Messages are now "Saved the
+  GIF", "Saved the picture-in-picture video", "Saved the vertical version", "Saved the
+  compilation", "Saved your Clip Kit", "Saved 12.3 MB". The inline "Show" beside a finished
+  Export / audio-export row is "Show in folder" too (one name for the control).
+- **Test.** Unit, `savedToast.test.tsx`: the duration is `ACTION_TOAST_MS` (>= 8000), the
+  toast's buttons are exactly `['Show in folder']` (and `['Show in folder', 'Edit in Video
+  Studio']` for Record), and the button's click reveals exactly the path it was given.
+  E2E (`expectRevealToast`): PiP, reframe, GIF and compilation each find "Show in
+  folder" on the toast, wait 3.5 s (past the 2 s default), find it still there, press it,
+  and assert the shell (stubbed in main, `tests/e2e/shellReveal.ts`) received exactly the file
+  that was written. **Red-first against the HEAD build**: `Error: "Show" is still there 3.5 s
+  later` for the GIF flow. `copyConventions.test.ts` fails on a bare "Show" button and pins the five panels
+  to the helper.
+- **Lesson.** **A toast is a notification, not a place to keep a button.** If an action is
+  worth offering, it outlives the default; and a duration that lives in five call sites is
+  five chances to omit it.
+
+### Bug (T-92) — a bare "192" was saved as 192 bits per second
+
+- **Bug.** The custom-preset form took "V bitrate" / "A bitrate" with no unit anywhere.
+  ffmpeg reads a bare number as BITS per second, so the "192" a person meant as kilobits
+  saved an audio rate nothing could hear, and "8000" video was 8 kbps. (Also: to ffmpeg a
+  lowercase `m` is *milli*, and the validator accepted it — "8m" encodes at 0.008 bits/s.)
+- **Root cause.** The form validated that a bitrate was *parseable* (T-50) and never asked
+  what unit it meant.
+- **Fix.** `normalizeBitrate(raw, kind)` in `shared/customPresets.ts`: a bare number is
+  kilobits per second (the unit the field's own examples teach) and is saved with its `k`;
+  a bare number over 100,000 is refused with the spelling that works ("5000000 is too big to
+  be kilobits per second. Write 5M instead."); `m` becomes `M`, `K` becomes `k`; every
+  accepted value passes `isValidBitrate`, the gate main applies again. The form writes the
+  understood value back into the field, labels the fields "Video bitrate (e.g. 8M)" /
+  "Audio bitrate (e.g. 192k)", and says what M and k mean. `formatBitrate` prints "8 Mbps" /
+  "192 kbps" in the saved list (and reads a legacy bare number the way ffmpeg does).
+- **Test.** Unit, red-first against a stub with today's behavior: **9 failed**
+  (`expected { ok: true, value: '192' } to deeply equal { ok: true, value: '192k' }`,
+  `expected { ok: true, value: '8m' } to deeply equal { ok: true, value: '8M' }`,
+  `expected true to be false` for 5000000). E2E, red-first against the HEAD build: the saved
+  file held `"videoBitrate": "8000"` where `"8000k"` was expected. Mutation: the auto-suffix
+  returns the text unchanged -> 3 named unit reds, byte-identical restore (`ea70ebdb4a39`).
+- **Lesson.** **A unit-less field needs a rule for its unit, applied at the door and shown
+  back.** Normalize on entry, put what was understood on screen, and keep the strict gate at
+  the trust boundary — the form is the friendly half, `validateExportJob` the safe one.
+
+### Bug (T-92) — highlight scores stopped at 40 without a chat log
+
+- **Bug.** The panel's score chip says "Combined score (0–100)". With no chat pasted, the
+  chat and hype weights (0.4 + 0.2) multiplied zeros, so the loudest possible moment scored
+  `1 x 0.4 = 40`. Every scan without chat topped out at 40 and read as mediocre. Its fallback
+  reason was the scanner's own id ("sustained-loud").
+- **Root cause.** A weighted average whose denominator was the sum of ALL weights, not the
+  weights in play; the 0–100 was a label, not a property.
+- **Fix.** `scoreHighlights` divides by the weights actually in play: audio alone when no
+  chat messages exist, all three when any do ("chat present" means messages exist, not that
+  they scored — a log that is silent at a moment weighs against it). The fallback reasons are
+  "Loud peak" and "Long loud stretch"; the other reasons are capitalized.
+- **Test.** Unit, red-first, 9 failed (`expected 0.4 to be close to 1`, `expected 2 to be less
+  than or equal to 1`): an audio-only score IS the audio signal at every loudness, the old
+  score was audio x 0.4 (pinned, so the change is visible), chat-present weights are
+  unchanged, weights that do not sum to 1 still stay in 0..1. E2E: the rescoring test now
+  walks 100 (no chat) -> 40 (chat that says nothing about this moment) -> 100 (chat that does)
+  -> 100 (cleared). Mutation: drop the division -> 5 reds, byte-identical restore
+  (`d36868c6f255`).
+- **Lesson.** **A scale printed on the screen is a promise the arithmetic has to be able to
+  keep.** And a test that pinned the broken ceiling ("= audio x 0.4") was the clearest
+  statement of the bug anyone had written.
+
+### Bug (T-92) — the export checkbox's name was a paragraph
+
+- **Bug.** Round 50 (T-83) moved each platform's reason text *into* its `<label>` so it
+  would be visible. A label is a name: a screen reader read "YouTube 1920×1080 OK Under the
+  1-minute sweet spot · 25% of the picture's height is trimmed to fit this shape · Picture is
+  smaller than this output — it will be enlarged, checkbox" for one tick box.
+- **Root cause.** "Visible" and "associated" were treated as one decision; wrapping the
+  text in the label achieved both and cost the name.
+- **Fix.** The label wraps the checkbox and the platform's name (and the Custom tag) only;
+  the size line ("1920×1080 · 30 fps" — the export IS 30 fps, and now says so; a custom
+  preset shows its own rate) and the verdict sit beside it as the checkbox's description
+  (`aria-describedby`). The label's `::after` is stretched over the card, so the whole
+  tile is still one hit area; the input is lifted above it (`relative z-10`) because Playwright
+  (rightly) refuses to click a box whose label overlay "intercepts pointer events".
+  `PlatformInfo.fps` joins the renderer table, and `presetTablesInSync.test.ts` holds it to
+  main's.
+- **Test.** E2E, red-first against the HEAD build: `getByRole('checkbox', { name: 'YouTube',
+  exact: true })` found 0 (the names were the paragraphs above); green: each of the five has
+  exactly the platform as its accessible name and "1920×1080 · 30 fps" / the verdict in its
+  accessible description, and a click on the size line still toggles it. The T-83 grid test
+  finds a tile by the checkbox it holds (`[data-export-target]`).
+- **Lesson.** **Say what a thing is called and what it is like in different places.** ARIA
+  gives them different slots (name, description); visible text that is part of the
+  description does not belong in the label to be seen.
+
+### Bug (T-92 send-back) — a toast card caught the click meant for the button under it
+
+- **Bug.** After the 8-second action toasts, `image.spec.ts` "emote pack: … ONE folder dialog"
+  timed out clicking Export: `<div role="status">Emote pack saved (3 PNGs: 28, 56, 112)</div>
+  from <div data-rht-toaster> subtree intercepts pointer events`, 56 retries over 30 s. A user
+  could not press any control under a live toast.
+- **Root cause.** react-hot-toast draws every card with `pointer-events: auto` (and its
+  wrapper's `> * { pointer-events: auto }`), and pauses a hovered toast's timer — so a card over
+  the Export button took the click, and a pointer resting on it kept the card alive. The
+  emote-pack toast is a plain 2 s `toast.success`, not one of the 8 s toasts: **the same test
+  fails against a clean HEAD build in isolation** (checked: `git archive HEAD`, same
+  `intercepts pointer events`, same timeout), so T-92's 8 s duration made a latent bug four
+  times longer rather than causing it. It passed in the full suite only because where the
+  pointer rests moves with run order.
+- **Fix.** `AppToaster`'s `TOAST_STYLE` sets `pointerEvents: 'none'` on every card (an inline
+  style beats the library's class rule); the one control meant to be pressed opts back in
+  (`pointer-events-auto` on the "Show in folder" / "Edit in Video Studio" buttons in
+  `lib/savedToast.tsx`), which also keeps a toast up while it is pointed at. One place, so
+  every toast shares it; no other toast has interactive content. The emote-pack toast stays a
+  plain `toast.success` (it saved to a folder the user picked, but the image saves — "PNG saved",
+  "Saved 4 thumbnails", the pack — have no reveal button, and their E2E asserts the exact text).
+  Cost: a card can no longer be hovered to pause, so a long error toast is not held open by
+  the pointer.
+- **Test.** The failing emote-pack E2E goes green unchanged (32.8 s timeout -> 3.0 s).
+  `AppToaster.test.tsx` pins `pointerEvents: 'none'` on the mounted element; `savedToast.test.tsx`
+  pins `pointer-events-auto` on every button. E2E `expectToastClickThrough` (run on each of the
+  four saved toasts) presses the toast's own padding and asserts the click landed on something
+  that is not the toaster. **Mutation** (`pointerEvents: 'auto'`): the unit pin goes red
+  (`expected 'auto' to be 'none'`), the emote-pack test times out (`intercepts pointer
+  events`) and the GIF flow fails `the click reached the control under the toast, not the
+  toast`; restore byte-identical (`da8ea4bfacc2`).
+- **Lesson.** **A transient surface must never take input it does not need.** Duration and
+  pointer capture multiply: lengthening a toast without making it click-through turned a rare
+  2 s annoyance into an 8 s wall. And a test that passes only in a particular order is
+  reporting the pointer's position, not the product's behavior.
+
+### Smaller fixes with the same root
+
+- **Dismiss labels** were Esc, ✕, Close, Done and Cancel across five dialogs. Every dialog
+  with nothing to decide now has ONE dismiss control reading "Close": the shortcuts overlay
+  (its Esc hint is its footer), Templates (the footer "Cancel" went — it duplicated the
+  header's), Custom export presets (the footer "Done" went), Thumbnail variants, the audio
+  wizard. A dialog that asks a question keeps its verb + "Cancel".
+- **Destruction verbs** crossed between a button and its confirm: the preset list said
+  "Remove preset" and asked "Delete preset"; Layers said "Delete" while the shortcuts dialog
+  said "Remove"; the autosave banners said "Discard" and "Clear" for one call. Delete = a
+  saved thing (asks first), Remove = an item in what you are editing (undoable), Clear =
+  emptying what stays, Discard = something never saved. The posting-log entry's delete (which
+  had no confirm and no undo) now asks.
+- **Compilation hid until the second clip**, so nobody with one learned it existed; the card
+  now always renders and says "Add a second clip to compile." with its button disabled.
+- **Jargon and units:** the hook badge's tooltip no longer says "LUFS"; the player reads
+  "30 fps · video h264 · audio aac"; GIF width and frame rate carry "px" and "fps"; PiP
+  fields say "(px)"; the chat panel's "Bucket sec" / "Pad sec" are "Spike window (s)" and
+  "Extra seconds around each clip"; the color panel says its sliders have no preview.
+- **Test.** `copyConventions.test.ts`, E2E assertions beside each panel, `units.test.ts`
+  for `formatFps`, `interactionWiring.test.ts` for the Close and Clear pins.
+- **Lesson.** **One concept, one control, one word.** Two buttons that dismiss one window
+  are two chances to disagree; the cheaper fix was deleting one.
+
 ## 2026-10-09 — T-90 + T-91 (round 55): a summary that was not what Apply did, a preset that carried last week's cuts, and a "saved" toast raised before anyone had saved
 
 Two tickets from the content review. T-90 is Audio Studio saying one thing and doing

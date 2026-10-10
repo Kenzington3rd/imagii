@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { nanoid } from 'nanoid'
+import { countOf } from '@shared/plural'
 import {
   CANVAS_TEMPLATES,
   getTemplatesByCategory,
@@ -50,12 +51,8 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
     >
       <div className="flex items-center justify-between p-4 border-b border-ink-dim/30">
         <h2 className="text-lg font-semibold">Streamer templates</h2>
-        <button
-          className="text-ink-dim hover:text-ink-base text-lg leading-none"
-          onClick={onClose}
-          aria-label="Close templates dialog"
-        >
-          ✕
+        <button className="text-ink-dim hover:text-ink-base" onClick={onClose}>
+          Close
         </button>
       </div>
       <div className="flex-1 overflow-auto p-4 flex flex-col gap-5">
@@ -97,11 +94,8 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
           </section>
         ))}
       </div>
-      <div className="p-4 border-t border-ink-dim/30 flex justify-between text-xs text-ink-muted">
-        <span>{CANVAS_TEMPLATES.length} templates · clicking one replaces the current canvas.</span>
-        <button className="text-accent hover:underline" onClick={onClose}>
-          Cancel
-        </button>
+      <div className="p-4 border-t border-ink-dim/30 text-xs text-ink-muted">
+        {countOf(CANVAS_TEMPLATES.length, 'template')} · clicking one replaces the current canvas.
       </div>
     </Modal>
   )

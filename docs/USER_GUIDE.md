@@ -37,13 +37,13 @@ The shortest path from a long recording to a posted clip.
    Export does not re-encode the whole recording beside your excerpts.
 3. **Trim** by dragging the two handles on the timeline. `I` and `O` set them
    at the playhead.
-4. Under **Export**, tick the platforms you want. A red mark says the clip
+4. Under **Export**, check the platforms you want. A red mark says the clip
    does not fit that platform, and the card says why.
 5. Click **Choose folder…** and pick where the files go. Export asks for a
    folder before it starts.
-6. Click **Export N files**. imagii writes one file per ticked platform for
+6. Click **Export N files**. imagii writes one file per checked platform for
    each clip in the list, and runs them all.
-7. When a file is finished, click **Show** beside it to open its folder with
+7. When a file is finished, click **Show in folder** beside it to open its folder with
    the file selected.
 
 ---
@@ -51,7 +51,7 @@ The shortest path from a long recording to a posted clip.
 ## What imagii does not do
 
 - **No game or desktop audio.** A recording takes your screen or window, and
-  your microphone and webcam if you tick them. Game and desktop sound are not
+  your microphone and webcam if you check them. Game and desktop sound are not
   captured.
 - **No face tracking.** Vertical reframing is a center crop: Left, Center, or
   Right. It does not follow faces or action.
@@ -90,7 +90,7 @@ controls:
   state of every studio at once. imagii also **autosaves** — if it finds a
   recent autosave on launch, it offers to pick up where you left off, and
   **Restore** takes you back to the studio you were in, with your selections
-  and the playhead where you left them. Choosing **Later** or **Discard**
+  and the playhead where you left them. Choosing **Later** or **Clear**
   starts a fresh session instead; nothing is restored unless you ask for it.
 
 ---
@@ -101,11 +101,11 @@ Capture your screen or a window to a single video file, with your microphone
 and webcam if you want them. Game and desktop sound are not captured.
 
 1. Click **Pick a screen or window** and choose a source.
-2. Under **Audio**, tick **Record microphone** if you want your voice.
-3. Under **Webcam**, tick **Include webcam in recording (picture-in-picture)**,
+2. Under **Audio**, check **Record microphone** if you want your voice.
+3. Under **Webcam**, check **Include webcam in recording (picture-in-picture)**,
    then pick the corner it sits in.
-4. Under **Output**, leave **Convert to MP4 after recording** ticked (slower,
-   better compatibility), or untick it for an instant WebM, which some apps do
+4. Under **Output**, leave **Convert to MP4 after recording** checked (slower,
+   better compatibility), or uncheck it for an instant WebM, which some apps do
    not accept.
 5. Click **Start recording**. Click **Stop** when you are done, then pick where
    to save. **Cancel** in the save dialog discards the take — the dialog's title
@@ -132,16 +132,19 @@ Drop a video in (or click **Choose file…**), then:
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
   **+ Add clip** adds another clip that spans the whole video; trim it with the
   handles. Each clip has its own name, crop, platforms and text.
-- **Crop** — tick **Crop** above the player and draw a box. Your crop becomes
+- **Crop** — check **Crop** above the player and draw a box. Your crop becomes
   the picture: each platform you export to takes a centered cut of it in that
   platform's own shape, so nothing is ever stretched. A tall crop on a wide
   platform (or the reverse) loses its edges, and the export tells you so before
-  it starts.
-- **Export** — tick the platforms you post to: **YouTube**, **Reels**,
+  it starts. **Crop guides**, beside the player, draws the 9:16, 1:1 and 4:5
+  shapes over the picture so you can see what each one keeps.
+- **Export** — check the platforms you post to: **YouTube**, **Reels**,
   **TikTok**, **X / Twitter**, and **Facebook**. Each shows a green, yellow, or
   red mark predicting how well your clip fits there. A red one says why —
   **Wrong shape** or **Too long** — and the reason is printed on the card. The
-  button says how many files it will write (**Export 3 files**).
+  button says how many files it will write (**Export 3 files**). Every export
+  is encoded at 30 fps (a custom preset uses its own frame rate), and each
+  platform's card shows its size and rate (**1920×1080 · 30 fps**).
   Add a **watermark** by typing your handle in the **Watermark** field and
   choosing a corner. Your handle and corner are saved when you export, and they
   fill in again next time. GIF, reframe, compilation and picture-in-picture
@@ -164,7 +167,9 @@ Drop a video in (or click **Choose file…**), then:
   the readout beside it says how tall the text comes out on a 1080p video.
   Captions need a one-time setup; see **Captions setup** below.
 - **Color & motion**, **Export as GIF**, **Compile clips**, and
-  **Picture-in-picture composite** are the other panels.
+  **Picture-in-picture composite** are the other panels. The player does not
+  show color changes — they appear in the exported file. **Compile clips** is
+  always there; with one clip it asks for a second.
 - **Cancel any long render.** Reframe, GIF, Compile, PiP, highlight scan, and
   caption burn-in all show a **Cancel** button next to the progress bar while
   they're running. Click it to abort cleanly — the background ffmpeg/whisper
@@ -179,13 +184,14 @@ Drop a video in (or click **Choose file…**), then:
   everything else in the project and names the missing file, so you can load
   it again in its studio.
 
-### Chat highlight reel
+### Chat spike finder
 
 Paste a Twitch chat log, one message per line in the form
-`[mm:ss] user: message`, and click **Find chat spikes**. imagii counts messages in short time
-buckets (the **Bucket sec** field) and lists the busiest moments with the
-messages in them. **+ clip** on a moment adds it as a clip named **Chat hype
-N**. Like the highlight finder, the first one you add replaces the untouched
+`[mm:ss] user: message`, and click **Find chat spikes**. imagii counts messages
+in short time windows (the **Spike window (s)** field) and lists the busiest
+moments with the messages in them. **+ Clip** on a moment adds it as a clip named
+**Chat spike N**, with **Extra seconds around each clip** on either side. Like
+the Smart highlight finder, the first one you add replaces the untouched
 whole-video **Clip 1**.
 
 ### Captions setup
@@ -196,7 +202,7 @@ downloads the English model for you, and that download goes online, once. Both
 steps are one-time:
 
 1. Get `whisper-cli.exe` from the whisper.cpp releases page, and put it at the
-   path the panel shows. The panel's **open folder** button opens that folder.
+   path the panel shows. The panel's **Open folder** button opens that folder.
    (The older name, `whisper.exe`, also works.) imagii does not download this
    file for you.
 2. Click **Download model (~141 MB)**. imagii downloads the English model and
@@ -219,14 +225,15 @@ The posting helpers sit at the bottom of Video Studio, in three parts:
 
 - **Title starters** — click **Title starters** for four title ideas built from
   a short list of patterns and verbs, such as *I clutched a boss fight so you
-  don't have to*. Each one has a **copy** button. The starters name no game;
+  don't have to*. Each one has a **Copy** button. The starters name no game;
   add yours yourself.
-- **Hashtag pack** — choose a pack (for example *twitch clip* or *tiktok
+- **Hashtag pack** — choose a pack (for example *Twitch clip* or *TikTok,
   general*) and copy its hashtags.
-- **Posting log** — type a clip name, tick the platforms you posted it to
+- **Posting log** — type a clip name, check the platforms you posted it to
   (YouTube, Reels, TikTok, X, Twitch, or Discord), add notes, and click
   **+ Log post**. Each entry has **views**, **likes**, and **comments** boxes you
-  fill in yourself. The log keeps the 100 most recent entries. It is saved with
+  fill in yourself, and a delete button that asks first. The log keeps the 100
+  most recent entries. It is saved with
   your settings, not in a project file.
 
 ---
@@ -243,7 +250,7 @@ Drop in audio, or any video, and imagii extracts its audio.
     for removing low rumble (below 80 Hz), **Hum removal**, and softer harsh
     's' sounds. Hum removal follows your power grid: 60 Hz in the US and Canada,
     50 Hz in most other regions. Pick yours in the **Power-line frequency**
-    list that appears when the box is ticked.
+    list that appears when the box is checked.
   - **Levels** — the compressor preset, **Even volume** with a loudness target
     (pick talking and podcasts at −16, or YouTube, Spotify, TikTok and Reels at
     −14), and manual gain. imagii measures the whole file first, so exports
@@ -278,10 +285,10 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    **hint — won't export** in the Layers panel: they show while you design and
    are left out of the file. Type your own words over a placeholder and they
    export.
-2. Edit with the toolbar: **Select**, **Rect**, **Ellipse**, and (under
+2. Edit with the toolbar: **Select**, **Rectangle**, **Ellipse**, and (under
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
-   and delete them. The **Properties** panel edits the selected layer.
+   and remove them. The **Properties** panel edits the selected layer.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
    design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
    of the file in pixels (it adds a note when a 16:9 export is bigger than

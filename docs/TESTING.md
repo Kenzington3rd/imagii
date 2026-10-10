@@ -59,7 +59,24 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 1955 tests across 95 files (round 55 added eleven files — `src/shared/audioPreset.test.ts`
+**Count.** 2113 tests across 99 files (round 56 added four files —
+`src/renderer/src/components/AppToaster.test.tsx`, which pins the toast card click-through (see
+the 2026-10-09 T-92 entry in `LESSONS_LEARNED.md`);
+`tests/unit/copyConventions.test.ts`, the T-92 copy scan: it parses every renderer
+source with the TypeScript parser, takes the strings a person reads (JSX text, copy
+attributes and properties, toast and `confirm` arguments, the strings a JSX
+expression chooses between — `tests/unit/renderedStrings.ts`, a helper, not a spec)
+and fails on a retired name, a `(s)` plural, an unspaced unit, a cut-short word, a
+lowercase button or panel header, a bare "Show" button, an "Esc" / "Done" dismiss
+button, a trailing period on a one-sentence result toast and the other rules in
+`docs/BRANDING_GUIDE.md` "Copy conventions"; it pins `countOf` at every site that once
+hand-wrote a plural, and its discrimination block runs the scanner over the copy that
+shipped (35 failures against HEAD before the sweep). `src/renderer/src/lib/savedToast.test.tsx`
+reads the element tree of a `toast.success` (the renderer has no DOM here) to prove an
+action toast lasts 8 s and names "Show in folder"; `src/shared/units.test.ts`, the fps
+formatter — and grew `highlights.test.ts` (the 0-100 score, old vs new),
+`customPresets.test.ts` (`normalizeBitrate` / `formatBitrate`), `presetTablesInSync.test.ts`
+(fps in both tables) and `interactionWiring.test.ts`; round 55 added eleven files — `src/shared/audioPreset.test.ts`
 and `PresetPanel.test.ts`, the T-90 old-shape preset fixture driven through the real
 store (the cut times an older build saved must not come back); `fixWizard.test.ts`, all
 18 answer combinations held to the patch the wizard applies; `src/shared/audio.test.ts`;
@@ -216,6 +233,23 @@ so these conventions are held by review and by the suite itself):
   under `<body>`, which meant a route change logged a studio's entire
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
+
+**Two house patterns from round 56** (T-92 needed a toast that outlives its default and a button
+whose end state is Explorer):
+
+- **Wait past the default to prove a duration.** `expectRevealToast` (video-pipelines.spec.ts)
+  finds "Show in folder" on a success toast, waits 3.5 s (react-hot-toast's success toast lasts 2 s)
+  and asserts the button is still there — the one place a fixed wait IS the assertion. It was
+  written red-first (`"Show" is still there 3.5 s later` against the old build).
+- **Stub the shell in MAIN and read what it was handed.** `tests/e2e/shellReveal.ts`
+  (`stubShellReveal` / `readRevealCalls`, shared by record.spec.ts, audio.spec.ts and
+  video-pipelines.spec.ts) replaces `shell.showItemInFolder` and records its argument, so every
+  "Show in folder" button is driven to its real end state — the exact file the job wrote — without
+  an Explorer window. `expectToastClickThrough` presses a point on a live toast's own padding and
+  reads where the click LANDED through a capture listener that swallows it, so the control beneath
+  can be proven to receive the click without being pressed. An accessible name or description is asserted with `toHaveAccessibleName` /
+  `toHaveAccessibleDescription`; a tile that holds a checkbox is found by that checkbox, not by its
+  text.
 
 **Two more house patterns from round 55** (T-91 needed a save that can be canceled, and
 T-90 a frequency a string test cannot vouch for):
