@@ -45,10 +45,12 @@ export function CompilationPanel(): JSX.Element | null {
         jobId,
         sourcePath: source.filePath,
         outDir: dir,
+        // T-96: each clip keeps the crop the user drew for it.
         segments: clips.map((c) => ({
           startSec: c.startSec,
           endSec: c.endSec,
-          name: c.name
+          name: c.name,
+          cropRect: c.cropRect
         })),
         fadeMs,
         width: targetW,

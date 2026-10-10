@@ -3,18 +3,45 @@ import { writeFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { ffmpegPath } from './paths'
-import { even } from './filters'
+import { cropToFrame, even, type SourceDimensions } from './filters'
+import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { assertDefined } from '../../shared/assert'
+import type { CropRect } from '../../shared/clip'
 
 export interface ConcatJobSpec {
   jobId: string
   sourcePath: string
   outDir: string
-  segments: Array<{ startSec: number; endSec: number; name: string }>
+  /** `cropRect` is the clip's manual crop (T-96): each segment is cut from it
+   *  exactly as a platform export is, then scaled to the compilation's size. */
+  segments: Array<{ startSec: number; endSec: number; name: string; cropRect?: CropRect | null }>
   fadeMs: number
   width: number
   height: number
+}
+
+/**
+ * The video filter that makes ONE compilation segment (T-96): the clip's crop
+ * and a centered cut of it to the compilation's shape (`cropToFrame`, the
+ * chain a platform export uses — the crop is the new frame, T-83), then the
+ * scale that normalizes every segment to the same size so the stream-copy join
+ * below sees identical streams. Without the cut, `scale` forces the
+ * compilation's exact WxH on whatever shape the segment has: a 9:16 crop would
+ * come out three times too wide, and so did any source that was not 16:9
+ * before this (a 4:3 recording was stretched 1.33x).
+ */
+export function buildSegmentFilter(
+  cropRect: CropRect | null | undefined,
+  source: SourceDimensions,
+  width: number,
+  height: number
+): string {
+  // M4 fix (round 15): even W/H so libx264 doesn't reject the encode.
+  // The IPC validator already enforces 16..16384 but doesn't snap to even.
+  const w = even(width)
+  const h = even(height)
+  return [...cropToFrame(cropRect, source, w / h), `scale=${w}:${h}:flags=lanczos,setsar=1`].join(',')
 }
 
 // M3 fix (round 15): register every spawn so a renderer-initiated cancel or
@@ -59,6 +86,10 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
   const fade = Math.max(0, Math.min(2, spec.fadeMs / 1000))
 
   try {
+  // The crop is a fraction of the frame, so the frame's pixels are needed once
+  // for every segment (main reads them, as a platform export does).
+  const probe = await probeVideo(spec.sourcePath)
+  const source = { width: probe.width, height: probe.height }
   const segCount = spec.segments.length
   for (let i = 0; i < segCount; i++) {
     const seg = assertDefined(spec.segments[i], `segments[${i}]`)
@@ -72,10 +103,8 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     const dur = Math.max(0.1, seg.endSec - seg.startSec)
     const fadeIn = i === 0 ? 0 : fade
     const fadeOut = i === segCount - 1 ? 0 : fade
-    // M4 fix (round 15): even W/H so libx264 doesn't reject the encode.
-    // The IPC validator already enforces 16..16384 but doesn't snap to even.
     const filters: string[] = [
-      `scale=${even(spec.width)}:${even(spec.height)}:flags=lanczos,setsar=1`
+      buildSegmentFilter(seg.cropRect, source, spec.width, spec.height)
     ]
     if (fadeIn > 0) filters.push(`fade=t=in:st=0:d=${fadeIn}`)
     if (fadeOut > 0)

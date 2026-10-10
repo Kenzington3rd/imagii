@@ -342,14 +342,6 @@ export function ExportPanel(): JSX.Element | null {
 
   const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
 
-  // T-83: the indicator judges the shape the export STARTS from, and for a
-  // cropped clip that is the crop — the pipeline cuts each platform's shape
-  // out of it. `null` means "no manual crop, use the source's own aspect".
-  const cropFrame = selectedClip?.cropRect
-    ? cropFrameSize(source.probe.width, source.probe.height, selectedClip.cropRect)
-    : null
-  const cropAspect = cropFrame ? cropFrame.w / cropFrame.h : null
-
   return (
     <>
     <SafeZoneWarningModal
@@ -489,7 +481,6 @@ export function ExportPanel(): JSX.Element | null {
             const checked = target.custom
               ? (selectedClip.customPresetIds ?? []).includes(target.key)
               : selectedClip.selectedPresets.includes(target.info.id)
-            const clipDuration = selectedClip.endSec - selectedClip.startSec
             const detailId = `export-target-${target.key}-detail`
             return (
               // T-92: the label wraps the checkbox and the platform's NAME and
@@ -537,12 +528,15 @@ export function ExportPanel(): JSX.Element | null {
                     {target.info.width}×{target.info.height} · {target.info.fps} fps
                   </div>
                   <div className="mt-1">
+                    {/* T-83 / T-97: the verdict is about the clip as it will be
+                        exported — its crop is the frame, its speed sets the
+                        length — so it gets the clip, not numbers read off the
+                        source. */}
                     <SuccessIndicator
                       platform={target.info}
-                      clipDuration={clipDuration}
+                      clip={selectedClip}
                       sourceWidth={source.probe.width}
                       sourceHeight={source.probe.height}
-                      cropAspect={cropAspect}
                     />
                   </div>
                 </div>

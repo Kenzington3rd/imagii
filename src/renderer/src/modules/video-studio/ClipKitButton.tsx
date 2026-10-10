@@ -5,7 +5,7 @@ import path from 'path-browserify'
 import type { Clip } from '@shared/clip'
 import { sanitizeFilename } from '@shared/filename'
 import { buildWatermark } from '@shared/watermark'
-import { ALL_PLATFORM_IDS, type PlatformInfo } from './presets'
+import { ALL_PLATFORM_IDS, outputDurationSec, type PlatformInfo } from './presets'
 import {
   buildKitQueue,
   describeKitLimit,
@@ -50,14 +50,18 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
   if (!source) return null
 
+  // Source seconds: where the three thumbnails are taken from.
   const clipDuration = Math.max(0.1, clip.endSec - clip.startSec)
+  // Output seconds (T-97): how long the files the kit writes will run, which
+  // is what a platform's limit is about and what the question below quotes.
+  const outputSec = outputDurationSec(clip)
 
   function startKit(): void {
     if (!source) return
     // The effective set, not the five names: a vertical source's YouTube slot
     // is exported as Reels geometry (INIT-B), so Reels is asked about once.
     const over = platformsOverLimit(
-      clipDuration,
+      clip,
       kitEffectivePresets({
         filePath: source.filePath,
         width: source.probe.width,
@@ -208,7 +212,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           <h2 className="text-lg font-semibold">This clip is long for some platforms</h2>
         </div>
         <p className="text-sm text-ink-base mb-3">
-          This clip is {formatClipLength(clipDuration)}. It is longer than the typical limit for:
+          This clip is {formatClipLength(outputSec)}. It is longer than the typical limit for:
         </p>
         <ul className="bg-bg-hover rounded p-2 text-xs flex flex-col gap-1.5 mb-4">
           {(pendingOver ?? []).map((info) => (

@@ -50,7 +50,9 @@ export function GifPanel(): JSX.Element | null {
         endSec: clip.endSec,
         width,
         fps,
-        speed
+        speed,
+        // T-96: the GIF is made from the crop the user drew for this clip.
+        cropRect: clip.cropRect
       })
       toastSaved('Saved the GIF', result.outputPath)
     } catch (err) {

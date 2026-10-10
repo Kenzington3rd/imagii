@@ -6,7 +6,8 @@ import {
   assertEnum,
   assertPlainObject,
   assertArray,
-  assertOptionalTimeRange
+  assertOptionalTimeRange,
+  assertOptionalCropRect
 } from './validators'
 
 describe('assertNonEmptyString', () => {
@@ -110,5 +111,57 @@ describe('assertOptionalTimeRange (captions:burnIn range, T-81)', () => {
   })
   it('requires a validator name', () => {
     expect(() => assertOptionalTimeRange(0, 1, '')).toThrow(/name required/)
+  })
+})
+
+describe('assertOptionalCropRect (compile + GIF crop payload, T-96)', () => {
+  const rect = { x: 0.25, y: 0.1, w: 0.5, h: 0.8 }
+
+  it('accepts no crop: null (the clip has none) or undefined (an older caller)', () => {
+    expect(() => assertOptionalCropRect(null, 'crop')).not.toThrow()
+    expect(() => assertOptionalCropRect(undefined, 'crop')).not.toThrow()
+  })
+
+  it('accepts a crop the editor can draw, including the whole frame and one at an edge', () => {
+    expect(() => assertOptionalCropRect(rect, 'crop')).not.toThrow()
+    expect(() => assertOptionalCropRect({ x: 0, y: 0, w: 1, h: 1 }, 'crop')).not.toThrow()
+    expect(() => assertOptionalCropRect({ x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, 'crop')).not.toThrow()
+    // The 9:16 preset button's rect for a 16:9 source (CropOverlay).
+    expect(() =>
+      assertOptionalCropRect({ x: 0.3575, y: 0.05, w: 0.285, h: 0.9 }, 'crop')
+    ).not.toThrow()
+  })
+
+  it('allows the rounding hair a browser puts on a crop dragged to the edge, and no more', () => {
+    expect(() => assertOptionalCropRect({ x: 0.2, y: 0, w: 0.8004, h: 1.0004 }, 'crop')).not.toThrow()
+    expect(() => assertOptionalCropRect({ x: 0, y: 0, w: 1.02, h: 1 }, 'crop')).toThrow(/crop\.w/)
+    expect(() => assertOptionalCropRect({ x: 0.5, y: 0, w: 0.7, h: 1 }, 'crop')).toThrow(/right edge/)
+    expect(() => assertOptionalCropRect({ x: 0, y: 0.6, w: 1, h: 0.6 }, 'crop')).toThrow(/bottom edge/)
+  })
+
+  it('refuses a rectangle with no area, or an origin outside the frame', () => {
+    expect(() => assertOptionalCropRect({ ...rect, w: 0 }, 'crop')).toThrow(/crop\.w/)
+    expect(() => assertOptionalCropRect({ ...rect, h: -0.1 }, 'crop')).toThrow(/crop\.h/)
+    expect(() => assertOptionalCropRect({ ...rect, x: -0.01 }, 'crop')).toThrow(/crop\.x/)
+    expect(() => assertOptionalCropRect({ ...rect, y: 1.5 }, 'crop')).toThrow(/crop\.y/)
+  })
+
+  it('refuses what is not a number: strings, NaN, Infinity, a missing field', () => {
+    expect(() => assertOptionalCropRect({ ...rect, x: '0.25' }, 'crop')).toThrow(/crop\.x/)
+    expect(() => assertOptionalCropRect({ ...rect, w: NaN }, 'crop')).toThrow(/crop\.w/)
+    expect(() => assertOptionalCropRect({ ...rect, h: Infinity }, 'crop')).toThrow(/crop\.h/)
+    expect(() => assertOptionalCropRect({ x: 0, y: 0, w: 0.5 }, 'crop')).toThrow(/crop\.h/)
+  })
+
+  it('refuses a crop that is not a plain object, naming it', () => {
+    expect(() => assertOptionalCropRect('0,0,1,1', 'segments[2].cropRect')).toThrow(
+      /segments\[2\]\.cropRect must be a plain object/
+    )
+    expect(() => assertOptionalCropRect([0, 0, 1, 1], 'crop')).toThrow(/plain object/)
+    expect(() => assertOptionalCropRect(7, 'crop')).toThrow(/plain object/)
+  })
+
+  it('requires a validator name', () => {
+    expect(() => assertOptionalCropRect(rect, '')).toThrow(/name required/)
   })
 })

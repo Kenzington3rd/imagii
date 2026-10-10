@@ -1,11 +1,13 @@
-import { evaluateSuccess, type PlatformInfo } from './presets'
+import { evaluateSuccess, type JudgedClip, type PlatformInfo } from './presets'
 
 interface SuccessIndicatorProps {
   platform: PlatformInfo
-  clipDuration: number
+  /** The clip itself (T-97): its crop, its speed and its range are what the
+   *  verdict is about, so the verdict reads them rather than being handed
+   *  the source's size or the source's seconds. */
+  clip: JudgedClip
   sourceWidth: number
   sourceHeight: number
-  cropAspect: number | null
 }
 
 const COLORS: Record<'green' | 'yellow' | 'red', string> = {
@@ -23,10 +25,9 @@ const TEXTS: Record<'green' | 'yellow' | 'red', string> = {
 export function SuccessIndicator(props: SuccessIndicatorProps): JSX.Element {
   const { level, label, reasons } = evaluateSuccess(
     props.platform,
-    props.clipDuration,
+    props.clip,
     props.sourceWidth,
-    props.sourceHeight,
-    props.cropAspect
+    props.sourceHeight
   )
   // T-83: the reasons are ON the card, under the label, for anything that is
   // not green. They used to live in a `title` — hover-only, so a red "Trim"

@@ -1779,7 +1779,7 @@ IMG-PREC.
   through the same crop-is-the-new-frame chain T-83 built (one
   implementation — extend, don't copy); Layer 5 case each
   (red-first); existing concat/GIF coverage green; LESSONS entry.
-- **Status:** open
+- **Status:** done (round 57 — see Done)
 
 ## T-97 — the export grid can say "Great" while upscaling a small crop
 
@@ -1797,7 +1797,7 @@ IMG-PREC.
   ("smaller than this output — it will be scaled up and look soft");
   unit cases in presets.test.ts both ways; the grid E2E extended
   with a small-crop row; existing grid coverage green.
-- **Status:** open
+- **Status:** done (round 57 — see Done)
 
 ## T-98 — Cancel is not a latch: clicked between jobs, it cancels nothing
 
@@ -1810,7 +1810,10 @@ IMG-PREC.
   lands.
 - **Acceptance criteria:** cancellation latches per batch/kit: jobs
   not yet started don't start, frame extracts are cancellable, and
-  the T-84 sentinel flows from the latch too; E2E lands a cancel in
+  the T-84 sentinel flows from the latch too; a cancel landing
+  BEFORE a runner's child spawns (the probe phase — round-57 note:
+  Compile and cropped GIF probe first, as do platform export and
+  Reframe) also latches; E2E lands a cancel in
   the between-jobs gap deterministically and asserts nothing more is
   written; existing cancel coverage green; LESSONS entry.
 - **Status:** open
@@ -1928,9 +1931,83 @@ IMG-PREC.
   files excluded); existing visual coverage green.
 - **Status:** open
 
+## T-105 — Compile and GIF run a different recipe than the clip the user built
+
+- **Spec:** round-57 worker finding, the wrong-file class. Compile
+  ignores a clip's speed, color grade, text overlays, auto zoom and
+  hype shake (a 2x clip compiles at 1x, audio included) — the crop
+  now carries (T-96) but nothing else does; the GIF panel's "over
+  about 10 s" warning reads source seconds and ignores its own
+  speed select (the T-97 shape); the speed normalization exists in
+  four copies (runExportJob x2, buildVideoFilter, outputDurationSec)
+  — extract one `clipSpeed` as part of this; the Compile card has
+  no verdict row telling the user what a crop loses.
+- **Acceptance criteria:** a compiled segment carries the clip's
+  full recipe through the same builders the platform export uses
+  (one implementation; the audio side included for speed); the GIF
+  warning reads output seconds; `clipSpeed` is the one speed read;
+  Layer 5 red-first per carried stage (speed at minimum; grade/
+  overlays as the builders allow); the Compile card shows a verdict
+  line consistent with the grid's; existing coverage green; LESSONS
+  entry.
+- **Status:** open
+
+## T-106 — export outputs can silently overwrite each other, and one boundary is unvalidated
+
+- **Spec:** round-57 worker finding. `<source>_<w>px_<fps>fps.gif`
+  and `<source>_compilation.mp4` are fixed names — the next job with
+  the same settings silently overwrites the last; and
+  `video:exportBatch` does not validate `clip.cropRect` at the IPC
+  boundary (`assertOptionalCropRect` exists and is applied to the
+  two new payloads only; a hand-edited project file reaches ffmpeg
+  unchecked).
+- **Acceptance criteria:** outputs never silently overwrite (a
+  numbered suffix or a timestamp — follow whatever the platform
+  export already does for collisions, or document that it has the
+  same gap and fix both); exportBatch validates cropRect with the
+  shared validator (note: this changes what a hand-edited project
+  export does — the refusal must speak the T-84 voice); unit + E2E
+  per the standing bar; LESSONS entry.
+- **Status:** open
+
 ---
 
 ## Done
+
+Round 57 — content fix wave batch 10: T-96 + T-97, the last of the
+review's wrong-file class. T-96: the crop stage extracted byte for
+byte from buildVideoFilter into `cropToFrame(crop, source,
+targetAspect)` — one implementation, three callers. Compile
+segments carry the clip's crop, then a centered cut to the
+compilation's 16:9, then the normalizing scale (the worker's
+correct veto of my "keep the mixed-sizes mechanism" direction: that
+mechanism WAS the stretch, and an uncropped non-16:9 source now
+center-cuts instead of stretching — T-83's rule extended to its
+last holdout, flagged and accepted). GIFs keep the shape the user
+drew (null aspect skips the cut; height follows width). Both IPC
+payloads carry the rect, validated by the repo's first rect
+validator (with a 1% edge tolerance for Rnd's whole-pixel
+rounding). Layer 5 proves exclusion: a red marker the crop excludes
+yields zero red pixels in the compiled and GIF'd outputs
+(red-first: 17956 and 1154 leaked pixels at HEAD). T-97: verdicts
+take the CLIP — `evaluateSuccess` and `platformsOverLimit` share
+`outputDurationSec` (speed-divided) and `cropFrameSize`, so the
+grid and the kit cannot disagree; a small crop reads "The picture
+is smaller than this output — it will be scaled up and look soft";
+a 2x clip is judged at its real output length (red-first: TikTok
+never reached "Great" at 2x on HEAD, and the kit raised its modal
+for a file that fit). Expedite: verify 2177/2177 (102 files), build
+clean, test:media 101/101 (+6 gates; mandatory), full Playwright
+173/173; worker's six mutations reviewed (incl. the narrow redo of
+an over-broad one — the discipline holding), one independent
+expediter mutation at the untouched null-aspect seam (the skip
+removed -> 5 named reds across gif/filters pins, concat rightly
+green — per-caller semantics proven; byte-identical restore ->
+45/45). Worker findings filed: T-105 (Compile ignores
+speed/grade/overlays — the recipe class continues; GIF's 10 s
+warning; the four speed copies; a Compile verdict row) and T-106
+(fixed output names silently overwrite; exportBatch's unvalidated
+cropRect boundary); the probe-phase cancel gap amended into T-98.
 
 Round 56 — content fix wave batch 9: T-92, the terminology sweep,
 plus a latent click-eater fixed at its root. BRANDING_GUIDE now has

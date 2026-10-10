@@ -285,6 +285,38 @@ async function countTintedPixels(
 }
 
 /**
+ * Bounding box of the bright (> 128 luma) region of the WHOLE frame of `file`
+ * at `timeSec` (`width` x `height` is the frame's known size, so a short read
+ * fails loudly instead of measuring a different picture). The marker fixtures
+ * (T-83, T-96) are black frames carrying a white square; a square that comes
+ * out non-square was resampled by different factors on its two axes.
+ */
+async function brightBox(
+  file: string,
+  timeSec: number,
+  width: number,
+  height: number
+): Promise<{ w: number; h: number; cx: number; cy: number }> {
+  const buf = await samplePixels(file, timeSec, 'null', 'gray')
+  expect(buf.length, 'the whole output frame was decoded').toBe(width * height)
+  let minX = width
+  let maxX = -1
+  let minY = height
+  let maxY = -1
+  for (let i = 0; i < buf.length; i++) {
+    if ((buf[i] ?? 0) <= 128) continue
+    const x = i % width
+    const y = (i - x) / width
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  expect(maxX, 'a bright marker exists in the output at all').toBeGreaterThan(-1)
+  return { w: maxX - minX + 1, h: maxY - minY + 1, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 }
+}
+
+/**
  * Every filter name compiled into the bundled ffmpeg, parsed out of the
  * `-filters` table (`flags name in->out description`). Asking the binary
  * what it can do is the only way to tell a per-platform capability gap from
@@ -747,34 +779,8 @@ describe('manual crop exported to a mismatched preset (real ffmpeg, T-83)', () =
   }, 60_000)
 
   /** Bounding box of the bright (> 128 luma) region of the output's frame at 0.5 s. */
-  async function markerBox(
-    file: string,
-    width: number,
-    height: number
-  ): Promise<{ w: number; h: number; cx: number; cy: number }> {
-    const buf = await samplePixels(file, 0.5, 'null', 'gray')
-    expect(buf.length, 'the whole output frame was decoded').toBe(width * height)
-    let minX = width
-    let maxX = -1
-    let minY = height
-    let maxY = -1
-    for (let i = 0; i < buf.length; i++) {
-      if ((buf[i] ?? 0) <= 128) continue
-      const x = i % width
-      const y = (i - x) / width
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-    }
-    expect(maxX, 'a bright marker exists in the output at all').toBeGreaterThan(-1)
-    return {
-      w: maxX - minX + 1,
-      h: maxY - minY + 1,
-      cx: (minX + maxX) / 2,
-      cy: (minY + maxY) / 2
-    }
-  }
+  const markerBox = (file: string, width: number, height: number) =>
+    brightBox(file, 0.5, width, height)
 
   const CASES: ReadonlyArray<{
     label: string
@@ -877,6 +883,209 @@ describe('manual crop exported to a mismatched preset (real ffmpeg, T-83)', () =
       // A centered sub-crop of a crop centered on the marker keeps it central.
       expect(Math.abs(box.cx - target.width / 2), 'marker horizontal offset from centre').toBeLessThan(8)
       expect(Math.abs(box.cy - target.height / 2), 'marker vertical offset from centre').toBeLessThan(8)
+    },
+    120_000
+  )
+})
+
+/**
+ * T-96 — a clip cropped in the editor is cropped in the compilation and the GIF.
+ *
+ * Compile and GIF export took only a clip's start and end, so a clip the user
+ * cropped to 9:16 for a vertical post came out at the full frame in both,
+ * silently: the file opened, played and was the size it was asked to be. T-83
+ * made the crop the frame an export starts from; these two runners now take the
+ * crop through that same chain (`cropToFrame`, filters.ts).
+ *
+ * The fixture is a black 1920x1080 frame carrying a RED block that every crop
+ * below excludes (x 100-300, y 100-300; the crops all start at x >= 480) and a
+ * white SQUARE at the centre of every crop. "Honored" is therefore three
+ * pixel facts, none of which reads a filter string: the red is gone (its
+ * colour is not in the output at all), the white square is still SQUARE (a crop
+ * that was stretched to fit would not be), and it has the hand-derived size
+ * (the crop's full width, or the crop's shape, mapped onto the output). Each
+ * case carries its control — the same source uncropped, where the red block IS
+ * in the output — so a test that passes because the red was never visible
+ * cannot.
+ */
+describe('a cropped clip compiled or GIF\'d keeps its crop (real ffmpeg, T-96)', () => {
+  const MARKER = 160
+  let src = '' // 1920x1080, 4 s: red block top-left, white MARKER square at the centre
+  let fourThreeSrc = '' // 640x480, 3 s: white 120 px square at the centre
+
+  const px = (pixels: number, of: number): number => (pixels + 0.25) / of
+  const cropOf = (x: number, y: number, w: number, h: number, srcW = 1920, srcH = 1080) => ({
+    x: px(x, srcW),
+    y: px(y, srcH),
+    w: px(w, srcW),
+    h: px(h, srcH)
+  })
+  /** Pixels strongly red — R more than 60 levels above both G and B. */
+  const redPixels = (file: string, timeSec: number): Promise<number> =>
+    countTintedPixels(file, timeSec, 'null', 0)
+
+  beforeAll(async () => {
+    src = path.join(workDir, 't96-marker.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi',
+      '-i',
+      `color=c=black:s=1920x1080:r=30:d=4,drawbox=x=100:y=100:w=200:h=200:color=red:t=fill,drawbox=x=880:y=460:w=${MARKER}:h=${MARKER}:color=white:t=fill`,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', src
+    ])
+    fourThreeSrc = path.join(workDir, 't96-four-three.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi',
+      '-i', 'color=c=black:s=640x480:r=30:d=3,drawbox=x=260:y=180:w=120:h=120:color=white:t=fill',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', fourThreeSrc
+    ])
+  }, 60_000)
+
+  // A crop centered on the marker, in source pixels, and what the marker
+  // becomes in a 1280x720 compilation: the user's crop, cut to the
+  // compilation's 16:9 (T-83's second stage), scaled to 1280 wide.
+  const COMPILE_CASES: ReadonlyArray<{
+    label: string
+    crop: [number, number, number, number]
+    /** Hand-derived: the cut's full width maps onto 1280 px. */
+    expectedMarker: number
+  }> = [
+    // 4:3 crop -> cut to its widest 16:9 (960 x 540) -> 960 px onto 1280.
+    { label: '4:3 crop', crop: [480, 180, 960, 720], expectedMarker: (MARKER * 1280) / 960 },
+    // 9:16 crop -> cut to a 540 x 304 strip -> 540 px onto 1280.
+    { label: '9:16 crop', crop: [690, 60, 540, 960], expectedMarker: (MARKER * 1280) / 540 },
+    // The control for the chain's second stage: already 16:9, so it is only scaled.
+    {
+      label: '16:9 crop (the shape already matches)',
+      crop: [480, 270, 960, 540],
+      expectedMarker: (MARKER * 1280) / 960
+    }
+  ]
+
+  it.each(COMPILE_CASES)(
+    'compile: a $label segment leaves the red block out and stays square; the uncropped segment beside it keeps both',
+    async ({ crop, expectedMarker }) => {
+      const { outputPath } = await runConcat({
+        jobId: `t96-compile-${crop[2]}x${crop[3]}`,
+        sourcePath: src,
+        outDir: workDir,
+        segments: [
+          { startSec: 0, endSec: 1.5, name: 'cropped', cropRect: cropOf(...crop) },
+          { startSec: 2, endSec: 3.5, name: 'whole' }
+        ],
+        fadeMs: 0,
+        width: 1280,
+        height: 720
+      })
+      const info = await ffprobeJson(outputPath)
+      const v = info.streams.find((s) => s.codec_type === 'video')
+      expect([v?.width, v?.height]).toEqual([1280, 720])
+      expect(v?.sample_aspect_ratio).toBe('1:1')
+
+      // Segment 1 (output 0-1.5 s): cropped. The red is not in the frame at all.
+      const croppedRed = await redPixels(outputPath, 0.5)
+      expect(croppedRed, `the crop excludes the red block, but ${croppedRed} red pixels came out`).toBe(0)
+      const box = await brightBox(outputPath, 0.5, 1280, 720)
+      const message = `marker came out ${box.w}x${box.h} (expected a ${Math.round(expectedMarker)}px square)`
+      expect(box.w / box.h, message).toBeGreaterThan(0.97)
+      expect(box.w / box.h, message).toBeLessThan(1.03)
+      expect(box.w, message).toBeGreaterThan(expectedMarker * 0.97)
+      expect(box.w, message).toBeLessThan(expectedMarker * 1.03)
+      expect(Math.abs(box.cx - 640), 'marker horizontal offset from centre').toBeLessThan(8)
+      expect(Math.abs(box.cy - 360), 'marker vertical offset from centre').toBeLessThan(8)
+
+      // Segment 2 (output 1.5-3 s): no crop, so the whole frame, red block
+      // included — the control that makes the absence above mean something.
+      const wholeRed = await redPixels(outputPath, 2.5)
+      expect(wholeRed, 'the uncropped segment still has its red block').toBeGreaterThan(5000)
+      const whole = await brightBox(outputPath, 2.5, 1280, 720)
+      expect(whole.w / whole.h).toBeGreaterThan(0.97)
+      expect(whole.w / whole.h).toBeLessThan(1.03)
+      expect(whole.w).toBeGreaterThan(((MARKER * 1280) / 1920) * 0.97)
+      expect(whole.w).toBeLessThan(((MARKER * 1280) / 1920) * 1.03)
+    },
+    120_000
+  )
+
+  it('compile: a segment that is not 16:9 and has no crop is cut to the compilation\'s shape, not stretched', async () => {
+    // The same chain with the whole source as the frame (T-83's no-crop path):
+    // 640x480 is cut to its widest 16:9 (640 x 360) and doubled. A plain
+    // `scale=1280:720` — what this runner did — made the 120 px square
+    // 240 wide by 180 tall.
+    const { outputPath } = await runConcat({
+      jobId: 't96-compile-uncropped-43',
+      sourcePath: fourThreeSrc,
+      outDir: workDir,
+      segments: [{ startSec: 0, endSec: 2, name: 'whole' }],
+      fadeMs: 0,
+      width: 1280,
+      height: 720
+    })
+    const box = await brightBox(outputPath, 0.5, 1280, 720)
+    const message = `marker came out ${box.w}x${box.h} (expected a 240px square)`
+    expect(box.w / box.h, message).toBeGreaterThan(0.97)
+    expect(box.w / box.h, message).toBeLessThan(1.03)
+    expect(box.w, message).toBeGreaterThan(240 * 0.97)
+    expect(box.w, message).toBeLessThan(240 * 1.03)
+  }, 120_000)
+
+  // The GIF keeps the crop's own shape: there is no preset to cut it to, so the
+  // chain stops after the user's crop and `scale=<width>:-1` sizes it.
+  const GIF_CASES: ReadonlyArray<{
+    label: string
+    crop: [number, number, number, number]
+    /** The crop's shape at the requested 320 px width. */
+    size: [number, number]
+  }> = [
+    { label: '4:3 crop', crop: [480, 180, 960, 720], size: [320, 240] },
+    { label: '9:16 crop', crop: [690, 60, 540, 960], size: [320, 569] }
+  ]
+
+  it.each(GIF_CASES)(
+    'gif: a $label comes out in the crop\'s shape without the red block, and the uncropped GIF beside it keeps both',
+    async ({ crop, size }) => {
+      const cropped = await runGifExport({
+        jobId: `t96-gif-${crop[2]}x${crop[3]}`,
+        sourcePath: src,
+        outDir: workDir,
+        startSec: 0,
+        endSec: 2,
+        width: 320,
+        fps: 10,
+        speed: 1,
+        cropRect: cropOf(...crop)
+      })
+      // The headline first: the red block the crop excludes is not in the GIF.
+      const croppedRed = await redPixels(cropped.outputPath, 0.3)
+      expect(croppedRed, `the crop excludes the red block, but ${croppedRed} red pixels came out`).toBe(0)
+      const v = (await ffprobeJson(cropped.outputPath)).streams.find((s) => s.codec_type === 'video')
+      expect(v?.codec_name).toBe('gif')
+      expect(v?.width).toBe(size[0])
+      expect(Math.abs((v?.height ?? 0) - size[1])).toBeLessThanOrEqual(1)
+      // The marker is the crop's full width mapped onto 320 px: still square.
+      const expected = (MARKER * 320) / crop[2]
+      const box = await brightBox(cropped.outputPath, 0.3, size[0], v?.height ?? 0)
+      const message = `marker came out ${box.w}x${box.h} (expected a ${Math.round(expected)}px square)`
+      expect(box.w / box.h, message).toBeGreaterThan(0.94)
+      expect(box.w / box.h, message).toBeLessThan(1.06)
+      expect(box.w, message).toBeGreaterThan(expected * 0.94)
+      expect(box.w, message).toBeLessThan(expected * 1.06)
+
+      // The control: the same call with no crop is the whole frame.
+      const whole = await runGifExport({
+        jobId: `t96-gif-whole-${crop[2]}x${crop[3]}`,
+        sourcePath: src,
+        outDir: workDir,
+        startSec: 0,
+        endSec: 2,
+        width: 320,
+        fps: 10,
+        speed: 1
+      })
+      const wv = (await ffprobeJson(whole.outputPath)).streams.find((s) => s.codec_type === 'video')
+      expect([wv?.width, wv?.height]).toEqual([320, 180])
+      expect(await redPixels(whole.outputPath, 0.3), 'the uncropped GIF still has its red block').toBeGreaterThan(300)
     },
     120_000
   )

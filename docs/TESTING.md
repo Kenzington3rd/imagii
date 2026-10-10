@@ -59,7 +59,15 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 2113 tests across 99 files (round 56 added four files —
+**Count.** 2177 tests across 102 files (round 57 added three files —
+`src/main/ipc/videoCropPayload.test.ts`, the IPC gate on the crop that Compile and GIF now carry
+(both handlers driven through a captured `ipcMain.handle` with the runners mocked: ten malformed
+crops refused before ffmpeg is spawned, a good one handed through untouched), and
+`src/main/ffmpeg/concat.test.ts` / `gif.test.ts`, the pure per-segment and GIF filter builders —
+and grew `filters.test.ts` (`cropToFrame`, the one crop chain three runners share),
+`validators.test.ts` (`assertOptionalCropRect`), and `presets.test.ts` / `clipKit.test.ts`, whose
+verdicts now take the clip: the size check against the crop's frame, and every length at the clip's
+speed (T-96, T-97); round 56 added four files —
 `src/renderer/src/components/AppToaster.test.tsx`, which pins the toast card click-through (see
 the 2026-10-09 T-92 entry in `LESSONS_LEARNED.md`);
 `tests/unit/copyConventions.test.ts`, the T-92 copy scan: it parses every renderer
@@ -234,6 +242,16 @@ so these conventions are held by review and by the suite itself):
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
 
+**One house pattern from round 57** (T-96 needed an end state no filename shows):
+
+- **Decode the output and count a colour.** `video-pipelines.spec.ts`'s `redPixelCount(file, t)`
+  has the bundled ffmpeg write one frame of a GIF or MP4 as raw `rgb24` and counts the strongly red
+  pixels. A source with a red block the drawn crop excludes turns "did the crop reach the GIF /
+  the compilation" into `0` versus `> 5000`, and the same run's other half (an uncropped clip, or the
+  crop cleared) is the control. It was written red-first against the HEAD build
+  (`Received: 58549` red pixels in the cropped half of a compilation). Layer 5 asserts the same facts
+  with a square marker; the E2E version proves the control the person actually pressed reached them.
+
 **Two house patterns from round 56** (T-92 needed a toast that outlives its default and a button
 whose end state is Explorer):
 
@@ -384,6 +402,17 @@ flat, so "is a caption painted at this instant" is a luma-spread read of
 0 vs > 100) and the ramp (every frame's luma is 12 x its own source
 second, plus one loud audio burst, so "which part of the source is under
 this sound" is arithmetic). Cut at an offset, never from 0.
+
+**Assert what an output LEFT OUT, with the control beside it (T-96).** Round 57's
+Compile and GIF both ignored a clip's crop and produced a file that was the right size,
+length and codec, so none of the dimension or duration checks that were already there could
+see it. The fixture carries a RED block that every crop excludes and a white square at every
+crop's centre; the output is decoded and three pixel facts are read (no red at all, a square
+marker, the hand-derived size), and the same call UNcropped sits beside it in the same test
+and must still contain the red. A test that asserts only the absence passes when the marker was
+never visible. When several runners share one rule (`cropToFrame` has three callers) mutate
+each path alone: dropping the stage from Compile alone must fail the Compile cases and leave
+the GIF ones green, and the reverse.
 
 **A stretch passes every container check — measure a shape whose truth you
 know.** Round 50's T-83 shipped a manual crop squeezed 2-3x on one axis

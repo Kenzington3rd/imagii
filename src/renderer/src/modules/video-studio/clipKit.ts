@@ -1,5 +1,11 @@
 import type { Clip, ExportJobSpec, PlatformId, WatermarkSpec } from '@shared/clip'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO, spanAdjective, type PlatformInfo } from './presets'
+import {
+  ALL_PLATFORM_IDS,
+  PLATFORM_INFO,
+  outputDurationSec,
+  spanAdjective,
+  type PlatformInfo
+} from './presets'
 
 /**
  * The pure half of Clip Kit: what it queues, and what it warns about first.
@@ -69,15 +75,21 @@ export function buildKitQueue(args: {
 }
 
 /**
- * T-85 — the kit's one question. Which of the kit's platforms does a clip of
- * `durationSec` run past the TYPICAL upload limit of?
+ * T-85 — the kit's one question. Which of the kit's platforms does `clip` run
+ * past the TYPICAL upload limit of?
  *
- * The same limits, and the same word, the export grid already uses for its red
- * "Too long" (`evaluateSuccess`, T-83): an account's real cap depends on the
- * account, so this is advice, never "will be rejected". Deduplicated, because a
- * vertical source's YouTube slot IS the Reels preset.
+ * The same limits, the same word, AND the same length the export grid uses for
+ * its red "Too long" (`evaluateSuccess`, T-83): the clip's length at its speed
+ * (`outputDurationSec`, T-97) — a 6-minute range at 2x is a 3-minute file and
+ * must not be told it is long for Reels. An account's real cap depends on the
+ * account, so this is advice, never "will be rejected". Deduplicated, because
+ * a vertical source's YouTube slot IS the Reels preset.
  */
-export function platformsOverLimit(durationSec: number, presets: readonly PlatformId[]): PlatformInfo[] {
+export function platformsOverLimit(
+  clip: Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier'>,
+  presets: readonly PlatformId[]
+): PlatformInfo[] {
+  const durationSec = outputDurationSec(clip)
   const seen = new Set<PlatformId>()
   const over: PlatformInfo[] = []
   for (const id of presets) {

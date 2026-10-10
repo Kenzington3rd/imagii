@@ -1,4 +1,5 @@
 import { assert } from './assert'
+import type { CropRect } from './clip'
 
 /** Throws if `v` is not a non-empty string. */
 export function assertNonEmptyString(v: unknown, name: string): asserts v is string {
@@ -58,4 +59,36 @@ export function assertArray<T>(v: unknown, name: string, maxLen = 1_000_000): as
   assert(typeof name === 'string' && name.length > 0, 'validator name required')
   assert(Array.isArray(v), `${name} must be an array`)
   assert(v.length <= maxLen, `${name} exceeds max length ${maxLen}`)
+}
+
+/**
+ * The most a stored crop may overshoot the frame, as a fraction of it. The
+ * editor writes `offsetWidth / pictureWidth`, and a browser rounds those box
+ * sizes to whole pixels, so a crop dragged to the frame's edge can read a hair
+ * over 1; a bound of exactly 1 would refuse a crop the editor itself drew.
+ */
+const CROP_SLACK = 0.01
+
+/**
+ * Throws unless `v` is absent (`null` / `undefined`: no crop) or a crop
+ * rectangle as the editor stores it — `x`, `y`, `w`, `h` as finite FRACTIONS of
+ * the source frame, with a positive size that lies inside it (T-96). The
+ * Compile and GIF handlers check it at the IPC boundary: the numbers become
+ * `crop=` arguments in an ffmpeg filter string, so a string, `NaN` or a
+ * thousand-times-the-frame rectangle from a hostile renderer or a hand-edited
+ * project must never get that far.
+ */
+export function assertOptionalCropRect(
+  v: unknown,
+  name: string
+): asserts v is CropRect | null | undefined {
+  assert(typeof name === 'string' && name.length > 0, 'validator name required')
+  if (v === null || v === undefined) return
+  assertPlainObject(v, name)
+  assertRange(v.x, 0, 1, `${name}.x`)
+  assertRange(v.y, 0, 1, `${name}.y`)
+  assertRange(v.w, Number.MIN_VALUE, 1 + CROP_SLACK, `${name}.w`)
+  assertRange(v.h, Number.MIN_VALUE, 1 + CROP_SLACK, `${name}.h`)
+  assert((v.x as number) + (v.w as number) <= 1 + CROP_SLACK, `${name} extends past the right edge of the frame`)
+  assert((v.y as number) + (v.h as number) <= 1 + CROP_SLACK, `${name} extends past the bottom edge of the frame`)
 }

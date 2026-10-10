@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { __testing__, buildVideoFilter, even } from './filters'
+import { __testing__, buildVideoFilter, cropToFrame, even } from './filters'
 import { PLATFORM_PRESETS } from './presets'
 import type { Clip, TextOverlay } from '../../shared/clip'
 
@@ -325,6 +325,63 @@ describe('a manual crop is the frame each platform is cut from (T-83)', () => {
       { w: 960, h: 720, x: 480, y: 180 },
       { w: 720, h: 720, x: 120, y: 0 }
     ])
+  })
+})
+
+/**
+ * T-96 — `cropToFrame` is the one place a manual crop becomes filter stages.
+ * A platform export, a compilation segment and a GIF all call it; these pin
+ * its two modes and that `buildVideoFilter` really delegates to it, so the
+ * chain cannot quietly grow a second copy.
+ */
+describe('cropToFrame — one chain for exports, compilation segments and GIFs (T-96)', () => {
+  const src = { width: 1920, height: 1080 }
+  // 960x720 at (480, 180): the 4:3 crop T-83 uses.
+  const fourThree = { x: 480.25 / 1920, y: 180.25 / 1080, w: 960.25 / 1920, h: 720.25 / 1080 }
+
+  it('with a target shape: the crop, then a centered cut of the CROPPED frame to it', () => {
+    expect(cropToFrame(fourThree, src, 16 / 9)).toEqual([
+      'crop=960:720:480:180',
+      'crop=960:540:0:90'
+    ])
+    expect(cropToFrame(fourThree, src, 9 / 16)).toEqual([
+      'crop=960:720:480:180',
+      'crop=404:720:278:0'
+    ])
+  })
+
+  it('with no target shape: the crop alone — the frame keeps the shape the user drew', () => {
+    expect(cropToFrame(fourThree, src, null)).toEqual(['crop=960:720:480:180'])
+  })
+
+  it('with no crop: the whole source is the frame, so a target shape is one cut and no shape is nothing', () => {
+    expect(cropToFrame(null, src, 9 / 16)).toEqual(['crop=606:1080:656:0'])
+    expect(cropToFrame(undefined, src, 9 / 16)).toEqual(['crop=606:1080:656:0'])
+    expect(cropToFrame(null, src, null)).toEqual([])
+    // Already the target's shape: no stage at all.
+    expect(cropToFrame(null, src, 16 / 9)).toEqual([])
+  })
+
+  it('adds no second stage when the crop already has the target shape', () => {
+    expect(cropToFrame({ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, src, 16 / 9)).toEqual([
+      'crop=960:540:480:270'
+    ])
+  })
+
+  it('buildVideoFilter\'s crop stages ARE cropToFrame\'s, byte for byte, for every preset', () => {
+    const clip: Clip = {
+      id: 'c1',
+      name: 'clip',
+      startSec: 0,
+      endSec: 3,
+      cropRect: fourThree,
+      textOverlays: [],
+      selectedPresets: ['youtube']
+    }
+    for (const preset of Object.values(PLATFORM_PRESETS)) {
+      const stages = cropToFrame(fourThree, src, preset.aspectRatio).join(',')
+      expect(buildVideoFilter(clip, preset, src).startsWith(`${stages},scale=`), preset.id).toBe(true)
+    }
   })
 })
 

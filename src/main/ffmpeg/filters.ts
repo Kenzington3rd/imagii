@@ -86,6 +86,46 @@ function autoCropForAspect(
   return `crop=${evenSourceW}:${cropH}:0:${cropY}`
 }
 
+/**
+ * The crop-is-the-new-frame stages (T-83, T-96): the filters that take
+ * `source` to the frame an output is made from. ONE implementation, three
+ * callers — a platform export (`buildVideoFilter`, below), a compilation
+ * segment (`buildSegmentFilter`, concat.ts) and a GIF (`buildGifFilter`,
+ * gif.ts) — so "what a manual crop means" cannot be decided three ways, which
+ * is how Compile and GIF came to ignore it (the same family as T-82's
+ * `keepExpression`).
+ *
+ * Chain: the user's crop (when `cropRect` is set), then — when `targetAspect`
+ * is given — a centered cut of THAT frame to the output's shape. The crop says
+ * what the content is; the output then takes a cut of it to reach its own
+ * shape, so the `scale` that follows only ever resizes and never changes the
+ * aspect. With no crop the whole source is the frame (the same call, one
+ * fewer stage), so the no-crop path and the cropped one are one code path.
+ * `targetAspect: null` is "keep the crop's own shape" — what a GIF does, since
+ * its height follows its width.
+ *
+ * Every crop dimension and offset is an even integer (yuv420p, libx264), and a
+ * frame that is already the target's shape adds no second stage.
+ */
+export function cropToFrame(
+  cropRect: CropRect | null | undefined,
+  source: SourceDimensions,
+  targetAspect: number | null
+): string[] {
+  const stages: string[] = []
+  let frame = source
+  if (cropRect) {
+    const region = manualCropRegion(cropRect, source)
+    stages.push(`crop=${region.w}:${region.h}:${region.x}:${region.y}`)
+    frame = { width: region.w, height: region.h }
+  }
+  if (targetAspect !== null) {
+    const cut = autoCropForAspect(frame, targetAspect)
+    if (cut) stages.push(cut)
+  }
+  return stages
+}
+
 function scaleFilter(preset: PlatformPreset): string {
   // T-65: `setsar=1` is load-bearing, not decoration — same rule T-12 fixed
   // in runReframe and concat.ts already carried. `scale` preserves the
@@ -281,25 +321,12 @@ export function buildVideoFilter(
   const parts: string[] = []
   const speed = clip.speedMultiplier && clip.speedMultiplier > 0 ? clip.speedMultiplier : 1
   if (speed !== 1) parts.push(`setpts=PTS/${speed.toFixed(4)}`)
-  // T-83 — the manual crop is the new SOURCE FRAME, not the final picture.
-  //
-  // Chain: crop (the user's) -> autoCropForAspect (against the CROPPED size)
-  // -> scale. The user's crop says what the content is; each platform then
-  // takes a centered cut of it to reach its own shape, so the `scale` below
-  // only ever resizes — it never changes the aspect. Before this, a manual
-  // crop skipped the aspect step and `scale` forced the preset's exact WxH on
+  // T-83 — the manual crop is the new SOURCE FRAME, not the final picture
+  // (see `cropToFrame` for the chain and why). Before this, a manual crop
+  // skipped the aspect step and `scale` forced the preset's exact WxH on
   // whatever shape the user had drawn: a 4:3 crop exported to Reels came out
-  // 2.4x too tall, on every ticked platform at once. The no-crop path is the
-  // same code with the whole source as the frame, so there is one
-  // implementation of "cut this frame to that shape" and two callers.
-  let frame = source
-  if (clip.cropRect) {
-    const region = manualCropRegion(clip.cropRect, source)
-    parts.push(`crop=${region.w}:${region.h}:${region.x}:${region.y}`)
-    frame = { width: region.w, height: region.h }
-  }
-  const aspectCut = autoCropForAspect(frame, preset.aspectRatio)
-  if (aspectCut) parts.push(aspectCut)
+  // 2.4x too tall, on every ticked platform at once.
+  parts.push(...cropToFrame(clip.cropRect, source, preset.aspectRatio))
   if (clip.hypeShake) parts.push(hypeShakeFilter())
   parts.push(scaleFilter(preset))
   if (clip.colorGrade) {
