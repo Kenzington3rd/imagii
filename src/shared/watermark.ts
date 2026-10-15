@@ -37,7 +37,7 @@ export function isWatermarkPosition(value: unknown): value is WatermarkSpec['pos
  *
  * Both inputs are untrusted — the saved ones came off disk — so a blank or
  * non-string handle is no watermark, an overlong one is cut to what the input
- * allows, and an unrecognised corner falls back to the default rather than
+ * allows, and an unrecognized corner falls back to the default rather than
  * reaching the filter graph.
  */
 export function buildWatermark(text: unknown, position: unknown): WatermarkSpec | null {

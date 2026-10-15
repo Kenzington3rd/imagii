@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { playableDuration, useVideoStore } from './store/videoStore'
-
-function formatShort(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.0'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  const t = Math.floor((seconds - Math.floor(seconds)) * 10)
-  return `${m}:${String(s).padStart(2, '0')}.${t}`
-}
+import { playableDuration, playheadNow, useVideoStore } from './store/videoStore'
+import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
+import { formatClock } from '@shared/clockTime'
 
 type DragMode = 'start' | 'end' | 'scrub' | null
 
@@ -23,6 +17,7 @@ export function Timeline(): JSX.Element | null {
   const setClipRange = useVideoStore((s) => s.setClipRange)
   const endGesture = useVideoStore((s) => s.endGesture)
   const requestSeek = useVideoStore((s) => s.requestSeek)
+  const fps = useVideoStore((s) => (s.source && s.source.probe.fps > 0 ? s.source.probe.fps : 30))
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragMode>(null)
 
@@ -92,14 +87,55 @@ export function Timeline(): JSX.Element | null {
     requestSeek(positionToSeconds(e.clientX))
   }
 
+  /**
+   * T-119: I / O at the playhead, the same store calls the Player's own handler makes. The USER_GUIDE's
+   * sequence is "click the track, press I", and a click on the track hands THIS element the keyboard (it is
+   * the focusable slider), not the Player's column, so the keys the guide promises have to be heard here too.
+   * The playhead is the element's own time when a Player is mounted (T-120: the store's `currentTime` is
+   * written on `timeupdate`, so during playback it is up to a quarter second behind the frame on screen, and
+   * the Player's own I / O read the element), and the store's, the number the track draws, otherwise.
+   */
+  function setMarker(which: 'in' | 'out'): void {
+    const state = useVideoStore.getState()
+    const id = state.selectedClipId
+    if (!id) return
+    const at = playheadNow(state)
+    if (which === 'in') state.setClipStart(id, at)
+    else state.setClipEnd(id, at)
+    // T-40: a keypress is the whole gesture (both markers coalesce with the drags).
+    state.endGesture()
+  }
+
   function onScrubKey(e: ReactKeyboardEvent<HTMLDivElement>): void {
+    // Same stand-down as the Player's handler (T-123 (2): `focusOwnsKey`, not "any INPUT"). (The slider has no
+    // children today, so its own target is never a control; this is the line a future child would rely on.)
+    if (focusOwnsKey((e.target as HTMLElement).tagName, inputTypeOf(e.target), e.key)) return
+    // T-124 (29): Ctrl+O is a browser chord, not "set Out"; the handler read no modifier and swallowed it with `preventDefault`.
+    if (hasChordModifier(e)) return
+    // T-121: the four relative keys step from the frame on screen, the way I / O mark it (T-120). The store's
+    // `currentTime` is written on `timeupdate`, so during playback it trails the picture by up to a quarter
+    // second: `.` stepped back 0.15 s and the right arrow moved 0.05 s instead of 0.1 in QA's measurement.
+    const now = playheadNow(useVideoStore.getState())
     let next: number
     switch (e.key) {
+      case ' ':
+        // T-120: the guide's "click the track, then Space". The slider is the focused element after a click,
+        // not the Player's column, so the Player's own handler never heard it, and an unhandled Space scrolls
+        // the studio. The same toggle, through the Player's registration.
+        e.preventDefault()
+        useVideoStore.getState().transport?.togglePlay()
+        return
       case 'ArrowLeft':
-        next = currentTime - NUDGE_SEC
+        next = now - NUDGE_SEC
         break
       case 'ArrowRight':
-        next = currentTime + NUDGE_SEC
+        next = now + NUDGE_SEC
+        break
+      case ',':
+        next = now - 1 / fps
+        break
+      case '.':
+        next = now + 1 / fps
         break
       case 'Home':
         next = 0
@@ -107,6 +143,16 @@ export function Timeline(): JSX.Element | null {
       case 'End':
         next = duration
         break
+      case 'i':
+      case 'I':
+        e.preventDefault()
+        setMarker('in')
+        return
+      case 'o':
+      case 'O':
+        e.preventDefault()
+        setMarker('out')
+        return
       default:
         return
     }
@@ -125,21 +171,20 @@ export function Timeline(): JSX.Element | null {
     <div className="card p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between text-xs text-ink-muted">
         <span>
-          In <span className="font-mono text-ink-base">{formatShort(clip.startSec)}</span>
+          In <span className="font-mono text-ink-base">{formatClock(clip.startSec, 1)}</span>
         </span>
         <span>
-          Length <span className="font-mono text-ink-base">{formatShort(clipDuration)}</span>
+          Length <span className="font-mono text-ink-base">{formatClock(clipDuration, 1)}</span>
         </span>
         <span>
-          Out <span className="font-mono text-ink-base">{formatShort(clip.endSec)}</span>
+          Out <span className="font-mono text-ink-base">{formatClock(clip.endSec, 1)}</span>
         </span>
       </div>
       <div ref={trackRef} className="relative h-12 bg-bg-hover rounded-md select-none">
-        {/* The scrub surface. Its own element rather than the track itself for
-            two reasons: `role="slider"` makes its DOM children presentational,
-            which would hide the trim handles from assistive tech, and keeping
-            it BELOW the handles in paint order is what gives their drags
-            priority over a scrub. */}
+        {/* The scrub surface. Its own element rather than the track itself so
+            that it sits BELOW the trim handles in paint order, which is what
+            gives their drags priority over a scrub. (The handles are pointer
+            affordances and hidden from assistive tech on purpose, below.) */}
         <div
           role="slider"
           tabIndex={0}
@@ -147,7 +192,7 @@ export function Timeline(): JSX.Element | null {
           aria-valuemin={0}
           aria-valuemax={Number(duration.toFixed(2))}
           aria-valuenow={Number(currentTime.toFixed(2))}
-          aria-valuetext={formatShort(currentTime)}
+          aria-valuetext={formatClock(currentTime, 1)}
           onMouseDown={startScrub}
           onKeyDown={onScrubKey}
           className="absolute inset-0 rounded-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent"
@@ -166,8 +211,13 @@ export function Timeline(): JSX.Element | null {
           className="absolute top-0 bottom-0 w-0.5 bg-ember pointer-events-none"
           style={{ left: `calc(${playheadPct}% - 1px)` }}
         />
+        {/* T-119: the two trim handles are pointer affordances. They take no keyboard focus and are hidden
+            from assistive tech, because pressing Enter or Space on one did nothing: they were dead tab stops
+            that announced themselves as buttons. The keyboard's way to the same trim is I / O on the
+            Playhead slider above, said in the line under the track. */}
         <button
-          aria-label="Trim start"
+          tabIndex={-1}
+          aria-hidden="true"
           onMouseDown={(e) => {
             e.preventDefault()
             setDrag('start')
@@ -176,7 +226,8 @@ export function Timeline(): JSX.Element | null {
           style={{ left: `${startPct}%` }}
         />
         <button
-          aria-label="Trim end"
+          tabIndex={-1}
+          aria-hidden="true"
           onMouseDown={(e) => {
             e.preventDefault()
             setDrag('end')

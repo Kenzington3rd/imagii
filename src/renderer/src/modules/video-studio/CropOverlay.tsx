@@ -109,12 +109,24 @@ export function CropControls({
               className={`px-2 py-1 rounded ${
                 aspect === m ? 'bg-accent text-bg-base' : 'bg-bg-hover text-ink-base'
               }`}
+              // T-113: the selected shape was shown by fill color alone.
+              aria-pressed={aspect === m}
               onClick={() => applyAspectPreset(m)}
             >
               {m}
             </button>
           ))}
-          <button className="ml-auto text-ink-dim hover:text-ink-base" onClick={clearCrop}>
+          <button
+            className="ml-auto text-ink-dim hover:text-ink-base"
+            onClick={() => {
+              // T-112: Reset clears the rectangle, not the section. A crop that arrived with a
+              // project is "on" only because it exists (Player derives `enabled` from it), so
+              // clearing it also switched the section off under the person's cursor, while a
+              // crop they ticked themselves stayed open. Both arrivals now behave as the second.
+              onEnabledChange(true)
+              clearCrop()
+            }}
+          >
             Reset
           </button>
         </>

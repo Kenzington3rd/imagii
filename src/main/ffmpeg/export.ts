@@ -5,11 +5,27 @@ import { resolveExportPreset } from './presets'
 import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { CancelLatch, type LatchRun } from './cancelLatch'
+import { discardPartialOutput } from './partialOutput'
+import { ensureOutputDir, nextFreePath } from './outputPath'
+import { clipSpeed } from '../../shared/clip'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
 
 export type ProgressListener = (p: ExportProgress) => void
 
 const activeJobs = new Map<string, ChildProcess>()
+// T-98: a run per job (its probe is a pre-spawn await a Cancel must reach) and
+// one per batch (the instant between one job and the next).
+const latch = new CancelLatch()
+
+/**
+ * The run a batch holds open for as long as it works. `video:exportBatch` asks
+ * it before every job, so a Cancel that lands between two jobs — when no child
+ * is alive to kill — still stops the jobs that have not started.
+ */
+export function beginExportBatch(): LatchRun {
+  return latch.begin()
+}
 
 function safeFileBase(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'clip'
@@ -26,19 +42,32 @@ export async function runExportJob(
   job: ExportJobSpec,
   onProgress: ProgressListener
 ): Promise<ExportResult> {
+  const run = latch.begin(job.jobId)
+  try {
+    return await encodeJob(job, onProgress, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function encodeJob(
+  job: ExportJobSpec,
+  onProgress: ProgressListener,
+  run: LatchRun
+): Promise<ExportResult> {
   // T-50: a job that carries a custom preset encodes at ITS geometry and
   // bitrates. The resolved preset is a full PlatformPreset, so every filter
   // and flag below reads it exactly as it read the platform row.
   const preset = resolveExportPreset(job.preset, job.customPreset)
-  const probe = await probeVideo(job.sourcePath)
-  const source = { width: probe.width, height: probe.height }
+  // T-98: the probe is where a Cancel pressed between two jobs lands.
+  const probe = await run.guard(probeVideo(job.sourcePath))
+  const source = { width: probe.width, height: probe.height, colorSpace: probe.colorSpace }
   const filterChain = buildVideoFilter(job.clip, preset, source, job.watermark)
-  const speedForDuration =
-    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
+  const speed = clipSpeed(job.clip)
   // Progress is measured against OUTPUT time (ffmpeg's out_time), and a
   // 2x-speed clip produces half as much output — divide by the speed or
   // the bar stalls at 50% until the job completes (round 18).
-  const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speedForDuration)
+  const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speed)
 
   const sourceBase = path.parse(job.sourcePath).name
   // The fallback name has to distinguish two custom presets sharing a base
@@ -48,10 +77,12 @@ export async function runExportJob(
     job.outputFilename && job.outputFilename.trim()
       ? job.outputFilename
       : `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${presetTag}.mp4`
-  const outputPath = path.join(job.outDir, outputName)
+  // T-106: the name the settings give is the name WANTED. A file already there is
+  // somebody's earlier export, and this job writes beside it, not over it.
+  // T-125 (10): the folder is there before the name is chosen (a remembered one may have been deleted or live on an unplugged drive).
+  await run.guard(ensureOutputDir(job.outDir))
+  const outputPath = await run.guard(nextFreePath(path.join(job.outDir, outputName)))
 
-  const speed =
-    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
   const audioSpeed = buildAudioSpeedFilter(speed)
 
   const args: string[] = [
@@ -90,9 +121,13 @@ export async function runExportJob(
   )
 
   const startedAt = Date.now()
+  let spawnedAt: number | null = null
 
-  return new Promise<ExportResult>((resolve, reject) => {
+  const finished = new Promise<ExportResult>((resolve, reject) => {
+    // T-98: the last look before the child exists. A throw here rejects the job.
+    run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    spawnedAt = Date.now()
     activeJobs.set(job.jobId, child)
 
     let stderrBuffer = ''
@@ -149,17 +184,15 @@ export async function runExportJob(
       }
     })
   })
-}
-
-export function cancelExportJob(jobId: string): boolean {
-  const child = activeJobs.get(jobId)
-  if (!child) return false
-  killAsCancelled(child)
-  activeJobs.delete(jobId)
-  return true
+  // T-100: the half-written file is this job's wreckage; earlier jobs' files stay.
+  return finished.catch(async (err: unknown) => {
+    await discardPartialOutput(outputPath, spawnedAt)
+    throw err
+  })
 }
 
 export function cancelAllExportJobs(): void {
+  latch.cancelAll()
   for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }

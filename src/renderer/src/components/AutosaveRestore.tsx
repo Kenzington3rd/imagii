@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
-import { applyProject, describeUnavailableSources } from '../modules/project/ProjectIO'
-import { suppressAutosave } from '../hooks/useAutosave'
-import { ipcErrorMessage } from '@shared/ipcError'
+import { describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
+import { applyProjectHeld } from '../hooks/useAutosave'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
@@ -36,6 +35,12 @@ export function AutosaveRestore(): JSX.Element | null {
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<AutosaveSnapshot | null>(null)
   const [dismissed, setDismissed] = useState(false)
+  // T-124 (5): the banner is for a session that holds nothing - a launch, or the page a crash reloads to. This component
+  // mounts on every visit to Home, mid-session included, and `dismissed` is only this mount's state, so a file that was
+  // fresh and valid offered itself again on each visit, and Restore applied it over the live session with no question
+  // (the undo histories went with it). Asked once per mount, ahead of both banners; a damaged file is announced at the
+  // next launch instead, when nothing is open.
+  const [holdsWork] = useState(sessionHoldsWork)
   const [busy, setBusy] = useState(false)
   // Round 17 B7: lightweight metadata (size + age) shown via `autosave.info`
   // without loading the whole project. Lets the home page show "Last
@@ -81,7 +86,7 @@ export function AutosaveRestore(): JSX.Element | null {
     }
   }, [])
 
-  if (dismissed || !snapshot || !snapshot.info) {
+  if (dismissed || holdsWork || !snapshot || !snapshot.info) {
     // Round 17 B7: even when there's no restore prompt to show, surface a
     // single-line "Last autosave: 5 min ago" so the user knows imagii is
     // backing them up. Driven by the cheap autosave.info() call.
@@ -98,16 +103,14 @@ export function AutosaveRestore(): JSX.Element | null {
   async function restore(): Promise<void> {
     if (!snapshot?.project) return
     setBusy(true)
-    const release = suppressAutosave()
-    let restored = false
     try {
-      const outcome = await applyProject(snapshot.project)
-      restored = true
+      // T-113: autosave is held for the apply alone (see `applyProjectHeld`).
+      const outcome = await applyProjectHeld(snapshot.project)
       // T-84: same rule as Open project — what could be restored is, and the
       // one message names the file that could not.
-      const missing = describeUnavailableSources(outcome.unavailable)
-      if (missing) {
-        toast(missing, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+      const note = describeApplyOutcome(outcome, 'autosave')
+      if (note) {
+        toast(note, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
       } else {
         toast.success('Restored from autosave')
       }
@@ -121,13 +124,6 @@ export function AutosaveRestore(): JSX.Element | null {
     } catch (err) {
       reportFailure(err, { failed: "Couldn't restore the autosave." })
     } finally {
-      // Bug-fix (Phase 2.14): on success, hold suppression for 1.5s so the
-      // stores' applyProject side-effects flush before autosave re-engages.
-      // On failure, release immediately — a thrown applyProject leaves
-      // partially-applied state and there's no benefit to making the user
-      // wait an extra 1.5s before they can autosave again.
-      if (restored) setTimeout(release, 1500)
-      else release()
       setBusy(false)
     }
   }
@@ -146,10 +142,14 @@ export function AutosaveRestore(): JSX.Element | null {
       // the banner stays too — with its button, because trying again is the
       // only thing to do and hiding the offer would strand the file with no
       // way to reach it. Nothing here dismisses.
-      toast.error(
-        `Couldn't clear the autosave: ${ipcErrorMessage(err, 'unknown reason')}. ` +
-          "It's still on disk — close anything using it and try again."
-      )
+      // T-117: through the one helper (8 s, T-115). The sentence used to splice main's string in as
+      // written ("Couldn't clear the autosave: <reason>."); the plain cause now follows it where the
+      // shape is known, and a raw one is left to the console. The only cause that can be named is a
+      // locked file: main appends the errno of the unlink that failed (T-118, "could not delete
+      // autosave.json (EBUSY)") and userFacingError maps EBUSY, EPERM and EACCES. unlink has no
+      // full-disk shape, and a message without a code stays the bare sentence. The banner and its
+      // Clear button are still there, so the sentence says only what is true.
+      reportFailure(err, { failed: "Couldn't clear the autosave. It's still on disk." })
     } finally {
       setBusy(false)
     }

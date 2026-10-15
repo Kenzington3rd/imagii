@@ -136,25 +136,125 @@ describe('ratio claims', () => {
 
 // ── hint layers ──────────────────────────────────────────────────────────
 
-const PLACEHOLDER_TEXT = /@yourhandle|Game name|goes here|Drop (face|clip) here/
 const GUIDE_NAME = /hole|hint|placeholder|safe area|video well/i
 
 function isGuide(l: CanvasLayer): boolean {
   return GUIDE_NAME.test(l.name)
 }
 
-describe('hint layers: guidance that never ships in an export', () => {
+/**
+ * T-103 — for every template and asset, EXACTLY which text layers are hints and which are the
+ * card's own content. There is no blanket rule: the question per layer is "would a user plausibly
+ * ship this text verbatim ON PURPOSE?" — no means a hint (a stand-in title, a name, a handle, a game,
+ * a schedule line: text they MUST replace for the export to be theirs), yes means content (the
+ * words ARE the card's deliverable). A table, so every choice is deliberate and a text layer added
+ * to a card — or a new card — fails here until someone decides which side it is on.
+ *
+ * Hints: the file a person posts never says "YOUR TITLE HERE"; retyping one clears the flag, so what
+ * they type always exports. Content: exporting the BRB card gives a BRB screen with its words.
+ */
+const TEXT_LAYERS: Record<string, { hints: string[]; content: string[] }> = {
+  // ── templates ──
+  'yt-thumb-bold': { hints: ['Title', 'Face hint'], content: [] },
+  // "TUTORIAL" is the card's sample category label, not words anyone ships beside "How to do the thing".
+  'yt-thumb-clean': { hints: ['Eyebrow', 'Title', 'Subtitle'], content: [] },
+  'tw-overlay-streamer': { hints: ['Facecam hint', 'Handle', 'Now playing'], content: [] },
+  'tw-overlay-minimal': { hints: ['Handle corner'], content: [] },
+  'tw-banner-videoplayer': { hints: ['Handle', 'Schedule'], content: [] },
+  'yt-banner-channel': { hints: ['Safe area hint', 'Channel name'], content: [] },
+  'yt-thumb-bold-2k': { hints: ['Title', 'Face hint'], content: [] },
+  'yt-thumb-bold-4k': { hints: ['Title', 'Face hint'], content: [] },
+  'tw-overlay-streamer-2k': { hints: ['Facecam hint', 'Handle', 'Now playing'], content: [] },
+  'tw-overlay-streamer-4k': { hints: ['Facecam hint', 'Handle', 'Now playing'], content: [] },
+  'emote-blank-112': { hints: [], content: [] },
+  // The emote IS "POG": a text emote that exported blank would be a yellow circle.
+  'emote-text': { hints: [], content: ['Text'] },
+  // ── assets ──
+  'frame-clean-corner': { hints: ['Handle'], content: [] },
+  'frame-just-chatting': { hints: ['Chat hint'], content: [] },
+  'lower-third-clean': { hints: ['Name', 'Role'], content: [] },
+  // The scene cards: their words are what the scene says. Only the handle is the person's own.
+  'scene-brb': { hints: ['Handle'], content: ['Brb', 'Sub'] },
+  'scene-starting-soon': { hints: ['Countdown'], content: ['Title', 'Sub'] },
+  'scene-ending': { hints: ['SocialsText'], content: ['Thanks', 'Sub'] },
+  'frame-clean-corner-2k': { hints: ['Handle'], content: [] },
+  'frame-clean-corner-4k': { hints: ['Handle'], content: [] },
+  'social-square-clip': { hints: ['Title', 'Hint'], content: [] }
+}
+
+/** Words that only a stand-in carries — a content layer must never read like one. */
+const PLACEHOLDER_WORDS = /@yourhandle|@handle|Game name|goes here|Drop (face|clip) here|YOUR (TITLE|CHANNEL|NAME)|\bHERE\b|Your (Name|role)/i
+
+function textLayers(e: Entry): Extract<CanvasLayer, { type: 'text' }>[] {
+  return e.doc.layers.filter((l): l is Extract<CanvasLayer, { type: 'text' }> => l.type === 'text')
+}
+
+describe('hint layers: guidance and sample words that never ship in an export', () => {
   const hinted = ENTRIES.filter((e) => e.doc.layers.some((l) => l.hint === true))
 
   it('flags layers in more than a handful of entries (the rule is not vacuous)', () => {
     expect(hinted.length).toBeGreaterThan(10)
   })
 
-  it.each(ENTRIES.map((e) => [e.id, e] as const))('%s: every guide and placeholder is a hint, and nothing else is', (_id, e) => {
-    for (const l of e.doc.layers) {
-      const placeholderText = l.type === 'text' && PLACEHOLDER_TEXT.test(l.text)
-      const mustBeHint = isGuide(l) || placeholderText
-      expect(l.hint === true, `${e.id} / "${l.name}"${placeholderText ? ` ("${(l as { text: string }).text}")` : ''}`).toBe(mustBeHint)
+  it('the table names every template and asset, and nothing else', () => {
+    expect(Object.keys(TEXT_LAYERS).sort()).toEqual(ENTRIES.map((e) => e.id).sort())
+  })
+
+  it.each(ENTRIES.map((e) => [e.id, e] as const))(
+    '%s: its text layers are exactly the table\'s, hints are hints and content exports',
+    (id, e) => {
+      const row = TEXT_LAYERS[id]
+      expect(row, `${id} has a row in TEXT_LAYERS — decide which side each of its text layers is on`).toBeDefined()
+      if (!row) return
+      // A text layer added to (or removed from) a card fails here until the table says what it is.
+      expect(textLayers(e).map((l) => l.name).sort(), `${id}: the card's text layers`).toEqual(
+        [...row.hints, ...row.content].sort()
+      )
+      for (const l of textLayers(e)) {
+        const mustBeHint = row.hints.includes(l.name)
+        expect(
+          l.hint === true,
+          `${id} / "${l.name}" ("${l.text}") must ${mustBeHint ? 'be a hint' : 'export as the card\'s own content'}`
+        ).toBe(mustBeHint)
+      }
+      // Everything else on the card: a guide is a hint, a plate/bar/border/shape is not.
+      for (const l of e.doc.layers.filter((x) => x.type !== 'text')) {
+        expect(l.hint === true, `${id} / "${l.name}"`).toBe(isGuide(l))
+      }
+    }
+  )
+
+  it('the rule has text to bite on: dozens of text layers across the cards, hints and content both', () => {
+    const texts = ENTRIES.flatMap((e) => textLayers(e))
+    expect(texts.length).toBeGreaterThan(30)
+    expect(texts.filter((l) => l.hint === true).length).toBeGreaterThan(20)
+    expect(texts.filter((l) => l.hint !== true).length).toBeGreaterThan(5)
+  })
+
+  // The inverse of YOUR TITLE HERE (T-103): the scene cards and the text emote export their words.
+  it('text that IS the deliverable exports: the scene cards and the text emote are not left wordless', () => {
+    const word = (id: string, name: string) =>
+      textLayers(ENTRIES.find((e) => e.id === id) as Entry).find((l) => l.name === name)
+    for (const [id, name, text] of [
+      ['scene-brb', 'Brb', 'BE RIGHT BACK'],
+      ['scene-starting-soon', 'Title', 'STARTING SOON'],
+      ['scene-ending', 'Thanks', 'THANKS FOR HANGING OUT'],
+      ['emote-text', 'Text', 'POG']
+    ] as const) {
+      const l = word(id, name)
+      expect(l?.text, `${id} / ${name}`).toBe(text)
+      expect(l?.hint, `${id} / ${name} exports`).not.toBe(true)
+    }
+  })
+
+  it('no content layer reads like a stand-in, and no hint reads like the card\'s own words', () => {
+    for (const e of ENTRIES) {
+      const row = TEXT_LAYERS[e.id]
+      for (const l of textLayers(e)) {
+        if (row?.content.includes(l.name)) {
+          expect(PLACEHOLDER_WORDS.test(l.text), `${e.id} / "${l.name}" ("${l.text}") is exported as content`).toBe(false)
+        }
+      }
     }
   })
 
@@ -162,6 +262,113 @@ describe('hint layers: guidance that never ships in an export', () => {
     for (const e of ENTRIES) {
       for (const l of e.doc.layers) if (l.hint) expect(['rect', 'text']).toContain(l.type)
     }
+  })
+
+  // T-112. The card says what is NOT in the file; for a sample WORD that is the thing a
+  // streamer asks ("will 'YOUR TITLE HERE' be on my thumbnail?"). Five descriptions named
+  // the guide and said nothing of the sample text — the canvas shows it (dimmed, since T-112)
+  // and the description is where a person reads what it does. A template whose sample text
+  // is a hint says so in a sentence that names it a sample or a placeholder.
+  it('a template with sample words says the sample words do not export', () => {
+    const withSampleText = CANVAS_TEMPLATES.filter((t) =>
+      textLayers(t).some((l) => l.hint === true)
+    )
+    expect(withSampleText.length).toBeGreaterThanOrEqual(8)
+    for (const t of withSampleText) {
+      expect(t.description, `${t.id} names its sample text`).toMatch(
+        /(?:sample|placeholder)[^.]*do(?:es)? not export/i
+      )
+    }
+  })
+
+  // T-113. The same question, asked of the Asset Library: the six cards the review named were
+  // templates; the assets carry the same sample words ("@yourhandle", "Your Name", "CLIP TITLE
+  // HERE", "0:00") and their descriptions said nothing of it (one said "a title bar"; the
+  // starting-soon card said "a static 0:00 countdown to replace" and never that it does not
+  // export). A card whose text hint is a SAMPLE says so in a sentence that names it one.
+  it('an asset with sample words says the sample words do not export — the rule is the templates\'', () => {
+    const withSampleText = ASSET_CATALOG.filter((a) => textLayers(a).some((l) => l.hint === true))
+    // Nine assets carry a text hint today: the four overlay frames (the clean corner at 1080p, 1440p and
+    // 4K, and the just-chatting frame), the lower-third, the three scene cards and the square clip card.
+    expect(withSampleText.length).toBeGreaterThanOrEqual(9)
+    for (const a of withSampleText) {
+      expect(a.description, `${a.id} names its sample text`).toMatch(
+        /(?:sample|placeholder)[^.]*do(?:es)? not export/i
+      )
+    }
+  })
+
+  it('and says what typing does to it, for the sample words that are the person\'s own to fill in', () => {
+    // Not for a guide label ("CHAT"): nothing a person types over a label is their deliverable.
+    for (const a of ASSET_CATALOG) {
+      const own = textLayers(a).filter((l) => l.hint === true && !isGuide(l))
+      if (own.length > 0) {
+        expect(a.description, `${a.id} says what typing does`).toMatch(/\btype\b/i)
+      }
+    }
+  })
+
+  // T-114. The square clip card said "The well, its label and the sample title do not export until you
+  // type your own title" - which made the well and its label sound like they come back when you type.
+  // They are guides, not retyped; only the sample title is something a person retypes. The card
+  // says the two things apart, in the channel banner's pattern ("The sample handle and schedule do not
+  // export until you type your own."). T-115: "never export" became "do not export" - a hint's TEXT
+  // exports once it is retyped (the label is a text layer), so "never" was a promise the layer's own
+  // rule breaks; "do not" is the verb the other twenty cards use.
+  it('the square clip card says the well and its label do not export, and only the sample title is retyped', () => {
+    const card = ASSET_CATALOG.find((x) => x.id === 'social-square-clip')?.description ?? ''
+    expect(card).toMatch(/The well and its label do not export\./)
+    expect(card).not.toMatch(/\bnever\b/i)
+    expect(card).toMatch(/The sample title does not export until you type your own\./)
+    // The sentence that blurred them is gone: no "until you type" after the well or its label.
+    expect(card).not.toMatch(/well[^.]*until you type/i)
+    expect(card).not.toMatch(/label and the sample title/i)
+    // It stays true: the well, its label and the title are all hints (left out of every export).
+    const hint = (name: string): boolean | undefined => ASSET_CATALOG.find((x) => x.id === 'social-square-clip')?.doc.layers.find((l) => l.name === name)?.hint
+    expect(hint('Video well')).toBe(true)
+    expect(hint('Hint')).toBe(true)
+    expect(hint('Title')).toBe(true)
+  })
+
+  it('the cards the second pass named each say it in their own words', () => {
+    const says: Record<string, RegExp> = {
+      'lower-third-clean': /sample name and role/i,
+      'social-square-clip': /sample title/i,
+      'scene-brb': /sample handle/i,
+      'scene-starting-soon': /sample "0:00"/i,
+      'scene-ending': /sample socials line/i,
+      'frame-clean-corner': /sample handle/i,
+      'frame-clean-corner-2k': /sample handle/i,
+      'frame-clean-corner-4k': /sample handle/i,
+      'frame-just-chatting': /sample "CHAT" label/i
+    }
+    for (const [id, pattern] of Object.entries(says)) {
+      expect(ASSET_CATALOG.find((x) => x.id === id)?.description, id).toMatch(pattern)
+    }
+  })
+
+  it('the five cards the review named each say it in their own words', () => {
+    const says: Record<string, RegExp> = {
+      'yt-thumb-bold': /sample title/i,
+      'yt-thumb-clean': /sample words/i,
+      'tw-overlay-minimal': /sample handle/i,
+      'tw-banner-videoplayer': /sample handle and schedule/i,
+      'yt-banner-channel': /sample channel name/i
+    }
+    for (const [id, pattern] of Object.entries(says)) {
+      const t = CANVAS_TEMPLATES.find((x) => x.id === id)
+      expect(t?.description, id).toMatch(pattern)
+      // ...and what happens to it: the words a person types over a sample DO export.
+      expect(t?.description, `${id} says what typing does`).toMatch(/\btype\b/i)
+    }
+  })
+
+  it('the Twitch profile banner does not point at an offline screen no card provides', () => {
+    const t = CANVAS_TEMPLATES.find((x) => x.id === 'tw-banner-videoplayer')
+    expect(t?.description).not.toMatch(/offline/i)
+    // It points at cards that exist: the scene cards of the Asset Library.
+    expect(t?.description).toMatch(/scene cards in the Asset Library/)
+    expect(ASSET_CATALOG.some((a) => a.category === 'scene-card')).toBe(true)
   })
 
   it('a card with a guide layer says the guide does not export', () => {
@@ -181,5 +388,13 @@ describe('hint layers: guidance that never ships in an export', () => {
       (l) => l.name === 'Lower third'
     )
     expect(lower?.hint).toBeUndefined()
+  })
+
+  it('every non-text design element keeps exporting: plates, bars, borders and shapes are never hints (T-103)', () => {
+    const design = ENTRIES.flatMap((e) =>
+      e.doc.layers.filter((l) => l.type !== 'text' && !isGuide(l)).map((l) => [e.id, l] as const)
+    )
+    expect(design.length).toBeGreaterThan(20)
+    for (const [id, l] of design) expect(l.hint === true, `${id} / "${l.name}"`).toBe(false)
   })
 })

@@ -2,8 +2,9 @@
 # Release, so the app can be downloaded/shared as a file — no build tools
 # needed by anyone.
 #
-# COST NOTE: this workflow runs ONLY on manual dispatch (never on push/PR),
-# and this repository is public, so runs consume no paid Actions minutes.
+# COST NOTE: this workflow runs ONLY on manual dispatch or a pushed v* tag
+# (never on a branch push or a PR), and this repository is public, so runs
+# consume no paid Actions minutes.
 name: Release standalone exe
 
 on:
@@ -28,8 +29,9 @@ jobs:
   build-and-release:
     runs-on: windows-latest
     # 45, not 30: the Layer 5 media suite below spawns real ffmpeg for every
-    # case and is markedly slower on a Windows runner than the ~90 s it takes
-    # on linux — and it now carries six extra 1080p encodes for the T-51
+    # case and is markedly slower on a Windows runner than on linux (the
+    # measured linux figure is in docs/TESTING.md, "How long each layer
+    # takes") — and it now carries six extra 1080p encodes for the T-51
     # drawtext pixels. The ceiling still only bounds a run that has hung.
     timeout-minutes: 45
     steps:
@@ -68,8 +70,8 @@ jobs:
           body: |
             imagii for Windows 10/11 (64-bit). Free, no account, nothing to install.
 
-            1. Under **Assets** below, download **imagii.exe** (about 170 MB — not "Source code").
-            2. Put it anywhere and double-click. The first launch takes 10-15 seconds with no window while it unpacks.
+            1. Under **Assets** below, download **imagii.exe** (a single portable exe — not "Source code").
+            2. Put it anywhere and double-click. Every launch takes 10-15 seconds with no window while it unpacks itself.
             3. Windows SmartScreen will say "Windows protected your PC" because the file is unsigned: click **More info**, then **Run anyway**. If your antivirus quarantines it, restore it and allow it.
 
-            Everything stays on your computer. Optional: auto-captions need a one-time setup (see the in-app Captions panel).
+            Your videos, audio, recordings, images, and projects stay on your computer. Only Reference Search and the one-time caption model download go online. Optional: auto-captions need a one-time setup (see the in-app Captions panel).

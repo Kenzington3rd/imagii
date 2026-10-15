@@ -339,7 +339,7 @@ test.describe('T-47 session continuity', () => {
         })
         .toBe(2)
       const debounced = readSnapshot(userDataDir)
-      expect(debounced?.schemaVersion).toBe(3)
+      expect(debounced?.schemaVersion).toBe(5)
       expect(debounced?.place?.route).toBe('/video')
 
       // ── the last few seconds: an edit and a selection, then quit at once ──

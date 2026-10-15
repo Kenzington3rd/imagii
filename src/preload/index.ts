@@ -9,6 +9,7 @@ import type {
   ChainSpec
 } from '../shared/audio'
 import type { ImageSaveManyRequest, ImageSaveRequest } from '../shared/canvas'
+import type { ReframePhase } from '../shared/reframe'
 import type { MoodBoardCollection, SearchResult } from '../shared/search'
 import type {
   CaptionsProgress,
@@ -16,11 +17,7 @@ import type {
   TranscribeRequest,
   BurnInRequest
 } from '../shared/captions'
-import type {
-  ImagiiProject,
-  RecordingFinalizeSpec,
-  RecordingSpec
-} from '../shared/workspace'
+import type { ImagiiProject, RecordingFinalizeSpec } from '../shared/workspace'
 
 const api: ImagiiApi = {
   settings: {
@@ -28,20 +25,18 @@ const api: ImagiiApi = {
     set: (key: SettingsKey, value: unknown) => ipcRenderer.invoke('settings:set', key, value)
   },
   app: {
-    quit: () => ipcRenderer.send('app:quit'),
     getVersion: () => ipcRenderer.invoke('app:getVersion')
   },
   video: {
     probe: (filePath: string) => ipcRenderer.invoke('video:probe', filePath),
     pickFile: () => ipcRenderer.invoke('video:pickFile'),
     convertForImport: (filePath: string) => ipcRenderer.invoke('video:convertForImport', filePath),
-    pickOutputDir: () => ipcRenderer.invoke('video:pickOutputDir'),
+    pickOutputDir: (defaultPath?: string) => ipcRenderer.invoke('video:pickOutputDir', defaultPath),
     // Bug-fix (2026-08-14): must be the SAME builder the protocol
     // handler's parser mirrors. The old inline copy here disagreed with
     // the handler and no media ever loaded — see src/shared/fileUrl.ts.
     fileUrl: (filePath: string) => pathToImagiiFileUrl(filePath),
     exportBatch: (jobs: ExportJobSpec[]) => ipcRenderer.invoke('video:exportBatch', jobs),
-    cancel: (jobId: string) => ipcRenderer.invoke('video:cancel', jobId),
     cancelAll: () => ipcRenderer.invoke('video:cancelAll'),
     revealInFolder: (filePath: string) => ipcRenderer.invoke('video:revealInFolder', filePath),
     onProgress: (handler: (p: ExportProgress) => void) => {
@@ -69,7 +64,7 @@ const api: ImagiiApi = {
     onReframeProgress: (handler) => {
       const listener = (
         _e: unknown,
-        p: { jobId: string; phase: string; percent: number }
+        p: { jobId: string; phase: ReframePhase; percent?: number }
       ): void => handler(p)
       ipcRenderer.on('video:reframeProgress', listener)
       return () => ipcRenderer.removeListener('video:reframeProgress', listener)
@@ -79,6 +74,7 @@ const api: ImagiiApi = {
     analyzeClipHook: (params) => ipcRenderer.invoke('video:analyzeClipHook', params),
     extractFrame: (params) => ipcRenderer.invoke('video:extractFrame', params),
     makeKitDir: (params) => ipcRenderer.invoke('video:makeKitDir', params),
+    removeKitDir: (kitDir) => ipcRenderer.invoke('video:removeKitDir', kitDir),
     onHighlightProgress: (handler) => {
       const listener = (
         _e: unknown,
@@ -129,13 +125,14 @@ const api: ImagiiApi = {
     burnIn: (req: BurnInRequest) => ipcRenderer.invoke('captions:burnIn', req),
     saveSrt: (srtPath: string, defaultName: string) =>
       ipcRenderer.invoke('captions:saveSrt', srtPath, defaultName),
-    copySrtTo: (params) => ipcRenderer.invoke('captions:copySrtTo', params),
+    writeKitSrt: (params) => ipcRenderer.invoke('captions:writeKitSrt', params),
     pickBurnInOutput: (defaultName: string) =>
       ipcRenderer.invoke('captions:pickBurnInOutput', defaultName),
     openBinFolder: () => ipcRenderer.invoke('captions:openBinFolder'),
     openModelsFolder: () => ipcRenderer.invoke('captions:openModelsFolder'),
     // Round 17 B6: cancel an in-flight caption burn-in from the panel.
     cancelBurnIn: () => ipcRenderer.invoke('captions:cancelBurnIn'),
+    cancelTranscribe: () => ipcRenderer.invoke('captions:cancelTranscribe'),
     onProgress: (handler: (p: CaptionsProgress) => void) => {
       const listener = (_e: unknown, p: CaptionsProgress): void => handler(p)
       ipcRenderer.on('captions:progress', listener)
@@ -192,7 +189,6 @@ const api: ImagiiApi = {
   },
   recording: {
     listSources: () => ipcRenderer.invoke('recording:listSources'),
-    save: (spec: RecordingSpec) => ipcRenderer.invoke('recording:save', spec),
     // Round 18 H1: streaming save protocol — chunks cross the bridge one
     // at a time instead of as one recording-sized ArrayBuffer.
     begin: () => ipcRenderer.invoke('recording:begin'),
@@ -203,10 +199,10 @@ const api: ImagiiApi = {
     abandon: (id: string) => ipcRenderer.invoke('recording:abandon', id),
     // M6 fix (round 15): renderer can show conversion progress and abort.
     cancelSave: () => ipcRenderer.invoke('recording:cancelSave'),
-    onProgress: (handler: (info: { percent: number; message?: string }) => void) => {
+    onProgress: (handler: (info: { percent?: number; message?: string }) => void) => {
       const listener = (
         _e: unknown,
-        info: { percent: number; message?: string }
+        info: { percent?: number; message?: string }
       ): void => handler(info)
       ipcRenderer.on('recording:progress', listener)
       return () => ipcRenderer.removeListener('recording:progress', listener)

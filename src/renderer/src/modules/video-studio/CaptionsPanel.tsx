@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
@@ -16,18 +16,14 @@ import {
   burnInDoneMessage,
   captionPhaseLabel,
   captionSizeReadout,
-  captionsReadyMessage
+  captionsReadyMessage,
+  staleCaptionsMessage
 } from '@shared/captions'
-import { useVideoStore } from './store/videoStore'
+import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
+import { formatClock } from '@shared/clockTime'
 
 export function CaptionsPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -37,14 +33,25 @@ export function CaptionsPanel(): JSX.Element | null {
   // across sessions via project save/load and (b) is available to other
   // panels (like Clip Kit) that want to bundle the SRT.
   const srtPath = useVideoStore((s) => s.srtPath)
-  const setSrtPath = useVideoStore((s) => s.setSrtPath)
+  const setSrtPathFor = useVideoStore((s) => s.setSrtPathFor)
   const [status, setStatus] = useState<CaptionsInstallStatus | null>(null)
-  const [running, setRunning] = useState(false)
+  // T-112: WHICH job is running, not just that one is. The header button said
+  // "Transcribing…" for a burn-in too, because both shared one boolean.
+  const [job, setJob] = useState<'transcribe' | 'burn-in' | null>(null)
+  const running = job !== null
   const [progress, setProgress] = useState<CaptionsProgress | null>(null)
   const [segments, setSegments] = useState<CaptionSegment[] | null>(null)
   const [showSetup, setShowSetup] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
+  // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
+  // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
+  // in that gap: two save dialogs, two burn-ins into two files. A `finally` gives the claim back; a second press is dropped in silence (the first
+  // one's chooser is on screen). Declared with the other hooks, ahead of any early return.
+  const burnStartingRef = useRef(false)
+  // T-127 (11): the same claim for "Save .srt", which goes straight to a native Save dialog (a double-click opened two, and answered
+  // twice wrote the file twice). Claimed first, given back in a finally.
+  const saveSrtStartingRef = useRef(false)
   // Phase 4E: Whisper model auto-install state
   const [installing, setInstalling] = useState(false)
   const [installProgress, setInstallProgress] = useState<ModelInstallProgress | null>(null)
@@ -73,6 +80,7 @@ export function CaptionsPanel(): JSX.Element | null {
   }, [])
 
   if (!source) return null
+  const noSound = videoHasNoSound(source)
 
   async function refreshStatus(): Promise<void> {
     const s = await window.api.captions.status()
@@ -80,79 +88,115 @@ export function CaptionsPanel(): JSX.Element | null {
   }
 
   async function transcribe(): Promise<void> {
-    if (!source) return
+    if (!source || noSound) return
     if (!status?.ready) {
       setShowSetup(true)
       return
     }
-    setRunning(true)
+    // T-112: the video this job is FOR. It takes minutes and nothing locks the app: close
+    // it, drop another, and the result arrived to attach itself to whatever was open.
+    const startedFor = source.filePath
+    const startedName = source.fileName
+    setJob('transcribe')
     setProgress(null)
     try {
       const result = await window.api.captions.transcribe({
         jobId: nanoid(10),
-        sourcePath: source.filePath
+        sourcePath: startedFor
       })
+      if (!setSrtPathFor(startedFor, result.srtPath)) {
+        toast(staleCaptionsMessage(startedName), {
+          icon: <Icon name="warning" size={18} />,
+          duration: 8000
+        })
+        return
+      }
       setSegments(result.segments)
-      setSrtPath(result.srtPath)
       toast.success(captionsReadyMessage(result.segments.length))
     } catch (err) {
       reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
     } finally {
-      setRunning(false)
+      setJob(null)
+      // T-100 + T-108: the row below the header shows a job that is running. One that
+      // stopped is not, whatever phase its last event named; and one that finished is
+      // not either — "Done 100%" with nothing to press stayed there for good. The toast
+      // says it finished, as in every other single-job panel.
+      setProgress(null)
     }
   }
 
   async function saveSrt(): Promise<void> {
-    if (!srtPath) return
-    const defaultName = source ? `${path.parse(source.fileName).name}.srt` : 'captions.srt'
-    const saved = await window.api.captions.saveSrt(srtPath, defaultName)
-    if (saved) toast.success('SRT saved')
+    if (saveSrtStartingRef.current) return
+    saveSrtStartingRef.current = true
+    try {
+      if (!srtPath) return
+      const defaultName = source ? `${path.parse(source.fileName).name}.srt` : 'captions.srt'
+      // T-115: this had no catch, so a rejection did nothing, visibly - main THROWS for a transcript
+      // outside the captions folder (a project file may name one as its srtPath), and the copy itself
+      // can fail (a full disk, a read-only destination). Either is the panel's one plain sentence.
+      const saved = await window.api.captions.saveSrt(srtPath, defaultName)
+      if (saved) toast.success('SRT saved')
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save the captions file." })
+    } finally {
+      saveSrtStartingRef.current = false
+    }
   }
 
   async function burnIn(): Promise<void> {
-    if (!srtPath || !source) return
-    const defaultName = `${path.parse(source.fileName).name}-captioned.mp4`
-    const outputPath = await window.api.captions.pickBurnInOutput(defaultName)
-    if (!outputPath) return
-    // Phase 3.1: when "trim to selected clip" is on, burn captions over the
-    // active clip's range only. The IPC handler validates the range, but
-    // double-check here so the toast comes from us, not from a thrown
-    // assert message.
-    const selectedClip =
-      trimToClip && selectedClipId
-        ? clips.find((c) => c.id === selectedClipId) ?? null
-        : null
-    if (trimToClip && !selectedClip) {
-      toast.error('Pick a clip first to use trim-to-clip burn-in.')
-      return
-    }
-    setRunning(true)
+    if (burnStartingRef.current) return
+    burnStartingRef.current = true
     try {
-      const result = await window.api.captions.burnIn({
-        jobId: nanoid(10),
-        videoPath: source.filePath,
-        srtPath,
-        outputPath,
-        // Legacy field — main process picks pixel size from style.fontSize
-        // when it's set, falling back to fontSizePct * 10 otherwise.
-        fontSizePct: style.fontSize / 10,
-        style,
-        ...(selectedClip && {
-          startSec: selectedClip.startSec,
-          endSec: selectedClip.endSec
-        })
-      })
-      // T-89: a ranged burn over a stretch nobody speaks in still writes the
-      // clip, with nothing on it. Say that, not "Captions burned in".
-      if (result.captioned) {
-        toast.success(burnInDoneMessage(true))
-      } else {
-        toast(burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: 6000 })
+      if (!srtPath || !source) return
+      const defaultName = `${path.parse(source.fileName).name}-captioned.mp4`
+      const outputPath = await window.api.captions.pickBurnInOutput(defaultName)
+      if (!outputPath) return
+      // Phase 3.1: when "trim to selected clip" is on, burn captions over the
+      // active clip's range only. The IPC handler validates the range, but
+      // double-check here so the toast comes from us, not from a thrown
+      // assert message.
+      const selectedClip =
+        trimToClip && selectedClipId
+          ? clips.find((c) => c.id === selectedClipId) ?? null
+          : null
+      if (trimToClip && !selectedClip) {
+        toast.error('Pick a clip first to use trim-to-clip burn-in.')
+        return
       }
-    } catch (err) {
-      reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
+      setJob('burn-in')
+      try {
+        const result = await window.api.captions.burnIn({
+          jobId: nanoid(10),
+          videoPath: source.filePath,
+          srtPath,
+          outputPath,
+          // Legacy field — main process picks pixel size from style.fontSize
+          // when it's set, falling back to fontSizePct * 10 otherwise.
+          fontSizePct: style.fontSize / 10,
+          style,
+          ...(selectedClip && {
+            startSec: selectedClip.startSec,
+            endSec: selectedClip.endSec
+          })
+        })
+        // T-89: a ranged burn over a stretch nobody speaks in still writes the
+        // clip, with nothing on it. Say that, not "Captions burned in".
+        if (result.captioned) {
+          toast.success(burnInDoneMessage(true))
+        } else {
+          toast(burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: 6000 })
+        }
+      } catch (err) {
+        reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
+      } finally {
+        setJob(null)
+        // T-100 + T-108: without this a stopped burn froze at "Burning in… 40%" with a
+        // Cancel button for a job that no longer existed, and a finished one left
+        // "Done 100%" for good. The toast says what happened; the row goes back to idle.
+        setProgress(null)
+      }
     } finally {
-      setRunning(false)
+      burnStartingRef.current = false
     }
   }
 
@@ -190,6 +234,16 @@ export function CaptionsPanel(): JSX.Element | null {
     }
   }
 
+  // T-112: the header button names the job that is running (never "Transcribing…" during a
+  // burn-in), and otherwise what pressing it will do.
+  const headerLabel =
+    job === 'transcribe'
+      ? 'Transcribing…'
+      : job === 'burn-in'
+        ? 'Burning in…'
+        : segments
+          ? 'Re-transcribe'
+          : 'Transcribe'
   // T-89: a phase main cannot measure sends no percent, and gets an
   // indeterminate bar rather than a number that means nothing.
   const percent = progress?.percent
@@ -203,20 +257,26 @@ export function CaptionsPanel(): JSX.Element | null {
           <button
             className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
             onClick={transcribe}
-            disabled={running}
+            disabled={running || noSound}
+            title={noSound ? NO_SOUND_MESSAGE : undefined}
           >
-            {running ? 'Transcribing…' : segments ? 'Re-transcribe' : 'Transcribe'}
+            {headerLabel}
           </button>
         }
       >
         Auto-captions
       </PanelHeader>
+      {/* T-112: a video with no sound track has nothing to transcribe. */}
+      {noSound ? <p className="text-xs text-warn">{NO_SOUND_MESSAGE}</p> : null}
 
       {!status?.ready ? (
+        // T-112: the links on this ember wash are `text-warn` (10.4:1 on it) and underlined at
+        // rest. They were `text-accent`, which measures 4.09:1 on the wash — under AA — and
+        // only underlined on hover, so a link was a color and nothing else.
         <div className="bg-ember/10 border border-ember/30 rounded p-2 text-xs">
           <div className="font-semibold text-warn mb-1">Captions need setup</div>
           <button
-            className="text-warn hover:underline"
+            className="text-warn underline"
             onClick={() => setShowSetup((v) => !v)}
           >
             {showSetup ? 'Hide' : 'Show'} setup instructions
@@ -234,7 +294,7 @@ export function CaptionsPanel(): JSX.Element | null {
                 1. Download <code>whisper-cli.exe</code> from the{' '}
                 <a
                   href="https://github.com/ggerganov/whisper.cpp/releases"
-                  className="text-accent hover:underline"
+                  className="text-warn underline"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -242,19 +302,23 @@ export function CaptionsPanel(): JSX.Element | null {
                 </a>{' '}
                 (the Windows build) and save it exactly here:
                 <button
-                  className="ml-1 text-accent hover:underline"
+                  className="ml-1 text-warn underline"
                   onClick={() => window.api.captions.openBinFolder()}
                 >
                   Open folder
                 </button>
               </div>
               <div className="font-mono break-all">{status?.exePath}</div>
+              {/* T-102: this is imagii's own data folder, not the app's install
+                  folder — the portable build unpacks to a temp folder that is
+                  rebuilt on every launch, so a file placed there would vanish. */}
+              <div>This folder survives app updates, so you only set this up once.</div>
               <div>
                 2. The English model (~141 MB). The button below downloads it for you, or
                 you can grab it from{' '}
                 <a
                   href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-                  className="text-accent hover:underline"
+                  className="text-warn underline"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -267,7 +331,7 @@ export function CaptionsPanel(): JSX.Element | null {
                   binaries link so a power user can drop a different .bin in
                   alongside the auto-installed one. */}
               <button
-                className="text-accent hover:underline self-start text-xs"
+                className="text-warn underline self-start text-xs"
                 onClick={() => window.api.captions.openModelsFolder()}
               >
                 Show models folder
@@ -293,7 +357,14 @@ export function CaptionsPanel(): JSX.Element | null {
                   </button>
                   {installing && installProgress ? (
                     <div className="flex items-center gap-2 text-xs">
-                      <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+                      <div
+                        className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
+                        role="progressbar"
+                        aria-label="Downloading the caption model"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round(installProgress.percent ?? 0)}
+                      >
                         <div
                           className="h-full bg-accent"
                           style={{
@@ -301,7 +372,7 @@ export function CaptionsPanel(): JSX.Element | null {
                           }}
                         />
                       </div>
-                      <span className="font-mono w-10 text-right">
+                      <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">
                         {Math.round(installProgress.percent ?? 0)}%
                       </span>
                       <button
@@ -317,7 +388,7 @@ export function CaptionsPanel(): JSX.Element | null {
                 </div>
               ) : null}
               <button
-                className="text-accent hover:underline mt-1 self-start"
+                className="text-warn underline mt-1 self-start"
                 onClick={refreshStatus}
               >
                 Refresh status
@@ -345,11 +416,12 @@ export function CaptionsPanel(): JSX.Element | null {
             )}
           </div>
           {determinate ? (
-            <span className="font-mono w-10 text-right">{Math.round(percent)}%</span>
+            <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(percent)}%</span>
           ) : null}
-          {/* Round 17 B6: burn-in is the only phase the user can usefully
-              abort (transcribe is short). Show Cancel while the burn-in
-              phase is in flight. */}
+          {/* Round 17 B6: Cancel while the burn-in phase is in flight. T-108:
+              transcription of a long VOD is not short — extracting the sound and
+              the engine run for minutes — so those two phases carry one too (the
+              SRT write after them is instant, and ends the job either way). */}
           {progress.phase === 'burning-in' ? (
             <button
               className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
@@ -358,15 +430,32 @@ export function CaptionsPanel(): JSX.Element | null {
             >
               Cancel
             </button>
+          ) : progress.phase === 'extracting' || progress.phase === 'transcribing' ? (
+            <button
+              className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
+              onClick={() => void window.api.captions.cancelTranscribe()}
+              title="Cancel transcription"
+            >
+              Cancel
+            </button>
           ) : null}
         </div>
       ) : null}
 
       {segments ? (
-        <div className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs">
+        // T-113: a scroller must be reachable by keyboard — this Electron (Chromium 126) does not
+        // make a scrollable region focusable by itself, and its lines hold nothing to tab to.
+        // T-114: and it is a region, so its name is announced when focus lands (a name on a plain
+        // div is not).
+        <div
+          className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          role="region"
+          tabIndex={0}
+          aria-label="Transcript preview"
+        >
           {segments.map((seg, i) => (
             <div key={i} className="py-0.5">
-              <span className="text-ink-dim font-mono mr-2">{formatTime(seg.startSec)}</span>
+              <span className="text-ink-dim font-mono mr-2">{formatClock(seg.startSec)}</span>
               {seg.text}
             </div>
           ))}
@@ -408,14 +497,17 @@ export function CaptionsPanel(): JSX.Element | null {
                   step={1}
                   value={style.fontSize}
                   onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
-                  className="flex-1"
+                  className="flex-1 min-w-0"
                   // M11 fix (round 15)
                   aria-label="Caption size"
-                  aria-valuetext={`${style.fontSize}, ${captionSizeReadout(style.fontSize)}`}
+                  aria-valuetext={`${style.fontSize}, ${captionSizeReadout(style.fontSize, source.probe)}`}
                 />
-                <span className="font-mono w-8">{style.fontSize}</span>
+                <span className="font-mono w-8 shrink-0 whitespace-nowrap">{style.fontSize}</span>
               </label>
-              <span className="text-ink-dim pl-[3.875rem]">{captionSizeReadout(style.fontSize)}</span>
+              {/* T-112: about THIS video's frame (the size the burn draws), not 1080p. */}
+              <span className="text-ink-dim pl-[3.875rem]">
+                {captionSizeReadout(style.fontSize, source.probe)}
+              </span>
             </div>
             <label className="col-span-2 flex items-center gap-1.5">
               <span className="text-ink-muted w-14">Position</span>
@@ -465,6 +557,7 @@ export function CaptionsPanel(): JSX.Element | null {
             <button
               className="btn-ghost px-2 py-1 mr-auto inline-flex items-center gap-1.5"
               onClick={saveSrt}
+              aria-describedby="srt-scope-hint"
             >
               <Icon name="save" size={14} /> Save .srt
             </button>
@@ -476,6 +569,12 @@ export function CaptionsPanel(): JSX.Element | null {
               Burn into video
             </button>
           </div>
+          {/* T-123 (16): "Save .srt" copies the WHOLE transcript, on the source's clock (`captions:saveSrt` is a copy), and
+              it sits directly under a box that says "clip range only". The scope is said at the button, and the button
+              is described by it. The range-aware save is the ledgered upgrade (it is what the Clip Kit's `.srt` already is). */}
+          <p id="srt-scope-hint" className="text-xs text-ink-dim">
+            The box above only changes Burn into video. Save .srt keeps the captions for the whole video.
+          </p>
         </div>
       ) : null}
 

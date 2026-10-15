@@ -114,3 +114,70 @@ describe('the same check rejects a widened trigger (it can tell the difference)'
     expect(childKeys(block, 'push')).toEqual(['branches', 'tags'])
   })
 })
+
+/**
+ * T-120 (8) - the exe ships the Electron the tests ran.
+ *
+ * `electron-builder.yml` pinned `electronVersion: 31.3.0` while the lockfile resolved 31.7.7 and every unit,
+ * E2E and Layer 5 run used that one: the runtime that shipped never ran under any test. With no pin
+ * electron-builder reads the installed `electron` package, which is the lockfile's. The release run on the
+ * Windows runner is where the packaged build is checked.
+ */
+describe('electron-builder.yml does not pin an Electron version (T-120)', () => {
+  const builder = readFileSync(path.resolve(__dirname, '../../electron-builder.yml'), 'utf8')
+
+  it('has no electronVersion key, so the packaged runtime is the installed one', () => {
+    expect(builder).not.toMatch(/^\s*electronVersion\s*:/m)
+  })
+
+  it('the check can tell: the line it removed would have been found', () => {
+    expect('appId: x\nelectronVersion: 31.3.0\n').toMatch(/^\s*electronVersion\s*:/m)
+    expect('appId: x\n# electronVersion was pinned here\n').not.toMatch(/^\s*electronVersion\s*:/m)
+  })
+})
+
+/**
+ * T-121 (2) - the portable exe ships one ffprobe, and no dependency nothing imports.
+ *
+ * ffprobe-static carries six platforms' binaries (336 MiB measured in the unpacked tree) and a Windows
+ * x64 build loads one of them (`ffprobe-static/index.js` joins `bin/win32/x64/ffprobe.exe`); the other
+ * five were unpacked on every launch (T-110 (ai)). Four dependencies (fluent-ffmpeg, pdf-lib,
+ * music-metadata, file-type) were imported by no file under `src`. A `electron-builder --dir` probe of the
+ * trimmed tree held `bin/win32/x64/ffprobe.exe` and nothing else under `bin`.
+ */
+describe('the packaged tree carries one ffprobe and no unused dependency (T-121)', () => {
+  const builder = readFileSync(path.resolve(__dirname, '../../electron-builder.yml'), 'utf8')
+  const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as {
+    dependencies: Record<string, string>
+  }
+  const EXCLUDES = [
+    '!node_modules/ffprobe-static/bin/darwin/**',
+    '!node_modules/ffprobe-static/bin/linux/**',
+    '!node_modules/ffprobe-static/bin/win32/ia32/**'
+  ]
+  const excluded = (yml: string, pattern: string): boolean =>
+    new RegExp(`^\\s*-\\s*"${pattern.replace(/[*.]/g, '\\$&')}"\\s*$`, 'm').test(yml)
+
+  it.each(EXCLUDES)('files excludes %s', (pattern) => {
+    expect(excluded(builder, pattern)).toBe(true)
+  })
+
+  it('and never excludes the one binary a Windows x64 build loads', () => {
+    expect(builder).not.toMatch(/ffprobe-static\/bin\/win32\/x64/)
+    expect(builder).not.toMatch(/ffprobe-static\/bin\/win32\/\*\*/)
+  })
+
+  it.each(['fluent-ffmpeg', 'pdf-lib', 'music-metadata', 'file-type'])(
+    '%s is not a dependency: nothing imports it',
+    (name) => {
+      expect(Object.keys(pkg.dependencies)).not.toContain(name)
+    }
+  )
+
+  it('the check can tell: a files list without the line, or with it commented out, is not excluded', () => {
+    const line = '  - "!node_modules/ffprobe-static/bin/linux/**"\n'
+    expect(excluded(`files:\n${line}`, EXCLUDES[1] as string)).toBe(true)
+    expect(excluded('files:\n  - "out/**/*"\n', EXCLUDES[1] as string)).toBe(false)
+    expect(excluded(`files:\n  # ${line.trim()}\n`, EXCLUDES[1] as string)).toBe(false)
+  })
+})

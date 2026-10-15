@@ -3,7 +3,13 @@ import {
   audioPeakToScore,
   countHypeWords,
   DEFAULT_WEIGHTS,
+  HOOK_MAX_SOURCE_SEC,
+  HOOK_MIN_SEC,
+  HOOK_OUTPUT_SEC,
   HYPE_KEYWORDS,
+  hookAsk,
+  hookWindow,
+  HOOK_DEBOUNCE_MS,
   scoreHighlights,
   scoreHookQuality,
   type AudioCandidate
@@ -263,5 +269,159 @@ describe('scoreHookQuality — Phase 4C', () => {
   })
   it('echoes the input audioEnergyDb in the result', () => {
     expect(scoreHookQuality(-12.345).audioEnergyDb).toBe(-12.345)
+  })
+})
+
+/**
+ * T-112 — "First 3 s" is three seconds of what the viewer SEES.
+ *
+ * The badge analyzed 3 source seconds from the clip's start whatever its speed. At
+ * 2x the viewer's first 3 seconds are 6 source seconds, and a hook that is loud in
+ * seconds 3-6 of the range was scored as if it did not exist (and the other way
+ * round at 0.5x, where the first 3 output seconds are only 1.5 source seconds).
+ * Output time is source time over the speed, so the window to analyze is the
+ * output length TIMES the speed.
+ */
+describe('hookWindow — three output seconds, in source seconds (T-112)', () => {
+  const clip = (speedMultiplier?: number, length = 60) => ({ startSec: 10, endSec: 10 + length, speedMultiplier })
+
+  it('is 3 seconds at 1x, and 3 seconds when no speed is set', () => {
+    expect(HOOK_OUTPUT_SEC).toBe(3)
+    expect(hookWindow(clip(1))).toEqual({ sourceSec: 3, outputSec: 3 })
+    expect(hookWindow(clip())).toEqual({ sourceSec: 3, outputSec: 3 })
+  })
+
+  it('a faster clip shows more of the source in its first 3 seconds, a slower one less', () => {
+    expect(hookWindow(clip(2))?.sourceSec).toBe(6)
+    expect(hookWindow(clip(4))?.sourceSec).toBe(12)
+    expect(hookWindow(clip(0.5))?.sourceSec).toBe(1.5)
+    expect(hookWindow(clip(0.25))?.sourceSec).toBe(0.75)
+    for (const speed of [0.25, 0.5, 1, 1.5, 2, 4]) {
+      expect(hookWindow(clip(speed))?.outputSec, `${speed}x`).toBeCloseTo(3, 10)
+    }
+  })
+
+  it('reads a speed that means nothing as 1x, the way the encoder does', () => {
+    for (const bad of [0, -2, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(hookWindow(clip(bad))?.sourceSec, String(bad)).toBe(3)
+    }
+  })
+
+  it('never reaches past the end of the clip — the loudness of a different part of the video is not its hook', () => {
+    // 4 s of source at 4x is a 1 s clip: the whole range, and a first "3 seconds" of 1.
+    expect(hookWindow(clip(4, 4))).toEqual({ sourceSec: 4, outputSec: 1 })
+    expect(hookWindow(clip(1, 2))).toEqual({ sourceSec: 2, outputSec: 2 })
+  })
+
+  it('stays inside what main will analyze, and a clip too short to have a hook has none (T-113)', () => {
+    // T-113: the window used to floor at 0.1 s while the gate in `video:analyzeClipHook` takes
+    // 0.5-30 s, so a 0.3 s clip showed a "Hook…" spinner that died silently on the refusal.
+    // A clip whose first seconds are under half a second has no hook to rate: no window at all.
+    expect(hookWindow({ startSec: 5, endSec: 5, speedMultiplier: 1 })).toBeNull()
+    expect(hookWindow({ startSec: 9, endSec: 5, speedMultiplier: 1 })).toBeNull()
+    expect(hookWindow(clip(1, 0.3))).toBeNull()
+    expect(hookWindow(clip(1, 0.49))).toBeNull()
+    expect(hookWindow(clip(1, 0.5))).toEqual({ sourceSec: 0.5, outputSec: 0.5 })
+    expect(hookWindow(clip(4, 3600))?.sourceSec).toBeLessThanOrEqual(30)
+  })
+
+  it('judges the OUTPUT length: 1.5 s of source at 4x plays for under half a second, so no hook', () => {
+    expect(hookWindow(clip(4, 1.9))).toBeNull() // 0.475 s out
+    expect(hookWindow(clip(4, 2))).toEqual({ sourceSec: 2, outputSec: 0.5 })
+  })
+
+  it('a slow clip is judged on its source window too: 0.45 s of source at 0.5x plays for 0.9 s, but main will not analyze 0.45 s', () => {
+    expect(hookWindow(clip(0.5, 0.45))).toBeNull()
+    expect(hookWindow(clip(0.5, 0.5))).toEqual({ sourceSec: 0.5, outputSec: 1 })
+  })
+
+  it('every window it hands back is one the gate takes — the badge cannot be refused', () => {
+    // The gate: HOOK_MIN_SEC <= window <= HOOK_MAX_SOURCE_SEC source seconds. Walk lengths and
+    // every speed the slider offers; a window is either absent or inside it.
+    for (const speed of [0.25, 0.5, 1, 1.5, 2, 3, 4]) {
+      for (const length of [0, 0.05, 0.2, 0.49, 0.5, 0.75, 1, 2, 3, 5, 30, 600, 7200]) {
+        const w = hookWindow({ startSec: 10, endSec: 10 + length, speedMultiplier: speed })
+        if (w === null) continue
+        expect(w.sourceSec, `${length} s at ${speed}x`).toBeGreaterThanOrEqual(HOOK_MIN_SEC)
+        expect(w.sourceSec, `${length} s at ${speed}x`).toBeLessThanOrEqual(HOOK_MAX_SOURCE_SEC)
+        expect(w.outputSec, `${length} s at ${speed}x`).toBeGreaterThanOrEqual(HOOK_MIN_SEC)
+      }
+    }
+  })
+})
+
+/**
+ * T-115 — the badge asks for the EXACT start and window, once they stop changing.
+ *
+ * The history, because each step is why the next exists. T-113: the speed slider moves in 0.05
+ * steps, a window is 3 x the speed, and the effect was keyed on that number, so every tick killed the
+ * running ffmpeg and started another (75 times across the slider's range). T-114: a drag of the start
+ * handle changed `startSec` on every mousemove, the same bug from the other handle. Both were fixed
+ * by keying the effect on whole seconds (`hookWindowKey`), which stopped the respawning and made the
+ * badge describe a start up to half a second away, indefinitely - the final badge after a drag could
+ * be a whole second stale. A trailing debounce on the exact numbers (`HOOK_DEBOUNCE_MS`, applied in
+ * `HookIndicator`) bounds the asks the same way and leaves nothing stale: the badge always describes
+ * the window the clip has once the person stops moving. What is testable without a DOM is the pair of
+ * facts the effect rests on - what it asks for (`hookAsk`), and how long it waits; the timing itself
+ * is driven in the E2E ("dragging the start handle asks once, after it settles, with the exact
+ * start").
+ */
+describe('hookAsk and HOOK_DEBOUNCE_MS — the exact window, once the drag settles (T-115)', () => {
+  it('asks for the EXACT start and window - never a rounded one', () => {
+    expect(hookAsk(12.37, 3.45)).toEqual({ startSec: 12.37, durationSec: 3.45 })
+    expect(hookAsk(0.4, 3)).toEqual({ startSec: 0.4, durationSec: 3 })
+    expect(hookAsk(0, 0.5)).toEqual({ startSec: 0, durationSec: 0.5 })
+    // The old key rounded 12.49 and 12.51 to different seconds and 12.4 and 12.0 to the same one;
+    // the ask keeps all of them apart.
+    expect(hookAsk(12.4, 3)?.startSec).not.toBe(hookAsk(12, 3)?.startSec)
+  })
+
+  it('every start of a drag and every tick of the speed slider is a distinct, exact ask (the debounce bounds them, not the numbers)', () => {
+    const starts = Array.from({ length: 61 }, (_, i) => Math.round(i * 0.05 * 100) / 100)
+    expect(new Set(starts.map((start) => hookAsk(start, 3)?.startSec)).size).toBe(61)
+    const ticks = Array.from({ length: 76 }, (_, i) => Math.round((0.25 + i * 0.05) * 100) / 100)
+    const windows = ticks.map((speed) => (hookWindow({ startSec: 0, endSec: 600, speedMultiplier: speed }) as { sourceSec: number }).sourceSec)
+    expect(new Set(windows.map((w) => hookAsk(0, w)?.durationSec)).size).toBe(76)
+  })
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['negative', -2],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY]
+  ])('a start that is %s asks for nothing - main would refuse it', (_label, start) => {
+    expect(hookAsk(start, 3)).toBeNull()
+  })
+
+  it('a window main would refuse asks for nothing: under HOOK_MIN_SEC, over HOOK_MAX_SOURCE_SEC, or not a number', () => {
+    expect(hookAsk(0, HOOK_MIN_SEC - 0.01)).toBeNull()
+    expect(hookAsk(0, 0)).toBeNull()
+    expect(hookAsk(0, -1)).toBeNull()
+    expect(hookAsk(0, HOOK_MAX_SOURCE_SEC + 0.01)).toBeNull()
+    expect(hookAsk(0, Number.NaN)).toBeNull()
+    expect(hookAsk(0, Number.POSITIVE_INFINITY)).toBeNull()
+    // The bounds are the gate's, inclusive.
+    expect(hookAsk(0, HOOK_MIN_SEC)).not.toBeNull()
+    expect(hookAsk(0, HOOK_MAX_SOURCE_SEC)).not.toBeNull()
+  })
+
+  it('every window hookWindow hands back, at any usable start, is one the badge may ask for', () => {
+    for (const speed of [0.25, 1, 1.05, 2, 4]) {
+      for (const length of [0.5, 1, 3, 30, 600]) {
+        for (const start of [0, 0.4, 12.37, 3599.9]) {
+          const w = hookWindow({ startSec: start, endSec: start + length, speedMultiplier: speed })
+          if (w === null) continue
+          expect(hookAsk(start, w.sourceSec), `${length} s at ${speed}x from ${start}`).not.toBeNull()
+        }
+      }
+    }
+  })
+
+  it('waits a quarter second: past a drag\'s mousemoves (about 16 ms apart), well inside the time a person waits for a badge', () => {
+    expect(HOOK_DEBOUNCE_MS).toBe(250)
+    // The two bounds the number lives between - a drag pauses for longer than a frame before it
+    // is over, and a badge that took over half a second to appear would read as broken.
+    expect(HOOK_DEBOUNCE_MS).toBeGreaterThan(100)
+    expect(HOOK_DEBOUNCE_MS).toBeLessThan(500)
   })
 })

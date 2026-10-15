@@ -5,13 +5,24 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
-import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
+import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
 import { dragTo } from './drag'
+import {
+  DEFAULT_WINDOW,
+  MIN_WINDOW,
+  expectControlsWhole,
+  expectNoHorizontalOverflow,
+  expectOneLine,
+  expectSelectsWhole,
+  setWindowSize
+} from './layout'
+import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
@@ -268,6 +279,9 @@ async function stubOpenDialog(app: ElectronApplication, filePath: string | null)
 // ── panel scopes ──────────────────────────────────────────────────────────
 const CLEANUP = '[data-tutorial="audio-cleanup"]'
 const LEVELS = '[data-tutorial="audio-levels"]'
+/** T-124 (26): the sentence under Manual gain: the limiter ends a chain with something in it, and a bare pass-through has none. */
+const CEILING_SENTENCE =
+  'When you boost, switch something on or cut a part out, peaks above −1 dBFS are limited in the export, so a boost cannot clip. Otherwise the export keeps your levels as they are.'
 const MULTITRACK = '[data-tutorial="audio-multitrack"]'
 const EXPORT = '[data-tutorial="audio-export"]'
 const WAVEFORM = '[data-tutorial="audio-waveform"]'
@@ -371,12 +385,16 @@ async function makeLongMp3(outPath: string): Promise<void> {
   }
 }
 
-function expectSelected(locator: ReturnType<Page['locator']>): Promise<void> {
-  return expect(locator).toHaveClass(/bg-accent/)
+// T-113: the selected button of a group is told to assistive tech, not only drawn in the accent
+// fill (aria-pressed) — every group these two read (Cleanup's strengths, Levels' compressors).
+async function expectSelected(locator: ReturnType<Page['locator']>): Promise<void> {
+  await expect(locator).toHaveClass(/bg-accent/)
+  await expect(locator).toHaveAttribute('aria-pressed', 'true')
 }
 
-function expectNotSelected(locator: ReturnType<Page['locator']>): Promise<void> {
-  return expect(locator).toHaveClass(/bg-bg-hover/)
+async function expectNotSelected(locator: ReturnType<Page['locator']>): Promise<void> {
+  await expect(locator).toHaveClass(/bg-bg-hover/)
+  await expect(locator).toHaveAttribute('aria-pressed', 'false')
 }
 
 /** T-90: says WHEN a marked part goes (at export) and how to undo the mark. */
@@ -526,7 +544,11 @@ test.describe('imagii Audio Studio', () => {
       // Probe readout — these numbers came back over IPC from ffprobe.
       await expect(window.locator(WAVEFORM)).toContainText('44100 Hz')
       await expect(window.locator(WAVEFORM)).toContainText('1 ch')
-      await expect(window.locator(WAVEFORM)).toContainText('pcm_s16le')
+      // T-100: the codec id is ffprobe's word for how the file is stored, not
+      // something a person cleaning audio can use; the sample rate and the
+      // channel count are, and stay.
+      await expect(window.locator(WAVEFORM)).not.toContainText('pcm_s16le')
+      await expect(window.locator(WAVEFORM)).not.toContainText(/pcm_|mp3float|aac_/)
       const transport = window.locator(`${WAVEFORM} .font-mono`).first()
       await expect(transport).toHaveText(`0:00.00 / 0:0${FIXTURE_SECONDS}.00`)
       await expect
@@ -640,6 +662,11 @@ test.describe('imagii Audio Studio', () => {
       await expect
         .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
         .toContain('Loaded')
+      // T-108: the header names the VIDEO the person dropped — the extracted WAV is
+      // scratch with a random name they never chose ("aB3dE5fG7h.wav").
+      const header = window.locator('header')
+      await expect(header.getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(header.getByText(/\.wav$/)).toHaveCount(0)
       // The extract writes 48 kHz stereo pcm_s16le regardless of the source.
       await expect(window.locator(WAVEFORM)).toContainText('48000 Hz')
       await expect(window.locator(WAVEFORM)).toContainText('2 ch')
@@ -710,6 +737,77 @@ test.describe('imagii Audio Studio', () => {
       await toggle.click()
       await window.getByRole('button', { name: 'Clear list' }).click()
       await expect(window.getByRole('button', { name: /^Recent \(/ })).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+      try {
+        rmSync(seedRoot, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+
+  // T-119 (6): the video Importer refused a second import while one ran (T-112); this one did not. A slow
+  // extraction of a video's sound landed after a second file had loaded - and been tuned - and replaced it.
+  // The extraction's ffmpeg is held for 8 s, so "meanwhile" is a state the test creates.
+  test('a second file while the first one is still being extracted is refused, from a drop and from Recent, and the first one is what opens (T-119)', async () => {
+    test.setTimeout(180_000)
+    const seedRoot = path.join(os.tmpdir(), `imagii-e2e-audio-busy-seed-${Date.now().toString(36)}`)
+    mkdirSync(seedRoot, { recursive: true })
+    const seededFixture = path.join(seedRoot, 'from-last-session.wav')
+    await makeFixtureWav(seededFixture)
+    const studio = await openStudio('importerbusy', { recentFiles: { audio: [seededFixture] } })
+    const { window, app } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+
+      // The flag is released when a load FAILS too (the importer stays mounted after a refusal, so a stuck flag
+      // would refuse every later file): a text file is refused, then the next file is taken.
+      const notes = path.join(studio.root, 'source', 'stream-notes.txt')
+      writeFileSync(notes, 'this is not audio, it is a text file\n', 'utf8')
+      await dropOnImporter(window, notes, 'stream-notes.txt')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] })
+        .toContain("This file has no sound, so there's nothing to clean. Pick a file with audio.")
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 8_000 }])
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Extracting audio…')
+
+      // A second file arrives meanwhile, by a drop. It used to start a PARALLEL load. It sits in a folder that
+      // looks cloud-synced, which is what discriminates WHERE the refusal happens: before anything else is said
+      // about the file, so the person is not told "cloud-sync folder" and then "wait" in two sentences.
+      const synced = path.join(studio.root, 'source', 'Dropbox', 'e2e-tone.wav')
+      mkdirSync(path.dirname(synced), { recursive: true })
+      copyFileSync(studio.fixture, synced)
+      await dropOnImporter(window, synced, 'e2e-tone.wav')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Still extracting audio from the last file. Wait for it to finish.')
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/cloud-sync/i)
+      // ...and by the Recent menu, which loads through the same function.
+      await window.getByRole('button', { name: 'Recent (1)' }).click()
+      await window.getByRole('button', { name: /from-last-session\.wav/ }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+      expect((await readSpawnLog(app)).filter((k) => k === 'ffmpeg'), 'one extraction, no second load').toHaveLength(1)
+
+      // The extraction finishes and the sound that opens is the FIRST drop's.
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      const header = window.locator('header')
+      await expect(header.getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(header.getByText('e2e-tone.wav', { exact: true })).toHaveCount(0)
+      await expect(header.getByText('from-last-session.wav', { exact: true })).toHaveCount(0)
+
+      // The refusal does not stick: once it is loaded and closed, the importer takes a file again.
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await dropAndWaitReady(studio)
+      await expect(window.locator('header').getByText('e2e-tone.wav', { exact: true })).toBeVisible()
     } finally {
       await closeStudio(studio)
       try {
@@ -884,6 +982,13 @@ test.describe('imagii Audio Studio', () => {
       await expect(reduction).toHaveAttribute('max', '50')
       await expect(cleanup.locator('label', { hasText: 'Noise floor' })).toContainText('-25 dB')
       await expect(cleanup.locator('label', { hasText: 'Reduction' })).toContainText('12 dB')
+      // T-112: the hint names the preset that owns the number it quotes. T-125 (3) swapped the floors so the strengths are ordered
+      // by what they remove: Light is -35 / 12 dB (chain.ts), Medium -30 / 18, Aggressive -25 / 24 - and Custom still STARTS at
+      // -25 / 12, which is no preset's setting, so the hint must not say it is.
+      // The hint is the label's title (hover), so it is read as the attribute.
+      const floorLabel = cleanup.locator('label', { hasText: 'Noise floor' })
+      await expect(floorLabel).toHaveAttribute('title', /-35 is the Light preset's setting\.$/)
+      await expect(floorLabel).not.toHaveAttribute('title', /-25|medium/i)
       await noiseFloor.press('ArrowRight')
       await expect(cleanup.locator('label', { hasText: 'Noise floor' })).toContainText('-24 dB')
       await noiseFloor.press('ArrowLeft')
@@ -970,6 +1075,16 @@ test.describe('imagii Audio Studio', () => {
       await loudnorm.check()
       await expect(lufs).toBeEnabled()
       await expect(lufs).toHaveValue('-16')
+      // T-113: the range the box settles to is said beside it, not only enforced.
+      // T-114: beside the checkbox's label, not inside it - it was part of the checkbox's accessible
+      // name ("Even volume ... LUFS) · -70 to -5") - in parentheses, with the true minus the paragraph
+      // below uses (U+2212), not a hyphen.
+      const range = levels.getByText('(\u221270 to \u22125)', { exact: true })
+      await expect(range).toBeVisible()
+      await expect(levels.getByText('· -70 to -5')).toHaveCount(0)
+      expect(await loudnorm.evaluate((el) => el.closest('label')?.textContent ?? '')).not.toMatch(/70/)
+      await expect(loudnorm).not.toHaveAccessibleName(/70/)
+      await expect(loudnorm).toHaveAccessibleName(/^Even volume/)
       const platform = levels.getByLabel('Loudness platform preset')
       // -16 is the podcast target, so the picker reads Podcast without anyone
       // having chosen it.
@@ -996,15 +1111,15 @@ test.describe('imagii Audio Studio', () => {
       // ONE row now, and the row you pick is the row that stays picked.
       await expect(platform.locator('option')).toHaveText([
         'Talking and podcasts (−16)',
-        'YouTube, Spotify, TikTok, Reels (−14)',
+        'YouTube, TikTok, Reels (−14)',
         'Broadcast TV and radio (−23)',
         'Custom'
       ])
-      await platform.selectOption({ label: 'YouTube, Spotify, TikTok, Reels (−14)' })
+      await platform.selectOption({ label: 'YouTube, TikTok, Reels (−14)' })
       await expect(lufs).toHaveValue('-14')
       await expect(platform).toHaveValue('streaming')
       await expect(platform.locator('option:checked')).toHaveText(
-        'YouTube, Spotify, TikTok, Reels (−14)'
+        'YouTube, TikTok, Reels (−14)'
       )
 
       // Number -> "Custom" detection.
@@ -1034,6 +1149,13 @@ test.describe('imagii Audio Studio', () => {
       await gain.press('Home')
       await expect(readout).toHaveText('-12.0 dB')
       await expect(gain).toHaveAttribute('aria-valuetext', '-12.0 decibels')
+      // T-123 (10): the ceiling is said where the boost is. The export ends in a -1 dBFS limiter (Layer 5 measures it:
+      // +12 dB on a -2 dBFS file lands at or under -0.9 dBFS, where it used to land at 0.0), so the panel says what it does.
+      // T-124 (26): and says it of what it is true of. A bare pass-through (nothing boosted, nothing switched on) keeps no limiter
+      // on purpose - "nothing switched on is the file that went in" - so the sentence is conditional, and says what stays as it was.
+      const ceiling = levels.getByText(CEILING_SENTENCE, { exact: true })
+      await expect(ceiling).toBeVisible()
+      await expect(levels.getByText('Peaks above −1 dBFS are limited when you export', { exact: false })).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }
@@ -1082,6 +1204,506 @@ test.describe('imagii Audio Studio', () => {
       await presetName.getByPlaceholder('My mic preset').fill('typed')
       await presetName.getByPlaceholder('My mic preset').press('Control+z')
       await expectSelected(medium)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a ticked checkbox or a moved slider keeps its focus and still lets Ctrl+Z, Ctrl+Y and ? through (T-123 (2))', async () => {
+    // Every window-level key guard stood down for ANY <input>, and a checkbox that has just been ticked (or a slider that has
+    // just been moved) is the focused element: tick Hum removal, press Ctrl+Z, and nothing happened. The overlay's "?" died the
+    // same way. A text field still owns its keys (the existing case above); a checkbox and a range have no use for these.
+    test.setTimeout(120_000)
+    const studio = await openStudio('undo-focus')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      const hum = cleanup.getByLabel('Hum removal (60 Hz mains)')
+      const focusedType = (): Promise<string | null> =>
+        window.evaluate(() => (document.activeElement as HTMLInputElement | null)?.type ?? null)
+
+      // ── a checkbox: tick it, and it is the focused element ──
+      await expect(hum).not.toBeChecked()
+      await hum.check()
+      await expect(hum).toBeChecked()
+      expect(await focusedType(), 'the trap is real: focus is on the checkbox that was just ticked').toBe('checkbox')
+      await window.keyboard.press('Control+z')
+      await expect(hum, 'Ctrl+Z from the focused checkbox undoes the tick').not.toBeChecked()
+      await window.keyboard.press('Control+y')
+      await expect(hum, 'Ctrl+Y puts it back').toBeChecked()
+      await window.keyboard.press('Control+Shift+z')
+      await expect(hum).toBeChecked()
+      await window.keyboard.press('Control+z')
+      await expect(hum).not.toBeChecked()
+      await hum.check()
+      expect(await focusedType()).toBe('checkbox')
+      // `?` from the same focus opens the shortcuts, and Escape closes them.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      // The native key of a checkbox is still the checkbox's: Space toggles it, and nothing else changes.
+      await hum.focus()
+      await window.keyboard.press(' ')
+      await expect(hum).not.toBeChecked()
+      await window.keyboard.press(' ')
+      await expect(hum).toBeChecked()
+
+      // ── a slider: moved with its own keys, and Ctrl+Z from it is still the studio's ──
+      await cleanup.getByRole('button', { name: 'Custom', exact: true }).click()
+      const noiseFloor = cleanup.getByRole('slider', { name: 'Noise floor' })
+      await expect(cleanup.locator('label', { hasText: 'Noise floor' })).toContainText('-25 dB')
+      await noiseFloor.focus()
+      await window.keyboard.press('ArrowRight')
+      await expect(cleanup.locator('label', { hasText: 'Noise floor' }), 'the arrow is the slider\'s own').toContainText('-24 dB')
+      expect(await focusedType()).toBe('range')
+      await window.keyboard.press('Control+z')
+      await expect(
+        cleanup.locator('label', { hasText: 'Noise floor' }),
+        'Ctrl+Z from the focused slider is the studio\'s: the -24 is undone'
+      ).not.toContainText('-24 dB')
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+
+      // ── a text field is still its own: Ctrl+Z inside it never reaches the studio (the case above, once more) ──
+      const presetName = window.locator('.card').filter({ hasText: 'Cleanup presets' }).getByPlaceholder('My mic preset')
+      await presetName.fill('typed')
+      const before = await cleanup.locator('label', { hasText: 'Noise floor' }).textContent()
+      await presetName.press('Control+z')
+      await expect(cleanup.locator('label', { hasText: 'Noise floor' })).toHaveText(before ?? '')
+      await window.keyboard.press('Escape')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-123 (25), (27): the Cleanup card clipped its own labels ("Aggress" for "Aggressive", five equal columns in a card too
+  // narrow for the longest one) and the two flex-1 selects were as wide as their longest option and poked past the card's
+  // edge (by 3 and 19 px). Playwright's click() scrolls what it clicks into view, so no behavior case could see either; this
+  // reads the geometry, at the window a 1080p display opens the app at and at the smallest the window can be.
+  test('Cleanup and Levels draw every label whole and keep their selects inside the card, at the default window and the minimum (T-123 (25), (27))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('layout')
+    const { app, window } = studio
+    try {
+      await setWindowSize(app, window, DEFAULT_WINDOW)
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      const levels = window.locator(LEVELS)
+      // The two selects only exist once their checkbox is on: put both on, and the Custom sliders too.
+      await cleanup.getByLabel('Hum removal (60 Hz mains)').check()
+      await levels.getByRole('checkbox').check()
+      const powerLine = cleanup.getByLabel('Power-line frequency')
+      const platform = levels.getByLabel('Loudness platform preset')
+      await expect(powerLine).toBeVisible()
+      await expect(platform).toBeVisible()
+      const strengths = cleanup.locator('button[aria-pressed]').filter({ hasText: /^(Off|Light|Medium|Aggressive|Custom)$/ })
+      await expect(strengths).toHaveCount(5)
+
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        await expectNoHorizontalOverflow(cleanup, `the Cleanup card at ${where}`)
+        await expectNoHorizontalOverflow(levels, `the Levels card at ${where}`)
+        // Every strength label is drawn whole ("Aggressive", not "Aggress"), and inside the card.
+        await expectControlsWhole(cleanup, strengths, `Cleanup's strength buttons at ${where}`)
+        // Both selects end inside their card.
+        await expectControlsWhole(cleanup, powerLine, `the Power-line select at ${where}`)
+        await expectControlsWhole(levels, platform, `the Platform select at ${where}`)
+        // T-124 (24): and each shows its WHOLE selected value. A select clips its own text, so the two checks above are vacuous
+        // for it (`scrollWidth` equals `clientWidth` whatever is cut off): round 73's `min-w-0` made the Power-line select
+        // show "60 Hz — US," of "60 Hz — US, Canada" and stayed green. The text is measured instead. Both options of each
+        // select are measured, because a person who changes the choice should not meet the clipped one.
+        for (const select of [powerLine, platform]) {
+          const options = await select.locator('option').evaluateAll((os) => (os as HTMLOptionElement[]).map((o) => o.value))
+          const owner = select === powerLine ? cleanup : levels
+          for (const value of options) {
+            await select.selectOption(value)
+            await expectSelectsWhole(owner, select, `the ${select === powerLine ? 'Power-line' : 'Platform'} select showing option "${value}" at ${where}`)
+          }
+          await select.selectOption(options[0] ?? '')
+        }
+      }
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-layout-min.png') })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-124 (19): none of the side panels changes what the player plays (the waveform is the original sound) and every setting is applied
+  // at export; BRANDING says a control with no live preview says so in one line.
+  test('the side column says its changes are applied when you export, and the player keeps playing the original sound (T-124 (19))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('preview-disclosure')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await expect(window.getByText('Changes here are applied when you export. The player plays your original sound.')).toBeVisible()
+      // The wizard's toast says the same where the person has just pressed Apply.
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).click()
+      const dialog = window.getByRole('dialog')
+      await dialog.getByRole('button', { name: 'A little' }).click()
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await dialog.getByRole('button', { name: 'Talking / voice' }).click()
+      await dialog.getByRole('button', { name: 'Apply' }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-124 (25): a slider's readout ("-25 dB") was a `w-14` box with no shrink guard in a row that had no room for it: it was
+  // squeezed to 38 px and wrapped onto two lines, and the row's height changed with the value while the slider was dragged (a
+  // one-digit readout fits where a two-digit one wraps). The readout is a single line that is never squeezed, and the row is
+  // the same height at either end of the slider.
+  test('the Custom noise sliders keep their readouts on one line and the row the same height from end to end of the slider (T-124 (25))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('slider-layout')
+    const { app, window } = studio
+    try {
+      await setWindowSize(app, window, DEFAULT_WINDOW)
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      await cleanup.getByRole('button', { name: 'Custom', exact: true }).click()
+      const rows = [cleanup.locator('label', { hasText: 'Noise floor' }), cleanup.locator('label', { hasText: 'Reduction' })]
+      const sliders = [cleanup.getByRole('slider', { name: 'Noise floor' }), cleanup.getByRole('slider', { name: 'Reduction' })]
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        await expectNoHorizontalOverflow(cleanup, `the Cleanup card with Custom on at ${where}`)
+        for (const [i, row] of rows.entries()) {
+          const readout = row.locator('span.font-mono')
+          const slider = sliders[i]
+          if (!slider) throw new Error('missing slider')
+          const heights: number[] = []
+          // The ends and the middle: -80 / -25 / -20 dB, and 1 / 12 / 50 dB.
+          for (const key of ['Home', 'End', 'ArrowLeft']) {
+            await slider.press(key)
+            await expectOneLine(readout, `the readout of ${i === 0 ? 'Noise floor' : 'Reduction'} at ${where}`)
+            await expectControlsWhole(cleanup, readout, `the readout of ${i === 0 ? 'Noise floor' : 'Reduction'} at ${where}`)
+            heights.push(Math.round((await row.boundingBox())?.height ?? 0))
+          }
+          expect(new Set(heights).size, `the ${i === 0 ? 'Noise floor' : 'Reduction'} row changes height with its value at ${where}: ${heights.join(', ')} px`).toBe(1)
+        }
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-123 (14): the waveform is drawn from the whole file, decoded in the renderer. An ADPCM WAV opens (ffprobe reads it, the
+  // import says "Loaded") and then wavesurfer cannot decode it: the panel was a dead waveform with no word, because
+  // `WaveSurfer.create({ url })` swallows the load's rejection and tells only the `error` event, which nothing listened to.
+  test('a file the waveform cannot be drawn for says so, once, in a finished sentence (T-123 (14))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('waveform-error')
+    const { window } = studio
+    // Written out, not imported: an E2E asserts the words a person reads (and a build without the constant can still run it).
+    const WAVEFORM_ERROR_MESSAGE =
+      "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+    try {
+      const adpcm = path.join(studio.root, 'source', 'adpcm.wav')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'adpcm_ms', adpcm])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      await dropOnImporter(window, adpcm, 'adpcm.wav')
+
+      // The import itself succeeded (it is the picture of the sound that cannot be drawn)...
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(WAVEFORM_ERROR_MESSAGE)
+      await expect(window.getByText(WAVEFORM_ERROR_MESSAGE)).toBeVisible()
+      // ...and the person reads the sentence ONCE (the case below is the one where wavesurfer reports a failure twice).
+      await window.waitForTimeout(1000)
+      const toasts = await readToastLog(window)
+      expect(toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE), `the sentence was toasted ${toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE).length} times: ${JSON.stringify(toasts)}`).toHaveLength(1)
+      // It is a sentence, not a cause: no decoder name, no DOMException, no envelope.
+      expect(toasts.join(' | ')).not.toMatch(/EncodingError|decodeAudioData|Unable to decode|Error invoking remote method/)
+      // The studio is open on the file (the cleanup and export still work: they read the file, not the picture), and
+      // the transport that needs the picture stays off.
+      await expect(window.locator(WAVEFORM)).toBeVisible()
+      await expect(playButton(window)).toBeDisabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-123 (14), the other way a waveform fails: the bytes cannot be read at all (the file moved or went away between the probe and
+  // the picture). wavesurfer's `load()` emits `error` and then REthrows into the constructor's own catch, which emits it again,
+  // so one failed fetch is two events: without a toast id the person reads the sentence twice. (The ADPCM case above is a media
+  // element error, which is emitted once, and cannot tell the two apart.) The page's `fetch` is made to refuse the app's file
+  // protocol, which is exactly what wavesurfer's fetcher calls.
+  test('a waveform whose file cannot be read says so once too, though wavesurfer reports it twice (T-123 (14))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('waveform-fetch')
+    const { window } = studio
+    const WAVEFORM_ERROR_MESSAGE =
+      "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+    try {
+      await window.evaluate(() => {
+        const real = window.fetch.bind(window)
+        ;(window as unknown as { __fetchRefused: number }).__fetchRefused = 0
+        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input).startsWith('imagii-file:')) {
+            ;(window as unknown as { __fetchRefused: number }).__fetchRefused += 1
+            return Promise.reject(new TypeError('Failed to fetch'))
+          }
+          return real(input, init)
+        }
+      })
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(WAVEFORM_ERROR_MESSAGE)
+      await window.waitForTimeout(1000)
+      expect(await window.evaluate(() => (window as unknown as { __fetchRefused: number }).__fetchRefused), 'the waveform asked for the file').toBeGreaterThan(0)
+      const toasts = await readToastLog(window)
+      expect(
+        toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE),
+        `the sentence was toasted ${toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE).length} times: ${JSON.stringify(toasts)}`
+      ).toHaveLength(1)
+      await expect(playButton(window)).toBeDisabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-123 (14): a 3 to 6 h stream recording decoded to 10-20 GB of renderer memory (measured: 3.25 GB for 1 h, 6.5 GB for
+  // 2 h) and took the window with it, with nothing said. Over two hours the file is refused at load, in a sentence that
+  // names the ceiling and why, and the studio never holds it. The fixture is 2 h and 1 s of 8 kHz mono, 58 MB.
+  test('a file longer than two hours is refused at load, naming the ceiling, and the studio never holds it (T-123 (14))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('too-long')
+    const { window } = studio
+    try {
+      const longWav = path.join(studio.root, 'source', 'two-hours-and-a-second.wav')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '7201', '-c:a', 'pcm_u8', longWav])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      // Written out, not imported (see the waveform-error case): the sentence names the ceiling and the reason. T-124 (7): a
+      // file that is ONLY sound is not sent to Video Studio (which refuses a file with no picture and sends the person back
+      // here); it is told to split the file in another app.
+      const sentence =
+        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
+        'Split it into shorter files in another app first, then open one of them.'
+      await dropOnImporter(window, longWav, 'two-hours-and-a-second.wav')
+
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
+      await expect(window.getByText(sentence)).toBeVisible()
+      // Refused, not half-loaded: no "Loaded", no waveform, no export, still the drop zone.
+      expect(await readToastLog(window)).not.toContain('Loaded')
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+      await expect(window.locator(EXPORT)).toHaveCount(0)
+      // And the way on works: a short file is taken straight after, on the same drop zone.
+      await dropAndWaitReady(studio)
+      await expect(window.locator(WAVEFORM)).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-124 (6): a VIDEO over two hours dropped on the importer used to be extracted to a full-length WAV (a 4 h VOD: minutes
+  // of ffmpeg and ~2.8 GB in %TEMP%\\imagii-audio, never deleted) and only then refused by the same 2-hour gate. The length is asked
+  // first, and the refusal is the video sentence (Video Studio can cut it down). The fixture is 2 h and 1 s of 1 fps video and
+  // 8 kHz sound, 650 KB.
+  test('a video longer than two hours is refused before any sound is extracted: no ffmpeg, no WAV in %TEMP% (T-124 (6))', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('too-long-video')
+    const { window, app } = studio
+    const scratch = path.join(os.tmpdir(), 'imagii-audio')
+    const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
+    try {
+      const longVideo = path.join(studio.root, 'source', 'four-hour-vod.mp4')
+      const made = await runBinary(ffmpegPath, [
+        '-y', '-f', 'lavfi', '-i', 'color=c=black:s=64x48:r=1:d=7201', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+        '-t', '7201', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '600', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '8k', '-shortest', longVideo
+      ])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      const before = new Set(wavs())
+      await installSpawnStall(app, []) // no stall: the log of what the app spawns from here on
+      const sentence =
+        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
+        'Export the part you want from Video Studio first, then open that shorter file.'
+      await dropOnImporter(window, longVideo, 'four-hour-vod.mp4')
+
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
+      await expect(window.getByText(sentence)).toBeVisible()
+      // Refused before the work: the app looked at the file's length (an ffprobe) and never started an ffmpeg...
+      await window.waitForTimeout(1500)
+      expect(await readSpawnLog(app), 'no sound extraction was started for a file the gate refuses').not.toContain('ffmpeg')
+      // ...so nothing was written where scratch audio goes.
+      expect(wavs().filter((f) => !before.has(f)), 'a full-length WAV was left in %TEMP%\\imagii-audio').toEqual([])
+      expect(await readToastLog(window)).not.toContain('Loaded')
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-126 (7): "is this a video?" was decided from the file NAME. An .mkv or .mp4 that holds sound alone (a podcast, a voice memo, a stream's
+  // audio-only rip) was treated as one: Re-attach was ON by default and its mux dies on `-map 0:v:0` (there is no picture), and a 2-hour one was told
+  // to export a part from Video Studio, which refuses a file with no picture and sends the person back here. The probe reads the streams now.
+  test('an audio-only .mkv loads as sound: no Re-attach is offered, it exports as plain audio, and over two hours it is told to split the file in another app (T-126 (7))', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('audio-only-mkv')
+    const { app, window } = studio
+    const scratch = path.join(os.tmpdir(), 'imagii-audio')
+    const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
+    try {
+      const podcast = path.join(studio.root, 'source', 'podcast.mkv')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'aac', podcast])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      await dropOnImporter(window, podcast, 'podcast.mkv')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain('Loaded')
+      await expect(window.locator('header').getByText('podcast.mkv', { exact: true })).toBeVisible()
+
+      // Nothing to re-attach a sound to: no Re-attach box, and the format select is the person's.
+      const exportPanel = window.locator(EXPORT)
+      await expect(exportPanel.getByRole('checkbox'), 'no Re-attach to video for a file with no picture').toHaveCount(0)
+      await expect(exportPanel.getByText('Re-attach to video (output .mp4)')).toHaveCount(0)
+      await expect(exportPanel.getByRole('combobox').first()).toBeEnabled()
+
+      // It exports as plain audio (the Re-attach it used to be sent down fails on `-map 0:v:0`).
+      const out = path.join(studio.root, 'podcast-clean.mp3')
+      await stubSaveDialog(app, out)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportButton.click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      const probed = await probeFile(out)
+      expect(probed.codecs, 'an audio file: no video stream').toEqual(['mp3'])
+
+      // Over two hours: the AUDIO sentence, not "Export the part you want from Video Studio", and no sound is extracted for it.
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      const longMkv = path.join(studio.root, 'source', 'podcast-two-hours.mkv')
+      const longMade = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '7201', '-c:a', 'pcm_s16le', longMkv])
+      if (longMade.code !== 0) throw new Error(`fixture ffmpeg exit ${longMade.code}: ${longMade.stderr.slice(-800)}`)
+      const before = new Set(wavs())
+      await installSpawnStall(app, [])
+      const sentence =
+        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
+        'Split it into shorter files in another app first, then open one of them.'
+      await dropOnImporter(window, longMkv, 'podcast-two-hours.mkv')
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
+      await window.waitForTimeout(1500)
+      expect(await readToastLog(window)).not.toContain('Export the part you want from Video Studio first, then open that shorter file.')
+      expect(await readSpawnLog(app), 'no sound extraction was started for a file the gate refuses').not.toContain('ffmpeg')
+      expect(wavs().filter((f) => !before.has(f)), 'no WAV left in %TEMP%').toEqual([])
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-125 (4): the pre-extract probe (T-124 (6)) refused a container with no duration in its header - a MediaRecorder WebM, an older
+  // take, a crashed MKV - with "imagii can't read this audio format", for a file the extraction handles end to end (the control: the
+  // same file imported before T-124). A probe that cannot READ a length is an unknown length, and the extraction goes ahead.
+  test('a recording whose header has no duration (a MediaRecorder WebM) imports: the probe not reading a length is not a refusal (T-125 (4))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('no-duration')
+    const { window } = studio
+    try {
+      const webm = path.join(studio.root, 'source', 'take-no-duration.webm')
+      const made = await runBinary(ffmpegPath, [
+        '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+        '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-c:a', 'libopus', '-live', '1', '-f', 'webm', webm
+      ])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      // The fixture is what it says: no duration in the header (ffprobe prints N/A), so `probeAudio` cannot use it.
+      const probed = spawnSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', webm])
+      expect(probed.stdout.toString().trim(), 'a header with no duration').toBe('N/A')
+
+      await dropOnImporter(window, webm, 'take-no-duration.webm')
+      await expect(window.locator(WAVEFORM)).toBeVisible({ timeout: 60_000 })
+      await expect(playButton(window)).toBeEnabled()
+      const log = await readToastLog(window)
+      expect(log, 'the file loaded').toContain('Loaded')
+      expect(log.join(' | '), 'and nobody told the person the format cannot be read').not.toMatch(/can't read this audio format/)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the Fix Wizard keeps the chain\'s 50 Hz mains and its summary names the notch it will apply (T-112)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('wizard50')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      // The person is on 50 Hz mains and has said so in the Cleanup panel.
+      await cleanup.getByLabel('Hum removal (60 Hz mains)').check()
+      await cleanup.getByLabel('Power-line frequency').selectOption('50')
+      await expect(cleanup.getByLabel('Hum removal (50 Hz mains)')).toBeChecked()
+
+      const dialog = window.getByRole('dialog')
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).click()
+      await dialog.getByRole('button', { name: 'A little' }).click()
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await dialog.getByRole('button', { name: 'Talking / voice' }).click()
+      // The summary says WHICH notch (it used to say only "on", and Apply could not be checked).
+      await expect(dialog).toContainText('Hum removal: on (50 Hz mains)')
+      await expect(dialog).not.toContainText('60 Hz')
+      await dialog.getByRole('button', { name: 'Apply' }).click()
+      await expect(dialog).toHaveCount(0)
+      // ...and Apply did exactly that: still 50, still on.
+      await expect(cleanup.getByLabel('Hum removal (50 Hz mains)')).toBeChecked()
+      await expect(cleanup.getByLabel('Power-line frequency')).toHaveValue('50')
+
+      // A quiet room switches hum removal off, and then there is no notch to name.
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).click()
+      await dialog.getByRole('button', { name: 'None to speak of' }).click()
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await dialog.getByRole('button', { name: 'Music' }).click()
+      await expect(dialog).toContainText('Hum removal: off')
+      await expect(dialog).not.toContainText('Hz mains')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the loudness target box stops a number loudnorm refuses: -3 becomes -5, -80 becomes -70, junk changes nothing (T-112)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('lufsbox')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const levels = window.locator(LEVELS)
+      await levels.getByRole('checkbox').check()
+      const lufs = levels.getByLabel('Loudness target (LUFS)')
+      // The box carries loudnorm's range itself (it only marks a number invalid; the commit below stops it).
+      await expect(lufs).toHaveAttribute('min', '-70')
+      await expect(lufs).toHaveAttribute('max', '-5')
+
+      // A target inside the range reaches the chain as it is typed (the platform picker follows).
+      await lufs.fill('-18')
+      await expect(levels.getByLabel('Loudness platform preset')).toHaveValue('custom')
+      await lufs.fill('-23')
+      await expect(levels.getByLabel('Loudness platform preset')).toHaveValue('broadcast')
+
+      // -3 passed the old 0 ceiling and was refused only at Export. It is stopped at the box.
+      await lufs.fill('-3')
+      await expect(levels.getByLabel('Loudness platform preset')).toHaveValue('broadcast') // not committed yet
+      await lufs.blur()
+      await expect(lufs).toHaveValue('-5')
+      await lufs.fill('-80')
+      await lufs.press('Enter')
+      await expect(lufs).toHaveValue('-70')
+      // Not a number: the last good target stays.
+      await lufs.fill('')
+      await lufs.blur()
+      await expect(lufs).toHaveValue('-70')
+      // The way to -23 passes through -2: a keystroke is never refused.
+      await lufs.fill('')
+      await lufs.pressSequentially('-23')
+      await expect(lufs).toHaveValue('-23')
+      await expect(levels.getByLabel('Loudness platform preset')).toHaveValue('broadcast')
     } finally {
       await closeStudio(studio)
     }
@@ -1144,7 +1766,8 @@ test.describe('imagii Audio Studio', () => {
       await expect(dialog).not.toContainText("I'll")
       await expect(dialog).toContainText('Quieter background: on (aggressive)')
       await expect(dialog).toContainText('Low rumble removal: on')
-      await expect(dialog).toContainText('Hum removal: on')
+      // T-112: the line names the notch it will apply (the chain is on 60 Hz mains).
+      await expect(dialog).toContainText('Hum removal: on (60 Hz mains)')
       await expect(dialog).toContainText("Softer harsh 's' sounds: on")
       await expect(dialog).toContainText('Compressor: voice')
       await expect(dialog).toContainText('Even volume: on (target −16)')
@@ -1159,7 +1782,15 @@ test.describe('imagii Audio Studio', () => {
       await expect(dialog).toHaveCount(0)
       await expect
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
-        .toContain('Cleanup configured. Tweak from the side panels if needed.')
+        .toContain('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
+      // T-125 (19): the only sentence that says the cleanup waits for the export is still on screen well past a success toast's 2 s
+      // (react-hot-toast takes it down at about 3 s with its exit animation; an action toast lasts 8 s).
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(4_500)
+      await expect(
+        window.getByText('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.'),
+        'the Apply toast carries a needed fact and is held like an action toast'
+      ).toBeVisible()
 
       // ── the panels really changed ──
       const cleanup = window.locator(CLEANUP)
@@ -1255,6 +1886,106 @@ test.describe('imagii Audio Studio', () => {
     }
   })
 
+  // T-119 (8): each answer replaces the buttons that were just pressed, so keyboard focus fell to the page
+  // behind the dialog after every step (the focus trap only places it when the dialog opens). A person who
+  // answers with Enter must be able to answer the next question with Enter.
+  test('Fix Wizard keeps keyboard focus on every step: the first option of each question, then Apply (T-119)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('wizardfocus')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const openWizard = window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' })
+      const dialog = window.getByRole('dialog')
+      /** Where focus is, as the element's visible text (or 'body' when it fell out of the dialog). */
+      const focusedText = (): Promise<string> =>
+        window.evaluate(() => {
+          const el = document.activeElement
+          return !el || el === document.body ? 'body' : (el.textContent ?? '').trim()
+        })
+
+      await openWizard.focus()
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      await expect(dialog.getByRole('button', { name: 'None to speak of' })).toBeFocused()
+
+      // Answer by keyboard alone; every step lands on its first option.
+      await window.keyboard.press('Enter') // None to speak of
+      await expect(dialog).toContainText('Quick fix · 2 of 3')
+      await expect(dialog.getByRole('button', { name: 'Sounds dry' })).toBeFocused()
+      await window.keyboard.press('Tab')
+      await window.keyboard.press('Enter') // Yeah, kind of echoy
+      await expect(dialog).toContainText('Quick fix · 3 of 3')
+      await expect(dialog.getByRole('button', { name: 'Talking / voice' })).toBeFocused()
+      await window.keyboard.press('Enter') // Talking / voice
+      await expect(dialog).toContainText('Ready to apply')
+      await expect(dialog.getByRole('button', { name: 'Apply' })).toBeFocused()
+      expect(await focusedText()).toBe('Apply')
+
+      // Start over is a step too: the first question's first option again.
+      await dialog.getByRole('button', { name: 'Start over' }).click()
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      await expect(dialog.getByRole('button', { name: 'None to speak of' })).toBeFocused()
+
+      // The trap still works from the new position: Tab stays inside the dialog, and Escape hands focus back to
+      // the button that opened it.
+      for (let i = 0; i < 6; i++) {
+        await window.keyboard.press('Tab')
+        expect(await focusedText(), `Tab ${i + 1} left the dialog`).not.toBe('body')
+        expect(await dialog.evaluate((d) => d.contains(document.activeElement))).toBe(true)
+      }
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      await expect(openWizard).toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-120 (10): the wizard puts focus on each next question's first option inside the same event as the answer
+  // (React flushes a discrete event's effects at its end), so a HELD Enter - whose auto-repeats are keydowns on
+  // whatever has focus - answered all three questions and pressed Apply. A repeat is not a new decision.
+  // Playwright marks a keydown for a key that is already down as a repeat, which is what a held key does.
+  test('Fix Wizard: a held Enter answers one question, not all three and Apply (T-120)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('wizardheld')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const dialog = window.getByRole('dialog')
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).focus()
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      await expect(dialog.getByRole('button', { name: 'None to speak of' })).toBeFocused()
+
+      // Hold Enter: the first keydown answers question 1 ...
+      await window.keyboard.down('Enter')
+      await expect(dialog).toContainText('Quick fix · 2 of 3')
+      // ... and five auto-repeats land on the next question's first option, then the next.
+      for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(dialog, 'the repeats walked the wizard on').toContainText('Quick fix · 2 of 3')
+      await expect(dialog).not.toContainText('Ready to apply')
+      await expect(dialog.getByRole('button', { name: 'Sounds dry' })).toBeFocused()
+      expect(await readToastLog(window), 'Apply was pressed by a repeat').not.toContain(
+        'Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.'
+      )
+
+      // A fresh press is a decision: it answers question 2, and so on to Apply.
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 3 of 3')
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Ready to apply')
+      await window.keyboard.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
   test('cleanup presets save, apply, and delete through both confirm branches', async () => {
     test.setTimeout(120_000)
     const studio = await openStudio('presets')
@@ -1344,6 +2075,8 @@ test.describe('imagii Audio Studio', () => {
         .toContain('Saved "Mic B"')
       await expect(presets.getByRole('button', { name: 'Apply' })).toHaveCount(2)
       expect(readdirSync(presetDir)).toHaveLength(2)
+      // T-127 (15): a preset's name is cut with an ellipsis in a narrow card; its whole self is the tooltip.
+      await expect(presets.locator('li span.truncate').filter({ hasText: /^Mic A$/ })).toHaveAttribute('title', 'Mic A')
 
       // ── apply restores the first chain over the current one ──
       const rowA = presets.locator('li').filter({ hasText: 'Mic A' })
@@ -1418,6 +2151,11 @@ test.describe('imagii Audio Studio', () => {
 
       const duck = panel.getByLabel('Duck under your voice')
       await expect(duck).toBeChecked()
+      // T-122: "This track dips whenever you talk" is a promise about the export, and the export only dips the
+      // track when Duck is on, so the sentence is on screen exactly then (it was unconditional, and "Second
+      // mic" defaults Duck OFF with no sidechaincompress built).
+      const dipsFooter = panel.getByText(/This track dips whenever you talk/)
+      await expect(dipsFooter).toBeVisible()
 
       // ── the four ducking sliders (DEFAULT_DUCK_PARAMS) ──
       const threshold = panel.getByRole('slider', { name: 'Threshold' })
@@ -1425,24 +2163,30 @@ test.describe('imagii Audio Studio', () => {
       const attack = panel.getByRole('slider', { name: 'Attack' })
       const release = panel.getByRole('slider', { name: 'Release' })
       await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('-26 dBFS')
-      await expect(panel.locator('label', { hasText: 'Ratio' })).toContainText('8 :1')
+      // T-126 (12): a ratio's unit is ":1" and joins its number, in the drawn readout and in what a screen reader is given ("8 :1" before).
+      await expect(panel.locator('label', { hasText: 'Ratio' })).toContainText('8:1')
+      await expect(panel.locator('label', { hasText: 'Ratio' })).not.toContainText('8 :1')
+      await expect(ratio).toHaveAttribute('aria-valuetext', '8:1')
       await expect(panel.locator('label', { hasText: 'Attack' })).toContainText('20 ms')
       await expect(panel.locator('label', { hasText: 'Release' })).toContainText('400 ms')
       await threshold.press('ArrowRight')
       await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('-25 dBFS')
       await ratio.press('ArrowRight')
-      await expect(panel.locator('label', { hasText: 'Ratio' })).toContainText('8.5 :1')
+      await expect(panel.locator('label', { hasText: 'Ratio' })).toContainText('8.5:1')
+      await expect(ratio).toHaveAttribute('aria-valuetext', '8.5:1')
       await attack.press('ArrowLeft')
       await expect(panel.locator('label', { hasText: 'Attack' })).toContainText('19 ms')
       await release.press('ArrowRight')
       await expect(panel.locator('label', { hasText: 'Release' })).toContainText('410 ms')
       await expect(release).toHaveAttribute('aria-valuetext', '410 ms')
 
-      // Ducking off hides the four sliders; back on restores the values.
+      // Ducking off hides the four sliders AND the sentence that says the track dips; back on restores the values.
       await duck.uncheck()
       await expect(panel.getByRole('slider', { name: 'Threshold' })).toHaveCount(0)
+      await expect(dipsFooter, 'Duck off: nothing dips, so the footer that says it does is gone').toHaveCount(0)
       await duck.check()
       await expect(panel.locator('label', { hasText: 'Release' })).toContainText('410 ms')
+      await expect(dipsFooter).toBeVisible()
 
       // ── remove, then the other two roles and their defaults ──
       await panel.getByRole('button', { name: /Remove/ }).click()
@@ -1454,13 +2198,74 @@ test.describe('imagii Audio Studio', () => {
       await expect(panel).toContainText('+0.0 dB')
       await expect(panel.getByLabel('Duck under your voice')).not.toBeChecked()
       await expect(panel.getByRole('slider', { name: 'Threshold' })).toHaveCount(0)
+      await expect(dipsFooter, 'Second mic defaults Duck off: no sidechaincompress, no dip, no footer').toHaveCount(0)
       await panel.getByRole('button', { name: /Remove/ }).click()
 
       await panel.getByRole('button', { name: /Game audio/ }).click()
       await expect(panel).toContainText('Game audio: e2e-tone.wav')
       await expect(panel).toContainText('-3.0 dB')
       await expect(panel.getByLabel('Duck under your voice')).toBeChecked()
+      await expect(dipsFooter).toBeVisible()
       await window.screenshot({ path: path.join(SCREENSHOTS, 'audio-04-secondary.png') })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-126 (12): the second-track card squeezed itself. The gain readout ("-10.0 dB", eight characters of mono) was a `w-12` box and wrapped
+  // to two lines at every window size; "✕ Remove" had no guard against the file name beside it, which is the one that should give; and the
+  // four ducking sliders' label and readout were 1 px apart at 2560. A long file name is used on purpose (the name truncates, and a button
+  // beside a short one is never squeezed), and the three widths are measured before anything fails, so one red names all of them.
+  test('the second-track card draws its gain readout, its Remove button and its slider readouts whole, on one line and apart, at 1024, 1632 and 2560 (T-126 (12))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('secondary-layout')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const longName = 'second-microphone-take-number-twelve-from-the-long-friday-stream.wav'
+      const longFixture = path.join(studio.root, 'source', longName)
+      copyFileSync(studio.fixture, longFixture)
+      await stubOpenDialog(app, longFixture)
+      const panel = window.locator(MULTITRACK)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: ')
+      // T-127 (15): the name is cut with an ellipsis where the card is narrow; its whole self is the tooltip. The header's name too.
+      const secondName = panel.locator('span.truncate').filter({ hasText: longName })
+      await expect(secondName, 'the second track\'s name carries its full self as its title').toHaveAttribute('title', `Background music: ${longName}`)
+      const headerName = window.locator('header span.truncate').filter({ hasText: /^e2e-tone\.wav$/ })
+      await expect(headerName, 'the header\'s file name carries its full self as its title').toHaveAttribute('title', 'e2e-tone.wav')
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      for (const [size, where] of [
+        [MIN_WINDOW, 'the 1024 px minimum'],
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [{ width: 2560, height: 1200 }, '2560 px']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        const gain = panel.locator('span.font-mono').filter({ hasText: /^[+-]\d+\.\d dB$/ })
+        await expect(gain, `the gain readout at ${where}`).toHaveCount(1)
+        await check(() => expectOneLine(gain, `the gain readout at ${where}`))
+        await check(() => expectControlsWhole(panel, gain, `the gain readout at ${where}`))
+        const remove = panel.getByRole('button', { name: /Remove/ })
+        await check(() => expectOneLine(remove, `the Remove button at ${where}`))
+        await check(() => expectControlsWhole(panel, remove, `the Remove button at ${where}`))
+        await check(() => expectOneLine(panel.locator('label span.font-mono'), `the ducking readouts at ${where}`))
+        for (const name of ['Threshold', 'Ratio', 'Attack', 'Release']) {
+          const gap = await panel.locator('label', { hasText: name }).first().evaluate((label) => {
+            const left = label.querySelector('span.text-ink-muted')?.getBoundingClientRect()
+            const right = label.querySelector('span.font-mono')?.getBoundingClientRect()
+            return left && right ? right.left - left.right : -1
+          })
+          await check(async () => expect(gap, `the ${name} label and its readout are ${Math.round(gap)} px apart at ${where} (gap-2 keeps them 8)`).toBeGreaterThanOrEqual(7.5))
+        }
+      }
+      expect(problems, 'the second-track card keeps its readouts and Remove whole, and its slider rows spaced, at every width').toEqual([])
     } finally {
       await closeStudio(studio)
     }
@@ -1505,7 +2310,7 @@ test.describe('imagii Audio Studio', () => {
         .poll(() => dialogs.messages.length, { timeout: 15_000, intervals: [200] })
         .toBe(2)
       expect(dialogs.messages[1]).toBe(
-        'Close this audio? Your cleanup settings, 1 cut will be discarded.'
+        'Close this audio? Your cleanup settings and 1 cut will be discarded.'
       )
       await expect(window.getByText('e2e-tone.wav')).toBeVisible()
 
@@ -1602,6 +2407,39 @@ test.describe('imagii Audio Studio', () => {
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       await expect(exportPanel.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
       expect(existsSync(path.join(studio.root, 'no-such-folder'))).toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-126 (19): `ExportDialog.startExport` claimed "running" after the save dialog it awaits, so a double-click on Export opened TWO save
+  // dialogs and ran two exports (executed in the built app). The dialog here answers after 300 ms, as a real one does: that is the window
+  // the second press lands in. ExportPanel (Video Studio) has had the claim since T-125 (18).
+  test('a double-click on Export opens ONE save dialog and writes ONE file (T-126 (19))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('export-dblclick')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const out = path.join(studio.root, 'double.mp3')
+      await app.evaluate(({ dialog }, picked) => {
+        const g = globalThis as unknown as { __audioSaveOptions: unknown[] }
+        g.__audioSaveOptions = []
+        ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async (_win: unknown, options: unknown) => {
+          g.__audioSaveOptions.push(options)
+          await new Promise((resolve) => setTimeout(resolve, 300))
+          return { canceled: false, filePath: picked }
+        }
+      }, out)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportButton.dblclick()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      expect(await readSaveOptions(app), 'one save dialog, not two').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Cleaned audio exported'), 'one "exported" toast').toHaveLength(1)
+      expect(readdirSync(studio.root).filter((f) => /\.(mp3|wav|m4a|flac)$/i.test(f)).sort(), 'one file written').toEqual(['double.mp3'])
+      expect((await probeFile(out)).codecs).toEqual(['mp3'])
     } finally {
       await closeStudio(studio)
     }
@@ -1723,9 +2561,10 @@ test.describe('imagii Audio Studio', () => {
       await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
       // The bar names the phase in words, never the pass id.
       await expect(exportPanel).not.toContainText(/\b(measure|render|mux)\b/)
+      // T-124 (20): the toast carries buttons now, so its text is the sentence and then their names.
       await expect
         .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
-        .toContain('Cleaned audio attached to the video')
+        .toEqual(expect.arrayContaining([expect.stringContaining('Cleaned audio attached to the video')]))
 
       // The save dialog was opened for an .mp4 — this used to throw before the
       // dialog could open at all (the validator did not know the format).
@@ -1739,7 +2578,101 @@ test.describe('imagii Audio Studio', () => {
       // the 3 s source by about the 0.6 s that was marked.
       expect(facts.duration).toBeLessThan(2.9)
       expect(facts.duration).toBeGreaterThan(1.8)
-      await expect(exportPanel).toContainText('Attaching to video…')
+      // T-100: a re-attach is two passes (render, then put it on the picture),
+      // and the row says which one it ended on.
+      await expect(exportPanel).toContainText('Step 2 of 2 — attaching to video')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-125 (7): .aiff, .aif and .wma are audio WebAudio cannot decode, so the importer pulls their sound through the extraction a
+  // video's takes - and the studio then called them VIDEOS: Export defaulted to "Re-attach to video" (checked) and failed on
+  // `-map 0:v:0` because there is no picture, the file was suggested a name from the scratch WAV, and a project stored the scratch
+  // path's cousin. A WMA loaded and exported is the case: the checkbox is not there, the name is the WMA's, the file is written.
+  test('a WMA loads and exports as the sound file it is: no "Re-attach to video", named for the WMA, written (T-125 (7))', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('wma')
+    const { app, window } = studio
+    try {
+      const wma = path.join(studio.root, 'source', 'take one.wma')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '44100', '-ac', '2', wma])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      await dropOnImporter(window, wma, 'take one.wma')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      // The header names the file the person dropped, not the scratch WAV the studio plays.
+      await expect(window.locator('header').getByText('take one.wma', { exact: true })).toBeVisible()
+
+      const exportPanel = window.locator(EXPORT)
+      // A sound-only file has no picture to re-attach to: the option is not offered, and nothing says "video".
+      await expect(exportPanel.getByRole('checkbox')).toHaveCount(0)
+      await expect(exportPanel).not.toContainText(/re-attach|video/i)
+
+      const out = path.join(studio.root, 'take one-cleaned.mp3')
+      await stubRecordingSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
+        .toEqual(expect.arrayContaining([expect.stringContaining('Cleaned audio exported')]))
+      const [opts] = await readSaveOptions(app)
+      expect(opts?.defaultPath, 'named for the WMA, not for the scratch WAV').toBe('take one-cleaned.mp3')
+      const facts = await probeFile(out)
+      expect(facts.codecs).toEqual(['mp3'])
+      expect(facts.duration).toBeGreaterThan(1.5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-124 (20): the re-attach toast was a dead end. Every other finished file in the app says where it is and what to do next
+  // (Record's take, Reframe's 9:16 file); this one said "Cleaned audio attached to the video" and left the person to find the .mp4
+  // in a folder and drag it into Video Studio by hand - the very next step of the order the guide recommends (clean the sound,
+  // THEN clip). The new button is on the re-attached video only: an audio-only export has nothing for Video Studio to open.
+  test('the re-attach toast names the file, shows it in its folder, and opens it in Video Studio; an audio-only export offers no video to open (T-124 (20))', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('reattach-next')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+      const toaster = window.locator('[data-rht-toaster]')
+
+      // ── the audio-only export first: no video to open, so the toast has no such button ──
+      await exportPanel.getByRole('checkbox').uncheck()
+      await exportPanel.getByRole('combobox').first().selectOption('wav')
+      const wav = path.join(studio.root, 'e2e-clip-cleaned.wav')
+      await stubRecordingSaveDialog(app, wav)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      // (`toContain` on the log is an EXACT entry: the sentence and nothing after it, so no button text rides along.)
+      await expect
+        .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
+        .toContain('Cleaned audio exported')
+      await expect(toaster.getByRole('button', { name: 'Edit in Video Studio' })).toHaveCount(0)
+
+      // ── the re-attach: the same two buttons Record's saved take has ──
+      await expect(toaster).toHaveCount(1)
+      await window.waitForTimeout(500)
+      await exportPanel.getByRole('checkbox').check()
+      const out = path.join(studio.root, 'e2e-clip-cleaned.mp4')
+      await stubRecordingSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const edit = toaster.getByRole('button', { name: 'Edit in Video Studio', exact: true })
+      await expect(edit, 'the saved toast carries the action').toBeVisible({ timeout: 120_000 })
+      await expect(toaster.getByText('Cleaned audio attached to the video')).toBeVisible()
+
+      // Show in folder reaches the shell with the file that was written.
+      await stubShellReveal(app)
+      await toaster.getByRole('button', { name: 'Show in folder', exact: true }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([out])
+
+      // Edit in Video Studio opens THAT file there: the route, the header and the player.
+      await edit.click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('e2e-clip-cleaned.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(1)
     } finally {
       await closeStudio(studio)
     }
@@ -1861,6 +2794,305 @@ test.describe('imagii Audio Studio', () => {
       await expect(window.locator(WAVEFORM)).toContainText('Drag across the waveform')
       await expect(window.locator(MULTITRACK)).toContainText('Layer in background music')
       await expect(window.locator(MULTITRACK)).not.toContainText('monday-music.wav')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the Export row names its steps, and says Failed or Canceled after the toast fades (T-100)', async () => {
+    test.setTimeout(120_000)
+    // Loudness normalization is two passes and each reports its own 0-100%, so
+    // the bar went to 100 and then back to 0 under a different word — a stall,
+    // to anyone who had not read the code. And a render that stopped left a
+    // bar and a percentage and nothing to say which kind of stop it was once
+    // the toast was gone. The job is driven from MAIN (audio:export replaced by
+    // one the test holds), so the events arrive on the real channel in an order
+    // the test chooses, instead of racing a render that takes milliseconds.
+    const studio = await openStudio('exportrow')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await window.locator(LEVELS).getByRole('checkbox').check() // two passes
+      await stubSaveDialog(app, path.join(studio.root, 'row.mp3'))
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as {
+          __audioJob: { jobId: string; fail: (message: string) => void }
+        }
+        g.__audioJob = { jobId: '', fail: () => undefined }
+        ipcMain.removeHandler('audio:export')
+        ipcMain.handle(
+          'audio:export',
+          (_e, spec: { jobId: string }) =>
+            new Promise((_resolve, reject) => {
+              g.__audioJob = { jobId: spec.jobId, fail: (m) => reject(new Error(m)) }
+            })
+        )
+      })
+      const jobId = (): Promise<string> =>
+        app.evaluate(() => (globalThis as unknown as { __audioJob: { jobId: string } }).__audioJob.jobId)
+      const progress = (pass: string, percent: number): Promise<void> =>
+        app.evaluate(
+          ({ BrowserWindow }, p) => {
+            const g = globalThis as unknown as { __audioJob: { jobId: string } }
+            BrowserWindow.getAllWindows()[0]?.webContents.send('audio:progress', {
+              jobId: g.__audioJob.jobId,
+              ...p
+            })
+          },
+          { pass, percent }
+        )
+      const stop = (message: string): Promise<void> =>
+        app.evaluate((_e, m) => {
+          ;(globalThis as unknown as { __audioJob: { fail: (m: string) => void } }).__audioJob.fail(m)
+        }, message)
+      const exportPanel = window.locator(EXPORT)
+      const row = exportPanel.locator('.flex.items-center.gap-3.text-sm')
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      // ── the two passes read as Step 1 of 2 and Step 2 of 2 ──
+      await exportButton.click()
+      await expect.poll(jobId, { timeout: 15_000 }).not.toBe('')
+      await expect(row).toContainText('Step 1 of 2 — measuring loudness')
+      // T-112: the bar is a progressbar to a screen reader, named by the pass, with its number.
+      const bar = exportPanel.getByRole('progressbar')
+      await expect(bar).toHaveAccessibleName('Step 1 of 2 — measuring loudness')
+      await expect(bar).toHaveAttribute('aria-valuemin', '0')
+      await expect(bar).toHaveAttribute('aria-valuemax', '100')
+      await progress('measure', 60)
+      await expect(row).toContainText('60%')
+      await expect(bar).toHaveAttribute('aria-valuenow', '60')
+      await progress('measure', 100)
+      await progress('render', 20)
+      // The bar went back to 20%, and the words say it is the next step.
+      await expect(row).toContainText('Step 2 of 2 — rendering')
+      await expect(row).toContainText('20%')
+      await expect(row).not.toContainText('Step 1 of 2')
+      await expect(bar).toHaveAccessibleName('Step 2 of 2 — rendering')
+      await expect(bar).toHaveAttribute('aria-valuenow', '20')
+      await expect(row).not.toContainText(/Failed|Canceled/)
+
+      // ── a failure: the words outlive the toast, and the bar is red ──
+      await stop('FFmpeg exit 1: Conversion failed!')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toEqual(expect.arrayContaining([expect.stringContaining('Export failed.')]))
+      await expect(row.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(row.getByText('Canceled', { exact: true })).toHaveCount(0)
+      await expect(row.locator('.bg-danger-strong')).toHaveCount(1)
+      await expect(row).toContainText('Step 2 of 2 — rendering')
+      await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, {
+        timeout: 30_000
+      })
+      await expect(row.getByText('Failed', { exact: true })).toBeVisible()
+
+      // ── a cancel: the same row, a different word and NO danger red ──
+      const firstJob = await jobId()
+      await exportButton.click()
+      await expect.poll(jobId, { timeout: 15_000 }).not.toBe(firstJob)
+      // A new run starts clean: no word from the last one.
+      await expect(row.getByText('Failed', { exact: true })).toHaveCount(0)
+      await progress('measure', 40)
+      await stop('imagii:cancelled')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Audio export canceled.')
+      await expect(row.getByText('Canceled', { exact: true })).toBeVisible()
+      await expect(row.getByText('Failed', { exact: true })).toHaveCount(0)
+      await expect(row.locator('.bg-danger-strong')).toHaveCount(0)
+      await expect(row.locator('.bg-ink-muted')).toHaveCount(1)
+      await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, {
+        timeout: 30_000
+      })
+      await expect(row.getByText('Canceled', { exact: true })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Cancel in the render pass leaves no half-written file (T-100)', async () => {
+    test.setTimeout(300_000)
+    // The existing cancel test stops the MEASURE pass, which writes nothing. The
+    // render pass opens the output file on its first frame, so a Cancel there
+    // left an unplayable .mp3 at the name the user chose in the Save dialog,
+    // beside a toast that said it was canceled. Aggressive noise removal keeps
+    // an hour of audio rendering for minutes.
+    const studio = await openStudio('rendercancel')
+    const { app, window } = studio
+    try {
+      const long = path.join(studio.root, 'source', 'long-tone.mp3')
+      await makeLongMp3(long)
+      await dropOnImporter(window, long, 'long-tone.mp3')
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      await window
+        .locator(CLEANUP)
+        .getByRole('button', { name: 'Aggressive', exact: true })
+        .click()
+
+      const out = path.join(studio.root, 'rendered.mp3')
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => existsSync(out), { timeout: 60_000, intervals: [250] }).toBe(true)
+      await expect(exportPanel).toContainText('Rendering…') // one pass: no steps to count
+
+      await exportPanel.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
+        .toContain('Audio export canceled.')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({
+        timeout: 30_000
+      })
+      expect(existsSync(out), 'the half-written audio is gone').toBe(false)
+      await expect(exportPanel.getByText('Canceled', { exact: true })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a sound extracted from a video survives its scratch file: save, prune, relaunch, open (T-99)', async () => {
+    test.setTimeout(300_000)
+    // Dropping a video extracts its sound to a WAV in %TEMP%/imagii-audio, and
+    // the project that was saved next stored THAT path. The next launch deletes
+    // old scratch files, so "Open project" said "Couldn't find aB3dE5fG7h.wav"
+    // — a name the user never chose — with the video it came from sitting in the
+    // same project. The project now stores the video and re-extracts on open.
+    const studio = await openStudio('t99')
+    let second: ElectronApplication | null = null
+    try {
+      const { app, window } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      const scratch = path.join(os.tmpdir(), 'imagii-audio')
+      const before = new Set(existsSync(scratch) ? readdirSync(scratch) : [])
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const extracted = readdirSync(scratch).filter((f) => !before.has(f))
+      expect(extracted, 'one scratch WAV was made').toHaveLength(1)
+      const wav = path.join(scratch, extracted[0] as string)
+
+      // ── save from Home ──
+      const projectFile = path.join(studio.root, 'saved.imagii.json')
+      await stubSaveDialog(app, projectFile)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(projectFile), { timeout: 15_000 }).toBe(true)
+      const saved = JSON.parse(readFileSync(projectFile, 'utf8')) as {
+        schemaVersion: number
+        audioStudio: { sourcePath: string; extractedFromVideo?: boolean; fromVideoPath?: string }
+      }
+      // The file names the VIDEO, says the sound is extracted, and holds no
+      // path into the temp folder anywhere.
+      expect(saved.audioStudio.sourcePath).toBe(video)
+      expect(saved.audioStudio.extractedFromVideo).toBe(true)
+      expect(readFileSync(projectFile, 'utf8')).not.toContain('imagii-audio')
+      expect(readFileSync(projectFile, 'utf8')).not.toContain(path.basename(wav))
+
+      // ── the next launch: the scratch WAV is gone ──
+      await app.close()
+      rmSync(wav)
+      const mainEntry = path.resolve(__dirname, '../../out/main/index.js')
+      second = await electron.launch({
+        args: [mainEntry, `--user-data-dir=${studio.userDataDir}`],
+        env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
+      })
+      const window2 = await second.firstWindow()
+      await window2.waitForLoadState('domcontentloaded')
+      await expect(window2.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      await installToastLog(window2)
+      await stubOpenDialog(second, projectFile)
+      await window2.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(() => readToastLog(window2), { timeout: 60_000, intervals: [250] })
+        .toContain('Project loaded')
+      expect((await readToastLog(window2)).join(' | ')).not.toMatch(/Couldn't find/)
+
+      // The audio is back: loaded, playable, still a sound from a video.
+      await window2.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(playButton(window2)).toBeEnabled({ timeout: 60_000 })
+      await expect(window2.locator(EXPORT).getByRole('checkbox')).toBeChecked() // Re-attach to video
+      // The header still names the video, though the WAV under it has a new random name (T-108).
+      await expect(window2.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      expect(existsSync(wav), 'the old scratch file was not needed').toBe(false)
+      expect(
+        readdirSync(scratch).filter((f) => !before.has(f)),
+        'it was extracted again, under a new name'
+      ).toHaveLength(1)
+
+      // ── and a video that has moved is named, plainly, as the file that is gone ──
+      rmSync(video)
+      await window2.getByRole('link', { name: 'Home' }).click()
+      await window2.getByRole('button', { name: 'Open project' }).click()
+      const GONE =
+        "Couldn't find e2e-clip.mp4. It may have been moved or deleted. " +
+        'The rest of your project is open — load the audio again in Audio Studio.'
+      await expect
+        .poll(() => readToastLog(window2), { timeout: 60_000, intervals: [250] })
+        .toContain(GONE)
+    } finally {
+      try {
+        await second?.close()
+      } catch {
+        /* ignore */
+      }
+      // The first app was closed on purpose (the relaunch), so closing it again
+      // is the one close that may refuse; the scratch folder goes either way.
+      try {
+        await closeStudio(studio)
+      } catch {
+        rmSync(studio.root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test('a project saved before the marker, whose scratch WAV was already pruned, is recovered from the video it names (T-107)', async () => {
+    test.setTimeout(300_000)
+    // Schema 3 and older wrote the scratch WAV as the audio source and the video beside it
+    // (`fromVideoPath`). Once a launch had pruned the WAV, "Open project" said "Couldn't
+    // find aB3dE5fG7h.wav" and the sound was lost with the video still on disk. The file
+    // carries the video, so it is extracted again from that; and if the VIDEO is what is
+    // gone, that is the file named.
+    const studio = await openStudio('t107v3')
+    try {
+      const { app, window } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      const deadWav = path.join(os.tmpdir(), 'imagii-audio', 'aB3dE5fG7h.wav')
+      expect(existsSync(deadWav), 'the scratch WAV the old file names is gone').toBe(false)
+      const projectFile = path.join(studio.root, 'old-v3.imagii.json')
+      writeFileSync(
+        projectFile,
+        JSON.stringify({
+          schemaVersion: 3,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          audioStudio: { sourcePath: deadWav, fromVideoPath: video, chain: DEFAULT_CHAIN_SPEC }
+        }),
+        'utf8'
+      )
+
+      await stubOpenDialog(app, projectFile)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
+        .toContain('Project loaded')
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/Couldn't find/)
+
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(window.locator(EXPORT).getByRole('checkbox')).toBeChecked() // Re-attach to video
+
+      // ── and with the video gone too, it is the VIDEO that is named ──
+      rmSync(video)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Open project' }).click()
+      const GONE =
+        "Couldn't find e2e-clip.mp4. It may have been moved or deleted. " +
+        'The rest of your project is open — load the audio again in Audio Studio.'
+      await expect
+        .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
+        .toContain(GONE)
     } finally {
       await closeStudio(studio)
     }

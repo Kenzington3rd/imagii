@@ -317,6 +317,21 @@ async function currentStep(window: Page): Promise<number> {
   return Number(match[1])
 }
 
+/**
+ * T-125 (13): the background colors painted inside the toast bar that holds `message` - the status disc (the green tick of a success,
+ * the red cross of an error) is one of them. react-hot-toast draws its own stock green and red unless `iconTheme` says otherwise.
+ */
+async function toastDiscColors(window: Page, message: string): Promise<string[]> {
+  return window.evaluate((text) => {
+    const status = Array.from(document.querySelectorAll('[data-rht-toaster] [role="status"]')).find((el) => (el.textContent ?? '').includes(text))
+    const bar = status?.parentElement
+    if (!bar) return []
+    return Array.from(bar.querySelectorAll('*'))
+      .map((el) => getComputedStyle(el).backgroundColor)
+      .filter((c) => c !== 'rgba(0, 0, 0, 0)')
+  }, message)
+}
+
 async function waitForHome(window: Page): Promise<void> {
   await window.waitForLoadState('domcontentloaded')
   await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
@@ -664,6 +679,80 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  /**
+   * T-119 (11) - the coachmark's scroll honors the OS "Reduce motion" setting.
+   *
+   * `scrollIntoView({ behavior: 'smooth' })` is an explicit option, and CSS `scroll-behavior` (what the
+   * `prefers-reduced-motion` block in index.css sets) does not govern an explicit one - so the page animated to
+   * every step's target under Reduce motion, the thing that setting exists to stop. The behavior is chosen when
+   * the step is entered: 'auto' (an instant jump) under Reduce motion, 'smooth' otherwise.
+   */
+  test('T-119 the coachmark scrolls instantly under Reduce motion and smoothly otherwise', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-motion')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Every scrollIntoView on the page is recorded with the `behavior` it was asked for.
+      await window.addInitScript(() => {
+        const calls: Array<{ name: string; behavior: string | null }> = []
+        ;(window as unknown as { __scrollBehaviors: typeof calls }).__scrollBehaviors = calls
+        const original = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = function patched(this: Element, ...args: unknown[]): void {
+          const opts = args[0]
+          calls.push({
+            name: this.getAttribute('data-tutorial') ?? this.tagName,
+            behavior: opts && typeof opts === 'object' ? ((opts as ScrollIntoViewOptions).behavior ?? null) : null
+          })
+          ;(original as (...a: unknown[]) => void).apply(this, args)
+        }
+      })
+      await window.reload()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+
+      const reduced = (): Promise<boolean> =>
+        window.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      const behaviorsOn = (name: string): Promise<Array<string | null>> =>
+        window.evaluate(
+          (n) =>
+            ((window as unknown as { __scrollBehaviors?: Array<{ name: string; behavior: string | null }> })
+              .__scrollBehaviors ?? [])
+              .filter((c) => c.name === n)
+              .map((c) => c.behavior),
+          name
+        )
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+
+      // Reduce motion on: arriving at the importer's step is an instant jump.
+      await window.emulateMedia({ reducedMotion: 'reduce' })
+      expect(await reduced(), 'the emulation took').toBe(true)
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => behaviorsOn('video-import'), { timeout: 10_000 }).toEqual(['auto'])
+
+      // Reduce motion off: the same arrival glides, as it always did.
+      await window.emulateMedia({ reducedMotion: 'no-preference' })
+      expect(await reduced(), 'the emulation was lifted').toBe(false)
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(3)).toBeVisible()
+      await window.getByRole('button', { name: 'Back' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => behaviorsOn('video-import'), { timeout: 10_000 }).toEqual(['auto', 'smooth'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('AutosaveRestore: Restore rehydrates the video and image stores', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()
@@ -728,6 +817,18 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // never happening.
       await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
       expect(await readToastLog(window)).toContain('Restored from autosave')
+      // T-125 (13): the success mark is the palette's ok-strong, not react-hot-toast's stock green, and the page's native controls
+      // are told the window is dark and which color is the accent (they were stock Chromium: blue ticks and sliders, light scrollbars).
+      const successDiscs = await toastDiscColors(window, 'Restored from autosave')
+      expect(successDiscs, 'the success disc is OK_STRONG').toContain('rgb(52, 211, 153)')
+      expect(successDiscs, 'and not the library\'s stock green').not.toContain('rgb(97, 211, 69)')
+      expect(
+        await window.evaluate(() => {
+          const cs = getComputedStyle(document.documentElement)
+          return { colorScheme: cs.colorScheme, accentColor: cs.accentColor }
+        }),
+        'native controls: dark, with the accent token'
+      ).toEqual({ colorScheme: 'dark', accentColor: 'rgb(255, 49, 49)' })
 
       // The banner dismisses itself once the restore lands.
       await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0, { timeout: 20_000 })
@@ -1170,7 +1271,9 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // mean different things to root and to Windows and this assertion is
       // about what the user is told, which must be the same everywhere.
       // The message is verbatim what main/autosave.ts raises when a file it
-      // tried to delete is still there afterwards.
+      // tried to delete is still there afterwards and the failed unlink
+      // carried no errno code (T-118: with one, it ends in "(EBUSY)" - the
+      // second stub below). This is the shape the helper has no words for.
       await app.evaluate(async ({ ipcMain }) => {
         ipcMain.removeHandler('autosave:clear')
         ipcMain.handle('autosave:clear', () => {
@@ -1194,8 +1297,17 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         })
         .toContain("Couldn't clear the autosave")
       const failedToasts = (await readToastLog(window)).join(' | ')
-      expect(failedToasts).toContain('could not delete autosave.json')
-      expect(failedToasts).toContain("It's still on disk")
+      // T-117: the sentence is the banner's own. It used to splice main's string in as written
+      // ("Couldn't clear the autosave: could not delete autosave.json. ..."); a locked file now reads
+      // as the plain cause when the shape is known (below), and is not shown when it is not.
+      expect(failedToasts).toContain("Couldn't clear the autosave. It's still on disk.")
+      // T-125 (13): and the error mark is the palette's danger-strong, not the library's stock red.
+      const errorDiscs = await toastDiscColors(window, "Couldn't clear the autosave")
+      expect(errorDiscs, 'the error disc is DANGER_STRONG').toContain('rgb(251, 113, 133)')
+      expect(errorDiscs, 'and not the library\'s stock red').not.toContain('rgb(255, 75, 75)')
+      expect(failedToasts).not.toContain('could not delete autosave.json')
+      // T-118: no code on the message, so no cause is guessed - the bare sentence is the whole toast.
+      expect(failedToasts).not.toContain('Windows blocked access')
       // The success copy must NOT appear — a failed delete that says
       // "Autosave cleared" is the lie this ticket exists to remove.
       expect(failedToasts).not.toContain('Autosave cleared')
@@ -1211,6 +1323,26 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(clearButton).toBeVisible()
       await expect(clearButton).toBeEnabled()
       await expect(window.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+
+      // A cause the helper knows is named in plain words, and the code and file name it came with are
+      // not shown. The stub is main's real shape for a locked file (T-118): clearAutosave appends the
+      // first failed unlink's errno to the names that survived. (Before T-118 main swallowed the errno
+      // and could never raise this, so the toast below was unreachable outside a stub.)
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => {
+          throw new Error('could not delete autosave.json (EBUSY)')
+        })
+      })
+      await window.getByRole('button', { name: 'Clear' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 20_000, intervals: [200] })
+        .toContain(
+          "Couldn't clear the autosave. It's still on disk. Windows blocked access to a file. " +
+            'Close any app using it, or check your antivirus.'
+        )
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EBUSY|maken|AppData|autosave\.json|unlink/)
+      await expect(banner).toBeVisible()
 
       // Discrimination: the SAME button, with a clear that works. What is
       // being told apart here is the renderer's two branches, so the stub is
@@ -1532,11 +1664,15 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(
         alert.getByRole('heading', { name: 'Something went wrong in this studio' })
       ).toBeVisible()
+      // T-125 (21): and what is safe is stated truthfully. It said "most of it should be waiting on the Home screen", which
+      // Reload to Home never made true (it changes the hash and rebuilds no store, so nothing "waits" on Home); the next case drives
+      // the real claim, that the work is still open in its studio.
       await expect(
         alert.getByText(
-          'imagii saves your work every few seconds, so most of it should be waiting on the Home screen.'
+          'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'
         )
       ).toBeVisible()
+      expect(await alert.innerText()).not.toMatch(/waiting on/i)
       // What the user can SEE says neither — `innerText` skips the closed
       // Details, whose thrown message ("Forced render error …") legitimately
       // does.
@@ -1629,6 +1765,325 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-125 (21): the crash screen's promise, driven. A person who sees "Your work is still open in its studios" and presses Reload to
+  // Home must find it there: the studio they were in has what they were doing, and no restore banner appears over it (the banner is for
+  // a launch, or a render process that died - a hash change is neither).
+  test('ErrorBoundary: after Reload to Home the work is still open in its studio, and no restore banner is offered over it (T-125 (21))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('error-boundary-open')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Work in Stream Graphics: a text layer on the canvas.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+
+      // The studio throws.
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      await expect(alert.getByText(/^Your work is still open in its studios/)).toBeVisible()
+
+      await window.getByRole('button', { name: 'Reload to Home' }).click()
+      await expect(alert).toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+      // No restore banner over Home: nothing was restarted, so there is nothing to restore.
+      await expect(window.getByText(/autosaved your work/)).toHaveCount(0)
+
+      // The work is where the screen said it was: back in the studio, the layer is still on the canvas (and the empty-state button is not).
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Layers (1)'), 'the text layer is still open in its studio').toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Start with text' })).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('T-123 (15) a renderer that dies is reloaded to Home and the autosave is offered again; a second death at once is left, not looped', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    // What main says about it: the handler logs, and the log is how a person finds out why the window blinked.
+    const mainLog: string[] = []
+    app.process().stdout?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    app.process().stderr?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // "Later" hides the banner for this renderer only, so its coming back is the proof of a NEW page.
+      await window.getByRole('button', { name: 'Later' }).click()
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __beforeCrash?: boolean }).__beforeCrash = true
+      })
+
+      // The page is read from MAIN (webContents.executeJavaScript), not through the Playwright Page:
+      // the Page handle belongs to the process that died. A dead renderer never answers, so the read
+      // is raced against a short timer and counts as "nothing there".
+      const readWindow = (): Promise<{
+        crashed: boolean
+        page: { h1: string | null; marker: boolean; banner: boolean } | null
+      }> =>
+        app.evaluate(async ({ BrowserWindow }) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return { crashed: true, page: null }
+          const read = wc
+            .executeJavaScript(
+              `({ h1: document.querySelector('h1')?.textContent ?? null,
+                  marker: globalThis.__beforeCrash === true,
+                  banner: document.body.innerText.includes('imagii autosaved your work') })`
+            )
+            .catch(() => null)
+          const page = await Promise.race([
+            read,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+          ])
+          return { crashed: wc.isCrashed(), page }
+        })
+      const crash = (): Promise<void> =>
+        app.evaluate(({ BrowserWindow }) => {
+          BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+        })
+
+      // ── the first death: reloaded, on Home, a new page, the work offered again ──
+      await crash()
+      await expect
+        .poll(readWindow, { timeout: 30_000, intervals: [500] })
+        .toEqual({ crashed: false, page: { h1: 'imagii', marker: false, banner: true } })
+      expect(mainLog.join('')).toMatch(/renderer process went away \(crashed/)
+
+      // ── a second death straight after: left as it is, said so, and NOT reloaded in a loop ──
+      await crash()
+      await expect
+        .poll(() => mainLog.join(''), { timeout: 15_000 })
+        .toMatch(/renderer process went away \(crashed[^\n]*leaving the window as it is/)
+      await new Promise((resolve) => setTimeout(resolve, 3000))
+      expect((await readWindow()).crashed).toBe(true)
+      // One reload, not two: the first log line for each death, and only one reload between them.
+      expect((mainLog.join('').match(/renderer process went away/g) ?? []).length).toBe(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (2): the T-123 (15) recovery called `webContents.reload()`, which keeps the URL's hash, so a crash inside a
+  // studio reloaded INTO the dead studio: the page the reload lands on is `#/audio` again, no Home, no autosave banner,
+  // while the log said "reloading to Home." The entry is now loaded fresh.
+  test('T-124 (2) a renderer that dies inside a studio is reloaded to Home, with the autosave offered, not into the studio it died in', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone-studio')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    const mainLog: string[] = []
+    app.process().stdout?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    app.process().stderr?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Into a studio, by the card a person clicks, so the hash really is the studio's.
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 20_000 })
+      expect(await window.evaluate(() => globalThis.location.hash)).toBe('#/audio')
+
+      const readWindow = (): Promise<{
+        crashed: boolean
+        page: { hash: string; h1: string | null; marker: boolean; banner: boolean } | null
+      }> =>
+        app.evaluate(async ({ BrowserWindow }) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return { crashed: true, page: null }
+          const read = wc
+            .executeJavaScript(
+              `({ hash: globalThis.location.hash,
+                  h1: document.querySelector('h1')?.textContent ?? null,
+                  marker: globalThis.__beforeCrash === true,
+                  banner: document.body.innerText.includes('imagii autosaved your work') })`
+            )
+            .catch(() => null)
+          const page = await Promise.race([
+            read,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+          ])
+          return { crashed: wc.isCrashed(), page }
+        })
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __beforeCrash?: boolean }).__beforeCrash = true
+      })
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+      })
+      await expect
+        .poll(readWindow, { timeout: 30_000, intervals: [500] })
+        .toEqual({ crashed: false, page: { hash: '#/home', h1: 'imagii', marker: false, banner: true } })
+      expect(mainLog.join('')).toMatch(/renderer process went away \(crashed[^\n]*reloading to Home\./)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (3): the same reload also STRANDED the recording sessions the dead page had open (executed: four orphaned fds and
+  // webms, then `recording:begin` refused with "too many open sessions"). The reload branch abandons the ones not yet closed.
+  test('T-124 (3) a crash mid-take leaves no recording session behind: the temp webm is removed and a new take can begin', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone-take')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // A take in progress, through the preload bridge the Record studio uses: a session and some bytes.
+      const sessionId = await window.evaluate(async () => {
+        const api = (globalThis as unknown as {
+          api: { recording: { begin: () => Promise<{ id: string }>; appendChunk: (id: string, b: ArrayBuffer) => Promise<void> } }
+        }).api
+        const { id } = await api.recording.begin()
+        await api.recording.appendChunk(id, new Uint8Array(65536).buffer)
+        return id
+      })
+      const temp = path.join(userDataDir, 'recordings', `${sessionId}.webm`)
+      expect(existsSync(temp), 'the take has a temp file while it is being recorded').toBe(true)
+
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+      })
+      await expect
+        .poll(() => existsSync(temp), {
+          timeout: 30_000,
+          intervals: [250],
+          message: 'the dead renderer\'s partial webm is still on disk after the reload'
+        })
+        .toBe(false)
+
+      // The new page can begin a take: the dead one's session is not holding a slot. (The page is read from MAIN: the
+      // Playwright Page handle belongs to the process that died.)
+      const inPage = <T,>(code: string): Promise<T | null> =>
+        app.evaluate(async ({ BrowserWindow }, js) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return null
+          return Promise.race([wc.executeJavaScript(js).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000))])
+        }, code) as Promise<T | null>
+      await expect
+        .poll(() => inPage<string>(`document.querySelector('h1')?.textContent ?? null`), { timeout: 30_000, intervals: [500] })
+        .toBe('imagii')
+      const fresh = await inPage<string>(
+        `(async () => { const { id } = await window.api.recording.begin(); await window.api.recording.abandon(id); return id })()`
+      )
+      expect(fresh).toMatch(/^[A-Za-z0-9_-]+$/)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (5): AutosaveRestore gated on the file alone and `dismissed` is the component's own state, so every visit to Home
+  // offered the autosave again - mid-session too - and Restore applied it over the LIVE session with no question (the undo
+  // histories went with it) while the README and USER_GUIDE say the banner appears on launch and after a crash. It is for a
+  // session that holds nothing: a launch, or the page a crash reloads to.
+  async function editInStreamGraphics(window: Page): Promise<void> {
+    await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+    await window.getByRole('button', { name: 'Start with text' }).click()
+    await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+  }
+
+  test('T-124 (5) the autosave is offered on launch, and not again over the work you are doing: edit, go Home, no banner', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('banner-midsession')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Launch: nothing is open, the work is offered.
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Restore' })).toBeVisible()
+
+      // The person declines, starts something new, and comes back to Home.
+      await window.getByRole('button', { name: 'Later' }).click()
+      await editInStreamGraphics(window)
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+
+      // Mid-session: no offer to apply a snapshot over the work, and no Restore button to press by mistake. The quiet status line stays.
+      await expect(
+        window.getByText(/imagii autosaved your work/),
+        'the banner is offered again over the live session'
+      ).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Restore' })).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /)).toBeVisible({ timeout: 15_000 })
+
+      // And the work is still the work: the studio holds the text layer, not the seeded rect.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Kept rect')).toHaveCount(0)
+
+      // A page with nothing in it (the launch, or what a crash reloads to) gets the offer again.
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('T-124 (5) a damaged autosave is announced at launch, not over a session that has work in it', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('banner-damaged-midsession')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const banner = window.getByText(/imagii found an autosave from .*, but it's damaged/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      await editInStreamGraphics(window)
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(banner, 'the damaged-file notice came back over the live session').toHaveCount(0)
+      // A page with nothing in it hears about the file on disk again (by then the live session's own autosave may have replaced
+      // the damaged file with a good one, so either banner is the right answer).
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work|but it's damaged/)).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('RecentFilesMenu: a pick loads the video, Escape and click-outside dismiss, Clear empties the setting', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()
@@ -1698,7 +2153,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
       expect(dialogMessages).toContain(
-        'Close this video? 1 clip and their edits will be discarded.'
+        'Close this video? 1 clip and its edits will be discarded.'
       )
 
       // ── Clear empties the list, in the UI and on disk ──
@@ -1838,9 +2293,14 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       ).toBeVisible()
       const opened = await focusInfo(window)
       expect(opened.insideDialog).toBe(true)
-      expect(opened.label).toBe('Close')
+      // T-119 (8): the question opens on its first answer (it used to open on Close, the first thing in the
+      // dialog), because every later step lands on ITS first answer and the wizard is answered from the keyboard.
+      expect(opened.label).toBe('None to speak of')
 
       // ── focus trap wraps in both directions ──
+      // One step back from the first answer is Close; one more goes past the start and wraps to the last answer.
+      await window.keyboard.press('Shift+Tab')
+      expect((await focusInfo(window)).label).toBe('Close')
       await window.keyboard.press('Shift+Tab')
       const wrappedBack = await focusInfo(window)
       expect(wrappedBack.insideDialog).toBe(true)
@@ -1873,10 +2333,10 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // Apply button raises must never have been shown. Exact copy, and the
       // recorder that would have caught it is proven live above.
       expect(await readToastLog(window)).not.toContain(
-        'Cleanup configured. Tweak from the side panels if needed.'
+        'Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.'
       )
       await expect(
-        window.getByText('Cleanup configured. Tweak from the side panels if needed.')
+        window.getByText('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
       ).toHaveCount(0)
       // And the studio is still on the loaded source, not back at the importer.
       await expect(window.getByText('Drop audio or video here')).toHaveCount(0)

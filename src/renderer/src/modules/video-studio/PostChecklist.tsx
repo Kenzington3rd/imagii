@@ -81,6 +81,12 @@ export function fillTitle(pattern: string, verb: TitleVerb, subject: string, n: 
 
 interface PostChecklistProps {}
 
+/**
+ * Where a post can be logged: the five the Clip Kit writes a file for (`*_youtube.mp4`, `*_reels.mp4`, `*_tiktok.mp4`,
+ * `*_twitter.mp4`, `*_facebook.mp4`), then the two a stream goes to. T-123 (17): Facebook had a file in every kit and no chip here.
+ */
+const POSTING_PLATFORMS = ['YouTube', 'Reels', 'TikTok', 'X', 'Facebook', 'Twitch', 'Discord']
+
 export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
   const [diary, setDiary] = useState<DiaryEntry[]>([])
   const [outputName, setOutputName] = useState('')
@@ -251,10 +257,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
             className="bg-bg-base rounded px-2 py-1 text-xs"
           />
           <div className="flex items-center gap-1.5 flex-wrap">
-            {['YouTube', 'Reels', 'TikTok', 'X', 'Twitch', 'Discord'].map((p) => (
+            {POSTING_PLATFORMS.map((p) => (
               <button
                 key={p}
                 onClick={() => togglePlatform(p)}
+                aria-pressed={platforms.includes(p)}
                 className={`px-2 py-0.5 rounded border text-xs ${
                   platforms.includes(p)
                     ? 'bg-accent text-bg-base border-accent'
@@ -298,8 +305,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                   ✕
                 </button>
               </div>
-              {e.notes ? <div className="text-ink-muted">{e.notes}</div> : null}
-              <div className="flex items-center gap-1 text-xs">
+              {/* T-123 (26): `break-words` so a link pasted into the notes wraps instead of widening the list. */}
+              {e.notes ? <div className="text-ink-muted break-words">{e.notes}</div> : null}
+              {/* T-123 (26): the row WRAPS. Three labels and three w-16 boxes are 337 px and the list is 274 px, so
+                  "comments" (and its box) were pushed off the right edge behind the list's hidden horizontal scrollbar. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 {(['views', 'likes', 'comments'] as const).map((f) => (
                   <label key={f} className="flex items-center gap-1">
                     <span className="text-ink-dim">{f}</span>

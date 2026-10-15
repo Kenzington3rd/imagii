@@ -107,7 +107,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
         })}
       </div>
       <span
-        className={`font-mono w-14 text-right ${clipping ? 'text-danger' : 'text-ink-muted'}`}
+        className={`font-mono w-14 shrink-0 whitespace-nowrap text-right ${clipping ? 'text-danger' : 'text-ink-muted'}`}
       >
         {peakDb.toFixed(0)} dB
       </span>

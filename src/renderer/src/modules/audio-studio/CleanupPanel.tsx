@@ -41,16 +41,20 @@ export function CleanupPanel(): JSX.Element {
 
       <div>
         <div className="text-xs text-ink-muted mb-1.5">Quieter background (strength)</div>
-        <div className="grid grid-cols-5 gap-1.5 text-xs">
+        {/* T-123 (25): five equal columns made each button as wide as the card's fifth, and "Aggressive" (71 px of text)
+            was cut to "Aggress" in a 46 px one. The buttons take the width their label needs and share each row out, so
+            they wrap at a narrow card instead of clipping, and every label is drawn whole at any window width. */}
+        <div className="flex flex-wrap gap-1.5 text-xs">
           {DENOISE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               title={opt.description}
-              className={`px-2 py-1.5 rounded border ${
+              className={`flex-1 whitespace-nowrap px-2 py-1.5 rounded border ${
                 chain.denoise === opt.value
                   ? 'bg-accent text-bg-base border-accent'
                   : 'bg-bg-hover border-ink-dim/30 hover:border-accent'
               }`}
+              aria-pressed={chain.denoise === opt.value}
               onClick={() => patchChain({ denoise: opt.value })}
             >
               {opt.label}
@@ -75,7 +79,7 @@ export function CleanupPanel(): JSX.Element {
             step={1}
             value={Math.min(-20, params.noiseFloorDb)}
             onChange={(noiseFloorDb) => updateParam({ noiseFloorDb })}
-            hint="Set the level below which signal is treated as noise. -25 ≈ medium preset."
+            hint="Set the level below which signal is treated as noise. -35 is the Light preset's setting."
           />
           <ParamSlider
             label="Reduction"
@@ -108,10 +112,14 @@ export function CleanupPanel(): JSX.Element {
           <span>Hum removal ({mains} Hz mains)</span>
         </label>
         {chain.hum60 ? (
-          <label className="flex items-center gap-2 text-xs -mt-1 ml-6">
+          <label className="flex flex-col gap-1 text-xs -mt-1 ml-6">
             <span className="text-ink-muted">Power-line frequency</span>
+            {/* T-123 (27): `min-w-0`, or a select is as wide as its longest option and pokes past the card. T-124 (24): but a
+                select that is shrunk CLIPS its text ("60 Hz — US," of "60 Hz — US, Canada"), and its `scrollWidth` says nothing
+                is cut, so the check that looked was green. The label is on its own line and the select has the card's width
+                under it; both options fit it at the narrowest column (`expectSelectsWhole` measures the selected text). */}
             <select
-              className="bg-bg-base rounded px-2 py-1 flex-1"
+              className="bg-bg-base rounded px-2 py-1 w-full min-w-0"
               value={mains}
               onChange={(e) => patchChain({ humHz: Number(e.target.value) === 50 ? 50 : 60 })}
               aria-label="Power-line frequency"
@@ -150,9 +158,17 @@ interface ParamSliderProps {
 
 function ParamSlider(props: ParamSliderProps): JSX.Element {
   const { label, unit, min, max, step, value, onChange, hint } = props
+  const readout = `${value.toFixed(step < 1 ? 1 : 0)}${unit ? ` ${unit}` : ''}`
+  // T-124 (25): the name and the readout share a line and the slider has the row's width under them. The readout was a `w-14`
+  // box beside the slider in a row with no room for it: squeezed to 38 px, "-25 dB" wrapped onto two lines, and the row grew
+  // and shrank with the value while the slider was being dragged (a one-digit readout fits where a two-digit one wraps). A
+  // readout never shrinks and never wraps, so the row is the same height at both ends of the slider.
   return (
-    <label className="flex items-center gap-2" title={hint}>
-      <span className="text-ink-muted w-24">{label}</span>
+    <label className="flex flex-col gap-1" title={hint}>
+      <span className="flex items-center justify-between gap-2">
+        <span className="text-ink-muted">{label}</span>
+        <span className="font-mono shrink-0 whitespace-nowrap text-right">{readout}</span>
+      </span>
       <input
         type="range"
         min={min}
@@ -160,14 +176,10 @@ function ParamSlider(props: ParamSliderProps): JSX.Element {
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1"
+        className="w-full"
         aria-label={label}
-        aria-valuetext={`${value.toFixed(step < 1 ? 1 : 0)}${unit ? ` ${unit}` : ''}`}
+        aria-valuetext={readout}
       />
-      <span className="font-mono w-14 text-right">
-        {value.toFixed(step < 1 ? 1 : 0)}
-        {unit ? ` ${unit}` : ''}
-      </span>
     </label>
   )
 }

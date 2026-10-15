@@ -25,21 +25,25 @@ class FakeChild extends EventEmitter {
 }
 
 let lastChild: FakeChild | null = null
+let lastArgs: string[] = []
 
 vi.mock('node:child_process', () => ({
-  spawn: () => {
+  spawn: (_cmd: string, args: string[]) => {
     lastChild = new FakeChild()
+    lastArgs = args
     return lastChild
   }
 }))
 
 const {
   convertToMp4,
+  remuxWebm,
   cancelConverts,
   cancelAllConverts,
   ConvertCancelledError,
   ConvertFailedError
 } = await import('./convert')
+const { EVEN_PICTURE } = await import('./filters')
 
 /** Start a convert and hand back the promise plus its (fake) child. */
 function startConvert(
@@ -271,5 +275,170 @@ describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
     expect(importing.child.signals).toEqual(['SIGKILL'])
     importing.child.emit('close', null, 'SIGKILL')
     await expect(importing.promise).rejects.toBeInstanceOf(ConvertCancelledError)
+  })
+})
+
+describe('convertToMp4 - the picture it asks for (T-114)', () => {
+  it('opens its -vf chain with the even-size stage, ahead of the encoder', async () => {
+    const { promise, child } = startConvert()
+    child.emit('close', 0, null)
+    await promise
+    // An odd screen recording died at exit 187 here, and recording.ts unlinks the temp webm
+    // when the convert fails. Layer 5 (media.spec.ts) proves the real binary accepts it.
+    expect(lastArgs[lastArgs.indexOf('-vf') + 1]).toBe(EVEN_PICTURE)
+    expect(lastArgs.indexOf('-vf')).toBeLessThan(lastArgs.indexOf('libx264'))
+  })
+})
+
+// T-120: a MediaRecorder webm declares no frame rate (ffprobe reads its container rate as 1000/1) and the
+// mp4 muxer's default is a constant rate, so the convert wrote one frame per millisecond: 9575 frames for
+// a 9.6 s take, 1m56s to write, and a file that probes as 1000 fps. `-fps_mode vfr` keeps each frame at its
+// own time. This pins the argument; Layer 5 (media.spec.ts) is the proof that the real binary does it, on a
+// file with MediaRecorder's shape, and that sources with a steady rate are unchanged.
+describe('convertToMp4 - frames keep their own times (T-120)', () => {
+  it('asks for a variable frame rate, as an output option ahead of the encoder', async () => {
+    const { promise, child } = startConvert()
+    child.emit('close', 0, null)
+    await promise
+    const at = lastArgs.indexOf('-fps_mode')
+    expect(at, `the convert asks for a frame-rate mode: ${lastArgs.join(' ')}`).toBeGreaterThan(lastArgs.indexOf('-i'))
+    expect(lastArgs[at + 1]).toBe('vfr')
+    expect(at).toBeLessThan(lastArgs.indexOf('libx264'))
+    // And it is not the other way to fix a rate: no forced output rate, which would be a guess.
+    expect(lastArgs).not.toContain('-r')
+  })
+})
+
+// T-120: the WebM save is a packet copy through the same child registry (so Discard and the quit sweep
+// reach it), and it never re-encodes.
+describe('remuxWebm (T-120)', () => {
+  function startRemux(owner: 'recording' | 'import' = 'recording'): {
+    promise: Promise<void>
+    child: FakeChild
+  } {
+    const promise = remuxWebm(owner, '/tmp/in.webm', '/tmp/out.webm')
+    const child = lastChild
+    if (!child) throw new Error('spawn was never called')
+    return { promise, child }
+  }
+
+  it('copies the packets into the chosen path and encodes nothing', async () => {
+    const { promise, child } = startRemux()
+    child.emit('close', 0, null)
+    await promise
+    expect(lastArgs).toEqual(['-y', '-i', '/tmp/in.webm', '-c', 'copy', '/tmp/out.webm'])
+  })
+
+  it('is canceled by "Discard recording" like the convert: the sentinel, not a crash', async () => {
+    const { promise, child } = startRemux('recording')
+    expect(cancelConverts('recording')).toBe(true)
+    expect(child.signals).toEqual(['SIGKILL'])
+    child.emit('close', null, 'SIGKILL')
+    await expect(promise).rejects.toBeInstanceOf(ConvertCancelledError)
+  })
+
+  it('a failed copy is a failure, not a cancel', async () => {
+    const { promise, child } = startRemux()
+    child.stderr.emit('data', 'Invalid data found when processing input')
+    child.emit('close', 1, null)
+    await expect(promise).rejects.toBeInstanceOf(ConvertFailedError)
+  })
+
+  it('is not reached by an import convert\'s owner', async () => {
+    const { child } = startRemux('recording')
+    expect(cancelConverts('import')).toBe(false)
+    expect(child.signals).toEqual([])
+    cancelAllConverts()
+  })
+})
+
+// T-115: the recording's bar used to be `Math.min(99, encodedSeconds * 2)` under a comment saying
+// "1% per second" - 50 seconds of a 5-minute take already read 99%, and the bar then sat at 99
+// for minutes beside an enabled Discard button. A percent is a measurement or it is absent
+// (STYLE_GUIDE, "A progress number is a measurement"): ffmpeg's `out_time` over the length of the
+// take, capped at 99, and no percent at all when nobody knows the length. Layer 5 runs the real
+// binary through the same path ("convert progress is the encode position over the length").
+describe('convertToMp4 - progress is a measurement, or it is absent (T-115)', () => {
+  /** A convert with a length (or without), a recorder of what it reported, and its fake child. */
+  function startMeasured(durationSec?: number): {
+    promise: Promise<void>
+    child: FakeChild
+    reports: Array<{ percent?: number }>
+  } {
+    const reports: Array<{ percent?: number }> = []
+    const promise = convertToMp4('recording', '/tmp/in.webm', '/tmp/out.mp4', (p) => reports.push(p), durationSec)
+    const child = lastChild
+    if (!child) throw new Error('spawn was never called')
+    return { promise, child, reports }
+  }
+  /** What ffmpeg's `-progress pipe:1` prints for one tick, ending with the key under test. */
+  const tick = (outTime: string): string =>
+    `frame=10\nfps=30.0\nout_time_us=1\nout_time=${outTime}\nspeed=2x\nprogress=continue\n`
+
+  it('is the position in the output over the length of the take', async () => {
+    const { promise, child, reports } = startMeasured(10)
+    child.stdout.emit('data', tick('00:00:02.500000'))
+    child.stdout.emit('data', tick('00:00:05.000000'))
+    child.stdout.emit('data', tick('00:00:07.500000'))
+    expect(reports.map((r) => r.percent)).toEqual([25, 50, 75])
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it('a 5-minute take is not at 99% after 50 seconds (the 1%-per-second guess)', async () => {
+    const { promise, child, reports } = startMeasured(300)
+    child.stdout.emit('data', tick('00:00:50.000000'))
+    expect(reports[0]?.percent).toBeCloseTo(16.667, 2)
+    expect(reports[0]?.percent ?? 100).toBeLessThan(20)
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it('reads hours and minutes, not only seconds', async () => {
+    const { promise, child, reports } = startMeasured(7200)
+    child.stdout.emit('data', tick('01:00:00.000000'))
+    expect(reports[0]?.percent).toBe(50)
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it('tops out at 99 - the last percent is the file being finalized - and starts at 0', async () => {
+    const { promise, child, reports } = startMeasured(10)
+    child.stdout.emit('data', tick('00:00:00.000000'))
+    child.stdout.emit('data', tick('00:00:10.000000'))
+    child.stdout.emit('data', tick('00:00:14.000000'))
+    expect(reports.map((r) => r.percent)).toEqual([0, 99, 99])
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it.each([
+    ['no length', undefined],
+    ['a length of 0', 0],
+    ['a negative length', -3],
+    ['a length that is not a number', Number.NaN],
+    ['an infinite length', Number.POSITIVE_INFINITY]
+  ])('with %s it reports progress WITHOUT a percent, so the bar is indeterminate', async (_label, length) => {
+    const { promise, child, reports } = startMeasured(length)
+    child.stdout.emit('data', tick('00:00:30.000000'))
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).not.toHaveProperty('percent')
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it('ffmpeg\'s first tick, out_time=N/A, reports nothing at all', async () => {
+    const { promise, child, reports } = startMeasured(10)
+    child.stdout.emit('data', tick('N/A'))
+    expect(reports).toEqual([])
+    child.emit('close', 0, null)
+    await promise
+  })
+
+  it('the importer\'s convert (no length) keeps working: it finishes and nothing breaks', async () => {
+    const { promise, child } = startConvert('import')
+    child.stdout.emit('data', tick('00:00:03.000000'))
+    child.emit('close', 0, null)
+    await expect(promise).resolves.toBeUndefined()
   })
 })

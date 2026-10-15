@@ -1,5 +1,6 @@
 import type { PlatformId } from '../../shared/clip'
 import type { CustomPreset } from '../../shared/customPresets'
+import { even } from './filters'
 
 export interface PlatformPreset {
   id: PlatformId
@@ -48,8 +49,10 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     // duration updates (Reels 3 min, TikTok 60 min, X Premium 3 h) only
     // landed in the renderer copy of this table. A cross-table test now
     // pins the two against each other (presetTablesInSync.test.ts).
+    // T-112: 20 minutes is what Reels takes; 3 is where Instagram stops
+    // recommending one (the renderer's yellow note) — see presets.ts there.
     durationSweetSpot: { min: 15, max: 90 },
-    durationHardLimit: 180,
+    durationHardLimit: 20 * 60,
     aspectRatio: 9 / 16
   },
   tiktok: {
@@ -111,6 +114,12 @@ export const ALL_PRESET_IDS: PlatformId[] = ['youtube', 'reels', 'tiktok', 'twit
  * to 9:16 and then stretch it, which is the wrong picture, not just the
  * wrong number. Codec, pixel format and the duration advisories stay with
  * the base platform: those are the parts the user chose a base FOR.
+ *
+ * T-111: the custom size is snapped to even pixels, the way a compilation's is
+ * (`buildSegmentFilter`). yuv420p keeps one chroma sample per 2x2 block and
+ * libx264 refuses an odd width or height outright, so a 1081x607 preset used to
+ * fail EVERY export with "width not divisible by 2" — the form accepts any size
+ * from 16 to 16384 and nothing downstream rounded it.
  */
 export function resolveExportPreset(
   baseId: PlatformId,
@@ -118,14 +127,16 @@ export function resolveExportPreset(
 ): PlatformPreset {
   const base = PLATFORM_PRESETS[baseId]
   if (!custom) return base
+  const width = even(custom.width)
+  const height = even(custom.height)
   return {
     ...base,
     label: custom.name,
-    width: custom.width,
-    height: custom.height,
+    width,
+    height,
     fps: custom.fps,
     videoBitrate: custom.videoBitrate,
     audioBitrate: custom.audioBitrate,
-    aspectRatio: custom.width / custom.height
+    aspectRatio: width / height
   }
 }

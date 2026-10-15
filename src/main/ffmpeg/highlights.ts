@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { ffmpegPath } from './paths'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { CancelLatch, type LatchRun } from './cancelLatch'
 import { assert, assertDefined } from '../../shared/assert'
 
 export interface HighlightCandidate {
@@ -49,6 +50,15 @@ function parseEbur128(stderr: string): LoudnessSample[] {
   return samples
 }
 
+/**
+ * The loudness filter both passes run (the full-source scan and the per-clip hook window). `framelog=info` is load-bearing: the
+ * per-frame "t: … M: …" lines `parseEbur128` reads are logged at that level, and `quiet` suppressed them entirely (T-09, T-10 in
+ * LESSONS_LEARNED). T-126 (23): and NO `peak=true`. True-peak oversamples every block 4x, and the parser reads only `t:` and `M:`, so the
+ * scans paid about 3x their time (14.7 s against 4.8 s on a 30 minute source) for numbers they threw away. Layer 5 holds that this string
+ * computes no true peak and parses to the same series as the one that did.
+ */
+export const EBUR128_SCAN_FILTER = 'ebur128=metadata=1:framelog=info'
+
 // Exported only for testing. Keeps the cap visible to test cases without
 // exposing it through the broader module API.
 export const __testing__ = { parseEbur128, PARSE_EBUR128_MAX_ITERATIONS }
@@ -59,13 +69,31 @@ export const __testing__ = { parseEbur128, PARSE_EBUR128_MAX_ITERATIONS }
 //   - activeHookProcess = the per-clip analyzeClipHook pass
 // cancelAllHighlightJobs() takes both.
 let activeScan: ChildProcess | null = null
+// T-98: the scan probes the source before it spawns. Only findHighlights opens
+// a run here — the per-clip hook analysis is superseded by the next request,
+// not canceled by the user.
+const scanLatch = new CancelLatch()
 
 export async function findHighlights(
   jobId: string,
   sourcePath: string,
   onProgress: (p: HighlightProgress) => void
 ): Promise<HighlightCandidate[]> {
-  const probe = await probeVideo(sourcePath)
+  const run = scanLatch.begin(jobId)
+  try {
+    return await scanSource(jobId, sourcePath, onProgress, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function scanSource(
+  jobId: string,
+  sourcePath: string,
+  onProgress: (p: HighlightProgress) => void,
+  run: LatchRun
+): Promise<HighlightCandidate[]> {
+  const probe = await run.guard(probeVideo(sourcePath))
   const totalDuration = probe.duration
   onProgress({ jobId, phase: 'scanning', percent: 0 })
 
@@ -78,13 +106,15 @@ export async function findHighlights(
     // function parses are logged at that level, and `quiet` (round 21's
     // value) suppressed them entirely — parseEbur128 saw zero samples and
     // every scan returned no candidates. See T-09 in LESSONS_LEARNED.
-    'ebur128=metadata=1:framelog=info:peak=true',
+    // T-126 (23): and no `peak=true` (see EBUR128_SCAN_FILTER).
+    EBUR128_SCAN_FILTER,
     '-f',
     'null',
     '-'
   ]
 
   const stderr = await new Promise<string>((resolve, reject) => {
+    run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     activeScan = child
     let buffer = ''
@@ -234,8 +264,9 @@ export async function analyzeClipHook(
     '-af',
     // Same reason as findHighlights: without an explicit framelog=info the
     // "M:" lines parsed below never reach stderr (metadata=1 demotes them),
-    // so every clip scored the -70 LUFS floor. See T-10 in LESSONS_LEARNED.
-    'ebur128=metadata=1:framelog=info:peak=true',
+    // so every clip scored the -70 LUFS floor. See T-10 in LESSONS_LEARNED. (T-126 (23): no `peak=true` here either; the
+    // parser reads `M:` only.)
+    EBUR128_SCAN_FILTER,
     '-f',
     'null',
     '-'
@@ -288,7 +319,8 @@ export async function analyzeClipHook(
 // Single-slot — only one full-source scan runs at a time. Returns true if
 // a scan was actually killed.
 export function cancelActiveHighlightScan(): boolean {
-  if (!activeScan || activeScan.exitCode !== null) return false
+  const marked = scanLatch.cancelAll()
+  if (!activeScan || activeScan.exitCode !== null) return marked
   killAsCancelled(activeScan)
   activeScan = null
   return true
@@ -298,6 +330,7 @@ export function cancelActiveHighlightScan(): boolean {
 // app quit. Covers both findHighlights (full source pass) and analyzeClipHook
 // (per-clip window pass). Pre-16, a long source scan survived app quit.
 export function cancelAllHighlightJobs(): void {
+  scanLatch.cancelAll()
   if (activeScan && activeScan.exitCode === null) killAsCancelled(activeScan)
   activeScan = null
   if (activeHookProcess && activeHookProcess.exitCode === null) {

@@ -1,12 +1,19 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
-import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { DraftField } from '../../components/DraftField'
+import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
+import { useVideoOutputDir } from '../../hooks/useVideoOutputDir'
 
 type Position = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+/** The overlay width the box takes (px): the same 120 to 960 its attributes say, enforced when typing ends. */
+const PIP_WIDTH_MIN = 120
+const PIP_WIDTH_MAX = 960
 
 export function PipPanel(): JSX.Element {
   const [basePath, setBasePath] = useState<string | null>(null)
@@ -14,54 +21,59 @@ export function PipPanel(): JSX.Element {
   const [overlayWidth, setOverlayWidth] = useState(360)
   const [position, setPosition] = useState<Position>('bottom-right')
   const [margin, setMargin] = useState(32)
-  const [outDir, setOutDir] = useState<string | null>(null)
+  // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
+  const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
   const [busy, setBusy] = useState(false)
   // Round 17 B5
   const jobIdRef = useRef<string | null>(null)
+  // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
+  // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
+  // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
+  // one's chooser is on screen). Declared with the other hooks, ahead of any early return.
+  const startingRef = useRef(false)
 
   async function pick(setter: (path: string | null) => void): Promise<void> {
     const f = await window.api.video.pickFile()
     if (f) setter(f)
   }
 
-  async function pickDir(): Promise<void> {
-    const d = await window.api.video.pickOutputDir()
-    if (d) setOutDir(d)
-  }
-
   async function run(): Promise<void> {
-    if (!basePath || !overlayPath) {
-      toast.error('Pick both files')
-      return
-    }
-    let dir = outDir
-    if (!dir) {
-      dir = await window.api.video.pickOutputDir()
-      if (!dir) return
-      setOutDir(dir)
-    }
-    setBusy(true)
-    const jobId = nanoid(10)
-    jobIdRef.current = jobId
+    if (startingRef.current) return
+    startingRef.current = true
     try {
-      const result = await window.api.video.pipComposite({
-        jobId,
-        basePath,
-        overlayPath,
-        outDir: dir,
-        overlayWidth,
-        position,
-        margin
-      })
-      toastSaved('Saved the picture-in-picture video', result.outputPath)
-    } catch (err) {
-      reportFailure(err, {
-        failed: 'Picture-in-picture failed.',
-        canceled: 'Picture-in-picture canceled.'
-      })
+      if (!basePath || !overlayPath) {
+        toast.error('Pick both files')
+        return
+      }
+      const dir = await resolveOutDir()
+      if (!dir) return
+      setBusy(true)
+      const jobId = nanoid(10)
+      jobIdRef.current = jobId
+      try {
+        const result = await window.api.video.pipComposite({
+          jobId,
+          basePath,
+          overlayPath,
+          outDir: dir,
+          overlayWidth,
+          position,
+          margin
+        })
+        // T-112: the file's own name, so "name (2).mp4" (T-106) is never a surprise.
+        toastSaved(`Saved ${basename(result.outputPath)}`, result.outputPath)
+        rememberOutDir(dir)
+      } catch (err) {
+        reportFailure(err, {
+          failed: 'Picture-in-picture failed.',
+          canceled: 'Picture-in-picture canceled.'
+        })
+      } finally {
+        setBusy(false)
+        jobIdRef.current = null
+      }
     } finally {
-      setBusy(false)
-      jobIdRef.current = null
+      startingRef.current = false
     }
   }
 
@@ -100,16 +112,26 @@ export function PipPanel(): JSX.Element {
           Overlay: {nameOf(overlayPath)}
         </button>
       </div>
-      <div className="grid grid-cols-3 gap-2 text-xs">
+      {/* T-125 (12): two boxes to a row and the Position select on a row of its own. In three columns each cell was a third of a
+          card that is about 300 px, so the select drew "Bottom rig" and cut "Bottom right" off at the default window, and the
+          "Overlay width (px)" label wrapped onto two lines. */}
+      <div className="grid grid-cols-2 gap-2 text-xs">
         <label className="flex flex-col gap-1">
           <span className="text-ink-muted">Overlay width (px)</span>
-          <input
+          {/* T-123 (4): the box keeps what is typed until typing ends. `Number(typed) || 360` snapped an emptied box to
+              360 on the spot, so the digits typed next appended to it: "600" was 360600, and the composite failed. */}
+          <DraftField
             type="number"
-            min={120}
-            max={960}
+            min={PIP_WIDTH_MIN}
+            max={PIP_WIDTH_MAX}
             step={20}
-            value={overlayWidth}
-            onChange={(e) => setOverlayWidth(Number(e.target.value) || 360)}
+            value={String(overlayWidth)}
+            live={(typed) => isTypedInRange(typed, PIP_WIDTH_MIN, PIP_WIDTH_MAX)}
+            commit={(typed) => {
+              const n = clampTyped(typed, PIP_WIDTH_MIN, PIP_WIDTH_MAX)
+              if (n !== null) setOverlayWidth(n)
+              return null
+            }}
             className="bg-bg-base rounded px-2 py-1"
           />
         </label>
@@ -125,7 +147,7 @@ export function PipPanel(): JSX.Element {
             className="bg-bg-base rounded px-2 py-1"
           />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex flex-col gap-1 col-span-2">
           <span className="text-ink-muted">Position</span>
           <select
             className="bg-bg-base rounded px-1 py-1"
@@ -140,18 +162,23 @@ export function PipPanel(): JSX.Element {
         </label>
       </div>
       <div className="flex items-center gap-2">
-        <button className="btn-ghost px-3 py-1.5 text-xs" onClick={pickDir}>
+        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs" onClick={pickDir}>
           <OutputDirLabel outDir={outDir} />
         </button>
         <button
-          className="btn-primary px-3 py-1.5 text-xs ml-auto disabled:opacity-50"
+          className="btn-primary px-3 py-1.5 text-xs ml-auto whitespace-nowrap disabled:opacity-50"
           disabled={busy}
           onClick={run}
         >
           {busy ? 'Compositing…' : 'Composite'}
         </button>
-        {/* Round 17 B5 */}
-        {busy ? (
+      </div>
+      {/* T-126 (20): Cancel has a row of its own. Beside the primary it took the place the primary's right edge had a moment ago - the
+          busy label is shorter, so the second click of a double-click landed on Cancel and cancelled the job it had just started
+          (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
+      {/* Round 17 B5 */}
+      {busy ? (
+        <div className="flex justify-end">
           <button
             className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
             onClick={cancel}
@@ -159,8 +186,8 @@ export function PipPanel(): JSX.Element {
           >
             Cancel
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -6,7 +6,11 @@ import { existsSync } from 'node:fs'
 import { net } from 'electron'
 import { extractAudioFromVideo } from '../audio/extract'
 import { ffmpegPath } from '../ffmpeg/paths'
+import { probeVideo } from '../ffmpeg/probe'
+import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
+import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
+import { discardPartialOutput } from '../ffmpeg/partialOutput'
 import {
   captionsOutputDir,
   whisperExePath,
@@ -24,12 +28,18 @@ import type {
   CaptionStyle
 } from '../../shared/captions'
 import {
+  ASS_PLAY_RES_Y,
   DEFAULT_CAPTION_STYLE,
+  TRANSCRIPTION_AUDIO,
   WHISPER_MODEL_FILENAME,
   WHISPER_MODEL_MAX_BYTES,
   WHISPER_MODEL_MIN_BYTES,
   WHISPER_MODEL_SHA256,
   WHISPER_MODEL_URL,
+  burnInLengthSec,
+  burnInPercent,
+  captionPlayResY,
+  isUsableFrame,
   escapeSubtitlesPath,
   shiftedSrtPath,
   shiftSrtToRange,
@@ -37,7 +47,7 @@ import {
 } from '../../shared/captions'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { assert } from '../../shared/assert'
+import { assertAlways } from '../../shared/assert'
 import { CANCELLED_MESSAGE } from '../../shared/cancel'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
@@ -91,16 +101,25 @@ let transcribeInProgress = false
 // ffmpeg/export.ts activeJobs pattern.
 const activeTranscribe = new Map<string, ChildProcess>()
 const activeBurnIn = new Map<string, ChildProcess>()
+// T-98: the Cancel button appears with the first progress event, a few awaits
+// (the SRT read, the shifted copy's write) before the child exists.
+const burnLatch = new CancelLatch()
+// T-108: the same for transcription. Its first child is the audio extraction (a
+// long source takes a while) and the engine only starts after it, so most of a
+// transcription is spent before the engine exists; a Cancel in that wait must
+// still stop the job. `activeTranscribe` holds whichever of the two is running.
+const transcribeLatch = new CancelLatch()
 
 export function cancelTranscribe(jobId?: string): boolean {
   if (jobId) {
+    const marked = transcribeLatch.cancel(jobId)
     const child = activeTranscribe.get(jobId)
-    if (!child) return false
+    if (!child) return marked
     killAsCancelled(child)
     activeTranscribe.delete(jobId)
     return true
   }
-  let any = false
+  let any = transcribeLatch.cancelAll()
   for (const [, child] of activeTranscribe) {
     killAsCancelled(child)
     any = true
@@ -111,13 +130,14 @@ export function cancelTranscribe(jobId?: string): boolean {
 
 export function cancelBurnIn(jobId?: string): boolean {
   if (jobId) {
+    const marked = burnLatch.cancel(jobId)
     const child = activeBurnIn.get(jobId)
-    if (!child) return false
+    if (!child) return marked
     killAsCancelled(child)
     activeBurnIn.delete(jobId)
     return true
   }
-  let any = false
+  let any = burnLatch.cancelAll()
   for (const [, child] of activeBurnIn) {
     killAsCancelled(child)
     any = true
@@ -142,7 +162,7 @@ export async function runTranscribe(
   // Lessons: see "claim flag must be set synchronously" entry in
   // docs/LESSONS_LEARNED.md (2026-05-09).
   if (transcribeInProgress) {
-    throw new Error('Transcription already in progress')
+    throw new Error('A transcription is already running. Wait for it to finish, then try again.')
   }
   transcribeInProgress = true
   try {
@@ -158,8 +178,22 @@ async function runTranscribeBody(
 ): Promise<TranscribeResult> {
   const status = getCaptionsStatus()
   if (!status.ready) throw new Error('Whisper not installed (see Captions setup)')
+  const run = transcribeLatch.begin(req.jobId)
+  try {
+    return await transcribeUnderRun(req, onProgress, status, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function transcribeUnderRun(
+  req: TranscribeRequest,
+  onProgress: CaptionsProgressListener,
+  status: CaptionsInstallStatus,
+  run: LatchRun
+): Promise<TranscribeResult> {
   const startedAt = Date.now()
-  await mkdir(captionsOutputDir(), { recursive: true })
+  await run.guard(mkdir(captionsOutputDir(), { recursive: true }))
 
   // T-89: no `percent` on the phases whose length main cannot know. The
   // transcribe phase used to send `15 + Math.random() * 10` — a number that
@@ -167,7 +201,37 @@ async function runTranscribeBody(
   // and the SRT write a fixed 5 and 95 that measured nothing either. An absent
   // percent is the indeterminate bar in the panel; only `done` is a fact.
   onProgress({ jobId: req.jobId, phase: 'extracting' })
-  const extracted = await extractAudioFromVideo(req.sourcePath)
+  // T-108: extraction is the first child, and it is registered so a Cancel kills it
+  // (a long VOD takes a while). A Cancel that landed before the child existed
+  // (the mkdir above) kills it the moment it does.
+  const extraction = extractAudioFromVideo(
+    req.sourcePath,
+    (child) => {
+      activeTranscribe.set(req.jobId, child)
+      try {
+        run.check()
+      } catch {
+        killAsCancelled(child)
+        // T-111: this child arrives AFTER the Cancel ended the wait below, whose
+        // `finally` already cleared the entry — so the line above has just put a
+        // dead job's child back, where a later cancel would find it, report a
+        // cancel of something that is not running, and the map would hold it.
+        activeTranscribe.delete(req.jobId)
+      }
+    },
+    TRANSCRIPTION_AUDIO
+  )
+  let extracted: Awaited<typeof extraction>
+  try {
+    extracted = await run.guard(extraction)
+  } catch (err) {
+    // The wait ended on a Cancel while the extraction may still be finishing: a WAV
+    // that arrives after nobody wants it is removed (a killed one removes itself).
+    void extraction.then((e) => e.cleanup(), () => undefined)
+    throw err
+  } finally {
+    activeTranscribe.delete(req.jobId)
+  }
 
   // Bug fix: try/finally ensures the temp WAV is deleted on every exit
   // path. Previously, a Whisper failure (non-zero exit, missing SRT,
@@ -195,6 +259,7 @@ async function runTranscribeBody(
     ]
 
     await new Promise<void>((resolve, reject) => {
+      run.check()
       const child = spawn(status.exePath, args, { windowsHide: true })
       activeTranscribe.set(req.jobId, child)
       let stderr = ''
@@ -257,8 +322,10 @@ async function runTranscribeBody(
  * libass uses 0=opaque so we always emit "00" in the alpha slot.
  */
 function hexToAssColor(hex: string): string {
-  // assert keeps the helper's preconditions auditable per Power-of-Ten rule 5
-  assert(/^#?[0-9a-fA-F]{6}$/.test(hex), `caption color must be #RRGGBB hex, got ${hex}`)
+  // T-114: assertAlways, not assert() - this is the only check between a style a renderer
+  // sent and `force_style='PrimaryColour=...'`, and assert() logs and continues under
+  // NODE_ENV=production. (The IPC gate refuses first; this is the runner's own line.)
+  assertAlways(/^#?[0-9a-fA-F]{6}$/.test(hex), `caption color must be #RRGGBB hex, got ${hex}`)
   const clean = hex.startsWith('#') ? hex.slice(1) : hex
   const r = clean.slice(0, 2)
   const g = clean.slice(2, 4)
@@ -284,7 +351,19 @@ function alignmentForPosition(position: CaptionStyle['position']): number {
   }
 }
 
-function buildForceStyle(style: CaptionStyle, legacyFontSizePct: number): string {
+/**
+ * `frame` is the picture the burn is drawn on, when known (T-111). libass sizes a
+ * `FontSize` by frame HEIGHT, so on a frame narrower than 16:9 the style also
+ * carries a `PlayResY` (see `captionPlayResY`) that brings the text to the size it
+ * has on a 16:9 frame of the same width, and a `MarginV` scaled with it so the
+ * caption sits the same fraction of the way up the frame as before. On 16:9 and
+ * wider, and when the frame is unknown, the string is exactly what it always was.
+ */
+function buildForceStyle(
+  style: CaptionStyle,
+  legacyFontSizePct: number,
+  frame?: { width: number; height: number }
+): string {
   // The legacy fontSizePct path scaled by 10 to get a pixel size; preserve
   // that semantics when a fresh style isn't provided so old callers still work.
   const fontSize =
@@ -294,7 +373,11 @@ function buildForceStyle(style: CaptionStyle, legacyFontSizePct: number): string
   const primary = hexToAssColor(style.primaryColor)
   const outline = hexToAssColor(style.outlineColor)
   const alignment = alignmentForPosition(style.position)
-  const marginV = style.position === 'middle' ? 0 : 40
+  const baseMarginV = style.position === 'middle' ? 0 : 40
+  // T-113: a probe can answer with a frame of 0, which `captionBasisPx` refuses; that is
+  // "no frame known" (landscape), never a reason to refuse the burn.
+  const playResY = isUsableFrame(frame) ? captionPlayResY(frame.width, frame.height) : null
+  const marginV = playResY === null ? baseMarginV : Math.round((baseMarginV * playResY) / ASS_PLAY_RES_Y)
   return [
     `FontName=Arial`,
     `FontSize=${fontSize}`,
@@ -303,7 +386,8 @@ function buildForceStyle(style: CaptionStyle, legacyFontSizePct: number): string
     `Outline=2`,
     `Shadow=0`,
     `Alignment=${alignment}`,
-    `MarginV=${marginV}`
+    `MarginV=${marginV}`,
+    ...(playResY === null ? [] : [`PlayResY=${playResY}`])
   ].join(',')
 }
 
@@ -311,10 +395,12 @@ export async function runBurnIn(
   req: BurnInRequest,
   onProgress: CaptionsProgressListener
 ): Promise<{ outputPath: string; captioned: boolean }> {
-  onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 5 })
+  // T-113: no number yet. The length of the output is not known until the video is probed
+  // (below), and a determinate 0% sent first stood forever when the probe failed and the
+  // length was unknowable — an honest bar is indeterminate until main can measure.
+  onProgress({ jobId: req.jobId, phase: 'burning-in' })
 
   const style = req.style ?? DEFAULT_CAPTION_STYLE
-  const forceStyle = buildForceStyle(style, req.fontSizePct)
 
   // Phase 3.1: when the renderer asks to burn over a trimmed range, use
   // -ss/-to on the input so the output covers only that span. Same trick
@@ -345,7 +431,9 @@ export async function runBurnIn(
   // everything from the top of the file to reach minute 40. Unlike T-74 the
   // stored field is not reinterpreted: the SRT on disk (and what Save .srt
   // exports) stays source-absolute.
+  const run = burnLatch.begin(req.jobId)
   let tempSrt: string | null = null
+  let spawnedAt: number | null = null
   // Whether the written file carries any caption — false is the cue-less
   // window below. The renderer says so instead of toasting "Captions burned in"
   // over a clip with none (T-89).
@@ -373,13 +461,36 @@ export async function runBurnIn(
       }
     }
 
+    // T-111: the picture the captions are drawn on (their size follows its shape)
+    // and how long it runs (the bar). Both are enhancements, never a reason to
+    // refuse a burn ffmpeg could do, so a probe that fails leaves the burn sized as
+    // a landscape frame with an indeterminate bar. A Cancel ends the wait at once.
+    // simplification: the probe reports the CODED size, so a phone clip stored
+    // landscape and tagged "rotated" is sized as landscape; the rotation-aware probe
+    // is T-110(h)'s.
+    const probe = await run.guard(probeVideo(req.videoPath).catch(() => null))
+    const forceStyle = buildForceStyle(
+      style,
+      req.fontSizePct,
+      probe ? { width: probe.width, height: probe.height } : undefined
+    )
+    const lengthSec = burnInLengthSec(probe ? probe.duration : null, range)
+    // The length is known, so the bar can be a real one: it starts at 0 — nothing is encoded
+    // yet, which is true (T-111: it was 5, then `5 + 0.5 per second encoded`).
+    if (lengthSec !== null) onProgress({ jobId: req.jobId, phase: 'burning-in', percent: 0 })
+
     // Round 18: full two-level escaping, unquoted. The old single-quoted form
     // broke on any SRT path containing an apostrophe (source filenames flow
     // into the SRT name untouched), killing the burn-in with a parse error.
+    //
+    // T-114: the chain always opens with the even-size stage - libx264 + yuv420p die at
+    // exit 187 on an odd edge - and when there is no subtitle stage (a window with no cue
+    // in it) the stage is the whole chain. The join is a comma at the filtergraph level;
+    // the commas inside `force_style='...'` are quoted and never reach it.
     const filter =
       burnSrt === null
-        ? null
-        : `subtitles=${escapeSubtitlesPath(burnSrt)}:force_style='${forceStyle}'`
+        ? EVEN_PICTURE
+        : `${EVEN_PICTURE},subtitles=${escapeSubtitlesPath(burnSrt)}:force_style='${forceStyle}'`
 
     const args: string[] = ['-y']
     if (range) {
@@ -388,7 +499,15 @@ export async function runBurnIn(
     args.push(
       '-i',
       req.videoPath,
-      ...(filter === null ? [] : ['-vf', filter]),
+      '-vf',
+      filter,
+      // T-121: keep each frame at its own time, as the convert does (T-120). A Record WebM saved with Convert
+      // to MP4 off is remuxed, and a remux cannot give a MediaRecorder file a frame rate: its container reads
+      // 1000/1 (the clock ticks in milliseconds), and the mp4 muxer's default is a CONSTANT rate, so this
+      // re-encode wrote one frame per millisecond (2987 frames for a 3 s take, "More than 1000 frames
+      // duplicated", minutes for a long one). A source with a steady rate is unchanged.
+      '-fps_mode',
+      'vfr',
       '-c:v',
       'libx264',
       '-preset',
@@ -408,19 +527,23 @@ export async function runBurnIn(
     )
 
     await new Promise<void>((resolve, reject) => {
+      run.check()
       const child = spawn(ffmpegPath, args, { windowsHide: true })
+      spawnedAt = Date.now()
       activeBurnIn.set(req.jobId, child)
       let stderr = ''
+      let lastEmitted = lengthSec === null ? -1 : 0
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => {
-        const m = chunk.match(/out_time_ms=(\d+)/)
-        if (m) {
-          const ms = Number(m[1]) / 1000
-          onProgress({
-            jobId: req.jobId,
-            phase: 'burning-in',
-            percent: Math.min(99, 5 + (ms / 1000) * 0.5)
-          })
+        // `-progress`: a block of key=value lines every half second or so, the last
+        // of which is `out_time=HH:MM:SS.ffffff` — the export runner's own signal.
+        const marks = chunk.match(/out_time=(\d+:\d+:\d+[.,]\d+)/g)
+        const last = marks?.[marks.length - 1]
+        if (!last) return
+        const percent = burnInPercent(tsToSeconds(last), lengthSec)
+        if (percent !== undefined && percent - lastEmitted >= 0.5) {
+          lastEmitted = percent
+          onProgress({ jobId: req.jobId, phase: 'burning-in', percent })
         }
       })
       child.stderr.setEncoding('utf8')
@@ -440,8 +563,13 @@ export async function runBurnIn(
         if (code === 0) resolve()
         else reject(cancelledOr(child, new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`)))
       })
+    }).catch(async (err: unknown) => {
+      // T-100: a burn that stopped halfway is not the captioned video.
+      await discardPartialOutput(req.outputPath, spawnedAt)
+      throw err
     })
   } finally {
+    run.end()
     // Success, ffmpeg failure, or cancel (SIGKILL rejects the promise above):
     // the shifted copy is a means, never an output.
     if (tempSrt) await unlink(tempSrt).catch(() => {})
@@ -477,7 +605,7 @@ export type ModelInstallProgressListener = (p: ModelInstallProgress) => void
 /**
  * Tech-debt fix: cancellation. We track the active request handle so the
  * renderer can call cancelWhisperModelInstall() to abort an in-flight
- * download mid-stream. Cancelling deletes the .partial file so the next
+ * download mid-stream. Canceling deletes the .partial file so the next
  * install attempt starts clean.
  *
  * Bug-fix (regression audit 2026-05-09): there are async pauses between
@@ -522,7 +650,7 @@ export async function installWhisperModel(
   // calls would otherwise both pass an `activeInstall === null` check and
   // race writes to the same .partial path.
   if (installInProgress) {
-    return { ok: false, reason: 'install already in progress' }
+    return { ok: false, reason: 'A model download is already running. Wait for it to finish, then try again.' }
   }
   installInProgress = true
 

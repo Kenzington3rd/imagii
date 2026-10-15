@@ -34,6 +34,7 @@ vi.mock('../sidecars/whisperManager', () => ({
 }))
 
 const { registerCaptionsIpc } = await import('./captions')
+const { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } = await import('../../shared/captions')
 
 const base = {
   jobId: 'job-1',
@@ -42,7 +43,7 @@ const base = {
   outputPath: path.join(tmpdir(), 'out.mp4'),
   fontSizePct: 4
 }
-const sender = { send: vi.fn() }
+const sender = { isDestroyed: () => false, send: vi.fn() }
 const burn = (extra: Record<string, unknown>): Promise<unknown> => {
   const handler = handlers.get('captions:burnIn')
   if (!handler) throw new Error('captions:burnIn was not registered')
@@ -79,6 +80,68 @@ describe('captions:burnIn range validation (T-81)', () => {
     ['numeric strings', { startSec: '2', endSec: '5' }, /startSec/]
   ])('refuses %s with a plain message, before the runner is touched', async (_label, range, message) => {
     await expect(burn(range)).rejects.toThrow(message)
+    expect(runBurnIn).not.toHaveBeenCalled()
+  })
+})
+
+describe('captions:burnIn caption colors (T-114)', () => {
+  // The two style colors become `PrimaryColour=` / `OutlineColour=` inside the `force_style='...'`
+  // of the burn's `subtitles` filter. `<input type="color">` only ever writes `#rrggbb`, so the
+  // gate takes exactly that; anything else is hand-made, and the runner's own check is the
+  // second line. The sentence is a finished one (`userFacingError` stands behind it); the
+  // validator's path-into-the-payload detail goes to the console.
+  const SENTENCE = "A caption color has a setting imagii can't use — check the text and outline colors, then try again."
+  const style = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    fontSize: 32,
+    position: 'bottom',
+    primaryColor: '#ffffff',
+    outlineColor: '#000000',
+    ...extra
+  })
+
+  it('passes the style the panel sends, and an absent or null style, through to the runner', async () => {
+    await expect(burn({ style: style() })).resolves.toBeDefined()
+    await expect(burn({ style: style({ primaryColor: '#FFCC00', outlineColor: '#0a0b0c' }) })).resolves.toBeDefined()
+    await expect(burn({ style: null })).resolves.toBeDefined()
+    await expect(burn({})).resolves.toBeDefined()
+    expect(runBurnIn).toHaveBeenCalledTimes(4)
+  })
+
+  it('takes every style the panel can produce: the default and each one-click preset', async () => {
+    runBurnIn.mockClear()
+    await expect(burn({ style: DEFAULT_CAPTION_STYLE })).resolves.toBeDefined()
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      await expect(burn({ style: preset.style }), preset.id).resolves.toBeDefined()
+    }
+    expect(runBurnIn).toHaveBeenCalledTimes(1 + CAPTION_STYLE_PRESETS.length)
+  })
+
+  it.each([
+    ['an ASS override smuggled in the text color', { primaryColor: '&H00FFFFFF&,Fontname=x' }],
+    ['a force_style break-out in the outline color', { outlineColor: "#000000',FontName=x,Alpha='" }],
+    ['a color name', { primaryColor: 'white' }],
+    ['a hex without its #', { primaryColor: 'ffffff' }],
+    ['the #rgb shorthand', { outlineColor: '#fff' }],
+    ['a hex with a trailing payload', { primaryColor: '#ffffff,x' }],
+    ['a hex with a trailing newline', { primaryColor: '#ffffff\n' }],
+    ['an empty text color', { primaryColor: '' }],
+    ['a missing outline color', { outlineColor: undefined }],
+    ['a number for a color', { primaryColor: 16777215 }]
+  ])('refuses %s in one plain sentence, before the runner is touched', async (_label, bad) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(burn({ style: style(bad) })).rejects.toThrow(SENTENCE)
+      expect(runBurnIn).not.toHaveBeenCalled()
+      expect(error, 'the detail goes to the console').toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('refuses a style that is not an object, in the same sentence', async () => {
+    for (const bad of ['white', 7, ['#ffffff'], true]) {
+      await expect(burn({ style: bad })).rejects.toThrow(SENTENCE)
+    }
     expect(runBurnIn).not.toHaveBeenCalled()
   })
 })

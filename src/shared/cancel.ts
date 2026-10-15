@@ -2,7 +2,7 @@
  * T-84 — "the user pressed Cancel" is a fact main knows, not a string the
  * renderer parses.
  *
- * Cancelling a job SIGKILLs its ffmpeg child, and a SIGKILL'd child exits
+ * Canceling a job SIGKILLs its ffmpeg child, and a SIGKILL'd child exits
  * non-zero — exactly like a crash. Before T-84 every cancel therefore
  * travelled the failure path and reached the user as a red error, in the
  * runner's own ffmpeg words ("FFmpeg exit null", "pip exit 1", "highlight

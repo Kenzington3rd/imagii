@@ -5,6 +5,9 @@ import { countOf } from '@shared/plural'
 import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { DraftField } from '../../components/DraftField'
+import { clampTyped, isTypedInRange } from '@shared/draftNumber'
+import { formatClock } from '@shared/clockTime'
 
 interface ChatPeak {
   bucketStart: number
@@ -49,11 +52,9 @@ function findPeaks(msgs: ChatMessage[], bucketSec: number, padSec: number): Chat
   return merged.sort((a, b) => b.count - a.count).slice(0, 12).sort((a, b) => a.bucketStart - b.bucketStart)
 }
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
+/** The spike window the box takes (s): the 3 to 60 its attributes say, enforced when typing ends. */
+const SPIKE_WINDOW_MIN = 3
+const SPIKE_WINDOW_MAX = 60
 
 export function ChatHighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -125,12 +126,18 @@ export function ChatHighlightPanel(): JSX.Element | null {
       <div className="grid grid-cols-2 gap-2 text-xs">
         <label className="flex flex-col gap-1">
           <span className="text-ink-muted">Spike window (s)</span>
-          <input
+          {/* T-123 (4): kept until typing ends; `Number(typed) || 10` appended "45" to an emptied box as 1045. */}
+          <DraftField
             type="number"
-            min={3}
-            max={60}
-            value={bucketSec}
-            onChange={(e) => setBucketSec(Number(e.target.value) || 10)}
+            min={SPIKE_WINDOW_MIN}
+            max={SPIKE_WINDOW_MAX}
+            value={String(bucketSec)}
+            live={(typed) => isTypedInRange(typed, SPIKE_WINDOW_MIN, SPIKE_WINDOW_MAX)}
+            commit={(typed) => {
+              const n = clampTyped(typed, SPIKE_WINDOW_MIN, SPIKE_WINDOW_MAX)
+              if (n !== null) setBucketSec(n)
+              return null
+            }}
             className="bg-bg-base rounded px-2 py-1"
           />
         </label>
@@ -156,7 +163,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
               key={i}
               className="flex items-start gap-2 px-2 py-1.5 bg-bg-hover rounded text-xs"
             >
-              <span className="font-mono">{formatTime(p.bucketStart)}</span>
+              <span className="font-mono">{formatClock(p.bucketStart)}</span>
               <span className="text-ink-dim">{countOf(p.count, 'message')}</span>
               <span className="flex-1 truncate text-ink-muted">{p.topMessages.join(' · ')}</span>
               <button

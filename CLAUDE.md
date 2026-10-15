@@ -190,7 +190,17 @@ Makenah's directive for how agent work on this repo is organized:
   fixes). Workers get the ticket text verbatim, including acceptance
   criteria, plus the expediter's implementation direction — the
   dispatch prompt carries the mechanism decisions so the worker does
-  not have to make design calls.
+  not have to make design calls. **Owner amendment (2026-10-15): every
+  ticket goes to Sonnet or Haiku, no exceptions — do not burn
+  expediter-tier usage on work they can do. A ticket whose items are
+  all docs or isolated copy goes to Haiku; a mixed ticket's docs items
+  ride with its Sonnet worker rather than paying a second dispatch.
+  The nine review agents also run with an explicit `model: "sonnet"`
+  on dispatch (their definitions pin no model, which otherwise
+  inherits the expediter's).** The expediter itself keeps only what
+  this workflow reserves to it: tickets and the ledger, adjudication,
+  re-running the gates, the independent mutation, and the files
+  workers are forbidden from touching (package.json, the lockfile).
 - **Fable expedites before anything merges.** The Fable session checks
   the implementation against the ticket's acceptance criteria, runs
   `npm run verify` (and `test:media` when IMG-PREC requires it), and

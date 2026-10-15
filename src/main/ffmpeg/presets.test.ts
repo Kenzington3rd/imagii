@@ -116,3 +116,46 @@ describe('resolveExportPreset (T-50)', () => {
     expect(PLATFORM_PRESETS.reels.label).toBe('Instagram Reels')
   })
 })
+
+/**
+ * T-111 — the custom-preset form takes any size from 16 to 16384, yuv420p keeps
+ * one chroma sample per 2x2 block, and libx264 refuses an odd width or height
+ * ("width not divisible by 2"). A 1081x607 preset therefore failed EVERY export
+ * made with it, from a form that had accepted it. The resolved row is what
+ * every stage reads (scale, zoompan's `s=`, the drawtext coordinates), so it is
+ * where the size is snapped, the way a compilation segment's is.
+ */
+describe('resolveExportPreset snaps odd sizes to even pixels (T-111)', () => {
+  const odd: CustomPreset = {
+    id: 'cp-odd',
+    name: 'Odd',
+    width: 1081,
+    height: 607,
+    fps: 30,
+    videoBitrate: '5M',
+    audioBitrate: '128k',
+    basePlatformId: 'youtube'
+  }
+
+  it('rounds an odd side down to the even pixel below it', () => {
+    const resolved = resolveExportPreset('youtube', odd)
+    expect(resolved.width).toBe(1080)
+    expect(resolved.height).toBe(606)
+  })
+
+  it('derives the aspect from the sizes it will actually write', () => {
+    expect(resolveExportPreset('youtube', odd).aspectRatio).toBeCloseTo(1080 / 606, 10)
+  })
+
+  it('leaves an even size exactly as it was, and snaps each side on its own', () => {
+    expect(resolveExportPreset('youtube', { ...odd, width: 1280, height: 720 })).toMatchObject({ width: 1280, height: 720 })
+    expect(resolveExportPreset('youtube', { ...odd, width: 1081, height: 720 })).toMatchObject({ width: 1080, height: 720 })
+    expect(resolveExportPreset('youtube', { ...odd, width: 1280, height: 607 })).toMatchObject({ width: 1280, height: 606 })
+  })
+
+  it('keeps the whole range the form accepts usable', () => {
+    // assertCustomPreset admits 16..16384; every value in it survives even().
+    expect(resolveExportPreset('youtube', { ...odd, width: 17, height: 17 })).toMatchObject({ width: 16, height: 16 })
+    expect(resolveExportPreset('youtube', { ...odd, width: 16383, height: 16383 })).toMatchObject({ width: 16382, height: 16382 })
+  })
+})

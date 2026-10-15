@@ -63,12 +63,22 @@ const RUNNER_EXIT = /^[\w-]+(?: [\w-]+)? exit [\w-]+/
  * an ffmpeg run that died on a missing file is "a file is missing", not
  * "ffmpeg exited", so these are tried before the generic runner-exit rule.
  */
+const MISSING_FILE =
+  /\bENOENT\b|no such file or directory|system cannot find the (?:file|path)/i
+
+/**
+ * True when `err` says a file is not there — the one failure the project-open
+ * sentence "Couldn't find X. It may have been moved or deleted." is true of
+ * (T-112). The same pattern `KNOWN_CAUSES` explains as a missing file, so the two
+ * cannot disagree about what "missing" is.
+ */
+export function isMissingFileError(err: unknown): boolean {
+  return MISSING_FILE.test(ipcErrorMessage(err, ''))
+}
+
 const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bENOSPC\b|no space left on device/i, 'Your disk is full. Free up some space and try again.'],
-  [
-    /\bENOENT\b|no such file or directory|system cannot find the (?:file|path)/i,
-    "A file imagii needs isn't there. It may have been moved or deleted."
-  ],
+  [MISSING_FILE, "A file imagii needs isn't there. It may have been moved or deleted."],
   [
     /\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i,
     'Windows blocked access to a file. Close any app using it, or check your antivirus.'

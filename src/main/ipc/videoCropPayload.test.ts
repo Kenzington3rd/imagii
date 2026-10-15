@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { userFacingError } from '../../shared/userFacingError'
+import { newTextOverlay } from '../../shared/textOverlay'
 
 // T-96: video:concat and video:exportGif now carry the clip's crop, and the
 // crop becomes `crop=` arguments in an ffmpeg filter string — so both handlers
@@ -43,7 +45,7 @@ const GOOD_CROP = { x: 0.25, y: 0.1, w: 0.5, h: 0.8 }
 const call = (channel: string, params: Record<string, unknown>): Promise<unknown> => {
   const handler = handlers.get(channel)
   if (!handler) throw new Error(`${channel} was not registered`)
-  return handler({ sender: { send: vi.fn() } }, params)
+  return handler({ sender: { isDestroyed: () => false, send: vi.fn() } }, params)
 }
 const concat = (segment: Record<string, unknown>): Promise<unknown> =>
   call('video:concat', {
@@ -75,6 +77,29 @@ beforeEach(() => {
   registerVideoIpc()
 })
 
+// T-109: the refusal is ONE plain sentence on all three paths (the platform export's batch
+// already spoke it, T-106). The validator's own message — a path into the payload — is for
+// main's console, which is where the second column is read from.
+const SENTENCE = "One of this project's clips has a damaged crop — redraw it and try again."
+// T-113: the rest of a clip's recipe (speed, grade, effects, text) speaks the batch's sentence on Compile too.
+// Compile used to throw the validator's path-shaped message, which reached the person as "Compilation failed."
+const CLIP_SENTENCE =
+  "One of this project's clips has a setting imagii can't use — check its speed, color and text, then try again."
+
+/** Run `go` with console.error captured; hand back what it threw and what was logged. */
+async function refusal(go: () => Promise<unknown>): Promise<{ err: unknown; logged: string }> {
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  try {
+    const err = await go().then(
+      () => null,
+      (e: unknown) => e
+    )
+    return { err, logged: String(spy.mock.calls[0]?.[1]) }
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 const BAD_CROPS: Array<[string, unknown, RegExp]> = [
   ['a string', '0,0,1,1', /plain object/],
   ['an array', [0, 0, 1, 1], /plain object/],
@@ -100,14 +125,17 @@ describe('video:concat segment crops (T-96)', () => {
     expect(first.segments[0]?.cropRect).toEqual(GOOD_CROP)
   })
 
-  it.each(BAD_CROPS)('refuses %s, naming the segment, before the runner is touched', async (_l, crop, message) => {
-    await expect(concat({ cropRect: crop })).rejects.toThrow(message)
-    await expect(concat({ cropRect: crop })).rejects.toThrow(/segments\[0\]\.cropRect/)
+  it.each(BAD_CROPS)('refuses %s with the plain sentence, before the runner is touched', async (_l, crop, detail) => {
+    const { err, logged } = await refusal(() => concat({ cropRect: crop }))
+    expect((err as Error).message).toBe(SENTENCE)
+    // The detail is not lost: main's console names the segment and the field.
+    expect(logged).toMatch(detail)
+    expect(logged).toMatch(/segments\[0\]\.cropRect/)
     expect(runConcat).not.toHaveBeenCalled()
   })
 
   it('checks every segment, not just the first', async () => {
-    await expect(
+    const { err, logged } = await refusal(() =>
       call('video:concat', {
         sourcePath: source,
         outDir,
@@ -119,8 +147,115 @@ describe('video:concat segment crops (T-96)', () => {
         width: 1920,
         height: 1080
       })
-    ).rejects.toThrow(/segments\[1\]\.cropRect/)
+    )
+    expect((err as Error).message).toBe(SENTENCE)
+    expect(logged).toMatch(/segments\[1\]\.cropRect/)
     expect(runConcat).not.toHaveBeenCalled()
+  })
+
+  it('reaches the person as that sentence alone, through Electron\'s envelope', () => {
+    const wrapped = new Error(`Error invoking remote method 'video:concat': Error: ${SENTENCE}`)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(userFacingError(wrapped, 'Compilation failed.')).toEqual({ cancelled: false, message: SENTENCE })
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('the rest of the recipe speaks its own plain sentence too (T-113), the field kept for the console', async () => {
+    const { err, logged } = await refusal(() => concat({ speedMultiplier: 0 }))
+    expect((err as Error).message).toBe(CLIP_SENTENCE)
+    expect(logged).toMatch(/segments\[0\]\.speedMultiplier/)
+  })
+})
+
+// T-105: the segment carries the clip's whole recipe now, and every field of it
+// becomes part of an ffmpeg filter string — checked here, before any process.
+describe('video:concat segment recipe (T-105)', () => {
+  const GRADE = { brightness: 0.1, contrast: 1.2, saturation: 0.8, temperature: 0.5 }
+  const OVERLAY = {
+    id: 'o1',
+    text: 'GG',
+    font: 'Arial',
+    sizePx: 48,
+    colorHex: '#ff3b30',
+    x: 0.1,
+    y: 0.8,
+    startSec: 1,
+    endSec: 2
+  }
+  const RECIPE = {
+    cropRect: GOOD_CROP,
+    speedMultiplier: 2,
+    colorGrade: GRADE,
+    autoZoom: true,
+    hypeShake: true,
+    textOverlays: [OVERLAY]
+  }
+
+  it('hands a whole recipe to the runner untouched, field by field', async () => {
+    await expect(concat(RECIPE)).resolves.toEqual({ outputPath: '/out/compilation.mp4' })
+    const call = (runConcat.mock.calls[0] as unknown[])[0] as { segments: Array<Record<string, unknown>> }
+    expect(call.segments[0]).toMatchObject(RECIPE)
+  })
+
+  it('a segment with only its range still compiles — the clip at 1x with nothing on it', async () => {
+    await expect(concat({})).resolves.toBeDefined()
+    expect(runConcat).toHaveBeenCalledTimes(1)
+  })
+
+  const BAD: Array<[string, Record<string, unknown>, RegExp]> = [
+    ['a speed of zero', { speedMultiplier: 0 }, /segments\[0\]\.speedMultiplier/],
+    ['a speed as a string', { speedMultiplier: '2' }, /segments\[0\]\.speedMultiplier/],
+    ['a grade with NaN in it', { colorGrade: { ...GRADE, contrast: Number.NaN } }, /segments\[0\]\.colorGrade\.contrast/],
+    ['a grade past what ffmpeg takes', { colorGrade: { ...GRADE, temperature: 9 } }, /colorGrade\.temperature/],
+    ['an effect flag that is not a boolean', { autoZoom: 'on' }, /segments\[0\]\.autoZoom/],
+    ['an overlay with a filter injection in its color', { textOverlays: [{ ...OVERLAY, colorHex: 'red,movie=x' }] }, /segments\[0\]\.textOverlays\[0\] malformed/],
+    ['overlays that are not a list', { textOverlays: { text: 'GG' } }, /segments\[0\]\.textOverlays must be an array/]
+  ]
+
+  it.each(BAD)('refuses %s with the plain sentence, the segment named in the console, before the runner is touched', async (_l, recipe, detail) => {
+    const { err, logged } = await refusal(() => concat(recipe))
+    expect((err as Error).message).toBe(CLIP_SENTENCE)
+    expect(logged).toMatch(detail)
+    expect(runConcat).not.toHaveBeenCalled()
+  })
+
+  it('checks every segment, not just the first', async () => {
+    const { err, logged } = await refusal(() =>
+      call('video:concat', {
+        sourcePath: source,
+        outDir,
+        segments: [
+          { startSec: 0, endSec: 2, name: 'ok', ...RECIPE },
+          { startSec: 3, endSec: 5, name: 'bad', speedMultiplier: -1 }
+        ],
+        fadeMs: 0,
+        width: 1920,
+        height: 1080
+      })
+    )
+    expect((err as Error).message).toBe(CLIP_SENTENCE)
+    expect(logged).toMatch(/segments\[1\]\.speedMultiplier/)
+    expect(runConcat).not.toHaveBeenCalled()
+  })
+
+  it('reaches the person as that sentence alone, through Electron\'s envelope (not "Compilation failed.")', () => {
+    const wrapped = new Error(`Error invoking remote method 'video:concat': Error: ${CLIP_SENTENCE}`)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(userFacingError(wrapped, 'Compilation failed.')).toEqual({ cancelled: false, message: CLIP_SENTENCE })
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('a segment carrying the overlay "+ Add text" stores untouched compiles (T-113: its color used to be the name "white")', async () => {
+    await expect(concat({ textOverlays: [{ id: 'o-default', ...newTextOverlay(0, 2) }] })).resolves.toEqual({
+      outputPath: '/out/compilation.mp4'
+    })
+    expect(runConcat).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -134,9 +269,56 @@ describe('video:exportGif crop (T-96)', () => {
     expect(first.cropRect).toEqual(GOOD_CROP)
   })
 
-  it.each(BAD_CROPS)('refuses %s before the runner is touched', async (_l, crop, message) => {
-    await expect(gif({ cropRect: crop })).rejects.toThrow(message)
-    await expect(gif({ cropRect: crop })).rejects.toThrow(/cropRect/)
+  it.each(BAD_CROPS)('refuses %s with the plain sentence, before the runner is touched', async (_l, crop, detail) => {
+    const { err, logged } = await refusal(() => gif({ cropRect: crop }))
+    expect((err as Error).message).toBe(SENTENCE)
+    expect(logged).toMatch(detail)
+    expect(logged).toMatch(/cropRect/)
     expect(runGifExport).not.toHaveBeenCalled()
+  })
+
+  it('reaches the person as that sentence alone, through Electron\'s envelope', () => {
+    const wrapped = new Error(`Error invoking remote method 'video:exportGif': Error: ${SENTENCE}`)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(userFacingError(wrapped, 'GIF export failed.')).toEqual({ cancelled: false, message: SENTENCE })
+    } finally {
+      logged.mockRestore()
+    }
+  })
+})
+
+// T-125 (22): a compilation is named for the video the person opened, not for the working copy a converted import is played from
+// (`stream-aB3dE5fG_compilation.mp4`, executed): the same scratch-name bug Reframe and the GIF had until T-124 (17).
+describe('video:concat carries the display name of the video (T-125 (22))', () => {
+  const lastConcatSpec = (): Record<string, unknown> => {
+    const calls = runConcat.mock.calls as unknown as Array<[Record<string, unknown>]>
+    return (calls[calls.length - 1] ?? [{}])[0]
+  }
+  const withName = (extra: Record<string, unknown>): Promise<unknown> =>
+    call('video:concat', {
+      jobId: 'job-1',
+      sourcePath: source,
+      outDir,
+      segments: [{ startSec: 0, endSec: 2, name: 'a' }],
+      fadeMs: 0,
+      width: 1920,
+      height: 1080,
+      ...extra
+    })
+
+  it('hands the runner the sanitized display name', async () => {
+    await withName({ sourceName: 'stream' })
+    expect(lastConcatSpec().sourceName).toBe('stream')
+  })
+
+  it('sanitizes it, because the runner joins it into a path', async () => {
+    await withName({ sourceName: '..\\..\\evil/name: *?"<>|' })
+    expect(String(lastConcatSpec().sourceName)).not.toMatch(/[\\/:*?"<>|]/)
+  })
+
+  it.each([undefined, '', '   ', 5, null])('%s passes none: the runner falls back to the source file\'s own name', async (sourceName) => {
+    await withName({ sourceName })
+    expect(lastConcatSpec().sourceName).toBeUndefined()
   })
 })

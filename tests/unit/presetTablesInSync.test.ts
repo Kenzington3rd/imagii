@@ -7,8 +7,13 @@ import {
 import {
   PLATFORM_INFO,
   ALL_PLATFORM_IDS,
+  COMPILE_SIZE,
+  COMPILE_TARGET,
+  REELS_RECOMMEND_CUTOFF_SEC,
+  TIKTOK_REWARDS_MIN_SEC,
   customPresetInfo
 } from '../../src/renderer/src/modules/video-studio/presets'
+import { COMPILE_FPS } from '../../src/main/ffmpeg/concat'
 import { PLATFORM_IDS } from '../../src/shared/clip'
 import type { CustomPreset } from '../../src/shared/customPresets'
 
@@ -39,6 +44,32 @@ describe('platform preset tables stay in sync', () => {
   it('both display lists are the shared PLATFORM_IDS source', () => {
     expect(ALL_PRESET_IDS).toEqual([...PLATFORM_IDS])
     expect(ALL_PLATFORM_IDS).toEqual([...PLATFORM_IDS])
+  })
+})
+
+/**
+ * T-112 — Reels' 180 s was a cap on both sides of the bridge, and it was
+ * Instagram's RECOMMENDATION cutoff: Reels upload up to about 20 minutes. The
+ * generic loop above only holds the two tables EQUAL, so it passed with the wrong
+ * number in both; this is the knowing update — the number is pinned by value, and
+ * the cutoff that replaced it as the yellow warning must sit below the limit.
+ */
+describe('Reels: 3 minutes is advice, 20 minutes is the limit (T-112)', () => {
+  it('both tables carry the 20-minute limit', () => {
+    expect(PLATFORM_PRESETS.reels.durationHardLimit).toBe(1200)
+    expect(PLATFORM_INFO.reels.durationHardLimit).toBe(1200)
+  })
+
+  it('the recommendation cutoff is 3 minutes, past the sweet spot and under the limit', () => {
+    expect(REELS_RECOMMEND_CUTOFF_SEC).toBe(180)
+    expect(REELS_RECOMMEND_CUTOFF_SEC).toBeGreaterThan(PLATFORM_INFO.reels.durationSweetSpot.max)
+    expect(REELS_RECOMMEND_CUTOFF_SEC).toBeLessThan(PLATFORM_INFO.reels.durationHardLimit)
+  })
+
+  it('TikTok\'s sweet-spot note stops at a minute, inside the platform\'s limit', () => {
+    expect(TIKTOK_REWARDS_MIN_SEC).toBe(60)
+    expect(TIKTOK_REWARDS_MIN_SEC).toBeGreaterThan(PLATFORM_INFO.tiktok.durationSweetSpot.max)
+    expect(TIKTOK_REWARDS_MIN_SEC).toBeLessThan(PLATFORM_INFO.tiktok.durationHardLimit)
   })
 })
 
@@ -80,5 +111,36 @@ describe('custom-preset resolution stays in sync across the two tables', () => {
     // made-up id: `assertEnum(job.preset, ALL_PRESET_IDS)` has to accept it.
     expect(shown.id).toBe(id)
     expect(ALL_PRESET_IDS).toContain(shown.id)
+  })
+
+  // T-111: the encoder writes even pixels, so the grid must judge the same file.
+  it.each(ALL_PRESET_IDS)('on a %s base, an odd custom size is the same even size on both sides', (id) => {
+    const custom = { ...make(id), width: 1081, height: 607 }
+    const encoder = resolveExportPreset(id, custom)
+    const shown = customPresetInfo(custom)
+    expect([encoder.width, encoder.height]).toEqual([1080, 606])
+    expect([shown.width, shown.height]).toEqual([encoder.width, encoder.height])
+    expect(shown.aspectRatio).toBeCloseTo(encoder.aspectRatio, 10)
+  })
+})
+
+/**
+ * T-105: the Compile card judges each clip against `COMPILE_TARGET` and sends
+ * `COMPILE_SIZE` to main, which writes every segment at `COMPILE_FPS`. Three
+ * constants on two sides of the bridge describe one frame; this is the pin
+ * that a change to any of them is a change to all.
+ */
+describe('the compilation frame is the same on both sides of the bridge (T-105)', () => {
+  it('the verdict is about the frame main writes: size, shape and rate', () => {
+    expect([COMPILE_TARGET.width, COMPILE_TARGET.height]).toEqual([COMPILE_SIZE.width, COMPILE_SIZE.height])
+    expect(COMPILE_TARGET.aspectRatio).toBeCloseTo(COMPILE_SIZE.width / COMPILE_SIZE.height, 10)
+    expect(COMPILE_TARGET.fps).toBe(COMPILE_FPS)
+  })
+
+  it('is the YouTube preset\'s frame, which is what lets a segment equal an export of that preset byte for byte', () => {
+    const youtube = PLATFORM_PRESETS.youtube
+    expect([youtube.width, youtube.height]).toEqual([COMPILE_SIZE.width, COMPILE_SIZE.height])
+    expect(youtube.aspectRatio).toBeCloseTo(COMPILE_TARGET.aspectRatio, 10)
+    expect(youtube.fps).toBe(COMPILE_FPS)
   })
 })

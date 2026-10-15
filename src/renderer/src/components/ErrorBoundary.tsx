@@ -60,13 +60,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         {/* T-84: this screen used to say "imagii hit a render error" and ask
             the user to "copy the message below and report it" — to a channel a
             local-first app does not have. It now says what happened, what is
-            safe, and where it is; the technical text is one click away. */}
+            safe, and where it is; the technical text is one click away. T-125 (21): "where it is" was the Home screen, "waiting on"
+            it, which was never true: Reload to Home changes the hash and nothing else, so no store is rebuilt, the restore banner
+            (which is for a launch, and for a render process that died) is rightly not shown, and the work is still open in
+            the studio it was in. */}
         <h1 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '8px' }}>
           Something went wrong in this studio
         </h1>
         <p style={{ fontSize: '14px', color: '#a59a97', marginBottom: '16px' }}>
-          imagii saves your work every few seconds, so most of it should be waiting on the
-          Home screen.
+          Your work is still open in its studios, and imagii saves it every few seconds.
+          Reload to Home to carry on.
         </p>
         <details style={{ marginBottom: '16px' }}>
           <summary style={{ fontSize: '12px', color: '#a59a97', cursor: 'pointer' }}>

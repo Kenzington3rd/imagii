@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { CANCELLED_MESSAGE, CancelledError } from './cancel'
-import { userFacingError, ERROR_TOAST_MS, CANCEL_TOAST_MS } from './userFacingError'
+import {
+  userFacingError,
+  isMissingFileError,
+  ERROR_TOAST_MS,
+  CANCEL_TOAST_MS
+} from './userFacingError'
 
 // T-84: the helper every renderer catch goes through. The inputs below are
 // the real strings main produces (the runners' exit-code errors, the probe's
@@ -209,5 +214,117 @@ describe('toast timing constants', () => {
   it('a failure toast outlives the 4 s default, and a cancel toast outlives a plain one', () => {
     expect(ERROR_TOAST_MS).toBeGreaterThan(4000)
     expect(CANCEL_TOAST_MS).toBeGreaterThan(4000)
+  })
+})
+
+// T-112: "Couldn't find X. It may have been moved or deleted." is a claim about ONE
+// kind of failure — the file is not there. A project that cannot open its video
+// for any other reason (a conversion that failed, a full disk, a file another app
+// holds) used to say the same sentence, and the person went looking for a file
+// that was sitting where they left it.
+describe('isMissingFileError — only a file that is not there', () => {
+  it.each([
+    ['ffprobe, the way main words it', new Error('ffprobe exit 1: /v/stream.mp4: No such file or directory')],
+    ['wrapped by the IPC bridge', wrap('video:probe', 'ffprobe exit 1: /v/a.mp4: No such file or directory')],
+    ['a converter on a missing original', new Error('convert-to-mp4 exit 1: /v/a.flv: No such file or directory')],
+    ['a Node errno', Object.assign(new Error("ENOENT: no such file or directory, open 'a.wav'"), { code: 'ENOENT' })],
+    ['Windows words', new Error('The system cannot find the file specified.')],
+    ['Windows words for a path', new Error('The system cannot find the path specified.')]
+  ])('%s', (_name, err) => {
+    expect(isMissingFileError(err)).toBe(true)
+  })
+
+  it.each([
+    ['a conversion that failed', new Error('convert-to-mp4 exit 1: /v/a.flv: Invalid data found when processing input')],
+    ['a full disk', new Error('ENOSPC: no space left on device, write')],
+    ['a file another app holds', new Error('EBUSY: resource busy or locked')],
+    ['a permission refusal', new Error('EACCES: permission denied')],
+    ['a damaged file', new Error('ffprobe exit 1: moov atom not found')],
+    ['a sentence main wrote', new Error('This file is text, not a video — pick a video file such as MP4, MOV, or MKV.')],
+    ['no message at all', new Error('')],
+    ['not an error', undefined],
+    ['a string that happens to be a name', 'stream.mp4']
+  ])('%s is not "missing"', (_name, err) => {
+    expect(isMissingFileError(err)).toBe(false)
+  })
+
+  it('agrees with the sentence userFacingError gives for a missing file', () => {
+    // One definition of "missing": whatever userFacingError explains as a missing
+    // file is what the project-open path calls missing.
+    const err = new Error('ffprobe exit 1: /v/a.mp4: No such file or directory')
+    expect(userFacingError(err, 'Export failed.').message).toContain("isn't there")
+    expect(isMissingFileError(err)).toBe(true)
+  })
+})
+
+// T-117 (4): Record's finalize toast only stripped the IPC envelope (`ipcErrorMessage(err, 'Save failed')`),
+// so every cause but the convert crash reached the person as main's raw string: a copyfile EPERM with both
+// full paths, an ENOSPC from the write stream mid-take, a channel-prefixed "recording is empty". It goes
+// through `userFacingError(err, 'Saving the recording failed.')` (reportFailure) now; these are the shapes
+// that save can actually reject with, as Electron hands them to the renderer.
+describe("Record's save failure is a sentence, whatever the cause (T-117)", () => {
+  const FAILED = 'Saving the recording failed.'
+  const wrapFinalize = (text: string): Error => wrap('recording:finalize', text)
+
+  it('a copyfile EPERM is "Windows blocked access", and neither path reaches the person', () => {
+    const raw =
+      "EPERM: operation not permitted, copyfile 'C:\\Users\\maken\\AppData\\Roaming\\imagii\\recordings\\V1StGXR8_Z.webm' -> 'D:\\Videos\\Stream take.webm'"
+    const shown = userFacingError(wrapFinalize(raw), FAILED).message
+    expect(shown).toBe(
+      `${FAILED} Windows blocked access to a file. Close any app using it, or check your antivirus.`
+    )
+    expect(shown).not.toMatch(/maken|Videos|AppData|\.webm|copyfile|EPERM/)
+  })
+
+  it('an ENOSPC from the stream mid-take is "Your disk is full"', () => {
+    const shown = userFacingError(wrapFinalize('ENOSPC: no space left on device, write'), FAILED).message
+    expect(shown).toBe(`${FAILED} Your disk is full. Free up some space and try again.`)
+  })
+
+  it('the same causes read the same when the stream error is thrown by the renderer-side queue (no envelope)', () => {
+    const plain = new Error('ENOSPC: no space left on device, write')
+    expect(userFacingError(plain, FAILED).message).toBe(`${FAILED} Your disk is full. Free up some space and try again.`)
+  })
+
+  it('a raw string with a channel in it and no known cause is the caller\'s sentence, not the raw text', () => {
+    expect(userFacingError(wrapFinalize('recording:finalize recording is empty'), FAILED).message).toBe(FAILED)
+    expect(userFacingError(new Error('Recording session was never started'), FAILED).message).toBe(FAILED)
+  })
+
+  it('main\'s own finished sentences (the convert crash, nothing recorded) stand as written', () => {
+    const convert =
+      'Converting the recording to MP4 failed (ffmpeg exit code 1). Nothing was saved \u2014 ' +
+      'try again, or uncheck "Convert to MP4 after recording" to keep the WebM.'
+    expect(userFacingError(wrapFinalize(convert), FAILED).message).toBe(convert)
+    const empty = 'Nothing was recorded, so there is nothing to save. Start the recording again.'
+    expect(userFacingError(wrapFinalize(empty), FAILED).message).toBe(empty)
+  })
+})
+
+// T-118 (1): the Autosave banner's Clear goes through `userFacingError(err, "Couldn't clear the autosave.
+// It's still on disk.")`. main/autosave.ts `clearAutosave` carries the first failed unlink's errno code in
+// its message ("could not delete autosave.json (EBUSY)"); these are the shapes it can raise, as Electron
+// hands them over. `autosave.test.ts` drives the real function and checks it throws exactly these.
+describe("the Autosave banner's Clear failure (T-118)", () => {
+  const FAILED = "Couldn't clear the autosave. It's still on disk."
+  const wrapClear = (text: string): Error => wrap('autosave:clear', text)
+
+  it.each([
+    ['a locked file', 'could not delete autosave.json (EBUSY)'],
+    ['a blocked one', 'could not delete autosave.prev.json (EPERM)'],
+    ['one it may not touch', 'could not delete autosave.json, autosave.tmp (EACCES)']
+  ])('%s is the sentence plus the plain cause, and no file name or code reaches the person', (_label, text) => {
+    const shown = userFacingError(wrapClear(text), FAILED).message
+    expect(shown).toBe(`${FAILED} Windows blocked access to a file. Close any app using it, or check your antivirus.`)
+    expect(shown).not.toMatch(/EBUSY|EPERM|EACCES|autosave\.(?:json|prev|tmp)|could not delete/)
+  })
+
+  it.each([
+    ['no code at all (the bare shape)', 'could not delete autosave.json'],
+    ['a folder where the file should be', 'could not delete autosave.tmp (EISDIR)'],
+    ['a read-only disk', 'could not delete autosave.json (EROFS)'],
+    ['a code the helper has no words for', 'could not delete autosave.json (EIO)']
+  ])('%s is the caller\'s own sentence, because the shape has no period to stand on', (_label, text) => {
+    expect(userFacingError(wrapClear(text), FAILED).message).toBe(FAILED)
   })
 })

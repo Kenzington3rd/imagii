@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { mkdir, writeFile, utimes, readdir } from 'node:fs/promises'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
@@ -8,6 +8,30 @@ import { pruneStaleTempFiles, __testing__ } from './tempCleanup'
 import { CAPTIONS_DIR_NAME, shiftedSrtPath } from '../shared/captions'
 
 const { STALE_THRESHOLD_MS, TEMP_SUBDIRS, setUserDataDirForTest } = __testing__
+
+/**
+ * T-113 (10) — this file's temp folder is its own.
+ *
+ * Every case below recursively removes the three temp families under `tmpdir()` and asserts
+ * exact counts, and vitest runs test files in parallel. `extract.test.ts` and
+ * `transcribeCancel.test.ts` write real WAVs into `tmpdir()/imagii-audio` (the extractor's
+ * folder), so a WAV they were writing could be removed between its mkdir and its use, or
+ * counted by `scanned === 0` here: a failure in ~1 of 6 runs that no re-run explained. The
+ * module under test and this file now see a private `tmpdir()`, so nothing outside this file
+ * can be inside the folders it empties. (`tests/unit/tempSandbox.test.ts` fails if this goes.)
+ */
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  const { mkdtempSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const sandbox = mkdtempSync(join(actual.tmpdir(), 'imagii-tempcleanup-sandbox-'))
+  const tmpdir = (): string => sandbox
+  return { ...actual, tmpdir, default: { ...actual, tmpdir } }
+})
+
+afterAll(() => {
+  rmSync(tmpdir(), { recursive: true, force: true })
+})
 
 /**
  * T-67: every family the function SCANS, not just the two this file writes

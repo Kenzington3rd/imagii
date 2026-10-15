@@ -235,19 +235,35 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
  * rather than the thrown errno because a file that vanished underneath us
  * (a second window clearing at the same time) is the outcome the caller
  * asked for, not a failure.
+ *
+ * T-118: that same swallow threw away the one fact the renderer can use. The
+ * message carries the errno CODE of the first unlink that failed on a file that
+ * stayed ("could not delete autosave.json (EBUSY)"), so `userFacingError` can
+ * tell a locked file ("Windows blocked access to a file. Close any app using
+ * it...") from a failure it has no words for. No trailing period, on purpose:
+ * a shape the helper does not know must fall to the caller's own sentence, and
+ * a period would make it read as a finished one. A code on a file that vanished
+ * is not reported, because that is not a failure.
  */
 export async function clearAutosave(): Promise<void> {
   const survivors: string[] = []
+  let code: string | undefined
   for (const p of [autosavePath(), prevAutosavePath(), tmpAutosavePath()]) {
     if (!existsSync(p)) continue
+    let failedWith: string | undefined
     try {
       await unlink(p)
-    } catch {
+    } catch (err) {
       /* the existsSync below decides whether this mattered */
+      const c = (err as NodeJS.ErrnoException | null)?.code
+      if (typeof c === 'string') failedWith = c
     }
-    if (existsSync(p)) survivors.push(path.basename(p))
+    if (existsSync(p)) {
+      survivors.push(path.basename(p))
+      code ??= failedWith
+    }
   }
   if (survivors.length > 0) {
-    throw new Error(`could not delete ${survivors.join(', ')}`)
+    throw new Error(`could not delete ${survivors.join(', ')}${code ? ` (${code})` : ''}`)
   }
 }

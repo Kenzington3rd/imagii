@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSafeAbsolutePath, assertSafeAbsolutePath } from './pathSafety'
+import { isSafeAbsolutePath, assertSafeAbsolutePath, isSafeId, assertSafeId } from './pathSafety'
 
 describe('isSafeAbsolutePath', () => {
   it('accepts well-formed Windows absolute paths', () => {
@@ -61,5 +61,44 @@ describe('assertSafeAbsolutePath', () => {
   it('throws with the named field on rejection', () => {
     expect(() => assertSafeAbsolutePath('../etc/passwd', 'sourcePath')).toThrow(/sourcePath/)
     expect(() => assertSafeAbsolutePath('relative/path', 'videoPath')).toThrow(/videoPath/)
+  })
+})
+
+// T-117: an id the renderer hands back is joined into a path under userData, so it is held to the
+// alphabet nanoid mints (the same set customPresets.ts, moodboard.ts and ipc/search.ts each spell out).
+describe('isSafeId', () => {
+  it.each(['abc', 'A_b-9', '_', '-', 'V1StGXR8_Z', 'a'.repeat(64)])('accepts %j', (id) => {
+    expect(isSafeId(id)).toBe(true)
+  })
+
+  it.each([
+    '',
+    '..',
+    '.',
+    '../config',
+    'a/b',
+    'a\\b',
+    'has space',
+    'x.json',
+    'abc\n',
+    'a\u0000b',
+    'caf\u00e9',
+    'a%2fb'
+  ])('refuses %j', (id) => {
+    expect(isSafeId(id)).toBe(false)
+  })
+
+  it('refuses anything that is not a string', () => {
+    for (const v of [undefined, null, 42, {}, [], ['abc'], { toString: () => 'abc' }]) expect(isSafeId(v)).toBe(false)
+  })
+})
+
+describe('assertSafeId', () => {
+  it('passes silently on an id in the alphabet', () => {
+    expect(() => assertSafeId('V1StGXR8_Z', 'preset id')).not.toThrow()
+  })
+  it('throws with the named field and the alphabet on rejection', () => {
+    expect(() => assertSafeId('../config', 'preset id')).toThrow(/preset id must match nanoid alphabet/)
+    expect(() => assertSafeId(42, 'preset id')).toThrow(/preset id/)
   })
 })

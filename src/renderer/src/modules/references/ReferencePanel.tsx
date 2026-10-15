@@ -129,7 +129,11 @@ export function ReferencePanel(): JSX.Element {
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
+              {/* T-115/T-116: shown on keyboard focus as well as hover - Tab reaches Save, and a
+                  button drawn at opacity 0 is one a keyboard user presses blind. :focus-visible,
+                  not focus-within: a mouse click focuses the button too, and focus-within kept
+                  the scrim lit after the pointer had left. */}
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                 <span className="text-xs text-ink-base line-clamp-2">{result.title}</span>
                 <span className="text-xs text-ink-dim">{result.source}</span>
                 {/* T-28: never disabled. "You have no board yet" is a reason

@@ -3,36 +3,63 @@ import { writeFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { ffmpegPath } from './paths'
-import { cropToFrame, even, type SourceDimensions } from './filters'
+import {
+  buildAudioSpeedFilter,
+  buildVideoFilter,
+  even,
+  EVEN_PICTURE,
+  type FilterClip,
+  type SourceDimensions
+} from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { CancelLatch, type LatchRun } from './cancelLatch'
+import { discardPartialOutput } from './partialOutput'
+import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
-import type { CropRect } from '../../shared/clip'
+import { clipSpeed, type ClipRecipe, type CompileSegment } from '../../shared/clip'
 
 export interface ConcatJobSpec {
   jobId: string
   sourcePath: string
   outDir: string
-  /** `cropRect` is the clip's manual crop (T-96): each segment is cut from it
-   *  exactly as a platform export is, then scaled to the compilation's size. */
-  segments: Array<{ startSec: number; endSec: number; name: string; cropRect?: CropRect | null }>
+  /** Each segment is its clip: the range, and the recipe the clip was built with
+   *  (T-96 its crop, T-105 the rest), made exactly as a platform export makes it. */
+  segments: CompileSegment[]
   fadeMs: number
   width: number
   height: number
+  /** The display name of the video the compilation is made from, safe for a path (T-125 (22)); absent: the source file's own name. */
+  sourceName?: string
 }
 
+/** The compilation's frame rate: every segment is written at it, so the stream-copy join sees one rate. */
+export const COMPILE_FPS = 30
+
+/** A segment is Matroska with PCM sound (T-125 (1)): nothing in it for a stream-copy join to misplace. */
+export const SEGMENT_EXTENSION = 'mkv'
+export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
+
+type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRecipe>
+
 /**
- * The video filter that makes ONE compilation segment (T-96): the clip's crop
- * and a centered cut of it to the compilation's shape (`cropToFrame`, the
- * chain a platform export uses — the crop is the new frame, T-83), then the
- * scale that normalizes every segment to the same size so the stream-copy join
- * below sees identical streams. Without the cut, `scale` forces the
- * compilation's exact WxH on whatever shape the segment has: a 9:16 crop would
- * come out three times too wide, and so did any source that was not 16:9
- * before this (a 4:3 recording was stretched 1.33x).
+ * The video filter that makes ONE compilation segment (T-96, T-105): the clip's
+ * whole recipe, through the SAME builder a platform export uses
+ * (`buildVideoFilter`) — speed, the crop and the centered cut of it to the
+ * compilation's shape (T-83: the crop is the new frame, so nothing is
+ * stretched), hype shake, the scale that normalizes every segment to one size so
+ * the stream-copy join below sees identical streams, color grade, auto zoom and
+ * text overlays. The compilation is "a preset" with its own size, 16:9 and 30 fps.
+ *
+ * Why the builder and not a copy of its stages: a compilation that carried only
+ * the crop (T-96) compiled a 2x clip at 1x with its color, text and zoom gone,
+ * and every stage added to the export since would have been missed the same way.
+ * The overlays' clock is the segment's — `-ss` is an input option, so the
+ * segment's frames start at 0 and the builder rebases the stored source-absolute
+ * seconds by `startSec`, exactly as for an export.
  */
 export function buildSegmentFilter(
-  cropRect: CropRect | null | undefined,
+  seg: SegmentClip,
   source: SourceDimensions,
   width: number,
   height: number
@@ -41,7 +68,50 @@ export function buildSegmentFilter(
   // The IPC validator already enforces 16..16384 but doesn't snap to even.
   const w = even(width)
   const h = even(height)
-  return [...cropToFrame(cropRect, source, w / h), `scale=${w}:${h}:flags=lanczos,setsar=1`].join(',')
+  const clip: FilterClip = {
+    startSec: seg.startSec,
+    cropRect: seg.cropRect ?? null,
+    textOverlays: seg.textOverlays ?? [],
+    speedMultiplier: seg.speedMultiplier,
+    colorGrade: seg.colorGrade,
+    autoZoom: seg.autoZoom,
+    hypeShake: seg.hypeShake
+  }
+  return buildVideoFilter(clip, { width: w, height: h, aspectRatio: w / h, fps: COMPILE_FPS }, source)
+}
+
+/**
+ * Both filter chains for one segment — its picture (`buildSegmentFilter`, then
+ * its fade in and fade out) and its sound (`atempo` for the clip's speed, then
+ * its fade in and fade out) — with the fades placed on the clip's length in the OUTPUT. A clip
+ * at 2x is half as long as its range, and a fade-out that starts 0.3 s before the
+ * end of the RANGE would start after the clip is over. `audio` is '' when there
+ * is nothing to do, so the caller leaves `-af` off.
+ */
+export function buildSegmentFilters(
+  seg: SegmentClip,
+  source: SourceDimensions,
+  width: number,
+  height: number,
+  fadeIn: number,
+  fadeOut: number
+): { video: string; audio: string } {
+  const speed = clipSpeed(seg)
+  const outSec = Math.max(0.1, (seg.endSec - seg.startSec) / speed)
+  const fadeOutStart = Math.max(0, outSec - fadeOut).toFixed(3)
+  const video = [buildSegmentFilter(seg, source, width, height)]
+  const audio: string[] = []
+  const tempo = buildAudioSpeedFilter(speed)
+  if (tempo) audio.push(tempo)
+  if (fadeIn > 0) {
+    video.push(`fade=t=in:st=0:d=${fadeIn}`)
+    audio.push(`afade=t=in:st=0:d=${fadeIn}`)
+  }
+  if (fadeOut > 0) {
+    video.push(`fade=t=out:st=${fadeOutStart}:d=${fadeOut}`)
+    audio.push(`afade=t=out:st=${fadeOutStart}:d=${fadeOut}`)
+  }
+  return { video: video.join(','), audio: audio.join(',') }
 }
 
 // M3 fix (round 15): register every spawn so a renderer-initiated cancel or
@@ -50,13 +120,17 @@ export function buildSegmentFilter(
 // "<jobId>:concat" so the segment loop can cancel one at a time, and a
 // global cancelAllConcatJobs takes the lot.
 const activeJobs = new Map<string, ChildProcess>()
+// T-98: a compilation probes the source, then spawns one child per segment and
+// one to join them; between any two of those no child is alive to kill, so a
+// Cancel marks the run and the next spawn asks it first.
+const latch = new CancelLatch()
 
 function escapeForConcatList(p: string): string {
   return p.replace(/'/g, "'\\''")
 }
 
 export function cancelConcatJob(jobId: string): boolean {
-  let killed = false
+  let killed = latch.cancel(jobId)
   // Cancel any sub-keyed children too (segment-N, concat).
   for (const [key, child] of activeJobs) {
     if (key === jobId || key.startsWith(`${jobId}:`)) {
@@ -69,11 +143,21 @@ export function cancelConcatJob(jobId: string): boolean {
 }
 
 export function cancelAllConcatJobs(): void {
+  latch.cancelAll()
   for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }
 
 export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: string }> {
+  const run = latch.begin(spec.jobId)
+  try {
+    return await stitch(spec, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath: string }> {
   const tempDir = path.join(tmpdir(), 'imagii-concat')
   const fs = await import('node:fs/promises')
   await fs.mkdir(tempDir, { recursive: true })
@@ -86,12 +170,16 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
   const fade = Math.max(0, Math.min(2, spec.fadeMs / 1000))
 
   try {
+  // T-125 (10): the output folder first. A remembered folder that was deleted (or lives on an unplugged drive) used to be found out
+  // only at the join, after every segment had been encoded.
+  await run.guard(ensureOutputDir(spec.outDir))
   // The crop is a fraction of the frame, so the frame's pixels are needed once
   // for every segment (main reads them, as a platform export does).
-  const probe = await probeVideo(spec.sourcePath)
-  const source = { width: probe.width, height: probe.height }
+  const probe = await run.guard(probeVideo(spec.sourcePath))
+  const source = { width: probe.width, height: probe.height, colorSpace: probe.colorSpace }
   const segCount = spec.segments.length
   for (let i = 0; i < segCount; i++) {
+    run.check()
     const seg = assertDefined(spec.segments[i], `segments[${i}]`)
     // Defense in depth: IPC layer also validates this, but reject reversed
     // ranges here too so any non-IPC caller (tests, future scripts) can't
@@ -99,21 +187,10 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     if (seg.endSec <= seg.startSec) {
       throw new Error(`segments[${i}] range invalid (endSec must exceed startSec)`)
     }
-    const segPath = path.join(tempDir, `seg-${spec.jobId}-${i}.mp4`)
-    const dur = Math.max(0.1, seg.endSec - seg.startSec)
+    const segPath = path.join(tempDir, `seg-${spec.jobId}-${i}.${SEGMENT_EXTENSION}`)
     const fadeIn = i === 0 ? 0 : fade
     const fadeOut = i === segCount - 1 ? 0 : fade
-    const filters: string[] = [
-      buildSegmentFilter(seg.cropRect, source, spec.width, spec.height)
-    ]
-    if (fadeIn > 0) filters.push(`fade=t=in:st=0:d=${fadeIn}`)
-    if (fadeOut > 0)
-      filters.push(`fade=t=out:st=${(dur - fadeOut).toFixed(3)}:d=${fadeOut}`)
-
-    const audioFilters: string[] = []
-    if (fadeIn > 0) audioFilters.push(`afade=t=in:st=0:d=${fadeIn}`)
-    if (fadeOut > 0)
-      audioFilters.push(`afade=t=out:st=${(dur - fadeOut).toFixed(3)}:d=${fadeOut}`)
+    const filters = buildSegmentFilters(seg, source, spec.width, spec.height, fadeIn, fadeOut)
 
     const args = [
       '-y',
@@ -124,9 +201,9 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       '-i',
       spec.sourcePath,
       '-vf',
-      filters.join(',')
+      filters.video
     ]
-    if (audioFilters.length > 0) args.push('-af', audioFilters.join(','))
+    if (filters.audio) args.push('-af', filters.audio)
     args.push(
       '-c:v',
       'libx264',
@@ -134,12 +211,22 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       'fast',
       '-pix_fmt',
       'yuv420p',
+      // T-125 (1): the sound of a SEGMENT is uncompressed. An AAC segment carries 1024 samples of priming and about 8 ms of
+      // end padding, an MP4 honors one edit list (the first), and the stream-copy join below laid every segment's priming
+      // into the middle of the sound: +29.3 ms of delay PER JOIN (eight segments: 0 / 30 / 59 / 88 / 118 / 147 / 176 /
+      // 206 ms, measured through this runner on both majors, invisible to a duration check). PCM has neither, so the
+      // segments join sample-exact and the sound is encoded ONCE, at the join. (MPEG-TS would also join clean, but
+      // the bundled 7.0.2 segfaults on it - see `shared/mediaFormats.ts`.)
       '-c:a',
-      'aac',
-      '-b:a',
-      '192k',
+      SEGMENT_AUDIO_CODEC,
       '-r',
-      '30',
+      String(COMPILE_FPS),
+      // T-127 (4): a segment ends where its SHORTER stream does. A length that is not a whole number of frames wrote one or two extra
+      // video frames (the fps stage, a fractional -ss, the EOF fill), the join's concat demuxer offsets the next segment by the
+      // container's picture-led length, and the join's AAC encode swallows the gap in the sound: the picture fell further behind it at
+      // every join (eight fractional segments of a 25 fps source, through this runner on both majors: 3 / 57 / 83 / 112 / 125 / 161 /
+      // 194 / 194 ms, a flat 3 / -3 / 7 / 0 / 0 / 0 / 0 / 0 with this line) while every duration check stayed green.
+      '-shortest',
       segPath
     )
 
@@ -177,10 +264,18 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
     .join('\n')
   await writeFile(listFilePath, listContent, 'utf8')
 
-  const base = path.parse(spec.sourcePath).name
-  const outputPath = path.join(spec.outDir, `${base}_compilation.mp4`)
+  const base = spec.sourceName ?? path.parse(spec.sourcePath).name
+  // T-106: `<source>_compilation.mp4` is the name WANTED; a compilation already
+  // there is the user's, and this one is written beside it.
+  const outputPath = await run.guard(
+    nextFreePath(path.join(spec.outDir, `${base}_compilation.mp4`))
+  )
 
+  let spawnedAt: number | null = null
   await new Promise<void>((resolve, reject) => {
+    // The last pre-spawn await was the choosing of the output's name.
+    run.check()
+    spawnedAt = Date.now()
     const child = spawn(
       ffmpegPath,
       [
@@ -191,8 +286,13 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
         '0',
         '-i',
         listFilePath,
-        '-c',
+        // The picture is copied (it is already the one encode it needs); the sound is the compilation's one AAC encode.
+        '-c:v',
         'copy',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
         '-movflags',
         '+faststart',
         outputPath
@@ -217,6 +317,10 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
       if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })
+  }).catch(async (err: unknown) => {
+    // T-100: the segments go in the `finally` below; the joined file is this job's too.
+    await discardPartialOutput(outputPath, spawnedAt)
+    throw err
   })
 
   return { outputPath }
@@ -241,11 +345,37 @@ export async function runConcat(spec: ConcatJobSpec): Promise<{ outputPath: stri
   }
 }
 
+/**
+ * `wantedPath` is the name the composite should have (T-106): a file already
+ * there is not replaced — the result's `outputPath` is the one written. Choosing
+ * it is a wait before the spawn, so PiP holds a run like the other runners
+ * (T-98); `cancelConcatJob` (its cancel) marks it.
+ */
 export async function runPipComposite(
   jobId: string,
   basePath: string,
   overlayPath: string,
-  outputPath: string,
+  wantedPath: string,
+  options: {
+    overlayWidth: number
+    position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+    margin: number
+  }
+): Promise<{ outputPath: string }> {
+  const run = latch.begin(jobId)
+  try {
+    return await compositePip(run, jobId, basePath, overlayPath, wantedPath, options)
+  } finally {
+    run.end()
+  }
+}
+
+async function compositePip(
+  run: LatchRun,
+  jobId: string,
+  basePath: string,
+  overlayPath: string,
+  wantedPath: string,
   options: {
     overlayWidth: number
     position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
@@ -255,11 +385,19 @@ export async function runPipComposite(
   const { position, margin, overlayWidth } = options
   const x = position.includes('left') ? margin : `main_w-overlay_w-${margin}`
   const y = position.includes('top') ? margin : `main_h-overlay_h-${margin}`
+  // T-114: the output is sized by the base, and libx264 + yuv420p die at exit 187 on an odd
+  // edge, so the base is evened first (an even one passes through untouched).
   const filter =
+    `[0:v]${EVEN_PICTURE}[base];` +
     `[1:v]scale=${overlayWidth}:-1[ov];` +
-    `[0:v][ov]overlay=${x}:${y}[v]`
+    `[base][ov]overlay=${x}:${y}[v]`
 
+  // T-125 (10): the folder is there before the name is chosen.
+  await run.guard(ensureOutputDir(path.dirname(wantedPath)))
+  const outputPath = await run.guard(nextFreePath(wantedPath))
+  let spawnedAt: number | null = null
   await new Promise<void>((resolve, reject) => {
+    run.check()
     const child = spawn(
       ffmpegPath,
       [
@@ -274,6 +412,11 @@ export async function runPipComposite(
         '[v]',
         '-map',
         '0:a?',
+        // T-121: keep each frame at its own time (see the convert, T-120). The base is often a Record WebM
+        // whose container rate reads 1000/1, and the mp4 muxer's default constant rate wrote a frame per
+        // millisecond; the overlay follows the base's frames, so they are the ones that matter.
+        '-fps_mode',
+        'vfr',
         '-c:v',
         'libx264',
         '-preset',
@@ -293,6 +436,7 @@ export async function runPipComposite(
       ],
       { windowsHide: true }
     )
+    spawnedAt = Date.now()
     // M3 fix (round 15): register the child so app-quit can SIGKILL it.
     // The IPC layer now passes a real jobId (was `_jobId`).
     activeJobs.set(jobId, child)
@@ -312,6 +456,9 @@ export async function runPipComposite(
       if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`pip exit ${code}: ${stderr.slice(-500)}`)))
     })
+  }).catch(async (err: unknown) => {
+    await discardPartialOutput(outputPath, spawnedAt)
+    throw err
   })
 
   return { outputPath }

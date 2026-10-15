@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid'
 import type { ChainPreset } from '../../shared/workspace'
 import type { ChainSpec } from '../../shared/audio'
 import { cleanupSettings } from '../../shared/audioPreset'
+import { assertSafeId, isSafeId } from '../../shared/pathSafety'
 
 function presetsDir(): string {
   return path.join(app.getPath('userData'), 'audio-presets')
@@ -32,7 +33,9 @@ export function parseChainPreset(raw: string): ChainPreset | null {
   }
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
   const p = data as Record<string, unknown>
-  if (typeof p.id !== 'string' || p.id.length === 0) return null
+  // T-117: the id comes back to main as the argument of deletePreset and is joined into a path,
+  // so a file that carries an id outside the alphabet nanoid mints is not a preset the list shows.
+  if (!isSafeId(p.id)) return null
   if (typeof p.name !== 'string' || p.name.length === 0) return null
   if (typeof p.chain !== 'object' || p.chain === null || Array.isArray(p.chain)) return null
   return {
@@ -87,7 +90,14 @@ export async function savePreset(name: string, chain: ChainSpec): Promise<ChainP
   return preset
 }
 
+/**
+ * T-117: `id` is the renderer's, and it is a path segment (`<id>.json` under userData), so it is
+ * held to the alphabet nanoid mints - `../config` used to reach `unlink`. The same gate
+ * `deleteCustomPreset` has. `savePreset` mints its own id and `listPresets` reads by directory
+ * entry, so this is the one place an outside id becomes a path.
+ */
 export async function deletePreset(id: string): Promise<void> {
+  assertSafeId(id, 'deletePreset: id')
   const file = path.join(presetsDir(), `${id}.json`)
   if (existsSync(file)) await unlink(file)
 }

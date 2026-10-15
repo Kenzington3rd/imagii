@@ -6,14 +6,8 @@ import { playableDuration, useVideoStore } from './store/videoStore'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  const cs = Math.floor((seconds - Math.floor(seconds)) * 100)
-  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
-}
+import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
+import { formatClock } from '@shared/clockTime'
 
 /**
  * Where the PICTURE is inside the player box, in CSS pixels.
@@ -99,7 +93,17 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [showSafeZones, setShowSafeZones] = useState(false)
-  const [cropEnabled, setCropEnabled] = useState(false)
+  // T-109: the crop is on whenever the person turned it on OR the selected clip already
+  // has one. It used to be plain state starting `false`, so a project opened with a
+  // stored crop applied it to every export while the editor showed no rectangle and an
+  // unchecked box — a crop the person could neither see nor adjust. Derived rather than
+  // initialized, so it also holds after a project is opened into a Player that is
+  // already mounted, when another clip is selected, and when an undo brings a crop back.
+  const [cropWanted, setCropWanted] = useState(false)
+  const hasStoredCrop = useVideoStore(
+    (s) => (s.clips.find((c) => c.id === s.selectedClipId)?.cropRect ?? null) !== null
+  )
+  const cropEnabled = cropWanted || hasStoredCrop
   const [cropAspect, setCropAspect] = useState<AspectMode>('free')
   const pictureRect = useVideoContentRect(videoEl, frameEl)
 
@@ -173,6 +177,16 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     []
   )
 
+  // T-120: lend the Timeline's keys what only this element knows - its exact playhead (the store's trails
+  // playback by up to a `timeupdate`) and this Player's own play / pause (the Timeline slider is a different
+  // focus target, so a Space pressed on it had no transport to reach). Registered for as long as the Player
+  // is mounted. `togglePlay` is the function below: it reads only the ref and a state setter, both stable.
+  const registerTransport = useVideoStore((s) => s.registerTransport)
+  useEffect(() => {
+    registerTransport({ readTime: () => videoRef.current?.currentTime ?? null, togglePlay })
+    return () => registerTransport(null)
+  }, [registerTransport])
+
   if (!source) return null
 
   const fps = source.probe.fps > 0 ? source.probe.fps : 30
@@ -181,6 +195,10 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   // it has published one, the probe's until then. A readout that topped out
   // 20 ms below where the playhead can go is the same lie in words.
   const duration = playable
+  // T-126 (15): the probe line, once, for the text and for the tooltip a truncated one needs.
+  const probeInfo = `${source.probe.width}×${source.probe.height} · ${formatFps(fps)} · video ${source.probe.videoCodec}${
+    source.probe.audioCodec ? ` · audio ${source.probe.audioCodec}` : ' · no audio'
+  }`
 
   function togglePlay(): void {
     const v = videoRef.current
@@ -233,15 +251,19 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
     const tag = (e.target as HTMLElement).tagName
     // A control that owns the key gets it, and the studio shortcut stands
-    // down. Text fields own every key. A BUTTON owns Space and only Space:
+    // down. Text fields (and a select) own every key. A BUTTON owns Space and only Space:
     // Space is how a keyboard user clicks one, so a Space that reached the
     // transport from a focused crop preset both moved the video and (with
     // `preventDefault` below) fought the button's own activation (T-63) —
     // while `,`, `.`, the arrows and I/O carry no meaning for a button and
     // stay available from anywhere in the column, which is what makes them
     // feel global inside the player.
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return
-    if (tag === 'BUTTON' && e.key === ' ') return
+    // T-123 (2): the same is true of the other controls a person leaves focused: a ticked "Crop guides" box owns
+    // Space and nothing else, a range owns the arrows, Home and End, so "any INPUT" was wrong in the other direction -
+    // `,` `.` I O and the arrows went dead after the box was ticked.
+    if (focusOwnsKey(tag, inputTypeOf(e.target), e.key)) return
+    // T-124 (29): a chord (Ctrl+O, Alt+Left...) is not a bare-letter shortcut, and is not this handler's to swallow.
+    if (hasChordModifier(e)) return
     switch (e.key) {
       case ' ':
         e.preventDefault()
@@ -285,7 +307,7 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     >
       <CropControls
         enabled={cropEnabled}
-        onEnabledChange={setCropEnabled}
+        onEnabledChange={setCropWanted}
         aspect={cropAspect}
         onAspectChange={setCropAspect}
       />
@@ -345,10 +367,13 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         >
           Frame <Icon name="step-forward" size={15} />
         </button>
-        <div className="ml-2 font-mono text-ink-muted">
-          {formatTime(time)} / {formatTime(duration)}
+        {/* T-126 (15): the clock and the Crop guides label keep their words on one line and their width ("1:40:43.50 / 3:12:07.00" is 24
+            characters of mono on a 3-hour VOD, and at the 1024 px minimum the row had no room for it beside the probe line); the
+            probe line is what gives, ending in an ellipsis with the whole text as its tooltip. */}
+        <div className="ml-2 shrink-0 whitespace-nowrap font-mono text-ink-muted">
+          {formatClock(time, 2)} / {formatClock(duration, 2)}
         </div>
-        <label className="ml-auto flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer">
+        <label className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-ink-muted cursor-pointer">
           <input
             type="checkbox"
             checked={showSafeZones}
@@ -356,10 +381,8 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
           />
           Crop guides
         </label>
-        <div className="text-xs text-ink-dim">
-          {source.probe.width}×{source.probe.height} · {formatFps(fps)} · video{' '}
-          {source.probe.videoCodec}
-          {source.probe.audioCodec ? ` · audio ${source.probe.audioCodec}` : ' · no audio'}
+        <div className="min-w-0 truncate text-xs text-ink-dim" title={probeInfo}>
+          {probeInfo}
         </div>
       </div>
 

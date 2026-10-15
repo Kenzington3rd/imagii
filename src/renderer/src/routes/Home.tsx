@@ -1,13 +1,9 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
 import { Icon } from '../components/Icon'
-import {
-  applyProject,
-  captureProject,
-  describeUnavailableSources
-} from '../modules/project/ProjectIO'
+import { captureProject, describeApplyOutcome } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
-import { suppressAutosave } from '../hooks/useAutosave'
+import { applyProjectHeld } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
 import { reportFailure } from '../lib/reportFailure'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
@@ -28,8 +24,6 @@ async function handleSave(): Promise<void> {
 }
 
 async function handleLoad(): Promise<void> {
-  const release = suppressAutosave()
-  let opened = false
   try {
     const result = await window.api.project.load()
     if (!result) return // user canceled the dialog
@@ -37,14 +31,17 @@ async function handleLoad(): Promise<void> {
       reportFailure(result.reason, { failed: PROJECT_OPEN_FAILED })
       return
     }
-    opened = true
     // T-84: a project whose video was moved still opens everything else, and
     // the ONE message says which file is gone (instead of "Project loaded"
     // over a half-empty studio, or a probe error over a half-restored one).
-    const outcome = await applyProject(result.project)
-    const missing = describeUnavailableSources(outcome.unavailable)
-    if (missing) {
-      toast(missing, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+    // T-113: autosave is held for the apply and for nothing else — not the file dialog before
+    // it, not 1.5 s after it (a quit then saved none of what was done during a long conversion).
+    const outcome = await applyProjectHeld(result.project)
+    // T-112: also the files that would not open for another reason, and a source
+    // skipped because the person opened a different one while it loaded.
+    const note = describeApplyOutcome(outcome, 'project')
+    if (note) {
+      toast(note, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
     } else {
       toast.success('Project loaded')
     }
@@ -52,12 +49,6 @@ async function handleLoad(): Promise<void> {
     // Not a validation failure — something threw while opening (the dialog
     // bridge, a store). The "damaged or newer" line above would be a guess.
     reportFailure(err, { failed: "Couldn't open that project." })
-  } finally {
-    // On a successful load, hold suppression while stores settle. On any
-    // failure path (cancel, validation rejection, throw), release immediately
-    // so the user can keep autosaving without a 1.5s stall.
-    if (opened) setTimeout(release, 1500)
-    else release()
   }
 }
 

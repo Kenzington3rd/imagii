@@ -44,6 +44,14 @@ export default {
           soft: '#fecdd3', // 12.92:1 on bg-elevated
           strong: '#fb7185' // 7.20:1 on bg-base; bg-base text ON it is 7.20:1
         },
+        // T-104: the categorical marks that are neither accent nor ember — the
+        // highlight finder's Chat bar and the 9:16 / 4:5 crop guides. JS-context
+        // tokens in practice (inline style, SVG stroke), mirrored here so the
+        // sync test sees them. Not status colors: they only tell series apart.
+        signal: {
+          pink: '#f472b6', // 7.32:1 on bg-base, 6.30:1 on bg-hover
+          cyan: '#22d3ee' // 10.72:1 on bg-base, 9.23:1 on bg-hover
+        },
         warn: '#fcd34d', // 12.64:1 on bg-elevated, 10.4:1 on an ember/10 wash
         ok: {
           DEFAULT: '#6ee7b7', // 11.96:1 on bg-elevated, 8.16:1 on an ok-strong/20 wash

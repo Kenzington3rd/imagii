@@ -31,7 +31,7 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 
 ### Option 1: Use the prebuilt .exe (easiest)
 
-1. **Get the file.** Download `imagii.exe` (~169 MB) from the
+1. **Get the file.** Download `imagii.exe` (a single portable exe) from the
    [Releases page](https://github.com/Kenzington3rd/imagii/releases) —
    or use a copy someone sent you directly (possibly inside a
    `for-mike.zip` with a quick-start text file; right-click →
@@ -40,8 +40,9 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 3. **Skip to "First launch" below.**
 
 > Maintainer note: a new release is published from the Actions tab →
-> "Release standalone exe" → Run workflow (manual only — it never runs on
-> pushes, and Actions is free on this public repo).
+> "Release standalone exe" → Run workflow, or by pushing a `v*` tag. It runs
+> on manual dispatch or a pushed `v*` tag, never on a branch push or a pull
+> request, and Actions is free on this public repo.
 
 ### Option 2: Build it yourself from source
 
@@ -50,8 +51,8 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 git clone <this repo>
 cd imagii
 npm install
-npm run verify     # emoji guard + typecheck + 360+ vitest unit tests
-npm run dist       # produces dist/imagii.exe (~166 MB)
+npm run verify     # emoji guard + typecheck + the vitest unit tests
+npm run dist       # produces dist/imagii.exe (a single portable exe)
 ```
 
 ### Running tests
@@ -72,7 +73,7 @@ Output goes to `dist/`. The `.exe` is portable and runs from any folder.
 ## First launch
 
 ### 1. Double-click the .exe
-First run is slower than later ones — Electron unpacks itself to `%TEMP%`. Give it 5–10 seconds.
+Every launch takes 10–15 seconds with no window while Electron unpacks itself to `%TEMP%` — it unpacks again each time you start it. Wait for the window.
 
 ### 2. Get past Windows SmartScreen
 Because the .exe isn't code-signed (commercial signing certificates cost a couple hundred dollars per year), Windows will show a blue warning:
@@ -91,7 +92,7 @@ You'll see a personalized welcome the first time. Click "Let's go →" to enter 
 ### 5. Home screen
 Five cards: **Record**, **Video Studio**, **Audio Studio**, **Stream Graphics**, **References**. Plus 💾 **Save project** and 📂 **Open project** buttons in the header.
 
-If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"imagii autosaved your work N minutes ago — Restore?"* — click it to pick up where you left off.
+When imagii starts and finds an autosave, you'll see a banner: *"imagii autosaved your work N min ago. Want to pick up where you left off?"*, with **Restore**, **Clear** and **Later**. It appears after a crash or a force-quit, and after a normal close too: imagii takes one last snapshot as it closes. **Restore** takes you back where you were. The banner waits for a fresh start: it is not shown over work you have already begun in the session, so a restore never lands on top of it.
 
 ---
 
@@ -99,9 +100,9 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 
 ### 🔴 Record
 1. Click "Pick a screen or window" → choose from the live thumbnail grid.
-2. Check "Record microphone" and pick your input device. Optionally enable webcam preview.
+2. Check "Record microphone" and pick your input device. Optionally check "Include webcam in recording" to put your camera in a corner of the take.
 3. Choose whether to convert to MP4 on save (slower; better compatibility) or keep WebM.
-4. Click ● Start. Stop button appears in the header.
+4. Click Start recording. Stop button appears in the header.
 5. On stop, save the recording somewhere. Cancel in the save dialog discards the take.
 
 ### 🎬 Video Studio
@@ -114,16 +115,16 @@ If imagii previously crashed or was force-quit mid-edit, you'll see a banner: *"
 7. **Pick platforms.** Check the platforms you want; success indicator shows green/yellow/red per platform, and a red one says why ("Wrong shape", "Too long").
 8. **Click Export.** The button says how many files it will write ("Export 3 files"). Sequential render with a progress bar; cancel any time.
 
-The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat spike finder (paste a Twitch chat log), Reframe to 9:16 (center crop), GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (title patterns + hashtag packs + posting diary).
+The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat spike finder (paste a Twitch chat log), Reframe to 9:16, GIF export, Compile clips into a montage, PiP composite (overlay video), Captions, Posting helpers (Title starters + hashtag packs + Posting log).
 
 **Player hotkeys:** `Space` play/pause · `← →` nudge 0.1 s · `, .` frame step · `I O` set in/out · `?` show all shortcuts
 
 ### 🎚 Audio Studio
-1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown.
+1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown. Sound up to 2 hours long opens; a longer file is refused with a note, because the waveform is drawn from the whole file in memory.
 2. **Cut regions (optional).** Drag on the waveform.
 3. **Volume meter** sits below the waveform — turns red on clipping.
 4. **Cleanup panel:** quieter background (light/medium/aggressive), low-rumble removal, hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds.
-5. **Levels panel:** voice/music/mixed compressor preset, an even-volume loudness target (−16 for talking, −14 for YouTube/Spotify/TikTok/Reels), ±12 dB manual gain.
+5. **Levels panel:** voice/music/mixed compressor preset, an even-volume loudness target (−16 for talking, −14 for YouTube/Spotify/TikTok/Reels), ±12 dB manual gain. Whatever you switch on or cut out, peaks above −1 dBFS are limited when you export, so a boost cannot clip; an export with nothing switched on and nothing cut keeps the file's levels as they are.
 6. **Cleanup presets:** name and save your tuned cleanup settings ("My USB mic") for one-click re-apply next session. Cuts and the second track stay with the recording.
 7. **Add a second track** for background music with optional ducking, a co-host's mic, or game audio.
 8. **Click Export.** MP3 / WAV / FLAC / AAC (saved as `.m4a`). If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.
@@ -147,7 +148,7 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 - **💾 Save project / 📂 Open project** in the home header serialize the entire workspace (all studios, all clips, all audio chain settings, the canvas) to a single `.imagii.json` file.
 - **Autosave** runs every few seconds in the background while you work. It writes atomically (temp file → fsync → atomic rename) and keeps one rolling backup file. If the primary autosave gets corrupted, recovery falls through to the backup automatically.
 - On launch, if a recent autosave exists you'll see a banner: *"imagii autosaved your work N minutes ago"* with **Restore / Clear / Later** buttons.
-- 28 unit tests cover the validation + atomic-write paths (`npm test`).
+- Unit tests cover the validation + atomic-write paths (`npm test`).
 
 ---
 
@@ -157,27 +158,27 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 
 **Antivirus flagged the .exe** → Restore from quarantine and add a folder exception.
 
-**Slow first launch (15+ seconds)** → Normal. Subsequent launches are 2–3 seconds.
+**Slow launch (10–15 seconds, no window)** → Normal, and every launch does it: the portable .exe unpacks itself each time you start it. Wait for the window.
 
 **Video Studio won't import a file** → Check the codec (right-click → Properties). H.264, H.265, VP9, ProRes, AV1 in any common container should work. Some old AVI files use codecs FFmpeg can't decode.
 
 **Audio export is slow** → If "Even volume" is on, imagii measures the whole file first and then renders. Turn it off for a faster export.
 
-**The Stream Graphics canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. The preview downsamples to 2048 px; very large originals still take memory.
+**The Stream Graphics canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. imagii places an imported image at most 800 px on its long side, but the original stays at full size in memory, so a very large one still takes memory and can slow the canvas.
 
 **Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps to drop `whisper-cli.exe` (the older name, `whisper.exe`, also works) and the `ggml-base.en.bin` model in place — or let imagii download the model for you. Then click "Refresh status".
 
 **Reference search returns nothing** → DuckDuckGo's image endpoint is undocumented and occasionally rate-limits. Wait a minute.
 
-**App data + autosave + projects live at `%APPDATA%\imagii\`.** To reset everything, delete that folder.
+**App data + autosave live at `%APPDATA%\imagii\`.** Projects are the `.imagii.json` files you save, wherever you chose to put them. To reset the app, delete that folder.
 
 ---
 
 ## Privacy
 
 - **No telemetry, no analytics, no accounts.** The app makes zero network requests on startup.
-- **The only feature that touches the internet is reference image search**, which queries DuckDuckGo (no tracking, no API key).
-- **All your videos, audio, recordings, images, mood boards, and projects stay on your computer.**
+- **Reference Search and the one-time caption model download are the only two things that go online.** Reference Search queries DuckDuckGo (no tracking, no API key); the model download is a single file, fetched once, and only if you want auto-captions.
+- **All your videos, audio, recordings, images, mood boards, and projects stay on your computer.** The browser engine inside imagii keeps its own cache in `%APPDATA%\imagii`, and it can hold copies of images Reference Search fetched; **Clear thumbnail cache** does not touch it. Deleting that folder clears everything imagii keeps there. Temporary working copies live in `%TEMP%` instead, in the folders `imagii-audio` (sound pulled out of a video), `imagii-import` (a converted video) and `imagii-concat` (a compile in progress); imagii deletes the ones older than 6 hours the next time it starts.
 
 ---
 
@@ -187,7 +188,7 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 - FFmpeg-static for all video and audio processing
 - wavesurfer.js for audio waveform display
 - Konva for the Stream Graphics canvas
-- Vitest for the autosave + validation test suite (28 tests)
+- Vitest for unit and real-ffmpeg integration tests, Playwright for end-to-end tests (the five-layer strategy is in `docs/TESTING.md`)
 - Zustand for state management
 
 ---

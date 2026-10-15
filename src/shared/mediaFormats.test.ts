@@ -13,7 +13,9 @@ import {
   isImageFilename,
   videoNeedsConversion,
   audioNeedsExtraction,
-  formatHint
+  formatHint,
+  canStreamCopyIntoMp4,
+  MP4_COPYABLE_VIDEO_CODECS
 } from './mediaFormats'
 
 describe('mediaFormats lists', () => {
@@ -104,5 +106,26 @@ describe('formatHint', () => {
   it('renders uppercase comma-separated copy from the same list', () => {
     expect(formatHint(['mp4', 'mov'])).toBe('MP4, MOV')
     expect(formatHint(NATIVE_VIDEO_EXTENSIONS)).toContain('M4V')
+  })
+})
+
+describe('canStreamCopyIntoMp4 — what an mp4 can carry as it is (T-111)', () => {
+  it.each(['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg', 'H264', 'HEVC'])('carries %s', (codec) => {
+    expect(canStreamCopyIntoMp4(codec)).toBe(true)
+  })
+
+  it.each(['wmv2', 'wmv1', 'wmv3', 'vp8', 'vp9', 'theora', 'mpeg2video', 'mpeg1video', 'prores', 'dvvideo', 'flv1', 'msmpeg4v3', 'rawvideo', 'ansi', 'unknown'])(
+    'does not carry %s: it is re-encoded, not copied',
+    (codec) => {
+      expect(canStreamCopyIntoMp4(codec)).toBe(false)
+    }
+  )
+
+  it('does not carry a codec nobody named', () => {
+    for (const v of [undefined, null, '', ' ', 'h264 ']) expect(canStreamCopyIntoMp4(v), String(v)).toBe(false)
+  })
+
+  it('is the list the doc comment names, in lower case', () => {
+    expect(MP4_COPYABLE_VIDEO_CODECS).toEqual(['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg'])
   })
 })

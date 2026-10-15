@@ -26,7 +26,7 @@ Flags: `HL` = headless-limited (reason given) · `COV` = E2E-covered at
 sweep time · `NAT` = native confirm/prompt (needs a Playwright dialog
 handler).
 
-Global test hooks: `window.__imagiiStage` (Konva Stage, Canvas.tsx:360),
+Global test hooks: `window.__imagiiStage` (Konva Stage, Canvas.tsx:383),
 `window.__imagiiVideoEl` (Player.tsx, E2E handle only since T-38),
 `window.__imagiiCrashTest` (App.tsx — arms the #/__crash ErrorBoundary
 harness; unarmed, the route redirects to Home like any unknown hash.
@@ -143,9 +143,9 @@ fleet ticket that will drive its end state.
    schema pinned against each other). E2E: T-23.
 
 Also noted, not ticketed: Tutorial's scrim click ADVANCES rather than
-dismisses (Tutorial.tsx:212) — by design, but tests must not click the
+dismisses (Tutorial.tsx:226) — by design, but tests must not click the
 scrim to escape; Image emote-pack export (112x112 + PNG) silently emits
-three files from one click (ExportDialog.tsx:77-89) — intended feature,
+three files from one click (ExportDialog.tsx:199, :224-240) — intended feature,
 covered by T-25 (round 26). The orphaned getStageDataUrl() this note
 used to flag was deleted in round 29 (T-53 rider); ThumbnailVariants'
 private copy — the last raw stage.toDataURL() in the renderer, and the
@@ -159,15 +159,18 @@ interactionWiring.test.ts.
 
 | Call | file:line |
 |---|---|
-| confirm("A recording is in progress. Stop and save it…") | RecordStudio.tsx:434 |
-| confirm("Close this video? N clip(s)…") | VideoStudio.tsx:45 |
-| confirm("Remove clip \"X\"?") | ClipList.tsx:111 |
-| confirm("Delete preset \"X\"?") | CustomPresetManager.tsx:69 |
-| confirm("Delete preset \"X\"?") | PresetPanel.tsx:46 (reachable since T-14) |
-| confirm("Close this audio? … will be discarded.") | AudioStudio.tsx (T-19) |
-| prompt("Name your first mood board:") | ReferencePanel.tsx:31 |
-| prompt("Rename mood board", name) | MoodBoardPanel.tsx:68 |
-| confirm("Delete \"X\" and all N item(s)?") | MoodBoardPanel.tsx:75 |
+| window.confirm("A recording is in progress. Stop and save it…") | RecordStudio.tsx:623 |
+| confirm("Replace the video you're editing? N clips and their edits will be discarded.") (T-119; "1 clip and its edits", T-120; the one hook Record's and Reframe's toast actions share since T-123) | lib/editInVideoStudio.ts:23 |
+| confirm("Close this video? N clips and their edits will be discarded.") (T-120: "its" at one clip) | VideoStudio.tsx:66 |
+| confirm("Replace the audio you're editing? … will be discarded.") (Clean audio, T-112; the lead-in is T-113's) | VideoStudio.tsx:78 |
+| confirm("Remove clip \"X\"?") | ClipList.tsx:157 |
+| confirm("Delete preset \"X\"?") | CustomPresetManager.tsx:110 |
+| confirm("Delete preset \"X\"?") | PresetPanel.tsx:66 (reachable since T-14) |
+| confirm("Close this audio? … will be discarded.") | AudioStudio.tsx:46 (T-19) |
+| confirm("Delete \"X\" from your posting log?") | PostChecklist.tsx:193 |
+| ~~prompt("Name your first mood board:")~~ | **RETIRED (T-28):** `NameDialog` (`ReferencePanel.tsx:70`); Electron has no `window.prompt` |
+| ~~prompt("Rename mood board", name)~~ | **RETIRED (T-28):** `NameDialog` (`MoodBoardPanel.tsx:99`) |
+| confirm("Delete \"X\" and all N items?") | MoodBoardPanel.tsx:85 |
 
 ## Headless-limited categories
 
@@ -201,19 +204,19 @@ until a row carries one, treat it as OPEN.
 
 | Element | file:line | Chain | End state | Flags |
 |---|---|---|---|---|
-| Button "Let's go" | Welcome.tsx:43 | settings.set('welcomeSeen') | config.json written; Home renders | never directly clicked in any test |
+| Button "Let's go" | Welcome.tsx:44 | settings.set('welcomeSeen') | config.json written; Home renders | never directly clicked in any test |
 
 ### Home (15)
 
 | Element | file:line | Chain | End state | Flags |
 |---|---|---|---|---|
-| Undo button | Home.tsx:55 | useGlobalUndo -> last store .undo() | state reverts | |
-| Redo button | Home.tsx:63 | store .redo() | state advances | |
-| "last:" readout | Home.tsx:71 | readout | assertion target | |
-| Open project | Home.tsx:74 | project:load -> showOpenDialog -> applyProject | stores rehydrated; toast | HL dialog |
-| Save project | Home.tsx:80 | project:save -> showSaveDialog | .imagii.json written; toast | HL dialog |
-| NavCard x5 | Home.tsx:92-120 | router | route change | COV smoke |
-| AutosaveRestore: Restore / Discard / Later / Clear / Dismiss | AutosaveRestore.tsx:179-199,155-167 | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden; a clear that fails toasts the reason and KEEPS the banner (T-57) | |
+| Undo button | Home.tsx:73 | useGlobalUndo -> last store .undo() | state reverts | |
+| Redo button | Home.tsx:81 | store .redo() | state advances | |
+| "last:" readout | Home.tsx:84 | readout | assertion target | |
+| Open project | Home.tsx:90 | project:load -> showOpenDialog -> applyProject | stores rehydrated; toast | HL dialog |
+| Save project | Home.tsx:96 | project:save -> showSaveDialog | .imagii.json written; toast | HL dialog |
+| NavCard x5 | Home.tsx:104-138 | router | route change | COV smoke |
+| AutosaveRestore: Restore / Clear / Later (the healthy banner), Clear / Dismiss (the damaged one); T-92 renamed the healthy banner's Discard to Clear | AutosaveRestore.tsx:199-219 (Restore, Clear, Later), :173-186 (Clear, Dismiss) | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden; a clear that fails toasts the reason and KEEPS the banner (T-57) | |
 
 ### Record (17; 13 HL)
 
@@ -256,7 +259,8 @@ format. HomeLink COV.
   run), cancel, Show (HL shell).
 - **GifPanel (7):** width/fps/speed selects, dir (HL), export (HL),
   cancel, Show (HL).
-- **CompilationPanel (5):** crossfade slider, dir (HL), compile (HL),
+- **CompilationPanel (5):** fade slider ("Fade between clips": each clip fades out to black and the next
+  fades in from black; nothing crossfades), dir (HL), compile (HL),
   cancel, Show (HL).
 - **PipPanel (9):** base/overlay pickers (HL), width/margin numbers,
   position select, dir (HL), composite (HL), cancel, Show (HL).
@@ -267,7 +271,10 @@ format. HomeLink COV.
   inputs x2, trim checkbox, save .srt (HL dialog), burn (HL dialog).
 - **TextOverlayEditor (10):** add, text/font/size/color/x/y/start/end
   fields (start/end gained aria-labels in T-17), remove (sibling of the
-  time label since T-17).
+  time label since T-17). The font field's END STATE - which typeface is
+  drawn - was NOT covered by the E2E that sets it (it read the select back
+  from the store while the filter printed `arial.ttf` whatever it said); that
+  is covered since [T-114], see round 64. x and y are named since T-114.
 - **ExportPanel (13):** presets gear, output dir (HL; label COV
   render-only), Export N (COV export.spec end-to-end), cancel + modal
   keep/cancel-jobs, watermark input+position, filename template,
@@ -561,9 +568,10 @@ E2E; transcribe execution HL-whisper; model download/cancel HL-network
 HL-dialog + Layer 5 (`runBurnIn`); the folder buttons' OS side
 HL-shell. 4p ClipKit (6/6) -> E2E: full kit run (5 platform MP4s + 3
 thumbnails, ffprobed) + `clipKit.lastOutputDir`; safe-zone and cancel
-modals both branches, no jpg leak; `copySrtTo` not exercised (needs
-srtPath + a kit in one session; deepest: `captions:copySrtTo` IPC
-unit). 4r PostChecklist (10/10) -> E2E: title ideas + all 6 hashtag
+modals both branches, no jpg leak; `copySrtTo` was not exercised here
+(needs srtPath + a kit in one session) until round 63, when a project
+file carrying a transcript made both (see that section: the kit's `.srt`
+is read back, on the clip's clock). 4r PostChecklist (10/10) -> E2E: title ideas + all 6 hashtag
 packs reach the REAL system clipboard (read back in main), all 6
 platform toggles, diary -> `settings.postingDiary` on disk with
 localStorage proven empty, perf inputs, delete. 4s CustomPresetManager
@@ -630,7 +638,7 @@ ticket).
    -> Save dialog defaults to `.mp4` with an MP4 filter; progress bar
    advances; result opens in Windows Media Player / Photos.
 8. **Convert off.** Untick it, record 30 s, save. -> Dialog offers
-   `.webm`, save is near-instant with no progress phase, file plays in
+   `.webm`, save is quick (a copy of the packets into a fresh file, no progress phase), file plays in
    a browser.
 9. **Discard mid-save.** Record 60 s with convert ON, Stop, click
    "Discard recording" while the bar is moving. -> A calm "Recording
@@ -658,6 +666,19 @@ ticket).
     Windows "screen is being shared" / camera-in-use indicator clears
     within a second or two. If it lingers, `screenStreamRef` /
     compositor teardown regressed.
+15. **Captions setup on the portable exe (T-102; a clean Windows machine).**
+    Run `imagii.exe` from a download folder. Video Studio, load any video,
+    open **Auto-captions** -> "Captions need setup" -> **Show setup
+    instructions**. -> The first path is `%APPDATA%\imagii\bin\whisper-cli.exe`
+    (NOT anything under `Temp`), and the line under it says the folder
+    survives app updates. Click **Open folder** -> Explorer opens
+    `%APPDATA%\imagii\bin` (it exists already). Put `whisper-cli.exe` from the
+    whisper.cpp releases there, click **Download model**, then **Refresh status**
+    -> the card goes away. Quit, delete the extracted `%TEMP%` copy of imagii (or
+    just relaunch the exe), reopen the video -> Auto-captions is STILL ready, and
+    **Transcribe** runs; **Cancel** during it stops the engine (no `whisper-cli.exe`
+    left in Task Manager). If the card still says setup is needed after a
+    relaunch, the resolver is looking somewhere other than `userData/bin`.
 
 ---
 
@@ -991,8 +1012,9 @@ and the unit files named inline.
   half-written .mp4 left at the user's chosen path (pinned for T-59 in
   round 32). Now: the partial is reaped on both branches, and the
   failure crosses the IPC as `Converting the recording to MP4 failed
-  (ffmpeg exit code N). Nothing was saved — try again, or untick
-  "Convert to MP4 after recording" to keep the WebM.` E2E "a convert
+  (ffmpeg exit code N). Nothing was saved — try again, or uncheck
+  "Convert to MP4 after recording" to keep the WebM.` (it said "untick"
+  until round 66, T-116: a box is checked, never ticked) E2E "a convert
   that really crashes says so in plain words and leaves nothing
   behind" (real ffmpeg, real failure — an unwritable output path)
   asserts the copy and the absence of the invoke envelope, ffmpeg
@@ -1675,7 +1697,7 @@ that the old ones are gone.
   (Left / Center / Right) where there were four; the fourth, "Auto (centered)",
   was Center under another name. video-pipelines.spec.ts "reframe: the three
   positions are real state…" cycles all three (exactly one active at a time),
-  asserts the title 'Reframe to 9:16 (center crop)' and the sentence that it
+  asserts the title 'Reframe to 9:16' (T-126 (14): it read '(center crop)' until Left and Right made that stale) and the sentence that it
   does not track faces or action, and that neither 'Auto (centered)' nor
   'Auto-reframe' is on the panel. The `'smart'` position is deleted from the
   renderer type, `shared/api.ts`, main's `ReframePosition` and the IPC
@@ -1768,7 +1790,7 @@ HL-whisper — the whisper binary is not installed in any test environment, so t
 ### T-88
 
 - **Record - Refresh sources ([T-88], end state changed):** it re-lists screens and windows AND re-scans the microphones and cameras (the hints under an empty list send people to it; it used to touch only the screens). record.spec.ts "Refresh sources re-scans the microphone and camera, not just the screens": a spy in the page counts the scan — on arrival one enumeration and two `getUserMedia` probes (`{audio:true}` and `{video:true}`, never one call for both); after the click exactly one more enumeration and the same two probes; then a camera is "plugged in" (stub) and the click lists both cameras by name while the missing mic still warns, then "unplugged" and the click takes the stale list away. Red-first: against the old build the arrival scan never enumerates at all (`Expected: 1 / Received: 0`); mutation (`refreshAll` re-lists screens only) -> `Expected: 2 / Received: 1` at the click. Unit: devices.test.ts `scanDevices` against a fake `mediaDevices` that rejects a missing kind the way the real one does.
-- **Record - Microphone and Webcam selects / the two "No ... found" hints ([T-88], behaviour and copy changed):** one missing device no longer blanks the other. record.spec.ts "a microphone and NO camera: the mic is listed and only the camera warns" (stub: a mic exists, the real camera probe rejects) and the T-42 "with a camera attached" test, which now also asserts the mic warning is visible beside the camera list. The hints read "No microphone found. Plug one in, or allow microphone access in Windows privacy settings, then click Refresh sources." and the camera twin, asserted exactly. Unit: `noDeviceHint`, `deviceListsFrom` (a kind whose probe failed is empty even when the enumeration names it — the privacy-blocked case), `reconcileDeviceId` (a pick for an unplugged device falls back to the first). Red-first: 6 of 18 devices.test.ts cases fail against the combined `{audio, video}` probe (`expected [] to deeply equal [ { deviceId: 'mic-1', ... } ]`); mutation (probes recombined) -> the same 6, byte-identical restore. DISPOSITION: a real denial in Windows Settings > Privacy is an OS boundary; a denied probe and an absent device are the same rejection to the app, and that path is the one driven.
+- **Record - Microphone and Webcam selects / the two "No ... found" hints ([T-88], behaviour and copy changed):** one missing device no longer blanks the other. record.spec.ts "a microphone and NO camera: the mic is listed and only the camera warns" (stub: a mic exists, the real camera probe rejects) and the T-42 "with a camera attached" test, which now also asserts the mic warning is visible beside the camera list. The hints read "No microphone found. Plug one in, or allow microphone access in Windows privacy settings, then click Refresh sources." and the camera twin, asserted exactly (T-122 added "close any other app using it" after "Plug one in,": the round-72 section below has the current sentence). Unit: `noDeviceHint`, `deviceListsFrom` (a kind whose probe failed is empty even when the enumeration names it — the privacy-blocked case), `reconcileDeviceId` (a pick for an unplugged device falls back to the first). Red-first: 6 of 18 devices.test.ts cases fail against the combined `{audio, video}` probe (`expected [] to deeply equal [ { deviceId: 'mic-1', ... } ]`); mutation (probes recombined) -> the same 6, byte-identical restore. DISPOSITION: a real denial in Windows Settings > Privacy is an OS boundary; a denied probe and an absent device are the same rejection to the app, and that path is the one driven.
 - **Record - post-Stop "Finishing up" card ([T-88], copy and structure changed):** the status line is per state — "Finishing up — converting to MP4…" with a progress bar only when Convert to MP4 is on, "Finishing up — saving to disk…" with no bar otherwise ("converting and writing to disk…" is gone from every state). record.spec.ts "a WebM take: the card says "saving"..." holds the stubbed dialog open for 6 s and reads the card (no "convert" anywhere on the page, no bar, Discard disabled, the one-line reason on screen); the MP4 tests assert the converting line and an enabled Discard. Unit: saveCard.test.ts (the per-state copy; Discard offered in exactly one state). Red-first against the old build: `locator('div.card').filter({ hasText: 'Finishing up' }).getByText('Finishing up — saving to disk…')` not found.
 - **Record - Discard recording ([T-88], end state changed):** live only while a convert is running (the one thing it can stop); disabled, with the reason beside it, for a plain WebM copy, where it used to call a cancel with nothing behind it; "Discarding the recording…" and disabled between the click and the convert's rejection, and back to enabled if the click found nothing to kill. The calm end state is unchanged and still driven: record.spec.ts '"Discard recording" kills the running convert, says so calmly...' (trash-icon neutral toast, no file, no recent). New: "a save that comes back as the cancel sentinel is a discard, not "Save failed"" replaces `recording:finalize` IN MAIN with a handler that rejects with the shared sentinel message and lets the renderer's real catch decide — a neutral "Recording discarded." (trash icon), no "imagii:cancelled" or "Save failed", nothing stranded in userData/recordings. Red-first: the old catch toasted the sentinel in red. NOTE (deviation, reasoned): main already answers a killed convert with `null` (T-44) and the sentinel is the same fact in rejection form; the catch now treats both as a discard, so the toast cannot read as an error whichever shape arrives. DISPOSITION: a click while the native save dialog is open is unreachable (the dialog is modal); the "Discarding..." state lasts milliseconds and is covered at the unit layer (`saveCard(true, true)`).
 - **Record - native save dialog ([T-88], title changed):** "Save recording (Cancel discards it)". HL-dialog for the chrome itself. Deepest layers reached: recordingCancel.test.ts drives the real `recording:finalize` handler and asserts the title the dialog is opened with (MP4 and WebM), and that Cancel then resolves `null` and reaps the take (the claim in the title is true); record.spec.ts asserts the same title from the stub's recorded options in the WebM test and in "cancelling the save dialog discards the take". Mutation (title reverted) -> 2 named reds, byte-identical restore.
@@ -1958,4 +1980,1354 @@ filter graphs** (Compile's per-segment graph and the GIF's), so Layer 5 is part 
   diff out of `export.ts`.
 - **A cancel in the first moments of a Compile or a cropped GIF finds nothing to kill.** Both now probe the source
   before they spawn, and the job id is registered only at the spawn (a platform export and Reframe already
-  behave this way); the window is the length of an ffprobe call.
+  behave this way); the window is the length of an ffprobe call. **Fixed in round 58 (T-98).**
+
+## Dispositions — round 58 (T-98 + T-99 + T-100 + T-101 + T-104: Cancel is a latch; a project that never points at scratch; the wreckage a stop leaves; dead actions; raw colors)
+
+No new interactive element. **Twenty-odd existing controls change what their end state is allowed to be**, and
+every end state below is reachable without an OS boundary: the folder and Save/Open choosers are the house
+main-process stubs, the held probe and the held thumbnail are `tests/e2e/mainSpawn.ts` (a `child_process.spawn`
+wrapper installed in MAIN — nothing in `src/` changes), the audio and transcription jobs that cannot be run here
+are driven from main on their real channels, and every file that was or was not left on disk is read back.
+**This round touches `src/main/ffmpeg` and `src/main/audio`** (the cancel and cleanup paths of every runner; no
+argv or filter), so Layer 5 is part of every T-98 / T-100 row (IMG-PREC).
+
+### Cancel is a latch (T-98)
+
+- **Video 4t ExportPanel - Cancel and the "Cancel jobs" confirm ([T-98], end state changed):** from "kills the
+  ffmpeg that is running, if one is" to "stops the batch whenever it lands". E2E ("a Cancel pressed between two
+  jobs of a batch stops the rest"): a 2-job batch with the SECOND job's ffprobe held 8 s -> job 1 finishes,
+  Cancel is clicked inside the hold -> a neutral toast within the hold (the wait is cut short, not waited out),
+  row "Canceled", the spawn log is exactly `ffprobe, ffmpeg, ffprobe`, one file, and 9 s later still nothing.
+  Red-first: `Received: ["Video loaded", "Exported 2 files"]`. Beneath it: `videoExportBatch.test.ts` makes the
+  Cancel happen inside `e.sender.send('video:jobComplete')` — the gap itself — for a batch of 2 and of 5.
+- **Video 4k ReframePanel - Cancel ([T-98], end state changed), 4l GifPanel - Cancel, 4m CompilationPanel -
+  Cancel, 4j HighlightPanel - Cancel scan:** the same four controls, pressed before the job's ffmpeg exists. One
+  E2E ("a Cancel pressed before the job's ffmpeg exists still cancels…") holds every ffprobe 6 s, clicks each
+  panel's Cancel inside it and asserts each panel's own neutral toast, the panel freed within 4 s, no ffmpeg ever
+  spawned and nothing written. Red-first: `Received: ["Video loaded", "Saved the vertical version Show in
+  folder"]`. Layer 5 does the same with the real ffprobe, the Cancel issued in the same tick as the call.
+- **Video 4p ClipKit - the button, Cancel and "Cancel jobs" ([T-98], end state changed):** a kit Cancel now
+  reaches the three thumbnails (`video:cancelAll` joins the frame family) and a Cancel between two of the kit's
+  calls is remembered. E2E: "Cancel during the thumbnails reaches them" (the first extract held 20 s; five
+  exports stay, zero thumbnails, one extract spawned, no "Saved your Clip Kit"; HEAD `Received: [… "Saved your
+  Clip Kit"]`) and "a Cancel that lands between two thumbnail calls still stops the kit" (the extract handler
+  replaced in main by one the test holds; the second call is never made).
+- **Video 4o CaptionsPanel - Cancel (burn-in) ([T-98]):** the Cancel button appears with the first progress
+  event, a few awaits before the child; the burn-in is in the pre-spawn table of `cancelSentinel.test.ts`
+  (ranged: it reads its SRT first). Its end state is the T-100 row below.
+- **Audio ExportDialog - Cancel ([T-98]):** an export probes the file first, and the re-attach's mux probes the
+  cleaned audio; both are in the pre-spawn table. Layer 5: "audio export: a Cancel in the probe writes nothing".
+- **DISPOSITION - PiP (4n) has no run:** `video:pipComposite` spawns in the same tick the handler runs, so there
+  is no wait for a Cancel to fall into; its cancel stays a registry kill, with the T-100 cleanup of its output.
+  **Superseded in round 59:** T-106 made it choose a free output name first, which is such a wait, so PiP now holds a
+  run and has a row in the pre-spawn table.
+
+### A project never points into a temp family (T-99)
+
+- **Home - Save project, Open project; Audio Studio - drop / Choose file (a video) ([T-99], end state changed):**
+  from "the saved project names the scratch WAV (gone the next day)" to "it names the video and re-extracts on
+  open". E2E ("a sound extracted from a video survives its scratch file: save, prune, relaunch, open"): drop a
+  video -> Home -> Save project (Save chooser stubbed) -> the file names the video, carries the marker and holds
+  no `imagii-audio` path anywhere -> close the app -> delete the scratch WAV -> relaunch the same profile ->
+  Open project -> "Project loaded", the waveform plays, Re-attach is ticked, a new scratch file exists -> the
+  video moved -> "Couldn't find e2e-clip.mp4. It may have been moved or deleted. The rest of your project is
+  open — load the audio again in Audio Studio." Red-first: the saved `sourcePath` was
+  `/tmp/imagii-audio/F7BRlapFIv.wav`. Unit: `ProjectIO.test.ts` (both gates, save -> prune -> reopen, the moved
+  video, the old shape both ways), `projectValidation.test.ts` (schema 4).
+- **DISPOSITION - an old (v3) project whose scratch WAV is already gone** still says "Couldn't find
+  aB3dE5fG7h.wav", as before (unit-pinned): it has the video in `fromVideoPath`, and re-extracting from it would
+  recover it — see Found, not fixed.
+
+### The wreckage a stop leaves (T-100)
+
+- **Video 4t ExportPanel - Cancel, the queue rows, Show in folder ([T-100], end state changed):** a Canceled row
+  is neutral (`bg-ink-muted`) and keeps its word; a Failed row stays red; the folder holds only what finished.
+  E2E: the multi-job cancel test (HEAD `Expected: 3 Received: 0` neutral bars; every file left is a real video
+  and the count equals the rows with "Show in folder"), and "Cancel mid-encode leaves no half-written file, and
+  the job that finished before it keeps its file" (two clips of the 20-minute source: HEAD left a second .mp4).
+- **Video 4k / 4l / 4m / 4n / 4o / 4p - the files their Cancel and failures leave:** the same rule at Layer 5 with
+  a real SIGKILL mid-write (export, GIF, reframe, audio render, burn-in) and in the sentinel table for eight
+  runners and the compilation's join; "a file that was already there before the job started is left alone".
+- **Video 4o CaptionsPanel - Burn into video, Cancel, Transcribe ([T-100], end state changed):** the progress row
+  goes back to idle after a canceled or failed burn (and a failed transcription). E2E ("a canceled or failed
+  burn-in puts the progress row back and leaves no half-written video"): cancel mid-burn, then a burn that
+  fails (output folder missing), then a transcription whose engine fails (`captions:status` / `transcribe`
+  replaced in main — **HL-whisper**: the engine itself is not installed here, so the job's failure is injected on
+  the real channel and the panel's real `catch` runs). Red-first: `Expected: 0 Received: 1` progress bars.
+- **Audio ExportDialog - Export, Cancel, the progress row ([T-100], end state changed three ways):** (c) the row
+  says Failed / Canceled and outlives the toast; (e) the passes are "Step 1 of 2 — measuring loudness" / "Step 2
+  of 2 — rendering" / "Step 2 of 2 — attaching to video"; (a) a render canceled in its second pass leaves no
+  file. E2E: "the Export row names its steps, and says Failed or Canceled after the toast fades" (driven from
+  main on the real `audio:progress` channel; HEAD `"Measuring loudness…0%"`), "Cancel in the render pass leaves
+  no half-written file" (HEAD: the file stayed), the re-attach test's final label.
+- **Audio WaveformView - the readout ([T-100]):** "44100 Hz · 1 ch", no codec id (the import and extract tests
+  assert both halves).
+- **Video 4p ClipKit - the SRT notice ([T-100]):** E2E "captions that cannot come along say so in plain words"
+  (a project whose SRT is gone; HEAD `SRT not bundled (source SRT not found)`; the raw fragment in the console).
+- **Video 4k ReframePanel - the progress row ([T-100]):** "Checking the video…", never `ANALYZING`; asserted in the
+  probe-phase E2E above; `reframe.test.ts` for the table.
+
+### Dead code and raw colors (T-101, T-104)
+
+- **Video 4f ClipList - "+ Add clip" ([T-101]):** unchanged; `addClipFromRange` (no control called it) is
+  deleted with five more store actions no control called, and the buffered `recording.save` IPC with its
+  preload and type. `tests/unit/deadActions.test.ts` fails on any store action nothing outside the store names.
+  Every disposition above that cited `addClipFromRange` (round 32 and round 39 rows) now means `addScannedClip`'s
+  guards, in `videoStore.test.ts`.
+- **Video 4j HighlightPanel - the signal bars; Player - Crop guides ([T-104]):** the same hues, from tokens
+  (`EMBER`, `SIGNAL_PINK`, `SIGNAL_CYAN`); the existing "overlays: the crop rect and the safe-zone guides sit on
+  the picture" and highlight-scan E2E rows stay green and are unchanged. `noRawHex.test.ts` keeps hex out of the
+  renderer.
+- **DISPOSITIONS, restated:** the folder / Save / Open choosers are the house stubs (HL-dialog); "Show in folder"
+  is unchanged (HL-shell, `expectRevealToast`); the captions engine is HL-whisper (above).
+
+### Found, not fixed
+
+- **Video imports that convert (flv / ts / wmv / mpg / 3gp) have the T-99 bug too.** `convertForImport` writes
+  a working copy under `%TEMP%/imagii-import` and the video studio's source IS that path, so a saved project
+  points at a file the next launch's prune deletes. Same fix shape: store the original and a marker, re-convert on
+  open. Left out of this round: it needs its own schema field and a transcode on open.
+- **An OLD project (v3) whose scratch WAV was already pruned could be recovered** by the same re-extract from its
+  `fromVideoPath`; the round's direction was to leave it saying "Couldn't find …". It is a few lines.
+- **`video.cancel(jobId)` and `app.quit()` are exposed through the preload with no renderer caller** — the same
+  class as `recording.save`, outside what T-101 named. (`cancelExportJob` itself was used by the unit and Layer 5
+  tables; round 60 deleted it too.)
+- **Audio Studio's header shows the scratch WAV's random name** (`aB3dE5fG7h.wav`) for a sound extracted from a
+  video, because `source.fileName` is read off `filePath`. It should read the video's name.
+- **Reframe's `analyzing` event sends `percent: 0`** (a bar parked at 0%) where the T-89 rule says a phase of
+  unknown length sends none and draws the indeterminate bar.
+- **A finished burn-in leaves "Done 100%" on the captions row** until the next run starts.
+- **Transcription cannot be canceled at all**, and its audio extraction is not in any registry (the WAV is
+  extracted by a child nothing can reach).
+- **Two scratch outputs still survive a failure:** `convertForImport` (the `imagii-import` working copy) and
+  `extractAudioFromVideo` (the `imagii-audio` WAV) do not unlink a half-written file when their child fails.
+  Neither is a file the user chose or sees, both live in temp families the launch prune reaps, and neither is
+  named by T-100; the same one-line `discardPartialOutput` would do it. (Transcription writes its `.srt` only at
+  the end, so a stopped run leaves none.)
+- **`mainSpawn.ts` relies on `process.getBuiltinModule`** (Node 20.16+, so Electron 31); a future Electron bump
+  has to keep it, or the held-probe cases fail loudly at `installSpawnStall`.
+
+## Dispositions — round 59 (T-105 + T-106: Compile is the clip the user built; no export replaces another; the batch checks its crops)
+
+No new interactive control. **One new read-only element** (the Compile card's verdict list) and **about a dozen
+existing controls change what their end state is allowed to be**. Every end state below is reachable without an OS
+boundary: the folder chooser and the project chooser are the house main-process stubs, the bytes on disk are decoded
+by the bundled ffmpeg and read as pixels, samples of sound and lengths of streams, and "Show in folder" is the
+`stubShellReveal` recording (HL-shell). **This round changes ffmpeg filter graphs and output names** (Compile's
+per-segment graph and audio, Auto Zoom's graph, every runner's output path), so Layer 5 is part of every T-105 / T-106
+row (IMG-PREC).
+
+### Compile is the clip the user built (T-105)
+
+- **Video 4m CompilationPanel - Compile N clips ([T-105], end state changed again):** from "every clip's range at the
+  full frame or in its crop" to "every clip as it was built: crop, speed (the sound too), color grade, Auto Zoom,
+  Hype Shake and text, in the export's own graph". E2E ("compilation: each clip is compiled as the clip it was
+  built"): Clip 1 set to 2x, Brightness +0.5 and Auto-zoom through the real controls, Clip 2 added plain -> the file is
+  3 s (1 s + 2 s) with 3 s of sound, and Clip 1 is brighter than Clip 2 at the same moment of the source. Red-first:
+  the HEAD build wrote a 4 s file (`Expected: < 3.2 Received: 4.024`). Beneath it, Layer 5 "a compiled clip is the clip the user built" (speed at 2x / 4x / 0.5x / 0.25x with
+  each stream's length, the picture clock and the audio burst's position; grade; Auto Zoom; Hype Shake; fades on a 2x
+  clip; the whole recipe at once) and the T-51 block's compile cases (overlays by the drawbox stand-in on every build, by
+  drawtext on win32, and the linux pin).
+- **Video 4m CompilationPanel - the verdict list ([T-105], NEW, read-only):** one row per clip, each the export grid's own
+  verdict with the compilation as the target. E2E ("compilation: each clip has a verdict row in the grid's own words"): two
+  clips of a 1920x1080 source read "Great"; a 9:16 crop on Clip 1 turns its row "Wrong shape" with "Only the middle 32% of
+  the picture's height fits this shape" and the scaled-up reason — the sentence the YouTube tile shows for the same crop —
+  while Clip 2's row does not move; Crop unchecked -> "Great" again. Red-first: the HEAD build had no list (`Expected: 2 Received: 0` rows). Unit: `presets.test.ts`
+  (`COMPILE_TARGET`: no length to be too long for, the shape and size reasons, a source that is not 16:9).
+- **Video 4m CompilationPanel - Fade slider ([T-105], end state changed):** a fade (out to black, then in from black - nothing
+  crossfades or overlaps) is placed on the clip's length in the OUTPUT. Layer 5 ("a fade is placed on the clip's length in the output") on a 2x clip, picture and sound; `concat.test.ts`
+  for 1x / 2x / 0.5x / 4x and the tempo-before-fade order.
+- **Video 4f ClipList - Speed slider and Reset ([T-105], end state extended):** the clip's speed now reaches Compile, and
+  every reader of it (the export graph and audio, the bar, the grid, the GIF warning, the slider's readout, the store's
+  setter) is `clipSpeed`. Driven (`fill('2')`) in the Compile row above, the dup row below and the kit row below.
+- **Video 4i ColorGradePanel - Brightness / Contrast / Saturation / Temperature, Reset color, Auto-zoom, Hype shake
+  ([T-105], end state extended):** the panel's own sentence ("Both effects bake into the export") is now also true of a
+  compilation. Brightness and Auto-zoom are driven in the Compile row; Layer 5 covers all four sliders and both effects
+  through `runConcat`. **Auto Zoom's end state also changed for a platform export** (below).
+- **Video 4t ExportPanel - Export N files, with Auto-zoom on ([T-105], end state corrected):** the file is now the clip's
+  length. Layer 5 "Auto Zoom keeps a clip's length whatever the source frame rate" (30 and 60 fps; HEAD: `30 fps export:
+  the picture: 2.4 s, expected 2 s`) and `filters.test.ts` (the `fps=N,zoompan=...:fps=N` pair for every preset).
+- **Video 4l GifPanel - Speed select and the warning ([T-105], end state changed):** "GIF exports over about 10 s get huge.
+  Trim the clip first." counts the GIF that will be written. E2E ("gif: the 'over about 10 s' warning counts the GIF that
+  will be written"): a 14 s clip is warned at 1x and 0.5x and not at 1.5x / 2x / 3x; a 6 s clip is not warned at 1x, is
+  at 0.5x. Red-first: the HEAD build kept the warning at 2x (`Expected: 0 Received: 1`).
+
+### No export replaces another (T-106)
+
+- **Video 4l GifPanel - Export GIF; 4m CompilationPanel - Compile N clips; 4t ExportPanel - Export N files ([T-106], end
+  state changed):** a second job with the same settings is written beside the first (`name (2).ext`), and the panel points
+  at the file it wrote. E2E ("a second GIF, compilation and export with the same settings land beside the first and never
+  over it"): a GIF at 320 px / 12 fps then again at 2x -> `pipeline_320px_12fps.gif` and `... (2).gif`, the first byte for
+  byte what it was, the toast's "Show in folder" delivering the `(2)` path to the shell; a compilation, then again with Clip 1
+  at 2x -> `pipeline_compilation (2).mp4`, the first untouched; a two-clip export, then again -> `Clip 1-youtube (2).mp4` and
+  `Clip 2-youtube (2).mp4`, the first batch untouched, the second batch's row button delivering the numbered path.
+  Red-first: on the HEAD build the second GIF's `(2)` file never appears (a 9-minute poll). Layer 5 does the same three
+  times over for GIF, compile, export (template and default name), reframe and PiP.
+- **Video 4k ReframePanel - Reframe to 9:16; 4n PipPanel - Composite ([T-106], end state changed):** the same rule. E2E ("a
+  second Reframe and a second picture-in-picture with the same settings land beside the first"): Reframe twice -> `...-center.mp4`
+  and `... (2).mp4`, the toast's button delivering the numbered path, the first byte for byte what it was; Composite twice (the
+  second with another margin) -> `pipeline_pip.mp4` and `pipeline_pip (2).mp4`, the same checks. Red under a mutated build
+  (`nextFreePath` returning its input: the `(2)` file never appears). Layer 5 (both, three runs each) and
+  `cancelSentinel.test.ts` (both: the argv names the numbered file, the earlier one is untouched). **PiP now
+  holds a run** (the round-58 disposition "PiP (4n) has no run" is superseded): choosing the output's name is a wait before the
+  spawn, so a Cancel lands in it like in a probe — `cancelSentinel.test.ts` has PiP in the pre-spawn table.
+- **Video 4p ClipKit - the button ([T-106], end state changed):** a second kit of the same clip on the same day gets
+  `<clip>-kit-<date> (2)`, and the reveal opens THAT folder. E2E ("a second kit of the same clip on the same day lands in its
+  own folder, and the first kit is untouched"). Red-first: on the HEAD build the second folder never appears. Unit: `outputPath.test.ts` (`makeKitDir` twice).
+- **Video 4t ExportPanel / 4k / 4l / 4m / 4n - Cancel ([T-106], end state changed):** a Cancel on a job that shares a name with
+  an earlier export removes the job's own file and leaves the earlier one (T-100 used to delete it). Layer 5 ("a canceled job
+  beside an earlier export of the same name leaves that export alone": an export and a GIF, red on HEAD with `the earlier export
+  is still there: expected false to be true`), and the output rows of `cancelSentinel.test.ts` for each naming runner.
+- **Video 4t ExportPanel - Export N files, with a damaged crop ([T-106], end state changed):** from "ffmpeg's own failure" to
+  one plain sentence before any job starts. E2E ("a hand-edited project with a damaged crop is refused in plain words … and
+  redrawing the crop fixes it"): Open project (the project chooser stubbed) with a clip whose crop is twice the frame ->
+  Export -> "One of this project's clips has a damaged crop — redraw it and try again." and a Failed row, no file written;
+  Crop + 16:9 -> the same Export writes its file. Red-first: the HEAD build toasted `Export failed. imagii's video tool stopped before it finished…`. Unit: `videoExportBatch.test.ts`.
+- **Video 4d CropOverlay - Crop checkbox, aspect presets ([T-106]):** the recovery path the sentence names ("redraw it") is
+  driven end to end in the row above.
+- **DISPOSITIONS, restated:** the folder and project choosers are the house stubs (HL-dialog); "Show in folder" is
+  `stubShellReveal` (HL-shell); Clip Kit's own reveal is stubbed the same way in the kit row. The win32 `drawtext` case for a
+  compiled overlay runs where the product ships (the release workflow), with the linux pin and the drawbox stand-in covering
+  the argument everywhere else.
+
+### Found, not fixed
+
+- **The Crop checkbox starts unchecked on a loaded project even when its clips carry a stored crop**, so the crop is
+  invisible (the player draws nothing) while every export, GIF and compilation applies it. Found while writing the T-106 recovery
+  test: the damaged-crop sentence says "redraw it", and the person has to check Crop and pick a shape to do that. `cropEnabled`
+  is local state in `Player.tsx`, initialized to `false`; it should start from "the selected clip has a crop".
+- **Auto Zoom zooms toward the top-left corner, not the middle.** `zoompan`'s `x` and `y` default to 0, so the pulse that peaks
+  at 1.05x moves the picture's center about 24 px right and 13 px down (measured at 1.4 s in a 1280x720 compile). Appearance only,
+  in every platform export since Auto Zoom shipped; a centered zoom is `x='iw/2-(iw/zoom/2)'`, `y='ih/2-(ih/zoom/2)'`.
+- **The Temperature slider moves only a picture's shadows.** The grade is `colorbalance=rs/bs`, which weights dark areas: a warm
+  +1.0 on a mid-blue frame changes it by 2 levels per channel (63,111,191 -> 61,109,189) and on dark gray by +27 / -22. On
+  most footage "warm" and "cool" read as nothing.
+- **`video:exportBatch` does not range-check a clip's speed, grade or effect flags** (only the crop and the overlays); the new
+  compile segments are checked for all of them. They cannot become filter text, only a TypeError or an ffmpeg refusal.
+- **Compile's and the GIF's crop refusals still speak the validator's path** (`segments[0].cropRect.w must be in [...]`), which
+  `userFacingError` hides behind "Compilation failed." / "GIF export failed."; the batch now says "One of this project's clips
+  has a damaged crop — redraw it and try again." The same one-line wrapper would give all three the same sentence.
+- **The GIF ignores the clip's own speed, color grade and effects** (its Speed select is separate). A GIF of a 2x, graded clip
+  is 1x and ungraded unless the panel's select says otherwise.
+- **`docs/USER_GUIDE.md` still says Stream Graphics images "download without asking"** — true before T-91, false since.
+- **`npm run test:media` takes about four minutes here**, not the "~90 seconds" `docs/TESTING.md` quotes.
+
+## Dispositions — round 60 (T-102 + T-103 + T-107 + T-108 + T-109: the install path that survives the exe; sample words that never ship; a project that never points at scratch; Cancel for transcription; the round-59 finds)
+
+**One new interactive control** (the Cancel button on the transcription row, new IPC `captions:cancelTranscribe`) and **a
+dozen existing ones whose end state changes.** Every end state below is reachable without an OS boundary except the portable
+exe itself (HAND-TEST 15): the engine is a **stand-in script dropped where the T-102 resolver now looks** (`<userData>/bin`),
+so the real extraction runs and the real spawn happens (the speech engine itself is still HL-whisper); the project chooser, the
+save chooser and the folder chooser are the house main-process stubs (HL-dialog); the exports are decoded by the bundled ffmpeg
+and read as pixels. **This round changes ffmpeg graphs (Auto Zoom's, the grade's) and the audio extractor**, so Layer 5 is part
+of the T-108 and T-109 rows (IMG-PREC).
+
+### The captions setup path is real on the portable exe (T-102)
+
+- **Video 4o CaptionsPanel - the setup card, Show/Hide setup instructions, Open folder, Refresh status ([T-102], path and copy
+  changed):** the first path is `<userData>/bin/whisper-cli.exe`, created on first ask, with the line "This folder survives app
+  updates, so you only set this up once." E2E (the T-89 test, extended): the path's folder is `<userData>/bin`, it is not under
+  `resources`, it exists on disk, and the sentence is on screen. Red-first: `Expected: ".../ud-captions-…/bin"
+  Received: ".../resources"`. Unit: `paths.test.ts` (the whole resolver order, the lazy folder, an unmakeable folder). DISPOSITION:
+  **Open folder** is `shell.openPath` (HL-shell: its argument is the folder the card names and the folder exists, both asserted);
+  the exe itself on a clean Windows machine is **HAND-TEST 15**, which stays — the fix makes the documented path real, the hand-test
+  confirms the portable build.
+- **Video 4o CaptionsPanel - Transcribe, with the engine found in the user folder ([T-102]):** reachable now. The two cancel rows
+  below use it; they would have been unreachable before (the card could not be satisfied in a test without writing into the repo).
+
+### Sample words stay out of the export (T-103)
+
+- **Stream Graphics - every template card in the Templates dialog and the empty-state grid; References - every Asset Library card
+  that opens as a canvas ([T-103], end state changed):** applying one still draws its sample text on the canvas; the export
+  leaves it out until it is retyped. E2E ("sample words stay out of the export until you type your own"): `yt-thumb-bold` ->
+  the Layers panel tags Title "hint — won't export"; Export -> the title's box is plain background (0 non-background pixels),
+  with the accent bar in the same file as the positive control; type "MY TITLE" into Text -> the tag goes, Export -> > 3 000
+  glyph pixels in the same box. Red-first: `Expected: 0 Received: 29528`. **The rule (refined the same day): text the person MUST
+  replace is a hint; text that IS the card's deliverable exports.** E2E ("text that IS the card's deliverable exports"): References ->
+  Asset Library -> the BRB card opens in Stream Graphics; the Layers panel tags Handle and not Brb or Sub; Export -> "BE RIGHT BACK"
+  is in the file (> 3 000 glyph pixels in the headline's box) and the handle's box is plain background. Unit: `templateTruth.test.ts`
+  is a **per-card table** of which text layers are hints and which are content for all 21 cards (a new text layer or card fails
+  until it is decided), plus "the four deliverables export" (BRB, STARTING SOON, THANKS FOR HANGING OUT, POG), a
+  guard that content never reads like a stand-in, and "every non-text design layer is not a hint".
+- **Stream Graphics - Layers panel tag ([T-103]):** on every sample-text layer a person must replace; the first T-91 E2E asserts it
+  for the title as well as the face guide, the BRB E2E asserts its absence on the scene's words. The overlay test keeps its plate
+  and facecam border exporting.
+- **DISPOSITIONS:** a **keep-a-hint control stays unbuilt** (retype, or delete and redraw, covers it); **pre-round-55 mood-board
+  references** keep exporting as saved (no reliable migration; recorded in round 55). **Scene cards and the text emote export their
+  words** (the refined ruling); judgment calls recorded in the table: the lines under the scene titles are content, the thumbnail
+  card's "TUTORIAL" eyebrow is a hint, and the starting-soon "0:00" countdown is a hint (flipped at expedite), so its "to replace" description is true as written.
+
+### A project never points at a converted copy (T-107)
+
+- **Video 4a Importer - drop zone and Choose file, for an flv/ts/wmv/mpg/3gp ([T-107], end state changed):** the studio's source
+  is the working copy as before, but the store keeps the original beside it, the header and the export names use the original's
+  name. E2E ("an flv is converted again when its project is opened after the working copy is gone"): the header reads
+  `e2e-clip.flv` after the drop. Layer 5 already proves the conversion per container (round 20).
+- **Home - Save project / Open project, with a converted import ([T-107], end state changed):** schema 5. E2E (the same test):
+  Save from Home -> the file names the flv (`videoStudio.sourcePath`, `convertedForImport: true`) and the flv again for the sound
+  (`audioStudio.extractedFromVideo: true`), schema 5, no `imagii-import` or `imagii-audio` anywhere in it; close the app, delete
+  the working copy AND the scratch WAV, relaunch the same profile, Open project -> "Converting for editing…" appeared, "Project
+  loaded", both studios load from new copies, the old copy was not needed; delete the flv and Open again -> the one sentence
+  "Couldn't find e2e-clip.flv… load the video again in Video Studio and the audio again in Audio Studio." Red-first (HEAD build):
+  `Received array: ["Couldn't find e2e-clip-eTHEs10y.mp4. …"]`. Unit: `ProjectIO.test.ts` and `projectValidation.test.ts` (24 reds
+  on the HEAD source). DISPOSITION: the project chooser and save chooser are HL-dialog stubs.
+- **Video 4 VideoStudio - Clean audio ([T-107], end state changed):** hands the audio studio the original as well as the working
+  copy; driven in the E2E above (Clean audio, then Save, then reopen).
+- **Audio Studio - Open project with a pre-marker (v1-3) extraction whose scratch WAV is gone ([T-107], end state changed):** the
+  sound is extracted again from the video the file already named. audio.spec ("a project saved before the marker, whose scratch
+  WAV was already pruned, is recovered"): a hand-written v3 file -> "Project loaded", Audio Studio plays, the header says
+  `e2e-clip.mp4`, Re-attach is ticked; then with the video deleted -> "Couldn't find e2e-clip.mp4…" (the video, not the WAV).
+  Red-first: `["Couldn't find aB3dE5fG7h.wav…"]`. DISPOSITION: a **v4 project whose converted video was already pruned is not
+  recoverable** — its path names nothing about the original; it keeps saying the file is gone, as it always did.
+
+### Cancel reaches transcription; four smaller untruths (T-108)
+
+- **Video 4o CaptionsPanel - Cancel on the transcription row ([T-108], NEW control):** shown in the `extracting` and `transcribing`
+  phases, calls `captions.cancelTranscribe` (new). E2E ("Cancel stops a transcription while the engine runs"): the stand-in
+  engine runs (it records its pid) -> Cancel -> the neutral toast "Transcription canceled." (no status icon, nothing in ffmpeg's
+  or the bridge's voice), the engine process is dead, no progress bar and no Cancel remain, Transcribe is enabled, and the WAV
+  extracted for it is gone; E2E ("Cancel while the sound is still being extracted…", the 20-minute source): Cancel during
+  "Extracting audio…" -> the same toast, the engine's marker file never appears, no WAV left. Red-first (HEAD build, the stand-in
+  placed where HEAD looks): the Cancel button never appears (`Expected: visible`). Unit: `transcribeCancel.test.ts` (8) and the
+  pre-spawn table of `cancelSentinel.test.ts` (6 rows). Layer 5: a real SIGKILL of a real extraction removes its file.
+  DISPOSITION: the `building-srt` phase has no Cancel (instant; a Cancel there could not stop it).
+- **Video 4o CaptionsPanel - the progress row after Transcribe or Burn into video finishes ([T-108], end state changed):** the row
+  goes back to idle; "Done 100%" no longer stays. E2E: the ranged-burn test asserts no progress bar and no "Done" after each
+  finished burn (red-first `Expected: 0 Received: 1`); the T-100 failed/canceled test asserts the same after a stop (shared `finally`).
+  The T-89 progress test still drives a `done` event from main (no job is running, so nothing clears it) to assert the row's words.
+- **Video 4k ReframePanel - the progress row ([T-108], end state changed):** while main checks the source, the bar is
+  indeterminate (no `aria-valuenow`, the `.progress-indeterminate` segment, no "0%"). E2E (the T-98 held-probe test, extended).
+  Red-first: no `progressbar` role on HEAD. Unit: `reframeProgress.test.ts`.
+- **Audio Studio - the header name ([T-108], end state changed):** a sound extracted from a video shows the VIDEO's name (the
+  original's, for a converted import). audio.spec: the extraction test asserts `e2e-clip.mp4` and no `.wav`; the T-99 test asserts
+  it again after a relaunch; video-core.spec.ts ("clean audio extracts the track and hands it to Audio Studio") used to assert the header
+  read `….wav` and now asserts it reads `video-core.mp4` and no `.wav` (the one existing assertion this round flipped, caught by the full
+  run). Red-first: the header showed the scratch name.
+- **Preload bridge - `video.cancel(jobId)` and `app.quit()` ([T-108], DELETED with their main handlers):** no control called them.
+  `tests/unit/deadExposures.test.ts` holds all 83 functions of `ImagiiApi` to "reached from a renderer file". Red-first: against the
+  HEAD `api.ts` it reports exactly `['app.quit', 'video.cancel']`.
+
+### Crop, zoom, temperature, refusals (T-109)
+
+- **Video 4d CropControls - Crop checkbox; CropOverlay - the rectangle ([T-109], end state changed):** a clip with a stored crop
+  opens checked with the rectangle on the picture; the box follows the selected clip; unchecking clears the crop; Undo brings it
+  back, visibly. E2E ("a crop stored in a project is visible when it opens") and its control ("a project with no crop opens with the
+  box unchecked"). Red-first: `Expected: checked Received: unchecked`. The aspect presets and Reset are unchanged (still driven by
+  video-core.spec.ts).
+- **Video 4i ColorGradePanel - Temperature slider ([T-109], end state changed):** warm/cool now reach the mid-tones and highlights.
+  Layer 5 ("Temperature warms and cools the mid-tones and highlights, not only the shadows"; HEAD: `warm mid-tone 125,125,125 vs
+  128,128,128`) and `filters.test.ts`. DISPOSITION: the player does not preview color (it never did), so the slider's end state is
+  the exported file, which is where Layer 5 reads it.
+- **Video 4i ColorGradePanel - Auto-zoom checkbox ([T-109], end state changed):** the pulse is about the middle of the frame.
+  Layer 5 ("Auto Zoom zooms about the CENTRE of the frame", and the platform-export twin; HEAD: `(663.5, 373)` against `(640, 360)`).
+- **Video 4l GifPanel - Export GIF; 4m CompilationPanel - Compile N clips, with a damaged crop ([T-109], end state changed):** the
+  same plain sentence the batch speaks. E2E (the T-106 damaged-crop test, extended): after the batch's refusal, Export GIF and then
+  Compile 2 clips each toast "One of this project's clips has a damaged crop — redraw it and try again." and nothing else, no
+  file written. Red-first: `Expected: 2 Received: 1` sentences. Unit: `videoCropPayload.test.ts`.
+
+### Closed from round 59's "Found, not fixed"
+
+The Crop checkbox starting unchecked (T-109a); the top-left Auto Zoom (T-109b); the Temperature slider (T-109c); Compile's and the GIF's
+crop refusals (T-109d); the stale USER_GUIDE line (T-109e). Still open from that list: the GIF ignores the clip's own speed, grade
+and effects. (`video:exportBatch` not range-checking a clip's speed, grade or effect flags was closed by T-111(3), round 61.)
+
+### Found, not fixed
+
+- **A converted import is converted again on every open** (T-99's rule), so opening a project with a two-hour flv waits a transcode
+  (minutes) behind the "Converting for editing…" toast, where an extraction waits seconds. A cache keyed by the original's path,
+  size and mtime, kept outside the temp families, would remove it.
+- **Re-attach after a reopen muxes the ORIGINAL** (the project names it), and `-c:v copy` into an mp4 only works for codecs mp4
+  carries (h264 flv does; a wmv's may not). In the session that converted it, re-attach still uses the h264 working copy.
+  (Closed by T-111(13), round 61: a picture an mp4 cannot carry is re-encoded in the mux.)
+- **The Temperature coefficients (a quarter for the mid-tones, a half for the highlights of the shadows' strength) were chosen from a
+  tonal curve measured on the linux ffmpeg 7.0.2**; the shipped Windows build is 6.1.1 with the same filter source. Layer 5 runs on
+  the release workflow's windows-latest, which is where that is confirmed; a hand look at real footage is worth a minute.
+- **A canceled or failed Open project of a converted import leaves the "Converting for editing…" toast only as long as the
+  conversion** (it is dismissed in a `finally`); there is no Cancel for the conversion itself (the import path never had one).
+
+## Dispositions — round 61 (T-111: the review gate's main-process and media-chain fixes)
+
+Fifteen fixes from the nine-reviewer sweep over the held wave; the renderer half is T-112 (round 62). Every behavior change below
+was red-first (the quotes are in `LESSONS_LEARNED.md`, 2026-10-10 round 61). Where a row says "win32 twin", the real-drawtext render
+is gated to win32 like the rest of the T-51 block; the same cases were also run during the round against a system ffmpeg 6.1.1 (the
+shipped build's major, which has drawtext) with a font stand-in.
+
+### What goes into the filter graph
+
+- **Video 4q TextOverlayEditor - the caption field; 4t ExportPanel - the Watermark field ([T-111], end state changed):** the text
+  drawn is the text typed, for an apostrophe, a percent sign, a colon, a backslash and a newline. `escapeDrawtext` writes for the
+  three passes ffmpeg makes over `text='...'`. Layer 5 win32 twins ("T-111: an apostrophe, a percent sign, a colon and a backslash in
+  an overlay export and paint"; "a two-line overlay draws both lines, and a watermark with an apostrophe and a percent sign draws");
+  `filters.test.ts` parses the escape back the way ffmpeg does (a model of `av_get_token` and drawtext's expansion) for twelve texts
+  and holds the whole graph for "Let's go" and "Sale 50% off". Red-first: `No such filter: '0.000'`; `0 green px`; 15 unit reds.
+  DISPOSITION: the linux build has no drawtext, so the render is win32 (the release workflow); nothing in `tests/` runs a
+  system-binary variant (the suite has no pattern for one).
+- **Video 4t ExportPanel - a custom preset of an odd size ([T-111], end state changed):** exports at the even size below it
+  (1081x607 -> 1080x606) and the grid shows that size. Layer 5 ("an odd custom size exports"; HEAD: `width not divisible by 2
+  (1081x607)`); `presets.test.ts` and `presetTablesInSync.test.ts` (main and renderer agree on the even size).
+- **Video 4t ExportPanel - Export; 4p ClipKit - with a hand-edited clip ([T-111], refusal added):** a speed, grade, effect flag or
+  overlay outside what the graph takes is refused for the whole batch, before the first probe, in "One of this project's clips has
+  a setting imagii can't use — check its speed, color and text, then try again." `videoExportBatch.test.ts`, 15 cases through the
+  real handler (HEAD: a speed of 1e-6 wrote a 261-byte file and reported success). DISPOSITION: a damaged recipe can only arrive in
+  a hand-edited project file, so there is no control to drive; the handler is the deepest layer.
+- **Video 4t ExportPanel - Export; 4p ClipKit - a second batch while one runs ([T-111], refusal added):** a second `video:exportBatch` while one
+  runs is refused with "An export is already running. Wait for it to finish, or cancel it, then try again.", does not disturb the
+  first, and the gate opens when the first finishes, fails or is canceled. `videoExportBatch.test.ts`. NOT covered by an E2E: the
+  panel's own controls disable themselves, so only two surfaces at once reach it (round 62's T-112 lists the renderer side).
+- **Audio SecondaryTrackPanel - Gain, Threshold, Ratio, Attack, Release; Audio - Levels - the loudness number ([T-111], refusal
+  added):** the second track's gain and ducking numbers are held to the sliders' ranges (gain -60..+12, threshold -60..0, ratio
+  1..20, attack 1..200, release 50..2000) at the export gate AND when a project opens, and the loudness target to loudnorm's
+  -70..-5, each in a finished sentence. `audioChainValidation.test.ts` (55 cases through the real handlers with a fake child: the
+  command with an injected `gainDb` is shown, then refused with nothing spawned), `audio.test.ts`, `projectValidation.test.ts`.
+  An injection is never run through a real ffmpeg. DISPOSITION: the second track's numbers are slider-bound in the UI; the refusals
+  are for a hand-edited project. The loudness box is a free number input, so a typed -3 now reaches the sentence — the input's
+  `min`/`max` is round 62's.
+
+### The mix, the sound and the picture
+
+- **Audio SecondaryTrackPanel - Add a second track; Audio ExportDialog - Export ([T-111], end state changed):** the voice is one level for the whole
+  recording when a shorter music bed ends. `amix` no longer re-weights the survivor (`normalize=0`), and a manual-gain mix ends in a
+  limiter at -1 dBFS (a match-loudness mix has its loudnorm's). Layer 5 ("the voice is one level when a shorter music bed ends", six
+  cases: manual, ducked, a +6 dB bed, match-loudness, a hot pair limited, a quiet mix left alone). Red-first: the voice stepped
+  -30.1 -> -24.1 dB (manual and ducked) and 4.7 dB under match-loudness. The existing equal-length mix cases were unchanged.
+- **Audio ExportDialog - Re-attach to video, after a project reopen ([T-111], end state changed):** a picture in a codec an mp4
+  cannot hold (wmv2, vp8/vp9, theora, mpeg-2...) is re-encoded in the mux step; h264, hevc, av1, mpeg-4 and mjpeg are still copied
+  packet for packet. Layer 5 ("a picture an mp4 cannot carry is re-encoded, not copied": a wmv2 original -> playable h264 with the
+  cleaned sound; the h264 control byte-identical; a cut one) and `muxCodec.test.ts` (the command for each codec, a failed probe,
+  a Cancel in the probe). Red-first: `Could not find tag for codec wmv2 in stream #0`. DEVIATION recorded in the ticket's report:
+  the extra step is not a separate "convert" pass, so no new progress label — the mux pass re-encodes and its bar measures.
+  NOT covered by an E2E: reopening a project whose source is a .wmv, then Re-attach.
+- **Video 4o CaptionsPanel - Transcribe ([T-111], end state changed):** the scratch WAV the engine reads is 16 kHz mono (a sixth of
+  the bytes; older whisper.exe builds refuse anything else); Audio Studio's extraction stays 48 kHz stereo. Layer 5 ("the
+  transcription format is 16 kHz mono, a sixth the size, and Audio Studio's stays 48 kHz stereo", ffprobe) and
+  `transcribeCancel.test.ts` (the argv of the real extractor under `runTranscribe`). DISPOSITION: the engine is HL-whisper.
+- **Video 4o CaptionsPanel - Transcribe's Cancel, pressed before the extraction child exists ([T-111]):** the child that arrives
+  late is killed AND leaves nothing registered, so the next cancel finds nothing. `transcribeCancel.test.ts`.
+- **App quit during Audio Studio's import of a video's sound ([T-111]):** the extraction ffmpeg is in a registry the quit sweep and
+  `cancelAllAudioJobs` reach. `extract.test.ts` (fake child: register, clear on close and on error, kill, sweep) and Layer 5
+  ("cancelAllExtractions SIGKILLs a real extraction nobody holds a handle to, and its WAV goes"). DISPOSITION: the quit itself is
+  Electron's `before-quit`, which no test fires; main's sweep list names the call.
+- **Video 4o CaptionsPanel - Burn into video, its bar and its size ([T-111], end state changed):** (1) the bar is the encode
+  position over the length of the file (0 at the start, never 100 until `done`, absent when the length is unknown); (2) the same
+  Size draws the same share of the picture's WIDTH on 1920x1080 and 1080x1920 (and square and 4:5), with the caption as far up the
+  frame as before, and a landscape burn's command is exactly what it was. Unit: `captions.test.ts`, `whisperManager.test.ts`,
+  `captionsProgress.test.ts`; `cancelSentinel.test.ts` (the burn now probes first, and a Cancel in that wait ends it at once).
+  Layer 5 ("burned caption size follows the frame": glyph height over frame width within 10% on four shapes; the vertical
+  default is one line at under 7% of the frame's height; the margin; a bigger Size is bigger; the bar's last report is near the
+  end). Red-first: the vertical default was a 353 px block (18% of the frame, three lines) against a 3% line. The panel's Size
+  readout still says "on 1080p" (T-112 wires the frame's real size into `effectiveCaptionPx`).
+- **Reframe progress listener, preload ([T-111]):** typed `percent?: number` as `api.ts` and main have it. `reframeProgress.test.ts`
+  reads the source (the preload imports Electron).
+
+### Closed from round 60's "Found, not fixed"
+
+Re-attach after a reopen muxing an original mp4 cannot carry (T-111(13)); `video:exportBatch` not range-checking a clip's
+recipe (T-111(3)); the burn-in's invented percentage (T-111(10); the MP4 convert's remains an estimate).
+
+### Found, not fixed
+
+- **Compile's recipe refusals still name their field** ("segments[0].speedMultiplier must be in [...]"), which `userFacingError`
+  turns into the generic failed line, while the batch now speaks a sentence. `videoCropPayload.test.ts` pins "only the crop speaks the
+  plain sentence" on purpose; the GIF has no recipe to check.
+- **A burn-in sizes by the CODED size of the video**, so a phone clip stored landscape and tagged rotated is sized as landscape on
+  a portrait picture (T-110h's rotation-aware probe fixes it for the burn, the crop and the grid together).
+- **The loudness box takes any number** (the sentence now says what to change, after the Export click). `LOUDNESS_TARGET_LUFS` is
+  exported from `@shared/audio` for the input's `min`/`max`.
+- **`convertForImport` still leaves its half-written copy** when it fails or is canceled (the launch prune reaps it).
+- **An odd-sized picture cannot be re-encoded for the mux** (libx264 refuses an odd side): already true of a cut re-attach, and now
+  also reachable for a non-carriable codec; no codec in the list encodes odd sizes, so it needs an odd-size file in a carriable codec
+  plus a cut.
+
+## Dispositions — round 62 (T-112: the review gate's renderer fixes)
+
+Thirty-six fixes from the nine-reviewer sweep over the held wave: the renderer half of what round 61 (T-111) did in main. Every behavior
+change was red-first (the quotes are in `LESSONS_LEARNED.md`, 2026-10-10 round 62), and every new refusal was shown to discriminate
+(guard broken, the exact red named, the file restored byte for byte). **No ffmpeg command, filter graph or audio chain changed**
+(IMG-PREC's Layer 5 trigger did not fire): the main-side edits are Reels' number in the mirrored preset table, pinned by
+`presetTablesInSync.test.ts`, and `video:removeKitDir` (approved after the first hand-back). The OS boundaries are the house stubs (HL-dialog: the folder chooser and the native confirm), the held
+probe (`installSpawnStall`) and a handler the test holds open (the speech engine, HL-whisper). E2E names below are in
+`video-pipelines.spec.ts` ("T-112: review-gate fixes") unless a spec is named.
+
+### Video Studio - what Export, Clip Kit and Compile say and do
+
+- **Video 4p ClipKit - Clip Kit, a 16:9 recording cropped to 9:16 ([T-112], end state changed):** the YouTube slot is a 1080x1920 Short
+  (`Clip_1_youtube_short.mp4`), judged by the CROP's frame (`cropFrameSize`) and not the source's; a portrait recording cropped to landscape
+  keeps its landscape YouTube file; a square crop is not vertical. E2E "a 16:9 recording cropped to 9:16 gets a Short from Clip Kit...":
+  eight files, the Short probes 1080x1920, no `Clip_1_youtube.mp4`. Unit: `clipKit.test.ts` (six cases incl. an unsizable probe).
+- **Video 4p ClipKit - the button's label and color ([T-112]):** "Exporting platform version n of 5…" then "Extracting thumbnail n of 3…", moved by
+  `video:jobComplete`; E2E holds job 2's probe and reads "version 2 of 5". The label reads in ink (4.1:1 at rest and 3.6:1 on hover became
+  12.0 and 10.5). Unit: `kitExportLabel` / `kitThumbLabel`. **The empty kit folder is removed (approved main-side addition, `video:removeKitDir`):** a Cancel
+  or a failure before ANY file landed in the folder (`landed`, counted per finished job and per finished thumbnail) asks main to remove it; main
+  does a non-recursive `rmdir` behind the `assertSafeAbsolutePath` gate, so it can never take a file, and any refusal (not empty, gone, a file) is a
+  console note, never a user-facing error. Once a file has landed the renderer does not ask. E2E (red-first: on the build before the change the
+  folder survived, `existsSync(kitDir)` `Expected: false` / `Received: true`): "a kit canceled before any file landed takes its empty folder with
+  it" (job 1's probe held; the real handler), "a kit that fails before any file landed takes its empty folder with it" (the source removed under
+  the held probe; the real handler), "a kit canceled after a file landed keeps its folder, and the renderer does not even ask" (job 2's probe held;
+  a recording handler sees zero calls); "cancelling a kit asks first" now holds job 2's probe so its folder has a file in it. Unit:
+  `videoRemoveKitDir.test.ts` (15 cases through the real handler on real folders: an empty folder goes; a folder with a file, with an empty
+  subfolder, a missing path and a path that is a file all stay without an error; a console note only on a refusal; relative, `..`, empty and
+  non-string paths are refused before anything is touched), `interactionWiring.test.ts` (the single call site, in the catch, guarded by `landed === 0`).
+- **Video 4t ExportPanel - the platform grid, Reels and TikTok ([T-112], verdict changed):** Reels' limit is 20 minutes (it was 180 s, Instagram's
+  RECOMMENDATION cutoff); past 3 minutes the card is yellow "Over 3 minutes — Instagram won't recommend it to new viewers", red only past 20;
+  TikTok no longer says "Over the 34-second sweet spot" of a clip of a minute or more (the short-clip advice below a minute is unchanged).
+  The Clip Kit's long-clip question moved with the limit ("the typical 20-minute limit"). E2E: the T-97 speed test, re-pointed (300 s at 1x gets Instagram's
+  advice and no "Too long", 150 s at 2x the sweet-spot reason, 600 s at 0.5x the advice again, never the length's red; the 4:3 fixture's card as a
+  whole still reads "Wrong shape" for 9:16, which is the shape's verdict, and the level the length alone gives is pinned in `presets.test.ts`) plus a
+  36-minute source (red at 1x, the advice at 2x);
+  the two Clip Kit question tests moved to the 36-minute source. Unit: `presets.test.ts`, `clipKit.test.ts`, `presetTablesInSync.test.ts`.
+- **Video 4t ExportPanel - Export with no folder; the disabled Export ([T-112], end state changed):** Export opens the chooser itself, and a canceled
+  chooser starts nothing and says nothing; with nothing checked the button is off and "Check at least one platform below to export." is on screen
+  and its title. E2E "with no output folder Export opens the chooser..." (canceled -> nothing; answered -> the folder is taken and the export
+  runs in one click; the hint comes and goes with the checkbox). The old red "Choose an output folder first" toast is gone and pinned gone.
+- **Video 4t ExportPanel - the queue's rows ([T-112], end state changed):** the row that failed is "Failed" (red) with its reason as TEXT; the rows
+  the batch never reached are "Not run" (neutral); a canceled batch keeps "Canceled" for every unfinished row; a finished row shows the file it
+  wrote (`name (2).mp4` when the name was taken). E2E "a failed batch marks the job that failed...": four jobs (YouTube, X / Twitter, Facebook, Reels;
+  the safe-zone question answered "Export anyway"), the source removed while job 2's probe is held -> one finished, one Failed, two Not run, one red
+  bar, the reason visible after the toast fades; the dup test asserts the numbered names on the rows. Unit: `settleJobs` (seven cases). The batch-refused-before-it-starts case reads Failed on row 1 (ceiling in the file).
+- **Video 4t ExportPanel - Export again after leaving and returning ([T-112], the T-111 refusal driven):** the returning panel believes nothing runs; the
+  second Export is refused with "An export is already running. Wait for it to finish, or cancel it, then try again." (an error toast, on the row as
+  text) and starts nothing (the spawn log is unchanged). E2E "pressing Export again after leaving Video Studio and coming back is refused...".
+  DISPOSITION: the orphaned Cancel/progress of the first batch is T-110(j), not this round.
+- **Video 4l GifPanel / 4m CompilationPanel / 4k ReframePanel / 4n PipPanel - the saved toast ([T-112]):** "Saved <the file>" with the runner's own name,
+  `name (2).gif` included. E2E: the four T-106 duplicate cases assert the numbered name in the toast; the first-run tests assert the plain one.
+  Verified, not changed: all four IPCs already returned the real `outputPath` (`nextFreePath`), so no main edit was needed.
+- **Video 4m CompilationPanel - the card ([T-112]):** says "1920×1080, 30 fps" (from `COMPILE_SIZE` and `COMPILE_TARGET.fps`, which
+  `presetTablesInSync` ties to main's `COMPILE_FPS`); "Crossfade" is "Fade between clips" and says what it is (out to black, in from black, no
+  overlap, 0 ms is a hard cut). The verdict list takes focus (`tabIndex=0`, an accent ring on keyboard focus) and its name column flexes
+  (a 2:3 share of the row beside the verdict, both able to shrink: a bare `flex-1` name gets 0 px beside a verdict whose reasons are one long line;
+  asserted > 100 px, the whole name in its title). E2E "the Compile card says what it makes...". The slider's accessible name is now "Fade between clips, in
+  milliseconds" (every Compile test moved with it).
+- **Video 4m CompilationPanel - Compile, a clip stored at speed 0 ([T-112], refusal avoided):** the wire carries the speed the clip PLAYS at
+  (`clipRecipe` -> `clipSpeed`), so a legacy 0 compiles at 1x instead of failing main's round-61 validator. The fix is in the shared function,
+  not the panel. E2E "a clip whose stored speed is 0 compiles at 1x..." (a project with a 0, the real compile, two 1 s clips -> ~2 s, no failure
+  toast). Unit: `clip.test.ts`. The Export batch and Clip Kit still refuse such a clip (their sentence names the speed): "Found, not fixed".
+- **Video 4f ClipList - the Hook badge ([T-112], end state changed):** the window it listens to is 3 x the clip's speed in source seconds
+  (3 output seconds), cut at the clip's end, and the label beside it says the same number ("First 3 s:", or "First 2 s:" for a clip of two seconds;
+  it said 3 over a window that ran past the clip). The T-92 hook test reads the 2 s fixture's "First 2 s:" and "first 2 seconds"; the T-112 test reads
+  "First 3 s:" on a long clip at every speed. `interactionWiring.test.ts` pins that label and window come from one `hookWindow`. The ticket said "divide"; output time is source time over the speed, so the window is multiplied.
+  E2E "the hook badge listens to the first 3 seconds the viewer SEES" replaces the IPC in main and reads 6 / 1.5 / 12 / 3 s at 2x / 0.5x / 4x / 1x.
+  Unit: `hookWindow` (`highlights.test.ts`).
+- **Video 4f ClipList - the select button and the selected row ([T-112], a11y):** the button's name contains its timecode ("Select clip Clip 1,
+  0:00 → 0:02"); the selected row and its button carry `aria-current="true"`. E2E: the clip-list test in `video-core.spec.ts`;
+  `interactionWiring.test.ts` pins the label.
+- **Video 4k ReframePanel - Left / Center / Right ([T-112], a11y):** `aria-pressed`. E2E: the reframe test asserts the state through every click.
+- **Video 4l GifPanel - the length warning ([T-112], a11y):** an always-mounted `role="status"` region, so a Speed change announces it. E2E "the GIF
+  length warning is announced...": the region exists and is empty at 1x, holds the warning at 0.5x, empties again.
+- **Video 4j HighlightPanel - the score pill ([T-112], contrast):** ink on the accent wash with an accent border (3.58:1 -> 10.5:1). E2E: the highlight
+  test reads the computed color. Unit: `designTokensInSync.test.ts` recomputes all four pairings from the tokens.
+
+### Video Studio - what a video with no sound, a late result, a second drop and a Reset do
+
+- **Video - Clean audio; 4o CaptionsPanel - Transcribe; 4j HighlightPanel - Scan VOD, for a video with no audio stream ([T-112], gated):** each is off and
+  says "This video has no sound." (the probe's `audioCodec` was already exposed, so no main edit). E2E "a video with no sound has nothing to clean,
+  transcribe or scan...": the flat-green fixture has no audio; a forced click on Clean audio goes nowhere; the control video has all three.
+- **Video - Clean audio, with a tuned Audio Studio session ([T-112], confirm added):** asks "Close this audio? Your cleanup settings will be
+  discarded." (`audioCloseMessage`, moved to `audioClose.ts` so Video Studio need not import the Audio Studio component) before replacing it
+  - as written in round 62; **round 63 [T-113] changed the Clean-audio confirm to "Replace the audio you're editing? ..." (the row below), and
+  "Close this audio?" is now Audio Studio's own Close only**;
+  declined = nothing extracted, nothing opened; an untouched session asks nothing. E2E "Clean audio asks before it replaces a tuned Audio Studio
+  session...". NAT: the confirm is a native dialog, answered by the test's dialog handler.
+- **Video 4a Importer - drop zone, Choose file…, Recent ([T-112], refusal added):** a second import while one runs is refused ("Still converting the last
+  video. Wait for it to finish." / "Still loading..."), from the drop and from Recent alike (a ref, not state, so two arrivals in one tick are both
+  seen). E2E "a second drop while a conversion runs is refused...": an flv's conversion is held; the second file is left alone, one ffmpeg ran, the
+  first video opens, and the importer takes a file again afterwards.
+- **Video 4o CaptionsPanel - Transcribe, a result that arrives after the video changed ([T-112], refusal added):** the result is applied only to the
+  video the job started on (`videoStore.setSrtPathFor`); otherwise B gets nothing and a toast says the captions were not added. E2E
+  "transcription that finishes after the video changed is not attached to the new video": a held `captions:transcribe`; A closed, B dropped, A's
+  job released -> no Burn into video, no A words, the toast. Unit: `videoStore.test.ts` (six cases through the real `loadSource`).
+- **Video 4o CaptionsPanel - the header button during a burn-in ([T-112]):** "Burning in…" (disabled), never "Transcribing…". E2E: the real burn in
+  the T-100 test.
+- **Video 4o CaptionsPanel - the setup card's links and the Size readout ([T-112]):** underlined at rest and in the `warn` tone (4.10:1 -> 10.4:1);
+  the readout is "about N px tall on this video" from the loaded frame (`effectiveCaptionPx` with the width), the 1080p wording only with no
+  video. E2E: the setup test (computed `text-decoration` and color on six links) and the style test (320x240 -> 20 / 35 / 18 / 45 px).
+- **Video 4d CropControls - Reset ([T-112], end state changed):** clears the crop and keeps the section open whichever way the crop arrived. E2E "Reset
+  clears the crop but keeps the Crop section open...": a project-loaded crop (red before: the box unchecked itself) and a hand-drawn one (the control).
+- **Video 4d Player - Crop guides ([T-112]):** the overlay's svg is `aria-hidden`; the dead 16:9 guide (a color and a shape no caller used) is gone.
+  E2E: the transport test; `designTokensInSync.test.ts` pins the source to three guides.
+
+### Opening a project, Audio Studio and Stream Graphics
+
+- **Home - Open project; the autosave Restore banner - Restore ([T-112], reports changed):** the outcome has three kinds of "not applied": a file that is
+  gone (said only when the failure is a not-there error, `isMissingFileError`), a file that was there and would not open (the real cause through
+  `userFacingError`: "Your disk is full...", "That file looks damaged..."), and a source skipped because the person opened a different one while the
+  long re-convert / re-extract ran (never clobbered). One string, `describeApplyOutcome`, toasted by both callers. Unit: `ProjectIO.test.ts`
+  (staleness for the video and the sound, closing is not "opening another", the control, the classes, the sentences). E2E: the T-107 reopen test.
+  The two existing "fails with the file still there" cases changed knowingly (they were `unavailable`; they are `failed`), and a fixture that said
+  "No such file" now says what ffmpeg says. NOT covered by an E2E: opening a project over a video the person opened during the conversion
+  (the race needs a hold on main's convert AND a second drop; the unit test drives the real stores and the real `applyProject`).
+- **Home - Open project / Restore, the sound of a reopened project ([T-112]):** "Extracting audio…" shows (its own toast id, dismissed in a `finally`) while
+  the sound is taken from the video again. E2E: the T-107 reopen test reads it in the toast log; unit: shown under an id, dismissed on success AND on
+  failure.
+- **Audio ExportDialog - the progress row ([T-112], a11y):** `role="progressbar"`, named by the pass ("Step 2 of 2 — rendering"), with its value. E2E: the
+  T-100 export-row test asserts name, min, max and now through both passes.
+- **Audio - Fix Wizard, the last card ([T-112]):** the hum line names the notch it applies ("Hum removal: on (50 Hz mains)"); the patch carries the chain's own
+  frequency, so Apply writes back what the line said. E2E: the existing wizard test (60 Hz) and "the Fix Wizard keeps the chain's 50 Hz mains...".
+- **Audio - Cleanup, the Custom noise floor hint ([T-112]; superseded by [T-125], copy changed):** "-35 is the Light preset's setting." (T-112 had it "-25 is the Light preset's setting", main's `light` being `nf=-25:nr=12`; T-125 (3) swapped the strengths so Light removes the least, `nf=-35:nr=12`, Medium `-30:18`, Aggressive `-25:24`, and the hint follows the preset). E2E: audio.spec.ts "every Cleanup control writes through to the chain" (the sentence, and that Custom still STARTS at -25 / 12, which is no preset's setting now). Layer 5: media.spec.ts "T-125 (3)" (the three strengths remove noise in the order Light < Medium < Aggressive, on both majors).
+  Unit: `audioStudioCopy.test.ts` derives the owner of the number from main's `denoiseFilter`. E2E: the Custom-controls test.
+- **Audio - Levels, the loudness target box ([T-112], refusal added):** `min`/`max` from `LOUDNESS_TARGET_LUFS`, and a number outside -70..-5 becomes the nearest
+  edge when typing ends (blur or Enter), where a number inside goes straight to the chain; junk changes nothing. E2E "the loudness target box stops a number
+  loudnorm refuses...": -3 -> -5, -80 -> -70, "" keeps -70, and typing -23 key by key passes through -2. Unit: `commitLoudnessTarget`.
+- **Stream Graphics - the canvas, hint text ([T-112]):** a hint's words draw at 40% of their own opacity on the canvas only (`displayOpacity`; the stored layer is
+  untouched, a retyped layer is at full strength, `captureDocument` still switches hint nodes off). E2E: the T-103 sample-words test reads the Konva
+  nodes' opacity (0.4 for the two hints, 1 for the rest, 1 again after typing) and its two existing pixel checks prove the export is unchanged. Unit:
+  `canvas.test.ts`, `canvasStore.test.ts`, and `ExportDialog.test.ts` (a dimmed node is off for the capture and its opacity is never touched).
+- **Stream Graphics / References - template cards' descriptions ([T-112]):** the Bold thumbnail (1x, 2K, 4K), Clean thumbnail, Minimal overlay, Profile banner and Channel
+  banner descriptions say which text does not export and that what you type does; the Profile banner no longer mentions an "offline screen" no card
+  provides and points at the Asset Library's scene cards. Unit: `templateTruth.test.ts` (every template with sample text names it; the five by name).
+
+### Closed from round 61's "Found, not fixed"
+
+The kit folder a canceled or failed kit left behind (round 62's own item 11, closed by the approved `video:removeKitDir`); the loudness target box now has `min`/`max` from `LOUDNESS_TARGET_LUFS` and clamps what is typed (E2E "the loudness target box stops a number loudnorm
+refuses..."); the Caption Size readout uses the loaded video's real frame (E2E: the style test's 20 / 35 / 18 / 45 px at 320x240); the T-111
+single-flight refusal is driven end to end from a returning panel (E2E "pressing Export again after leaving Video Studio and coming back is refused...").
+
+### Found, not fixed
+
+- **The Export batch and Clip Kit still refuse a clip stored at speed 0** (the batch's recipe check, round 61), and the slider shows 1.00x, so the person
+  cannot see what to change. Compile plays it at 1x now (`clipRecipe` -> `clipSpeed`); the batch and the kit read the same speed one step later.
+- **`settleJobs` blames row 1 for a refusal before anything starts** (the single-flight gate refuses the batch; no job began). The ceiling is in the file;
+  a `video:jobStarted` event from main would name the real culprit.
+- **Catalog and template cards that carry hint text say nothing about it**: frame-clean-corner and its 2K/4K variants, lower-third-clean, the scene cards,
+  social-square-clip (the five cards this round named are done).
+- **The native `loadSource` probe in `applyProject` is unguarded** (milliseconds, no conversion or extraction ahead of it); the long waits are guarded.
+- **Panel-local job state and the orphaned Cancel** are T-110(j): a panel that unmounts forgets its job; the importer's busy toast has its own id,
+  separate from Clean audio's "Opening Audio Studio".
+- **Audio Studio's slider hints are hover-only.** `ParamSlider` puts its `hint` in the label's `title`, so the corrected "-25 is the Light preset's
+  setting." is read by pointer users only (the E2E reads the attribute). Verdict reasons were moved on screen for the same reason in T-83; the
+  Custom controls' hints have not been.
+
+## Dispositions — round 63 (T-113: the review gate's second pass)
+
+Nineteen fixes from the nine reviewers' second pass over the held wave. Every behavior change was red-first (the quotes and the mutation table, with sha256 before and after each restore, are in `LESSONS_LEARNED.md`, 2026-10-10 round 63). **IMG-PREC's Layer 5 trigger fired twice:** the re-attach re-encode gained an ffmpeg stage (three real-media cases, odd-sized VP9/VP8 webm) and the kit's captions needed a real file to prove their clock (two cases measuring the loudness of the kit's own export at the moment a cue starts). The OS boundaries are the house stubs: the folder chooser and native confirm (HL-dialog), the held probe (`installSpawnStall`), and a main handler the test replaces where the real one needs the speech engine or a 141 MB download (HL-whisper, HL-network); the panel's markup, its toasts and its code are the product's. E2E names are in `video-pipelines.spec.ts` ("T-113: review-gate fixes, pass 2") unless a spec is named.
+
+### Video Studio - text overlays, Export, Compile
+
+- **Video 4q TextOverlayEditor - "+ Add text", the Color box, the Size box ([T-113], end state changed):** the untouched overlay is `#ffffff` (it was the name `white`, which every overlay gate refuses) and EXPORTS; the Color box takes a CSS color name or a code, applied when typing ends, shows `#rrggbb` afterwards, and refuses an unknown name in a sentence in the row ("imagii doesn't know that color. Use a name like white or a code like #ffcc00.", `role="alert"`, the text kept to fix); the Size box clamps to 8-512 when typing ends, takes a number inside the range as typed, and no longer turns a typed 72 into 82. E2E: "the text overlay "+ Add text" stores, untouched, is one the exporter takes" (win32: the file; linux: the job reaches ffmpeg and dies at the known `drawtext` pin, never at the gate) and the extended "text overlays: add, edit every field, remove". Unit: `textOverlay.test.ts`, `videoStore.test.ts`, `ProjectIO.test.ts` (save, autosave, restore), `videoCropPayload.test.ts` (Compile).
+- **Video 4t ExportPanel - Export with a clip stored at speed 0 ([T-113], end state changed):** the job carries the clip as it plays (`clipForExport`), so a hand-edited or older project's 0 is 1x (it was a batch refusal on a clip the slider showed at 1.00x). E2E "a clip stored at speed 0 exports at 1x" (the file, 2 s). Unit: `clip.test.ts`, and `jobClipNormalized.test.ts` (every export-job builder).
+- **Video 4m CompilationPanel - Compile N clips, a refusal ([T-113], words changed):** a segment whose recipe the filter graph cannot take now answers the batch's sentence ("One of this project's clips has a setting imagii can't use - check its speed, color and text, then try again."), the field in the console - it reached the person as "Compilation failed.". Unreachable from the UI (the editor writes only valid values; a hand-edited project is the route): `videoCropPayload.test.ts` drives the real `video:concat` handler, nine recipes and the Electron envelope.
+- **Re-attach to video (Audio Studio's Export dialog) of a project's original ([T-113]):** a picture an mp4 cannot carry is re-encoded with an even-sized stage; a 321x241 VP9/VP8 webm used to die with "Error while opening encoder". DISPOSITION: Layer 5 (three cases: VP9, VP8, VP9 with a cut; each `ffprobe`d and decoded to the last frame) and `muxCodec.test.ts` (the stage, and its place before `select`); the Re-attach toggle itself is covered by the existing audio E2Es, which use even-sized sources.
+
+### Video Studio - Clip Kit, the hook badge, the highlight finder
+
+- **Video 4p ClipKit - the `.srt` ([T-113], end state changed):** the kit's captions are the clip's, on the clock of the kit's own files (shifted to the clip's start, cut to its range, divided by its speed); a clip nobody speaks in gets no `.srt` and the success toast says "(no captions fall inside this clip)". **Closes round 62's and the original ledger's "`copySrtTo` not exercised"** (the channel is `captions:writeKitSrt` now): a project file carrying a transcript in the captions folder is the route to a session with both. E2E: "the kit's captions are on the clip's clock" (a 0.5-2.0 s clip at 2x: `Mid_captions.srt` read back, byte for byte, and the video's length; the file was `Mid.srt` when this row was written and was renamed in round 64, T-114, because a clip named like a Windows device made the bare name a device name) and "a clip nobody speaks in gets no .srt". Unit: `captionsWriteKitSrt.test.ts` (the real `captions:writeKitSrt` handler on real files), `captions.test.ts`, `clipKit.test.ts`. Layer 5: "the Clip Kit's captions are on the clock of the kit's own file" (the cue lands on the loud burst, 2x, 0.5x, 1x).
+- **Video 4p ClipKit - the long-clip question for a YouTube Short ([T-113], end state changed):** the vertical clip's YouTube slot is "YouTube Short - the typical 3-minute limit" and Reels stays 20 minutes: a 4-minute 9:16 clip now asks, and names only the Short. E2E "a 4-minute vertical clip makes the kit ask about the YouTube Short, and only about it" (the question, then Cancel: nothing started, no folder). Unit: `clipKit.test.ts` (180 s at the limit, a second past it, 2x, landscape, the slots in queue order).
+- **Video 4p ClipKit - Cancel, the toast ([T-113], words changed):** with no file finished the folder is gone and the toast says "Clip Kit canceled." alone; with files it still points at the folder. E2E: the three cancel-before-the-first-file tests now match the exact short sentence (`expectCanceledNotFailed` is exact-text), the cancel-after-a-file tests keep the long one.
+- **Video 4p ClipKit - the button's `aria-live` ([T-113], a11y):** the label is the progress readout and is now announced. E2E: the full-kit test reads `aria-live="polite"`.
+- **Video 4c ClipList - the hook row/badge ([T-113]; the whole-second key was replaced in round 65 by a debounce on the exact window, T-115 - see below):** the badge asks again only when the whole-second window changes (76 slider ticks, at most 12 asks), and a clip whose output is under half a second has no row and asks nothing. E2E: "the hook badge asks once per whole second of window" (the recorded asks while the slider moves 1x, 1.05, 1.1, 1.15, 1.2) and "a clip too short to have a hook shows no hook row" (0.375 s out: no label, no spinner, zero asks; 0.5 s out: "First 0.5 s:" and one ask). The existing "listens to the first 3 seconds the viewer SEES" still passes.
+- **Video 4j HighlightPanel - the chat-log disclosure, the scan bar, the signal bars ([T-113], a11y):** `aria-expanded` on the disclosure, a named `progressbar` on the scan bar, a named and valued `meter` on each of the three signal bars. E2E: the scan test reads three meters (Audio 100, Chat 0, Hype 0), the rescoring test reads `aria-expanded` through open and closed, the cancel test reads the bar's name, bounds and value.
+
+### Video Studio - captions, the safe-zone question, the crop and the posting log
+
+- **Video 4o CaptionsPanel - the model download bar and the transcript preview ([T-113], a11y):** the bar is a `progressbar` named "Downloading the caption model" with its value; the preview is a focusable scroller ("Transcript preview", `tabindex="0"`, reachable and scrollable from the keyboard). E2E "the captions panel: the transcript preview scrolls from the keyboard, and the model download is a named progressbar" - the download is a stand-in main handler that sends a 42% event (HL-network: the real 141 MB download is never clicked; the panel, its markup and its toasts are the product's); the preview is read after a stand-in transcription returns thirty lines (HL-whisper).
+- **Video 4o CaptionsPanel - the transcript that finished for a video that is gone ([T-113], words changed):** "Captions for X finished after that video was closed or replaced, so they weren't added. Transcribe again when you're ready." E2E: the existing "transcription that finishes after the video changed" test, exact new text. Unit: `captions.test.ts`.
+- **Video 4o CaptionsPanel - Burn into video, progress ([T-113], end state changed):** the burn announces itself with no percent, becomes a real bar at 0 once the length is known, and stays indeterminate when it never is (a failed probe no longer freezes a determinate 0%); a probe that reports a frame of 0 no longer refuses the burn. Unit only, at the real runner with a fake child: `captionsProgress.test.ts`, `whisperManager.test.ts`, `captions.test.ts`. DISPOSITION: the E2E burn tests have a real probe; a probe that answers 0 or fails is not reachable from the UI.
+- **Transcribe and the model download, a second one while one runs ([T-113], words changed):** main's single-flight gates say "A transcription is already running..." / "A model download is already running..." DISPOSITION: the panel disables its own button, so a second request reaches main only from a second window; `whisperManager.test.ts` pins the sentences and that each stands alone through `userFacingError`.
+- **Video 4t SafeZoneWarningModal - the cropped-clips list ([T-113], a11y):** a focusable scroller ("Clips that will be cropped"). E2E: the safe-zone pre-flight test focuses it.
+- **Video 4e CropOverlay - the shape buttons ([T-113], a11y):** `aria-pressed`. E2E: the Space-on-a-focused-button test reads false then true.
+- **Video 4r PostChecklist - the posting log's platforms ([T-113], a11y):** `aria-pressed`. E2E: the posting-log test reads all six off, on, and the three toggled back.
+
+### Opening a project, Audio Studio, Stream Graphics, References, Record
+
+- **Home - Open project; the autosave Restore banner - Restore ([T-113], behavior changed):** (a) the sound's staleness baseline is taken at the start, so a sound opened and tuned during the video's wait is never wiped; (b) the clip selection and playhead are applied only to a video that opened; (c) the conversion's toast is "reopen-convert", apart from the importer's "convert"; (d) a skipped source says what is still open and "Open the project again to bring its video back."; (e) autosave is held for the apply alone and released the moment it ends. Unit through the real stores and the real `applyProject` / `captureForQuit`: `ProjectIO.test.ts` (the second-pass block, the skip sentences, the default-overlay round trip), `useAutosave.test.ts` (eight cases: the quit flush during and after the apply, nested holds, the re-arm). **Residue, stated:** a quit DURING the wait still saves nothing new (the stores hold half a project; the previous autosave stands); a quit AFTER it saves everything, including what was done meanwhile. DISPOSITION: the quit flush is an Electron before-quit round trip; the wait needs a held conversion AND an app quit, which Playwright cannot interleave. The pieces are covered at the deepest layer that has them: the held apply and the capture in unit tests, and the quit flush's IPC in the existing autosave E2E.
+- **Video Studio - Clean audio, the confirm ([T-113], words changed):** "Replace the audio you're editing? Your cleanup settings and 2 cuts will be discarded." (Audio Studio's Close keeps "Close this audio?"; both lists now read "X and Y"). E2E: the Clean-audio test reads the new sentence word for word; the Audio Studio Close test reads the grammatical two-item list. Unit: `AudioStudio.test.ts`.
+- **Audio - Levels (compressor presets, the loudness box) and Cleanup (noise strengths) ([T-113], a11y):** `aria-pressed` on the preset groups and the range "· -70 to -5" visible beside the loudness box (**round 64 [T-114] moved the range out of the checkbox's label and wrote it "(−70 to −5)"**, see below). E2E: `expectSelected` / `expectNotSelected` now assert `aria-pressed` (every Levels and Cleanup test reads it), and the loudness test reads the range text.
+- **Stream Graphics - the toolbar's tools ([T-113], a11y):** `aria-pressed`. E2E: the toolbar test reads the active tool.
+- **References - the tab strip ([T-113], a11y):** `aria-current="true"` on the open tab. E2E: the three-tabs test reads it through Reference Search -> Mood Boards.
+- **Record - the saving card's convert bar ([T-113], a11y):** a `progressbar` named "Converting the recording to MP4" with its value. E2E: the MP4-save test reads name, bounds and a numeric value during the real convert.
+- **Stream Graphics / References - asset cards' descriptions ([T-113]):** nine Asset Library cards (the four overlay frames including the two HiDPI ones, the lower-third, the three scene cards and the square clip card) say their sample text does not export until you type your own. Unit: `templateTruth.test.ts` (the templates' sentence rule now covers the assets).
+
+### Not an element, but covered
+
+- **Validators and IPC gates throw under `NODE_ENV=production`:** `validators.test.ts` (its source scan covers `src/main/ipc`; **since [T-114] it covers every non-test file under `src/main`, with a table of audited pure invariants**), `assert.test.ts`, `audioChainValidation.test.ts`. **Every `spawn(` hides its window on Windows:** `spawnWindowsHide.test.ts` (DISPOSITION: the console window exists on win32 only; the scan is the deepest layer a linux run has). **The test flake:** `tests/unit/tempSandbox.test.ts` and 40 consecutive runs of the three racing files.
+
+### Closed from round 62's "Found, not fixed"
+
+"The Export batch and Clip Kit still refuse a clip stored at speed 0" (`clipForExport`); "Catalog and template cards that carry hint text say nothing about it" (all nine asset cards now say it, and the rule is a test).
+
+### Closed from this round's own "Found, not fixed" (owner-approved)
+
+The IPC boundary checks that were plain `assert(` (36 call sites: audio 2, image 4, project 1, recording 8, search 5, video 16; the 37 first counted included a comment) are `assertAlways`, and `validators.test.ts` fails on any soft `assert(` under `src/main/ipc`. `captions:copySrtTo` is `captions:writeKitSrt` (handler, preload bridge, API type, the kit button, the tests).
+
+### Found, not fixed
+
+- **A quit during a long project open saves nothing new** (the residue named above). The upgrade is a capture that fills in the not-yet-applied studios from the project being applied, so mid-wait work and the pending sources are both saved; it needs `applyProject` to report what it has applied so far.
+- **UK spellings remain in five kinds of place** (round 69 recounted category (5) once more: the places that quote the old ffmpeg-era wording on purpose are seven, on ten lines, not "eight"; and the string literals and regex alternatives that spell it the old way, which no clause held, are now in the literals clause; every cite below is where it sits after round 70's edits (which re-pointed them against the tree: `convert.ts`, `recording.ts`, `recordingCancel.test.ts`, `convertCancel.test.ts`, `cancelSentinel.test.ts`, `record.spec.ts`, `audio.spec.ts`, `video-pipelines.spec.ts`, `media.spec.ts` and `videoStore.ts` all moved); round 68 recounted category (5) a third time: eighteen comments and titles, not nineteen, plus two string literals it had counted as one comment or missed (`audio.spec.ts:1905` and `media.spec.ts:4239`), and the `failurePathLanguage.test.ts` cite is the real lines now; round 67 recounted category (5) again, found one more line in it (`record.spec.ts:96`: nineteen, not eighteen) and moved every line number the round's own edits shifted; round 66 recounted this line and found its list had never covered "cancelling", "unrecognised" or "cancelled" as words; round 65 had corrected its count; round 64 swept the rest of the wave's prose and comments, including `noRawHex.test.ts`'s own; round 65 swept the wave's unquoted test strings and its own new comments; round 66 swept what a diff-based scan cannot read, the UNTRACKED new files - `cancelLatch.test.ts`'s three titles, `videoExportBatch.test.ts`'s "colour" and `transcribeCancel.test.ts`'s comment - and the seven older comments the ticket took for user-facing strings: "Cancelling" in `NameDialog.tsx`, `ClipKitButton.tsx`, `ExportPanel.tsx` (twice), `cancel.ts` and `whisperManager.ts`, "unrecognised" in `watermark.ts`; every one was a comment, none was shown to a person). After those, every line the wave added (the whole `git diff HEAD`, and every file `git status --short` lists as `??`) holds no UK spelling except categories (1) and (2) below; that was checked for centre, colour, cancel*, recognis*, honour*, behaviour, favourite, grey, analyse and the -ise family. What follows is what has been LOOKED FOR in the older work, not every UK word in it. (1) Words that are not ours to change: code identifiers (`CENTRED` in `filters.test.ts`, `aria-labelledby`, `cancelledOr` and its family, `cancelled` as a property or variable name such as `UserFacingError.cancelled`, `settleJobs`' option and the effect flags in several panels, Web Audio's `AnalyserNode`), libass's own names (`PrimaryColour`, `OutlineColour`, `HALIGN_CENTRE`), the cancel sentinel's value `imagii:cancelled` (a protocol id; `copyConventions.test.ts` exempts it by name), the CSS name `grey`, and `copyConventions.test.ts`'s British-spelling rule and its samples, which have to contain the words they forbid - the sample of bad copy, and the sample CODE in which the same file proves the scan reads strings and not identifiers or comments (`copyConventions.test.ts:519`, the comment "a cancelled flag was called tick" inside that sample: a borderline line, decided in round 67 to belong here and not to category (5), because it is text inside a fixture that the rule is shown to ignore, not a comment about the product). (2) Three wave-added test strings that a ledger or lessons entry quotes verbatim, all in `media.spec.ts`: the title "Auto Zoom zooms about the CENTRE of the frame" (a doc that quotes it quotes the test's own string), its message "a zoom about the centre leaves it at (640, 360)" and "the control's is dead centre", and the words this section and the lessons entries quote in order to report them. (3) Work older than the wave, which was never part of a sweep: 87 lines hold "centre" or "colour" (`git grep -nIiE 'centre|colour' -- . ':!package-lock.json'`, less the lines the wave added; the lockfile is excluded because its three `@img/colour` lines are a package name, and the count is the same 87 round 65 measured) - 53 in tests (`media.spec.ts` 26, `image.spec.ts` 8, `video-pipelines.spec.ts` 8, `whisperManager.test.ts` 6, and 5 more in four other files), 26 in docs (the lessons entries of earlier rounds, which are history, 12; this ledger's older rows 7; `TICKETS.md` 4; `TESTING.md` 3) and 8 in source and config comments (`canvasStore.ts:70`, `videoStore.ts:655`, `AppToaster.tsx:16`, `whisperManager.ts` 4 lines (340-341 and the libass names at 384-385), `playwright.config.ts:22`). A wave-added ledger row also quotes one older test title verbatim, "cancelling a kit asks first" (`video-pipelines.spec.ts`). (4) Other UK words in older source comments: "honour", "honoured" and "honouring" (`HighlightPanel.tsx:131`, `reframe.ts:134`, `RecordStudio.tsx:368`, `protocol.ts:130`) and "recognised" (`importDiagnostics.ts:92`, `userFacingError.ts:62`). (5) Older "cancelling", "unrecognised" and "cancelled" in tests and comments (none is shown to a person; round 66's recount): eleven lines of "cancelling" or "unrecognised" - "cancelling" in the titles `convertCancel.test.ts:194` and `:210`, `recordingCancel.test.ts:250`, `record.spec.ts:2195` and `video-pipelines.spec.ts:2687`, `:3636` and `:4846` (the last three are titles that ledger rows above quote verbatim) and in the comments `audio.spec.ts:261` and `video-pipelines.spec.ts:339`, "unrecognised" in the titles `referencesStore.test.ts:333` and `clipKitWatermark.test.ts:75`; eighteen comments and titles with "cancelled" as a word (`cancelSentinel.test.ts:683`, `convert.ts:81` and `:248`, `convertCancel.test.ts:4`, `:140`, `:145` and `:156`, `highlights.ts:241`, `audioSaveFormat.test.ts:96`, `recording.ts:222`, `recordingCancel.test.ts:179` and `:185`, `userFacingError.ts:14`, `audio.spec.ts:717`, `continuity.spec.ts:32`, `record.spec.ts:96`, `:100` and `:708`) and string literals that spell it the old way: two named in round 68 (`audio.spec.ts:1905`, the file name `'cancelled.mp3'`, and `tests/integration/media.spec.ts:4212`, the assertion message `'the recording convert was cancelled'`; round 67 counted the first as a comment and left the second out) and six that nothing counted until rounds 69 and 70, the test-local outcome value of `recordingCancel.test.ts` (`:51`, the member of `type ConvertOutcome`, and its uses at `:86`, `:181` and `:239` from round 69, and at `:71` and `:427` from round 70, whose remux outcome reuses the type), plus two regex alternatives that match the word (`audio.spec.ts:1927` and `video-pipelines.spec.ts:403`, `/...|cancelled|imagii:cancelled|.../i`); and seven places, on ten lines, that quote the old ffmpeg-era wording on purpose ("highlight scan cancelled" and its spelling: `cancel.test.ts:45-48` is one table of four lines, `userFacingError.test.ts:59`, `video-pipelines.spec.ts:390`, `cancel.ts:9`, and the comment (`failurePathLanguage.test.ts:274` and `:275`) and the filter (`:278`) of the rule that fails on it). Not counted at all: "normalises" and "recognises" in test titles (`captions.test.ts:72`, `:249` and `:267`; `cancel.test.ts:19`, `:23` and `:38`) and "honours" in `media.spec.ts:2790`, found while looking. The older ones are left as they are on purpose; the product's own copy is held by `copyConventions.test.ts`, which since round 66 also reads the strings of `src/main`, `src/shared` and `src/preload`. (The count read "about eighty in `media.spec.ts` alone" before round 65: the eighty was about right for the whole tree and wrong for the file, which has 26.)
+- **Two unit tests (`cancelSentinel.test.ts` and, since round 68, `gradeMatrix.test.ts`, both through `runConcat`) still write the real `<tmp>/imagii-concat` folder** (the folder only: the fake child dies before any segment exists). Nothing removes it from a test anymore, so nothing races it; sandboxing it like the three above is the tidy-up.
+- **The Layer 5 kit-captions case measures loudness with `analyzeClipHook`** (the hook badge's ebur128 pass) rather than a purpose-built probe; the numbers (-22 dB during the burst, -56 dB before) have 8 and 11 dB of room to its thresholds on this fixture.
+
+## Dispositions — round 64 (T-114: the review gate's third pass)
+
+Twenty-three fixes from the nine reviewers' third pass over the held wave. Every behavior change was red-first (the quotes and the mutation table, with sha256 before and after each restore, are in `LESSONS_LEARNED.md`, 2026-10-10 round 64). **IMG-PREC's Layer 5 trigger fired three times:** the even-size stage reached the MP4 convert, the caption burn-in and the picture-in-picture composite (nine real-media cases, an odd-sized VP9 webm through each, an even-sized control beside each); the two-pass loudness render met a silent input (three cases, `anullsrc`); and the overlay font changed a `drawtext` graph (a win32-gated pair, run here against a stand-in: system ffmpeg 6.1.1 and a `C:/Windows/Fonts/` folder of symlinks to six different faces, the way TESTING.md describes it).
+
+### Video Studio - the files it writes from a source picture
+
+- **Record - Save recording with "Convert to MP4" ([T-114], end state changed):** a screen recording of an odd size (321x241 VP9, say) converts to an even-sized h264 mp4 that plays; before, the convert died at exit 187 and `promoteTempWebm` removed the temp webm in its `finally`, so the take was LOST. DISPOSITION: the save dialog is native (NAT) and the recording is screen capture (HL); the deepest layer is `convertToMp4`, which the recording and the importer share - Layer 5 ("the MP4 convert", three cases: through `convertToMp4('recording', ...)`, through `convertForImport`, and an even-sized control) and `convertCancel.test.ts` (the `-vf` is the even stage, before the encoder).
+- **Video - Importer, a non-native container ([T-114]):** the same convert, so an odd-sized flv/wmv/webm imports. Layer 5 as above.
+- **Video 4s CaptionsPanel - Burn into video ([T-114], end state changed):** an odd-sized picture burns, with a subtitle stage and with none (a range with no cue in it, which is "not captioned"); the stage is joined to `subtitles=` by one comma outside the quoted style. DISPOSITION: the output is a native dialog and the engine's SRT is HL, so the deepest layers are `runBurnIn` (Layer 5, three cases: the text painted in the bottom band and the top band flat on an odd picture, the no-cue window, an even control) and `captionsProgress.test.ts` (the chain, byte for byte, and the one comma). The style's colors: see "Captions - burn-in colors" below.
+- **Video 4o PipPanel - Composite ([T-114], end state changed):** an odd-sized base composites into an even-sized mp4 with the overlay's green at the asked-for place and the base's gray elsewhere. DISPOSITION: the pickers and the output folder are native (NAT); the deepest layer is `runPipComposite` (Layer 5, odd and even bases).
+
+### Video Studio - text overlays, Clip Kit, the clip list
+
+- **Video 4q TextOverlayEditor - Font ([T-114], the field was dead; its end state is now a picture):** the six typefaces draw as themselves (`impact.ttf`, `verdana.ttf`, `georgia.ttf`, `cour.ttf`, `comic.ttf`, `arial.ttf`); a font that is not one of them - an older project, a hand-edited one - is Arial, and the stored string is never printed. The row for "font" in the T-113 and earlier ledgers counted it covered because an E2E set the select and read it back from the store. Unit: `filters.test.ts` (each font's command text; thirteen unknown or hostile values print Arial and appear nowhere in the graph). DISPOSITION: win32 only (the linux binary has no `drawtext`): Layer 5 "every font the editor offers is a file this machine has, and each one exports and paints" and "the Font choice reaches the picture" (width of a line of i's, Courier New against Arial; an unknown, an empty and a hostile font are EXACTLY Arial's width) execute on the release run on windows-latest, and ran here against the stand-in. The real Windows file names are the standard ones and were not checkable on this box.
+- **Video 4q TextOverlayEditor - the x and y boxes, the Color box ([T-114], a11y):** the two position boxes are named "x" and "y" (one `<label>` wrapped both; renamed "Overlay horizontal position (0 to 1)" and "Overlay vertical position (0 to 1)" in round 65, T-115); the Color box is `aria-describedby` its `role="alert"` sentence, so focusing it reads the reason. `#rgb` is accepted and shown as `#rrggbb`. E2E: "text overlays: add, edit every field, remove" reads both names, the accessible description while refused and none after, and `aria-invalid`. Unit: `overlayColors.test.ts` (`#fff` -> `#ffffff`, `#f00` -> `#ff0000`, `fff` without the `#` is not a code, the refusal sentence unchanged).
+- **Video 4p ClipKit - the `.srt` and the thumbnails' names ([T-114], names changed):** `<clip>_captions.srt` and `<clip>_thumb_N.jpg`, like the five `<clip>_<platform>.mp4`. A clip called Aux, Con, COM1 or lpt9 used to write eight files and then fail the whole kit at the path gate. E2E: the kit's captions case reads `Mid_captions.srt`. Unit: `clipKit.test.ts` (all nine names for eight device-like clip names pass `isSafeAbsolutePath`; the bare name is the control that the gate refuses) and the wiring pin that the button builds both through the helpers.
+- **Video 4f ClipList - the hook row ([T-114], gated):** a video with no sound has no "First N s:" row, no spinner and no badge. E2E: the no-sound test asserts the three absences and the control (a video with sound) asserts the row. Unit: the wiring pin.
+- **Video 4e Timeline - Trim start, and the hook badge it feeds ([T-114]; the whole-second key was replaced in round 65 by a debounce on the exact start, T-115 - see below):** a drag of the start handle asks the hook analysis once per whole second of start (not once per mousemove), the previous score stays on screen while the next is worked out (no spinner flash), and the badge is per clip. E2E "dragging the start handle asks once per whole second of start, and the last badge stays up meanwhile": four moves inside the first second -> no new analysis and no spinner; one past half a second -> exactly one, with the exact start, the old badge still up while a held answer is pending, then replaced. Unit: `highlights.test.ts` (`hookWindowKey`: one change per whole second across a 3 s drag of 61 starts, the staleness ceiling, half a second as the boundary, a non-number keys as 0).
+- **Video 4t SafeZoneWarningModal - the safe-zone question ([T-114]):** the dialog opens on Cancel; the list above it keeps its tab stop and is one Shift+Tab away; Tab goes Cancel -> Export anyway. E2E: the safe-zone test no longer calls `.focus()` and asserts the initial focus and the order. Unit: the pins on `data-initial-focus` and on the trap honoring it (the other dialogs, which have none, still open on their first control).
+- **Video 4j ExportPanel - the Queue's bars ([T-114], a11y):** each is a `progressbar` named "<clip> · <platform>" with `aria-valuemin/max/now`; the percent beside it is still the live region. E2E: the two-clip, two-preset queue reads four bars at 100 and four live percents.
+- **Video 4s CaptionsPanel - the transcript preview ([T-114], a11y):** `role="region"` beside its tab stop and name. E2E: `getByRole('region', { name: 'Transcript preview' })`.
+- **Video 4n GifPanel - the always-mounted live region ([T-114], layout):** it no longer adds a phantom 12 px gap under the header while it is empty (measured: 24 px from the header to the controls, 12 now), and it stays in the accessibility tree (no `display: none`, no `visibility: hidden`). E2E: the "over about 10 s" test measures the gap on the live page and asserts the region is still there, empty, with `display: block`.
+- **Captions - burn-in colors ([T-114], refusals):** `captions:burnIn` refuses a `primaryColor` / `outlineColor` that is not `#RRGGBB` in one plain sentence ("A caption color has a setting imagii can't use ..."), before the runner is touched; the runner's own `hexToAssColor` refuses again under `NODE_ENV=production`. DISPOSITION: the panel's color inputs write `#rrggbb` only, so no click reaches it; `captionsBurnIn.test.ts` (ten malformed colors and the default and every preset pass) and `captionsProgress.test.ts` (forced production, ffmpeg never started).
+
+### Opening a project, the autosave, Audio Studio, Stream Graphics, References, Record
+
+- **Home - Restore (autosave) ([T-114], words changed, and a launch that now works):** an autosave from the build before T-113, whose overlay color is the NAME `white`, restores (it failed validation and the banner offered Clear). A restore whose video was skipped (the person opened another while it loaded) says what is true for an autosave: it now holds what is open, so the skipped video and its clips will not come back from it - not "Open the project again". DISPOSITION: a skip needs a long conversion and a second open in its window - Unit: `ProjectIO.test.ts` (`describeApplyOutcome(outcome, 'autosave')` from a real skip, and every wording beside a missing file and a failure; Open project's words are unchanged), `projectValidation.test.ts` (a verbatim schema-5 JSON restores; injection strings still refuse), `autosave.test.ts` (the real `readAutosave` on a legacy file) and the wiring pin on both call sites.
+- **Audio - Levels, "Even volume" ([T-114], a11y and words):** the range is beside the checkbox's label, not inside it ("(−70 to −5)", the true minus), so the checkbox's name is "Even volume (target -16 LUFS)". E2E: the Levels test reads the new text, its absence from the label and from the accessible name.
+- **Audio - Export with "Even volume", a silent source ([T-114], end state changed):** a silent track exports (single-pass loudness) instead of failing in ffmpeg. DISPOSITION: the save dialog is native (NAT); the deepest layers are Layer 5 "a silent input through the two-pass loudness render" (the fixture is checked to print `-inf` first; the export is 4 s of silence) and `silentLoudnorm.test.ts` (pass 2's `-af`).
+- **Stream Graphics - the Layers panel ([T-114], keyboard and a11y):** a layer's name is a button: Enter and Space select it, Tab reaches it (a click anywhere on the row still selects, as before); the row and the button carry `aria-current`; the eye is `aria-pressed` with the name "Layer visible" and a title that says what pressing does ("Hide layer" / "Show layer", replacing the constant "Show/hide"). E2E: "every per-row control reaches its end state" selects Ellipse by Enter and Text by Space, tabs from the lock button to the name, and reads the eye's `aria-pressed` and description through hide and show; the other eye clicks use the new name.
+- **References - Boards ([T-114], keyboard and a11y):** the board's row is a button (Enter and Space select it, Tab reaches it), the row and the button carry `aria-current`, and the name is "<board>, N items". E2E: the mood-board test selects Beta by Enter and Alpha by Space, reads `aria-current` moving, and the accessible name.
+- **Record - the source cards ([T-114], a11y):** `aria-pressed` on the selected card. E2E: the stale-selection test reads it before and after picking the other card.
+- **References 5c - the Asset Library's Square clip card ([T-114], words changed; "never" became "do not" in round 65, T-115):** "The well and its label never export. The sample title does not export until you type your own." (the well and its label are guides; only the title is retyped). Unit: `templateTruth.test.ts` (the sentence rule, the card's own wording, and the three layers still hints).
+
+### Not an element, but covered
+
+- **The even-size stage is one constant** (`EVEN_PICTURE`, `filters.ts`) at the head of the `-vf` of the audio re-attach, the MP4 convert, the burn-in and the PiP base. `filters.test.ts` pins the literal once; the four commands are pinned or run (see above).
+- **The audited soft asserts:** `validators.test.ts`'s `AUDITED_PURE_INVARIANTS` (seventeen asserts in six files, each read against its caller, keyed by file and message, with a stale-entry check). A new soft assert anywhere in `src/main` fails until it is converted or audited into the table.
+- **Accessibility rule 1 sees four ways to mark a selection** (the fill, a border, a ring, a wash) on a `button` or anything with an `onClick`: `a11ySweep.test.ts` (it flagged exactly the three unfixed sites, then none; the discrimination block covers each style, the state attributes, a drop zone and a hover variant). The renderer has no other clickable non-control (a scan found the Modal's scrim and the tutorial's SVG scrim, both with Escape).
+
+### Closed from round 63's "Found, not fixed"
+
+"UK spellings remain in test TITLES and quoted assertion messages" - the sweep covered the rest of the wave's prose and comments (the bullet above states what remains and why).
+
+### Found, not fixed
+
+- **Any failed MP4 convert still deletes the take, not only an odd-sized one.** `promoteTempWebm` removes the temp webm in its `finally` whatever the convert's failure, and the message ("Nothing was saved - try again, or untick Convert to MP4 ... to keep the WebM") sends the person to a recording that is gone. T-114 removed the one cause that was certain (an odd picture); the structural fix is to keep the temp file when the convert fails and offer the WebM save, which changes the post-Stop card's states and is a product call.
+- **A Windows install without one of the six fonts** (an N edition stripped of Comic Sans, a locked-down image) fails the export at `drawtext` ("Cannot open font file") for an overlay set to it. The release run checks the runner's fonts, not the person's. The upgrade is a font preflight at export that falls back to Arial and says so.
+- **The caption style's size and position are not validated at the gate** (only the colors are). They cannot reach the command as text - a size is rounded to a number and an unknown position is `undefined` in an integer slot - so this is hardening, not a hole.
+- **`project:save` now migrates a legacy named color as it validates**, so the file it writes carries the hex. That is the right outcome and it is a side effect of `validateProject` mutating its input, as its three schema migrations already do; it is recorded here so nobody is surprised.
+- **The hook badge describes a start up to half a second away while its key holds** (the staleness ceiling in `hookWindowKey`). A tier flipping on half a second of shift has not been seen; the upgrade is a debounce on the exact numbers.
+
+## Dispositions — round 65 (T-115: the review gate's fourth pass)
+
+Ten code items and six docs items from the nine reviewers' fourth pass (audio, privacy, ffmpeg and electron came back clean; items (1)-(9) and (16), Save .srt's `catch`, are code; (10)-(15) are docs; this line said nine because it stopped at (9)). Every behavior change was red-first (the quotes, the mutation table and the sha256 before and after are in the hand-back); a new test that guards something was broken once and watched to fail. The numbers: `npm run verify` 3344 tests in 128 files (3301 + 43, no new file); `test:media` and Playwright are counted in `TESTING.md`.
+
+### Record - the convert bar, and the two toasts that must last
+
+- **Record - the saving card's convert bar ([T-115], end state changed):** the bar draws the encode position over the take's own length (capped at 99), not `seconds x 2`; a convert that was handed no length reports progress with no percent and the bar slides (`role="progressbar"` with no `aria-valuenow`, the `.progress-indeterminate` segment, as the captions panel does). `promoteTempWebm` passes `spec.durationMs / 1000` (nothing for 0 or absent); `convertForImport` passes nothing. E2E: "the convert bar draws what main reports" holds `recording:finalize` open and drives the real progress channel - 0 before anything, 40 as 40 (width 40%), `{}` as the sliding bar with no number, 99 as a number again - and lets the save end into the calm "Recording discarded" (red on the old build: `aria-valuenow="NaN"`). Unit: `convertCancel.test.ts` (ffmpeg's `-progress` text through a fake child: the mapping, the 99 cap, hours and minutes, five lengths that are not a length report no percent, `out_time=N/A` reports nothing), `recordingCancel.test.ts` (the length handed down; progress forwarded as it came), `captions.test.ts` (`burnInPercent` refuses a non-finite length), `interactionWiring.test.ts` (`?? null`, the null branch draws the sliding bar), `a11ySweep.test.ts` (the bar's attributes). Layer 5 "the convert reports a measured progress, or none": the real binary on a 6 s webm. The existing E2E "record -> Esc -> save as MP4" still reads a numeric `aria-valuenow` during the real convert.
+- **Record - the "Save failed" toast and Autosave - the banner's Clear failure ([T-115], duration changed):** both last `ERROR_TOAST_MS` (8 s) like every other failure; the take-is-gone message in particular was gone in 4 s. DISPOSITION: the toast's lifetime is a timer inside react-hot-toast and no E2E waits it out; the deepest layer is the AST pin in `interactionWiring.test.ts` (three toasts named, a finder that discriminates, red on the two that were bare). The wording of both toasts is unchanged and still asserted where it was.
+
+### References, Stream Graphics, Video Studio
+
+- **References - Save (a search result's tile) and "→ Canvas" (a mood-board tile) ([T-115], keyboard):** the overlay that holds them is drawn at `opacity-0` until hovered and now also `focus-within:opacity-100` (replaced in round 66 by `has-[:focus-visible]:opacity-100`, because a click matched it too; see the round-66 row); Tab reaches the button and it is visible. E2E: the first-save test parks the mouse, reads the overlay's opacity (0 at rest, 1 on focus, 0 after blur) and opens the name dialog from the keyboard (focus, Enter); the Canvas test does the same for "→ Canvas" and Enter carries it to the canvas with the 40% layer, as before. Unit: `a11ySweep.test.ts` rule 4 (a hover-only container that holds a button, link or field must show on focus; flagged exactly these two sites before the fix, with a discrimination block). Red on the old build: `Expected: "1" / Received: "0"`.
+- **Stream Graphics - the Export card's format select ([T-115], a11y):** named "Export format". E2E: the PNG/JPG, emote-pack and background tests find it by that name (they found it as "the first combobox"), and the first asserts its two options. `a11ySweep.test.ts` names it.
+- **Video 4q TextOverlayEditor - the x and y boxes ([T-115], a11y and words):** "Overlay horizontal position (0 to 1)" and "Overlay vertical position (0 to 1)" (they were "x" and "y"); the visible "x / y" label is unchanged. E2E: the text-overlay test reads both accessible names and finds the spinbuttons by them (red: `Received: "x"`).
+- **Video 4c ClipList - the hook badge, with Trim start and the speed slider ([T-115], end state changed):** the badge asks once the start and the window have been still for 250 ms, for the EXACT numbers, not once per whole second (a badge's first ask - a clip selected, the studio re-entered - is immediate). E2E (both cases re-pinned, intent kept - bounded asks during a drag, the exact final state, no spinner flicker): "the hook badge asks once the speed slider stops moving, for the exact window" (three ticks in a row are one ask, for 3.45 s; the next settled value one more, 3.6 s; the old badge stays up with no spinner) and "dragging the start handle asks once, after it settles, with the exact start" (four moves are one ask whose `startSec` matches where the handle stopped to within 0.06 s, the previous score stays up while a held answer is pending, then the new one replaces it, and nothing else was asked); red on the old build (`Expected: 3 / Received: 2`). The other two hook cases ("listens to the first 3 seconds the viewer SEES", "a clip too short to have a hook") pass unchanged. Three cases that read the spawn log or a badge title were re-pointed to wait for the badge to settle first (T-98 "a Cancel pressed before the job's ffmpeg exists", T-111/T-112 "pressing Export again after leaving Video Studio", T-92 "the hook badge says what it measures"): the badge runs a real ffmpeg of its own, and the cases had assumed it was already done. Unit: `highlights.test.ts` (`hookAsk`: exact pass-through, every unusable start and window refused, the gate's bounds inclusive; `HOOK_DEBOUNCE_MS`), `interactionWiring.test.ts` (deps, the ask inside the timer, the cleanup, the previous score kept).
+- **Video - everything that encodes a source picture: the Convert to MP4 save, the importer's non-native containers, the audio re-attach, the caption burn-in, the picture-in-picture base ([T-115], end state changed):** the even-size stage is a crop, so an odd window capture loses one pixel at the right and bottom edge instead of being resampled. Layer 5: "a 1-pixel checkerboard stays hard-edged" (a lossless 321x241 fixture and a 320x240 control through `convertToMp4`: no pixel of three sampled rows in the mid-gray band strictly between 80 and 175, every neighbor the other one; red on the old stage with 70 such pixels in row 7); the nine odd-size cases and the control stay green. Unit: `filters.test.ts` (the literal, and "a crop, never a scale"), `muxCodec.test.ts` (the re-attach's chain). The burn-in and the PiP base are covered by the unchanged odd-size cases and by the constant they share; a checkerboard through them would add no independent coverage of the stage.
+- **References 5c - the Asset Library's Square clip card ([T-115], words changed):** "The well and its label do not export." (it said "never": retyping a hint exports it). Unit: `templateTruth.test.ts` (the sentence, no "never", the three layers still hints).
+
+### Opening a project, the autosave
+
+- **Home - Open project; the autosave Restore banner ([T-115], end state changed):** a project or autosave written by a build whose overlay editor had no upper clamp (a size of 800, or 3) restores, at 512 or 8, instead of failing validation. Unit: `projectValidation.test.ts` (a verbatim legacy JSON with `"sizePx": 800` restores at 512 with every other field as written; 1, 7.9, -3, 513 and 1e6 clamp to the nearest bound; a name and a size together both migrate; a string, a filter-graph payload, `1e999`, `null` and an object are still refused; the injection pins unchanged; `isValidTextOverlay` still refuses an out-of-range size), `autosave.test.ts` (the real `readAutosave` on a legacy file with two such overlays). `migrateNamedOverlayColors` is now `migrateLegacyOverlays` (it migrates colors and sizes).
+
+### Video Studio - captions
+
+- **Video 4s CaptionsPanel - Save .srt, a failure ([T-115], failure path added):** "Save .srt" had no `catch`: `captions:saveSrt` THROWS for a transcript outside `<userData>/captions` (a project file may name any safe absolute path as its `srtPath`) and the copy itself can fail (a full disk, a read-only destination), and the rejection was unhandled - no dialog, no toast, nothing. It is now the panel's one plain sentence through `reportFailure`: "Couldn't save the captions file." (a known cause - a full disk, a blocked file - is added after it by `userFacingError`; the refusal's own words, which name a channel, never reach the screen). The handler was NOT changed in round 65 (it still throws where `captions:writeKitSrt` answers `ok: false`; see below); round 66 gave its two throws a finished sentence each, so the toast above is now the fallback for a copy that fails after the dialog (a full disk, a read-only destination) and nothing more. E2E: "Save .srt on a transcript outside the captions folder says why, instead of doing nothing (T-115, T-116)" (named "...the app did not write says it could not..." in round 65, when it read the bare fallback; round 66 re-pinned it to the sentence main throws and added its sibling, "Save .srt on a transcript that is gone says so, without asking where to save it (T-116)", from the same table) seeds a transcript OUTSIDE the captions folder (the sibling: inside it, with no file), opens it through a project file, presses Save .srt, and reads exactly one toast, the sentence, with the Save dialog asked zero times, no file at the chosen path, no unhandled rejection (`pageerror`) and the button still enabled; the round-65 version was red on the unfixed build with the toast log empty (`Received: []`). The success path is the existing "with an SRT restored from a project file" case (a real copy, "SRT saved"). Unit: `failurePathLanguage.test.ts` pins the await inside a `try` whose `catch` calls `reportFailure` with that sentence, with a finder that discriminates (no try, a try that swallows, the real shape), and the table of sites now counts five in `CaptionsPanel`.
+
+### Not an element, but covered
+
+- **The even-size stage is a crop, still one constant** (`EVEN_PICTURE`, `filters.ts`): the entry above replaces the round-64 sentence's "scale".
+- **Accessibility rule 4** (`a11ySweep.test.ts`): a hover-only container (`opacity-0 group-hover:opacity-100`) that holds a button, link or field shows on focus too; a discrimination block (flags a button, a link and a nested field; accepted `focus-within` and `group-focus-within` until round 66, which accepts `has-[:focus-visible]` and `group-has-[:focus-visible]` and fails on `focus-within`; ignores text-only overlays, plain `opacity-0` and `hover:opacity-100`; a `focus-within:ring-2` is not the reveal).
+- **Docs:** STYLE_GUIDE (the confined-read exception for `captions:writeKitSrt`, the convert's measured percent, the crop, the migration's two halves, the debounce), DESIGN_GUIDE (state-named toggles and action-named ones, hover-only reveals), the two "crossfade" rows (this file, "CompilationPanel (5)" and the T-105 fade row), the T-113 kit row's `Mid.srt` (renamed `Mid_captions.srt` in round 64), the spelling disclosure above.
+
+### Closed from round 64's "Found, not fixed"
+
+"The MP4 convert's percent remains an estimate" (round 61's closing note, and the STYLE_GUIDE progress bullet that pointed here for it): closed by the measured percent above. "The hook badge describes a start up to half a second away while its key holds": closed by the debounce on the exact numbers (the key, `hookWindowKey` and its ceiling are gone). "`project:save` now migrates a legacy named color as it validates": still true, and it now clamps a legacy size the same way (the file it writes carries the clamped number); the side effect is the same one, recorded here so nobody is surprised.
+
+### Found, not fixed
+
+- **`captions:saveSrt` throws on the read-confinement outcome that `captions:writeKitSrt` answers as data.** Both confine the source SRT to the captions directory; one throws `captions:saveSrt source path outside captions directory`, the other returns `{ ok: false, reason }`. STYLE_GUIDE says why `writeKitSrt` is on the data side (Clip Kit toasts one plain line and the rest of the kit stands). The panel half is fixed in this round (its rejection is now a plain sentence, above), and round 66 made the two throws finished sentences (below); whether the two handlers should be one rule is a bigger call and was left.
+- **The renderer awaits about 47 `window.api.*` calls with no `try`** (a syntax-tree scan, round 65): nearly all native pickers (`pickOutputDir`, `pickFile`), settings writes and `cancel*` calls that do not reject in practice, but `failurePathLanguage.test.ts` reads `catch` clauses and cannot see a missing one, so a new one would not be flagged. `CaptionsPanel.saveSrt` was the one that could and did reject, and it is pinned by name; the scan with an allow-list for the rest is the upgrade, to be written when a second site turns up (its header comment says so).
+
+## Dispositions — round 66 (T-116: the review gate's fifth pass)
+
+Three code items and the comments and docs around them, from the nine reviewers' fifth pass (privacy, audio, streamer and accessibility came back clean; every other finding was LOW, the wave's first pass with no MED). Every behavior change was red-first (the quotes, the mutation table and the sha256 before and after each restore are in the hand-back); each new guard was broken once and watched to fail. **IMG-PREC's Layer 5 trigger did not fire:** no ffmpeg command, filter graph or audio chain changed (the Layer 5 file gained one corrected comment). The numbers: `npm run verify` 3356 tests in 129 files (3344 + 12, one new file); `test:media` unchanged (192 cases, 181 run, 11 platform-skipped); Playwright 227 (one new case; the affected specs were run, the full suite is the gate's). All counted in `TESTING.md`.
+
+### References - the tile overlays
+
+- **References - Save (a search result's tile) and "→ Canvas" (a mood-board tile) ([T-116], keyboard only, end state changed):** the overlay that holds them is `opacity-0` until hovered and now shows on `has-[:focus-visible]:opacity-100` instead of `focus-within:opacity-100`: Tab reveals it, a mouse click does not keep it lit after the pointer leaves (the click focuses the button, and `focus-within` matched that). E2E, first-save test: the mouse is parked, one Tab from the Search button lands on Save (asserted focused), the overlay is 0 at rest, 1 on Tab and 0 after Shift+Tab; the dialog is opened with Tab then Enter (it called `focus()` before); then, with a board selected, a real click on Save is read at 1 under the pointer and, once the mouse leaves, at 0 with Save still the focused element. E2E, Canvas test: "→ Canvas" is pressed and the pointer dragged off before the button is released (a click would navigate away and end the test), read at 0 with the button focused and the studio unchanged; then Tab from Delete lands on it (1), and Enter carries it to the canvas with the 40% layer, as before. Unit: `a11ySweep.test.ts` rule 4 accepts `has-[:focus-visible]` and `group-has-[:focus-visible]` and flags `focus-within`, `group-focus-within`, a `focus-within:ring-2` and a `has-[:focus-visible]:ring-2`. Red on the `focus-within` build: `a clicked Save lets go when the pointer leaves` and `a pressed "→ Canvas" lets go when the pointer leaves`, each `Expected: "0" / Received: "1"`, the Tab steps before them green on both builds. **Residue, stated:** after the first-save dialog closes by mouse, focus is restored to Save and `:focus-visible` still matches it, so that one tile stays lit until focus moves (probed: focused, focus-visible, opacity 1); see Found, not fixed.
+
+### Video Studio - captions
+
+- **Video 4s CaptionsPanel - Save .srt, a transcript outside the folder or gone ([T-116], words changed, dialog order changed):** "That transcript isn't in imagii's captions folder on this computer — transcribe the video again." and "That transcript isn't on this computer anymore — transcribe the video again." (it said "any more" until round 67) are thrown by `captions:saveSrt` and shown as written (`userFacingError` tier 2: finished, no channel name, nothing a tier-1 pattern rewrites). The missing file is found BEFORE the Save dialog opens (`existsSync`, as `writeKitSrt` does), after the folder gate, so a path outside the folder never says whether a file is there. Console: the path. E2E (two cases from one table): "Save .srt on a transcript outside the captions folder says why" (re-pinned from the bare fallback) and "Save .srt on a transcript that is gone says so, without asking where to save it" (new: a project whose `srtPath` is inside `<userData>/captions` with no file); each reads exactly one toast, the sentence, counts the Save dialog's asks (zero), finds no file at the stubbed path, no `pageerror`, and the button enabled. Unit: `captionsSaveSrt.test.ts` (the real handler on real files, eight cases: both refusals before the dialog, the folder gate first, each sentence through `userFacingError` with the Electron envelope, the copy, the canceled dialog). Red on the old build: E2E `Received: ["Couldn't save the captions file."]` (outside) and `["Couldn't save the captions file. A file imagii needs isn't there. It may have been moved or deleted."]` (gone); unit 5 of 8. The success path is unchanged and still the "with an SRT restored from a project file" case. `failurePathLanguage.test.ts` is unchanged: it pins the fallback, which is what remains for a copy that fails after the dialog.
+
+### Record
+
+- **Record - Save recording, the convert's failure toast ([T-116], words changed):** "... try again, or uncheck "Convert to MP4 after recording" to keep the WebM." (it said "untick"; a box is checked, never ticked). The label is quoted exactly. E2E: "a convert that really crashes says so in plain words" reads `uncheck "Convert to MP4 after recording"` and no "tick"; red with the old word: `Received string: "... or untick \"Convert ..."`. Unit: `recordingCancel.test.ts` (the exact tail, and `not.toMatch(/tick/i)`).
+
+### Not an element, but covered
+
+- **The copy scan reads main now** (`copyConventions.test.ts`): the tick rule is `(un)?tick(ed|ing|s)?` (`\btick` cannot match inside "untick"), and the two word rules (US spelling, tick) also read every string literal under `src/main`, `src/shared` and `src/preload` (77 files), with `imagii:` protocol ids exempt by name, a discrimination block (the shipped sentence fires; a protocol id and the good sentence do not) and a guard against an empty scan. When first run it found exactly two strings: this one and the sentinel's value.
+- **Accessibility rule 4** accepts the keyboard-focus spelling only (the row above).
+- **Comments that were wrong:** `process.ts`, `muxCodec.test.ts` (twice) and `filters.ts` described the even-size stage as a scale, or a `pad` that does not exist; `projectValidation.ts`, its test and STYLE_GUIDE said Save project refuses an out-of-range overlay size (it clamps; Export and Compile run the strict gate). Seven older comments say "Canceling" and "unrecognized" now; five UK words in untracked new test files are US (the disclosure above).
+- **Docs:** DESIGN_GUIDE and the lessons entries quote the button's real label, "→ Canvas"; STYLE_GUIDE records `captions:saveSrt` as the handler that still throws (with finished sentences) beside `writeKitSrt`'s `ok: false`; BRANDING_GUIDE says the word rules reach main; round 65's counts above (3344, +43, ten code items); `TESTING.md`'s media total (192 cases) and its checkerboard claim, now per row (7, 100 and 233 had 70, 320 and 67 soft pixels under the scale, reproduced this round; 0 under the crop), and the same comment in `media.spec.ts`.
+
+### Closed from round 65's "Found, not fixed"
+
+"`captions:saveSrt` throws on the read-confinement outcome that `captions:writeKitSrt` answers as data": half. The two throws are finished sentences and the existence check precedes the dialog; the handler still throws, which STYLE_GUIDE now records as the exception. "The renderer awaits about 47 `window.api.*` calls with no `try`": still true, T-110(x).
+
+### Found, not fixed
+
+- **A dialog that restores focus after a mouse flow leaves `:focus-visible` on the trigger.** After the first-save dialog closes, `useFocusTrap` restores focus to Save and the browser matches `:focus-visible` (the field the dialog had focused was the active element), so that tile's overlay stays lit until focus moves. Measured, not guessed: focused true, `:focus-visible` true, opacity 1, pointer parked away. `focus({ focusVisible: false })` is a Firefox option as far as I know and a probe in this Electron (Chrome 126) still matched. The upgrade is to restore focus only when the dialog was opened from the keyboard, a change to every dialog; the visible cost is one lit tile after the first save a person ever makes.
+- **`captions:saveSrt` still throws where `captions:writeKitSrt` answers `ok: false`.** Now with sentences; the shape is the bigger call (round 65's note stands).
+- **"tick" idioms remain in 30 older comments, test titles and fixtures**, none shown to a person (the scan reads strings, not comments). Round 70 re-pointed it against the tree again (ten of its cites no longer landed, and its own edits moved more; the count of 30 is right). Round 67 made the list exact against the tree (it had named nine sites and "a handful" in `record.spec.ts`; its `RecordStudio.tsx:689` was already stale, and the sites it left out are below). In source: `RecordStudio.tsx:358`, `:368`, `:399` and `:783`, `ExportPanel.tsx:391`, `filters.ts:517`, `videoStore.ts:655`, and the wave's own `CropOverlay.tsx:125` (the list called it older: it is not). In tests: `presets.test.ts:88`, `videoStore.test.ts:835` ("YouTube unticked"), the wave's own `clip.test.ts:123` ("ticked for"), `tutorialCopy.test.ts:171` (a fixture sentence, "Tick 'Crop' then '+ Clip'."), `audio.spec.ts:663` and `:1121`, `video-pipelines.spec.ts:1730` ("a success tick", the check-mark sense), `:2515`, `:5470` ("one tick box"), `:5498` and the wave's own `:6171`, and `record.spec.ts:73`, `:80`, `:88`, `:600`, `:608`, `:618`, `:699`, `:726`, `:990`, `:1000` and `:2199`. Not counted: a timer's or slider's tick (`tick()` helpers, "per tick", "poll ticks"), the sentences that STATE the rule (`recordingCancel.test.ts:276` and `:278`, `record.spec.ts:2398` and `:2400`) and `copyConventions.test.ts`'s rule and fixtures. STYLE_GUIDE's "ticked for" (wave-added prose, in the bullet "A clip's recipe is built in ONE place") is not on this list because it is fixed: the guides are the spec, and it says "checked for" now.
+- **A mood-board tile's click-away cannot be driven by a plain click.** "→ Canvas" navigates to Stream Graphics and leaves the tile behind, so its E2E presses the button and drags off it before releasing; the plain-click assertion lives on the Save tile.
+
+## Dispositions — round 67 (T-117: the review gate's sixth pass)
+
+Five code items and the docs around them, from the nine reviewers' sixth pass (privacy, accessibility and electron came back clean; every finding was LOW, the second pass in a row with no MED). Every behavior change was red-first (the quotes, the mutation table and the sha256 before and after each restore are in the hand-back); each new guard was broken once and watched to fail. **IMG-PREC's Layer 5 trigger did not fire:** no ffmpeg command, filter graph or audio chain changed (the Layer 5 file gained one corrected comment, and `filters.ts` one). The numbers: `npm run verify` 3489 tests in 132 files (three new files); `test:media` unchanged (192 cases, 181 run, 11 platform-skipped); Playwright 230 (three new cases in `record.spec.ts`, one existing kit case re-run on a skewed clock). All counted in `TESTING.md`.
+
+### Audio Studio - Cleanup presets
+
+- **Audio - Cleanup - presets, Delete preset (the trash button on a saved preset) ([T-117], validation added):** the id the button hands back is held to the alphabet nanoid mints (`[A-Za-z0-9_-]`) at the handler, at the store and at the parse of a preset file, so `audio:deletePreset('../config')` no longer reaches `unlink`. The button's own end state is unchanged and still driven end to end by the existing audio.spec.ts cases "cleanup presets save, apply, and delete through both confirm branches" (a real delete of an id `savePreset` minted, which is in the alphabet) and "a preset that cannot be saved or deleted says so in plain words (T-90)". DISPOSITION: a traversal id cannot be sent by clicking (the list is built from the files main wrote and the renderer returns the id it was given), so the deepest layer that can reach it is the IPC handler and the store on real files: `audioPresetIds.test.ts` (the real handler, the store wrapped in a spy so only the handler's refusal can pass it: `../config`, a nested climb, a slash, a backslash, a space, `x.json`, `..`, a trailing newline, and the empty, numeric, undefined and null ids; the minted id still deletes) and `presets.test.ts` (a temp userData with a real file at each id's target: it is still there afterwards and the call refused with "nanoid alphabet"; a planted preset file whose id is `../config` is not listed). Red on the old build: the target file was gone (`ENOENT ... open '<userData>/config.json'`).
+
+### Video Studio - captions and the Clip Kit
+
+- **Video 4s CaptionsPanel - Save .srt, a transcript whose own name starts with two dots ([T-117], end state changed):** a transcript called `..intro.srt` or `...and then-123.srt` in `<userData>/captions` (transcripts are named from the video; `..intro.mp4` is legal) is saved, where the folder gate used to answer "outside" for the app's own file and round 66's sentence told the person to transcribe again, which wrote the same name and was refused again. A real traversal still refuses with the same sentence. Unit: `captionsSaveSrt.test.ts` (the real handler on real files: four dot-named transcripts and one inside a folder called `..old stream` are copied to where the dialog said; a dot-named transcript that is gone says "gone", not "outside"; the folder's parent, a file one level up, a sibling whose name starts with the folder's, a climb that comes back down into a dot-named file and a climb written with the separator each still refuse with the dialog never asked), `pathConfine.test.ts` (the rule, posix and win32). Red on the old rule: all five save cases threw the "isn't in imagii's captions folder" sentence. E2E: unchanged. The two Save .srt refusals ("outside the folder", "gone") are driven end to end as before; the dot-named name adds nothing at that layer that the unit does not (the E2E would seed a file the same way the unit does). DISPOSITION: the OS Save dialog is stubbed in both layers, as it was.
+- **Video 4s ClipKit - the kit's captions file, a transcript whose name starts with two dots ([T-117], end state changed):** the same gate on `captions:writeKitSrt` answered `ok: false` for the same file, so the kit silently left its captions out. Unit: `captionsWriteKitSrt.test.ts` (three dot-named transcripts and the `..old stream` folder make the kit's captions on the clip's clock; the gone one is "not found", not "outside"; the same five real traversals answer `ok: false, reason: 'source SRT is outside the captions directory'` with nothing written). Red on the old rule: `ok: false` for each in-folder fixture. The Clip Kit E2E that builds the whole kit and its captions is unchanged.
+- **Video 4s ClipKit - the kit folder's date ([T-117], end state changed):** `<name>-kit-<YYYYMMDD>` is the day on the person's clock, as the export panel's `{date}` already was, and not the UTC day: a kit made at 9:23 pm in Pacific time is dated that day and not the next. Unit: `outputPath.test.ts` (`makeKitDir` with the clock at 04:23 UTC on the 11th: `-kit-20261010` under `America/Los_Angeles`, `-kit-20261011` under `Pacific/Auckland` for 20:30 UTC on the 10th), `filename.test.ts` (the helpers, both directions, three zones, and a scan that fails on any non-test `toISOString()` under `src`). E2E: "one click produces the whole kit" now runs on a clock whose day is never the UTC day (`skewedClock.ts`) and reads the folder by the local day; the helper `kitStamp()` in `video-pipelines.spec.ts` (and so every other kit case) reads the local day too. Red on the UTC stamp: the case waited out its 540 s for a folder that did not exist (the app had made the UTC one). A mood-board tile's cached thumbnail is gated by the same segment rule (`moodboard.test.ts`: a `..cover.jpg` in the cache is kept, one outside it is unset); no element changed.
+- **Video 4s CaptionsPanel - Save .srt, "gone" sentence ([T-117], words changed):** "That transcript isn't on this computer anymore — transcribe the video again." ("any more" before). Unit: `captionsSaveSrt.test.ts` (the exact sentence, before the dialog opens, and through `userFacingError`). E2E: "Save .srt on a transcript that is gone says so, without asking where to save it (T-116)" re-pinned.
+
+### Record
+
+- **Record - Stop, then the Save dialog's suggested name ([T-117], end state changed):** the name is `recording-YYYY-MM-DDTHH-MM-SS.webm` (or `.mp4`) on the person's clock; it was the UTC ISO string with a trailing `Z` and milliseconds, a day ahead on a Pacific evening. E2E: "the take's suggested name is stamped from the person's clock, not UTC (T-117)" runs a real take on a clock whose day is never UTC's and reads the `defaultPath` the Save dialog was opened with (the dialog is stubbed in main, as in every Record case): the date is the local day, not the UTC day, and the name has no colon and no `Z`. Red on the old name (`recording-2026-10-10T21-38-03-368Z.webm` fails the pattern) and, with the format right and the day wrong, on a `localDate()` that read UTC (`Expected value: "2026-10-10"`, `Received array: ["2026-10-11", "2026-10-11"]`). Unit: `filename.test.ts`.
+- **Record - Save recording, a failure ([T-117], words changed):** "Saving the recording failed." plus the plain cause where the shape is known, for 8 s, from `reportFailure`; it was `ipcErrorMessage(err, 'Save failed')`, which showed main's string as written (a copyfile EPERM with both full paths, an ENOSPC from the write stream). The convert crash's own sentence still stands as written. E2E: "a save that fails for a reason Windows gives says so in a sentence, with no path and no channel (T-117)" replaces `recording:finalize` IN MAIN with a handler that throws the exact EPERM and then ENOSPC strings Node raises, over two real takes, and reads two red toasts: "Saving the recording failed. Windows blocked access to a file. Close any app using it, or check your antivirus." and "Saving the recording failed. Your disk is full. Free up some space and try again.", with no path, errno, channel or "Save failed" in any toast, nothing stranded in `userData/recordings`, and the studio back to idle. Red on the old catch: the toast log was `EPERM: operation not permitted, copyfile 'C:\Users\maken\AppData\...' -> 'D:\Videos\Stream take.webm'`. Unit: `userFacingError.test.ts` (the two shapes, the stand-alone sentences, the old channel string falling to the caller's sentence), `reportFailure.test.ts` (the 8 s and the neutral cancel), `interactionWiring.test.ts` (the call, and the discard decided before the failure). The old pin that named the 8 s on this toast (`MUST_LAST`) moved to `reportFailure.test.ts`: the duration is one line in the helper now, for every caller.
+- **Record - Stop with nothing recorded ([T-117], words changed):** main refuses a take with no data in a finished sentence, "Nothing was recorded, so there is nothing to save. Start the recording again.", which the toast shows as written; it was `recording:finalize recording is empty`. E2E: "an empty take is refused in a sentence of its own, through the real IPC (T-117)" begins a real session with no chunk, calls the real `recording:finalize` and reads the sentence arrive in Electron's envelope, with the temp file reaped. Unit: `recordingStream.test.ts` (the sentence, the envelope, `userFacingError` showing it as written). DISPOSITION: the toast for this exact refusal is not driven by pressing Stop (a real take always delivers a first chunk), so the mapping is held at the unit layer on the real handler's message and the toast path is the EPERM / ENOSPC case above.
+
+- **Record - Refresh sources / the first scan, when the list is refused ([T-117], words changed):** "Couldn't list what can be recorded." for 8 s, plus the plain cause where the shape is known ("Windows blocked access to a file. Close any app using it, or check your antivirus."); it toasted main's string as written, envelope stripped (`Screen recording permission denied`, or an errno with a path). The in-flight state still ends, the empty-state warning and the retry stay, and the selection is still dropped. E2E: "zero capture sources says so..." (T-41) and "T-69: a refresh reconciles the selection..." re-pinned (the sentence, and no `permission denied`, channel or envelope text), and the first one stubs a second refusal, an `EPERM` with a path, and reads the known-cause sentence with no `EPERM`, path or file name. Red on the old toast: `Received string: "Screen recording permission denied"`. Unit: `interactionWiring.test.ts` (the call, and no `ipcErrorMessage` in the file), `failurePathLanguage.test.ts` (the site count, and the class pin below).
+- **Home - the Autosave banner's Clear, when the delete fails ([T-117], words changed; [T-118], the cause made reachable):** "Couldn't clear the autosave. It's still on disk." for 8 s, plus the plain cause where known. The only cause that can be named is a locked file ("Windows blocked access to a file. Close any app using it, or check your antivirus."): unlink has no full-disk shape, and any other failure is the bare sentence. Before T-117 the toast spliced main's string into the sentence ("Couldn't clear the autosave: could not delete autosave.json. It's still on disk — close anything using it and try again."). Round 67 promised the cause and main could not deliver it: `clearAutosave` swallowed every unlink errno and threw the shapeless "could not delete autosave.json", so the person always got the bare sentence and the advice to close what was using the file, true for exactly the locked case, was gone. T-118: the thrown message ends in the errno code of the first unlink that failed on a file that stayed ("could not delete autosave.json (EBUSY)"), with no trailing period, so a shape the helper does not know still falls to the bare sentence; a code on a file that vanished (a second window cleared it) is not reported. The banner and its Clear button stay, nothing is dismissed, the file stays on disk. E2E: "AutosaveRestore: a clear that fails says so and leaves the banner and the file alone" is pinned to the sentence with `could not delete autosave.json` absent; its first stub is the shape main raises when the failed unlink carried no errno code (the bare sentence, and the case asserts that no cause is guessed), its second is main's real locked-file shape, `could not delete autosave.json (EBUSY)`, and reads "...It's still on disk. Windows blocked access to a file. Close any app using it, or check your antivirus." with no errno, path or file name (before T-118 that stub was a raw `EBUSY: resource busy or locked, unlink 'C:\Users\...'` string, which main never raised); the success discrimination at the end is unchanged. The stubs are in MAIN, so this E2E cannot go red from `clearAutosave`; it holds the renderer's two branches (mutated: the second stub's code changed to `EISDIR` fails on the cause sentence, and the first stub given `(EBUSY)` fails the no-cause pin), and `autosave.test.ts` holds main's side. Unit: `autosave.test.ts` (the real function with an `unlink` stand-in: EBUSY and EPERM through `userFacingError` to the cause sentence, the bare shape and an unmapped code to the bare sentence, the first failure's code wins, a vanished file's ENOENT is not reported; red-first, 7 of the 8 new or changed cases failed on the old function, and the bare-shape case is the control that passed on both), `userFacingError.test.ts` (the shapes, wrapped as Electron wraps them), `interactionWiring.test.ts` (the T-57 pin names `reportFailure` and forbids `toast.error` and `ipcErrorMessage` in `clearAutosave`). Red on the T-117 build's old toast: `Received string: "Couldn't clear the autosave: could not delete autosave.json. It's still on disk — close anything using it and try again."`. The `MUST_LAST` row that named this toast's 8 s moved to `reportFailure.test.ts`, as Record's save row did.
+
+### Not an element, but covered
+
+- **No renderer site shows main's string as written** (`failurePathLanguage.test.ts`): no renderer source calls `ipcErrorMessage`, with a finder that discriminates (a call, a bare import, another function). The three that did (Record's save, its source list, the Autosave banner's Clear) are `reportFailure`. `ipcErrorMessage` is still the first step inside `userFacingError` and the classifier in `importDiagnostics.ts`, neither of which shows its input; both were checked and left.
+- **`isOutsideFolder`** (`src/main/pathConfine.ts`): the one place main asks "is this path outside that folder"; a scan in `pathConfine.test.ts` fails on a hand-rolled `startsWith('..')` anywhere in `src/main` and has a discrimination block. `round17Coverage.test.ts` asks the helper instead of a copy of the expression.
+- **`isSafeId` / `assertSafeId`** (`src/shared/pathSafety.ts`): the alphabet nanoid mints, held by `pathSafety.test.ts`; used by the audio presets at three places.
+- **`localDate` / `localTime` / `localStamp`** (`src/shared/filename.ts`): the three readers of the person's clock; the export panel's `{date}` and `{time}` call them.
+- **The copy of the whole-frame softness claim about `scale`** is the measured one in `filters.ts`, `filters.test.ts` (header and test title), STYLE_GUIDE, LESSONS, TESTING and the first sentence of `media.spec.ts`' T-115 comment. Re-measured with the repo's ffmpeg on the T-115 fixture (a 321x241 lossless 1-pixel checkerboard through `scale=320:240`): 48.5 percent of the pixels in the mid-gray band strictly between 80 and 175 (47.5 after `libx264 -preset fast`; the suite's `hardness` counts that band with EXCLUSIVE bounds, `v > 80 && v < 175`, and counted inclusively the scaled frame is 49.3 percent), which is not "between black and white" - nearly every pixel is, 96.2 percent strictly between 0 and 255 and only 3.8 percent still exactly 0 or 255 on the scaled frame (92.0 and 8.0 after the encode); every 8x8 corner tile still spanning 0 to 255, only the four corners hard (the first and last 15 percent or so of each edge: 48 of row 0's 320 pixels at each end, on the scaled frame and after the encode alike; column 0's 240 are 3 at each end on the scaled frame and 36 at each end after the encode) and every edge soft at its middle (row 0: 70 of 320 pixels in the band, no longer the "left and top edge stay hard" the text said until round 68), the center a flat 130; through the crop, none.
+- **Docs:** STYLE_GUIDE (the confinement, id and stamp conventions; `ipcErrorMessage` no longer the call for any renderer site; "anymore"; "checked for"), LESSONS (this round's entry, and the round-16 line that wrote the preset id off "since they're not paths"), the round-65 row that quoted a pre-rename E2E title, the tick-idiom list (exact, 30 sites), category (5) of the spelling disclosure (nineteen), USER_GUIDE (the kit folder's date is the computer's).
+
+### Closed from round 66's "Found, not fixed"
+
+"tick" idioms: the list is exact now (the bullet above is the round-66 bullet, recounted). `captions:saveSrt` still throws where `captions:writeKitSrt` answers `ok: false`: unchanged and still the bigger call.
+
+### Found, not fixed
+
+- **Five older copies of the nanoid alphabet remain** (`customPresets.ts`, `search/moodboard.ts`, `ipc/search.ts`, `SAFE_SESSION_ID_RE` in `ipc/recording.ts`, `SAFE_JOB_ID_RE` in `ipc/video.ts`); each is correct. `isSafeId` is where they would go, one import each; nothing was wrong with them, so nothing was changed.
+- **`video:deleteCustomPreset` gates its id in the store only.** The handler checks non-empty and the store (`deleteCustomPreset`) holds the alphabet, as the round-15 pattern has it. The audio handler now holds it in both, as `ipc/search.ts` does.
+- **`captions:saveSrt` with `srtPath` equal to the captions folder itself passes the gate** (the relative path is empty) and fails at the copy with an EISDIR the person reads as the panel's fallback. Harmless, and not a path anyone sends.
+- **A preset file whose own `id` field is outside the alphabet is no longer listed.** Nothing the app writes can produce one (ids are minted by nanoid), so this hides only a hand-edited file; it stays on disk, and is neither deleted nor shown.
+- **The skewed-clock E2E trick depends on Chromium and Electron reading `TZ` from the environment**, which they do on Linux and Windows; it was verified here (the date in the renderer's `new Date()` and in main both followed it). A launch that sanitizes the environment would make those two cases pass vacuously, which is why each asserts that the skewed local day is not the UTC day before it starts.
+- **"any more" remains in four comments, one test title and one line of guide prose** (the comments `useGlobalUndo.test.ts:91`, `moodboard.ts:263`, `copyConventions.test.ts:376` and `home-chrome.spec.ts:851`; the title `interactionWiring.test.ts:732`; and the wave-added `docs/STYLE_GUIDE.md:355`, "call for nothing in the renderer any more (T-117)", which is prose and not a comment). It is a house spelling for copy, not a rule any scan reads; the title was cited at `:716` until round 68, and the STYLE_GUIDE line was missing from the list.
+
+## Dispositions — round 68 (T-118: the review gate's seventh pass)
+
+Seven items from the nine reviewers' seventh pass (QA, audio, privacy and streamer clean; accessibility and UX clean after two T-110 filings; every finding LOW except one MED, the ffmpeg reviewer's). Three behavior changes, each red-first and each guard broken once and watched to fail (the quotes, the mutation table and the sha256 before and after each restore are in the hand-back): the Autosave Clear's errno, the bt709 matrix stage, the `=` in a caption path. **IMG-PREC's Layer 5 trigger fired twice** (a filter-graph change and an escaper that feeds a filter graph) and both are in the suite. The numbers: `npm run verify` 3522 tests in 133 files (one new file, `gradeMatrix.test.ts`); `test:media` 198 cases, 187 run and 11 platform-skipped (six new: the `a=b.srt` burn-in and the five-case bt709 block); Playwright 230, unchanged (no new case; `home-chrome.spec.ts`'s Clear-failure case re-pinned). All counted in `TESTING.md`.
+
+### Video Studio - the Temperature slider
+
+- **Video 4i ColorGradePanel - Temperature slider, on a source tagged bt709 ([T-118], end state changed):** the slider's output keeps a bt709 source's colors. On the shipped ffmpeg (6.1.1) `colorbalance` returned a bt709-tagged source (OBS's default) in the bt601 matrix and dropped the tag, so saturated colors shifted (SMPTE green `(0,157,0)` came out `(0,130,0)` here for a cast of 0.01) while players decode the file as bt709. `probeVideo` carries `colorSpace`, the export (and so Clip Kit) and the compilation hand it to `buildVideoFilter`, and a bt709 source's graph gains `scale=out_color_matrix=bt709,setparams=colorspace=bt709` right after `colorbalance`; an untagged or `unknown` source gets nothing (and, since round 69, the two bt601 tags get `setparams=colorspace=<tag>` alone: see "Dispositions - round 69"). Unit: `filters.test.ts` (the builder, a table of tags, the order, a crop), `gradeMatrix.test.ts` (each runner's real `-vf` for a bt709 probe and for an untagged and a bt601 one; dropping the probe's value from `export.ts` or from `concat.ts` fails exactly that runner's case). Layer 5: "the temperature grade keeps a bt709-tagged source in bt709" (five cases: the fixture is what it says; the export and a compilation segment each graded at 0.01 against an ungraded control within 4 levels after a player-style decode, output tagged bt709; a full warm grade still warms the gray band; an untagged source's grade within 4 levels of its control). DISPOSITION: the Layer 5 block passes on the bundled linux 7.0.2 with or without the fix (the stage removed: 5 of 5 green), because 7.0.2 keeps the matrix and the tag; the red-first run is the distro's 6.1.1 through a scratch alias config kept outside the repo (`green graded 0,130,0 vs control 0,157,0: expected 27 to be less than or equal to 4` and `the graded output is still tagged bt709: expected undefined to be 'bt709'`, on both runners; with the stage as the ticket first wrote it, `scale=out_color_matrix=bt709` alone, the pixels return and the tag does not, which is why `setparams` is in it), and the win32 release run (T-110(f)) is the standing check on the real binary. The slider itself is driven as before (the ColorGradePanel rows above, T-109's included); what changed is the file it writes for a tagged source, which no E2E decodes.
+
+### Video Studio - captions
+
+- **Video 4o CaptionsPanel - Burn into video, a video whose name has an equals sign ([T-118], end state changed):** the burn-in opens for a transcript called `Boss=Dead-<stamp>.srt` (derived from a video called `Boss=Dead.mp4`); it died with `Error applying option '.../a' to filter 'subtitles': Option not found` (exit 8) and the person's only recourse was renaming the video and transcribing again. `escapeSubtitlesPath` escapes `=` in both character classes. Unit: `captions.test.ts` (one, two and a repeated `=`). Layer 5: the burn-in escapes `it.each` gains `a=b.srt` (red on the old escaper: `ffmpeg exit 8`, run again on the distro's 6.1.1 with the fix: green). The click itself is unchanged: the OS save dialog and the whisper engine stay HL-dialog and HL-whisper as in the existing rows, and `runBurnIn` is driven by the real binary in the existing Layer 5 cases; the new case puts the escaper's output into the same `subtitles=<path>:force_style=...` shape the burn-in builds (`whisperManager.ts`). DISPOSITION: the Layer 5 case passes with `=` in the first character class alone (the second round escapes the backslash the first added, and the filtergraph parser has no use for `=`), so the second-class half is pinned by the unit only.
+
+### Home - the Autosave banner
+
+- The Clear failure row ("when the delete fails") is rewritten in place under round 67's heading, because round 67's claim about it (a locked file is named) was only true after this round; it now says what main raises, what each stub is, and why the E2E cannot be red from `clearAutosave`.
+
+### Not an element, but covered
+
+- **`clearAutosave`'s message** (`main/autosave.ts`): ends in the errno code of the first unlink that failed on a file that stayed, with no trailing period; `autosave.test.ts` drives the real function with an `unlink` stand-in and passes its error to the real `userFacingError`.
+- **`ProbeResult.colorSpace`** (`main/ffmpeg/probe.ts`): read off the real file by the bundled ffprobe in the Layer 5 fixture check ("the fixture is what it says"); the probe's other fields are covered by the existing "probeVideo reports source dimensions" cases.
+- **`RecordStudio.tsx`'s failure comment** now says which branch says what (comment only; the product call is T-110(u)).
+- **The softness prose** is the measured one in every place it was written - `filters.ts`, `filters.test.ts`, STYLE_GUIDE, LESSONS (twice), TESTING, this ledger (twice) and the Layer 5 comment - with the numbers in the round-67 bullet above.
+
+### Closed from round 67's "Found, not fixed"
+
+The "any more" list is re-pointed (`interactionWiring.test.ts:732`) and carries the wave-added `STYLE_GUIDE.md:355`; category (5) of the spelling disclosure is eighteen comments and titles plus two named string literals, with the real `failurePathLanguage.test.ts` lines. Line cites into files this round edited were re-pointed in the same rows (`media.spec.ts`, `captions.test.ts`, `AutosaveRestore.tsx`, `filters.ts`, `RecordStudio.tsx`).
+
+### Found, not fixed
+
+- **Only `bt709` is rewritten** (round 68; round 69 added the two bt601 tags, tag alone: see "Dispositions - round 69"). A source tagged `bt2020nc` (HDR, rare in OBS recordings) or another matrix would take the same RGB round trip on 6.1.1 and is not covered. The upgrade is the same pair keyed on the tag (T-120, measured: a retag alone restores a graded bt2020nc source's tag and pixels on 6.1.1, within 4 levels (red `200,43,40` against `202,45,44`) on the T-118 bands made in the bt2020 matrix and tagged bt2020nc, a hand fixture that is not in the suite, as it does bt709's (within 3 on the suite's own bt709 bands, red `199,42,42` against `202,45,45`), and `scale=out_color_matrix=bt2020` ahead of it is what survives an Auto Zoom; the constant is `bt2020`, because the bundled 7.0.2 refuses `bt2020nc` and `bt470bg` as `out_color_matrix` values).
+- **Auto Zoom after a grade strips the tags again.** `zoompan` drops them on both majors (6.1.1: all three unknown; 7.0.2: primaries and transfer unknown), as T-110(o) recorded; the pixels stay right (green `(0,155,0)` either way), so a bt709 clip with Auto Zoom and a Temperature is correct but untagged.
+- **`scale=out_color_matrix=bt709` does not re-tag on 6.1.1** (it does on 7.0.2), measured with `setparams=colorspace=unknown` ahead of it on both; `out_range`, `in_color_matrix`, `lanczos` and a trailing `format` did not change that either. `setparams=colorspace=bt709` is the only token that did, and it is in the stage.
+- **The GIF export ignores the grade by design** (T-110(e)), so it carries no `colorSpace`; no other runner builds a `colorbalance`.
+
+
+## Dispositions — round 69 (T-119: the review gate's eighth pass)
+
+Thirteen behavior items and thirteen claim-accuracy edits from the nine reviewers' eighth pass over the held wave (the first with the deeper rerun briefs). Every behavior change was red-first and every guard broken once and watched to fail (the quotes are in `LESSONS_LEARNED.md`, 2026-10-14; the mutation table with the sha256 before and after each restore is in the hand-back). **IMG-PREC's Layer 5 trigger fired once** (the Temperature stage's filter graph grew a branch) and is in the suite. The numbers: `npm run verify` 3596 tests in 135 files (two new files, `captionsOpenFolder.test.ts` and `settingsClear.test.ts`); `test:media` 205 cases, 194 run and 11 platform-skipped (seven new: the bt601 half of the T-118 block); Playwright 238 (eight new cases, five re-pinned or extended). All counted in `TESTING.md`.
+
+### Record
+
+- **Record - Start recording ([T-119], end state changed):** from the press until the capture and the main-process session are open, the button reads **Starting…** and is disabled, a second call of the handler in the same tick does nothing, and the press yields exactly one take; a refused start (no microphone) puts the button back and a second press runs the whole start again. E2E: record.spec.ts "Start while the capture is still opening says \"Starting…\", cannot be pressed again, and opens exactly one take" (the desktop capture held open; the capture asked for once however many presses) and "Start with mic enabled and no microphone refuses..." (presses Start twice: two refusal toasts, the second only if the guard was released). Unit: `interactionWiring.test.ts` (the claim before the first `await`, the release in a `finally`, the disabled prop and the label, with a finder that discriminates). DISPOSITION: the real screen capture is HL (it needs a display server's capture permission); the E2E stands in for `getUserMedia`, which is where the second capture used to begin.
+- **Record - Saved toast, Edit in Video Studio ([T-119], behavior changed):** with clips in Video Studio it asks "Replace the video you're editing? N clips and their edits will be discarded." before it loads; with none it asks nothing; declining leaves Record, the toast's button and the first take as they were. E2E: record.spec.ts "\"Edit in Video Studio\" asks before it replaces the video being edited, and asks nothing when nothing is open" (the real `confirm`, its text read). Unit: `videoStore.test.ts` (`videoDiscardMessage`: nothing at zero, Close's sentence word for word, Replace's) and the wiring pin (the question precedes `loadVideoSource`; Close goes through the same helper). Home's Open project over a tuned studio stays T-110(n).
+- **Record - a take whose write failed, `recording:abandon` (no element; the renderer's `catch` calls it) ([T-119], end state changed):** answers and removes the partial webm after a write error, where it used to wait forever for a `close` that had already fired. Unit: `recordingStream.test.ts` (three cases through the real handler: the fd closed under the stream, a close held for 150 ms, a close that never arrives). DISPOSITION: a full disk or a vanished drive is the OS; closing the fd under the stream is the deepest layer that makes the same stream state, and it is what the handler sees.
+
+### Video Studio
+
+- **Video 4e Timeline - Playhead slider keys, and the two trim handles ([T-119], behavior and a11y changed):** after a click on the track, `I` and `O` set the in and out points at the playhead (each its own undo step), `,` and `.` step a frame, and the existing arrows, Home and End are as before; the two handles are pointer-only (`tabindex=-1`, `aria-hidden`, no name). E2E: video-core.spec.ts "timeline: click the track, then I and O set the in and out points and , and . step a frame; the trim handles are pointer-only" (the sequence the guide promises; Undo takes only the Out point back; two `I` presses with the keyboard alone between them are two steps; Tab from the slider never lands on a handle). Unit: the wiring pin (the cases, the store actions, `endGesture`, the text-field stand-down, both handles). The handles lose their accessible names, "Trim start" and "Trim end": the earlier rows that use those words keep them as the names of the DRAGS in the tests, which find the handles by place (`[data-tutorial="video-timeline"] button[aria-hidden="true"]`). DISPOSITION for the stand-down: the slider has no children, so no key can reach it from a field today and no E2E can put one there; the pin reads the source.
+- **Video 4f ClipList - the clip rename field ([T-119], a11y):** a focus ring (`focus:ring-1 focus:ring-accent`); it was the one input in the app with `outline-none` and only a background change on focus. E2E: video-core.spec.ts "clip list: add, rename, select, speed slider and speed reset" reads the computed `box-shadow` (none while blurred, the accent color while focused). Unit: `a11ySweep.test.ts` rule 5 (`outline-none` needs its own ring; found exactly this one element).
+- **Video 4s CaptionsPanel - Show models folder ([T-119], end state changed):** opens `<userData>/models` on a fresh profile too (the handler makes the folder first, recursive, and awaits the shell; a non-empty answer is logged, a folder that cannot be made is logged and not thrown across the bridge). Unit: `captionsOpenFolder.test.ts` (the real handler on a real tree: the folder exists at the instant the shell is asked, parents too, an existing folder is left alone, the log, no throw). DISPOSITION: the Explorer window the shell opens is native (NAT/HL-shell); the handler is the deepest layer, and the button calls it with no logic of its own.
+- **Video 4r ExportPanel - Export with the Watermark field blank, and Clip Kit after it ([T-119], end state changed):** a blank export forgets the saved handle and corner (both keys leave `config.json`), so the kit that follows stamps nothing; before, the old handle stayed and the kit stamped it. E2E: video-pipelines.spec.ts "a blank export forgets the saved watermark, and the kit stamps nothing after it" (a handle seeded, the field emptied, one export, both keys absent from the file, then Clip Kit writes its five files and says `Saved your Clip Kit`, which this platform's drawtext-less ffmpeg cannot do for a stamped kit - the neighboring "kit stamps the SAVED watermark" case is the control). Unit: `settingsClear.test.ts` (the real `settings:set` over the real store: `undefined` clears, anything else is stored and judged as before, `null` is still refused) and the wiring pin (both clears in the else branch). The existing "the watermark reaches the filter graph, and both halves of it survive a relaunch" case is unchanged, and its comment about an empty watermark now says what the new case adds.
+- **Video 4i ColorGradePanel - Temperature slider, on a source tagged bt601 ([T-119], end state changed):** the slider's output keeps a `smpte170m` or `bt470bg` source's tag (it came out of 6.1.1 as `unknown`, and every built-in preset is at least 1280 px on its long side, where a player that guesses reads an untagged file as bt709). The graph gains `setparams=colorspace=<that tag>` right after `colorbalance` and nothing else (the bt709 recipe on a bt601 source moves the pixels: green came out `(11,184,3)` against the control's `(0,158,0)`); untagged, `unknown`, `bt2020nc` and every other string get nothing. Unit: `filters.test.ts` (the per-tag shapes, the order, a crop, ten inputs that get nothing), `gradeMatrix.test.ts` (each real runner's `-vf` for each tag; dropping the probe's value from `export.ts` or `concat.ts` fails exactly that runner's cases). Layer 5, the T-118 block (seven new cases: both fixtures are what they say, each tag through the export and a compilation segment against an ungraded control under a 601 decode with the tag asserted, a full warm grade still warms the gray band). DISPOSITION: like the bt709 cases, green on the bundled 7.0.2 with or without the branch (`12 passed` both ways) because 7.0.2 keeps the tag; the red-first run is the distro's 6.1.1 through a scratch alias config outside the repo (`5 failed | 7 passed` with the branch removed: `the graded output is still tagged smpte170m: expected undefined to be 'smpte170m'`; `8 failed | 4 passed` with the whole stage removed), and the win32 release run (T-110(f)) is the standing check on the real binary. The pixels are within 3 levels of the ungraded control on both majors (the suite's fixture; round 68's "2" was 3 as well).
+- **Home - Open project, and the autosave Restore ([T-119], validation changed):** a project whose studio is structurally empty (`clips: [{}]`, `chain: {}`, `doc: {}`) is refused with a reason in the existing style (`videoStudio.clips[0].id missing`, `audioStudio.chain.gainDb not a number`, `imageCanvas.doc.layers not an array`) instead of opening a studio that threw in render or silently stopped autosaving. Unit: `projectValidation.test.ts` (every field wrong in every way, the clip named by index, whole clips with and without every optional field accepted, the three shapes through `validateProjectJsonString`). DISPOSITION: the Open dialog is native (NAT); the refusal reaches the person through the same Open project and Restore paths the existing rows drive, with the validator's reason in the console.
+
+### Audio Studio
+
+- **Audio - importer: drop, Choose file… and Recent while a load runs ([T-119], behavior changed):** a second file is refused with "Still extracting audio from the last file. Wait for it to finish." (or "Still loading the last file. Wait for it to finish."), the first one is what opens, and a refusal does not stick. E2E: audio.spec.ts "a second file while the first one is still being extracted is refused, from a drop and from Recent, and the first one is what opens" (a held ffmpeg; one extraction in the spawn log; a text file refused first and the next file taken after; the second drop sits in a cloud-sync-looking folder, so the refusal must come BEFORE the warning). Unit: the wiring pin (the claim before the first `await`, the release in a `finally`, all three entries). DISPOSITION: the Choose file… leg is a native dialog (NAT) and the button is disabled while busy; the race is a drop starting a load while the picker is open, held by the pin alone.
+- **Audio - Fix Wizard, focus on every step ([T-119], a11y changed):** each question opens on its first option, the summary on Apply, and Start over on the first question again; the trap still cycles and Escape still returns to the opener. E2E: audio.spec.ts "Fix Wizard keeps keyboard focus on every step: the first option of each question, then Apply" (keyboard only). The older home-chrome.spec.ts case "Modal contract (FixWizard): Escape, scrim, focus trap, focus restore" is re-pinned: the wizard opens on its first answer ("None to speak of"), no longer on Close, one Shift+Tab back is Close, and the trap still wraps both ways. It was the one case in the full suite that went red, and the focused runs of the new case could not have shown it.
+
+### Stream Graphics
+
+- **Image - Variants: Generate, then Save all ([T-119], a11y changed):** the previews replace the Generate button and focus lands on **Save all**. E2E: image.spec.ts "variants: generate four tiles, save one, regenerate, save all" asserts it.
+- **Image - tool keys with a focused Export format or Scale select ([T-119], behavior changed):** the letters belong to the select (type-ahead), and Delete and Backspace no longer remove the selected layer behind it; with focus back on the page the same keys work. E2E: image.spec.ts "a focused select owns the keys: typing in the Export format neither switches the tool nor deletes the layer". The three cites into the guard in that file are re-pointed (`ImageStudio.tsx:62-71`, `:63`, `:54-55`).
+
+### Tutorial
+
+- **Tutorial coachmark - the scroll to a step's target ([T-119], a11y changed):** an instant jump under the OS Reduce-motion setting, a glide otherwise. E2E: home-chrome.spec.ts "T-119 the coachmark scrolls instantly under Reduce motion and smoothly otherwise" (every `scrollIntoView` recorded with the behavior asked for, under both emulated settings). Unit: `Tutorial.test.ts` (`tutorialScrollBehavior`). The `index.css` comment that said the block disables "smooth scrolling across the whole app" now says what it governs.
+
+### Not an element, but covered
+
+- **`setSetting(key, undefined)`** (`main/store.ts`) deletes the key; `settingsClear.test.ts` drives the real handlers over a real file.
+- **`truthInCopy.test.ts`** reads `README.md` and the release workflow's body for the two online exceptions (and against "the only feature that touches the internet" and "Everything stays on your computer"); the release edit is body text only, and `releaseWorkflowShape.test.ts` is unchanged and green.
+- **`spawnWindowsHide.test.ts`** has a floor of 17 spawn sites (fourteen that had the option and three that did not, seventeen in all); a lost site stays green at the old floor of 16 and fails at 17 (measured).
+- **`a11ySweep.test.ts` rule 5** (`outline-none` needs its own focus ring).
+
+### Closed from round 68's "Found, not fixed"
+
+"Only `bt709` is rewritten" is rewritten above (bt601 done; `bt2020nc` stays). The "any more" row in this file is "anymore", and the "any more" inventory and category (5) of the spelling disclosure below are recounted with their cites as they sit after this round's edits.
+
+### Found, not fixed
+
+- **`bt2020nc` and every other matrix still take 6.1.1's RGB round trip unrewritten.** The upgrade is the stage's own pair for that tag: `setparams=colorspace=<tag>` restores the tag and, measured on 6.1.1, the pixels (round 69 wrote that a retag alone would not; T-120 re-measured it and it does), with `scale=out_color_matrix=bt2020` ahead of it to survive an Auto Zoom. The constant is `bt2020`: the bundled 7.0.2 refuses `bt2020nc` and `bt470bg` there ("Undefined constant").
+- **The Layer 5 bt601 cases are green on the bundled 7.0.2 by design** (as the bt709 block is); their red lives on 6.1.1 only, so the unit pair is the regression suite everywhere else.
+- **`ExportPanel`'s settings writes are awaited outside any `try`** (T-110(x)'s family): a write that rejects ahead of the queue aborts the export silently. Measured with `setSetting` back to a plain `set`: the blank-watermark export never started. The two clears this round adds sit in the same unguarded spot as the two writes beside them.
+- **`abandon`'s bound is a fixed 2 s** (a `// simplification:` comment at the constant): a drive slower than that gets an unlink Windows refuses, and the partial stays until the next launch's `tempCleanup` (files older than 6 h). The upgrade is to keep the close listener and unlink when it fires.
+- **`HOW_IMAGII_WAS_MADE.md:69` still says "the only feature that touches the network"** (the build history, outside the ticket's two files); the same class as the README line this round fixed.
+- **The Timeline's text-field stand-down is unreachable today** (the slider has no children) and is pinned by source text only.
+
+
+## Dispositions — round 70 (T-120: the review gate's ninth pass)
+
+Fifteen behavior items and twelve claim and count edits from the nine reviewers' ninth pass over the held wave (the second deep-brief sweep). Every behavior change was broken once and watched to fail (the quotes are in `LESSONS_LEARNED.md`, 2026-10-14; the mutation table with the sha256 before and after each restore is in the hand-back). **IMG-PREC's Layer 5 trigger fired twice** (the convert's argv gained `-fps_mode vfr` and the save gained a remux; the matrix stage's claims moved with a new case) and both are in the suite. The numbers: `npm run verify` 3700 tests in 137 files (two new files, `probe.test.ts` and `videoPickOutputDir.test.ts`); `test:media` 215 cases, 204 run and 11 platform-skipped (ten new: the MediaRecorder block, eight, and the Auto Zoom pair); Playwright 245 (seven new cases, the rest extended or re-pinned). All counted in `TESTING.md`.
+
+### Record
+
+- **Record - Save recording with Convert to MP4 off, and Edit in Video Studio on the result ([T-120], end state changed):** the WebM is written by a packet copy (`remuxWebm`) and so carries a duration; "Edit in Video Studio" on it opens a studio with a clip, where it used to read "Re-export it as MP4 from your recorder". E2E: record.spec.ts "record -> Stop -> save as WebM writes real bytes, toasts, and joins recent videos" now reads `format.duration` and CLICKS "Edit in Video Studio" (the h1, the file name, "Export 1", one `<video>`, no refusal toast). Unit: `recordingCancel.test.ts` (the remux is handed the temp take and the chosen path; a discard answers `null` and leaves no file; a failed remux saves the take as recorded and logs; the MP4 branch never remuxes), `convertCancel.test.ts` / `cancelSentinel.test.ts` (the argv; the sentinel). Layer 5: the MediaRecorder-shaped block, VP9 and VP8. DISPOSITION: the Save dialog is native (stubbed in main); a "Discard recording" press during the remux is not offered by the card (its WebM state has `canDiscard: false`, recorded under Found, not fixed) though main would honor it (`cancelRecordingConvert` reaches the remux).
+- **Record - Convert to MP4 ([T-120], output changed):** the file keeps one frame per source frame instead of one per millisecond (`-fps_mode vfr`): the fixture's 3 s take is 90 frames and reads about 30 fps where it was 2980 frames at 1000 fps, 12 times faster, and Video Studio's `,` and `.` step a frame, not a millisecond. Layer 5 (same block): both codecs, and the importer's flv, wmv and mpg held to exactly 50 frames in 2 s.
+- **Record - the recording view's preview and the webcam thumbnail ([T-120], end state changed):** the screen preview shows the capture (`videoWidth > 0`, playing) and, with a camera in the take, the thumbnail shows the camera; both let go of their streams when the phase ends. E2E: the WebM case (the preview) and record.spec.ts "the recording view shows the take: the screen preview and, with a camera in the take, its thumbnail" (a canvas stream stands in for the camera, which this container lacks; the compositor really runs). Unit: the wiring pin (the effect, its dependency list, no `srcObject` left in `startRecording`).
+- **Record - Start recording, and leaving during "Starting…" ([T-120], end state changed):** a person who leaves Record while the capture is opening leaves nothing running: every track ends, no session is begun, no temp file. E2E: record.spec.ts "leaving Record while the capture is still opening lets go of it" (the real desktop capture held open, the Home link clicked, then released; tracks ended, no temp file, no recordings folder). Unit: the wiring pin (a syntax-tree finder: every `await` in `startRecording` is followed by the unmount check; the flag set in the cleanup and cleared on mount; a discrimination block). DISPOSITION: the check after `recording:begin` (the session already opened) is held by the pin alone; the E2E ends the start earlier, at the first check, and would not tell that guard's removal.
+- **Record - the Output card's hint ([T-120], words changed):** "A take can use about 3.6 GB of disk per hour, and saving needs room for a second copy of it." beside the existing sentence; recordings are asked for 8 Mbps (`videoBitsPerSecond`, merged with the mime option). E2E: record.spec.ts reads the hint on the Output card; the wiring pin holds the constant and the merged options. Measured with the real MediaRecorder: 1.36 Mbps without the option, 2.56 with it, on a synthetic 1080p canvas.
+- **Record - the "Finishing up" card, WebM state ([T-120], words changed):** "Saving a WebM is a quick copy, so there is nothing to stop." (it said "plain file copy"; the save is a packet copy into a fresh file now). E2E: record.spec.ts "a WebM take: the card says "saving"..." reads it.
+- **The app window, minimized ([T-120], no element):** `backgroundThrottling: false`, so the webcam composite's `requestAnimationFrame` loop keeps running while imagii is minimized. E2E: record.spec.ts "the window opts out of background throttling" reads `webContents.getBackgroundThrottling()` on the live window; the wiring pin reads the `BrowserWindow` options. DISPOSITION: a window manager is what hides a minimized window from the page, and this box has none (a probe that hid and minimized the window left `document.visibilityState` `visible`); the minimized behavior itself is a hand-check on the win32 release run.
+
+### Video Studio
+
+- **Video 4e Timeline - Space on the Playhead slider ([T-120], behavior changed):** after a click on the track, Space plays and pauses the video through the Player's own toggle (registered with the store as a `PlayerTransport`) and does not scroll the studio; the shortcut overlay's Space, `,` / `.` and I / O rows say "(player or timeline focused)". E2E: video-core.spec.ts "timeline: click the track, then Space plays and pauses the video, and the studio does not scroll". Unit: the wiring pin (the case, `preventDefault`, the transport call, the overlay rows), `videoStore.test.ts` (the registration), `hotkeyTable.test.ts` (the rows are real bindings).
+- **Video 4e Timeline - I and O during playback ([T-120], end state changed):** the in or out point is the frame on screen (`playheadNow`: the element's time, else the store's), where the store's `currentTime` trails playback by up to a `timeupdate`. E2E: video-core.spec.ts "timeline: I during playback marks the frame on screen, not the last time the store heard of" (the store made stale on purpose by stopping the element's `timeupdate`). Unit: `videoStore.test.ts` (five cases) and the wiring pin.
+- **Video 4p ClipKit - the folder chooser ([T-120], end state changed):** opens on the folder the last kit went to (`clipKit.lastOutputDir`, which was written and never read). E2E: video-pipelines.spec.ts "the Clip Kit chooser opens on the folder the last kit went to, and a stale setting is ignored" (the chooser stubbed in main and the options it was opened with read; a relative path and a cleared setting open where it always did; nothing starts, no toast). Unit: `videoPickOutputDir.test.ts` (eleven cases through the real handler), the wiring pin. DISPOSITION: the chooser itself is native.
+- **Video - Close and Record's "Edit in Video Studio" questions ([T-120], words changed):** "1 clip and its edits" at one, "N clips and their edits" otherwise. E2E: video-core.spec.ts "close asks first...", home-chrome.spec.ts "RecentFilesMenu: a pick loads the video...", record.spec.ts "\"Edit in Video Studio\" asks before it replaces the video being edited..."; unit: `videoStore.test.ts`.
+- **Video Studio's frame step on a recording ([T-120], end state changed):** `probeVideo` reads a rate above 240 fps as unknown (0), so a saved WebM (whose container still says `1000/1`) steps at the Timeline's 30 fps default, not 1 ms. Unit: `probe.test.ts`; Layer 5 asserts the saved remux reads `0` through the production probe and a real 30 fps file still reads `30`.
+
+### Audio Studio
+
+- **Audio - Fix Wizard, a held Enter ([T-120], behavior changed):** a repeated Enter is ignored in every body of the wizard, so a held key answers one question, not all three and Apply; a fresh press still answers. E2E: audio.spec.ts "Fix Wizard: a held Enter answers one question, not all three and Apply" (a second `keyboard.down` of Enter is a repeat). Unit: the wiring pin.
+- **Audio - Export and Re-attach with a hand-edited chain ([T-120], validation changed):** a cut whose times are not numbers, and a custom noise reduction whose numbers are missing or not numbers, are refused before anything is spawned, in a finished sentence; a saved preset is held to the same gate. Unit: `audioChainValidation.test.ts` (seven denoise shapes and nine cut shapes through both handlers, the preset, the sentences, the controls, `NODE_ENV=production`).
+
+### Stream Graphics
+
+- **Image - Variants: a keyboard Regenerate ([T-120], a11y changed):** focus ends on **Save all** after Regenerate, as after Generate. E2E: image.spec.ts "variants: generate four tiles, save one, regenerate, save all" (a keyboard Regenerate, then the focus assertion). Unit: the wiring pin.
+
+### Not an element, but covered
+
+- **The electron-store schema** is nested per dotted group; `settingsClear.test.ts` drives fifteen refused shapes and the accepted ones through the real handlers and store, and `settingsKnownKeys.test.ts` flattens the schema and compares it to the allowlist (and fails on a dotted property name).
+- **`electron-builder.yml`** no longer pins `electronVersion`; `releaseWorkflowShape.test.ts` fails if it returns.
+- **Docs:** the release workflow's comment and body and the README's maintainer note say "manual dispatch or a pushed `v*` tag" and "every launch unpacks" (comment and prose only; the triggers are untouched); the matrix stage's claims (`filters.ts`, `filters.test.ts`, STYLE_GUIDE, the two ledger bullets) say what was measured; "every built-in preset is at least 1280 px on its long side" at its six sites; the figures in LESSONS and TESTING are attributed to their fixtures; the native-dialog inventory, its Home table and the "tick" and UK-spelling inventories are re-pointed against this tree.
+
+### Closed from round 69's "Found, not fixed"
+
+"`bt2020nc` and every other matrix still take 6.1.1's RGB round trip unrewritten" stays open and is reworded: a retag alone does restore a graded bt2020nc source's tag and pixels (measured), and the constant for the matrix half is `bt2020`.
+
+### Found, not fixed
+
+- **A `config.json` that parses but breaks the schema stops the launch** (`new Store` validates the file as it opens it). It was so for the flat keys (`streamerHandle: 5`, measured) and the nested schema extends it to the eleven dotted ones, which is the price of the schema being alive. A `// simplification:` at the schema names the upgrade: catch the open, move the file aside, start from the defaults.
+- **A WebM save offers no Discard although main can stop the remux** (`saveCard`'s WebM state has `canDiscard: false`, a `// simplification:` there). The remux runs at disk speed; the upgrade is `canDiscard: !discarding` with the card test and the E2E that pin "nothing to stop" re-pinned.
+- **A remux that fails falls back to the plain copy, and that file has no duration.** Video Studio cannot open it (the old behavior); the failure is in the console and the take is not lost. Rare (a copy of the packets); not surfaced to the person.
+- **`probeVideo` reports 0 for a rate above 240 rather than a measured one**, so a recording stepped by `,` and `.` moves 1/30 s, not the take's true 1/29-or-so. A second `ffprobe -count_packets` over the first seconds would measure it; the cost (a second spawn per such file) was not worth a frame of difference.
+- **`videoBitsPerSecond: 8_000_000` is a ceiling, not a measurement of screen content**: the one measurement is a synthetic canvas (2.56 Mbps). The first real hour of gameplay is the hand-check for the 3.6 GB figure.
+- **The minimized-window behavior** is a hand-check on the win32 release run (no window manager here).
+
+---
+
+## Dispositions — round 71 (T-121: the review gate's tenth pass)
+
+Eight behavior items and fourteen claim and count edits from the nine reviewers' tenth pass over the held wave. Every behavior change was broken once and watched to fail (the quotes are in `LESSONS_LEARNED.md`, 2026-10-14, T-121; the mutation table with the sha256 before and after each restore is in the hand-back). **IMG-PREC's Layer 5 trigger fired three times** (the burn-in's and the PiP's argv gained `-fps_mode vfr`, and the cut re-attach's retime changed from a frame count to a timestamp) and all three are in the suite, on the MediaRecorder-shaped fixture. The numbers: `npm run verify` 3751 tests in 137 files (no new file); `test:media` 222 cases, 211 run and 11 platform-skipped (seven new: three per codec on the MediaRecorder fixture, and the overlapping cuts); Playwright 248 (three new cases, the zero-camera one extended). All counted in `TESTING.md`.
+
+### Record
+
+- **Record - Start recording with "Include webcam" checked, the camera opens and the compositor cannot start ([T-121], end state changed):** the take carries on as the screen alone, the camera that was opened is let go (every track `ended` while the take rolls), and no empty camera box is drawn over the preview. E2E: record.spec.ts "a camera that opens and a compositor that cannot start: the camera is let go and no empty box is left" (a canvas stream is the camera, `HTMLMediaElement.prototype.play` refuses it) and the existing "Start with the webcam ticked and no camera says so..." extended with the no-box assertion. Unit: the wiring pin. DISPOSITION: the camera's light is hardware; "every track ended" is the deepest state this box can read.
+- **Record - Start recording, then leaving while the camera is opening, then the camera failing ([T-121], end state changed):** nothing is toasted for the screen nobody is on, no session is begun (no recordings folder, no temp file) and the camera's tracks end. E2E: record.spec.ts "leaving Record while the camera is opening, then the camera failing, ends the start silently" (the refusal held behind a gate until the Home link has been clicked). Unit: the wiring pin (the catch opens with the unmount check).
+- **Record - the Output card's hint ([T-121], words changed):** "Off = save as WebM (quick, but some apps don't accept WebM)." (it said "instant"; the save is a packet copy into a fresh file, and the second-copy sentence beside it says it takes room). E2E: record.spec.ts reads the hint on the Output card.
+
+### Video Studio
+
+- **Video 4e Timeline - the left and right arrows and `,` / `.` during playback ([T-121], end state changed):** each steps from the frame on screen (`playheadNow`), not from the store's playhead, which trails playback by up to a `timeupdate`. E2E: video-core.spec.ts "timeline: the arrows and , . during playback step from the frame on screen, not the last time the store heard of" (the store made stale on purpose, once per key). Unit: the wiring pin (all four cases read `now`; the handler reads no `currentTime`).
+- **Video 4s CaptionsPanel - Burn captions on a Record take saved as WebM ([T-121], output changed):** the file keeps one frame per source frame (`-fps_mode vfr`) instead of one per millisecond. Layer 5: the T-120 MediaRecorder block, both codecs. DISPOSITION: the speech engine is not installed here, so the E2E cannot reach the button's end state through a real transcription; the burn-in runner itself is driven for real at Layer 5 with a hand-written SRT, and `captionsBurnIn.test.ts` holds the handler.
+- **Video - Picture-in-picture, base a Record take saved as WebM ([T-121], output changed):** the same `-fps_mode vfr`; Layer 5, both codecs, with an overlay as long as the take. The existing PiP E2E keeps its steady-rate sources.
+- **Audio re-attach to a video with cuts, source a Record take saved as WebM ([T-121], output changed; the Export panel's "Re-attach to video" is Audio Studio's):** the picture keeps the rest of the take, as long as the sound: it was 0.07 s of picture under 2 s of sound. Layer 5: the T-120 block (`runAudioMux` with one cut, both codecs) and the T-82 block (overlapping cuts); the whole existing cut family is green on both majors. Unit: `chain.test.ts`.
+- **Video 4p ClipKit - the file names of a clip named in another script ([T-121], names changed):** "Épico clutch" is `Épico_clutch_<platform>.mp4`, a Korean name keeps its letters, and two Hangul names no longer share `clip`. Unit: `filename.test.ts`, and `clipKit.test.ts` (six non-ASCII names through the real queue builders, each of the nine files a writable path). DISPOSITION: the kit's E2E keeps its ASCII clip; that Windows accepts these file names is a filesystem fact this box cannot show.
+- **Video 4g ChatHighlightPanel - a chat log from chatters with non-ASCII names ([T-121], end state changed):** their lines count toward the spikes. Unit: `chatLog.test.ts` (Korean, Japanese, Cyrillic, accented, with marks, the `<name>` form). The panel's existing E2E keeps its ASCII log.
+- **Open project and the autosave Restore, a clip with no `textOverlays` ([T-121], refusal added):** the project is refused naming the clip (`videoStudio.clips[0].textOverlays not an array`) instead of opening a studio that throws in render. Unit: `projectValidation.test.ts` (QA's clip as the red fixture). DISPOSITION: no UI path writes such a clip; the refusal is a damaged or hand-edited file's, so the deepest layer is the validator both entry points call.
+
+### Audio Studio
+
+- **Audio - the Close and "Clean audio" confirms ([T-121], words changed):** an older project's chain, with no `secondaryTrack` key or without the switches added since, no longer asks about "the second track" or "your cleanup settings" it does not have. Unit: `AudioStudio.test.ts` (eleven cases). The existing E2E (a native confirm answered both ways) keeps its edited chain.
+- **Audio - Export and Re-attach with a hand-edited cut ([T-121], words changed):** the refusal says "Click its mark to put it back, then cut that part again." Unit: `audioChainValidation.test.ts`. DISPOSITION: not reachable from the UI (the numbers arrive from a hand-edited project).
+- **Audio - the shortcut overlay's cut row ([T-121], words changed):** "Click a mark / Put a cut back". Unit: `hotkeyTable.test.ts` (a mouse hint), and the wiring pin that reads the four places the name appears.
+
+### Not an element, but covered
+
+- **`electron-builder.yml` and `package.json`:** three `files` excludes keep one ffprobe in the exe, and four dependencies nothing imports are gone; `releaseWorkflowShape.test.ts` pins both. Packaging probe (`electron-builder --win dir`, scratch output): `win-unpacked` 706 MiB to 409 MiB, `ffprobe-static` 336 MiB to 61 MiB (`bin/win32/x64/ffprobe.exe` only). The win32 release run is where `ffprobePath` and the Windows `ffmpeg.exe` are confirmed.
+- **Docs:** the claims the ticket listed are corrected at their sites (FOR_MIKE, README, PRODUCT_GUIDE, HOW_IMAGII_WAS_MADE, STYLE_GUIDE, DESIGN_GUIDE, USER_GUIDE, BRANDING, `release.yml`'s comment, and four source and three test comments) and the cites this round's edits moved are re-pointed in this file.
+
+### Closed from round 70's "Found, not fixed"
+
+"`bt2020nc` and every other matrix still take 6.1.1's RGB round trip unrewritten" stays open and its figure is corrected: a retag alone restores a graded bt2020nc source within 4 levels (red `200,43,40` against `202,45,44`), not 2, on a hand fixture that is not in the suite; bt709's own is 3.
+
+### Found, not fixed
+
+- **Older-build WebM takes still refuse with the re-export sentence.** The remux repairs new saves only; a take saved by an earlier build has no duration in its header, and Video Studio says so. The same packet copy by hand (`ffmpeg -i old.webm -c copy new.webm`, which is what the save does now) gives it one.
+- **The converted take's H.264 level is 6.1 on a 1080p take.** x264 is configured from the container's 1000/1 rate (re-measured here: 1920x1080, High profile, level 61, a `1000/1` fixture through the convert's argv; the same 320x240 take is level 4.2). It plays in Chromium; other decoders are a win32 hand-check. The burn-in, the PiP composite and the cut re-attach now share the argv shape and the level on a 1080p take (measured: 61 for the burn-in and for the cut).
+- **HEVC and ProRes "should work", and the possibly-raised YouTube thumbnail cap** join the owner report's hand-check list: neither was run here (no file, no platform), and the claims in the guide are the platform's, not imagii's.
+- **A silent PiP base shorter than its overlay runs to the overlay's length** with a frozen last frame (T-110 (ac), still open): `-shortest` has no audio stream to bound it. Met again while writing the PiP case (181 frames in 5.968 s over a 3 s take); the case uses an overlay as long as the take.
+- **`@types/fluent-ffmpeg` is still a dev dependency** although `fluent-ffmpeg` is gone: the ticket named four dependencies and `package.json` was to change for those four only. It is not shipped.
+- **A cut now leaves a one-frame hold at its seam** on a steady-rate source whose cut ends on a frame boundary (41.7 ms at 24 fps; the old count-based numbering closed the gap by a frame too much and put every later frame that much ahead of its sound). The upgrade is to snap cuts to the frame grid (T-110 (i)).
+
+---
+
+## Dispositions — round 72 (T-122: the review gate's eleventh pass)
+
+Six behavior items and eight claim, cite and count edits from the nine reviewers' eleventh pass. Every behavior change was broken once and watched to fail (the quotes are in `LESSONS_LEARNED.md`, 2026-10-14, T-122; the mutation table with the sha256 before and after each restore is in the hand-back). **IMG-PREC's Layer 5 trigger fired once** (the cut re-attach's argv gained `-enc_time_base:v filter`): the case is in the suite and its red is the 6.1.1 run, because the defect lives on the major the exe ships and the bundled 7.0.2 is exact either way. The numbers: `npm run verify` 3773 tests in 138 files (one new file, `tests/unit/emojiGuard.test.ts`); `test:media` 225 cases, 214 run and 11 platform-skipped (three new: the two cut-timestamp cases and the checker's own); Playwright 249 (one new case; the second-track case and the six Record cases that read the hint extended or re-pinned). All counted in `TESTING.md`.
+
+### Record
+
+- **Record - Microphone and Webcam selects / the two "No ... found" hints ([T-122], copy changed):** the sentence names the third recovery: "No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources." (and the microphone twin). A camera another app holds (OBS) probes as unavailable exactly like an absent or a blocked one, so the hint now says all three; Start's own error already did. E2E: the six record.spec.ts cases that read the hints exactly (`CAM_WARNING` and `MIC_WARNING`: "mic checkbox toggles...", "webcam checkbox with no camera...", "with a camera attached...", "Start with the webcam ticked and no camera...", "Refresh sources re-scans...", "a microphone and NO camera...") are re-pinned to the new sentences. Unit: `devices.test.ts` (both sentences exactly, and the clause for either kind). DISPOSITION: a device held by another app is an OS state this box cannot produce (no camera here); the sentence is what is asserted, and the probe's own rejection of all three is the shipped behavior the hint is written for.
+
+### Video Studio
+
+- **Video 4p ClipKit - Clip Kit on a clip whose name was cleared ([T-122], end state changed):** the rename field accepts an empty name, and the kit used to fail after the folder pick with "Clip Kit failed.". It now runs: the folder is `clip-kit-<date>`, the files are `clip_<platform>.mp4`, `clip_thumb_1-3.jpg`, and the reveal selects `clip_youtube.mp4`. E2E: video-pipelines.spec.ts "a Clip Kit on a clip whose name was cleared still runs: the folder and the files are named "clip"" (the real rename field cleared; the folder chooser stubbed in main, as in every kit case; a refusal fails the case with the toast's own words). Unit: the wiring pin (`safeName` is computed before `makeKitDir` and is what it is asked for; one `sanitizeFilename` call). Main's `assertNonEmptyString` gates are untouched (trust-boundary validation).
+- **Video - Export panel, the `{handle}` token of the filename template ([T-122], names changed):** a handle in any script survives (`@토끼` is `토끼`; it was empty, so the template fell to `export`), a decomposed accent keeps its accent, an emoji and its variation selector go, dots and separators still go. Unit: `filename.test.ts` (seven `{handle}` cases; there was none). The panel's E2E keeps its ASCII handle. DISPOSITION: that Windows accepts these file names is a filesystem fact this box cannot show.
+
+### Audio Studio
+
+- **Audio - Second track panel, the "This track dips whenever you talk" footer ([T-122], conditional):** drawn only while "Duck under your voice" is checked. "Second mic" defaults Duck off and the export builds no `sidechaincompress` then, so the sentence was a promise about a dip that did not happen. E2E: audio.spec.ts "a second track can be added in every role and its mix controls drive the chain" (footer present with Background music, absent after unchecking Duck, present again, absent on Second mic, present on Game audio). Unit: the wiring pin.
+- **Audio - Re-attach to video with cuts, the picture's timestamps ([T-122], output changed on the shipped ffmpeg):** a cut whose length is not a whole number of frames no longer puts two frames on one `pts_time` or shows a survivor up to half a frame early on a constant-rate source. Layer 5: the T-82 block, "a cut that is not a whole number of frames long keeps every survivor on its own timestamp" (the 24 fps ramp with two cuts; a 30 fps source with three), the whole output packet list against where each frame belongs, run on 7.0.2 (green with and without the option) and on 6.1.1 through the alias recipe (red without it: `pts_time written twice: 3.291667`). Unit: `muxCodec.test.ts` (the option beside passthrough on every re-encode, absent from a copy). DISPOSITION: the Export button's mux-back is the end state and is driven at Layer 5 through `runAudioReattach`; the Windows exe's own ffmpeg is the release run's.
+
+### Not an element, but covered
+
+- **The no-emoji guard** reads all four directories of `src/`; `tests/unit/emojiGuard.test.ts` fails when a directory is left off and runs the script on one emoji under each root. A temporary emoji in `src/preload/index.ts` failed the script and the file was restored byte-identical.
+- **Docs:** the four exe-size figures are number-free ("a single portable exe") until the release run measures one; the BRANDING name-table violations in README and FOR_MIKE use the real names ("Posting log", "Title starters", "Smart highlight finder", "Start recording"); the timing figures live in one table in TESTING and the config comment and the release workflow's comment point at it; TESTING's media heading says Layer 5; STYLE_GUIDE names the hook (PostToolUse on Edit|Write|MultiEdit), gives Home and End to the Timeline, and no longer cites a local path; the stale cites in `image.spec.ts` and `ExportDialog.tsx` are re-pointed against this tree; the AutosaveRestore row above says Clear, not Discard.
+
+### Found, not fixed
+
+Ledgered with the round and not fixed, as the ticket said:
+
+- **The reframe's Left and Right strips are not at the edges** (Left starts at x=196 on a 1920-wide source, not 0). A design call about what "Left" means; it joins the owner report's hand-check list.
+- **The overlay and watermark fonts have no CJK coverage**, so a Korean or Japanese overlay text or watermark handle has no glyphs to draw with (the file name now survives; the picture is a separate question). A capability call (a font to ship, or a fallback chain); owner report.
+- **(ak)** Record's microphone rides Chromium's voice-call processing (echo cancellation, auto gain, noise suppression all default on); **(al)** no single-instance lock; **(g)** the image-layer `src` mechanism; **(ai)** the portable exe's English-only locale paks. Each extends its lettered item in T-110's post-wave backlog.
+
+Seen and left:
+
+- **HOW_IMAGII_WAS_MADE.md** still says "Title pattern suggester" (line 96) and "auto-highlight finder" (line 159). It is the development log, and those are the names the items had when they were built; the user-facing docs are corrected.
+- **TESTING.md's layers are numbered 1, 2, 5, 3, 4 in document order** now that the heading says Layer 5 (the repo's name for the media suite everywhere else). Moving the section is a roughly 260-line block move the ticket did not ask for.
+- **The older LESSONS entry for T-82** (the cut re-attach's first fix) still says "ffmpeg falls back to a forced 25 fps CFR with duplicated frames"; it is that entry's own period account, measured on the bundled 7.0.x, and the claim is scoped to 7.0.x where the code and the test say it now.
+
+---
+
+## Dispositions — round 73 (T-123: the review gate's twelfth pass)
+
+Eighteen behavior items (four of them layout items with measured numbers, four with a Layer 5 case) and sixteen claim, cite and count edits from the nine reviewers' twelfth pass. Every behavior change was broken once and watched to fail (the quotes are in `LESSONS_LEARNED.md`, 2026-10-14, T-123; the mutation table with the sha256 before and after each restore is in the hand-back). **IMG-PREC's Layer 5 trigger fired four times** (the single-track export's `-af` gained a limiter, a mono source's loudnorm gained `dual_mono`, the cut's picture chain gained `settb`, the crop region gained a clamp): each has a case on real output, the AVI one red on the BUNDLED 7.0.2 and all of them run on the distro's 6.1.1 too (the transcript is in the hand-back). **The layout rows below are the first to be asserted by measuring** (`tests/e2e/layout.ts`: `scrollWidth <= clientWidth` and every control inside its box, at the 1632x918 default window and the 1024x640 minimum), against the pre-round build. The numbers: `npm run verify` 3976 tests in 146 files (eight new files, `docClaims.test.ts` among them); `test:media` 238 cases, 227 run and 11 platform-skipped (thirteen new, two existing loudnorm cases re-pointed); Playwright 267 (eighteen new cases and five extended). All counted in `TESTING.md`.
+
+### Record
+
+- **Record - a take that ends by itself ([T-123], state changed):** when the captured window is closed every track ends, `onstop` runs `finalizeRecording`, and the save used to run under a live "REC 00:07" screen with a Stop that did nothing and no Discard (only the Stop button set the `saving` phase). `finalizeRecording` sets it at its top. E2E: record.spec.ts "a take that ends ITSELF (the captured window closed: every track ends) shows the saving card at once, not a live REC screen with a dead Stop" (every track ended from the page: the "Finishing up" card at once, no REC clock, no Stop, Discard enabled, the save dialog asked for the take's own title, and the take is still saved). Red on the pre-round build: the saving card `element(s) not found`. DISPOSITION: closing the captured window is an OS act this box cannot perform; ending the tracks from the page is the same event the recorder sees.
+- **Record - the toast's "Edit in Video Studio" ([T-123], shared):** the ask-before-replace bridge is one hook now, `useEditInVideoStudio` (`lib/editInVideoStudio.ts`), that Record and Reframe both call; behavior unchanged. The two Record cases that drive it (record.spec.ts "record -> Esc -> save as MP4 runs the real convert and "Edit in Video Studio" hands the file over" and the T-119 question case) pass unchanged. Unit: `interactionWiring.test.ts` (the T-119 pin now reads the hook: the question before the load, a "no" returns first; both callers use it and neither carries a copy).
+
+### Video Studio
+
+- **Video 4q TextOverlayEditor - the Time boxes ([T-123], end state changed):** typing "12" is 12 (it was 1.00: the box rewrote itself to "N.00" on every keystroke), an emptied box stays empty, Enter or leaving commits, an end before the start is clamped to it and a start past the end lifts the end. E2E: video-core.spec.ts "text overlays: the Time boxes take typed digits (12 is 12, not 1.00), and the end never sits before the start" (typed with `retype`, because `fill` cannot find this class). Unit: `draftNumber.test.ts`. Red: `emptied: nothing snaps back into it  Expected: ""  Received: "0.00"`.
+- **Video 4n PipPanel, 4j ChatHighlightPanel, 4s CustomPresetManager - the overlay width, the spike window, the preset's width, height and frame rate ([T-123], end state changed):** each took typed digits through `Number(typed) || default`, so an emptied box snapped to its default and the next digits appended ("600" in PiP was 360600, then a bare "Picture-in-picture failed."). They are `DraftField`s: the box holds what is typed, and a commit stores the number clamped to the range the box's own attributes name. E2E, one case each: video-pipelines.spec.ts "the overlay width takes typed digits: 600 is 600, not 360600, and what leaves the box is inside the range", "the spike window takes typed digits: 45 is 45, not 1045, and a number outside 3 to 60 is clamped when typing ends", "the size, height and frame-rate boxes take typed digits, and are held to what a preset can be". **One deviation, on purpose:** the width and height of a preset are clamped to 1 to 16384, not to 64, at the box: a width under 64 is refused at Save with its own sentence ("Width / height must be at least 64"), and that refusal is kept (and tested where it was).
+- **Video - the five output-folder buttons ([T-123], name changed):** GIF, batch export, compilation, picture-in-picture and Reframe each draw an icon and the folder's name, so the button's accessible name was just "Videos". It is "Output folder: Videos" (`OutputDirLabel`'s `sr-only` prefix). E2E: video-pipelines.spec.ts "each of the five says what it is to a screen reader, "Output folder: <name>", not just the folder's name".
+- **Video 4k ReframePanel - the saved toast's "Edit in Video Studio" ([T-123], new element):** the toast that names the file ("Saved name.mp4") carries the action Record's identical moment has. It asks "Replace the video you're editing? 1 clip and its edits will be discarded." before it loads the 9:16 file in place of the source; declined, the source and its Reframe panel stay and the button stays on the toast; accepted, the header names the new file, the Reframe card is gone (it is vertical) and Captions is on it. USER_GUIDE gives the order for a captioned vertical video: reframe, Edit in Video Studio, Transcribe, Burn into video. E2E: video-pipelines.spec.ts "reframe: the three positions are real state, and 9:16 comes out square-pixelled" (extended: the real reframe, then both branches of the question). Unit: the wiring pins. Red on the pre-round build: `the saved toast carries the action  Expected: visible`.
+- **Video 4s CaptionsPanel - Save .srt, scope ([T-123], copy added):** "Save .srt" copies the whole transcript on the source's clock and sat directly under "Burn captions over selected clip range only". A sentence under the row says what the box does ("The box above only changes Burn into video. Save .srt keeps the captions for the whole video."), and the button is described by it (`aria-describedby`). E2E: the existing "with an SRT restored from a project file, every style control and Save .srt work" (the sentence visible, the button's accessible description equal to it, and with the range box CHECKED the saved file is still byte-identical to the whole transcript). The range-aware save through `writeKitSrt`'s shift is the ledgered upgrade.
+- **Video 4r PostChecklist - the Posting log's platform chips ([T-123], new chip):** Facebook, between X and Twitch: the kit writes `*_facebook.mp4` and the log had no chip. E2E: video-pipelines.spec.ts "logging a post writes a posting-log entry to the settings store, and deleting it (after a confirm) takes it back out" (all seven toggles are multi-select and reversible; a Facebook post is logged, drawn in its row and stored as `['Facebook']`). Red: `Expected: "false"  Error: element(s) not found`.
+- **Video 4r PostChecklist - the Logged posts rows ([T-123], layout):** the views / likes / comments boxes wrap (three `w-16` boxes were 337 px in a 274 px list, and "comments" sat off the edge behind a hidden scrollbar), and a pasted link in the notes wraps (`break-words`). E2E: video-pipelines.spec.ts "a logged post wraps its views / likes / comments boxes and its notes inside the list, at the default window and the minimum" (two entries, one with a long link; `expectNoHorizontalOverflow` on the list and the card, `expectControlsWhole` on every box and label). Red on the pre-round build: `the Logged posts list at the default 1632 px window scrolls sideways: its content is 337 px wide in a 274 px box. Past its edge: <label> "comments" +63px`.
+- **Video 4b Player, 4e Timeline - the keys after a box is ticked ([T-123], end state changed):** a ticked "Crop guides" box stays focused, and the Player's keys (`,` `.` I O, the arrows) went dead; Space stays the box's. The Timeline's Playhead slider asks the same `focusOwnsKey`. E2E: video-core.spec.ts "player keyboard: a ticked Crop guides box keeps its focus and the Player's keys still answer, Space stays the box's". Unit: `keyOwnership.test.ts`.
+- **Video - a crop that overshoots the frame by the validator's slack ([T-123], output changed):** an 800 px box in a 799.5 px parent (1.000625) made `crop=3842:2160:0:0` and refused the whole export. Layer 5: media.spec.ts "a crop that overshoots the frame by the validator's slack still exports" (the measured crop, a taller overshoot, the ceiling, an offset crop, Compile and GIF), on 7.0.2 and 6.1.1. Unit: `filters.test.ts`. DISPOSITION: the Export button is driven at Layer 5 through `runExportJob`; the crop rectangle's own drag is the existing CropOverlay rows.
+
+### Audio Studio
+
+- **Audio - Undo, Redo and `?` after a checkbox or a slider ([T-123], end state changed):** Ctrl+Z and `?` from a focused ticked box or a moved slider are the studio's (a text field still keeps its own). E2E: audio.spec.ts "a ticked checkbox or a moved slider keeps its focus and still lets Ctrl+Z, Ctrl+Y and ? through" (the focus asserted to be on the box, so the trap is real; Space still toggles it). Unit: `useUndoRedoHotkeys.test.ts`, `HotkeyOverlay.test.ts`.
+- **Audio - Cleanup's five strength buttons, Power-line frequency, Platform ([T-123], layout):** "Aggressive" was cut to "Aggress" (five equal columns); both selects poked past their card (by 3 and 19 px). The buttons take the width their label needs and share the row; both selects are `min-w-0`. E2E: audio.spec.ts "Cleanup and Levels draw every label whole and keep their selects inside the card, at the default window and the minimum" (each of the five buttons whole and inside, both selects inside, neither card scrolls sideways). Red on the pre-round build: `the Cleanup card at the default 1632 px window scrolls sideways: its content is 303 px wide in a 300 px box. Past its edge: <select> "60 Hz — US, Canada 50 Hz — mos" +3px`.
+- **Audio - Levels, Manual gain ([T-123], copy added):** "Peaks above −1 dBFS are limited when you export, so a boost cannot clip." sits under the slider. E2E: audio.spec.ts "every Levels control writes through to the chain" (the sentence). The behavior is Layer 5's (below).
+- **Audio - the waveform ([T-123], error path and ceiling added):** a file that opens but cannot be drawn (an ADPCM WAV) says "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again." once (a failed `load()` makes wavesurfer emit `error` twice; the toast has an id), and the transport that needs the picture stays off; a file over 2 hours is refused at load by every route to `loadSource` (the importer, Clean audio, a restored project) in a sentence naming the ceiling and the reason. E2E: audio.spec.ts "a file the waveform cannot be drawn for says so, once, in a finished sentence" (an ADPCM WAV), "a waveform whose file cannot be read says so once too, though wavesurfer reports it twice" (the page's `fetch` refuses the app's file protocol) and "a file longer than two hours is refused at load, naming the ceiling, and the studio never holds it" (a 58 MB, 2 h 1 s WAV; no "Loaded", no waveform, no export, and a short file is taken on the same drop zone straight after). Unit: `audio.test.ts`. Red on the pre-round build: `Received array: ["Loaded"]`. DISPOSITION: the ceiling is a marked simplification (T-110(ao)); a real 3 to 6 h decode is not run (that is the failure it prevents).
+- **Audio - Export, a single track's peaks and a mono file's loudness ([T-123], output changed):** a chain with any stage ends in the mix bus's limiter (-1 dBFS), a bare chain is the file that went in, and Even volume on a mono source lands on its label on the dual-mono meter (-16, where it landed at -13). Layer 5: media.spec.ts "a single-track export answers for its peaks and its loudness label" (seven cases on real output), and the two existing loudnorm cases re-pointed to the dual-mono meter. Unit: `singleTrackTail.test.ts`, `chain.test.ts`. DISPOSITION: the Export button's save dialog is stubbed in the existing E2E rows; what the bytes are is Layer 5's.
+- **Audio - Re-attach to video with cuts, an AVI source ([T-123], output changed):** `settb=AVTB` ahead of `setpts` keeps a survivor on its own timestamp when the stream's time base is 1/fps. Layer 5: "an AVI source (stream time base 1/fps) with cuts that are not frame-aligned", red on the BUNDLED 7.0.2 (`pts_time written twice: 3.291667`), green on both majors. Unit: `chain.test.ts`.
+
+### Stream Graphics
+
+- **Image - the tool keys after Snap is ticked ([T-123], end state changed):** R, Delete and Ctrl+Z work with the Snap box (or a slider) focused. E2E: image.spec.ts "tick Snap and R still switches the tool, Delete still removes the layer, Ctrl+Z still brings it back" (the existing select case, "a focused select owns the keys", still holds).
+- **Image - Toolbar Grid size and a text layer's Size ([T-123], end state changed):** the two boxes are `DraftField`s (an emptied box stays empty; 40 is 40, not 240), clamped when typing ends. E2E: image.spec.ts "the grid size and a text layer's Size take typed digits, and are held to their range when typing ends".
+- **Image - Properties panel, the Rotation row ([T-123], layout, HIGH):** the row (label, box, seven presets: 406 px) was clipped behind the column's hidden horizontal scrollbar at every window size ("0" and "15" of seven at the default window); it wraps. E2E: image.spec.ts "the Properties column has no sideways overflow and all seven rotation presets are on screen, at the default window and the minimum" (a text layer and a rectangle, each at both sizes; the 270 preset then sets the angle). The existing "all seven rotation presets" case clicks them with `click()`, which scrolls them into view, and stayed green throughout. Red on the pre-round build: `the layers and Properties column at the default 1632 px window (a text layer) scrolls sideways: its content is 406 px wide in a 260 px box. Past its edge: <div> "0 15 30 45 90 180 270" +146px; <button> "270" +146px`.
+- **Image - Variants, a single Save ([T-123], end state changed):** says "Saved <name>" after the file is written and nothing when the dialog is canceled (it was the one save with no word of success). E2E: image.spec.ts "variants: generate four tiles, save one, regenerate, save all" (a saved one toasts with the chosen name; a canceled one says nothing). Unit: T-91's pin (the null check, then the toast).
+
+### References
+
+- **References - Mood Boards, the "Clear thumbnail cache" tooltip ([T-123], words changed):** "Clear the on-disk thumbnail cache for mood boards" (it said "Drop", the app's drag-and-drop verb). E2E: references.spec.ts "Clear thumbnail cache empties the cache under the budget too" (the title attribute). Unit: `docClaims.test.ts`.
+- **References - the rename dialog's scrim ([T-123], end state changed):** a drag that began in the dialog and ended on the scrim no longer closes it or discards the typed name; a plain click on the scrim still closes. E2E: references.spec.ts "a drag that starts inside the dialog and is released on the scrim neither closes it nor loses the typed name; a plain click on the scrim still does". The fix is in `Modal`, so every dialog has it (Templates, Variants, the Fix wizard, the Custom preset manager, the shortcuts overlay, NameDialog); the NameDialog case is the one that loses something.
+
+### Not an element, but covered
+
+- **Main's progress reports** go through `sendIfAlive`; closing the window mid-export no longer raises the main-process error dialog. Unit: `closeMidJob.test.ts` (each real handler, a dead sender in two shapes), `sendIfAlive.test.ts`, `progressSendsGuarded.test.ts` (the grep for siblings, kept). DISPOSITION: the real window close mid-export (3 of 40) is a timing the box cannot reproduce on demand; the destroyed sender is the same fault.
+- **`recording:begin`'s cap** holds under concurrency (twelve begins at once open four). Unit: `recordingStream.test.ts`.
+- **A crashed renderer** is reloaded to Home, once. E2E: home-chrome.spec.ts "T-123 (15) a renderer that dies is reloaded to Home and the autosave is offered again; a second death at once is left, not looped" (`webContents.forcefullyCrashRenderer()`, beside T-35's ErrorBoundary case). Unit: `rendererRecovery.test.ts`.
+- **The no-emoji guard** reads `.html` and `.css` as well as `.ts` and `.tsx`; `emojiGuard.test.ts` runs it on an emoji in the page and the stylesheet and fails on a file type it does not read. A temporary emoji in `src/renderer/index.html` failed the script before this round and now fails it.
+- **`tests/unit/docClaims.test.ts`** holds the claims the twelfth pass found false against the code they describe: the toast durations (against the installed react-hot-toast), the autosave banner's words, the never-say terms, the 800 px cap, the black washes, the tooltip's verb, the timing comments.
+- **Docs:** the cites in `image.spec.ts` are re-pointed against the final tree (`ImportPanel.tsx:71`; `ImageStudio.tsx`'s and `index.ts`'s moved with this round's own edits), and so is every other cite this round's edits moved (the script that found them is in the hand-back); the seam comments say the bound is per cut and additive.
+
+### Closed from round 72's "Found, not fixed"
+
+None. (The reframe's Left and Right strips, the overlay fonts' CJK coverage, (ak), (al), (g) and (ai) are owner decisions or capability calls and stay open.)
+
+### Found, not fixed
+
+Ledgered with the round and not fixed, as the ticket said:
+
+- **SAR geometry** (a 720x480 source with a 32:27 sample aspect ratio exports squeezed and cropped) extends (h). **The renderer's dependencies in the asar** extends (ai). **The primary-gain cancellation** extends (ag). **The waveform peaks pipeline** is new, (ao): a real fix retires the 2 hour ceiling. **The Chromium cache's clear-versus-no-store call** is new, (am): this round only discloses it. **The 9:16 watermark inset** (20 px flat, under the caption rail of the vertical files the kit exists for) is new, (an). `validateExportJob` does not gate `outputFilename` (the renderer sanitizes; defense in depth) is noted. Kit `MAX_PATH` on long names and whisper.cpp's win32 ANSI argv join the owner hand-check list.
+- **The Posting log's three stat boxes** still read `Number(typed) || 0` (T-123 (4) names seven boxes whose default is not 0); with a default of 0 an emptied box then typed digits reads "05", which is 5, so the shape does no harm there. Left as it was.
+- **The layout assertions run in Xvfb at 1x** at two window sizes; a HiDPI display is not driven.
+- **"Edit in Video Studio" on the Reframe toast** is there only for a source wider than tall, because the Reframe panel is.
+
+## Dispositions — round 74 (T-124: the review gate's thirteenth pass)
+
+Thirty-three findings from sweep 13 (the Stream Graphics canvas, the output folders, the 9:16 strip, the re-attach toast, the cut grid). Every behavior change was red-first against the round-73 build or with the fix mutated out (the quotes are in `LESSONS_LEARNED.md`, 2026-10-15). A change to an interactive element carries its row here.
+
+### Record
+
+- **Record - the screen ending under a take that has the microphone on ([T-124], state changed):** closing the captured window ends the take and starts the save, with the mic on or off. `MediaRecorder` stops only when ALL of its tracks have ended and the microphone's outlives the screen, so the old take counted REC over a frozen frame. `watchScreenEnd` listens for `ended` on the screen's own video track after the phase is `recording`, and `stopAllStreams` takes the listener off. E2E: record.spec.ts "the captured window closing ends a take that has the microphone on, and saves it (T-124 (1))", "with the webcam in the take, the captured window closing still ends it: the listener is on the screen the compositor draws, not on its canvas (T-124 (1))", "a window that closed while the start was still opening ends the take the moment it begins (T-124 (1))". Native boundary: the OS fires `ended` when the real window closes; the test dispatches the event on the track the recorder was given, and `track.stop()` (which does not fire it) is not what the test uses. Unit: `interactionWiring.test.ts` "a take ends when the screen does".
+
+### Home
+
+- **Home - the Autosave banner, both of its notices ([T-124], state changed):** the restore offer AND the damaged-file notice are shown only over a session that holds no work (`sessionHoldsWork()` is `hasStudioState(captureProject())`, the autosave gate's own definition, asked once per mount), so going Home mid-session no longer offers a restore that would land on top of what is open. E2E: home-chrome.spec.ts "T-124 (5) the autosave is offered on launch, and not again over the work you are doing: edit, go Home, no banner", "T-124 (5) a damaged autosave is announced at launch, not over a session that has work in it". Unit: `projectValidation.test.ts` (`hasStudioState`), `ProjectIO.test.ts` (`sessionHoldsWork`), `interactionWiring.test.ts` "the autosave banner is not shown over a session that holds work".
+- **A crashed renderer - the reload ([T-124], end state changed; extends the round-73 row below):** the window loads the entry again (`loadEntry`, the loader `createWindow` uses) instead of `webContents.reload()`, which kept the URL's hash: a crash inside a studio came back inside it, and the guide said Home. The dead page's open recording sessions are abandoned (partial `.webm` removed, cap slot released). E2E: home-chrome.spec.ts "T-124 (2) a renderer that dies inside a studio is reloaded to Home, with the autosave offered, not into the studio it died in", "T-124 (3) a crash mid-take leaves no recording session behind: the temp webm is removed and a new take can begin". Unit: `recordingStream.test.ts` (`abandonOpenRecordingSessions`: open sessions go, a closed one stays, the count, the file), `interactionWiring.test.ts`.
+- **The window's size and position - the write ([T-124], failure path added):** `persistWindowBounds` never throws (a read-only or full `userData` made every `resize` and `move` an uncaught main-process error); it warns on the console and the app carries on. Unit: `windowBounds.test.ts` (a write the file system refuses, a window that dies between the check and the question, a gone window, and that the next write after a failed one still goes through). A real read-only disk is covered by the probe in the round's scratch (`chattr +i` on the config file: uncaught before, one warning after); an Electron window on a read-only volume is not driven by the suite.
+
+### Video Studio
+
+- **Video 4b Player, 4e Timeline - the O, I, `,` `.` and arrow keys with a modifier held ([T-124], end state changed):** Ctrl, Alt or Cmd makes the key a chord, which the handlers leave to the window; Ctrl+O set an Out point and was swallowed by `preventDefault`. E2E: video-core.spec.ts "Ctrl+O, Ctrl+I, Alt+. and Alt+ArrowRight are chords, not the O, I, . and arrow shortcuts: from the Player and from the Playhead slider they move nothing, and the bare O still sets the Out point (T-124 (29))" (both focus paths, and the bare O as the control). Unit: `keyOwnership.test.ts` (`hasChordModifier`).
+- **Video 4k ReframePanel - the strip ([T-124], output changed):** the 9:16 file is cut from the clip's crop (when one is drawn) and runs at the clip's speed, sound included, through the shared builders (`cropToFrame`, `buildAudioSpeedFilter`); the progress denominator is the range over the speed. E2E: video-pipelines.spec.ts "reframe: the crop and the speed set for the clip reach the 9:16 file ..." (a 1:1 crop at 2x: no red block, one second, 1080x1920 square pixels; the uncropped 1x control keeps the red and both seconds). Layer 5: media.spec.ts "a reframed clip keeps its crop and its speed (real ffmpeg, T-124 (16))" (four cases, green on 7.0.2 and 6.1.1; red with either stage mutated out, on both). Unit: `reframe.test.ts`, `videoReframePayload.test.ts` (the payload is checked at the boundary: crop, then speed).
+- **Video 4k ReframePanel, 4l GifPanel - the file's name ([T-124], name changed):** named for the video the person opened (`stream_reframe-1080x1920-center.mp4`, `stream_480px_15fps.gif`), not for the converted working copy it is played from (`stream-aB3dE5fG_...`). E2E: video-pipelines.spec.ts "reframe and GIF are named for the video the person opened, not for the working copy a converted import is played from (T-124 (17))".
+- **Video 4k, 4l, 4m, 4n - the output-folder button and what Reframe, GIF, Compile and Picture-in-picture do with no folder chosen ([T-124], state changed):** the button shows the folder the last file of any of the four went to (one shared key, `video.lastOutputDir`, read at mount and again when the action is pressed), a press with nothing chosen uses it without opening a chooser, a canceled chooser starts nothing and remembers nothing, and a stored value that is not a usable absolute path is ignored. The chooser opens on the current folder. E2E: video-pipelines.spec.ts "GIF, Compile, Reframe and Picture-in-picture start on the folder the last export went to: the button shows it, no chooser opens, and the file lands there (T-124 (21))", "a folder one panel finished with is the next panel's without asking, a canceled chooser remembers nothing, and a stored value that is not an absolute path is ignored (T-124 (21))"; the existing `output-folder buttons` case (the empty state) is unchanged and green. Native boundary: the real folder dialog, replaced in main by a recorder that counts which kind of chooser was asked for. Unit: `settingsKnownKeys.test.ts` and `settingsClear.test.ts` (the key is a known setting), `interactionWiring.test.ts` "the GIF, Compile, Reframe and Picture-in-picture panels start from the folder the last file went to".
+- **Video 4q TextOverlayEditor - the Time boxes, the position boxes and the card ([T-124], end state, copy and layout changed):** the x and y boxes are `DraftField`s held to 0..1 (".5" is 0.5, not 1); the Time boxes are labelled "Source time" and a window that misses the clip is flagged in a `role="status"` sentence naming the range the clip covers; the card says "Text appears in the exported file, not in the player. Times are seconds in the source video."; the controls are one column, each row wrapping, the remove cross beside the caption (it sat 12 px outside the card). E2E: video-core.spec.ts "text overlays: the position boxes take a leading decimal (.5 is 0.5, not 1), and a typed number is held to 0 to 1 (T-124 (15))", "text overlays: the Time boxes say they are source time, a window that misses the clip is flagged, and the card says nothing previews it (T-124 (18), (19))", "the Text overlays card draws every control whole, on one line and over nothing else, at the default window and the minimum (T-124 (23))". Unit: `textOverlay.test.ts` (`overlayOutsideClipMessage`).
+- **Video 4e ClipList - the Speed slider ([T-124], copy added):** "Speed is applied when you export. The player here always plays at normal speed." (the player has no live speed). E2E: video-core.spec.ts "the clip speed says it is applied when you export, and that the player plays at normal speed (T-124 (19))".
+- **Video - Clean audio, on a video over two hours ([T-124], failure path added):** refused at the button on the probe the open video already carries, before the replace question and before any ffmpeg: "Export the part you want from Video Studio first, then open that shorter file." (the audio-only sentence says to split the file in another app). E2E: video-pipelines.spec.ts "Clean audio on a video longer than two hours is refused at the button: no question, no extraction (T-124 (6))". Unit: `shared/audio.test.ts` (`waveformCeilingRefusal`'s two sentences), `interactionWiring.test.ts` "the 2-hour gate is asked where the length is known".
+
+### Audio Studio
+
+- **Audio - the importer's drop of a video over two hours ([T-124], failure path added):** `audio:extractFromVideo` probes first and refuses before ffmpeg is spawned (a 3 h video used to be extracted to a multi-gigabyte WAV in `%TEMP%` and only then refused). E2E: audio.spec.ts "a video longer than two hours is refused before any sound is extracted: no ffmpeg, no WAV in %TEMP% (T-124 (6))" (the spawn log has no ffmpeg; the temp folder gained nothing). Unit: `audioExtractCeiling.test.ts` (the handler, with a probe stub, never reaches the extractor).
+- **Audio - Export, "Re-attach to video", the saved toast ([T-124], new element):** "Cleaned audio attached to the video" carries **Show in folder** and **Edit in Video Studio** (the same two buttons Record's take has, through `useEditInVideoStudio`, which asks before it replaces the video being edited); an audio-only export's toast is unchanged and has neither. E2E: audio.spec.ts "the re-attach toast names the file, shows it in its folder, and opens it in Video Studio; an audio-only export offers no video to open (T-124 (20))" (Show in folder reaches the shell with the file; Edit in Video Studio lands on `#/video` with `e2e-clip-cleaned.mp4` in the header and the player mounted); the T-90 re-attach case reads the toast as "the sentence, then the buttons". The ask-before-replace branch is covered by Record's and Reframe's cases through the same hook.
+- **Audio - the side column, and the Fix Wizard's toast ([T-124], copy added and changed):** "Changes here are applied when you export. The player plays your original sound." sits above the panels, and the wizard's confirmation says "Cleanup configured. It is applied when you export, so tweak it from the side panels if needed." E2E: audio.spec.ts "the side column says its changes are applied when you export, and the player keeps playing the original sound (T-124 (19))"; the wizard cases that quote the toast (audio.spec.ts, home-chrome.spec.ts) are updated to the new sentence.
+- **Audio - Levels, Manual gain, the sentence under the slider ([T-124], copy changed; extended by [T-125] (15), see round 75):** "When you boost or switch something on, peaks above −1 dBFS are limited in the export, so a boost cannot clip. With nothing switched on, the export keeps your levels as they are." The round-73 sentence was unconditional and false for the export that changes nothing (a bare pass-through has no limiter by design). E2E: audio.spec.ts "every Levels control writes through to the chain" (the sentence, and the old one is gone). Unit: `docClaims.test.ts` (the panel, README and USER_GUIDE say the same condition, against `process.ts`).
+- **Audio - Cleanup, the Power-line select, and the custom noise sliders; Levels, the Platform select ([T-124], layout and label changed):** the Power-line row stacks its label above a full-width select; "60 Hz — US, Canada" is shown whole; the Platform option reads "YouTube, TikTok, Reels (−14)" (the 210 px label was cut in a 176 px select; the hint line under it still names Spotify); each custom slider's readout is one line on the label's row. E2E: audio.spec.ts "Cleanup and Levels draw every label whole and keep their selects inside the card, at the default window and the minimum (T-123 (25), (27))" (now measures the selected option of each select), "the Custom noise sliders keep their readouts on one line and the row the same height from end to end of the slider (T-124 (25))".
+- **Audio - an export with cut regions ([T-124], output changed):** a cut lands within one 256-sample block (5.3 ms), whatever block the decoder hands over; a FLAC source's cuts were up to 60 ms off and an ALAC's 77 ms (and a WAV's 77 ms on the bundled 7.0.2). Layer 5: media.spec.ts "a cut is accurate to a 256-sample block, whatever block the decoder hands over (real ffmpeg, T-124 (32))" (WAV, FLAC and ALAC through the real export, six cuts each; red with the re-chunk removed, with it set to 1024, or placed after the select; on 7.0.2 and 6.1.1). The re-attach cases keep their cut-survivor checks, with the tail allowance derived from the grid (`maxTailFrames`). Unit: `chain.test.ts`, `singleTrackTail.test.ts` (the stage and its place).
+
+### Stream Graphics
+
+- **Image - the selection frame (Transformer) on an imported picture, and after Select ([T-124], end state changed; revises the round-26 "Selection/Transformer" disposition above):** an imported picture gets resize and rotate handles like a shape; pressing Select (or `V`) right after drawing puts the handles on the selected layer without another click; a locked layer has none. E2E: image.spec.ts "an imported picture gets resize handles, and in a mixed canvas the handles follow what is selected (T-124 (8))", "draw a shape, then press Select: its handles are on it without another click (T-124 (9))", "a locked layer has no handles to resize or rotate it with; unlocking brings them back (T-124 (13))". The existing LayerPanel lock case (a locked drag is refused byte-equal) is unchanged.
+- **Image - a draw gesture released outside the canvas ([T-124], state changed):** the button released over the toolbar, the page or the OS ends the draw: the shape is kept and the preview is gone (the Stage's own `mouseup` never fired, so the preview stuck to the pointer). E2E: image.spec.ts "releasing the button outside the canvas finishes the draw: the shape is kept and the preview is gone (T-124 (10))".
+- **Image - the Line tool ([T-124], end state changed; revises "line 4 points" above):** a horizontal or vertical line draws (the gate is the line's length, not the larger of its box sides, so a straight line is not "under the floor"), a plain click still draws nothing, and a thin line can be resized from its frame (the Transformer refuses only a shrink below 5 px). E2E: image.spec.ts "the Line tool draws a horizontal and a vertical line, and still refuses a click (T-124 (11))".
+- **Image - Snap, a dragged picture ([T-124], end state changed):** a dragged picture snaps to the grid the way a shape does, and a drag shorter than half a cell snaps back. E2E: image.spec.ts "Snap quantizes a dragged picture the way it does a dragged shape, and a drag shorter than half a cell snaps back (T-124 (14))".
+- **Image - Properties, x / y / Rotation ([T-124], end state changed):** the three boxes are `DraftField`s (a minus sign can be typed, what is typed is kept until typing ends), held to `layerOffsetRange` (−1× to 2× the document) and ±360° when it ends. E2E: image.spec.ts "the x, y and rotation boxes take a minus sign and keep what is typed (T-124 (15))".
+- **Image - Properties, the seven rotation presets ([T-124], a11y changed):** announced as "Rotate 45 degrees", not "45"; the visible text stays the number. E2E: image.spec.ts "every shape field, all seven rotation presets, and the opacity readout" (the name and the text) and "the Properties column has no sideways overflow and all seven rotation presets are on screen, at the default window and the minimum" (the 270 preset by its new name).
+- **Image - the tool keys with Ctrl, Alt or Cmd held ([T-124], end state changed; revises "Ctrl+V-is-not-Select" above):** Ctrl+R, Ctrl+O, Ctrl+L, Ctrl+P (and the same with Alt or Cmd) leave the tool alone; the bare letters switch it. E2E: image.spec.ts "Ctrl, Alt or Meta held makes a tool key a chord, not a tool switch: ... (T-124 (29))" (the keydown is dispatched: a real Ctrl+R is the app menu's Reload). Unit: `keyOwnership.test.ts`.
+- **Image - the Layers panel rows ([T-124], layout changed):** the name is cut with an ellipsis inside its own button (it painted over "Move layer up"), the hint tag takes at most two lines, and the four action buttons drop to their own line when the row is narrow. E2E: image.spec.ts "a layer name is cut with an ellipsis inside its button, never painted over the row's buttons, and the hint tag takes at most two lines (T-124 (12))" (both window sizes, with `expectNoOverlap`).
+
+### Not an element, but covered
+
+- **Every outbound network site** is held against an allowlist: three destinations (DuckDuckGo for a typed search, Hugging Face for the caption model - the download follows the server's 302 to Hugging Face's own CDN, which is the same destination - and GitHub for a link the person clicks). Unit: `networkAllowlist.test.ts` (an AST scan of the `.ts` and `.tsx` under `src/`, to eight levels, with a test that fails if any other code file or a deeper one appears; red with a `fetch`, a `WebSocket`, an `import https`, an `<img>` in a new file, a second `fetch` in an allowlisted file, and a CSP `connect-src https:`). What the scan cannot see is the PLATFORM's own traffic: that is read from a net-log of the built app (round 77, T-127 (1)).
+- **The `%TEMP%` disclosure** (`imagii-audio`, `imagii-import`, `imagii-concat`, pruned at the next launch when 6 hours old) is stated beside every "deleting that folder clears everything imagii keeps there". Unit: `docClaims.test.ts`.
+- **Docs:** every cite in `image.spec.ts` and every `file:line` the round's edits moved is re-pointed against the final tree (`docClaims.test.ts` holds the table).
+
+### Found, not fixed
+
+Ledgered with the round and not fixed:
+
+- **The 48 kHz resample sits after the limiter.** The export is written at 48 kHz (`-ar 48000`) and the resampler is the last stage, so a 44.1 kHz source's -1 dBFS limit is not the file's peak: a cut's seam (two phases of a sine butted together) rings in the resampler, and 11 of 24 cuts of a hot 44.1 kHz tone peaked above -0.9 dBFS (to 0.0) on the decoder's block grid, 6 of 24 on the 256-sample one (T-124 (32) did not create it; it changed where the seams land). The Levels sentence and the README say what the LIMITER does. The fix is an `aresample` ahead of the limiter or a true-peak stage, which is a chain change with a Layer 5 case and a product call (an extra resample for every non-48 kHz export).
+- **Seven Layer 5 cases fail on the distro's ffmpeg 6.1.1 and always did** (confirmed on the round-73 tree): the four `KNOWN linux-binary gap` pins (the distro build HAS `drawtext`; the pins assert the bundled binary does not), the GIF frame-rate read (`25/2` where the case expects `12/1`), the text file the `ansi` demuxer claims as video, and the mpegts convert-crash pin. They are platform pins for the bundled linux binary, not defects; the win32 binary is the one that ships.
+- **A real Ctrl+R in the packaged app** is Electron's default menu (View > Reload), because main sets no application menu: the page loses its state (the autosave and the banner are the answer) and no handler of ours sees a keydown it could refuse. T-124 (29)'s E2E dispatches the keydown, since pressing it would reload the page under the test. Not driven; a menu decision for the owner.
+- **`hasChordModifier` reads AltGr as a chord** (Ctrl+Alt on Windows): a layout that types one of V R O L P I O through AltGr stands the shortcut down. Marked `// simplification:` with the upgrade (`getModifierState('AltGraph')`).
+
+## Dispositions — round 75 (T-125: the review gate's fourteenth pass)
+
+Twenty-seven findings from sweep 14 (the compilation join, the 9:16 strip, the output folders, the overlay editor, the allowlist guard) and the docs that ride along. Every behavior change was red-first against the round-74 build (the pristine-build pattern) or with the fix mutated out; the quotes and the mutation ledger are in `LESSONS_LEARNED.md`, 2026-10-15 (T-125). An element this round changed carries its row here.
+
+### Record
+
+- **Record - the microphone ending under a take ([T-125] (25), state changed; the mirror of the screen's end above):** a microphone that goes away mid-take (a headset pulled, a wireless one out of range) ends its audio track and nothing else: REC kept counting over a silent take and nothing said so. `watchMicEnd` listens for `ended` on the mic's audio track after the phase is `recording` and toasts once, in the 8 s error style, "The microphone stopped. The rest of this recording has no sound from it."; the take is NOT ended (the picture is worth keeping; the screen's own end is what `watchScreenEnd` is for), and `stopAllStreams` takes the listener off. E2E: record.spec.ts "a microphone that drops mid-take is announced once, the take carries on, and it still saves (T-125 (25))" (told once, REC still counting, Stop still there, the file saves with its picture, not told again by the save) and "a take with a working microphone that is stopped by the person says nothing about the microphone (T-125 (25))" (the negative). Native boundary: the OS fires `ended` when a device goes away; the test dispatches it, as the screen's does (`stop()` from script does not fire it).
+
+### Home
+
+- **The crash screen - "Reload to Home" ([T-125] (21), copy changed):** "Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on." It said "most of it should be waiting on the Home screen", which the button never made true (it changes the hash and rebuilds no store, so the restore banner is rightly not shown and nothing "waits" on Home). E2E: home-chrome.spec.ts "ErrorBoundary: a real render throw shows the fallback, the stack expands, and Reload to Home recovers (T-35)" (the sentence, and no "waiting on"), "ErrorBoundary: after Reload to Home the work is still open in its studio, and no restore banner is offered over it (T-125 (21))" (a text layer on the Stream Graphics canvas, a real render throw, Reload to Home, the layer is still there and the empty-state button is not). Unit: `interactionWiring.test.ts` (the copy, and that the button sets the hash and nothing else).
+- **Toasts - the success and error marks ([T-125] (13), colors changed):** the tick and the cross are the palette's `ok-strong` and `danger-strong` (`TOAST_ICON_THEME`, BG_BASE glyphs at 10.08:1 and 7.20:1), not react-hot-toast's stock green and red. E2E: home-chrome.spec.ts "AutosaveRestore: Restore rehydrates the video and image stores" (the success disc is `rgb(52, 211, 153)`, not the library's `rgb(97, 211, 69)`), "AutosaveRestore: a clear that fails says so and leaves the banner and the file alone" (the error disc is `rgb(251, 113, 133)`, not `rgb(255, 75, 75)`). Unit: `designTokensInSync.test.ts`.
+- **Every native control - checkbox, radio, range, scrollbar, select list, number spinner ([T-125] (13), colors changed):** one `:root` rule, `color-scheme: dark; accent-color: theme('colors.accent.DEFAULT')`, so they are drawn dark with the accent token instead of stock Chromium (blue ticks and sliders, light scrollbars). E2E: home-chrome.spec.ts "AutosaveRestore: Restore rehydrates the video and image stores" (the root's computed `colorScheme` is `dark` and `accentColor` is `rgb(255, 49, 49)`; both inherit to every control). Unit: `designTokensInSync.test.ts` (one `:root` rule, its two values, the accent being the buttons' token). No E2E asserts a screenshot (the specs write them, none compares), so the restyle breaks no pixel assertion; the drawn pixel of a native control is the browser's, and the computed property is the deepest layer the suite reads.
+
+### Video Studio
+
+- **Video 4k ReframePanel - the strip, its readout and its words ([T-125] (9), output and copy changed; revises the round-74 row above):** the 9:16 picture is `buildVideoFilter` at the 9:16 frame with only the aspect stage swapped for the strip, so a grade, text overlay, Auto Zoom and Hype Shake set for the clip reach the file (round 74 sent the crop and the speed and called the rest "out matching Compile", which was false: Compile sends all four). The header reads the size of the CROP the strip is cut from; the sentence says "…with the clip's crop, speed, color, text and effects. It takes a fixed strip — it does not track faces or action." E2E: video-pipelines.spec.ts "reframe: the header reads the crop's size, not the source's, and the panel says the clip's look is used (T-125 (9))", "reframe: the color set for the clip reaches the 9:16 file (T-125 (9))" (a graded clip's frame is measurably not the ungraded one's). Layer 5: media.spec.ts "T-125 (9)" (a clip with a grade, a text overlay, Auto Zoom and Hype Shake, measured; the text case on 7.0.2 through a stand-in because the bundled static build has no `drawtext`, and for real on 6.1.1; the strip's even dimensions and `setsar=1` kept). Unit: `reframe.test.ts`, `filters.test.ts`, `videoReframePayload.test.ts` (the whole recipe is checked at the boundary), `truthInCopy.test.ts`.
+- **Video 4k, 4l, 4m, 4n - the four output-folder buttons ([T-125] (10), state, failure path and end state changed; revises the round-74 row above):** they are ONE value now (a module store): a pick in one shows in the other three at once, within the visit. A remembered folder that no longer exists is ignored at the main-side read (the guide already promised it; it used to be seeded, written into, and blamed on "a file imagii needs"), the chooser opens on it only if it exists, a folder chosen and then deleted is made again by every runner, and one that cannot be made is refused in a sentence that names it, before anything is encoded (Compile used to run its whole segment encode first). E2E: video-pipelines.spec.ts "a remembered folder that no longer exists is ignored by all four buttons, and the action opens the chooser (T-125 (10))", "a pick in one of the four panels is the other three' folder at once (T-125 (10))", "a folder deleted after it was chosen is made again; one that cannot be made is named, before anything is encoded (T-125 (10))" (the spawn log is empty for the unmakeable one); the cases that pressed **Choose folder…** in each panel in turn now assert the later panels already show the folder (`expectFolderShown`). Layer 5: media.spec.ts "T-125 (10)" (the runner against a real missing parent). Unit: `settingsFolders.test.ts`, `useVideoOutputDir.test.ts`, `outputPath.test.ts`, `concatRunner.test.ts`, `videoPickOutputDir.test.ts`, `settingsClear.test.ts`.
+- **Video 4k, 4l, 4m, 4n, 4c - the output-folder chip, with a long name ([T-125] (11), layout changed):** the chip is capped (`max-w-[9rem]`), the name ends in an ellipsis and the full path is the tooltip; a long remembered folder pushed the primary button out of the card (to 668 px of content in a 298 px card, the primary button 370 px past the edge). E2E: video-pipelines.spec.ts "a long remembered folder name ends in an ellipsis and pushes no button out of any card, and the picture-in-picture card shows its whole Position select (T-125 (11), (12))" (all five cards, both window sizes: `expectNoHorizontalOverflow`, `expectControlsWhole`, and `expectEllipsized` for the clipped, ellipsized, nowrap name with its tooltip). The accessible name ("Output folder: <whole name>") is unchanged: video-pipelines.spec.ts "each of the five says what it is to a screen reader".
+- **Video 4n PipPanel - the Position select and the labels ([T-125] (12), layout changed):** two boxes to a row and the select on a row of its own (in three columns "Bottom right" showed as "Bottom rig" and "Overlay width (px)" wrapped onto two lines). E2E: the same case (every option of the select through `expectSelectsWhole`, and the labels through `expectOneLine`, at both window sizes).
+- **Video 4q TextOverlayEditor - Size and the label column ([T-125] (16), label and layout changed):** "Size (px)" (the Picture-in-picture boxes and the preset manager already said "(px)"); the label column is `w-14` so the longer word stays one line. E2E: video-core.spec.ts "the Text overlays card draws every control whole, on one line and over nothing else, at the default window and the minimum (T-124 (23))" (the label by its text, and every label on one line); image.spec.ts "the grid size and a text layer's Size take typed digits, and are held to their range when typing ends" (the Properties panel's own "Size (px)" is one line, and the field is found by it).
+- **Video 4q TextOverlayEditor - the Source time row ([T-125] (17), (23), (27), end state, layout and accessible names changed):** the arrow, the end box and "s" wrap together; both boxes are text boxes that take seconds, `m:ss` and `h:mm:ss` ("1:30", "2:47:13", "1:00:01.5") and refuse anything else in a sentence under the box ("imagii could not read that time. Use seconds like 90.5, or a time like 1:30 or 2:47:13."), keeping the text for the person to fix; a field of 60 or more beside a bigger unit ("1:75") is refused. Every overlay field's accessible name begins with the text drawn beside it (WCAG 2.5.3): "Source time, start (seconds in the source video)", "Source time, end (...)", "x / y, horizontal position (0 to 1)", "x / y, vertical position (0 to 1)". E2E: video-core.spec.ts "text overlays: the Source time boxes take 1:30 and 2:47:13, refuse what is not a time, and every field is named by the text beside it (T-125 (23), (27))", "the Source time row keeps the arrow with its end box and its "s", at the default window and the minimum (T-125 (17))"; the cases that located the boxes by their old names are updated. Unit: `clockTime.test.ts`, `textOverlay.test.ts` (the refusal sentence and that its examples parse), `a11ySweep.test.ts`, `interactionWiring.test.ts`.
+- **Video 4q TextOverlayEditor - the sentence for a window of no length ([T-125] (14), copy added):** "This text won't show in the export: its start and end are the same, so it never shows." for an overlay whose end was clamped to its start, inside the clip or outside it (it was given "its times fall outside the clip", false for one inside it). E2E: video-core.spec.ts "text overlays: the Time boxes say they are source time, a window that misses the clip is flagged, and the card says nothing previews it (T-124 (18), (19))" (zero-length inside the clip, zero-length outside it, a window with length back to the clip sentence, and a window that meets the clip to none). Unit: `textOverlay.test.ts`.
+- **Video 4q, 4e, 4b - every box that takes a number: the overlay x / y, Size, Time, Color; Properties' x / y / Rotation; PiP width; the preset manager ([T-125] (8), end state changed; revises "DraftField" above):** while a box has focus it shows what was TYPED, even after a live commit, and shows the stored number when it is left. Handing the box back to the stored value on every usable keystroke made React rewrite a number input whose DOM value reads "" for "0." and "-": "0.05" arrived as 1, "-0.5" lost its sign. E2E: video-core.spec.ts "text overlays: the position boxes take a leading decimal (.5 is 0.5, not 1), and a typed number is held to 0 to 1 (T-124 (15))" (now also "0.05", and the typed text while focused), image.spec.ts "the x, y and rotation boxes take a minus sign and keep what is typed (T-124 (15))" (now also "-0.5"). Unit: `interactionWiring.test.ts` (the live commit keeps the draft; `finish` does not commit the same text twice).
+- **Video - times past an hour: the Timeline, the clip list, the player, the highlight lists ([T-125] (23), copy changed):** a time from one hour up reads `h:mm:ss` ("1:01:40.0", not "61:40.0"); under an hour every readout is the string it always was. E2E: video-pipelines.spec.ts "a video over an hour reads its times as h:mm:ss in the Timeline, the clip list and the player (T-125 (23))" (a 3700 s video: In, Length, Out, the clip's name, the player's position and length, and the playhead at 59:59.0 and 1:00:00.0). The highlight and captions lists use the same helper (`clockTime.ts`); their rows need a scan of a loud hour and a transcript and are held by the wiring pin that no panel keeps its own formatter (`interactionWiring.test.ts`) and by `clockTime.test.ts`, not driven.
+- **Video 4e ClipKitButton, and the Video tour ([T-125] (24), copy added):** the tour has a **Clip Kit** step after **Export** that points at the button (`data-tutorial="video-clipkit"`): "Select a clip and click 'Clip Kit' to export it for all five platforms, plus three thumbnails, into one new folder. The clip's captions join them as an .srt file, if it has any." E2E: video-core.spec.ts "the Video tour introduces Clip Kit after Export, and its highlight sits on the Clip Kit button (T-125 (24))" (the step follows Export; the accent outline is the button's box plus the 8 px pad). Unit: `tutorialCopy.test.ts` (the step, its place, the quoted name against the studio's source, the numbers against the button's tooltip), `tutorialTargets.test.ts`.
+- **Video 4o ExportPanel - Export pressed twice in a breath ([T-125] (18), end state changed):** `startExport` claims `startingRef` before the settings writes it awaits and gives it back in a `finally` (the continue button of the safe-zone question goes through the same guard), so a fast double-click starts one batch and the queue reads truthfully (it read Failed and Not run beside a batch that was running). E2E: video-pipelines.spec.ts "a fast double-click on Export starts ONE batch and the queue shows it truthfully: no Failed row, no refusal, one file (T-125 (18))". Unit: `interactionWiring.test.ts` (the `singleFlight` finder).
+- **Video - Clean audio, with Audio Studio open on something else ([T-125] (20), end state changed):** the extraction compares Audio Studio's source with what it held when the button was pressed (`replacedSince`); if the person opened something else meanwhile, nothing is loaded and nobody is taken there, and a toast says what was skipped. E2E: video-pipelines.spec.ts "Clean audio does not replace what was opened in Audio Studio while it was extracting, and does not pull the person back (T-125 (20))". Unit: `ProjectIO.test.ts` (`replacedSince`).
+- **Video 4k, 4l, 4m - the files' names ([T-125] (22), name changed; extends the round-74 row above):** the compilation is named for the video the person opened (`name_compilation.mp4`, not `stream-aB3dE5fG_compilation.mp4`), and the GIF and the 9:16 file carry the clip's name after it (`name_Clip 1_reframe-1080x1920-center.mp4`), as Export's `{source}_{clip}` does; six highlights are six names and not "(2)" to "(6)". E2E: video-pipelines.spec.ts "reframe, GIF and compilation are named for the video the person opened (the clip's name after it, for the two that are one clip's), not for the working copy a converted import is played from (T-124 (17), T-125 (22))"; the cases that name a file are updated.
+- **Video 4k, 4l, 4m - Reframe, GIF and Compile with a long line of work behind them: the compilation's join ([T-125] (1), output changed):** each segment is written as Matroska with uncompressed (PCM) sound and the join copies the picture and encodes the sound ONCE (AAC, 192 kbps): stream-copying AAC segments added 29.3 ms of silence per join (the encoder's priming and the edit list), so the sound drifted a third of a second behind the picture by the ninth clip. Layer 5: media.spec.ts "T-125 (1)" (an eight-join compilation: per-segment sound offset under 15 ms, on 7.0.2 and 6.1.1; red with the old join, with an AAC segment, and with the PCM write removed). Unit: `concatRunner.test.ts` (the segment's `.mkv` and `pcm_s16le`, the join's `-c:v copy -c:a aac -b:a 192k`, the list file, the fades untouched). The segments are unlinked in the runner's `finally` whatever their extension, so a cancel leaves none (Layer 5: "the scratch the compilation made is gone when it finishes, and when it is canceled"), and the next-launch prune takes `imagii-concat` by age, not by name (`tempCleanup.ts`; its comment now says Matroska).
+
+### Audio Studio
+
+- **Audio - Cleanup, "Quieter background": Light, Medium, Aggressive ([T-125] (3), output changed):** the three strengths remove progressively more noise (Light `nf=-35`, Medium `-30`, Aggressive `-25`; `afftdn`'s `nf` and `nr` point in opposite directions and the old table had them the other way round, so "Light" removed more than "Medium"). The Custom hint reads "-35 is the Light preset's setting." Layer 5: media.spec.ts "T-125 (3)" (the removed noise rises Light < Medium < Aggressive, on both majors). Unit: `chain.test.ts`, `audioStudioCopy.test.ts`. E2E: audio.spec.ts "every Cleanup control writes through to the chain".
+- **Audio - the import and Clean audio: a sound's length and where it starts ([T-125] (2), (4), (6), output and failure path changed):** the extracted WAV is on the container's clock (`aresample=async=1:first_pts=0`), so a video whose sound starts late keeps it late; a recording whose header has no duration (a MediaRecorder WebM) imports, because the probe not reading a length is not a refusal (only "this video has no sound" is the probe's verdict); and the export's progress runs over the length that is kept (cuts and overlaps taken out), not the source's. E2E: audio.spec.ts "a recording whose header has no duration (a MediaRecorder WebM) imports: the probe not reading a length is not a refusal (T-125 (4))". Layer 5: media.spec.ts "T-125 (2)". Unit: `extract.test.ts`, `audioExtractCeiling.test.ts`, `exportProgress.test.ts`.
+- **Audio - an export with cut regions: the block size after the cut ([T-125] (5), output changed):** the chain re-chunks to 4096 samples after the cut, so everything downstream of `aselect` sees the block it was written for. Layer 5: media.spec.ts "T-125 (5)" (the stage order and bit-identity). Unit: `chain.test.ts`, `singleTrackTail.test.ts`.
+- **Audio - the importer and Export, with an AIFF or a WMA ([T-125] (7), end state changed):** a sound taken out of a file that is not a video (an AIFF, a WMA) is not "from a video": no **Re-attach to video**, the suggested name is the file's own, and a restored project agrees. E2E: audio.spec.ts "a WMA loads and exports as the sound file it is: no "Re-attach to video", named for the WMA, written (T-125 (7))". Unit: `ProjectIO.test.ts`, `audioExtractCeiling.test.ts`.
+- **Audio - the re-attach's suggested name ([T-125] (22), name changed):** `fromVideo.convertedFrom ?? videoPath` (the original's name, not a converted working copy's). E2E: video-pipelines.spec.ts "reframe, GIF and compilation are named for the video the person opened ..." (the dialog suggests `stream-cleaned.mp4`).
+- **Audio - Levels, Manual gain, the sentence under the slider ([T-125] (15), copy changed; revises the round-74 row above):** "When you boost, switch something on or cut a part out, peaks above −1 dBFS are limited in the export, so a boost cannot clip. Otherwise the export keeps your levels as they are." A cut alone is a stage (the chain is no longer a pass-through, so the limiter runs: a -0.3 dBFS file cut and nothing else exported at -1.2). E2E: audio.spec.ts "every Levels control writes through to the chain". Unit: `docClaims.test.ts` (the panel, README and USER_GUIDE), `singleTrackTail.test.ts`.
+- **Audio - the Fix Wizard's Apply toast ([T-125] (19), duration changed):** held 8 s (`ACTION_TOAST_MS`), because it is the only place that says the cleanup waits for the export. E2E: audio.spec.ts "Fix Wizard reconfigures Cleanup and Levels, and resets on both exits" (still on screen 4.5 s after it appeared; a success toast is gone at about 3 s).
+
+### References
+
+- **References - the mood board's "→ Canvas", the note ([T-125] (19), duration changed):** "Added to canvas as a reference — it won't be in your export" is held 8 s. E2E: references.spec.ts "a saved item goes to the canvas as a 40% overlay, and Remove is undoable".
+
+### Stream Graphics
+
+- **Image - Properties, a text layer's Size ([T-125] (16), label changed):** "Size (px)". E2E: image.spec.ts "the grid size and a text layer's Size take typed digits, and are held to their range when typing ends".
+
+### Not an element, but covered
+
+- **The network allowlist, hardened ([T-125] (26)):** the guard now sees `useImage(` (the image layer's `src`, ledger letter (g): a shared project file can point it at any host under `img-src https:`; the allowlist line is the known, owner-pending exposure, not an approval), `WaveSurfer.create(`, a dynamic `import()`, `eval(` / `new Function(`, `downloadURL`, the updater and crash reporter (`electron-updater`, `@sentry/*`, `autoUpdater`, `crashReporter`), a `spawn` of `curl` / `wget` / `powershell` or of anything but imagii's three binaries, and `<video>` / `<audio>` / `new Audio(`; the CSP check is `/^(https?:|wss?:|ftps?:|\*)/` over every directive with ONE named exception, the shipped `connect-src ws:` (ledger letter (m), a dev-server leftover); `dependencies` holds no updater, telemetry or crash SDK and `electron-builder.yml` has no `publish`; the header says what the scan cannot see. Unit: `networkAllowlist.test.ts` (12 cases; each new shape is proven to be seen and not over-seen, and the CSP, package and builder checks are proven to discriminate).
+- **Docs:** every cite re-pointed against the final tree; `TESTING.md` carries the counts and the timing table.
+
+### Found, not fixed
+
+Ledgered with the round and not fixed:
+
+- **Custom starts at a setting that is no preset's.** After T-125 (3) the Custom noise floor starts at -25 / 12 dB, which is no preset's setting (Light is -35 / 12, Aggressive -25 / 24). The hint now says -35 is Light's; the starting value was left (a different start is a product call: it changes what a person who opens Custom hears first).
+- **The highlight and captions lists at an hour** are held by the shared formatter's unit test and the wiring pin, not by an E2E (they need a scanned VOD and a transcript).
+- **`useImage` (g) and `connect-src ws:` (m)** are on the allowlist as named, owner-pending exposures. The strict fix for (g) would break the reference layer whose stored thumbnail is a DuckDuckGo address.
+
+---
+
+## Dispositions — round 76 (T-126: the review gate's fifteenth pass)
+
+Twenty-four findings from sweep 15 (the frame-rate lag, the double-press, the layout the click cannot see, the allowlist guard). Every behavior change was red-first: a new test against the round-75 build (the pristine-build pattern), against the pre-round bytes of the file, or with the fix mutated out; the quotes and the mutation ledger are in `LESSONS_LEARNED.md`, 2026-10-15 (T-126). An element this round changed carries its row here.
+
+### Record
+
+- **Record - the REC header, the saving card and the saved toast, with a microphone that dropped ([T-126] (2), state and copy added):** a microphone that ended mid-take leaves a line that outlives the 8 s toast: "Microphone stopped at 02:14 - no sound after that" under the REC clock, repeated on the saving card ("Finishing up") and as the saved toast's second sentence ("Saved 4.2 MB. Microphone stopped at 02:14 - no sound after that. Show in folder"). A take whose microphone never dropped shows none of the three. E2E: record.spec.ts "a microphone that drops mid-take is announced once, the take carries on, and it still saves" (the header line once, the card line, the toast text, gone with the take) and "a take with a working microphone that is stopped by the person says nothing about the microphone" (the negative; mutated: a line for a clean take fails it). Unit: `saveCard.test.ts` `micLostLine`.
+- **Record - the REC clock ([T-126] (4), copy changed):** "REC 00:05" under an hour as it always read, "REC 1:00:00" from one hour up (it read "REC 125:33" for a two-hour take). E2E: the clean-take case above moves the renderer's clock two hours on and reads `REC 2:00:0x` (red on the round-75 build: `REC 120:0x`). Unit: `clockTime.test.ts` `formatTimer` (59:59 -> 1:00:00).
+
+### Video Studio
+
+- **Video 4q TextOverlayEditor - a refused Source time ([T-126] (3), layout changed):** the sentence is a full-width row under the box it refused (it was an 8-line column 70 px wide beside it; for the end box, between the box and its "s"), the "s" stays on the end box's line, and nothing is drawn over it. E2E: video-core.spec.ts "a refused Source time is one full-width sentence under its box, over nothing, at the default window and the minimum" (both boxes, both sizes; red on the round-75 build with 16 findings; mutated: `order-last` dropped fails it). Unit: `interactionWiring.test.ts` T-126 (3).
+- **Video 4q TextOverlayEditor - the Source time boxes at rest, and the outside-the-clip note ([T-126] (5), copy changed):** from one hour up the boxes read the clock ("1:02:03.00", not "3723.00") and "2:47:13" stays "2:47:13.00" when the box is left; the note reads "runs from 1:40:43.50 to 1:41:43.50 of the video"; the teaching line ends "...or a time like 2:47:13". Under an hour every box is the string it always was. E2E: video-core.spec.ts "text overlays: the Source time boxes take 1:30 and 2:47:13, refuse what is not a time ..." (the `3723.00` / `3601.50` pins flipped; red on the round-75 build). Unit: `textOverlay.test.ts`.
+- **Video 4o ExportPanel - the folder button ([T-126] (6), state changed):** the chooser opens ON the folder the button shows (it opened wherever the OS last was). E2E: video-pipelines.spec.ts "Export's folder button opens the chooser on the folder it shows" (records the dialog's `defaultPath`; red: `undefined`). Unit: `interactionWiring.test.ts` (mutated: bare `pickOutputDir()` fails it).
+- **Video 4k, 4l, 4m, 4n - Compile, GIF, Picture-in-picture and Reframe pressed twice in a breath ([T-126] (19), (20), end state and layout changed; extends "Export pressed twice" above):** the start claims its ref before the first await (one chooser, one job, one file), and Cancel has a row of its own in Compile, GIF and Picture-in-picture, so the second press of a double-click lands on the disabled primary and cannot cancel the job the first one started. E2E: video-pipelines.spec.ts "a double-click on Compile opens ONE chooser and writes ONE file" (a 300 ms chooser; red: two choosers) and "a double-click on Reframe, GIF, Compile and Picture-in-picture runs the job to its end" (a remembered folder, the encode held 2.5 s, Cancel's box measured below the primary's, one file each, no canceled toast; red per panel with that panel at its old bytes). Unit: `interactionWiring.test.ts` (eleven `singleFlight` pins; 14 single mutations).
+- **Video 4e ClipKitButton, 4m CaptionsPanel - the Clip Kit and the burn-in start ([T-126] (19), end state changed):** both claim their ref first (`startingRef`, `burnStartingRef`) and release it in a `finally`. Their first await is a NATIVE folder chooser / save dialog: the press-twice end state is covered at the deepest reachable layer, the `singleFlight` pins (mutated: claim removed, release removed, per file), and Compile's E2E above drives the same pattern through a real chooser; no E2E presses them twice.
+- **Video 4m CompilationPanel - the fade readout ([T-126] (11), layout changed):** "300 ms" is one line (it wrapped at 1632 px and under) and the row keeps its height from end to end of the slider; the slider is the item that gives. E2E: video-pipelines.spec.ts "the Compile fade readout stays on one line and the row keeps its height from end to end of the slider" (red: wraps at both sizes). Unit: `interactionWiring.test.ts` T-126 (11) keeps every fixed-width readout in the renderer guarded.
+- **Video 4k, 4l, 4m - the primary buttons beside a long folder name ([T-126] (13), layout changed):** "Reframe to 9:16", "Export GIF" and "Compile N clips" are one line beside a long (spaced) folder name; the chip is what gives and its name ends in an ellipsis inside the shrunken button. E2E: video-pipelines.spec.ts "the Reframe, GIF and Compile primary buttons are one line beside a long folder name" (red: all three wrap at both sizes).
+- **Video 4k ReframePanel, 4h OutputPreview - the panel headers ([T-126] (14), layout and copy changed):** the Reframe title is "Reframe to 9:16"; "OUTPUT PREVIEW" never breaks mid-word (the header is a wrap-capable row: the heading never wraps and a row too narrow drops its actions whole to a second row); the preview select shows every platform whole. E2E: video-pipelines.spec.ts "the Reframe and Output preview headers keep their words whole at the minimum window, and the preview select shows every platform whole" (mutated: the old `PanelHeader` makes the heading wrap).
+- **Video 4c Player - the transport row with a three-hour video ([T-126] (15), layout changed):** the clock and "Crop guides" keep one line and their width; the probe line gives (an ellipsis, the whole text as its tooltip). E2E: video-pipelines.spec.ts "the player transport keeps its clock and Crop guides on one line at the minimum window with a three-hour video" (red: both wrap at 1024).
+
+### Audio Studio
+
+- **Audio - the importer and Export, with an audio-only .mkv or .mp4 ([T-126] (7), end state and copy changed; extends the AIFF / WMA row above):** a file with no picture (a podcast, a voice memo) is read from its STREAMS, not its name: no **Re-attach to video**, a plain audio export, and over two hours the sentence is the audio remedy ("Split it into shorter files in another app first..."), never "Export the part you want from Video Studio". Cover art on an mp3 is not a picture. E2E: audio.spec.ts "an audio-only .mkv loads as sound: no Re-attach is offered, it exports as plain audio, and over two hours it is told to split the file in another app" (red: the box is there). Layer 5: media.spec.ts "T-126 (7), (8)" (the real handler).
+- **Audio - the importer, a file whose header has no length, over two hours ([T-126] (8), failure path changed):** the handler reads the extracted WAV's own length and, over the ceiling, deletes the scratch with the refusal (a multi-GB WAV stayed in %TEMP% until the 6-hour reaper). Layer 5: the same block ("a durationless file that turns out longer than two hours is refused, and its multi-GB scratch WAV is deleted with the refusal"; mutated: the WAV kept, both majors). Unit: `audioExtractCeiling.test.ts`.
+- **Audio - the second-track card: gain, Remove and the ducking sliders ([T-126] (12), layout and copy changed):** "-10.0 dB" and "Remove" are one line at every width (the file's name is what gives), the four sliders' labels keep a gap from their readouts (1 px apart at 2560), and the Ratio reads "8:1" on screen and to a screen reader (it read "8 :1"). E2E: audio.spec.ts "the second-track card draws its gain readout, its Remove button and its slider readouts whole, on one line and apart, at 1024, 1632 and 2560" (red on the round-75 build: 13 findings) and "a second track can be added in every role and its mix controls drive the chain" (the `8 :1` pins flipped to `8:1`, `aria-valuetext` added).
+- **Audio - Export pressed twice in a breath ([T-126] (19), end state changed):** one save dialog, one file. E2E: audio.spec.ts "a double-click on Export opens ONE save dialog and writes ONE file" (a 300 ms dialog; red: two save dialogs).
+
+### Home
+
+- **Every text box, number box and file-name box - selected text ([T-126] (16), colors changed):** `::selection` is the accent at 40% with ink-base on it (it was Chromium's stock blue). The open drop-down list of a `<select>` draws its own highlight row, which no CSS reaches: not claimed. Unit: `designTokensInSync.test.ts` (the alpha is read from the style sheet; ink-base clears 7:1 on bg-base, bg-elevated and bg-hover). No E2E drives a selection color: the rendered ::selection is a computed-style fact the unit pin reads from the source.
+- **The whole app - the typeface ([T-126] (18), font bundled):** Inter latin 400 / 500 / 600 ship with the build; nothing is requested (every `url()` in the built style sheets is a file in the build). E2E: smoke.spec.ts "Inter is bundled" (the built sheets, then `document.fonts.load` for all three weights: `document.fonts.check` alone is TRUE for a family nobody defined).
+
+### Not an element, but covered
+
+- **The network allowlist, rebuilt ([T-126] (1)):** 19 cases; the CSP is judged by what is local, in every directive and letter case; navigation, `setAttribute`, SVG loaders, `<input type="image">`, a computed CSS `url(${})` and `crashReporter.start` are in the vocabulary; aliases of `spawn`, `useImage` and Electron's `net` are followed and `child_process`, `use-image` and `wavesurfer.js` are sites at their import. 35 breaks of the branches its negatives protect, each failing its named case (LESSONS 2026-10-15).
+- **Folder settings under an unreachable share ([T-126] (10)):** one stat per path in flight and a 1 s deadline (`unknown` answers the stored value). Unit: `folderVerdict.test.ts`, `settingsFolderDeadline.test.ts`. The unreachable-UNC end state is an OS boundary; the stalled stat is simulated.
+- **ffmpeg:** (21) `fps=N` after the retime, Layer 5 on export, Reframe, Compile and a 2x clip (both majors); (23) the highlight scans compute no true peak, Layer 5 on the same series (both majors); (24) a copied HEVC picture is tagged `hvc1`, Layer 5 (both majors).
+- **Docs:** `TESTING.md` carries the counts and the timing table; DESIGN_GUIDE and BRANDING_GUIDE say the font ships and what `::selection` and the OS's `<select>` highlight are.
+
+### Found, not fixed
+
+- **Item 22 (extraction of broken timestamps) was closed, not fixed:** the probe reads the same ~630 s as the extraction on every shape of the +600 s jump, so a cap has nothing to cap against; the bound is in the `EXTRACT_CLOCK_FILTER` comment.
+- **The double-click on Compile / GIF / Picture-in-picture is not a stable witness by itself:** whether the second press lands on Cancel depends on the widths of two labels in the font in use (in the Xvfb font the round-75 build's second press misses Cancel by about 50 px). The E2E measures where Cancel is drawn instead. *Round 77: that was the missing typeface, not the machine. Inter ships since T-126 (18), the widths no longer depend on the box's fonts, and on the Export card the second press does land on Cancel (round-76 bytes: primary x 771-881, Cancel x 809-881); the geometry measure stays because it is stable, and Export has a human-paced second press as well (T-127 (2) below).*
+- **Item 14 (i), `whitespace-nowrap` on the Reframe readout, cannot be shown red:** with the short title the readout fits one line without it. It is kept (the ticket's mechanism) and the readout is measured one line.
+- **Clip Kit and the burn-in are not driven twice by an E2E** (their first await is a native dialog); the claim-first pins are the deepest layer.
+
+## Dispositions — round 77 (T-127: the review gate's sixteenth pass)
+
+Sixteen findings from sweep 16 (the app phoning Google, the quit that left half a file, the join drift, the guard's last gaps). Every behavior change was red-first: a new test against the pristine round-76 build (`basebuild`), against the pre-round bytes of the file, or with the fix mutated out; the quotes, the sha256 triples and the mutation ledger are in the round's hand-back, and the story is in `LESSONS_LEARNED.md`, 2026-10-15 (T-127). An element this round changed carries its row here.
+
+### Every launch
+
+- **The built app, idle, past ready ([T-127] (1), no element, network behavior removed):** no http(s), ws or ftp request and no DNS lookup of a host that is not this machine. E2E: smoke.spec.ts "the built app makes no network request" (a net-log of the launch, 8 s idle, a loopback control that proves the log can see; red on the round-76 build: the dictionary download and six `dns.google` requests). Unit: `interactionWiring.test.ts` pins `spellcheck: false`, `app.configureHostResolver({ secureDnsMode: 'off' })` and `session.defaultSession.setSpellCheckerLanguages([])` ahead of the window. DISPOSITION: the DNS-over-HTTPS probe only happens where the machine's resolver is a DoH-capable provider (this box's 8.8.8.8 is; a CI runner's may not be), so the DoH leg of the E2E shows only there and the wiring pin holds it everywhere; the dictionary leg shows on any machine. The win32 release run is the confirmation on the shipped binary (TESTING, "the release run's hand-checks").
+- **The window's X, and `app.quit()`, in the middle of a job ([T-127] (3), end state changed):** nothing is left at a final name: the export's half-written file and a re-attach's `.cleaned.wav` are deleted before the process exits (`before-quit` waits, at most 1.5 s, for every canceled run to finish its own cleanup). E2E: video-pipelines.spec.ts "quitting the app in the middle of an export leaves no half-written file at the final name" and "quitting the app in the middle of a re-attach leaves no scratch WAV and no half-written mp4" (the folder is read after the app has exited; red on the round-76 build: `Received ["t127-quit_Clip 1_youtube.mp4"]`, `Received ["result.cleaned.wav"]`). The re-attach is started through its IPC (`audio:mux`, which the Export panel's button calls with the same spec): the button's native save dialog is the OS boundary and is not the thing under test. Unit: `cancelLatch.test.ts` (the drain, and a scan that every runner ends its run after its work), `reattachCollision.test.ts`, `interactionWiring.test.ts` (the handler's shape). DISPOSITION: a convert (the recording's save, an import transcode) is not a latch run, and its output cleanup lives in `recording.ts`: a quit mid-save is not covered (see Found, not fixed).
+
+### Video Studio
+
+- **Video 4o ExportPanel - Cancel ([T-127] (2), layout changed; extends "Compile, GIF and Picture-in-picture pressed twice" above):** Cancel has a row of its own under the header, so the second press of a double-click lands on the disabled primary. The two-or-more-jobs confirm modal is unchanged. E2E: video-pipelines.spec.ts "a double-click on Export, Reframe, GIF, Compile and Picture-in-picture runs the job to its end ..." (Export joins the geometry test: Cancel below the primary's box; red on the round-76 build: Cancel x 809-881 inside the primary's x 771-881) and "a second press on Export at a human pace lands on the disabled button, not on Cancel" (two real mouse clicks 120 ms apart; red: the export is canceled, no file).
+- **Video 4k, 4l, 4m, 4o, 4p - the dialog a button raises, pressed twice ([T-127] (8), end state changed):** the shared `Modal` ignores the second click of a double-click on its scrim, so the safe-zone / over-limit question a button raises on click 1 is not dismissed by click 2. E2E: video-pipelines.spec.ts "a double-click on Export raises the safe-zone question and the second click does not dismiss it; one click on the scrim still does" (red: the dialog is gone). Unit: `interactionWiring.test.ts` (the handler's order: the T-123 (7) drag guard, then `detail`, then close; four breaks). Every other dialog (Clip Kit's, the variants, the name dialog) shares the one handler; no E2E presses each twice.
+- **Video 4q TextOverlayEditor - the Source time row ([T-127] (7), copy and state changed; extends the T-126 (5) row above):** the PAIR decides the form: from one hour up in either box, both read the clock and there is no "s"; below it both are seconds and the "s" stays. The two labels are "Source time, start (seconds, or a time like 2:47:13)" and "..., end (...)". E2E: video-core.spec.ts "text overlays: the Source time boxes take 1:30 and 2:47:13 ..." (over, under, the start lifting the end, and 59:50 beside 1:00:10; every other test that names the boxes follows the new labels). Unit: `textOverlay.test.ts` `overlayTimePair`.
+- **Video 4s CaptionsPanel - Save .srt pressed twice ([T-127] (11), end state changed):** one save dialog, one file. E2E: video-pipelines.spec.ts "a double-click on Save .srt opens ONE save dialog and writes ONE file" (a 300 ms dialog; red: two). Unit: the `singleFlight` pin (`saveSrtStartingRef`).
+- **Video - the header's file name ([T-127] (15), tooltip added):** the whole name is the `title` of the cut one. E2E: video-core.spec.ts "the header names the open video in full as its title".
+- **Video - the tour's Export step ([T-127] (9), copy changed):** "Click the folder button - it reads 'Choose folder...' until you have picked one - then click the Export button...". Unit: `tutorialCopy.test.ts` (the quoted label is the empty state of `OutputDirLabel`). The tour itself is driven by home-chrome.spec.ts (unchanged).
+
+### Audio Studio
+
+- **Audio - the importer, a durationless file ([T-127] (10), end state and copy changed; extends the T-126 (7), (8) rows above):** a streamed WebM or MKV with no length in its header is classified by its STREAMS (sound alone: no Re-attach by default, and over two hours the audio remedy), not by its extension. Layer 5: media.spec.ts "the extraction reads a picture from the streams ..." (the 2 h durationless audio-only WebM's sentence flips; a short audio-only and a short picture WebM answer `false` / `true`; red on both majors). Unit: `audioExtractCeiling.test.ts`, `audio.test.ts` (`NoUsableDurationError`).
+- **Audio - the second-track card's file name, the header's file name, the Cleanup preset rows ([T-127] (15), tooltip added):** each name that is cut with an ellipsis carries its whole self as its `title`. E2E: audio.spec.ts "the second-track card draws ..." (the second track's line and the header) and "cleanup presets save, apply, and delete through both confirm branches" (the row).
+
+### Stream Graphics
+
+- **Image - the Thumbnail variants dialog: Save and Save all pressed twice ([T-127] (11), end state changed):** one save dialog for a variant's Save, one folder chooser and one set of four files for Save all. E2E: image.spec.ts "a double-click on Save all opens ONE folder dialog and writes ONE set; a double-click on a variant's Save opens ONE dialog and writes ONE file" (a 300 ms dialog; red: `one folder chooser, not two`).
+
+### Every text box
+
+- **Every text box and text area - placeholder text ([T-127] (16), color changed):** `ink-dim` (it was Preflight's stock `#9ca3af`). Unit: `designTokensInSync.test.ts` (one rule in the base layer, no raw hex, AA on every surface: 6.20 / 5.83 / 5.33). No E2E drives a placeholder; the colour was read off the glyph pixels of the built app (`156,143,139`, against the round-76 build's `156,163,175`), a probe the round keeps in its scratch and not in the repo.
+
+### Not an element, but covered
+
+- **The network allowlist's last gaps ([T-127] (5), (6), (12), (13), (14)):** 32 cases; a constructor through `window.` / `globalThis.` / `self.`, `getBuiltinModule(` and `createRequire(`, `export ... from`, `import x = require()`, a location chain, a bracketed IPv6 literal, `image-set(` (computed and in the style sheets), `createElement` of any loading tag and of `a`, `devDependencies`, every module the set names, and a guard that no `.js` file hides under `src/`. 38 breaks of its branches, each failing its named case.
+- **ffmpeg:** (4) `-shortest` on every compilation segment, Layer 5 on a 25 fps source with eight fractional segments (both majors: the lag series `3 / 57 / 83 / 112 / 125 / 161 / 194 / 194 ms` becomes `3 / -3 / 7 / 0 / 0 / 0 / 0 / 0`); (10) the durationless audio-only extraction, Layer 5 (both majors).
+- **Docs:** `TESTING.md` carries the counts, the timing table and the release run's hand-checks; DESIGN_GUIDE says what a truncated name carries and what a placeholder is; the LESSONS entries for T-125 (1) and T-126 (19), (20) carry their corrections.
+
+### Found, not fixed
+
+- **Other `truncate` spans with no `title`:** the mood board's collection names, the post checklist's output name, the variant labels, Record's source names, the layer names and the highlight lines. The ticket named four.
+- **A quit in the middle of a recording's save (a convert), and the caption model's download partial:** neither is a `CancelLatch` run, so the quit's wait does not reach them.
+- **Removing `spellcheck: false` from the window alone is not red in the E2E** (the empty language list already stops the download): that leg is held by the wiring pin.
