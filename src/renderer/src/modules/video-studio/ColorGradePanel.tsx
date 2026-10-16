@@ -131,7 +131,7 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1"
+        className="flex-1 min-w-0"
         // M11 fix (round 15): the visible value span is a sibling — screen
         // readers wouldn't otherwise read it. aria-valuetext exposes the
         // formatted value; aria-label keeps the slider self-identifying when
@@ -139,7 +139,7 @@ function Slider({
         aria-label={label}
         aria-valuetext={formatValue(value)}
       />
-      <span className="font-mono w-12 text-right">{formatValue(value)}</span>
+      <span className="font-mono w-12 shrink-0 whitespace-nowrap text-right">{formatValue(value)}</span>
     </label>
   )
 }

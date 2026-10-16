@@ -3,6 +3,7 @@ import {
   computeTooltipPosition,
   sameRect,
   tutorialKeyIntent,
+  tutorialScrollBehavior,
   RECT_EPSILON,
   TOOLTIP_MARGIN,
   TOOLTIP_MAX_WIDTH,
@@ -367,5 +368,19 @@ describe('tutorialKeyIntent', () => {
   it.each([' ', 'a', 'Tab', 'ArrowUp', 'ArrowDown', 'Backspace'])('ignores %p', (key) => {
     expect(tutorialKeyIntent({ key, onButton: false })).toBe('none')
     expect(tutorialKeyIntent({ key, onButton: true })).toBe('none')
+  })
+})
+
+/**
+ * T-119 (11): `scrollIntoView({ behavior: 'smooth' })` is an explicit option, which the CSS
+ * `scroll-behavior: auto !important` of the `prefers-reduced-motion` block does not override, so the
+ * coachmark glided to every target under the OS "Reduce motion" setting. The choice is this pure function;
+ * the E2E in home-chrome.spec.ts ("the coachmark scrolls instantly under Reduce motion and smoothly
+ * otherwise") records what the real page passed.
+ */
+describe('tutorialScrollBehavior', () => {
+  it('is an instant jump under Reduce motion and a glide otherwise', () => {
+    expect(tutorialScrollBehavior(true)).toBe('auto')
+    expect(tutorialScrollBehavior(false)).toBe('smooth')
   })
 })

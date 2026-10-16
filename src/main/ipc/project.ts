@@ -8,7 +8,7 @@ import {
   getAutosaveInfo
 } from '../autosave'
 import { validateProject, validateProjectJsonString } from '../../shared/projectValidation'
-import { assert, assertDefined } from '../../shared/assert'
+import { assertAlways, assertDefined } from '../../shared/assert'
 
 export interface ProjectLoadResult {
   ok: true
@@ -33,7 +33,7 @@ export function registerProjectIpc(): void {
       // Validate the about-to-be-written payload at the IPC boundary so a
       // bad project never reaches disk.
       const valid = validateProject(enriched)
-      assert(valid.ok, valid.ok ? 'unreachable' : `project:save invalid project — ${valid.reason}`)
+      assertAlways(valid.ok, valid.ok ? 'unreachable' : `project:save invalid project — ${valid.reason}`)
 
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (!win) return null

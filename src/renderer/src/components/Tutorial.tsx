@@ -41,6 +41,16 @@ export function sameRect(a: Rect | null, b: Rect | null): boolean {
   )
 }
 
+/**
+ * T-119: how the coachmark brings a step's target into view. `scrollIntoView({ behavior })` is an explicit
+ * option, and CSS `scroll-behavior` - what the `prefers-reduced-motion` block in index.css sets - does not
+ * govern an explicit one, so the page used to glide to every step's target under the OS "Reduce motion"
+ * setting, the thing that setting exists to stop. Reduce motion gets an instant jump.
+ */
+export function tutorialScrollBehavior(reduceMotion: boolean): 'auto' | 'smooth' {
+  return reduceMotion ? 'auto' : 'smooth'
+}
+
 interface TutorialProps {
   def: TutorialDef
   /** Called for every way out — Done, Skip, Esc. They are one act (T-86): the
@@ -129,7 +139,11 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       if (scrolled) return
       scrolled = true
       try {
-        ;(el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' })
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ;(el as HTMLElement).scrollIntoView({
+          block: 'center',
+          behavior: tutorialScrollBehavior(reduceMotion)
+        })
       } catch {
         /* ignore */
       }

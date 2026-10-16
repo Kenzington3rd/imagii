@@ -25,6 +25,17 @@ import { RENDERER_ROOT } from './routeSources'
  * Same caveat as the other structural tests: this reads source, so it says
  * "the call is there", not "it ran" — the E2E specs (video-pipelines, home-
  * chrome, references, record) drive the visible copy for each class.
+ *
+ * Scanner limitation (T-115): everything above reads `catch` clauses and the
+ * arguments of `toast.error`, so it cannot see the OTHER way to fail badly: an
+ * awaited `window.api.*` call with no `try` at all. A rejection there is an
+ * unhandled rejection and the control does nothing, visibly. A scan found about
+ * 47 such awaits in the renderer, nearly all of them native pickers and settings
+ * writes that do not reject in practice, so a blanket rule would need a 47-row
+ * allow-list and would be mostly noise. The one that could and did reject, `CaptionsPanel.saveSrt`
+ * (`captions:saveSrt` throws for a transcript outside the captions folder, and a
+ * project file may name one), is pinned BY NAME in the last block of this file. The upgrade is
+ * the scan with the allow-list, written when a second site turns up.
  */
 
 function listSources(dir: string, out: string[] = []): string[] {
@@ -160,14 +171,14 @@ describe('every site the ticket named routes through the helper', () => {
   // file -> how many catch/result sites in it must call the helper.
   const SITES: Array<[string, string, number]> = [
     ['routes/Home.tsx', 'reportFailure(', 3],
-    ['components/AutosaveRestore.tsx', 'reportFailure(', 1],
+    ['components/AutosaveRestore.tsx', 'reportFailure(', 2],
     ['modules/video-studio/ExportPanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/ClipKitButton.tsx', 'reportFailure(', 1],
     ['modules/video-studio/GifPanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/CompilationPanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/ReframePanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/PipPanel.tsx', 'reportFailure(', 1],
-    ['modules/video-studio/CaptionsPanel.tsx', 'reportFailure(', 4],
+    ['modules/video-studio/CaptionsPanel.tsx', 'reportFailure(', 5],
     ['modules/video-studio/HighlightPanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/VideoStudio.tsx', 'reportFailure(', 1],
     ['modules/audio-studio/ExportDialog.tsx', 'reportFailure(', 2],
@@ -176,7 +187,9 @@ describe('every site the ticket named routes through the helper', () => {
     ['modules/image-studio/ImportPanel.tsx', 'reportFailure(', 1],
     ['modules/image-studio/ThumbnailVariants.tsx', 'reportFailure(', 3],
     ['modules/references/MoodBoardPanel.tsx', 'reportFailure(', 1],
-    ['modules/record-studio/RecordStudio.tsx', 'reportFailure(', 2],
+    // T-123 (18): the "Edit in Video Studio" failure sentence moved out of RecordStudio into the hook Record and Reframe share.
+    ['lib/editInVideoStudio.ts', 'reportFailure(', 1],
+    ['modules/record-studio/RecordStudio.tsx', 'reportFailure(', 4],
     ['modules/record-studio/RecordStudio.tsx', 'userFacingError(', 1],
     ['modules/references/state/referencesStore.ts', 'userFacingError(', 1]
   ]
@@ -191,6 +204,36 @@ describe('every site the ticket named routes through the helper', () => {
   it('the importers pass their kind, so an mp3 never reads video wording', () => {
     const audio = FILES.find((x) => x.rel === 'modules/audio-studio/AudioImporter.tsx')
     expect(audio?.text).toMatch(/describeImportError\(err, filePath, 'audio'\)/)
+  })
+})
+
+// T-117: `ipcErrorMessage` strips Electron's envelope and nothing else, so a site that toasts its result shows
+// main's string as written: an errno, both paths of a failed copy, a channel name. Record's save, its source
+// list and the Autosave banner's Clear were the last three; they go through `reportFailure`. What is left in
+// `src/shared` is the first step inside `userFacingError` and the classifier in `importDiagnostics`, neither of
+// which shows its input.
+describe('no renderer site shows main\'s string as written (T-117)', () => {
+  const callsIpcErrorMessage = (sf: ts.SourceFile): number => {
+    let n = 0
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'ipcErrorMessage') n++
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    return n
+  }
+
+  it('no renderer source calls ipcErrorMessage', () => {
+    const offenders = FILES.filter((f) => callsIpcErrorMessage(f.ast) > 0).map((f) => f.rel)
+    expect(offenders, 'use reportFailure(err, { failed }) - it maps the known causes and hides the rest').toEqual([])
+  })
+
+  it('the finder discriminates: it sees a call, and not a mention or another function', () => {
+    const parse = (code: string): ts.SourceFile =>
+      ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    expect(callsIpcErrorMessage(parse("toast.error(ipcErrorMessage(err, 'x'))"))).toBe(1)
+    expect(callsIpcErrorMessage(parse("import { ipcErrorMessage } from '@shared/ipcError'"))).toBe(0)
+    expect(callsIpcErrorMessage(parse("reportFailure(err, { failed: 'x' })"))).toBe(0)
   })
 })
 
@@ -238,5 +281,79 @@ describe('the words on the failure path', () => {
         .map((s) => `${f.rel}: ${s.trim().slice(0, 60)}`)
     )
     expect(offenders).toEqual([])
+  })
+})
+
+describe('Save .srt reports its own failure (T-115)', () => {
+  /**
+   * What `fn` does with the `window.api.*` call it awaits: whether the await sits inside a `try`
+   * whose `catch` calls `reportFailure(…, { failed: <string> })`, and that sentence.
+   */
+  function guardedAwait(sf: ts.SourceFile, fn: string, needle: string): { awaited: boolean; guarded: boolean; failed: string | null } {
+    const out = { awaited: false, guarded: false, failed: null as string | null }
+    const inspect = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === fn && node.body) walkFn(node.body)
+      ts.forEachChild(node, inspect)
+    }
+    const walkFn = (body: ts.Node): void => {
+      const visit = (n: ts.Node, tryCatch: ts.CatchClause | null): void => {
+        if (ts.isTryStatement(n) && n.catchClause) {
+          visit(n.tryBlock, n.catchClause)
+          visit(n.catchClause, tryCatch)
+          if (n.finallyBlock) visit(n.finallyBlock, tryCatch)
+          return
+        }
+        if (ts.isAwaitExpression(n) && n.expression.getText(sf).includes(needle)) {
+          out.awaited = true
+          if (tryCatch) {
+            let failed: string | null = null
+            const find = (c: ts.Node): void => {
+              if (ts.isCallExpression(c) && c.expression.getText(sf) === 'reportFailure') {
+                const copy = c.arguments[1]
+                if (copy && ts.isObjectLiteralExpression(copy)) {
+                  for (const p of copy.properties) {
+                    if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'failed' && ts.isStringLiteralLike(p.initializer)) {
+                      failed = p.initializer.text
+                    }
+                  }
+                }
+              }
+              ts.forEachChild(c, find)
+            }
+            find(tryCatch)
+            if (failed !== null) {
+              out.guarded = true
+              out.failed = failed
+            }
+          }
+        }
+        ts.forEachChild(n, (c) => visit(c, tryCatch))
+      }
+      visit(body, null)
+    }
+    inspect(sf)
+    return out
+  }
+
+  const panel = FILES.find((f) => f.rel === 'modules/video-studio/CaptionsPanel.tsx')
+
+  it('CaptionsPanel awaits captions.saveSrt inside a try whose catch is reportFailure with a plain sentence', () => {
+    expect(panel).toBeDefined()
+    const found = guardedAwait((panel as (typeof FILES)[number]).ast, 'saveSrt', 'captions.saveSrt')
+    expect(found.awaited, 'saveSrt still awaits captions.saveSrt').toBe(true)
+    expect(found.guarded, 'the await has a catch that reports').toBe(true)
+    expect(found.failed).toBe("Couldn't save the captions file.")
+  })
+
+  it('the finder discriminates: no try, a try that swallows, and the real shape', () => {
+    const parse = (code: string): ts.SourceFile =>
+      ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    const bare = 'async function saveSrt() { const saved = await window.api.captions.saveSrt(a, b); if (saved) toast.success("x") }'
+    const swallowed = 'async function saveSrt() { try { await window.api.captions.saveSrt(a, b) } catch { /* nothing */ } }'
+    const real =
+      'async function saveSrt() { try { await window.api.captions.saveSrt(a, b) } catch (err) { reportFailure(err, { failed: "Nope." }) } }'
+    expect(guardedAwait(parse(bare), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: false, failed: null })
+    expect(guardedAwait(parse(swallowed), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: false, failed: null })
+    expect(guardedAwait(parse(real), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: true, failed: 'Nope.' })
   })
 })

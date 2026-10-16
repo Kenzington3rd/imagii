@@ -6,6 +6,13 @@
  * `asserts cond` narrowing degrades gracefully (TS still narrows; runtime
  * may misbehave but doesn't crash).
  *
+ * `assertAlways(cond, msg)` — throws in BOTH dev and prod when `cond` is falsy.
+ * This is what a VALIDATOR is built on (T-113): `shared/validators.ts` and
+ * `assertSafeAbsolutePath` refuse input at a trust boundary, and a refusal that
+ * only logs when NODE_ENV=production is a gate that fails open for exactly the
+ * person who has that variable set. The split is design — validators throw,
+ * `assert()` warns — so a new validator uses `assertAlways`, never `assert`.
+ *
  * `assertDefined(value, name)` — throws in BOTH dev and prod when value is
  * null/undefined. Earlier we tried "warn + return value as T" in prod to
  * mirror `assert()`, but that defeats its own purpose: the next line that
@@ -46,6 +53,19 @@ export function assert(cond: unknown, msg: string): asserts cond {
 }
 
 /**
+ * Assert a condition, and throw when it fails in EVERY environment (T-113). The
+ * primitive under the validators; see the module docstring for why `assert()`
+ * is not one.
+ */
+export function assertAlways(cond: unknown, msg: string): asserts cond {
+  if (typeof msg !== 'string' || msg.length === 0) {
+    throw new AssertionError('assertAlways() called without a non-empty message')
+  }
+  if (cond) return
+  throw new AssertionError(msg)
+}
+
+/**
  * Assert a value is not null/undefined and return it as the narrowed type.
  * Use instead of the `!` non-null assertion operator.
  *
@@ -56,7 +76,8 @@ export function assertDefined<T>(value: T | null | undefined, name: string): T {
     throw new AssertionError('assertDefined() called without a name')
   }
   if (value !== null && value !== undefined) return value
-  // Also log in prod for telemetry, then throw so callers fail fast with a
+  // Also warn on the prod console so the failure is visible there, then
+  // throw so callers fail fast with a
   // named message instead of a downstream `TypeError: Cannot read
   // properties of null`. The named throw is strictly more useful than the
   // anonymous TypeError it would otherwise become.

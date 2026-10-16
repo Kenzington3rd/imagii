@@ -80,20 +80,28 @@ describe('Reframe is a fixed strip, and says so', () => {
     expect(panel).toMatch(/label: 'Left'/)
     expect(panel).toMatch(/label: 'Center'/)
     expect(panel).toMatch(/label: 'Right'/)
-    expect(panel.match(/label: '/g)).toHaveLength(3)
+    // The three POSITIONS rows and no fourth. (T-123 (18): the saved toast's `label: 'Edit in Video Studio'` is the
+    // same word `label` on a different object, so the count reads the rows' own shape.)
+    expect(panel.match(/\{ id: '\w+', label: '/g)).toHaveLength(3)
   })
 
   it('is titled for what it does, and states plainly that it does not track', () => {
-    expect(panel).toMatch(/Reframe to 9:16 \(center crop\)/)
+    // T-126 (14): "(center crop)" was stale the day Left and Right became positions (a Left strip is not a center crop), and the
+    // shorter title is also the one that fits the header at the 298 px card without breaking a word.
+    expect(panel).toMatch(/<PanelHeader[^>]*>[\s\S]{0,400}>\s*Reframe to 9:16\s*<\/PanelHeader>/)
+    expect(panel).not.toMatch(/center crop/)
     expect(panel).toMatch(/it does not track faces or action/)
     expect(panel).toMatch(/TikTok, Reels, and Shorts/)
   })
 
   it("the 'smart' position is gone from the type, the validator and the crop maths", () => {
     expect(read('src/shared/api.ts')).toMatch(/position: 'left' \| 'center' \| 'right'\n/)
-    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(
-      /export type ReframePosition = 'left' \| 'center' \| 'right'\n/
+    // T-125 (9): the strip is a stage of the shared builder now, so the three sides are `StripPosition` (filters.ts) and Reframe's own
+    // type is that alias - one union, not two.
+    expect(read('src/main/ffmpeg/filters.ts')).toMatch(
+      /export type StripPosition = 'left' \| 'center' \| 'right'\n/
     )
+    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(/export type ReframePosition = StripPosition\n/)
     expect(read('src/main/ipc/video.ts')).toMatch(
       /const REFRAME_POSITIONS = \['left', 'center', 'right'\] as const/
     )
@@ -147,6 +155,20 @@ describe('local-first names its two online exceptions', () => {
     expect(branding).toMatch(/Everything runs on the user's computer, except/)
     expect(read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/caption model download/)
     expect(read('docs/PRODUCT_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/Reference Search|References\s+searches/)
+  })
+
+  // T-119 (14): the fix table of T-85 missed two files that still said an absolute. The README's privacy
+  // section called reference search "the only feature that touches the internet" (its own system-requirements
+  // note names the model download as going online), and the release body said "Everything stays on your
+  // computer". A file a person reads before they ever open the app is where a promise like that is first
+  // read, so both name the two exceptions and neither says the absolute.
+  it('the README and the release notes name both exceptions, and neither says the absolute', () => {
+    const readme = read('README.md').replace(/\s+/g, ' ')
+    const release = read('.github/workflows/release.yml').replace(/\s+/g, ' ')
+    expect(readme).toMatch(EXCEPTIONS)
+    expect(release).toMatch(EXCEPTIONS)
+    expect(readme).not.toMatch(/only feature that touches the internet/i)
+    expect(release).not.toMatch(/everything stays on your computer/i)
   })
 })
 
@@ -202,7 +224,8 @@ describe('Captions say what they do (T-89)', () => {
   it('the size control is "Size" with the real height beside it — not "Font px", not "pixels"', () => {
     expect(panel).not.toMatch(/Font px|size in pixels|\d+ pixels/)
     expect(panel).toMatch(/>Size</)
-    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize\)/)
+    // T-112: about the loaded video's own frame, not 1080p.
+    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize, source\.probe\)/)
   })
 
   it('progress prints a plain label, never the phase id, and has an indeterminate branch', () => {

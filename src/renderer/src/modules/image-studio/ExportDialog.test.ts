@@ -99,6 +99,15 @@ describe('captureDocument', () => {
       if (value === undefined) return this.shown
       this.shown = value
     }
+    // T-112: the canvas draws a hint's words dimmed by giving the node a lower opacity.
+    // The capture must neither depend on it nor change it.
+    dimmed = 1
+    opacityTouched = 0
+    opacity(value?: number): number | void {
+      if (value === undefined) return this.dimmed
+      this.opacityTouched += 1
+      this.dimmed = value
+    }
   }
 
   /**
@@ -119,6 +128,15 @@ describe('captureDocument', () => {
     visible(value?: boolean): boolean | void {
       if (value === undefined) return this.shown
       this.shown = value
+    }
+    // T-112: the canvas draws a hint's words dimmed by giving the node a lower opacity.
+    // The capture must neither depend on it nor change it.
+    dimmed = 1
+    opacityTouched = 0
+    opacity(value?: number): number | void {
+      if (value === undefined) return this.dimmed
+      this.opacityTouched += 1
+      this.dimmed = value
     }
   }
 
@@ -314,6 +332,24 @@ describe('captureDocument', () => {
     expect(nodes.map((n) => n.visible())).toEqual([true, true, true, true, true])
     // "Restore" is each node's PRIOR flag: a hidden layer stays hidden.
     expect(alreadyOff.visible()).toBe(false)
+  })
+
+  // T-112. A hint's words are drawn at 40% on the canvas so the person can see they are not
+  // in the file. The dim is the node's opacity — a thing the capture could in principle
+  // inherit — so this holds the other half of the promise: the dimmed node is OFF while the
+  // file is drawn (it cannot reach the output at any opacity), and the capture neither reads
+  // nor writes the opacity, so the canvas is exactly as dim afterwards.
+  it('a dimmed hint node is off for the capture and keeps its dim after it', () => {
+    const dimmedHint = new FakeNode('Handle', 'hint')
+    dimmedHint.dimmed = 0.4
+    const other = new FakeNode('Accent bar', '')
+    const f = fakeStage(1, { nodes: [dimmedHint, other] })
+    captureDocument(f.stage, 1280, 720, PNG_OPTS)
+    expect(f.nodesAtCapture).toEqual([['Accent bar']])
+    expect(dimmedHint.visible()).toBe(true)
+    expect(dimmedHint.dimmed).toBe(0.4)
+    expect(dimmedHint.opacityTouched).toBe(0)
+    expect(other.dimmed).toBe(1)
   })
 
   it('restores the hint nodes even when the capture throws', () => {

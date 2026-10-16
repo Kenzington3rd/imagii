@@ -195,6 +195,34 @@ describe('restoreCollections — the single inverse the undo history steps throu
   })
 })
 
+// T-117 (2): the thumbnail gate is the third site that asked `rel.startsWith('..')`. A cached thumbnail
+// whose own name starts with two dots is in the cache; one that is not in the cache is still dropped.
+describe('the thumbnail confinement reads a real parent segment (T-117)', () => {
+  it('keeps a ..-named thumbnail inside the cache and still unsets one outside it', async () => {
+    const m = await import('./moodboard')
+    const inCache = seedThumb('..cover.jpg')
+    const subCache = path.join(thumbsDir(), '..old')
+    mkdirSync(subCache, { recursive: true })
+    const inSub = path.join(subCache, 'a.jpg')
+    writeFileSync(inSub, 'jpeg-bytes')
+    const outside = path.join(TMP, 'cache', 'thumbs-evil', 'secret.jpg')
+    const board = withThumb('dots', 'Dots', inCache)
+    board.items.push(
+      { ...board.items[0]!, id: 'sub', cachedThumbPath: inSub },
+      { ...board.items[0]!, id: 'outside', cachedThumbPath: outside },
+      { ...board.items[0]!, id: 'parent', cachedThumbPath: path.join(TMP, 'cache', 'secret.jpg') }
+    )
+    seedBoard(board)
+
+    const [read] = await m.listCollections()
+    const thumbs = Object.fromEntries((read?.items ?? []).map((i) => [i.id, i.cachedThumbPath]))
+    expect(thumbs.dotsitem, 'a name that starts with two dots is in the cache').toBe(inCache)
+    expect(thumbs.sub, 'so is a folder that does').toBe(inSub)
+    expect(thumbs.outside, 'a sibling that starts with the cache folder\'s name is not').toBeUndefined()
+    expect(thumbs.parent, 'nor is a file one level up').toBeUndefined()
+  })
+})
+
 describe('destructive edits leave the thumbnail cache alone (T-58)', () => {
   it('deleting a board keeps its cached thumbs, so an undo can restore it whole', async () => {
     const m = await import('./moodboard')

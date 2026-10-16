@@ -118,7 +118,7 @@ export interface ExportStage {
  * Render the stage at DOCUMENT resolution: exactly `width * pixelRatio` by
  * `height * pixelRatio` pixels, whatever size the window happens to be.
  *
- * T-45. The on-screen stage is scaled to fit its container (Canvas.tsx:168),
+ * T-45. The on-screen stage is scaled to fit its container (Canvas.tsx:175-189),
  * so a bare `stage.toDataURL({ pixelRatio })` renders `stage.width()` — which
  * is `doc.width * fitZoom` — and every export came out the size of the
  * viewport instead of the size of the document: a 1280x720 template landed at
@@ -264,6 +264,8 @@ export function ExportDialog(): JSX.Element {
       <select
         className="bg-bg-base rounded px-2 py-1"
         value={format}
+        // T-115: the only unnamed select in the Export card ("Scale" has its label).
+        aria-label="Export format"
         onChange={(e) => setFormat(e.target.value as FormatOption)}
       >
         <option value="png">PNG</option>
@@ -284,7 +286,7 @@ export function ExportDialog(): JSX.Element {
             aria-label="JPG export quality"
             aria-valuetext={`${Math.round(quality * 100)} percent`}
           />
-          <span className="font-mono w-10 text-right">{Math.round(quality * 100)}%</span>
+          <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(quality * 100)}%</span>
         </label>
       ) : null}
       <label className="flex items-center gap-1.5 text-xs">

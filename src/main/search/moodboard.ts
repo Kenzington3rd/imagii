@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import { moodboardsDir, thumbsCacheDir } from '../sidecars/paths'
+import { isOutsideFolder } from '../pathConfine'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '../../shared/search'
 import { parseCollection } from '../../shared/moodboardParse'
 
@@ -50,12 +51,12 @@ function assertSafeId(id: unknown, name: string): asserts id is string {
  * still happily serve any absolute path that survives that gate (e.g.
  * a path under userData/recordings). M2 fix (round 15): unset the field
  * whenever the path escapes thumbsCacheDir so the UI shows a placeholder
- * rather than serving the wrong file. Same shape as captions:copySrtTo.
+ * rather than serving the wrong file. Same shape as captions:writeKitSrt.
  */
 function confineThumbPath(item: MoodBoardItem): MoodBoardItem {
   if (!item.cachedThumbPath) return item
-  const rel = path.relative(thumbsCacheDir(), item.cachedThumbPath)
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+  // T-117: a real parent segment, not a name that starts with two dots.
+  if (isOutsideFolder(thumbsCacheDir(), item.cachedThumbPath)) {
     return { ...item, cachedThumbPath: undefined }
   }
   return item

@@ -100,7 +100,7 @@ export function PresetPanel(): JSX.Element {
               key={p.id}
               className="flex items-center gap-2 px-2 py-1.5 bg-bg-hover rounded text-xs"
             >
-              <span className="flex-1 truncate font-medium">{p.name}</span>
+              <span className="flex-1 truncate font-medium" title={p.name}>{p.name}</span>
               <button
                 className="text-accent hover:underline"
                 onClick={() => apply(p)}

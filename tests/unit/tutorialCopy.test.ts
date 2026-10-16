@@ -184,3 +184,52 @@ describe('the control-name check discriminates', () => {
     expect(routeText('/video').includes('Scan VOD')).toBe(true)
   })
 })
+
+// T-127 (9): "Click 'Choose folder…'" named a button that exists only while NO folder is remembered (OutputDirLabel's emptyLabel). A tour
+// replayed after the first export points at a button that reads a folder's name, and the quoted name passes the "is a real label"
+// check above because the label exists in the source. The step names the button by what it IS, and says what it reads until then.
+describe('the Export step points at the folder button as the person sees it (T-127 (9))', () => {
+  const step = videoTutorial.steps.find((s) => s.id === 'export')
+
+  it('calls it the folder button, says it reads \'Choose folder…\' only until a folder is picked, and does not tell the person to click that label', () => {
+    expect(step?.body).toContain("Click the folder button — it reads 'Choose folder…' until you have picked one")
+    expect(step?.body, 'the label is not the instruction').not.toMatch(/[Cc]lick 'Choose folder…'/)
+  })
+
+  it('the label it quotes is the empty state of the shared folder button (so the sentence is true of the screen)', () => {
+    const label = readAll([path.resolve(__dirname, '../../src/renderer/src/components/OutputDirLabel.tsx')])
+    expect(label).toContain("emptyLabel = 'Choose folder…'")
+    expect(label, 'with a folder set it shows the folder, not the prompt').toMatch(/if \(!outDir\) return <span>\{emptyLabel\}<\/span>/)
+  })
+
+  it('stays the two sentences the tours are, and still tells the person to click Export and where a finished file is', () => {
+    expect(step?.body).toMatch(/then click the Export button/)
+    expect(step?.body).toContain("'Show in folder' beside a finished file reveals it in Explorer.")
+  })
+})
+
+describe('the Video tour introduces Clip Kit (T-125 (24))', () => {
+  const step = videoTutorial.steps.find((s) => s.id === 'clipkit')
+  const ids = videoTutorial.steps.map((s) => s.id)
+
+  it('is a step of its own, pointed at the Clip Kit button, between Export and the close', () => {
+    expect(step, 'the tour has no Clip Kit step: the feature that writes a whole posting folder was the one nothing introduced').toBeDefined()
+    expect(step?.title).toBe('Clip Kit')
+    expect(step?.targetSelector).toBe('[data-tutorial="video-clipkit"]')
+    expect(ids.indexOf('clipkit')).toBe(ids.indexOf('export') + 1)
+    expect(ids.indexOf('clipkit')).toBe(ids.length - 2)
+  })
+
+  it('names the button the way the screen does, and claims only what the kit writes', () => {
+    const body = step?.body ?? ''
+    expect(quotedNames(body)).toEqual(['Clip Kit'])
+    expect(body).toContain('five platforms')
+    expect(body).toContain('three thumbnails')
+    expect(body).toContain('one new folder')
+    expect(body).toContain('.srt')
+    // The numbers are the kit's own: five slots, three frames, and the button says so in its tooltip.
+    const button = readAll([path.join(__dirname, '../../src/renderer/src/modules/video-studio/ClipKitButton.tsx')])
+    expect(button).toContain('Export this clip for all 5 platforms + 3 thumbnails into one folder')
+    expect(button).toContain('data-tutorial="video-clipkit"')
+  })
+})

@@ -6,6 +6,8 @@ import type { PlatformId } from '@shared/clip'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
+import { DraftField } from '../../components/DraftField'
+import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface CustomPresetManagerProps {
   open: boolean
@@ -20,6 +22,15 @@ interface CustomPresetManagerProps {
 }
 
 const DEFAULT_BASE: PlatformId = 'youtube'
+
+// What a preset's boxes take. Width and height stop at 16384, the most the save accepts (`video:saveCustomPreset`),
+// so a typed 70000 is that and not a refusal nobody can read. Their FLOOR is deliberately not enforced here: a
+// width under 64 is refused at Save, in a sentence ("Width / height must be at least 64"), and that refusal is
+// kept (T-123 (4)). The frame rate is the 1 to 120 its attributes say.
+const SIZE_MIN = 64
+const SIZE_MAX = 16384
+const FPS_MIN = 1
+const FPS_MAX = 120
 
 export function CustomPresetManager({
   open,
@@ -164,32 +175,48 @@ export function CustomPresetManager({
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Width (px)</span>
-                  <input
+                  {/* T-123 (4): kept until typing ends; `Number(typed) || 64` appended "1280" to an emptied box as 641280. */}
+                  <DraftField
                     type="number"
-                    min={64}
-                    value={width}
-                    onChange={(e) => setWidth(Number(e.target.value) || 64)}
+                    min={SIZE_MIN}
+                    value={String(width)}
+                    live={(typed) => isTypedInRange(typed, SIZE_MIN, SIZE_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, 1, SIZE_MAX)
+                      if (n !== null) setWidth(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Height (px)</span>
-                  <input
+                  <DraftField
                     type="number"
-                    min={64}
-                    value={height}
-                    onChange={(e) => setHeight(Number(e.target.value) || 64)}
+                    min={SIZE_MIN}
+                    value={String(height)}
+                    live={(typed) => isTypedInRange(typed, SIZE_MIN, SIZE_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, 1, SIZE_MAX)
+                      if (n !== null) setHeight(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Frame rate (fps)</span>
-                  <input
+                  <DraftField
                     type="number"
-                    min={1}
-                    max={120}
-                    value={fps}
-                    onChange={(e) => setFps(Number(e.target.value) || 30)}
+                    min={FPS_MIN}
+                    max={FPS_MAX}
+                    value={String(fps)}
+                    live={(typed) => isTypedInRange(typed, FPS_MIN, FPS_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, FPS_MIN, FPS_MAX)
+                      if (n !== null) setFps(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>

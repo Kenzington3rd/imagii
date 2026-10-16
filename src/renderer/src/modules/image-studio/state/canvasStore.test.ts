@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { asHint, type CanvasDocument, type TextLayer } from '@shared/canvas'
+import { asHint, displayOpacity, type CanvasDocument, type TextLayer } from '@shared/canvas'
 import { applyLayerPatch, makeReferenceLayer, makeTextLayer, useCanvasStore } from './canvasStore'
 
 /**
@@ -29,6 +29,16 @@ describe('applyLayerPatch', () => {
     const next = applyLayerPatch(hintText(), { text: '@makenah' } as Partial<TextLayer>)
     expect(next.hint).toBe(false)
     expect((next as TextLayer).text).toBe('@makenah')
+  })
+
+  // T-112: the canvas draws a hint's words dimmed; the layer's own opacity is data and stays.
+  it('the dim is display only: the stored opacity is untouched, and retyping brings full strength back', () => {
+    const t = hintText()
+    expect(displayOpacity(t)).toBe(0.4)
+    expect(t.opacity).toBe(1)
+    const retyped = applyLayerPatch(t, { text: '@makenah' } as Partial<TextLayer>)
+    expect(retyped.opacity).toBe(1)
+    expect(displayOpacity(retyped)).toBe(1)
   })
 
   it('"editing" a hint to the same words is not an edit', () => {

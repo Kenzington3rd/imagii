@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
@@ -20,16 +20,37 @@ export function AudioImporter(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const { recent, push, clear } = useRecentFiles('audio')
+  // T-119: one import at a time, the video Importer's rule (T-112). `busy` is state, and a second drop or
+  // Recent pick in the same breath reads it before the first one's render; the ref is set the instant the
+  // import starts. `extractingRef` only chooses the words of the refusal. A slow extraction of a video's
+  // sound used to land after a second file had loaded (and been tuned) and replace it.
+  const busyRef = useRef(false)
+  const extractingRef = useRef(false)
+
+  /** Refuses a second import while one runs. */
+  function refuseIfBusy(): boolean {
+    if (!busyRef.current) return false
+    toast(
+      extractingRef.current
+        ? 'Still extracting audio from the last file. Wait for it to finish.'
+        : 'Still loading the last file. Wait for it to finish.',
+      { id: 'audio-importer-busy', icon: <Icon name="warning" size={18} /> }
+    )
+    return true
+  }
 
   async function loadFile(filePath: string): Promise<void> {
+    if (refuseIfBusy()) return
+    busyRef.current = true
     setBusy(true)
     try {
       console.info('[audio-import] loading', filePath)
       if (audioNeedsExtraction(filePath)) {
+        extractingRef.current = true
         toast.loading('Extracting audio…', { id: 'extract' })
-        const wavPath = await window.api.audio.extractFromVideo(filePath)
+        const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(filePath)
         toast.dismiss('extract')
-        await loadSource(wavPath, filePath)
+        await loadSource(wavPath, filePath, undefined, hasVideo)
       } else {
         await loadSource(filePath)
       }
@@ -40,6 +61,8 @@ export function AudioImporter(): JSX.Element {
       toast.dismiss('extract')
       toast.error(describeImportError(err, filePath, 'audio'), { duration: 8000 })
     } finally {
+      busyRef.current = false
+      extractingRef.current = false
       setBusy(false)
     }
   }
@@ -48,6 +71,9 @@ export function AudioImporter(): JSX.Element {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
+    // Before anything else is said about the file: a cloud-sync warning followed by a refusal would be
+    // two sentences that disagree.
+    if (file && refuseIfBusy()) return
     const diag = examineDroppedFile(file)
     console.info('[audio-import] drop', diag)
 
@@ -76,6 +102,9 @@ export function AudioImporter(): JSX.Element {
   async function onPickFile(): Promise<void> {
     const filePath = await window.api.audio.pickFile()
     if (!filePath) return
+    // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
+    // before the cloud-sync warning, for the reason the drop does.
+    if (refuseIfBusy()) return
     if (pathLooksLikeCloudSync(filePath)) {
       toast(
         'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',

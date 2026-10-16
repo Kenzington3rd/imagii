@@ -16,8 +16,11 @@ export interface ChatMessage {
   text: string
 }
 
+// T-121: the username is letters and numbers of any script, not ASCII `\w`: a Korean, Japanese or Cyrillic
+// display name matched nothing, so every line from such a chatter was dropped from the spike count. (A mark
+// belongs to the name too: a decomposed accent, a Thai or Hindi vowel sign.)
 const CHAT_LINE_RE =
-  /^\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d+)?)\]\s*(?:<[^>]+>|[\w-]+:?)\s*(.*)$/
+  /^\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d+)?)\]\s*(?:<[^>]+>|[\p{L}\p{M}\p{N}_-]+:?)\s*(.*)$/u
 
 /** Parse a "[hh:mm:ss[.fff]]" or "[mm:ss[.fff]]" timestamp to seconds. */
 export function parseTimestampToSec(ts: string): number {

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import toast from 'react-hot-toast'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js'
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
 import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
+import { WAVEFORM_ERROR_MESSAGE } from '@shared/audio'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
+import { formatClock } from '@shared/clockTime'
 
 /**
  * Every region this view puts on the waveform for a stored cut carries this id
@@ -19,14 +23,6 @@ const CUT_ID_PREFIX = 'cut-'
  *  weight is what separates "being drawn now" from "committed". */
 const SELECTION_FILL = withAlpha(ACCENT, 0.25)
 const CUT_FILL = withAlpha(ACCENT, 0.35)
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  const cs = Math.floor((seconds - Math.floor(seconds)) * 100)
-  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
-}
 
 export function WaveformView(): JSX.Element | null {
   const source = useAudioStore((s) => s.source)
@@ -81,6 +77,15 @@ export function WaveformView(): JSX.Element | null {
       setTime(t)
       setCurrentTime(t)
     })
+    // T-123 (14): a file that cannot be drawn (an ADPCM WAV the media element refuses, one whose bytes cannot be read)
+    // left a panel with no waveform and not a word: `WaveSurfer.create({ url })` swallows the load's rejection and tells
+    // only the `error` event. A failed `load()` emits it and RETHROWS into the constructor's own catch, which emits it again
+    // (a media-element error is emitted once), so the toast has an id and the second one lands on the first. The raw
+    // error is the console's.
+    const offError = ws.on('error', (err) => {
+      console.error('[audio-waveform] could not draw the waveform', err)
+      toast.error(WAVEFORM_ERROR_MESSAGE, { id: 'waveform-error', duration: ERROR_TOAST_MS })
+    })
     const offPlay = ws.on('play', () => setPlaying(true))
     const offPause = ws.on('pause', () => setPlaying(false))
     const offFinish = ws.on('finish', () => setPlaying(false))
@@ -103,6 +108,7 @@ export function WaveformView(): JSX.Element | null {
 
     return () => {
       offReady()
+      offError()
       offTime()
       offSeek()
       offPlay()
@@ -165,10 +171,13 @@ export function WaveformView(): JSX.Element | null {
           <Icon name={playing ? 'pause' : 'play'} size={16} />
         </button>
         <div className="font-mono text-ink-muted">
-          {formatTime(time)} / {formatTime(source.probe.duration)}
+          {formatClock(time, 2)} / {formatClock(source.probe.duration, 2)}
         </div>
         <div className="ml-auto text-xs text-ink-dim">
-          {source.probe.sampleRate} Hz · {source.probe.channels} ch · {source.probe.codec}
+          {/* T-100: the codec id ("pcm_s16le") is ffprobe's word for how the file
+              is stored, not something a person cleaning audio can act on. The
+              sample rate and channel count are. */}
+          {source.probe.sampleRate} Hz · {source.probe.channels} ch
         </div>
       </div>
       <VolumeMeter audioElement={mediaEl} />
@@ -187,7 +196,7 @@ export function WaveformView(): JSX.Element | null {
               className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
               title="Click to put this part back"
             >
-              {formatTime(cut.startSec)}–{formatTime(cut.endSec)} ✕
+              {formatClock(cut.startSec, 2)}–{formatClock(cut.endSec, 2)} ✕
             </button>
           ))}
         </div>

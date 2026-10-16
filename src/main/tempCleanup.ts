@@ -13,7 +13,7 @@ import { CAPTIONS_DIR_NAME, isShiftedSrtName } from '../shared/captions'
  *    audio:extractFromVideo IPC handler returns the path to the renderer
  *    without a matching cleanup hook, so each "extract audio from video"
  *    leaks one wav for the lifetime of the audio editing session).
- *  - %TEMP%/imagii-concat   — per-segment mp4s + concat list files. Now
+ *  - %TEMP%/imagii-concat   — per-segment files (Matroska, T-125) + concat list files. Now
  *    cleaned up by runConcat's try/finally on every exit path, but a
  *    crashed imagii leaves leftovers.
  *

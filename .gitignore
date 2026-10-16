@@ -15,3 +15,6 @@ for-mike.zip
 playwright-report/
 test-results/
 tests/e2e/screenshots/
+
+# Agent worktrees (parallel workers; never commit)
+.claude/worktrees/

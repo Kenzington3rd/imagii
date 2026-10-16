@@ -114,3 +114,20 @@ export function audioNeedsExtraction(name: string): boolean {
 export function formatHint(extensions: readonly string[]): string {
   return extensions.map((e) => e.toUpperCase()).join(', ')
 }
+
+/**
+ * The video codecs (ffprobe's `codec_name`) an MP4 can carry as they are
+ * (T-111): what a stream-copy mux into `.mp4` may be handed. Anything else —
+ * wmv2 from a .wmv, vp8/vp9 from a .webm, theora, mpeg2video, prores, dv — makes
+ * `-c:v copy` into an mp4 fail ("Could not find tag for codec wmv2 in stream
+ * #0, codec not currently supported in container") or write a file that no
+ * player opens, so those pictures are re-encoded instead. VP9 is on the wrong
+ * side of the line on purpose: ffmpeg will write it into an MP4, and half the
+ * players a streamer's audience owns will not play it.
+ */
+export const MP4_COPYABLE_VIDEO_CODECS: readonly string[] = ['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg']
+
+/** True when a picture in `codec` can be stream-copied into an mp4. */
+export function canStreamCopyIntoMp4(codec: string | null | undefined): boolean {
+  return typeof codec === 'string' && MP4_COPYABLE_VIDEO_CODECS.includes(codec.toLowerCase())
+}

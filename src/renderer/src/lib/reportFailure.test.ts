@@ -1,0 +1,49 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// T-117 (4): Record's save failure used to be `toast.error(..., { duration: ERROR_TOAST_MS })` written
+// out at the call, pinned by name in interactionWiring.test.ts. It is `reportFailure` now, so the 8 s
+// lives here once, for every caller: a failure is a red toast that outlasts the library's default, and a
+// cancel is a neutral one (never `toast.error`).
+const toastError = vi.fn()
+const toastPlain = vi.fn()
+vi.mock('react-hot-toast', () => ({
+  default: Object.assign((...a: unknown[]) => toastPlain(...a), { error: (...a: unknown[]) => toastError(...a) })
+}))
+
+const { reportFailure } = await import('./reportFailure')
+const { ERROR_TOAST_MS, CANCEL_TOAST_MS } = await import('@shared/userFacingError')
+const { CANCELLED_MESSAGE } = await import('@shared/cancel')
+
+beforeEach(() => {
+  toastError.mockReset()
+  toastPlain.mockReset()
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  vi.spyOn(console, 'info').mockImplementation(() => undefined)
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('reportFailure', () => {
+  it('a failure is a red toast that lasts ERROR_TOAST_MS, in the caller\'s sentence plus the plain cause', () => {
+    const out = reportFailure(
+      new Error("Error invoking remote method 'recording:finalize': Error: ENOSPC: no space left on device, write"),
+      { failed: 'Saving the recording failed.' }
+    )
+    expect(out.cancelled).toBe(false)
+    expect(toastError).toHaveBeenCalledTimes(1)
+    expect(toastError).toHaveBeenCalledWith(
+      'Saving the recording failed. Your disk is full. Free up some space and try again.',
+      { duration: ERROR_TOAST_MS }
+    )
+    expect(ERROR_TOAST_MS).toBeGreaterThanOrEqual(8000)
+    expect(toastPlain).not.toHaveBeenCalled()
+  })
+
+  it('a cancel is a neutral toast in the feature\'s own words, never toast.error', () => {
+    const out = reportFailure(new Error(CANCELLED_MESSAGE), { failed: 'x failed.', canceled: 'x canceled.' })
+    expect(out).toEqual({ cancelled: true, message: 'x canceled.' })
+    expect(toastPlain).toHaveBeenCalledWith('x canceled.', { duration: CANCEL_TOAST_MS })
+    expect(toastError).not.toHaveBeenCalled()
+  })
+})

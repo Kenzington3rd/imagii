@@ -48,7 +48,13 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
         tall ones keep only the middle of the frame, and anything near the edges is lost.
       </p>
       <p className="text-xs text-ink-muted mb-1.5">What gets cut down:</p>
-      <ul className="bg-bg-hover rounded p-2 text-xs flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-4">
+      {/* T-113: focusable, so a long list can be scrolled from the keyboard (Chromium 126 does
+          not make a scroller focusable by itself, and these rows hold nothing to tab to). */}
+      <ul
+        className="bg-bg-hover rounded p-2 text-xs flex flex-col gap-1.5 max-h-40 overflow-y-auto mb-4 outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        tabIndex={0}
+        aria-label="Clips that will be cropped"
+      >
         {affectedClips.map((row) => (
           <li key={row.clipName}>
             <span className="font-medium">{row.clipName}</span>
@@ -61,7 +67,9 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
         ))}
       </ul>
       <div className="flex justify-end gap-2">
-        <button className="btn-ghost px-3 py-1.5 text-sm" onClick={onCancel}>
+        {/* T-114: opens on Cancel, the safe answer. The trap would otherwise focus the first thing with
+            a tab stop - the list above, which has to keep one so a long list can be scrolled. */}
+        <button className="btn-ghost px-3 py-1.5 text-sm" data-initial-focus onClick={onCancel}>
           Cancel
         </button>
         <button className="btn-primary px-4 py-1.5 text-sm" onClick={onContinue}>

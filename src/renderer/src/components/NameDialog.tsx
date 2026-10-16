@@ -27,7 +27,7 @@ interface NameDialogProps {
  * uses.
  *
  * The behavior a name field owes the user is in one place rather than two:
- * Enter submits, a blank name cannot be confirmed, and cancelling — button,
+ * Enter submits, a blank name cannot be confirmed, and canceling — button,
  * Escape, or scrim — leaves the caller's state untouched.
  */
 export function NameDialog({

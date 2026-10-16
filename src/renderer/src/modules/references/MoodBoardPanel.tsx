@@ -7,6 +7,7 @@ import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvas
 import { NameDialog } from '../../components/NameDialog'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -36,7 +37,9 @@ export function MoodBoardPanel(): JSX.Element {
       const maxDim = 800
       const scale = Math.min(1, maxDim / Math.max(dims.width, dims.height))
       addCanvasLayer(makeReferenceLayer(src, dims.width * scale, dims.height * scale, title))
-      toast.success("Added to canvas as a reference — it won't be in your export")
+      // T-125 (19): "it won't be in your export" is the fact the person needs before they build on it, and the studio changes
+      // under the toast as it appears (`navigate`), so it is held as long as an action toast.
+      toast.success("Added to canvas as a reference — it won't be in your export", { duration: ACTION_TOAST_MS })
       navigate('/image')
     } catch (err) {
       reportFailure(err, { failed: "Couldn't add that image to the canvas." })
@@ -130,17 +133,28 @@ export function MoodBoardPanel(): JSX.Element {
           {collections.map((c) => {
             const isSelected = c.id === selectedCollectionId
             return (
+              // T-114: a clickable <li> with a border for a state, like the layer rows: the select control
+              // is a real button now (the whole row), and the state is `aria-current` (on the button as
+              // well - that is where keyboard focus lands). Named with its count, which is otherwise a
+              // bare number.
               <li
                 key={c.id}
-                onClick={() => selectCollection(c.id)}
-                className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-sm ${
+                aria-current={isSelected ? 'true' : undefined}
+                className={`rounded text-sm ${
                   isSelected
                     ? 'bg-accent/15 border border-accent'
                     : 'hover:bg-bg-hover border border-transparent'
                 }`}
               >
-                <span className="truncate flex-1">{c.name}</span>
-                <span className="text-xs text-ink-dim ml-2">{c.items.length}</span>
+                <button
+                  onClick={() => selectCollection(c.id)}
+                  aria-current={isSelected ? 'true' : undefined}
+                  aria-label={`${c.name}, ${countOf(c.items.length, 'item')}`}
+                  className="w-full flex items-center justify-between px-2 py-1.5 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <span className="truncate flex-1">{c.name}</span>
+                  <span className="text-xs text-ink-dim ml-2">{c.items.length}</span>
+                </button>
               </li>
             )
           })}
@@ -163,7 +177,7 @@ export function MoodBoardPanel(): JSX.Element {
             await window.api.moodboard.clearThumbs()
             toast.success('Thumbnail cache cleared')
           }}
-          title="Drop the on-disk thumbnail cache for mood boards"
+          title="Clear the on-disk thumbnail cache for mood boards"
         >
           Clear thumbnail cache
         </button>
@@ -216,7 +230,8 @@ export function MoodBoardPanel(): JSX.Element {
                           })
                         }
                       />
-                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
+                      {/* T-115/T-116: shown on keyboard focus as well as hover (see ReferencePanel). */}
+                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                         <span className="text-xs text-ink-base line-clamp-2">{item.title}</span>
                         <button
                           className="btn-primary px-3 py-1 text-xs"

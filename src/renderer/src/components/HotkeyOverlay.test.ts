@@ -8,7 +8,15 @@ import { SHORTCUTS_BY_ROUTE, isOverlayToggleKey, shortcutsForRoute } from './Hot
  * mount itself is pinned by tests/unit/interactionWiring.test.ts and the
  * route table's honesty by tests/unit/hotkeyTable.test.ts.
  */
-const base = {
+const base: {
+  key: string
+  ctrlKey: boolean
+  metaKey: boolean
+  tagName: string
+  inputType?: string | null
+  openModals: number
+  overlayOpen: boolean
+} = {
   key: '?',
   ctrlKey: false,
   metaKey: false,
@@ -30,6 +38,19 @@ describe('isOverlayToggleKey', () => {
   it.each(['INPUT', 'TEXTAREA'])('never fires while typing in %s', (tagName) => {
     // A `?` typed into the chat-log textarea belongs in the textarea.
     expect(isOverlayToggleKey({ ...base, tagName })).toBe(false)
+  })
+
+  // T-123 (2): "is it an INPUT?" also stood down for a ticked checkbox or a dragged slider, which the browser leaves
+  // focused, so `?` was dead from there - against the overlay's own promise (UX and a11y found it independently).
+  it.each(['checkbox', 'range', 'radio', 'color', 'file', 'button'])(
+    'fires from a focused <input type=%s>: `?` means nothing to it (T-123 (2))',
+    (inputType) => {
+      expect(isOverlayToggleKey({ ...base, tagName: 'INPUT', inputType })).toBe(true)
+    }
+  )
+
+  it.each(['text', 'number', 'search', null, undefined])('still never fires from a text <input> (type %s)', (inputType) => {
+    expect(isOverlayToggleKey({ ...base, tagName: 'INPUT', inputType })).toBe(false)
   })
 
   it.each(['/', 'a', 'Escape', 'Enter'])('ignores %p', (key) => {

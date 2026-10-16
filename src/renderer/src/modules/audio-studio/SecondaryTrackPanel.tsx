@@ -1,6 +1,7 @@
 import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
 import { DEFAULT_DUCK_PARAMS } from '@shared/audio'
+import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
 
@@ -93,12 +94,14 @@ export function SecondaryTrackPanel(): JSX.Element {
         </>
       ) : (
         <div className="flex flex-col gap-3 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="font-medium truncate">
+          {/* T-126 (12): the name is what gives (it truncates); the button keeps its words on one line instead of being squeezed to two. */}
+          <div className="flex items-center justify-between gap-2">
+            {/* T-127 (15): a name that is cut with an ellipsis carries its whole self as its tooltip (the folder chip's rule). */}
+            <span className="font-medium truncate" title={`${ROLE_OPTIONS.find((o) => o.value === secondary.role)?.label}: ${secondary.fileName}`}>
               {ROLE_OPTIONS.find((o) => o.value === secondary.role)?.label}: {secondary.fileName}
             </span>
             <button
-              className="text-ink-dim hover:text-danger text-xs px-2"
+              className="shrink-0 whitespace-nowrap text-ink-dim hover:text-danger text-xs px-2"
               onClick={() => setSecondaryTrack(null)}
             >
               ✕ Remove
@@ -113,12 +116,15 @@ export function SecondaryTrackPanel(): JSX.Element {
               step={0.5}
               value={secondary.gainDb}
               onChange={(e) => update({ gainDb: Number(e.target.value) })}
-              className="flex-1"
+              className="flex-1 min-w-0"
               // M11 fix (round 15)
               aria-label="Secondary track gain in decibels"
               aria-valuetext={`${secondary.gainDb >= 0 ? '+' : ''}${secondary.gainDb.toFixed(1)} decibels`}
             />
-            <span className="text-xs font-mono w-12 text-right">
+            {/* T-126 (12): "-10.0 dB" is eight characters of mono; w-12 wrapped it to two lines at every window size. It is never squeezed or
+                wrapped now, and a monospace face wider than Consolas (58 px of it in a 56 px box on Linux) widens the box instead of cutting the
+                text, so the width is a floor (`min-w`), not a fixed size. */}
+            <span className="text-xs font-mono min-w-[3.5rem] shrink-0 whitespace-nowrap text-right">
               {secondary.gainDb >= 0 ? '+' : ''}
               {secondary.gainDb.toFixed(1)} dB
             </span>
@@ -184,10 +190,14 @@ export function SecondaryTrackPanel(): JSX.Element {
               />
             </div>
           ) : null}
-          <p className="text-xs text-ink-dim">
-            This track dips whenever you talk, so your voice cuts through on its own.
-            Common for music beds.
-          </p>
+          {/* T-122: the sentence is a promise about the export, and only Duck builds a
+              sidechaincompress; "Second mic" defaults Duck off and said it dipped anyway. */}
+          {secondary.duckUnderPrimary ? (
+            <p className="text-xs text-ink-dim">
+              This track dips whenever you talk, so your voice cuts through on its own.
+              Common for music beds.
+            </p>
+          ) : null}
         </div>
       )}
     </div>
@@ -209,11 +219,10 @@ function DuckSlider(props: DuckSliderProps): JSX.Element {
   const { label, unit, min, max, step, value, onChange, hint } = props
   return (
     <label className="flex flex-col gap-0.5" title={hint}>
-      <div className="flex items-center justify-between">
+      {/* T-126 (12): the label and the readout are 1 px apart at 2560 without a gap; one formatter draws the readout and names the value. */}
+      <div className="flex items-center justify-between gap-2">
         <span className="text-ink-muted">{label}</span>
-        <span className="font-mono text-ink-base">
-          {value} {unit}
-        </span>
+        <span className="font-mono text-ink-base whitespace-nowrap">{readoutText(value, unit)}</span>
       </div>
       <input
         type="range"
@@ -224,7 +233,7 @@ function DuckSlider(props: DuckSliderProps): JSX.Element {
         onChange={(e) => onChange(Number(e.target.value))}
         // M11 fix (round 15)
         aria-label={label}
-        aria-valuetext={`${value} ${unit}`}
+        aria-valuetext={readoutText(value, unit)}
       />
     </label>
   )

@@ -7,6 +7,23 @@ confidence to tag a release.
 
 ---
 
+## How long each layer takes
+
+The one place the durations live (T-122: they had drifted three ways across this guide, `vitest.integration.config.ts` and
+`release.yml`; every other mention points here, `playwright.config.ts` and `video-pipelines.spec.ts` included since T-123). The idle
+column is one run each on the dev container with only text editing alongside (round 77, each suite run alone on the
+finished tree); the loaded column is what the same suites measured with other work running in round 72, not re-measured.
+
+| Command | What runs | Idle | Under load |
+|---|---|---|---|
+| `npm run verify` | emoji guard, both typechecks, the unit suite (160 files, 4386 tests) | about 40 s (39.9 s) | up to about 80 s (round 72, not re-measured) |
+| `npm run test:media` | the real-ffmpeg suite, 290 cases (279 run, 11 platform-skipped) | about 6.7 minutes (403 s; the whole file on the distro's 6.1.1 measured 550 s in round 77: 272 passed and the same 7 pins written for the bundled binary failed, as in round 75) | 9 to 10 minutes (round 72, not re-measured) |
+| `npm run test:e2e:build` | the build (about 6 s), then the Playwright suite, 334 tests, one worker | about 23 minutes (1382 s of Playwright, 1388 s with the build) | not separately measured |
+
+Update this table when a round re-measures it, and nowhere else.
+
+---
+
 ## Layer 1: vitest unit tests (`src/**/*.test.ts`)
 
 **Run with:** `npm test` (or `npm run test:watch` for an interactive
@@ -59,7 +76,70 @@ re-run loop).
   deleted, because the tutorial definition files contain the selector
   strings and are reachable from every studio.
 
-**Count.** 2177 tests across 102 files (round 57 added three files —
+**Count.** 4386 tests across 160 files (round 77 added no file and grew `networkAllowlist.test.ts` from 19 cases to 32 (the scan's last gaps: constructors through a global, `getBuiltinModule(` and `createRequire(`, `export ... from`, a location chain, an IPv6 literal, `image-set(`, `createElement`, `devDependencies`, every module the set names, a guard that no `.js` file hides under `src/`), `cancelLatch.test.ts` (8: `drainRuns`, and a scan that every runner ends its run after its work), `reattachCollision.test.ts` (2: a quit mid-re-attach is released only after the scratch WAV is gone), `concatRunner.test.ts` (1: `-shortest`), `audioExtractCeiling.test.ts` (5) and `audio.test.ts` (2) (`NoUsableDurationError`), `textOverlay.test.ts` (5: `overlayTimePair`), `tutorialCopy.test.ts` (3), `designTokensInSync.test.ts` (3: the placeholder rule) and `interactionWiring.test.ts` (the net-silence calls, the `before-quit` wait, the Modal scrim, the three save handlers, the titles); round 76 added four files - `src/main/ffmpeg/folderVerdict.test.ts` (8: one stat per path in flight, a 1 s deadline, `unknown` is not "not a folder"), `src/main/ipc/settingsFolderDeadline.test.ts` (5: the real `settings:get` over a hung stat), `src/main/ffmpeg/highlightsArgv.test.ts` (4: both loudness scans take `EBUR128_SCAN_FILTER`, no `peak=true`) and `src/renderer/src/modules/audio-studio/state/audioStore.test.ts` (8: `fromVideo` follows the streams, the extension only when the probe could not say) - and grew `networkAllowlist.test.ts` from 12 cases to 19, `interactionWiring.test.ts` (the seven more `singleFlight` handlers, Export's chooser, the readout audit, the refusal row), `designTokensInSync.test.ts` (`::selection`), `clockTime.test.ts` (`formatTimer`), `textOverlay.test.ts`, `units.test.ts` (`readoutText`), `saveCard.test.ts` (`micLostLine`), `audioExtractCeiling.test.ts`, `muxCodec.test.ts` (`-tag:v hvc1`), `filters.test.ts` / `concat.test.ts` / `reframe.test.ts` (`fps=N` after the retime); round 75 added five files - `src/main/ffmpeg/concatRunner.test.ts` (5: a compilation segment is Matroska with PCM sound, the join copies the picture and encodes the sound once to AAC at 192 kbps, the list file, the fades, and a folder that cannot be made refuses before one segment is encoded), `src/main/audio/exportProgress.test.ts` (6: the progress is over the length that is kept), `src/main/ipc/settingsFolders.test.ts` (17: `settings:get` answers a folder key only for a folder that exists now, for each of the three), `src/renderer/src/hooks/useVideoOutputDir.test.ts` (14: the four panels' folder is one store) and `src/shared/clockTime.test.ts` (10: `formatClock` and `parseClock`) - and grew `videoReframePayload.test.ts` (+17: the whole recipe at the boundary), `audioExtractCeiling.test.ts` (+11: a probe that failed is not a probe that said no; an AIFF or a WMA is not a video), `ProjectIO.test.ts` (+13: `extractedFrom`, `replacedSince`), `interactionWiring.test.ts` (+13: the round's wiring pins), `videoCropPayload.test.ts` (+7), `outputPath.test.ts` (+6: `ensureOutputDir`, `outputFolderRefusal`), `reframe.test.ts` in `src/main/ffmpeg/` (+9: the strip through `buildVideoFilter`) and in `src/shared/` (+4: the readout over the crop), `gradeMatrix.test.ts` (+5), `chain.test.ts` (+5: the strengths in order, the 4096 stage), `tutorialCopy.test.ts` (+4: the Clip Kit step), `videoPickOutputDir.test.ts` (+3), `textOverlay.test.ts` (+3: the window of no length, the time refusal), `designTokensInSync.test.ts` (+3: the native-controls rule and the toast marks), `audio.test.ts` (+2), `extract.test.ts` (+1) and `tutorialTargets.test.ts` (+1), and `networkAllowlist.test.ts` went from 6 cases to 12 by vitest's count (the T-124 entry first said 23, a transposed figure; the guard now also sees `useImage(`, a dynamic `import()`, the updater and crash SDKs, a fetching `spawn` and the media elements, holds the CSP to every directive with one named exception, and asserts the package and the builder config; each new shape is proven to red); the E2E count is 314, seventeen new cases (a header-less WebM, a WMA, the 9:16 file's look and header, three for the output folders, the long-name layout, a video over an hour, a double-clicked Export, Clean audio over a changed Audio Studio, the Source time boxes and names, the arrow's row, the Clip Kit tour step, two for the dropped microphone, and the crash screen's promise), and many extended (the cases that pressed Choose folder... in each panel in turn, every file-name expectation, the overlay locators, the position and rotation boxes, the toast marks and the native-control properties); test:media is 271 cases, 260 run | 11 skipped (twenty-two new across six blocks: the join, the extraction clock, the strengths, the 4096 stage, the 9:16 file and the output folder). Round 74 added five files - `src/main/windowBounds.test.ts` (5: the window-geometry write never throws: a refused write, a window that dies between the check and the question, nothing latched), `src/main/ffmpeg/reframe.test.ts` (17: the 9:16 graph is `setpts`, the crop stage on the cropped frame, the strip, `setsar=1`, and the sound at the clip's speed), `src/main/ipc/audioExtractCeiling.test.ts` (5: the handler probes first and never reaches the extractor for a video over 2 hours), `src/main/ipc/videoReframePayload.test.ts` (23: the reframe and GIF payloads are checked at the boundary, crop before speed, the name from the opened video) and `tests/unit/networkAllowlist.test.ts` (6: an AST scan of `src/` for every way the app reaches the network, held to an exact per-file list and the page's CSP, with the scan's own discrimination cases) - and grew `docClaims.test.ts` (+15: the `%TEMP%` disclosure, the Levels ceiling sentence, the layout guide, the re-pointed cites), `interactionWiring.test.ts` (+8: the round's wiring pins), `audio.test.ts` (+5: the ceiling's two sentences), `keyOwnership.test.ts` (+5: `hasChordModifier`), `textOverlay.test.ts` (+5: a window that misses the clip), `ProjectIO.test.ts` (+4: `sessionHoldsWork`), `recordingStream.test.ts` (+4: `abandonOpenRecordingSessions`), `canvas.test.ts` (+4: `layerOffsetRange`, `LAYER_ROTATION_RANGE`), `projectValidation.test.ts` (+3: `hasStudioState`), `chain.test.ts` (+1: the cut stage is re-chunked to 256 samples first), `settingsClear.test.ts` (+1) and, by the per-file scans, `copyConventions.test.ts` (+1) and `noRawHex.test.ts` (+1). Round 73 (3976 tests in 146 files) added eight files - `src/main/sendIfAlive.test.ts` (6: the one way main reports to a window drops a send for a destroyed WebContents, never asks one to send, swallows a window that dies between the check and the send), `src/main/ipc/closeMidJob.test.ts` (18: each real progress handler, a dead sender in two shapes), `tests/unit/progressSendsGuarded.test.ts` (5: no bare `.send(` under `src/main`, with a finder that discriminates), `src/main/rendererRecovery.test.ts` (11: reload once, never inside the cooldown, never when quitting), `src/main/audio/singleTrackTail.test.ts` (15: the single-track `-af` ends in the mix bus's limiter, a bare chain does not, Even volume does not, `dual_mono` on both passes for a mono source and not for 2 or 6 channels or the mix path), `src/renderer/src/lib/keyOwnership.test.ts` (35: every tag and input type through the three questions), `src/shared/draftNumber.test.ts` (14) and `tests/unit/docClaims.test.ts` (36: the claims the twelfth pass found false, held against the code they describe, the cites in `image.spec.ts` with an anchor each) - and grew `useUndoRedoHotkeys.test.ts` (+15) and `HotkeyOverlay.test.ts` (+11) (a checkbox, a range, a radio, a colour well, a file field and a button no longer own Ctrl+Z or `?`), `chain.test.ts` (+6: `settb=AVTB` between `select` and `setpts`, `dual_mono` on both passes), `filters.test.ts` (+8: a crop the validator accepts is inside the frame, at the measured ratio and the ceiling), `audio.test.ts` (+7: the 2 hour ceiling and its sentence), `recordingStream.test.ts` (+4: the cap under twelve concurrent begins), `emojiGuard.test.ts` (+3: `.html` and `.css`, and a file type the script does not read), and, by the per-file scans, `copyConventions.test.ts` (+3), `noRawHex.test.ts` (+3), `interactiveNesting.test.ts` (+1) and `failurePathLanguage.test.ts` (+1) for the three new renderer files, with `a11ySweep.test.ts` (+1: the shared `DraftField` and the Color box are two facts) and `interactionWiring.test.ts` (the Timeline's key guard, the saved-toast shape and the Edit in Video Studio bridge re-pointed to where they now live); the E2E count is 267, eighteen new cases (the focus-keeps-its-keys case in Audio, Stream Graphics and the Player, the Time boxes, the number boxes in Stream Graphics (one) and Video Studio (three), the self-ended take, the scrim drag, the five output-folder names, the renderer crash, three layout cases, and three waveform cases) and five extended (Reframe's toast action, Save .srt's scope sentence, the Posting log's Facebook chip, the Levels case's ceiling sentence, the thumbnail cache tooltip); test:media is 238 cases, 227 run | 11 skipped (thirteen new: the crop block (five), the single-track peaks and loudness block (seven), and the AVI seam case; two existing loudnorm cases re-pointed to the dual-mono meter); round 72 added one file, `tests/unit/emojiGuard.test.ts` (6: every directory of `src/` is a root of the emoji guard and every root exists, the script itself run from a scratch tree on one emoji under each of the four roots and naming the file, a clean control, a test file that may carry one) and grew `filename.test.ts` (+8: the `{handle}` token in any script, with an emoji's variation selector, the separators and no handle, and the mark that rides on `_` and `-`), `muxCodec.test.ts` (+5: `-enc_time_base:v filter` beside `-fps_mode passthrough` on a cut and on every re-encode, absent from a copy), `devices.test.ts` (+1: the empty-device hint names the third recovery) and `interactionWiring.test.ts` (+2: the kit's folder asked for with the sanitized name, the Second-track footer behind Duck); the E2E count is 249, one new case (a Clip Kit on a clip whose name was cleared) and two extended or re-pinned (the second-track case, and the six Record cases that read the hints); test:media is 225 cases, 214 run | 11 skipped (three new: the cut re-attach's timestamps on the 24 fps ramp and on a 30 fps source, and the check's own discrimination); round 71 added no file and grew `releaseWorkflowShape.test.ts` (+9: the packaged tree carries one ffprobe and none of the four unused dependencies, with a discrimination case), `AudioStudio.test.ts` (+11: a chain that lacks keys is not a chain with edits), `chain.test.ts` (+8: the picture cut closes each gap by the time it took, never by a frame rate, with the overlap, touching, nested, out-of-order and before-the-file shapes), `filename.test.ts` (+7) and `chatLog.test.ts` (+3) (letters and numbers of any script survive, a mark stays on its letter, an emoji's variation selector does not), `projectValidation.test.ts` (+4: QA's clip with no `textOverlays` and the rows around it), `clipKit.test.ts` (+6: non-ASCII clip names through the real queue builders) and `interactionWiring.test.ts` (+3: the camera fallback's catch and thumbnail, the Timeline's four relative keys, the name `mark`); the E2E count is 248, three new cases (a camera that opens and a compositor that cannot start, leaving Record while the camera is opening, the Timeline's arrows and `,` / `.` during playback) and the zero-camera case extended; test:media is 222 cases, 211 run | 11 skipped (seven new: the burn-in, the PiP and the cut re-attach on the MediaRecorder fixture, per codec, and the overlapping cuts); round 70 added two files - `src/main/ffmpeg/probe.test.ts` (`probedFps`: a container's clock is not a frame rate - the average rate first, the real rate when there is no average, a `1000/1` millisecond clock reads as unknown, the 240 ceiling is inclusive, no rate is 0) and `src/main/ipc/videoPickOutputDir.test.ts` (the real `video:pickOutputDir` handler: a usable absolute path becomes the chooser's `defaultPath`, anything else is ignored and nothing is refused, the answer still comes back) - and grew `audioChainValidation.test.ts` (+37: a cut's and the custom noise reduction's numbers through both handlers and the preset), `settingsClear.test.ts` (+19: the dotted keys the nested schema judges, through the real store), `interactionWiring.test.ts` (+8: the round-70 wiring pins and their discrimination blocks), `videoStore.test.ts` (+6: the Player transport, `playheadNow`, the pronoun), `convertCancel.test.ts` (+5: `-fps_mode vfr` in the convert's argv and `remuxWebm`), `cancelSentinel.test.ts` (+5), `recordingCancel.test.ts` (+4: the WebM branch's remux), `settingsKnownKeys.test.ts` (+2: the schema flattened and compared to the allowlist, no dotted property name) and `releaseWorkflowShape.test.ts` (+2: `electron-builder.yml` pins no Electron version); the E2E count is 245, seven new cases (a held Enter in the Fix wizard, Space on the timeline, I during playback, the Clip Kit chooser's folder, the recording view's preview and thumbnail, leaving Record while the capture opens, and the window's background-throttling option) and the WebM save, the Output hint and the Variants case extended; test:media is 215 cases, 204 run | 11 skipped (ten new: the MediaRecorder block, eight cases, and the Auto Zoom pair); round 69 added two files - `src/main/ipc/captionsOpenFolder.test.ts` (the real `captions:openModelsFolder` handler on a real tree: the folder exists at the instant the shell is asked, parents too, an existing folder is left alone, a non-empty answer is logged, a folder that cannot be made does not throw) and `src/main/ipc/settingsClear.test.ts` (the real `settings:set` / `settings:get` over the real electron-store against a file in a temp folder: `undefined` clears a key from memory and from the file, anything else is stored and judged as before) - and grew `projectValidation.test.ts` (+38: a clip, a chain and a canvas document that are structurally empty are refused, named by field, and whole ones with and without every optional field are accepted), `filters.test.ts` (+9: the matrix stage per tag, the two bt601 tags get the tag alone), `gradeMatrix.test.ts` (+1: each real runner's `-vf` for each tag), `interactionWiring.test.ts` (+6: the single-flight finder with its discrimination block, the timeline's keys, the `videoDiscardMessage` wiring, the blank watermark's clears), `recordingStream.test.ts` (+3: abandon after a write error, through the real handler), `videoStore.test.ts` (+3: `videoDiscardMessage`), `a11ySweep.test.ts` (+2: rule 5 and its discrimination), `Tutorial.test.ts` (+1) and `truthInCopy.test.ts` (+1: the README and the release body); the E2E count is 238, eight new cases (Start's "Starting…", Edit in Video Studio's question, the audio importer's second file, the Fix wizard's focus, the timeline's keys, a focused select, the coachmark under Reduce motion, and a blank watermark with the kit after it) and five re-pinned or extended (the mic-refusal case presses Start twice, the clip-list case reads the rename field's ring, the Variants case asserts focus, the trim-handle drags find the handles by place, and the Fix wizard's modal-contract case in `home-chrome.spec.ts` expects the question to open on its first answer, where it used to open on Close); test:media is 205 cases, 194 run | 11 skipped (seven new: the bt601 cases in the T-118 block); round 68 added one file, `src/main/ffmpeg/gradeMatrix.test.ts` - the real `runExportJob` and `runConcat` against a fake child and a fake probe: a bt709 source's color space reaches the temperature stage from each, and untagged and bt601 sources get nothing - and grew `autosave.test.ts` (+6: the real `clearAutosave` with an `unlink` stand-in, the first failed unlink's errno in the message, a vanished file's code left out, each shape through `userFacingError`), `userFacingError.test.ts` (+7: the Autosave Clear shapes), `filters.test.ts` (+11: the matrix stage for bt709 and none otherwise) and `captions.test.ts` (+1: the equals sign in a path); the E2E count is 230, unchanged (`home-chrome.spec.ts`'s Clear-failure case re-pinned: its two stubs are main's real shapes, and the first now asserts no cause is guessed); test:media is 198 cases, 187 run | 11 skipped (the `a=b.srt` burn-in case and the five-case bt709 block); round 67 added three files - `src/main/ipc/audioPresetIds.test.ts` (the real `audio:deletePreset` handler with the store wrapped in a spy: a traversal, a slash, a backslash, a space, an extension, `..` and a trailing newline are refused before the store is asked, and a minted id still deletes), `src/main/pathConfine.test.ts` (`isOutsideFolder` under posix and win32, and a scan that fails on a hand-rolled `startsWith('..')` anywhere in `src/main`) and `src/renderer/src/lib/reportFailure.test.ts` (a failure is a red toast for `ERROR_TOAST_MS`, a cancel is a neutral one) - and grew `presets.test.ts` (+23: a traversal id aimed at a real file leaves it standing and is refused, the parser and the list refuse an id that is a path), `pathSafety.test.ts` (+21: `isSafeId` / `assertSafeId`), `captionsSaveSrt.test.ts` (+11) and `captionsWriteKitSrt.test.ts` (+10) (a transcript whose name starts with two dots is in the folder; five real traversals still refuse), `filename.test.ts` (+10: the local stamps in three zones, a Date whose local and UTC fields differ, and a scan for `toISOString()`), `outputPath.test.ts` (+3: the kit folder's day under `America/Los_Angeles` and `Pacific/Auckland`), `userFacingError.test.ts` (+5: Record's save failure shapes), `recordingStream.test.ts` (+1: the empty-take sentence), `moodboard.test.ts` (+1: a dot-named thumbnail), and moved assertions inside `failurePathLanguage.test.ts` (+2: no renderer source calls `ipcErrorMessage`, with a finder that discriminates) and `interactionWiring.test.ts` (-1: the `MUST_LAST` row for the Save-failure and Autosave-Clear toasts moved to `reportFailure.test.ts`; Record's save, its source list and the Autosave Clear are `reportFailure` now); the E2E count is 230, three new cases in `record.spec.ts` (and the source-list refusal and the autosave Clear failure re-pinned to their sentences, each with a second, known-cause refusal) (the suggested name on a clock whose day is not UTC's; a save that fails with EPERM, then ENOSPC; an empty take through the real IPC), the kit case re-run on that skewed clock, and the `kitStamp()` helper reading the local day; test:media is unchanged at 181 passed | 11 skipped (comments only); round 66 added one file, `src/main/ipc/captionsSaveSrt.test.ts` (the real `captions:saveSrt` handler on real files: a transcript that is gone, or outside the captions folder, is refused in a finished sentence before the Save dialog opens, the folder gate answering first; each sentence passes `userFacingError` unchanged; the copy and the canceled dialog still work), and grew `copyConventions.test.ts` (the tick rule reads the un- prefix; the two word rules also read every string in main, shared and preload, with a discrimination block and a guard against an empty scan) and `recordingCancel.test.ts` (the convert-failure sentence says "uncheck" and quotes the label exactly), plus more assertions inside `a11ySweep.test.ts` (rule 4 accepts `has-[:focus-visible]:opacity-100` and no longer accepts `focus-within`; no new test); the E2E count is 227, one new case (Save .srt on a transcript that is gone) and four re-pinned (Save .srt outside the captions folder reads main's sentence; the two References overlays tab in with the keyboard and add the mouse-click-away assertion; the Record convert-failure case reads "uncheck"); test:media is unchanged at 181 passed | 11 skipped (one comment); round 65 added no file and grew `convertCancel.test.ts` (the convert's progress is ffmpeg's position over the take's length, 0-99, and carries no percent without one: eleven cases over ffmpeg's real `-progress` text), `recordingCancel.test.ts` (the length `promoteTempWebm` hands the convert, progress forwarded as it came), `filters.test.ts` (`EVEN_PICTURE` is a crop, never a scale), `projectValidation.test.ts` / `autosave.test.ts` (a verbatim legacy JSON with `"sizePx": 800` restores at 512, the injection pins stand, the gate stays strict), `highlights.test.ts` (`hookAsk` and `HOOK_DEBOUNCE_MS` replace `hookWindowKey`), `a11ySweep.test.ts` (rule 4: a hover-only container shows on focus, with a discrimination block; two more named elements) and `interactionWiring.test.ts` (the three failure toasts that must last, with a finder that discriminates; the convert bar's null branch; the hook badge's debounce, its first ask, its cleanup) and `failurePathLanguage.test.ts` (Save .srt awaits its call inside a `try` whose `catch` is `reportFailure`, with a finder that discriminates; its header now says it reads only `catch` clauses and not a missing one); the E2E count is 226, two new cases (the convert bar draws what main reports; Save .srt on a transcript outside the captions folder says it could not) and eleven extended or re-pinned (the two hook cases, the two References overlays, the Export format name, the overlay x/y names, and the three spawn-order or title cases that had assumed the hook badge was already done); test:media is 181 passed | 11 skipped — 7 new cases (the convert's progress ×4 against the real binary, and the 1-pixel checkerboard ×3); round 64 added three files — `src/shared/overlayColors.test.ts` (the 148-name table and its resolver, moved from `textOverlay.test.ts`, and `#rgb`), `src/main/audio/reattachCollision.test.ts` (the real `runAudioReattach` on real files with `NODE_ENV=production` forced: a source or a video sitting where the scratch WAV goes is refused and left intact, nothing spawned) and `src/main/audio/silentLoudnorm.test.ts` (the real `runAudioExport` against a fake child that prints a silent pass 1: pass 2 is the single-pass loudnorm) — and grew `projectValidation.test.ts` / `autosave.test.ts` (a verbatim pre-T-113 schema-5 JSON with the overlay color NAME `white` restores, and the injection strings still refuse), `validators.test.ts` (the source scan now reads every non-test file under `src/main` through the syntax tree, with `AUDITED_PURE_INVARIANTS`), `captionsBurnIn.test.ts` / `captionsProgress.test.ts` (the gate's caption colors; the runner's own check under forced production; the burn-in's chain always opens with the even-size stage), `convertCancel.test.ts` (the convert's `-vf`), `filters.test.ts` (`EVEN_PICTURE` once; the overlay font table: six fonts, thirteen fallbacks), `chain.test.ts` (a silent measurement is no measurement), `clipKit.test.ts` (all nine kit file names for eight device-like clip names), `ProjectIO.test.ts` (`describeApplyOutcome(outcome, via)`), `highlights.test.ts` (`hookWindowKey` is `"<window>@<start>"`), `templateTruth.test.ts` (the square card's sentence), `a11ySweep.test.ts` (rule 1 sees a border, a ring and a wash too, with a discrimination block; fourteen more elements named) and `interactionWiring.test.ts` (the hook badge's key, its gate and its per-clip key; both callers of `describeApplyOutcome`; the kit's file names); the E2E count is 224, one new case (the start-handle drag) and twelve extended; test:media is 174 passed | 11 skipped — 12 new cases that run (the odd-sized picture through the convert x3, the burn-in x3 and the PiP x2 plus the fixture check, and the silent input x3) and 2 win32-gated ones (the six fonts, and the Font choice reaching the picture); round 63 added seven files — `src/shared/textOverlay.test.ts` (the 148-name color table, name and hex resolution, the 8-512 clamp, the default overlay, the store patch), `src/main/ipc/captionsWriteKitSrt.test.ts` (the real `captions:writeKitSrt` handler on real files: the kit's `.srt` on the clip's clock, nine refused ranges and speeds), `src/renderer/src/hooks/useAutosave.test.ts` (the hold and the quit flush through the real stores), `tests/unit/spawnWindowsHide.test.ts` (a syntax-tree scan: every `spawn(` under `src/main` passes `windowsHide: true`), `tests/unit/jobClipNormalized.test.ts` (every export job takes its clip through `clipForExport`), `tests/unit/tempSandbox.test.ts` (the three test files that share a temp family each have a private `tmpdir()`), and `tests/unit/a11ySweep.test.ts` (selected-by-fill buttons need a state attribute, bounded scrollers need a tab stop, each named element is wired) — each scan with a discrimination block over sample code — and grew `validators.test.ts` / `assert.test.ts` (every validator throws under `NODE_ENV=production`, `assertAlways`, and a source scan that keeps every IPC gate off the soft `assert(`), `audioChainValidation.test.ts` (the chain gate under forced production), `muxCodec.test.ts` (the even-size stage ahead of a cut), `videoCropPayload.test.ts` (Compile's plain sentence, the default overlay compiles), `captionsProgress.test.ts` / `whisperManager.test.ts` / `captions.test.ts` (the burn's opening event has no percent, a probe frame of 0, `shiftSrtToRange` with a speed, `isUsableFrame`, the finished gate sentences), `clipKit.test.ts` (the YouTube Short's 180 s, `clipForExport` in the queue, `buildKitSrtRequest`, `kitCanceledMessage`), `highlights.test.ts` (`hookWindow` is `null` under 0.5 s, `hookWindowKey`), `videoStore.test.ts` / `ProjectIO.test.ts` (overlay normalization; both staleness baselines, the playhead for a video that opened, the toast ids and sentences), `AudioStudio.test.ts` (the lead-in and the grammatical list), `templateTruth.test.ts` (the sample-text rule over the Asset Library), and `extract.test.ts` (each child found by the file it was asked to read); the E2E count is 215 + 8 = 223; test:media is 162 passed | 9 skipped, the 7 new cases being the odd-sized re-attach (VP9, VP8, VP9 with a cut, plus the two fixture checks) and the kit's captions against the loudness of the kit's own export; round 62 added one file, `src/main/ipc/videoRemoveKitDir.test.ts` — the real `video:removeKitDir` handler on real folders: an empty kit folder goes, a folder with a file or an empty subfolder stays, every refusal is a console note, a path that fails the gate is refused before anything is touched — and grew the ones that already guard its surface: `ExportPanel.test.ts`
+(`settleJobs`: the row that failed, the rows that never ran, a cancel), `videoStore.test.ts` (`setSrtPathFor` through the real `loadSource`,
+`videoHasNoSound`), `ProjectIO.test.ts` (an `applyProject` that waits, driven by deferred gates over the real stores: a video or a sound opened
+meanwhile is never clobbered, only a missing file reads "moved or deleted", the extract toast is shown and taken down), `clipKit.test.ts`
+(the Short by the crop's frame, the counting labels), `presets.test.ts` / `presetTablesInSync.test.ts` (Reels 1200 s, the 180 s note, TikTok 60 s),
+`highlights.test.ts` (`hookWindow`), `clip.test.ts` (the wire speed), `captions.test.ts` (the readout from the real frame),
+`userFacingError.test.ts` (`isMissingFileError`), `audio.test.ts` (`commitLoudnessTarget`), `fixWizard.test.ts` (the notch),
+`audioStudioCopy.test.ts` (the Light hint derived from main's filter), `canvas.test.ts` / `canvasStore.test.ts` / `image-studio/ExportDialog.test.ts`
+(the dimmed hint and its capture), `templateTruth.test.ts`, `designTokensInSync.test.ts` (the four AA pairings recomputed, a scan for accent text on an
+accent wash, three guides) and `interactionWiring.test.ts` (each fix is reached from the panel that needs it); the E2E count is 198 + 17 =
+215); round 61 added three files — `src/main/ipc/audioChainValidation.test.ts`, the real
+`audio:*` handlers and the real audio runner against a fake child: a second track's gain and ducking numbers and the loudness
+target are refused in a finished sentence with nothing spawned, after the same test shows the old runner printing an injected
+`gainDb` into `-filter_complex` verbatim (T-111); `src/main/audio/extract.test.ts`, the extraction ffmpeg's registry (register,
+clear on close and on error, kill, the `cancelAllAudioJobs` sweep) and its 48 kHz / 16 kHz formats; and
+`src/main/audio/muxCodec.test.ts`, the Re-attach command for each codec an mp4 can and cannot carry — and grew
+`filters.test.ts` (the drawtext escape, judged by a model of ffmpeg's three parsing passes), `videoExportBatch.test.ts` (a damaged
+recipe, a second batch), `captions.test.ts`, `captionsProgress.test.ts` and `whisperManager.test.ts` (the burn's measured percent
+and its style on non-landscape frames), `transcribeCancel.test.ts`, `presets.test.ts`, `presetTablesInSync.test.ts`,
+`audio.test.ts`, `projectValidation.test.ts`, `mediaFormats.test.ts`, `reframeProgress.test.ts` and `cancelSentinel.test.ts`);
+round 60 added three files — `src/main/sidecars/transcribeCancel.test.ts`,
+the real `extractAudioFromVideo` and the real `runTranscribe` against a fake `spawn`: a Cancel during the extraction kills
+THAT child, removes its half-written WAV and never starts the engine, a Cancel before the child exists kills it on arrival,
+a stale Cancel does not reach the next job (T-108); `src/main/ffmpeg/reframeProgress.test.ts`, the real `runReframe`: the
+phase of unknown length carries no `percent` key (T-108); and `tests/unit/deadExposures.test.ts`, which fails on any function
+of `ImagiiApi` (`src/shared/api.ts`, the type the preload object is checked against) that no renderer file reaches as
+`<namespace>.<member>`, with a discrimination block (T-108) — and grew `paths.test.ts` (the whole captions-engine resolver
+order as a ladder of fixtures, the lazy `<userData>/bin`, T-102), `templateTruth.test.ts` (a per-card table of which text layers are hints and which are the card's own content, T-103), `ProjectIO.test.ts` / `projectValidation.test.ts` (schema 5: a converted import stored as its original, the Clean
+audio door, the v3 audio recovery, T-107), `cancelSentinel.test.ts` (transcription joins the pre-spawn table with a held
+extraction), `filters.test.ts` (the centered zoom, the three-band temperature, T-109) and `videoCropPayload.test.ts` (one plain
+sentence on the Compile and GIF paths, T-109); round 59 added three files — `src/shared/clip.test.ts`, `clipSpeed`
+(a missing, zero, negative or non-finite multiplier is 1x, a speed that is not a number is 1x) and `clipRecipe`
+(carries every field of a `Required<Clip>` except the five listed as not part of how a clip comes out, so a field added to
+`Clip` fails that file's typecheck until someone decides); `src/main/ffmpeg/outputPath.test.ts`, `nextFreePath` against real
+files (free, taken, 1..n, a gap, past 9 and 99, dots in a name, no extension, a folder or a dangling link counts, a missing
+parent is not an error, the folder mode) and `makeKitDir` twice (T-106); and `tests/unit/clipSpeedOneReading.test.ts`, a
+syntax-tree scan that fails on any read of `.speedMultiplier` outside the file defining `clipSpeed`, with a discrimination block
+over the shapes the four old copies took (T-105) — and grew `concat.test.ts` (a segment's graph is byte for byte the export's at
+the same geometry, stage order, fades placed on the clip's OUTPUT length at 1x/2x/0.5x/4x), `filters.test.ts`
+(`buildAudioSpeedFilter` at 0.25/0.5/1/2/4 and the product of every chain, the Auto Zoom `fps=N,zoompan=...:fps=N` pair),
+`validators.test.ts` (`assertOptionalClipRecipe`), `videoCropPayload.test.ts` (every compile recipe field refused by name
+before the runner is touched), `videoExportBatch.test.ts` (nine damaged crops, one plain sentence, no probe, no child),
+`presets.test.ts` (`COMPILE_TARGET`), `presetTablesInSync.test.ts` (the compilation's size, shape and rate are one frame on both
+sides of the bridge, and it is the YouTube preset's) and `cancelSentinel.test.ts` (every runner that names its output writes BESIDE a file that
+is there; a Cancel lands while the name is being chosen, for every runner incl. PiP, which gained a run; the join's name);
+round 58 added six files —
+`src/main/ffmpeg/cancelLatch.test.ts`, the run-scoped latch every cancelable runner opens (a
+cancel marks the runs open when it arrives and nothing else; a probe wait gives way to it at
+once; a stale cancel never reaches the next run — T-98); `src/main/ffmpeg/partialOutput.test.ts`,
+what a stopped job may delete, against real files (T-100); `src/main/ipc/videoExportBatch.test.ts`,
+the real `video:exportBatch` handler with the Cancel made to happen INSIDE
+`e.sender.send('video:jobComplete')` — after job 1, before job 2, which is the gap itself;
+`src/shared/reframe.test.ts`; `tests/unit/noRawHex.test.ts`, a syntax-tree scan that fails on a
+hex color in any renderer source outside `tokens.ts` and the documented exceptions, with a
+discrimination block (it fails exactly the two files T-104 named, 2 + 3 literals, against HEAD);
+and `tests/unit/deadActions.test.ts`, which fails on a store action nothing outside its store
+names (T-101: it found six, the ticket named one) — and grew `cancelSentinel.test.ts` (a pre-spawn
+table over nine runners with a held probe, the compilation's list-file write, and the output
+rows for eight runners: a cancel under both exit shapes, a failure, a stale file left alone, the
+control keeps its file), `ProjectIO.test.ts` / `projectValidation.test.ts` (schema 4: the
+extracted-from-video marker, save -> prune -> reopen, both old-shape directions),
+`audio.test.ts` (`audioPassPlan` / `audioPassLabel`), `designTokensInSync.test.ts` (the signal
+pair, its distinctness and its contrast) and `videoStore.test.ts` (the range-add guards,
+retargeted at `addScannedClip`); round 57 added three files —
 `src/main/ipc/videoCropPayload.test.ts`, the IPC gate on the crop that Compile and GIF now carry
 (both handlers driven through a captured `ipcMain.handle` with the runners mocked: ten malformed
 crops refused before ffmpeg is spawned, a good one handed through untouched), and
@@ -118,7 +198,7 @@ real filter graph; `useTutorial.test.ts`, the target-gating rule as two pure
 functions against a fake page; and the two structural files named above;
 round 51 added four files —
 `src/main/ffmpeg/cancelSentinel.test.ts`, the table that drives twelve real
-cancellable runners (video export, GIF, compile, PiP, reframe, highlight
+cancelable runners (video export, GIF, compile, PiP, reframe, highlight
 scan, audio export and re-attach, caption burn-in, transcription, convert,
 frame extract) against a fake child and asks, for every way the app can stop
 each one under both exit shapes a SIGKILL produces, that the rejection is the
@@ -160,10 +240,10 @@ predicate, which is why the DOM question "does a caret click end the
 undo gesture" is answerable here at all — and rewrote the T-29
 clear-vs-trim block in `moodboard.test.ts` as the clear's own, T-79
 having removed the budget it was trimming against).
-Fresh-run time on a
-mid-range laptop: ~7 seconds. (The count moves most rounds; treat the
-`npm run verify` output as the source of truth and this line as the
-last-updated marker.)
+How long the pass takes is in
+"How long each layer takes" at the top of this guide. (The count moves most
+rounds; treat the `npm run verify` output as the source of truth and this
+line as the last-updated marker.)
 
 **Adding a test.** Drop `foo.test.ts` next to `foo.ts`. Vitest picks it
 up automatically. If the module under test imports `electron`, see
@@ -199,6 +279,13 @@ covered at the deepest reachable layer instead and the ledger says so.
 - HomeLink works from every studio.
 - A PNG screenshot of each route lands in `tests/e2e/screenshots/` for
   visual review.
+- **The built app makes no network request (T-127 (1)).** It is launched with Chromium's net-log, left idle 8 s past ready (the first
+  DNS-over-HTTPS probe lands ~5 s in), makes ONE loopback request from main (the control: the log must hold exactly that request, so a log
+  that records nothing fails instead of passing "zero"), is closed, and the log is read: no http(s), ws or ftp `URL_REQUEST` but the control
+  and no resolver lookup of a host other than this machine. README's "zero network requests on startup" is this test. It is the one thing
+  that sees what the PLATFORM does (Electron's spellcheck dictionary and Chromium's DoH probes were the first finds); the source scan
+  (`networkAllowlist.test.ts`) cannot. The DoH leg shows only where the machine's resolver is a DoH-capable provider, so the wiring pin in
+  `interactionWiring.test.ts` holds the calls everywhere.
 
 **What it deliberately doesn't cover.** Media processing flows. Spawning
 ffmpeg on a CI runner is slow and flaky; the unit layer covers the
@@ -207,15 +294,15 @@ get built correctly and reach every studio" — not "did a 90-minute
 reframe finish".
 
 **Why not in `npm run verify`.** E2E requires the `out/` build
-artifact. `verify` is the fast pre-commit pass (~10 seconds total);
-the E2E layer lives behind `npm run test:e2e:build` for release smoke
-(~30 seconds for build + 6 seconds for the spec).
+artifact. `verify` is the fast pre-commit pass; the E2E layer lives behind
+`npm run test:e2e:build` (timings: "How long each layer takes" at the top of
+this guide).
 
 **Adding an E2E case.** Drop `*.spec.ts` into `tests/e2e/`. Keep the
 launch hermetic (`os.tmpdir()` userDataDir + cleanup in a `finally`)
 so concurrent runs don't collide.
 
-**Two shared helpers, and the rule for each** (the specs are not
+**Four shared helpers, and the rule for each** (the specs are not
 typechecked by `npm run verify` — `tsconfig.*.json` cover `src/` only —
 so these conventions are held by review and by the suite itself):
 
@@ -241,6 +328,159 @@ so these conventions are held by review and by the suite itself):
   under `<body>`, which meant a route change logged a studio's entire
   panel copy as one entry and `toContain` / `toEqual([])` assertions
   were quietly answering questions about the page (T-70).
+- **A box that is typed into is typed into with `retype` (`tests/e2e/typing.ts`), never `fill`** (T-123 (3), (4)).
+  `locator.fill('600')` replaces the value in one step, so it cannot find a box that rewrites itself on every keystroke:
+  the specs that filled the PiP width and the overlay's Time boxes were green for rounds while "600" typed key by key gave 360600
+  and "12" gave 1.00. `retype` selects the old number, deletes it (the box is EMPTY then, the instant an `|| default`
+  snapped it back) and `pressSequentially`s the digits; `leave` Tabs out, which is when a draft commits. A case for any new
+  number box asserts the emptied state, each intermediate state and the committed one.
+- **A chooser the app must NOT open is counted, not just answered** (T-124 (21)). `recordOpenDialogs(app, files)`
+  (video-pipelines.spec.ts) replaces `showOpenDialog` in main with a recorder: a folder chooser is answered "canceled" and
+  logged, a file chooser takes the next of `files`, and `openedDialogs(app)` reads what was asked. "Pressing the action with a
+  remembered folder opens no chooser" is then an assertion (`['file', 'file']`, the two the Picture-in-picture inputs need),
+  where a stub that always answers cannot tell a panel that asked from one that did not.
+- **Panels that share a value are driven as one** (T-125 (10)). Reframe, GIF, Compile and Picture-in-picture hold ONE output folder, so
+  a case that drives them in turn picks the folder in the first and asserts the others already show it (`expectFolderShown`: no
+  **Choose folder…**, and the button named `Output folder: <name>`); pressing a button that is no longer there timed out 30 s in six
+  cases the day the store landed. A device that goes away is a dispatched `ended` (`endMicTrackOnly`, beside the screen's), and the
+  take is stopped by the person, so both the told-once case and the told-nothing negative are driven.
+- **A key a menu would take is dispatched, not pressed** (T-124 (29)). A real Ctrl+R in the Electron window is the default
+  menu's Reload and takes the page with it before the assertion looks; `window.evaluate` dispatches the `keydown` on the canvas,
+  which is what the page's handler hears. The chords that are not accelerators (Ctrl+O in Video Studio) are pressed for real.
+- **A layout is asserted by measuring it, with `tests/e2e/layout.ts`** (T-123 (24)-(27)). Every behavior case reaches a
+  control with `click()`, which scrolls it into view first, so a Rotation row clipped behind a hidden horizontal scrollbar
+  passed ten sweeps of "click all seven presets". `setWindowSize(app, window, DEFAULT_WINDOW | MIN_WINDOW)` resizes the real
+  window (1632x918, the size a 1080p display opens the app at, and the 1024x640 minimum; Xvfb's own screen is not either) and
+  waits for the layout; `expectNoHorizontalOverflow(container, what)` asserts `scrollWidth <= clientWidth` and that nothing sits
+  past the container's right edge, and names the widest offenders when it fails; `expectControlsWhole(container, controls, what)`
+  asserts each control ends inside the container and its own text is not cut off ("Aggress" for "Aggressive"); T-124 added
+  three: `expectSelectsWhole(container, selects, what)` (a `<select>` clips its text inside itself, so its `scrollWidth` is
+  always its `clientWidth`: this measures the SELECTED option's text in the select's own font against its content box less
+  padding and the arrow, `SELECT_ARROW_PX`, calibrated on the real select: Chromium draws the text up to 25 px short of the
+  right edge), `expectNoOverlap(elements, what)` (nothing drawn over anything else: a control inside its box and not cut
+  off can still sit on its neighbour) and `expectOneLine(elements, what)` (a label that wraps by the word). Red-first
+  means against the pre-fix BUILD, because the number is the evidence: `the layers and Properties column ... scrolls sideways: its
+  content is 406 px wide in a 260 px box`.
+  T-125 added two: `expectSameRow(elements, what)` (the pieces of a wrapped row share a line: the Source time row left "→" at the end
+  of one line with its box under it, and nothing was clipped, overlapped or cut) and `expectEllipsized(chip, fullText, what)` (a
+  name too long for its box is clipped, ends in an ellipsis, is one line, and has the whole text as its tooltip). A case that checks
+  several cards or sizes collects every finding and fails once with all of them (`problems`), so the pre-fix run names each one:
+  `the Reframe card at the default 1632 px window scrolls sideways: its content is 668 px wide in a 298 px box. Past its edge:
+  <button> "Reframe to 9:16" +370px`. The fixture for a long folder name has no spaces and no hyphens: a name with a break opportunity
+  wraps inside the button instead of widening it, and the pre-fix build passes.
+  T-126 changed one helper and added four rules. `expectOneLine` measures the TEXT's height (the box less its own vertical padding and
+  border): a padded `btn-primary` is a line and 12 px of padding, which the box-height form read as two lines. The rules: (1) **seed both
+  halves of a shape** - the same long folder name needs no spaces to push a button out of a card (T-125 (11)) and needs spaces to make a
+  primary wrap (T-126 (13)), so there is a case for each. (2) **When a fix stops one item shrinking, measure the item that gives instead**:
+  `shrink-0` on the Compile fade readout moved a 27 px overflow onto the card until the slider got `min-w-0`, and `min-w-0` on the folder
+  chip let its label keep its min-content width inside a button that had shrunk (the ellipsis never fired) until the label got `w-full`
+  (a first try, `max-w-[min(9rem,100%)]`, lost the cap while the button was being sized and was caught by the T-125 (11) case in the full run);
+  the existing overflow and whole-control checks caught all three. (3) **A double-click is a witness only
+  where the second press can land**: whether it hits Cancel depends on two labels' widths in the font in use, so the E2E holds the encode
+  (`installSpawnStall`) and measures where Cancel is DRAWN (a row of its own, below the primary), then lets the job finish. (4) **A browser
+  API that answers "true" for the empty case is not a check**: `document.fonts.check('500 12px Inter')` is true for a family nothing defines
+  (measured on the pre-fix build: true, zero faces), so the font case asks `document.fonts.load()` for the matching faces and requires them
+  `loaded`, and reads the built style sheets from disk for a `url()` that is not a file in the build.
+
+**Two house patterns from round 60** (T-108 needed a speech engine that is not installed, T-103 a question one pixel cannot answer):
+
+- **Put a stand-in where the real resolver looks.** The captions engine is not installed in any test environment (HL-whisper),
+  but since T-102 the resolver looks in `<userData>/bin` first, so `video-pipelines.spec.ts`'s `installFakeEngine` writes a
+  shell script there (it appends to a marker file, writes its pid, and `exec`s a long sleep) plus a placeholder model file. The
+  real resolver finds it, the real audio extraction runs, the real `runTranscribe` spawns it, and a Cancel exercises the
+  product's own registry, latch, sentinel and toast; the assertions are on the process (dead within seconds), the marker (the
+  engine never started, for a Cancel during the extraction) and the temp folder (no WAV left). Skipped on win32, where the
+  stand-in is a script.
+- **Count the pixels that are not the background.** `image.spec.ts`'s `pixelsOtherThanBackground` decodes a whole box of an
+  exported PNG with the bundled ffmpeg and counts the pixels any channel of which is more than a tolerance from the document's
+  background. One pixel cannot say whether a line of text is in a file (glyphs have gaps); a box of them says 0 versus tens of
+  thousands, and the same file's accent bar is the positive control. Red-first: `Received: 29528`.
+
+**Three house patterns from round 71** (T-121 needed a camera that opens and then cannot be used, a store that lags on purpose once per key, and the bytes a red-first run really ran against):
+
+- **Refuse the one element that holds the camera's stream.** record.spec.ts's camera-fallback cases replace `getUserMedia` for the camera with a canvas stream (this container has no camera) and `HTMLMediaElement.prototype.play` with a function that rejects when `this.srcObject` is that stream. The compositor plays its camera element before anything else, so a camera that opens and then cannot be composited is a state the test creates, and the evidence is the stream's own tracks (`readyState`) read after the toast: `['ended']`, not the absence of an error. The leave case holds the same refusal behind a gate (the round-70 technique) until the Home link has been clicked, and asserts what a start that carried on would have left: a toast, a recordings folder.
+- **Stale on purpose, once per key.** The Timeline case loops over the four keys, parking the store's playhead near the start with a click each time and letting the picture run past it, because the first failure of a loop hides the others: the red-first run reverted each key alone and watched its own bound fail (`Received: -0.713054`, `-1.906576`, `-1.742021`, `-0.883008`).
+- **Rebuild the bytes you claim were red, and hash them.** For a change in a file the held wave has edited and not committed, "red against HEAD" is not available. The pre-change file is rebuilt by the inverse edits and its sha256 compared with the baseline recorded before the round started (RecordStudio and the Timeline matched), and only then is the E2E run against it; the restore is a content replace, hashed again.
+
+**Five house patterns from round 70** (T-120 needed states that exist only between two awaits, a key held down, and a number the page cannot be asked for):
+
+- **Hold the real capture, leave the screen, let go.** `record.spec.ts` wraps `navigator.mediaDevices.getUserMedia` so the REAL desktop capture is made and then held behind a gate the test owns,
+  clicks Start, clicks the Home link while the button still reads "Starting…", and opens the gate: the start's awaits now land in a studio that is gone. The evidence is what is left running: every
+  track of every stream the wrapper handed out is `ended`, `<userData>/recordings` was never created (`recording:begin` was never asked), no temp file. The first version asserted only the tracks and the temp
+  file, and the mutation that removed the FIRST unmount check stayed green (the later check cleaned up after a session had been opened and thrown away); the folder's absence is what tells them apart.
+- **A held key is `keyboard.down` twice.** Playwright marks a `keydown` for a key that is already down as a repeat (`event.repeat`), which is what a held key sends. The Fix wizard's case presses Enter once, repeats it
+  five times and releases, and asserts the wizard is still on its second question, nobody pressed Apply, and a fresh press still answers.
+- **Make the store stale on purpose.** `timeupdate` reaches React through a listener on the `<video>` itself, so a capture-phase listener added by the test that calls `stopImmediatePropagation()` keeps the store's `currentTime` where the
+  click left it while the video plays. "I marks the frame on screen" then differs by a second from "I marks what the store last heard", and the answer cannot be an accident of when a `timeupdate` landed.
+- **Read what the chooser was opened WITH.** `dialog.showOpenDialog` is replaced in main with a stub that records its options and cancels; the Clip Kit case asserts `defaultPath` for the remembered folder, a relative path, a cleared
+  setting and a written-back folder. A canceled chooser starts nothing and says nothing, which the same case asserts.
+- **A setting the window reports about itself.** There is no window manager under xvfb, so a hidden or minimized window stays `visible` to the page (probed with the setting off: `document.visibilityState` was `visible` after `hide()` and after `minimize()`, and `requestAnimationFrame` ran 31 ticks in 500 ms in all three states),
+  which means the effect of the setting cannot be shown here; the minimized behavior is a hand-check on the win32 release run. What can be read is `webContents.getBackgroundThrottling()` on the live window.
+
+**Two house patterns from round 59** (T-106 needed two files at one path, T-105 two clips in one file):
+
+- **Hash the files, wait the toast out, move the pointer off it.** `video-pipelines.spec.ts`'s `sha256(file)` is read before
+  and after a second job, so "the first export is untouched" is a byte comparison and not an absence of an error, and
+  `frameLuma(file, t)` (the whole frame's mean luma through the bundled ffmpeg) compares two clips of one compilation at the same
+  moment of the source, so a color grade is the only difference. Two jobs in one test would each raise a "Show in folder" toast
+  and `expectRevealToast` needs exactly one on screen, so the test waits for the first to go (`toHaveCount(0)`) and re-arms
+  `stubShellReveal`. **A toast the pointer is resting on never leaves** — react-hot-toast pauses a hovered toast, and
+  `expectRevealToast` presses the button — so move the mouse off it (`window.mouse.move(2, 2)`) before waiting; the dup tests
+  that go on to click elsewhere do it for free, the Reframe/PiP one has to say so (it timed out on `toHaveCount(0)` the first time).
+- **Red-first with a poll that waits 9 minutes: shorten it on a copy.** A "(2) never appears" test is red by timeout. The HEAD run
+  is the real evidence; for a mutation run on a built app, copy the spec to a throwaway file with the poll timeouts cut to 15 s
+  (`sed 's/540_000/15_000/g'`), run only that case, delete the copy. Nothing in the committed spec changes.
+
+**Four house patterns from round 62** (T-112 needed states that only exist while something slow is
+in flight; every one is "make the slow thing hold still, change the world, let it go"):
+
+- **Hold a probe, delete the source under it.** "A failed batch marks the job that failed"
+  (`video-pipelines.spec.ts`) holds the SECOND ffprobe with `installSpawnStall(app, [{ match:
+  'ffprobe', nth: 2, ms: 6000 }])`, waits for job 1's file (`Show in folder` count 1), removes the
+  source from disk, and lets the probe finish: job 2 fails with the REAL "file isn't there" error, job 3
+  never starts. The assertions are the row labels (`Failed` x1, `Not run` x2, `Canceled` x0), the
+  reason as text that outlives the toast, and one red bar. Red-first: `Expected: 1` / `Received: 2`.
+- **Replace the handler, change the world, release the gate.** "Transcription that finishes after the
+  video changed" swaps `captions:transcribe` in main for a handler that waits on a gate, closes video
+  A, drops video B, then opens the gate: the result for A arrives while B is open. Where the slow
+  thing is an ffmpeg the spawn stall holds it instead: the importer (an flv's conversion held 10 s, a
+  second file dropped meanwhile, the spawn log still showing ONE ffmpeg) and the returning Export (the
+  first batch's encode held 60 s, Home and back to a fresh panel, Export pressed again, the spawn
+  log unchanged and no file written).
+- **A native `confirm` is answered by the page's dialog handler.** Electron's `window.confirm` raises a
+  Playwright `dialog` event: `window.on('dialog', ...)` records `dialog.message()` (asserted word for
+  word against `audioCloseMessage`) and accepts or dismisses by a variable the test flips between
+  clicks, so one launch proves declined = nothing happened, accepted = it happened, and an untouched
+  session asks nothing.
+- **Read a computed style, not a class.** The AA fixes are asserted as `getComputedStyle(...).color` /
+  `textDecorationLine` on the live element (the setup links' six underlines, the pill's ink, the kit
+  label's color), because a class name passing a test says nothing about the cascade that wins.
+  `designTokensInSync.test.ts` is the other half: it recomputes the contrast ratios from the tokens and
+  scans the renderer's source (comments stripped by a `code()` helper, since explanatory comments
+  quote the very classes the scan forbids).
+
+**Two house patterns from round 58** (T-98 needed a click inside a 40 ms window, T-100 a job that
+cannot run here):
+
+- **Hold the wait, then click in it.** `tests/e2e/mainSpawn.ts` (`installSpawnStall` /
+  `readSpawnLog`) wraps `child_process.spawn` IN MAIN (nothing in `src/` changes) so a matching
+  spawn — the Nth ffprobe, every ffprobe, the first single-frame extract — is replaced by a tiny
+  Node process that waits `ms` and then runs the very same command with the same pipes. The probe
+  still returns the real answer, late, and "Cancel pressed before the job's ffmpeg exists"
+  becomes a state the test CREATES instead of a race it hopes to win. The spawn log is the other
+  half of the evidence: "the app spawned exactly `ffprobe, ffmpeg, ffprobe`" proves no encoder
+  was ever started for the second job, which "no file appeared" cannot (a slow job satisfies it
+  too). It reaches the module with `process.getBuiltinModule` (main is ESM, so there is no
+  `require` in `app.evaluate`) and publishes the patch with `syncBuiltinESMExports`. Written
+  red-first: the HEAD build answered the held-probe Cancel with `Received: ["Video loaded",
+  "Exported 2 files"]`.
+- **Replace the handler with one the test holds.** The Clip Kit "Cancel between two calls" case
+  swaps `video:extractFrame` in main for a handler that waits on a gate, clicks Cancel while the
+  renderer is mid-sequence, then opens the gate and counts the calls that were made; the audio
+  Export row case does the same with `audio:export` and sends `audio:progress` events on the
+  real channel in the order the test chooses; the captions case replaces `captions:status` and
+  `captions:transcribe` because the engine is not installed here. The component's real `catch`
+  runs on a rejection of the shape the real job produces.
 
 **One house pattern from round 57** (T-96 needed an end state no filename shows):
 
@@ -268,6 +508,16 @@ whose end state is Explorer):
   can be proven to receive the click without being pressed. An accessible name or description is asserted with `toHaveAccessibleName` /
   `toHaveAccessibleDescription`; a tile that holds a checkbox is found by that checkbox, not by its
   text.
+- **A date in a name needs a clock whose day is not UTC's (T-117).** `tests/e2e/skewedClock.ts`
+  (`skewTimeZone`, `localDay`, `utcDay`) puts the worker on UTC+14 once it is 10:00 UTC and UTC-12
+  before, so the local day differs from the UTC day at the moment the case starts; the app is launched
+  with `...process.env`, so main and the renderer inherit the zone. The Clip Kit folder and Record's
+  suggested name were stamped from `toISOString()` for rounds, and every case that named the stamp
+  computed the same UTC string (`kitStamp()` was written in UTC): they agreed with the bug on any
+  machine, and a CI box is usually in UTC. The oracle is written from the `Date` getters, not from the
+  app's helper, and each case asserts the skew is real before it starts. At the unit layer
+  `process.env.TZ` can be assigned inside a test (Node re-reads it) beside `vi.useFakeTimers({ toFake:
+  ['Date'] })`, and a Date whose local and UTC fields name different days works in any zone.
 
 **Two more house patterns from round 55** (T-91 needed a save that can be canceled, and
 T-90 a frequency a string test cannot vouch for):
@@ -329,9 +579,9 @@ commit (T-67).
 
 ---
 
-## Layer 2.5: real-media integration (`tests/integration/media.spec.ts`)
+## Layer 5: real-media integration (`tests/integration/media.spec.ts`)
 
-**Run with:** `npm run test:media` (~90 seconds).
+**Run with:** `npm run test:media` (290 cases, 279 run | 11 platform-skipped; timings: "How long each layer takes" at the top of this guide).
 
 **Environment.** node + the real bundled ffmpeg/ffprobe binaries. No
 Electron, no DOM. Configured by `vitest.integration.config.ts` so it
@@ -354,6 +604,70 @@ child can answer.
 that passed every string-shape unit test and were rejected by ffmpeg at
 runtime, 100% of the time. A unit test can pin what we *think* the
 filter should say; only real ffmpeg can pin that it *parses and runs*.
+
+**Running the win32-only drawtext cases here (T-111).** A linux box cannot run them against the bundled binary, but a system
+ffmpeg of the shipped major (6.1.1, which has drawtext) can, with four stand-ins and none of them in the repo: a throwaway vitest
+config that aliases `ffmpeg-static` / `ffprobe-static` to `/usr/bin/ffmpeg` / `ffprobe`, a setup file that sets
+`process.platform` to `win32`, a working directory holding a `C:/Windows/Fonts/` folder with `arial.ttf` / `arialbd.ttf` symlinked
+to DejaVu (the filter graph names the font by that relative path), and `-t` to pick the cases. Round 61 ran its drawtext
+cases that way (red-first included); the suite itself has no pattern for a second binary, so none was added. Round 64 ran
+the font pair that way with SIX different faces behind the six file names (`impact.ttf` and `arialbd.ttf` both the bold
+DejaVu Sans, `cour.ttf` the mono one, and so on), so "Courier New is wider than Arial for the same text" is a measurement
+that cannot pass if the filter prints one file for all of them: red-first `126 px against Arial's 126 px`. A config file
+kept outside the repo must not `import` from `vitest/config` (it cannot resolve it from there): export a plain object.
+Round 68 (T-118) ran the same recipe for a different reason: the major itself. The bt709 block below and the burn-in escapes were
+run against the distro's 6.1.1 with two two-line modules in the scratch folder (`export default '/usr/bin/ffmpeg'` for
+`ffmpeg-static`, `export default { path: '/usr/bin/ffprobe' }` for `ffprobe-static`), a config whose `resolve.alias` points the two
+package names at them, `root` set to the repo and `-t` to pick the cases. The config and the aliases stay outside the repo.
+Round 69 (T-119) ran it again for the bt601 half of the same block, with `@shared` in the alias list too and a one-test spec
+beside the config that prints what `ffmpegPath` and `ffprobePath` resolve to under it (`/usr/bin/ffmpeg | ffmpeg version
+6.1.1-3ubuntu5`, and the bundled `7.0.2-static` under the repo's own config), so the transcript says which binary ran.
+Round 74 (T-124) ran the WHOLE suite that way, for the first time, because its cut change (`asetnsamples=n=256` ahead of `aselect`)
+touches every audio export: 231 passed and 8 failed on 6.1.1, and the same seven failed on the round-73 tree under the same config
+(the four `KNOWN linux-binary gap` pins, which assert the BUNDLED binary has no `drawtext`; the GIF frame-rate read `25/2`; the `ansi`
+demuxer claiming a text file; the mpegts convert-crash pin). The eighth was real: a case that read `-0.2 dBFS` where it read `-1.0`
+before, which was the resample after the limiter and not the limiter (the case moved to a 48 kHz source, with the finding ledgered).
+A changed cut graph is run through the shipped major's whole suite, not only its own block, and a failure there is compared with
+the same config on the previous tree before it is called a regression or a platform difference.
+
+**Round 75 (T-125): what each new chain case measures, and its first red.** Five changes to ffmpeg commands or filter graphs each
+landed with a Layer 5 case that failed against the round-74 code, on the bundled 7.0.2 and on the shipped major's 6.1.1 (the alias
+recipe above; the transcripts are in the round's record).
+- *The join* (`a compilation keeps the sound on its picture across many joins`, item 1). Eight 1 s segments are cut from a source with
+  a flash and a beep on the same instant every second, joined through the real `runConcat`, and the beep minus the flash is measured at
+  each segment: under 15 ms at every one. Red with the old join (AAC segments, stream-copied): `beep minus flash at each segment is 0 / 30
+  / 59 / 88 / 118 / 147 / 176 / 206 ms` (29.3 ms of encoder priming per join), identically on both majors. The segment is Matroska with
+  PCM sound and the join encodes AAC once; a second case holds that the scratch is gone on finish and on cancel.
+- *The extraction* (`a sound that starts late in its container stays where it was`, item 2). A video whose sound starts 0.278 s after its
+  picture is extracted, and the burst is where the container had it, in the WAV the studio opens and in the re-attached file. Red: `the
+  burst in the WAV: 1.0214 s, expected 1.278 s`. A sound that starts with its picture extracts to the SAME bytes as before.
+- *The strengths* (`the three denoise strengths are ordered by the noise they remove`, item 3). Pink and brown noise through the real
+  chain at each strength, the removed level measured: Light < Medium < Aggressive. Red: `Light removes 8.7 dB, Medium 6.8 dB, Aggressive
+  4.7 dB` (the table had `nf` the wrong way round).
+- *The block after the cut* (`the cut stage hands the rest of the chain 4096-sample frames and changes no sample`, item 5).
+  `ashowinfo` on the chain's graph: every frame after the cut is 4096 samples (the last may be short), a stage ahead of the cut sees 256,
+  and a cut alone produces the same bytes with the stage as without. Red: `a frame after the cut that is not 4096 samples: 256 (of 1290)`.
+- *The 9:16 file* (`a reframed clip is the clip the user built`, item 9). A graded clip is measurably graded (a brightened gray, a
+  desaturated blue), Auto Zoom and Hype Shake move the picture, the whole recipe at once is one valid 1080x1920 square-pixel file of the
+  clip's length, and a text overlay shows in its window on the clip's own clock (at 2x, in the half of the output it belongs to). The
+  text case runs the `drawbox` stand-in on every build (the bundled linux 7.0.2 has no `drawtext`) and for real on 6.1.1. Red: `brightened
+  gray 47,47,47 vs 47,47,47` (Reframe ignored the grade).
+- *The output folder* (`an output folder that is gone is made again before anything is encoded`, item 10). Every runner against a folder
+  that does not exist yet writes into it, and against one that cannot be made (a file where a parent should be) refuses in a sentence that
+  names it with nothing written. Red: `expected 'ENOTDIR: not a directory, lstat ...' to be 'Couldn't create the folder "Clips". ...'`.
+
+**Round 77 (T-127): the two new chain cases, and their first red.** Both ran on the bundled 7.0.2 and on 6.1.1 through the alias recipe,
+with identical numbers.
+- *The joins* (`fractional segments do not walk the picture off its sound across the joins`, item 4). Eight segments with fractional
+  boundaries (each in the dark part of its second, so a flash is never cut in half) of a 25 fps source with a flash and a beep on the same
+  instant every second, joined through the real `runConcat`; the picture-minus-sound lag is read at EVERY flash and the SERIES is judged
+  (flat within 15 ms, none over 30). The T-125 (1) case above cuts whole seconds from a 30 fps source: every segment there is a whole
+  number of frames, the one shape that cannot drift. Red without `-shortest`: `3 / 57 / 83 / 112 / 125 / 161 / 194 / 194 ms`
+  (spread 191); green `3 / -3 / 7 / 0 / 0 / 0 / 0 / 0`.
+- *The durationless streams* (`a durationless file still answers whether it has a picture`, item 10). Two short streamed WebMs (no length in
+  the header: what MediaRecorder writes), sound alone and a picture with sound, through the probe and the real handler: `false` and `true`;
+  and the existing 2 h durationless audio-only case now expects the audio remedy. Red with the extension deciding:
+  `expected 'That file is longer than 2 hours...' to match /Split it into shorter files in another app/`, `expected null to be false`.
 
 **Per-platform cases.** ffmpeg-static ships binaries from different
 upstream builders per platform, so some evidence is only obtainable
@@ -387,6 +701,13 @@ The release workflow
 runs `npm run test:media` after `verify`, which is where those gated
 tests actually execute; nothing else in the project runs them.
 
+**The release run's hand-checks** (what no test here can reach, so the person cutting a release looks):
+- **The shipped binary's network silence (T-127 (1)).** Launch the portable exe on Windows with `--log-net-log=<file>` and leave it idle
+  for 30 s, then read the log for `URL_REQUEST_START_JOB` events with an http(s) address, and for DNS lookups of any host but this
+  machine: there are none. The mechanism (`app.configureHostResolver`, `session.setSpellCheckerLanguages([])`) is platform-independent and
+  the proof run was on Linux (smoke.spec.ts); this confirms it on win32, where Electron downloads its dictionary the same way.
+- **A window minimized during a take** (T-120): the webcam composite keeps drawing (no window manager exists on the test box).
+
 **Adding a case.** Generate sources in `beforeAll` with lavfi
 (`testsrc2`, `sine`, `anoisesrc`), drive the real exported function, and
 assert with `ffprobeJson`/`measureLufs`/`bandMeanVolume` helpers already
@@ -403,6 +724,138 @@ flat, so "is a caption painted at this instant" is a luma-spread read of
 second, plus one loud audio burst, so "which part of the source is under
 this sound" is arithmetic). Cut at an offset, never from 0.
 
+**Measure the LENGTH of each stream and where a known sound lands, not just that the file plays (T-105).**
+A compiled clip at 2x with its audio left at 1x is a valid file of a plausible length, and a stretched Auto Zoom clip is a
+valid file 20% too long: both passed every dimension and codec check for as long as they existed. Round 59's block reads each
+stream's own duration, the ramp fixture's picture clock (luma = 12 x its source second), and where its 1.5 s audio burst lands
+in the output — `atempo` keeps the pitch, so the burst's position IS the tempo — through 2x, 4x (two atempo stages), 0.5x and
+0.25x, and each case sits beside a plain 1x clip so a join that drifts shows up in the total. Grade, zoom and shake use one
+fixture each whose every pixel is known (a dark-gray half beside a blue half; a black frame with one white square) and a
+control segment in the same file. When a stage needs `drawtext`, the T-74 drawbox stand-in is generalized to `runConcat` and a
+linux pin proves the overlay reached the real runner's graph.
+
+**Run the same job three times with DIFFERENT content under one name, and hash the earlier files (T-106).** An export that
+replaces its predecessor is a valid file in the right place, and if the second run's bytes equal the first's a silent overwrite
+leaves no trace. Each case moves the part of the source it cuts (or a margin, or a speed) so the runs differ, asserts
+`x`, `x (2)`, `x (3)` for the names, and that each earlier file's sha256 is unchanged after every later run. The same block has
+the case that made the bug matter: a CANCELED second job beside a finished export of the same name — T-100 removes what a
+canceled job was writing, and the "file it was writing" used to be the earlier export.
+
+**Measure a level on both sides of the moment something leaves, and a size across shapes (T-111).** Every mix fixture was as long
+as its music bed, so `amix` never had to say what happens to the survivor; the voice stepped up 6 dB the moment a shorter bed
+ended and nothing measured it. Round 61's fixtures: a steady 300 Hz voice under a 3 kHz bed that stops at 3 s, the voice's OWN
+band read through a bandpass 1 s before and 0.3 s after, for the manual, ducked, +6 dB and match-loudness mixes (red-first: -30.1
+to -24.1 dB, and 4.7 dB under match-loudness), plus a hot pair that must be limited and a quiet mix that must not be re-leveled
+(the limiter's default raises its output; the test pins the exact upmix level). A caption's size is read off real frames: the white
+of the glyphs boxed on mid-gray frames of four shapes, the box's height over the frame's WIDTH equal within 10%, the default on a
+vertical clip one short line, the margin as high as on landscape; the same cases ran on the bundled 7.0.2 and on 6.1.1. A wmv2
+file generated in-test is re-attached and every frame of the result decoded with nothing on stderr.
+
+**An odd size, and a cue against a sound (T-113).** Round 63's two real-media blocks. A fixture an encoder will not make by itself: lavfi
+sources round a yuv420p picture to even, so the 321x241 VP9 and VP8 webms are made with a `scale` after the source (the odd size is
+`ffprobe`d before it is used), and re-attached; the old command died with `width not divisible by 2 ... exit 187` on all three cases
+(plain, VP8, and with a cut). The kit's captions are proved against the thing they describe: the REAL export the kit's own job
+describes of the ramp source, whose loud burst is at 10.0-11.5 s of its source, and the loudness of the kit's file read at the moment
+the shifted cue starts (-22 dB during the cue, -56 dB 0.6 s before it; thresholds -30 and -45), at 2x, 0.5x and 1x — a cue left on the
+source clock starts at 10 s, past the end of a 3-second file. Mutation: the division by the speed removed -> `expected 2 to be close to 1`.
+
+**An odd size through every command that encodes a source, silence through a two-pass measurement, and a font that has to
+reach a picture (T-114).** Round 64's Layer 5 blocks, each of which exists because the first fix stopped at the surface its
+author pictured. The odd-sized fixture is a flat-gray 321x241 VP9 webm (a lavfi source rounds to even by itself, so the odd
+size is made by a `scale` after it and `ffprobe`d before it is used), through the recording's convert, the importer's, the
+burn-in with a cue (the caption's glyphs in the bottom band, the top band flat) and with none, and the PiP composite (the
+overlay's color at its center, the base's elsewhere), each beside an even-sized control: red-first `exit 187` five times
+and the controls green. The silent input is `anullsrc`, and its test starts by asserting that pass 1 prints `-inf` — the
+trap must be in the fixture or a green run is no evidence — then exports and reads the output back as silence of the
+same length (red-first `FFmpeg exit 222`). The font pair measures a WIDTH (ten lowercase i's are about 2.7x as wide in a
+monospaced face), compares the same font twice for EXACT equality (an unknown, an empty and a hostile string are Arial,
+so their widths are Arial's to the pixel), and exports each of the six to catch a wrong file name. **Audit the class when
+the ticket names one member:** `grep -n libx264 src/main` is a five-line list of the commands that encode a source, and the
+test that matters is one case per line of it.
+
+**Test a stage that "loses one pixel" with the hardest edge there is, and a progress number with a length you control (T-115).**
+Round 65's Layer 5 blocks. The even-size stage had to lose a pixel and was a `scale`, which resamples the picture to do it (hard in the four corners, soft along every edge's middle and through the center); the odd-size
+cases from round 64 only read the OUTPUT SIZE, which a scale and a crop share, so they were green on both. A one-pixel checkerboard
+(a lossless VP9 fixture, made at its size by a `crop` with `exact=1` because `crop` rounds a yuv420p size to even by itself, and
+checked to be a hard checkerboard BEFORE the convert) is the test that separates them. Under the scale the three sampled rows (7, 100
+and 233) had 70, 320 and 67 pixels in the mid-gray band strictly between 80 and 175 (the suite's own `hardness` count, exclusive bounds): row 7 was hard toward its two corners and soft in the middle (a middle of
+120-143), row 100 had no black or white pixel at all; through the crop, none in any of the three, and an even-sized control proves the
+encoder is not what softens it. **A size assertion cannot see resampling; sample pixels.** The convert's progress is tested with the real binary
+and a length the test chooses: the right length ends the bar at 90-99, twice the length puts the same encode at about half, a
+shorter-than-the-file length pins at 99, and no length reports no percent at all - four runs of a six-second webm that take well
+under a second each. The fake-child unit cases (`convertCancel.test.ts`) feed ffmpeg's real `-progress` text; the real run is what
+shows `out_time` is the position in the OUTPUT.
+
+**A matrix-blind fixture cannot see a matrix bug, and a pass on one binary says nothing about the other (T-118).** `colorbalance` came
+back from its RGB round trip in the bt601 matrix on 6.1.1 (the shipped win32 major) and kept the matrix and the tag on the bundled linux
+7.0.2, so a bt709-tagged source (OBS's default) was re-encoded wrong on exactly one of them; every grade fixture before it was a neutral
+gray, which is the same in every matrix. The fixture is four SATURATED bands (green, red, blue, a gray) converted with
+`scale=out_color_matrix=bt709` and tagged bt709 (checked first: `ffprobe` says bt709, `probeVideo` carries it, the bands decode to the
+colors they were drawn as), and the output is read the way a player reads it, `scale=in_color_matrix=bt709,format=rgb24`, against the
+same job without a grade, through BOTH graded runners (the export Clip Kit shares, and a compilation segment). The grade used is a cast
+of 0.01, so what is measured is the matrix and not the warmth; a full warm grade is checked on the gray band to prove the stage does
+not undo it, and an untagged source gets the same comparison with a bt601 decode to prove the skip. **This block passes on the bundled
+7.0.2 with or without the fix** (run once with the stage removed: 5 of 5 green), so it can only be red on a 6.1.1 binary: through the
+alias recipe above, with the stage removed, the green band decoded `(0,130,0)` against the control's `(0,157,0)` (delta 27, limit 4)
+and the output's `color_space` was missing, on both runners. With the stage as first written (`scale=out_color_matrix=bt709` alone)
+the pixels come back and the tag does not, which is why `setparams=colorspace=bt709` follows it. What fails on every machine is the
+unit pair (`filters.test.ts` for the builder, `gradeMatrix.test.ts` for the wiring from each runner: dropping the probe's value from
+`runExportJob` or from `runConcat` turns exactly that runner's case red), and the win32 release run is the standing check on the real
+binary.
+
+**The second half of the same block: a source tagged bt601, and a skip that has to be true (T-119).** `smpte170m` and `bt470bg` (OBS's
+Rec.601 profile, SD captures) lost their tag through `colorbalance` on 6.1.1 the same way, and every built-in preset is at least 1280 px on its long side, where a
+player that guesses reads an untagged file as bt709. Their pixels were never wrong (swscale reads and writes bt601 by default), so the
+stage is the tag alone, `setparams=colorspace=<tag>`. Two fixtures keyed to the 601 matrix and tagged (checked first, as the bt709 one is),
+each tag through the export and a compilation segment at a cast of 0.01 against the ungraded control under a 601 decode, with the tag
+asserted on the output, and a full warm grade on the gray band. Through the alias recipe on 6.1.1: the stage as shipped, 12 of 12
+green; the bt601 branch removed, 5 failed (`the graded output is still tagged smpte170m: expected undefined to be 'smpte170m'`, the
+`bt470bg` twin on both runners, and the warm grade); the whole stage removed, 8 failed (round 68's three plus those five); the bt709 recipe
+given to a bt601 source instead of the tag alone, 4 failed on the PIXELS (`green graded 11,184,3 vs control 0,158,0`), which is the run that
+settles why the stage is the tag alone. On the bundled 7.0.2 the block is 12 of 12 green with the branch and without it, by design. **The
+tolerance is the suite's, not a hand fixture's:** the pixels are within 3 levels of the control on both majors (a soft assertion at 2 names
+every band: bt709 reads red 199,42,42 against 202,45,45, blue 38,54,195 against 40,56,197, gray 122,124,124 against 124,126,126; the bt601 tags and the untagged fixture read red 204,45,46 against 205,46,47, blue 40,57,198 against 43,58,200, gray 125 against 128), where the first draft of the stage's
+comment said 2 for bt709 and 1 for bt601 from a one-off fixture. **A skip is a claim, and its reason has to be true of what it skips:**
+untagged is skipped because the round trip is symmetric, and the sentence that said "players assume bt601" was wrong at HD.
+
+**A stage's comment names its job, and the job has to be a test that can fail (T-120).** Round 68's `scale=out_color_matrix=bt709` was
+described as the half that restores the pixels of a graded bt709 source, and round 69 measured that a retag alone restores them and the
+tag (a graded `bt2020nc` source reads `(0,153,0)` against the control's `(0,155,0)` with only the tag put back). The `scale`'s real job is
+a clip that also has Auto Zoom on: `zoompan` drops the tag, a frame still in RGB at that point is converted afterwards as an untagged one,
+and the retag-only graph reads green `(0,133,0)` against `(0,157,0)`. The new pair in the T-118 block (a bt709 source with a grade AND Auto
+Zoom, through the export Clip Kit shares and through a compilation segment, every band against the Auto Zoom control under a bt709 decode)
+is the only thing that fails when the `scale` goes. Through the alias recipe on 6.1.1 (the config prints `/usr/bin/ffmpeg | ffmpeg version
+6.1.1-3ubuntu5` for the resolver, and the bundled `7.0.2-static` under the repo's own config): the stage as shipped, `14 passed`; the
+`scale` dropped (`setparams` alone), `2 failed | 12 passed`, `green graded 0,133,0 vs control 0,157,0: expected 24 to be less than or equal
+to 4` on both runners. On the bundled 7.0.2 the same mutation is green, by design. The upgrade recipe for the other matrices uses the
+constant both majors accept: 7.0.2 refuses `bt2020nc` and `bt470bg` as `out_color_matrix` values (`Undefined constant or missing '(' in 'bt2020nc'`) and takes `bt2020`.
+
+**Make the fixture the shape of the file that broke, and check the shape before judging on it (T-120).** Chromium's MediaRecorder writes a
+streamed WebM: no duration in the header (`ffprobe` prints `N/A`), a container rate of `1000/1` with `avg_frame_rate` `0/0` (its clock ticks
+in milliseconds), packets at irregular millisecond times. A fixture encoded to a file, with a duration and a steady rate, cannot fail any
+of the three bugs that shape caused (a save that left the take without a duration, a convert that wrote one frame per millisecond, a probe
+that read 1000 fps), and every unit test around them was green. The block in `media.spec.ts` encodes VP9 and VP8 to a PIPE, with
+`-enc_time_base 1:1000` and a `setts` jitter, and overwrites the muxer's DefaultDuration element with an EBML Void of the same length (both
+majors write it, element `23 E3 83`, and the unpatched pipe output reads `30/1` on both: the patch is what makes the file read `1000/1`, and it is needed
+on both, T-122 corrected "7.0.2 does not write it"); each fixture is asserted to have that shape first.
+The cases run the production `remuxWebm`, `convertToMp4` and `probeVideo`: the remux has a duration, every packet and a probe the studio
+accepts (fps reads 0, the container still says `1000/1`: a stream copy cannot carry a rate, so `probedFps` treats a rate above 240 as
+unknown); the convert has the frames the take has (90 for the 3 s fixture, where it wrote 2980) and a sane rate; and flv, wmv and mpg
+sources at 25 fps keep exactly 50 frames in 2 s (the importer shares the argv). Red-first, one change at a time: the remux writing a live
+stream, the convert without `-fps_mode vfr`, the convert forced to 1000 fps and the ceiling widened each fail their own case.
+
+**Close the class, not the argv, and keep a fixture as long as the question (T-121).** T-120's remux sent the same `1000/1` file to three more libx264 commands than the convert it had fixed. The cases are the same fixtures (VP9 and VP8, the T-120 block), one per command: the caption burn-in and the PiP composite read an average rate between 20 and 60 and 75 to 105 frames for the 3 s take (`avg_frame_rate 1000/1: expected 1000 to be less than 60` unfixed), and `runAudioMux` with a 1 s cut keeps a picture within 0.35 s of the 2 s of sound (`video 0.058 s: expected 0.058 to be greater than 1.65`). Two traps the cases had to avoid: a silent take shorter than its overlay runs to the overlay's length with a frozen last frame (T-110 (ac)), so the PiP overlay is generated at the take's length (a 6 s overlay read 181 frames in 5.968 s on the FIXED argv); and a retime by a sum over the cuts counts an overlap twice, so a second case on the 24 fps ramp hands out overlapping cuts out of order (source 10 s must land at output 5 s under the sound's burst; `video duration 13.958984: expected 13.958984 to be greater than 14.75` with the merge removed). Each of the three fixes was removed alone and turned exactly its own cases red. The whole cut / re-attach / burn-in / PiP / MediaRecorder family (59 cases then) was run on the bundled 7.0.2 and on the distro's 6.1.1 through the alias recipe above before the timestamp retime was kept, because "every pinned case stays green" was the condition for it.
+
+**A defect that lives on the shipped major needs the shipped major in the room, and a unit pin for the box that cannot show it (T-122).** The cut re-attach's retimed stamps were exact on the bundled 7.0.2 and rounded onto the frame grid on 6.1.1, the major the Windows exe ships (a constant-rate source got an encoder time base of `1/fps`): on the 24 fps ramp with cuts 3.3-5.7 s and 8.0-9.2 s, ffprobe read `pts_time` `3.291667` twice (`non-strictly-monotonic PTS` on stderr). Every Layer 5 case was green on 7.0.2 because 7.0.2 keeps the graph's own time base either way. The new cases ("a cut that is not a whole number of frames long keeps every survivor on its own timestamp", the T-82 block: the ramp, and a generated 30 fps source with three cuts) compare EVERY output packet with where its source frame belongs, to 1 ms (a duplicate check first, so the failure names the stamp), with the expectation read from the source's own packets and not assumed from `k / fps` (the frame count of a fixture depends on the ffmpeg that made it), and with the tail allowed to lose a frame or two to `-shortest` and the middle not. They **cannot go red on 7.0.2**: the same unfixed bytes ran green there. The red is the 6.1.1 run through the alias recipe above (`the 24 fps ramp: pts_time written twice: 3.291667`; `the 30 fps source: packet 32 is at 1.100000 s, 16.7 ms from where its frame belongs`), green with `-enc_time_base:v filter` on both majors; `muxCodec.test.ts` pins the option beside `-fps_mode passthrough` on every re-encode so a box with only 7.0.2 reds too. Say in the case which run is the red. The cut / re-attach / audio-chain mux / MediaRecorder family (55 cases) was run on both majors before the option was kept. Two smaller traps: the OUTPUT's `r_frame_rate` after a cut reads `120/1` (the survivors are no longer evenly spaced), so a rate check belongs on the fixture; and the fixture recipe's Matroska `DefaultDuration` is written by BOTH majors (an earlier note here said 7.0.2 does not), so the Void patch is needed on both.
+
+**Measure a transform's pivot and a control's whole range (T-109).** Auto Zoom grew out of the top-left corner for as long as it
+existed, and the Temperature slider moved only the shadows: both produced valid files of the right size and length, and the
+fixtures that existed were chosen where the filter happened to work (a centered marker, a dark half). Round 60's cases use the
+frame the feature is FOR: a centered marker must stay centered while it grows AND an off-center one must move away from the middle
+by exactly the zoom the same run measured (expected positions derived from the geometry, never from the expression under test);
+a mid-gray half beside a light-gray half, with no shadows in sight, must go warmer or cooler on both. Red-first against the HEAD
+filter: the marker at (663.5, 373) against (640, 360), and a 0x80 half at 125,125,125 against its control's 128,128,128.
+
 **Assert what an output LEFT OUT, with the control beside it (T-96).** Round 57's
 Compile and GIF both ignored a clip's crop and produced a file that was the right size,
 length and codec, so none of the dimension or duration checks that were already there could
@@ -413,6 +866,20 @@ and must still contain the red. A test that asserts only the absence passes when
 never visible. When several runners share one rule (`cropToFrame` has three callers) mutate
 each path alone: dropping the stage from Compile alone must fail the Compile cases and leave
 the GIF ones green, and the reverse.
+
+**Kill a real encode, then look at the folder (T-100), and cancel inside the
+probe (T-98).** A fake child cannot leave a half-written MP4, and a cancel test
+that clicks "near" a 40 ms window passes for years. Round 58's block in
+`media.spec.ts` starts the real runner on a 60 s 1080p source, waits for the file
+ffmpeg opened (so the kill lands mid-write, a fact and not a hope), SIGKILLs it
+through the runner's own cancel function and asserts three things: the rejection
+is the T-84 sentinel, the half-written file is gone, and the finished job beside
+it is untouched and probes as a real video. A file that predates the job is left
+alone by a cancel that lands before ffmpeg opens its output. The T-98 half issues
+the cancel in the same tick as the call, so the real ffprobe is certainly still
+in flight: the job is refused, nothing is written, and the next job of the same
+name runs (a stale click must not mark it). Written red-first against HEAD: 14 of
+14 failed (`the half-written export is gone: expected true to be false`).
 
 **A stretch passes every container check — measure a shape whose truth you
 know.** Round 50's T-83 shipped a manual crop squeezed 2-3x on one axis
@@ -431,8 +898,16 @@ preset, so a fix that over-crops cannot pass.
 
 **Run with:** `npm run check:emoji` (wraps into `verify`).
 
-**What it covers.** Source files under `src/renderer`, `src/main`, and
-`src/shared` are scanned for emoji + pictograph glyphs. Two
+**What it covers.** Source files of four types (`.ts`, `.tsx`, `.html`, `.css`) under every
+directory of `src/` (`src/renderer`, `src/main`, `src/shared` and `src/preload`) are scanned for
+emoji + pictograph glyphs. `tests/unit/emojiGuard.test.ts` reads the script's
+`ROOTS` and `EXTENSIONS` and fails when a directory of `src/` is not listed or a file of a type
+the script does not read appears under it, and runs the script itself from a scratch tree with
+one emoji under each root, and one in the page and the stylesheet (it must exit 1 and
+name the file), plus a clean control and a test file that is allowed to carry one
+(T-122: `src/preload` was the one directory left off; T-123: `.html` and `.css` were never read, and an
+emoji in `src/renderer/index.html` passed with every gate silent). What it does not read is everything
+outside `src/`: the docs, the scripts, the tests and the README. Two
 typographic glyphs are allowlisted (`✕`, `✓`); everything else fails
 the build. Test files are excluded because they legitimately contain
 emoji fixtures to prove the app strips them.

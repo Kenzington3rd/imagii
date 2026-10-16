@@ -7,17 +7,17 @@ import {
   type AudioCandidate,
   type ScoredHighlight
 } from '@shared/highlights'
-import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
+import {
+  NO_SOUND_MESSAGE,
+  WHOLE_VIDEO_DROPPED_MESSAGE,
+  useVideoStore,
+  videoHasNoSound
+} from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
-import { ACCENT } from '../../styles/tokens'
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
+import { ACCENT, EMBER, SIGNAL_PINK } from '../../styles/tokens'
+import { formatClock } from '@shared/clockTime'
 
 /** Tiny inline 0..1 mini-bar for per-signal display. */
 interface SignalBarProps {
@@ -34,7 +34,15 @@ function SignalBar(props: SignalBarProps): JSX.Element {
       title={`${label}: ${(value * 100).toFixed(0)}%`}
     >
       <span className="text-ink-dim w-12">{label}</span>
-      <div className="flex-1 h-1 bg-bg-base rounded">
+      {/* T-113: a meter, named and valued — it was a colored width and nothing else. */}
+      <div
+        className="flex-1 h-1 bg-bg-base rounded"
+        role="meter"
+        aria-label={`${label} signal`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(value * 100)}
+      >
         <div
           className="h-full rounded"
           style={{ width: `${Math.round(value * 100)}%`, backgroundColor: color }}
@@ -83,9 +91,11 @@ export function HighlightPanel(): JSX.Element | null {
   }, [audioCandidates, debouncedChat])
 
   if (!source) return null
+  // T-112: the scan listens for loud moments; a video with no sound track has none to find.
+  const noSound = videoHasNoSound(source)
 
   async function scan(): Promise<void> {
-    if (!source) return
+    if (!source || noSound) return
     setScanning(true)
     setProgress(0)
     try {
@@ -139,7 +149,8 @@ export function HighlightPanel(): JSX.Element | null {
           <button
             className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
             onClick={scan}
-            disabled={scanning}
+            disabled={scanning || noSound}
+            title={noSound ? NO_SOUND_MESSAGE : undefined}
           >
             {scanning ? 'Scanning…' : audioCandidates ? 'Re-scan' : 'Scan VOD'}
           </button>
@@ -147,6 +158,7 @@ export function HighlightPanel(): JSX.Element | null {
       >
         Smart highlight finder
       </PanelHeader>
+      {noSound ? <p className="text-xs text-warn">{NO_SOUND_MESSAGE}</p> : null}
       <p className="text-xs text-ink-dim">
         Combines audio-loudness peaks with optional chat density and hype-keyword
         detection. Each highlight shows you <em>why</em> it scored — paste a chat log
@@ -158,6 +170,7 @@ export function HighlightPanel(): JSX.Element | null {
         <button
           className="text-xs text-accent hover:underline inline-flex items-center gap-1"
           onClick={() => setShowChatInput((v) => !v)}
+          aria-expanded={showChatInput}
         >
           <Icon name={showChatInput ? 'chevron-down' : 'chevron-right'} size={12} />
           Add chat log (optional)
@@ -175,10 +188,17 @@ export function HighlightPanel(): JSX.Element | null {
 
       {scanning ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+          <div
+            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label="Scanning the video for highlights"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress)}
+          >
             <div className="h-full bg-accent" style={{ width: `${Math.round(progress)}%` }} />
           </div>
-          <span className="font-mono w-10 text-right">{Math.round(progress)}%</span>
+          <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
           <button
             className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
@@ -196,10 +216,12 @@ export function HighlightPanel(): JSX.Element | null {
             <li key={i} className="flex flex-col gap-1 px-2 py-1.5 bg-bg-hover rounded text-xs">
               <div className="flex items-center gap-2">
                 <span className="font-mono">
-                  {formatTime(h.startSec)} → {formatTime(h.endSec)}
+                  {formatClock(h.startSec)} → {formatClock(h.endSec)}
                 </span>
+                {/* T-112: ink on the wash, accent border for the identity. accent text on a
+                    bg-accent/20 wash over this row's bg-hover measured 3.60:1 (AA is 4.5). */}
                 <span
-                  className="font-mono px-1.5 py-0.5 rounded bg-accent/20 text-accent"
+                  className="font-mono px-1.5 py-0.5 rounded border border-accent/40 bg-accent/20 text-ink-base"
                   title="Combined score (0–100)"
                 >
                   {Math.round(h.combinedScore * 100)}
@@ -216,8 +238,8 @@ export function HighlightPanel(): JSX.Element | null {
               </div>
               <div className="grid grid-cols-3 gap-2 mt-0.5">
                 <SignalBar label="Audio" value={h.signals.audioScore} color={ACCENT} />
-                <SignalBar label="Chat" value={h.signals.chatDensityScore} color="#f472b6" />
-                <SignalBar label="Hype" value={h.signals.hypeWordScore} color="#fbbf24" />
+                <SignalBar label="Chat" value={h.signals.chatDensityScore} color={SIGNAL_PINK} />
+                <SignalBar label="Hype" value={h.signals.hypeWordScore} color={EMBER} />
               </div>
               {h.topChatMessages.length > 0 ? (
                 <div className="text-ink-dim italic truncate">

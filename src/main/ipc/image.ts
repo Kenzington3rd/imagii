@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ImageSaveManyRequest, ImageSaveRequest } from '../../shared/canvas'
-import { assert } from '../../shared/assert'
+import { assertAlways } from '../../shared/assert'
 import { assertNonEmptyString, assertPlainObject } from '../../shared/validators'
 import {
   decodeImageDataUrl,
@@ -30,7 +30,7 @@ const MAX_FILES_PER_SAVE = 16
 export function registerImageIpc(): void {
   ipcMain.handle('image:save', async (_e, req: ImageSaveRequest) => {
     assertPlainObject(req, 'image:save req')
-    assert(isImageFormat(req.format), 'image:save format must be png or jpg')
+    assertAlways(isImageFormat(req.format), 'image:save format must be png or jpg')
     const bytes = decodeImageDataUrl(req.dataUrl, req.format)
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     if (!win) return null
@@ -51,7 +51,7 @@ export function registerImageIpc(): void {
   ipcMain.handle('image:saveMany', async (_e, req: ImageSaveManyRequest) => {
     assertPlainObject(req, 'image:saveMany req')
     assertNonEmptyString(req.title, 'image:saveMany title')
-    assert(
+    assertAlways(
       Array.isArray(req.files) && req.files.length > 0 && req.files.length <= MAX_FILES_PER_SAVE,
       `image:saveMany files must be 1-${MAX_FILES_PER_SAVE} entries`
     )
@@ -60,13 +60,13 @@ export function registerImageIpc(): void {
     const prepared = req.files.map((f) => {
       assertPlainObject(f, 'image:saveMany file')
       const format = typeof f.name === 'string' ? formatOfFileName(f.name) : null
-      assert(format !== null, 'image:saveMany file name must end in .png or .jpg')
+      assertAlways(format !== null, 'image:saveMany file name must end in .png or .jpg')
       return {
         name: safeImageFileName(f.name, format),
         bytes: decodeImageDataUrl(f.dataUrl, format)
       }
     })
-    assert(
+    assertAlways(
       new Set(prepared.map((p) => p.name)).size === prepared.length,
       'image:saveMany file names must be distinct'
     )

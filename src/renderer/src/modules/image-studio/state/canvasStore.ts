@@ -44,8 +44,6 @@ interface CanvasState {
   setRotation: (id: string, rotation: number) => void
   duplicateLayer: (id: string) => void
 
-  setBackground: (color: string) => void
-  setCanvasSize: (width: number, height: number) => void
   /** Replace the document WITHOUT recording an undo step, clearing the
    *  history — "open a file", not "edit the canvas". Called with no
    *  argument it resets to an empty document. T-47: a session restore goes
@@ -205,20 +203,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
-  setBackground: (color) => {
-    const prev = get().doc
-    set({
-      doc: { ...prev, background: color },
-      history: pushHistory(get().history, prev)
-    })
-  },
-  setCanvasSize: (width, height) => {
-    const prev = get().doc
-    set({
-      doc: { ...prev, width, height },
-      history: pushHistory(get().history, prev)
-    })
-  },
   resetDocument: (doc) => {
     set({ doc: doc ?? defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null })
   },

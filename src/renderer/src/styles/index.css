@@ -3,6 +3,14 @@
 @tailwind utilities;
 
 @layer base {
+  /* T-125 (13): the browser's own controls (checkbox, radio, range, scrollbar, the select's list, the date and number spinners) are
+     drawn from these two properties, and with neither set they were stock Chromium: blue ticks and sliders and light scrollbars on
+     the near-black window, a second accent color against the one the palette allows. */
+  :root {
+    color-scheme: dark;
+    accent-color: theme('colors.accent.DEFAULT');
+  }
+
   html,
   body,
   #root {
@@ -21,6 +29,25 @@
   input,
   textarea {
     user-select: text;
+  }
+
+  /* T-126 (16): selected text wears the palette. With nothing set it is Chromium's stock blue highlight on the near-black window, a
+     second accent against the one BRANDING allows (the number, text and file-name boxes are where a person selects). The wash is the
+     accent at 40%: composited over each surface a box can sit on (bg-base, bg-elevated, bg-hover) it keeps ink-base at 7:1 or better,
+     computed and pinned in designTokensInSync.test.ts. The open drop-down of a <select> draws its own highlight row, which no CSS
+     reaches; this is the selection of text. */
+  ::selection {
+    background-color: theme('colors.accent.DEFAULT / 40%');
+    color: theme('colors.ink.base');
+  }
+
+  /* T-127 (16): placeholder text wears the palette. Tailwind's Preflight sets every input's and textarea's placeholder to its stock
+     #9ca3af, a cool blue-gray brighter than ink-dim and the one colour in the app that belongs to no token (the Watermark, Filename,
+     chat-log, Caption and name boxes all show one). ink-dim keeps it at 6.2:1 on bg-base and 5.3:1 on bg-hover, computed and pinned in
+     designTokensInSync.test.ts. Preflight sets the opacity to 1 already, so the colour that is drawn is this one exactly. */
+  input::placeholder,
+  textarea::placeholder {
+    color: theme('colors.ink.dim');
   }
 }
 
@@ -60,8 +87,12 @@
 }
 
 /* B10 fix (round 15): honor the OS-level "Reduce motion" preference. Disables
-   animations, transitions and smooth scrolling across the whole app so that
-   spinners, opacity transitions and the like don't trigger vestibular issues. */
+   animations and transitions across the whole app, and the smooth scrolling that
+   CSS decides (`scroll-behavior`), so that spinners, opacity transitions and the
+   like don't trigger vestibular issues. A scroll that script asks for with an
+   explicit `behavior: 'smooth'` is NOT governed by `scroll-behavior`: the code
+   that makes one reads this preference itself (the tutorial coachmark does,
+   `tutorialScrollBehavior` in components/Tutorial.tsx). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

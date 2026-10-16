@@ -9,6 +9,10 @@ files:
   - "package.json"
   - "resources/icon.png"
   - "!**/*.{md,map}"
+  # ffprobe-static ships six platforms' binaries (336 MiB) and a Windows x64 build loads one of them.
+  - "!node_modules/ffprobe-static/bin/darwin/**"
+  - "!node_modules/ffprobe-static/bin/linux/**"
+  - "!node_modules/ffprobe-static/bin/win32/ia32/**"
 asar: true
 asarUnpack:
   - "node_modules/ffmpeg-static/**"
@@ -23,4 +27,3 @@ win:
   icon: resources/icon.ico
 portable:
   artifactName: imagii.exe
-electronVersion: 31.3.0

@@ -48,6 +48,16 @@ export interface CaptionStyle {
   outlineColor: string
 }
 
+/**
+ * The sound the speech engine is given (T-111): 16 kHz mono, whisper's native
+ * input. It resamples whatever it reads to this anyway, and older `whisper.exe`
+ * builds refuse a WAV that is not 16 kHz. Audio Studio's extraction is 48 kHz
+ * stereo (about 690 MB an hour); this is about 115 MB an hour, which is what a
+ * long VOD's scratch file in %TEMP% costs. Transcription-only: nothing a person
+ * hears is ever made from it.
+ */
+export const TRANSCRIPTION_AUDIO = { sampleRate: 16000, channels: 1 } as const
+
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   fontSize: 32,
   position: 'bottom',
@@ -143,6 +153,15 @@ export interface CaptionsProgress {
    * engine, writing the SRT) and the UI shows an indeterminate bar — T-89: the
    * transcribe phase used to send `15 + Math.random() * 10`, a number that
    * jittered between 15 and 25 and meant nothing.
+   *
+   * The burn-in is the one phase with a measurement (T-111): the encode position
+   * ffmpeg reports (`out_time`) over the length of the file being written, from
+   * `burnInPercent`. It used to be `5 + 0.5 per second encoded` — a number that
+   * was ahead of the work on a short clip, stuck at its cap on a long one, and
+   * never related to either. It starts at 0 (nothing is encoded yet, which is
+   * true), tops out at 99 (the last percent is the file being finalized, and
+   * `done` is the only 100), and is absent when the length of the output is not
+   * known — then the bar is indeterminate, like the phases above.
    */
   percent?: number
   message?: string
@@ -173,28 +192,140 @@ export const ASS_PLAY_RES_Y = 288
 export const CAPTION_REFERENCE_HEIGHT = 1080
 
 /**
+ * The height, in pixels, a caption's size is measured against on a frame
+ * `frameWidth` x `frameHeight` (T-111): the 16:9 picture that frame's WIDTH would
+ * make. On 16:9 and wider that is the frame's own height, exactly libass's
+ * behavior, so no landscape caption changes. On a narrower frame it is
+ * `frameWidth * 9 / 16`: libass scales by frame HEIGHT, so a 1080x1920 clip got
+ * text 1.78x the size it has on a 1920x1080 one in the same proportion of its
+ * width, and the default 32 wrapped into an 817 px block (43% of the frame) on
+ * a vertical clip. Without a width the height is all there is.
+ */
+export function captionBasisPx(frameHeight: number, frameWidth?: number): number {
+  assert(Number.isFinite(frameHeight) && frameHeight > 0, 'frameHeight must be a positive number')
+  if (frameWidth === undefined) return frameHeight
+  assert(Number.isFinite(frameWidth) && frameWidth > 0, 'frameWidth must be a positive number')
+  return Math.min(frameHeight, (frameWidth * 9) / 16)
+}
+
+/**
  * What a caption `fontSize` comes to in real pixels on a frame
  * `frameHeight` px tall: `fontSize * frameHeight / 288`. The default 32 is
  * ~120 px on 1080p and the slider's maximum, 96, is 360 px — a label that said
- * "px" was off by a factor of 3.75 at every setting.
+ * "px" was off by a factor of 3.75 at every setting. Give the frame's width as
+ * well and a frame narrower than 16:9 is measured on its 16:9-equivalent
+ * (`captionBasisPx`), which is what the burn-in now draws: 32 is ~120 px on
+ * 1920x1080 and ~68 px on 1080x1920 — the same fraction of the frame's WIDTH
+ * (6.3%), which is the measure that keeps the line wrapping the same way (T-111).
  */
 export function effectiveCaptionPx(
   fontSize: number,
-  frameHeight: number = CAPTION_REFERENCE_HEIGHT
+  frameHeight: number = CAPTION_REFERENCE_HEIGHT,
+  frameWidth?: number
 ): number {
   assert(Number.isFinite(fontSize) && fontSize > 0, 'fontSize must be a positive number')
-  assert(Number.isFinite(frameHeight) && frameHeight > 0, 'frameHeight must be a positive number')
-  return Math.round((fontSize * frameHeight) / ASS_PLAY_RES_Y)
+  return Math.round((fontSize * captionBasisPx(frameHeight, frameWidth)) / ASS_PLAY_RES_Y)
 }
 
-/** The readout beside the Size slider. */
-export function captionSizeReadout(fontSize: number): string {
+/**
+ * True for a frame whose width and height are both positive, finite numbers. A probe
+ * can answer 0 (a stream with no picture size, ffprobe's own "N/A") and
+ * `captionBasisPx` asserts a positive one, so the burn and the size readout both ask
+ * this first and treat anything else as "no frame known" — the landscape behavior (T-113).
+ */
+export function isUsableFrame(
+  frame: { width: number; height: number } | null | undefined
+): frame is { width: number; height: number } {
+  return (
+    frame !== null &&
+    frame !== undefined &&
+    Number.isFinite(frame.width) &&
+    frame.width > 0 &&
+    Number.isFinite(frame.height) &&
+    frame.height > 0
+  )
+}
+
+/**
+ * The script height to give libass for a frame narrower than 16:9, or `null` when
+ * the frame needs none (T-111). libass draws a `FontSize` at `frameHeight /
+ * PlayResY` pixels per unit; a PlayResY of `288 * frameHeight / basis` makes that
+ * `basis / 288` — the 16:9-equivalent scale of `captionBasisPx`. It is `null` on
+ * 16:9 and wider, and on a frame so close to 16:9 that the answer rounds to 288,
+ * so a landscape burn's command is exactly what it was before. PlayResY must be a
+ * whole number, which costs under 0.1% of size.
+ */
+export function captionPlayResY(frameWidth: number, frameHeight: number): number | null {
+  const basis = captionBasisPx(frameHeight, frameWidth)
+  const playResY = Math.round((ASS_PLAY_RES_Y * frameHeight) / basis)
+  return playResY === ASS_PLAY_RES_Y ? null : playResY
+}
+
+/**
+ * How long the file a burn-in writes will be, in seconds, or `null` when that is
+ * not known (T-111): the range when there is one — clipped to what the source
+ * actually has after `startSec` — otherwise the source's own length.
+ */
+export function burnInLengthSec(
+  sourceDurationSec: number | null,
+  range: { startSec: number; endSec: number } | null
+): number | null {
+  if (range === null) {
+    return sourceDurationSec !== null && sourceDurationSec > 0 ? sourceDurationSec : null
+  }
+  const asked = range.endSec - range.startSec
+  if (sourceDurationSec === null || !(sourceDurationSec > 0)) return asked > 0 ? asked : null
+  const left = sourceDurationSec - range.startSec
+  const length = Math.min(asked, left)
+  return length > 0 ? length : null
+}
+
+/**
+ * A burn-in's progress, 0-99, from where the encode is (`elapsedSec`, ffmpeg's
+ * `out_time` — the position in the OUTPUT, which starts at 0 even for a ranged
+ * burn) and how long the output will be (T-111). `undefined` when the length is
+ * unknown or the position is not a usable number. Never 100: the file is still
+ * being finalized (the MP4's index is written after the last frame), and `done`
+ * is the only 100. Also the MP4 convert's percent (T-115) - one mapping for every encode bar.
+ */
+export function burnInPercent(elapsedSec: number, totalSec: number | null): number | undefined {
+  if (totalSec === null || !(totalSec > 0) || !Number.isFinite(totalSec)) return undefined
+  if (!Number.isFinite(elapsedSec)) return undefined
+  return Math.min(99, Math.max(0, (elapsedSec / totalSec) * 100))
+}
+
+/**
+ * The readout beside the Size slider. With a video loaded it is about THAT
+ * video's frame (T-112: `effectiveCaptionPx` with its height and width, so it is
+ * the size the burn draws); with none — or a probe that could not size it — it
+ * keeps the 1080p wording, the frame the number is quoted on.
+ */
+export function captionSizeReadout(
+  fontSize: number,
+  frame?: { width: number; height: number } | null
+): string {
+  if (isUsableFrame(frame)) {
+    return `about ${effectiveCaptionPx(fontSize, frame.height, frame.width)} px tall on this video`
+  }
   return `about ${effectiveCaptionPx(fontSize)} px tall on ${CAPTION_REFERENCE_HEIGHT}p`
 }
 
 /** The toast after a transcription: lines of caption, counted properly. */
 export function captionsReadyMessage(segmentCount: number): string {
   return `Captions ready (${countOf(segmentCount, 'line')})`
+}
+
+/**
+ * The toast when a transcription finishes for a video that is no longer the one open (T-113).
+ * "Another video" was wrong for the case where the video was only CLOSED (nothing replaced
+ * it), so it says what is true of both — closed or replaced — and what to do: the captions
+ * were thrown away, not kept somewhere, so the way back is to transcribe again.
+ */
+export function staleCaptionsMessage(fileName: string): string {
+  return (
+    `Captions for ${fileName} finished after that video was closed or replaced, so they weren't added. ` +
+    "Transcribe again when you're ready."
+  )
 }
 
 /**
@@ -260,11 +391,17 @@ export const WHISPER_MODEL_SHA256 =
  * apostrophe ("Sam's Highlight.mp4"-derived SRTs failed to burn in);
  * verified against real ffmpeg for apostrophes, spaces, commas,
  * semicolons, brackets, and Windows drive colons.
+ *
+ * T-118: and equals signs. The burn-in passes the path as the filter's first,
+ * POSITIONAL option (`subtitles=<path>:force_style=...`), so an unescaped `=`
+ * made the option parser split the path into a name and a value ("Error
+ * applying option '.../a' to filter 'subtitles': Option not found", exit 8) -
+ * a video called "Boss=Dead.mp4" could never be captioned.
  */
 export function escapeSubtitlesPath(p: string): string {
   const normalized = p.replace(/\\/g, '/')
-  const optionLevel = normalized.replace(/([\\':,;[\]])/g, '\\$1')
-  return optionLevel.replace(/([\\':,;[\] ])/g, '\\$1')
+  const optionLevel = normalized.replace(/([\\':,;[\]=])/g, '\\$1')
+  return optionLevel.replace(/([\\':,;[\] =])/g, '\\$1')
 }
 
 /**
@@ -333,14 +470,22 @@ const SRT_TIME_LINE = /^\s*(\d+:\d+:\d+[.,]\d+)\s*-->\s*(\d+:\d+:\d+[.,]\d+)/
  * Arithmetic is in whole milliseconds, the SRT's own resolution, so a shift
  * never accumulates float error.
  *
+ * `speed` (T-113, default 1) is the clip's playback speed: the export plays the range
+ * at `setpts=PTS/speed`, so the file the cues sit beside is `(endSec - startSec) /
+ * speed` long and a cue at clip-time t belongs at t / speed on ITS clock. The Clip
+ * Kit bundles this SRT beside that file; the burn-in has no speed and passes none.
+ * The cut to the range comes first and the division second, so a cue never outlives
+ * the clip it sits beside.
+ *
  * simplification: only the timestamps and the text survive. Cue settings
  * after the end time (X1:/Y1: coordinates) are not carried — libass's SRT
  * reader ignores them anyway. Upgrade path if that ever changes: capture the
  * tail of the time line in SRT_TIME_LINE and re-append it.
  */
-export function shiftSrtToRange(srt: string, startSec: number, endSec: number): string {
+export function shiftSrtToRange(srt: string, startSec: number, endSec: number, speed = 1): string {
   assert(Number.isFinite(startSec) && startSec >= 0, 'startSec must be finite >= 0')
   assert(Number.isFinite(endSec) && endSec > startSec, 'endSec must be finite > startSec')
+  assert(Number.isFinite(speed) && speed > 0, 'speed must be a finite number > 0')
   const startMs = Math.round(startSec * 1000)
   const endMs = Math.round(endSec * 1000)
   const cues: string[] = []
@@ -351,8 +496,11 @@ export function shiftSrtToRange(srt: string, startSec: number, endSec: number): 
     if (!times?.[1] || !times[2]) continue
     const text = lines.slice(at + 1).filter((l) => l.trim() !== '')
     if (text.length === 0) continue
-    const from = Math.max(Math.round(tsToSeconds(times[1]) * 1000), startMs) - startMs
-    const to = Math.min(Math.round(tsToSeconds(times[2]) * 1000), endMs) - startMs
+    const clippedFrom = Math.max(Math.round(tsToSeconds(times[1]) * 1000), startMs) - startMs
+    const clippedTo = Math.min(Math.round(tsToSeconds(times[2]) * 1000), endMs) - startMs
+    if (clippedTo <= clippedFrom) continue
+    const from = Math.round(clippedFrom / speed)
+    const to = Math.round(clippedTo / speed)
     if (to <= from) continue
     cues.push(`${cues.length + 1}\n${msToSrtTimestamp(from)} --> ${msToSrtTimestamp(to)}\n${text.join('\n')}\n`)
   }

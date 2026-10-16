@@ -1,10 +1,11 @@
 import { ipcMain, desktopCapturer, dialog, BrowserWindow, app } from 'electron'
-import { writeFile, mkdir, unlink } from 'node:fs/promises'
+import { copyFile, mkdir, stat, unlink } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import {
   convertToMp4,
+  remuxWebm,
   cancelConverts,
   ConvertCancelledError,
   ConvertFailedError
@@ -12,15 +13,15 @@ import {
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
-  RecordingSource,
-  RecordingSpec
+  RecordingSource
 } from '../../shared/workspace'
 import {
   assertNonEmptyString,
   assertFiniteNonNeg,
   assertPlainObject
 } from '../../shared/validators'
-import { assert } from '../../shared/assert'
+import { assertAlways } from '../../shared/assert'
+import { sendIfAlive } from '../sendIfAlive'
 
 function recordingsDir(): string {
   return path.join(app.getPath('userData'), 'recordings')
@@ -40,7 +41,8 @@ function recordingsDir(): string {
 // appends in call order (the renderer serializes its sends, and a single
 // WriteStream preserves write ordering anyway); finalize(id, spec) closes
 // the stream then runs the SAME save-dialog + convert/copy logic as the
-// legacy `recording:save`; abandon(id) reaps the partial temp file.
+// buffered save it replaced (deleted, T-101); abandon(id) reaps the partial
+// temp file.
 interface RecordingStreamSession {
   tempPath: string
   stream: WriteStream
@@ -61,6 +63,23 @@ const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]+$/
 // One live recording per window is the app's model; a small cap keeps a
 // buggy/compromised renderer from opening unbounded write streams.
 const MAX_STREAM_SESSIONS = 4
+
+// Begins that have passed the cap and not yet inserted their session (T-123 (6)). The cap was
+// read, then `mkdir` and the stream's `open` were awaited, then the session was inserted: twelve
+// concurrent calls all read the same size and all passed a cap four sequential calls enforce. A
+// begin now takes its slot in the same synchronous step as the check and gives it back in a
+// `finally`, which runs in the same step as the insert (or after the failure), so
+// `streamSessions.size + beginsInFlight` is never short of what the handler has promised.
+let beginsInFlight = 0
+
+// How long abandon waits for the stream's fd to close before it unlinks anyway
+// (T-119). A close that was already pending always lands in milliseconds; this
+// only bounds a drive that has stopped answering.
+// simplification: a fixed 2 s. A drive that takes longer to let go of the fd gets an
+// unlink Windows refuses (the catch below swallows it), and the partial webm then stays
+// in <userData>/recordings until the next launch's tempCleanup, which sweeps files older
+// than 6 h. Upgrade: keep the close listener and unlink when it fires, however late.
+const ABANDON_CLOSE_WAIT_MS = 2000
 
 // Sanity ceiling per append. MediaRecorder timeslice chunks are a few MB
 // at most; anything near this is a renderer bug, not a recording.
@@ -97,6 +116,69 @@ export function abandonAllRecordingStreams(): void {
 }
 
 /**
+ * Throws away one session: its stream is closed and its partial temp file removed. The body of
+ * `recording:abandon`, and of `abandonOpenRecordingSessions` below.
+ */
+async function abandonSession(id: string): Promise<boolean> {
+  const session = streamSessions.get(id)
+  // Idempotent by design: the renderer calls abandon on every failure
+  // path, including ones where finalize already reaped the session.
+  if (!session) return false
+  session.closed = true
+  streamSessions.delete(id)
+  // T-119: a WriteStream that failed a write has already auto-destroyed and
+  // emitted its one 'close' — the renderer's own failure path (append
+  // rejects, finalize throws, abandon runs) arrives after that, and waiting
+  // for the event again never ends. So: wait only for a close that has not
+  // happened yet, and never past ABANDON_CLOSE_WAIT_MS. The session is out
+  // of `streamSessions` already, so nothing else would reap the file.
+  const { stream } = session
+  try {
+    if (!stream.closed) {
+      // destroy() discards buffered writes — this is the throw-away path,
+      // and the file must be closed before unlink can succeed on Windows.
+      await new Promise<void>((resolve) => {
+        const bound = setTimeout(resolve, ABANDON_CLOSE_WAIT_MS)
+        stream.once('close', () => {
+          clearTimeout(bound)
+          resolve()
+        })
+        stream.destroy()
+      })
+    }
+  } finally {
+    try {
+      await unlink(session.tempPath)
+    } catch {
+      /* already gone */
+    }
+  }
+  return true
+}
+
+/**
+ * T-124 (3): abandon the sessions a renderer that died left open. The crash-recovery reload (T-123 (15)) brings the
+ * window back to Home, and the dead page was the only caller of `appendChunk`, `finalize` and `abandon`: its
+ * sessions kept their fds and their partial webm, and four crashes filled the cap, so the next `recording:begin`
+ * was refused until the app was restarted. A session that is already `closed` is mid-finalize (the save dialog,
+ * the convert), owned by a handler that is still running and will reap it itself, so it is left alone. Answers how
+ * many it abandoned.
+ */
+export async function abandonOpenRecordingSessions(): Promise<number> {
+  const open = [...streamSessions].filter(([, session]) => !session.closed).map(([id]) => id)
+  await Promise.all(open.map((id) => abandonSession(id)))
+  return open.length
+}
+
+/**
+ * T-117: what the user is told when a take holds no data at all (Stop pressed before the first chunk
+ * arrived, or a capture that produced nothing). It used to be "recording:finalize recording is empty",
+ * which reached the toast as a channel name and a developer's phrase. A finished sentence, so
+ * `userFacingError` shows it as written: what happened and what to do, no channel, no path.
+ */
+export const RECORDING_EMPTY_MESSAGE = 'Nothing was recorded, so there is nothing to save. Start the recording again.'
+
+/**
  * T-59: what the user is told when the convert crashes. Everything ffmpeg
  * says about itself — the argv, the stderr tail, the words "convert-to-mp4"
  * — is main-process detail; what crosses the IPC is the studio's own
@@ -116,22 +198,51 @@ export function recordingConvertFailureMessage(err: unknown): string {
       : ''
   return (
     `Converting the recording to MP4 failed${detail}. Nothing was saved — ` +
-    'try again, or untick "Convert to MP4 after recording" to keep the WebM.'
+    'try again, or uncheck "Convert to MP4 after recording" to keep the WebM.'
   )
 }
 
 /**
- * Shared tail of both save paths: given a fully-written temp .webm, show
- * the save dialog, convert/copy to the chosen location, and reap the temp
- * file no matter which branch ran. Extracted verbatim from the legacy
- * `recording:save` handler (round 15 M1 leak guard preserved) so the
- * streaming `recording:finalize` produces byte-identical behavior.
+ * T-120: write the take to `outputPath` as a WebM that opens in Video Studio. MediaRecorder streams its
+ * webm, so the file it wrote has no duration in its header and `probeVideo` refuses it (a take saved with
+ * Convert off could only be reopened by re-exporting it as MP4 from some other program). A packet copy
+ * into a fresh file (`remuxWebm`) writes the duration and the seek index; nothing is re-encoded.
+ * The remux only repairs the header, so it is never a reason to lose the take: any failure except the
+ * person's own Discard falls back to the plain copy this branch always made, and says so in the log.
+ * ffprobe still reads the saved file's container rate as 1000/1 (the muxer writes it from the stream's
+ * millisecond clock and no ffmpeg option changes that for a stream copy), which is why `probeVideo`
+ * treats a rate above 240 as unknown.
+ */
+async function saveWebm(tempPath: string, outputPath: string): Promise<void> {
+  try {
+    await remuxWebm('recording', tempPath, outputPath)
+  } catch (err) {
+    if (err instanceof ConvertCancelledError) throw err
+    console.error('[recording] remux failed, saving the take as recorded:', err)
+    try {
+      await unlink(outputPath)
+    } catch {
+      /* ffmpeg never created it */
+    }
+    await copyFile(tempPath, outputPath)
+  }
+}
+
+/**
+ * Given a fully-written temp .webm, show the save dialog, convert/copy to the
+ * chosen location, and reap the temp file no matter which branch ran (the
+ * round 15 M1 leak guard). It was the shared tail of two save paths until
+ * T-101 deleted the buffered one; `recording:finalize` is the only caller now.
  */
 async function promoteTempWebm(
   win: BrowserWindow,
   tempPath: string,
   spec: RecordingFinalizeSpec
 ): Promise<RecordingResult | null> {
+  // The WebContents, taken while the window is certainly alive (the caller just asked for it): a
+  // destroyed BrowserWindow throws on `.webContents` itself, the WebContents only answers
+  // `isDestroyed()` (T-123 (1)).
+  const sender = win.webContents
   try {
     const baseName = spec.filename.replace(/\.(webm|mp4)$/i, '')
     const targetExt = spec.convertToMp4 ? 'mp4' : 'webm'
@@ -155,9 +266,20 @@ async function promoteTempWebm(
     const outputPath = result.filePath
     if (spec.convertToMp4) {
       try {
-        await convertToMp4('recording', tempPath, outputPath, (info) => {
-          win.webContents.send('recording:progress', info)
-        })
+        // T-115: the length of the take is what turns ffmpeg's position into a percent. The
+        // recorder's own clock is the only length there is (a MediaRecorder webm has no duration
+        // in its header); without one the bar is indeterminate rather than guessed.
+        const takeSec =
+          spec.durationMs !== undefined && spec.durationMs > 0 ? spec.durationMs / 1000 : undefined
+        await convertToMp4(
+          'recording',
+          tempPath,
+          outputPath,
+          (info) => {
+            sendIfAlive(sender, 'recording:progress', info)
+          },
+          takeSec
+        )
       } catch (err) {
         // T-44: "Discard recording" kills the convert child, and the kill
         // used to travel up as a rejected IPC — the user asked to throw the
@@ -187,13 +309,24 @@ async function promoteTempWebm(
         throw new Error(recordingConvertFailureMessage(err))
       }
     } else {
-      const fs = await import('node:fs/promises')
-      await fs.copyFile(tempPath, outputPath)
+      try {
+        await saveWebm(tempPath, outputPath)
+      } catch (err) {
+        // The same discard the convert honors: "Discard recording" killed the remux, and the
+        // half-written webm at the chosen name is not a take anyone can open.
+        if (err instanceof ConvertCancelledError) {
+          try {
+            await unlink(outputPath)
+          } catch {
+            /* never created, or already gone */
+          }
+          return null
+        }
+        throw err
+      }
     }
 
-    const sizeBytes = existsSync(outputPath)
-      ? (await (await import('node:fs/promises')).stat(outputPath)).size
-      : 0
+    const sizeBytes = existsSync(outputPath) ? (await stat(outputPath)).size : 0
 
     return {
       outputPath,
@@ -220,7 +353,7 @@ async function promoteTempWebm(
 // (cancelAllConverts, wired in main/index.ts).
 
 export type RecordingProgressListener = (info: {
-  percent: number
+  percent?: number
   message?: string
 }) => void
 
@@ -248,97 +381,65 @@ export function registerRecordingIpc(): void {
     }))
   })
 
-  ipcMain.handle(
-    'recording:save',
-    async (_e, spec: RecordingSpec): Promise<RecordingResult | null> => {
-      assertPlainObject(spec, 'recording:save spec')
-      assertNonEmptyString(spec.filename, 'spec.filename')
-      assert(
-        spec.webmBytes instanceof ArrayBuffer || ArrayBuffer.isView(spec.webmBytes),
-        'spec.webmBytes must be an ArrayBuffer or typed array'
-      )
-      const byteLen =
-        spec.webmBytes instanceof ArrayBuffer
-          ? spec.webmBytes.byteLength
-          : (spec.webmBytes as ArrayBufferView).byteLength
-      assert(byteLen > 0, 'spec.webmBytes must not be empty')
-      if (spec.durationMs !== undefined) {
-        assertFiniteNonNeg(spec.durationMs, 'spec.durationMs')
-      }
-      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-      if (!win) return null
-
-      await mkdir(recordingsDir(), { recursive: true })
-      const tempName = `${nanoid(10)}.webm`
-      const tempPath = path.join(recordingsDir(), tempName)
-      const webmBuffer = Buffer.from(spec.webmBytes)
-      await writeFile(tempPath, webmBuffer)
-
-      // M1 fix (round 15): promoteTempWebm wraps everything after the temp
-      // write in try/finally so the WebM is always reaped, regardless of
-      // which branch threw (dialog explosion, conversion failure, cancel).
-      // Round 18 H1: body extracted into promoteTempWebm, shared with the
-      // streaming recording:finalize path.
-      return promoteTempWebm(win, tempPath, {
-        filename: spec.filename,
-        durationMs: spec.durationMs,
-        convertToMp4: spec.convertToMp4
-      })
-    }
-  )
-
   // -------------------------------------------------------------------
   // Round 18 H1: streaming save protocol — see the comment block above
-  // RecordingStreamSession for the why. The legacy recording:save stays
-  // registered for compatibility.
+  // RecordingStreamSession for the why. T-101 deleted the buffered
+  // `recording:save` it replaced: nothing in the renderer called it, and an
+  // IPC that takes a whole recording as one ArrayBuffer is the memory cliff
+  // the streaming protocol exists to avoid.
   // -------------------------------------------------------------------
   ipcMain.handle('recording:begin', async (): Promise<{ id: string }> => {
-    assert(
-      streamSessions.size < MAX_STREAM_SESSIONS,
+    assertAlways(
+      streamSessions.size + beginsInFlight < MAX_STREAM_SESSIONS,
       'recording:begin too many open sessions'
     )
-    await mkdir(recordingsDir(), { recursive: true })
-    const id = nanoid(10)
-    const tempPath = path.join(recordingsDir(), `${id}.webm`)
-    const stream = createWriteStream(tempPath, { flags: 'w' })
-    // Resolve only once the fd is actually open: begin succeeding means
-    // the temp file exists and is writable, so open-time errors (EACCES,
-    // full disk) surface here instead of at the first append.
-    await new Promise<void>((resolve, reject) => {
-      stream.once('open', () => resolve())
-      stream.once('error', (err) => {
-        stream.destroy()
-        reject(err)
+    beginsInFlight++
+    try {
+      await mkdir(recordingsDir(), { recursive: true })
+      const id = nanoid(10)
+      const tempPath = path.join(recordingsDir(), `${id}.webm`)
+      const stream = createWriteStream(tempPath, { flags: 'w' })
+      // Resolve only once the fd is actually open: begin succeeding means
+      // the temp file exists and is writable, so open-time errors (EACCES,
+      // full disk) surface here instead of at the first append.
+      await new Promise<void>((resolve, reject) => {
+        stream.once('open', () => resolve())
+        stream.once('error', (err) => {
+          stream.destroy()
+          reject(err)
+        })
       })
-    })
-    const session: RecordingStreamSession = {
-      tempPath,
-      stream,
-      bytesWritten: 0,
-      error: null,
-      closed: false
+      const session: RecordingStreamSession = {
+        tempPath,
+        stream,
+        bytesWritten: 0,
+        error: null,
+        closed: false
+      }
+      // Without a listener, an async fs error ('error' event) would crash
+      // the main process. Park it; the next append/finalize surfaces it.
+      stream.on('error', (err) => {
+        if (!session.error) session.error = err
+      })
+      streamSessions.set(id, session)
+      return { id }
+    } finally {
+      beginsInFlight--
     }
-    // Without a listener, an async fs error ('error' event) would crash
-    // the main process. Park it; the next append/finalize surfaces it.
-    stream.on('error', (err) => {
-      if (!session.error) session.error = err
-    })
-    streamSessions.set(id, session)
-    return { id }
   })
 
   ipcMain.handle(
     'recording:appendChunk',
     async (_e, id: string, chunk: ArrayBuffer): Promise<void> => {
       assertNonEmptyString(id, 'recording:appendChunk id')
-      assert(SAFE_SESSION_ID_RE.test(id), 'recording:appendChunk id malformed')
-      assert(
+      assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:appendChunk id malformed')
+      assertAlways(
         chunk instanceof ArrayBuffer || ArrayBuffer.isView(chunk),
         'recording:appendChunk chunk must be an ArrayBuffer or typed array'
       )
       const session = streamSessions.get(id)
-      // Plain throws (not assert) for session state: assert() only warns in
-      // production, and continuing here would write into a dead stream.
+      // Session state throws plainly with its own message: it is not a payload
+      // check, and continuing here would write into a dead stream.
       if (!session) {
         throw new Error(
           'recording:appendChunk unknown session (already finalized or abandoned?)'
@@ -349,8 +450,8 @@ export function registerRecordingIpc(): void {
       }
       if (session.error) throw session.error
       const buf = toBuffer(chunk)
-      assert(buf.byteLength > 0, 'recording:appendChunk chunk must not be empty')
-      assert(buf.byteLength <= MAX_CHUNK_BYTES, 'recording:appendChunk chunk too large')
+      assertAlways(buf.byteLength > 0, 'recording:appendChunk chunk must not be empty')
+      assertAlways(buf.byteLength <= MAX_CHUNK_BYTES, 'recording:appendChunk chunk too large')
       await new Promise<void>((resolve, reject) => {
         session.stream.write(buf, (err) => (err ? reject(err) : resolve()))
       })
@@ -362,10 +463,10 @@ export function registerRecordingIpc(): void {
     'recording:finalize',
     async (_e, id: string, spec: RecordingFinalizeSpec): Promise<RecordingResult | null> => {
       assertNonEmptyString(id, 'recording:finalize id')
-      assert(SAFE_SESSION_ID_RE.test(id), 'recording:finalize id malformed')
+      assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:finalize id malformed')
       assertPlainObject(spec, 'recording:finalize spec')
       assertNonEmptyString(spec.filename, 'spec.filename')
-      assert(typeof spec.convertToMp4 === 'boolean', 'spec.convertToMp4 must be a boolean')
+      assertAlways(typeof spec.convertToMp4 === 'boolean', 'spec.convertToMp4 must be a boolean')
       if (spec.durationMs !== undefined) {
         assertFiniteNonNeg(spec.durationMs, 'spec.durationMs')
       }
@@ -385,7 +486,7 @@ export function registerRecordingIpc(): void {
         })
         if (session.error) throw session.error
         if (session.bytesWritten === 0) {
-          throw new Error('recording:finalize recording is empty')
+          throw new Error(RECORDING_EMPTY_MESSAGE)
         }
         const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
         if (!win) return null
@@ -406,25 +507,8 @@ export function registerRecordingIpc(): void {
 
   ipcMain.handle('recording:abandon', async (_e, id: string): Promise<boolean> => {
     assertNonEmptyString(id, 'recording:abandon id')
-    assert(SAFE_SESSION_ID_RE.test(id), 'recording:abandon id malformed')
-    const session = streamSessions.get(id)
-    // Idempotent by design: the renderer calls abandon on every failure
-    // path, including ones where finalize already reaped the session.
-    if (!session) return false
-    session.closed = true
-    streamSessions.delete(id)
-    // destroy() discards buffered writes — this is the throw-away path, and
-    // the file must be closed before unlink can succeed on Windows.
-    await new Promise<void>((resolve) => {
-      session.stream.once('close', () => resolve())
-      session.stream.destroy()
-    })
-    try {
-      await unlink(session.tempPath)
-    } catch {
-      /* already gone */
-    }
-    return true
+    assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:abandon id malformed')
+    return abandonSession(id)
   })
 
   // M6 fix (round 15): renderer-callable cancel for the save phase.

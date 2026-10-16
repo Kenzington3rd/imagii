@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
@@ -20,21 +20,45 @@ export function Importer(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const { recent, push, clear } = useRecentFiles('video')
+  // T-112: one import at a time. `busy` is state, and a second drop or Recent pick in
+  // the same breath reads it before the first one's render; the ref is set the instant
+  // the import starts. `convertingRef` only chooses the words of the refusal.
+  const busyRef = useRef(false)
+  const convertingRef = useRef(false)
+
+  /** Refuses a second import while one runs — it used to start a PARALLEL conversion
+   *  (two ffmpeg transcodes fighting for the CPU, then whichever finished last won). */
+  function refuseIfBusy(): boolean {
+    if (!busyRef.current) return false
+    toast(
+      convertingRef.current
+        ? 'Still converting the last video. Wait for it to finish.'
+        : 'Still loading the last video. Wait for it to finish.',
+      { id: 'importer-busy', icon: <Icon name="warning" size={18} /> }
+    )
+    return true
+  }
 
   async function handleFile(filePath: string): Promise<void> {
     if (!filePath) return
+    if (refuseIfBusy()) return
+    busyRef.current = true
     setBusy(true)
     try {
       let sourcePath = filePath
       // Round 20: stream-dump containers (flv/ts/wmv/mpg/3gp) can't play
       // in Chromium's <video> element — transcode to an mp4 working copy
       // first. Proven per-container in the Layer 5 suite.
-      if (videoNeedsConversion(filePath)) {
+      const needsConversion = videoNeedsConversion(filePath)
+      if (needsConversion) {
+        convertingRef.current = true
         toast.loading('Converting for editing\u2026', { id: 'convert' })
         sourcePath = await window.api.video.convertForImport(filePath)
         toast.dismiss('convert')
       }
-      await loadSource(sourcePath)
+      // T-107: the store keeps the ORIGINAL beside the working copy, so a saved
+      // project can point at the file the person owns and convert again on open.
+      await loadSource(sourcePath, needsConversion ? filePath : undefined)
       await push(filePath)
       toast.success('Video loaded')
     } catch (err) {
@@ -45,6 +69,8 @@ export function Importer(): JSX.Element {
       // permission, unknown codec).
       toast.error(describeImportError(err, filePath), { duration: 8000 })
     } finally {
+      busyRef.current = false
+      convertingRef.current = false
       setBusy(false)
     }
   }
@@ -54,6 +80,9 @@ export function Importer(): JSX.Element {
     setDragOver(false)
     const file = e.dataTransfer.files[0]
     if (!file) return
+    // Before anything else is said about the file: "trying anyway" followed by a
+    // refusal would be two sentences that disagree.
+    if (refuseIfBusy()) return
     const filePath = (file as File & { path?: string }).path
     if (!filePath) {
       // M8 fix (round 15): longer duration to match the rest of the error path.

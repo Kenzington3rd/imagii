@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { CanvasDocument } from '@shared/canvas'
 import { useCanvasStore } from './state/canvasStore'
 import { assertDefined } from '@shared/assert'
 import { Modal } from '../../components/Modal'
+import { basename } from '../../components/OutputDirLabel'
 import { reportFailure } from '../../lib/reportFailure'
 import { countOf } from '@shared/plural'
 import { captureDocument, type ExportStage } from './ExportDialog'
@@ -96,6 +97,9 @@ interface VariantPreview {
   dataUrl: string
 }
 
+/** One empty list, so "no previews" is the same array every render (the focus effect below keys on identity). */
+const NO_PREVIEWS: VariantPreview[] = []
+
 export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JSX.Element | null {
   const doc = useCanvasStore((s) => s.doc)
   // T-46: previews belong to the DOCUMENT they were rendered from. This
@@ -111,10 +115,26 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
     null
   )
   const [busy, setBusy] = useState(false)
+  const items = previews !== null && previews.doc === doc ? previews.items : NO_PREVIEWS
+
+  // T-119: the Generate button is swapped for the previews when the render finishes, and the focused button
+  // goes with it - keyboard focus fell to the page behind the dialog. It lands on "Save all", the next thing
+  // a person does with four renders (the Tutorial coachmark's pattern: focus the primary action of the new
+  // state). Keyed on the swap, not on the dialog opening, so a reopen over kept previews is left as it was.
+  // T-120: keyed on the previews' IDENTITY, not on whether there are any. Regenerate disables itself while it
+  // renders, and Chromium blurs a focused button that becomes disabled; the new previews replace the old ones
+  // with the list still non-empty, so a boolean never changed and keyboard focus stayed on the page behind.
+  const saveAllRef = useRef<HTMLButtonElement | null>(null)
+  // T-127 (11): one save at a time, claimed the instant a save handler runs (ExportPanel.startingRef's shape). Both saves go straight to a
+  // native dialog, and a dialog is not on screen yet when the second click of a double-click arrives: it opened TWO choosers and, answered
+  // twice, wrote the whole set twice (executed: dblclick "Save all" = two choosers, 8 files). The one ref covers both buttons: a chooser is
+  // modal, so a "Save" pressed while another is opening has nothing to add.
+  const startingRef = useRef(false)
+  useEffect(() => {
+    if (items.length > 0) saveAllRef.current?.focus()
+  }, [items])
 
   if (!open) return null
-
-  const items = previews !== null && previews.doc === doc ? previews.items : []
 
   async function generate(): Promise<void> {
     setBusy(true)
@@ -168,23 +188,34 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
   // hidden `<a download>` toasted "Saving 4 variants…" before any dialog had
   // answered, and again for a cancel.
   async function saveOne(p: VariantPreview): Promise<void> {
+    if (startingRef.current) return
+    startingRef.current = true
     try {
-      await window.api.image.save({
+      const saved = await window.api.image.save({
         dataUrl: p.dataUrl,
         defaultName: `imagii-variant-${p.id}-${Date.now()}.png`,
         format: 'png'
       })
+      // T-123 (9): the answer was discarded, so a single Save was the one save with no word of success (saveAll and the
+      // Export button both toast). `null` is the dialog canceled: not a success, not an error, nothing said. The name is
+      // the one the person chose. The shape is the one the other two saves have (T-91 pins it): the null check, then the toast.
+      if (saved === null) return
+      toast.success(`Saved ${basename(saved)}`)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't save that thumbnail." })
+    } finally {
+      startingRef.current = false
     }
   }
 
   // ONE folder picker for the whole set — four Save dialogs in a row is not a
   // button called "Save all".
   async function saveAll(): Promise<void> {
-    if (items.length === 0) return
-    const stamp = Date.now()
+    if (startingRef.current) return
+    startingRef.current = true
     try {
+      if (items.length === 0) return
+      const stamp = Date.now()
       const saved = await window.api.image.saveMany({
         title: 'Choose a folder for the thumbnail variants',
         files: items.map((p) => ({
@@ -196,6 +227,8 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       toast.success(`Saved ${countOf(saved.count, 'thumbnail')}`)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't save the thumbnails." })
+    } finally {
+      startingRef.current = false
     }
   }
 
@@ -264,7 +297,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                 >
                   {busy ? 'Generating…' : 'Regenerate'}
                 </button>
-                <button className="btn-primary px-4 py-1.5 ml-auto" onClick={saveAll}>
+                <button ref={saveAllRef} className="btn-primary px-4 py-1.5 ml-auto" onClick={saveAll}>
                   Save all ({items.length - 1} + original)
                 </button>
               </div>

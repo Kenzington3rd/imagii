@@ -278,8 +278,11 @@ test.describe('imagii References studio', () => {
         await expect(tabStrip.getByRole('button', { name: label, exact: true })).toHaveCount(1)
       }
 
-      // Default tab: Reference Search.
+      // Default tab: Reference Search — and the strip says which tab is open (T-113: it was an
+      // underline and nothing else).
       await expect(searchInput).toBeVisible()
+      await expect(tabStrip.getByRole('button', { name: 'Reference Search', exact: true })).toHaveAttribute('aria-current', 'true')
+      await expect(tabStrip.getByRole('button', { name: 'Mood Boards', exact: true })).not.toHaveAttribute('aria-current', /.*/)
       // T-85: the panel says WHO filters (DuckDuckGo's SafeSearch — imagii
       // screens nothing itself). T-89: and that search goes online while the
       // saved boards stay on this computer — it is NOT "the one feature that
@@ -297,6 +300,8 @@ test.describe('imagii References studio', () => {
       // -> Mood Boards.
       await moodBoardTab(window).click()
       await expect(boardsPanel).toBeVisible()
+      await expect(tabStrip.getByRole('button', { name: 'Mood Boards', exact: true })).toHaveAttribute('aria-current', 'true')
+      await expect(tabStrip.getByRole('button', { name: 'Reference Search', exact: true })).not.toHaveAttribute('aria-current', /.*/)
       await expect(
         window.getByText('Create a mood board on the left to get started.')
       ).toBeVisible()
@@ -413,6 +418,26 @@ test.describe('imagii References studio', () => {
       await expect(alphaRow).toHaveClass(/border-accent/)
       await expect(window.locator('li', { hasText: 'Beta board' })).not.toHaveClass(/border-accent/)
 
+      // T-114: ...and it is said to assistive tech too, and reachable by keyboard. A board row was a
+      // clickable <li> with only the border to say which: no tab stop, no Enter, no state.
+      const betaRow = window.locator('li', { hasText: 'Beta board' })
+      await expect(alphaRow).toHaveAttribute('aria-current', 'true')
+      await expect(alphaRow.getByRole('button')).toHaveAttribute('aria-current', 'true')
+      await expect(betaRow).not.toHaveAttribute('aria-current', /.*/)
+      await betaRow.getByRole('button').focus()
+      await window.keyboard.press('Enter')
+      await expect(detailTitle).toHaveText('Beta board')
+      await expect(betaRow).toHaveClass(/border-accent/)
+      await expect(betaRow).toHaveAttribute('aria-current', 'true')
+      await expect(alphaRow).not.toHaveAttribute('aria-current', /.*/)
+      await alphaRow.getByRole('button').focus()
+      await window.keyboard.press('Space')
+      await expect(detailTitle).toHaveText('Alpha board')
+      await expect(alphaRow).toHaveAttribute('aria-current', 'true')
+      await expect(betaRow).not.toHaveAttribute('aria-current', /.*/)
+      // A name a screen reader can use: the board and how much is on it.
+      await expect(alphaRow.getByRole('button', { name: 'Alpha board, 0 items' })).toBeVisible()
+
       // ── delete, dismissed ──
       // Handler registered BEFORE the click: an unhandled dialog blocks the
       // renderer, and Playwright's auto-dismiss would give us nothing to
@@ -507,8 +532,10 @@ test.describe('imagii References studio', () => {
       await openReferences(window)
       await moodBoardTab(window).click()
 
-      const undo = window.getByRole('button', { name: 'Undo' })
-      const redo = window.getByRole('button', { name: 'Redo' })
+      // T-114: exact. A board row is a named button now ("Undo board, 1 item") and this fixture's
+      // board is called "Undo board", so the substring "Undo" names two buttons.
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
       const detailTitle = window.locator('h3.text-lg')
       const thumb = window.locator('img[alt="Undoable reference"]')
       const decoded = (): Promise<number> =>
@@ -584,6 +611,80 @@ test.describe('imagii References studio', () => {
    * "this control throws in the renderer and nothing happens", and it has to
    * be empty on the way through.
    */
+  // T-123 (7): Chromium dispatches a click to the COMMON ANCESTOR of where the button went down and where it came up. Press in the
+  // dialog's text box (to select a word of the name) and let go a little outside the card, and that ancestor is the scrim: the
+  // scrim's click handler closed the dialog and threw the typed name away. A click is a press AND a release on the scrim.
+  test('a drag that starts inside the dialog and is released on the scrim neither closes it nor loses the typed name; a plain click on the scrim still does (T-123 (7))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-scrim-drag')
+    const boardFile = path.join(fx.boardsDir, 'dragboard.json')
+    writeFileSync(
+      boardFile,
+      JSON.stringify({ id: 'dragboard', name: 'Original name', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const detailTitle = window.locator('h3.text-lg')
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      await expect(dialog).toBeVisible()
+      await field.fill('A name I have typed')
+
+      const box = async (locator: typeof dialog): Promise<{ x: number; y: number; width: number; height: number }> => {
+        const b = await locator.boundingBox()
+        if (!b) throw new Error('no bounding box')
+        return b
+      }
+      const inField = await box(field)
+      const card = await box(dialog)
+      // The scrim is the whole window around the card: the top-left corner is far from it.
+      expect(card.x).toBeGreaterThan(40)
+      expect(card.y).toBeGreaterThan(40)
+
+      // ── press in the text box, release on the scrim: the dialog stays and the name survives ──
+      await window.mouse.move(inField.x + 24, inField.y + inField.height / 2)
+      await window.mouse.down()
+      await window.mouse.move(inField.x + 8, inField.y + inField.height / 2, { steps: 3 })
+      await window.mouse.move(12, 12, { steps: 12 })
+      await window.mouse.up()
+      await expect(dialog, 'a drag out of the card is not a click on the scrim').toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── press on the card's padding, release on the scrim: the same ──
+      await window.mouse.move(card.x + 4, card.y + 4)
+      await window.mouse.down()
+      await window.mouse.move(12, 12, { steps: 8 })
+      await window.mouse.up()
+      await expect(dialog).toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── press on the scrim, release inside the card: not a click on the scrim either ──
+      await window.mouse.move(12, 12)
+      await window.mouse.down()
+      await window.mouse.move(card.x + card.width / 2, card.y + card.height / 2, { steps: 12 })
+      await window.mouse.up()
+      await expect(dialog).toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── a click inside the card does nothing to it, and does not leave a stale press behind ──
+      await dialog.locator('h2.text-lg').click()
+      await expect(dialog).toBeVisible()
+
+      // ── the control: a plain click on the scrim (press and release both there) closes it, and the board is untouched ──
+      await window.mouse.click(12, 12)
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+    } finally {
+      await app.close()
+    }
+  })
+
   test('the Rename dialog renames on Enter and on the button, and both cancels leave disk alone', async () => {
     test.setTimeout(120_000)
     const fx = makeFixture('refs-rename')
@@ -761,8 +862,26 @@ test.describe('imagii References studio', () => {
       const dialog = window.getByRole('dialog')
       const field = dialog.getByRole('textbox')
 
-      // ── cancelling writes nothing at all ──
-      await save.click()
+      // ── T-115/T-116: Save lives in an overlay that is drawn only on hover - and on KEYBOARD focus ──
+      // Tab reaches the button, and a button drawn at opacity 0 is one a keyboard user presses
+      // blind. Parked mouse, so only the keyboard can be what shows it. The Search button sits
+      // right before the first tile, so one Tab from it is the real route to Save.
+      const overlay = save.locator('xpath=..')
+      const searchButton = window.getByRole('button', { name: 'Search', exact: true })
+      await window.mouse.move(0, 0)
+      await expect(overlay, 'at rest the tile shows only its picture').toHaveCSS('opacity', '0')
+      await searchButton.focus()
+      await window.keyboard.press('Tab')
+      await expect(save, 'Tab from Search lands on Save').toBeFocused()
+      await expect(overlay, 'a Tab-focused Save is visible').toHaveCSS('opacity', '1')
+      await window.keyboard.press('Shift+Tab')
+      await expect(save).not.toBeFocused()
+      await expect(overlay, 'and goes back when focus leaves').toHaveCSS('opacity', '0')
+
+      // ── canceling writes nothing at all ── (opened from the keyboard: Tab, then Enter)
+      await window.keyboard.press('Tab')
+      await expect(save).toBeFocused()
+      await window.keyboard.press('Enter')
       await expect(dialog).toBeVisible()
       await expect(dialog.getByText('Name your first mood board').first()).toBeVisible()
       await expect(field).toHaveValue('')
@@ -821,6 +940,15 @@ test.describe('imagii References studio', () => {
       await expect
         .poll(() => readToastLog(window).then((l) => l.filter((t) => t.includes('Inspiration'))))
         .toHaveLength(2)
+
+      // ── T-116: a MOUSE click is not keyboard focus ──
+      // The click left Save focused, and the overlay used to stay lit (focus-within) until focus
+      // moved on: a scrim stuck over the picture after the pointer had left. Under the pointer
+      // the tile is lit; once the pointer leaves, it is not - with Save still the focused element.
+      await expect(overlay, 'under the pointer the tile is lit').toHaveCSS('opacity', '1')
+      await window.mouse.move(0, 0)
+      await expect(save, 'the click left Save focused').toBeFocused()
+      await expect(overlay, 'a clicked Save lets go when the pointer leaves').toHaveCSS('opacity', '0')
 
       expect(pageErrors).toEqual([])
     } finally {
@@ -887,7 +1015,29 @@ test.describe('imagii References studio', () => {
         .toBe(8)
 
       // ── -> Canvas bridge ──
-      await window.getByRole('button', { name: /Canvas/ }).click()
+      // T-115/T-116: the button sits in an overlay drawn only on hover - and on KEYBOARD focus.
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      const tileOverlay = toCanvas.locator('xpath=..')
+      await window.mouse.move(0, 0)
+      await expect(tileOverlay, 'at rest the tile shows only its picture').toHaveCSS('opacity', '0')
+      // A mouse press focuses the button but is not keyboard focus: press it, drag off the tile
+      // and let go elsewhere (so the click never fires and the studio stays put). The button keeps
+      // focus and the scrim must not - this is the stuck overlay a click used to leave.
+      await toCanvas.hover()
+      await expect(tileOverlay, 'under the pointer the tile is lit').toHaveCSS('opacity', '1')
+      await window.mouse.down()
+      await window.mouse.move(0, 0)
+      await window.mouse.up()
+      await expect(toCanvas, 'the press left "→ Canvas" focused').toBeFocused()
+      await expect(tileOverlay, 'a pressed "→ Canvas" lets go when the pointer leaves').toHaveCSS('opacity', '0')
+      expect(window.url()).not.toContain('#/image')
+      // Reached from the keyboard with the mouse parked: it must be visible, and Enter must do the
+      // whole job. Delete is the control before the tile's in tab order.
+      await window.getByRole('button', { name: 'Delete', exact: true }).focus()
+      await window.keyboard.press('Tab')
+      await expect(toCanvas, 'Tab from Delete lands on "→ Canvas"').toBeFocused()
+      await expect(tileOverlay, 'a Tab-focused "→ Canvas" is visible').toHaveCSS('opacity', '1')
+      await window.keyboard.press('Enter')
       await expect
         .poll(() => readToastLog(window))
         .toContain("Added to canvas as a reference \u2014 it won't be in your export")
@@ -895,6 +1045,14 @@ test.describe('imagii References studio', () => {
         timeout: 15_000
       })
       expect(window.url()).toContain('#/image')
+      // T-125 (19): the toast says what the reference is NOT (it won't be in the export), and the studio changes under it as it
+      // appears, so it is held as long as an action toast: still up 4.5 s on (a success toast is taken down at about 3 s).
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(4_500)
+      await expect(
+        window.getByText("Added to canvas as a reference \u2014 it won't be in your export"),
+        'the reference note outlives a success toast\'s default'
+      ).toBeVisible()
 
       // canvasStore gained exactly one image layer, named from the item
       // title, and PropertiesPanel shows it selected at 40% opacity.
@@ -1026,6 +1184,12 @@ test.describe('imagii References studio', () => {
       // quarter of a million times under it, and the whole cache, which is
       // what the button asked for.
       expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
+      // T-123 (33): the tooltip says the verb the button, the toast and BRANDING's Destruction verbs say. It said "Drop",
+      // the app's drag-and-drop verb, for the one control that empties a folder.
+      await expect(window.getByRole('button', { name: 'Clear thumbnail cache' })).toHaveAttribute(
+        'title',
+        'Clear the on-disk thumbnail cache for mood boards'
+      )
       await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
       await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
       await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])

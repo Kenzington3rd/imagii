@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { assert, assertDefined, AssertionError } from './assert'
+import { assert, assertAlways, assertDefined, AssertionError } from './assert'
 
 describe('assert', () => {
   it('returns silently when condition is truthy', () => {
@@ -79,7 +79,7 @@ describe('assertDefined in production', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     expect(() => assertDefined<number>(null, 'must-be-defined')).toThrow(AssertionError)
     expect(() => assertDefined<number>(null, 'must-be-defined')).toThrow(/null/)
-    // It still warns for telemetry, but it MUST also throw.
+    // It still warns on the console, but it MUST also throw.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('must-be-defined'))
     warn.mockRestore()
   })
@@ -94,5 +94,40 @@ describe('assertDefined in production', () => {
     expect(assertDefined(0, 'zero is defined')).toBe(0)
     expect(assertDefined('', 'empty string is defined')).toBe('')
     expect(assertDefined(false, 'false is defined')).toBe(false)
+  })
+})
+
+// T-113: `assertAlways` is the validators' primitive. `assert()` is a soft invariant (it
+// warns and continues in production, by design); a validator refuses input at a trust
+// boundary, and a refusal that depends on an environment variable is not one.
+describe('assertAlways', () => {
+  const prevEnv = process.env.NODE_ENV
+  afterEach(() => {
+    process.env.NODE_ENV = prevEnv
+  })
+
+  it('returns silently when the condition holds', () => {
+    expect(() => assertAlways(true, 'fine')).not.toThrow()
+    expect(() => assertAlways('x', 'truthy')).not.toThrow()
+  })
+
+  it('throws AssertionError on a falsy condition in dev', () => {
+    expect(() => assertAlways(false, 'refused')).toThrow(AssertionError)
+    expect(() => assertAlways(0, 'zero')).toThrow(/zero/)
+  })
+
+  it('throws in production too — where assert() only warns', () => {
+    process.env.NODE_ENV = 'production'
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      expect(() => assert(false, 'soft')).not.toThrow()
+      expect(() => assertAlways(false, 'hard')).toThrow(/hard/)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('rejects empty messages so a refusal always says what it refused', () => {
+    expect(() => assertAlways(true, '')).toThrow(/non-empty message/)
   })
 })

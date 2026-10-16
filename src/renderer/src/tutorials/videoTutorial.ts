@@ -86,8 +86,15 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'export',
       title: 'Export',
-      body: "Click 'Choose folder…', then click the Export button — it says how many files it will write. 'Show in folder' beside a finished file reveals it in Explorer.",
+      body: "Click the folder button — it reads 'Choose folder…' until you have picked one — then click the Export button, which says how many files it will write. 'Show in folder' beside a finished file reveals it in Explorer.",
       targetSelector: '[data-tutorial="video-export"]',
+      placement: 'top'
+    },
+    {
+      id: 'clipkit',
+      title: 'Clip Kit',
+      body: "Select a clip and click 'Clip Kit' to export it for all five platforms, plus three thumbnails, into one new folder. The clip's captions join them as an .srt file, if it has any.",
+      targetSelector: '[data-tutorial="video-clipkit"]',
       placement: 'top'
     },
     {

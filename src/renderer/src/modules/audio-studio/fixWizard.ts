@@ -1,4 +1,4 @@
-import type { ChainSpec, CompressorPreset, DenoiseStrength } from '@shared/audio'
+import type { ChainSpec, CompressorPreset, DenoiseStrength, MainsHz } from '@shared/audio'
 
 /**
  * The Fix Wizard's whole decision, as pure functions (T-90).
@@ -31,6 +31,7 @@ export type FixPatch = Required<
     ChainSpec,
     | 'denoise'
     | 'hum60'
+    | 'humHz'
     | 'rumbleHighpass'
     | 'deEss'
     | 'compressor'
@@ -39,7 +40,12 @@ export type FixPatch = Required<
   >
 >
 
-export function fixPatch(answers: FixAnswers): FixPatch {
+/**
+ * `mains` is the frequency the Cleanup panel already has (T-112): the wizard turns hum
+ * removal on or off but never picks a frequency, so Apply writes the chain's own back —
+ * which is what lets the summary say which notch it is applying.
+ */
+export function fixPatch(answers: FixAnswers, mains: MainsHz = 60): FixPatch {
   const denoise: DenoiseStrength =
     answers.backgroundNoise === 'loud'
       ? 'aggressive'
@@ -50,6 +56,7 @@ export function fixPatch(answers: FixAnswers): FixPatch {
   return {
     denoise,
     hum60: answers.backgroundNoise !== 'none',
+    humHz: mains,
     rumbleHighpass: answers.backgroundNoise !== 'none' || answers.primaryUse === 'voice',
     deEss: answers.primaryUse === 'voice' || answers.primaryUse === 'mixed',
     compressor,
@@ -70,7 +77,7 @@ export function fixSummary(patch: FixPatch): string[] {
       ? 'Quieter background: off'
       : `Quieter background: on (${patch.denoise})`,
     `Low rumble removal: ${onOff(patch.rumbleHighpass)}`,
-    `Hum removal: ${onOff(patch.hum60)}`,
+    patch.hum60 ? `Hum removal: on (${patch.humHz} Hz mains)` : 'Hum removal: off',
     `Softer harsh 's' sounds: ${onOff(patch.deEss)}`,
     `Compressor: ${patch.compressor}`,
     patch.loudnorm

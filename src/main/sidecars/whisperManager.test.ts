@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   installWhisperModel,
   runTranscribe,
@@ -7,6 +7,7 @@ import {
   __whisperTranscribeTesting__
 } from './whisperManager'
 import { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } from '../../shared/captions'
+import { userFacingError } from '../../shared/userFacingError'
 
 const { hexToAssColor, alignmentForPosition, buildForceStyle } = __testing__
 
@@ -77,6 +78,66 @@ describe('buildForceStyle', () => {
   })
 })
 
+/**
+ * T-111 — burned caption size follows the 16:9 picture a frame's width would make.
+ * Landscape is byte for byte what it was; a narrower frame also gets the PlayResY
+ * that brings libass's height-based scale to that picture, and a MarginV scaled
+ * with it so the caption sits as far up the frame as it always did. The real
+ * render (glyph height as a fraction of width, equal on 1920x1080 and 1080x1920)
+ * is Layer 5's.
+ */
+describe('buildForceStyle on frames that are not landscape (T-111)', () => {
+  const LANDSCAPE_AS_SHIPPED =
+    'FontName=Arial,FontSize=32,PrimaryColour=&H00ffffff&,OutlineColour=&H00000000&,Outline=2,Shadow=0,Alignment=2,MarginV=40'
+
+  it('is byte for byte what it was with no frame, or on 16:9 and wider', () => {
+    expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5)).toBe(LANDSCAPE_AS_SHIPPED)
+    for (const [width, height] of [[1920, 1080], [1280, 720], [3840, 2160], [2560, 1080], [1918, 1080]] as const) {
+      expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width, height }), `${width}x${height}`).toBe(LANDSCAPE_AS_SHIPPED)
+    }
+    expect(LANDSCAPE_AS_SHIPPED).not.toContain('PlayRes')
+  })
+
+  it('a vertical frame carries PlayResY and a MarginV in step with it', () => {
+    const out = buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width: 1080, height: 1920 })
+    expect(out).toBe(`${LANDSCAPE_AS_SHIPPED.replace('MarginV=40', 'MarginV=126')},PlayResY=910`)
+    // 126 script units x (1920 / 910) = 266 px up: the 267 px (13.9% of the frame) 40 units always meant.
+    expect(Math.round(126 * (1920 / 910))).toBe(266)
+    expect(Math.round(40 * (1920 / 288))).toBe(267)
+  })
+
+  it('square, 4:5 and 4:3 frames are narrower than 16:9 too', () => {
+    expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width: 1080, height: 1080 })).toMatch(/MarginV=71,PlayResY=512$/)
+    expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width: 1080, height: 1350 })).toMatch(/MarginV=89,PlayResY=640$/)
+    expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width: 1440, height: 1080 })).toMatch(/MarginV=53,PlayResY=384$/)
+  })
+
+  // T-113: a probe can answer with a frame of 0 (an audio-only stream, a container with no
+  // size, ffprobe's own "N/A" coerced to 0). `captionBasisPx` asserts a positive size, so the
+  // burn was REFUSED for a number that only decides how big the text is. The size readout
+  // beside the slider already treats such a frame as "unknown" (`captionSizeReadout`); the
+  // burn does the same: the landscape behavior, byte for byte.
+  it.each([
+    [0, 0],
+    [0, 1080],
+    [1920, 0],
+    [-1, 1080],
+    [Number.NaN, 1080],
+    [1920, Number.NaN]
+  ])('a probe frame of %s x %s is no frame at all: the landscape command, not a refused burn', (width, height) => {
+    expect(() => buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width, height })).not.toThrow()
+    expect(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5, { width, height })).toBe(LANDSCAPE_AS_SHIPPED)
+  })
+
+  it('the middle position stays at MarginV=0 and every setting still carries the user\'s size and colors', () => {
+    const mid = buildForceStyle({ ...DEFAULT_CAPTION_STYLE, position: 'middle', fontSize: 48 }, 3.5, { width: 1080, height: 1920 })
+    expect(mid).toContain('MarginV=0,')
+    expect(mid).toContain('FontSize=48')
+    expect(mid).toContain('Alignment=10')
+    expect(mid).toContain('PlayResY=910')
+  })
+})
+
 describe('installWhisperModel — concurrency guard (regression 2026-05-09)', () => {
   afterEach(() => {
     __whisperInstallTesting__.setInstallInProgressForTest(false)
@@ -88,10 +149,15 @@ describe('installWhisperModel — concurrency guard (regression 2026-05-09)', ()
     // in vitest) — testing the gate logic in isolation is the right level.
     __whisperInstallTesting__.setInstallInProgressForTest(true)
     const result = await installWhisperModel(() => undefined)
+    // T-113: a finished sentence the person can act on (the panel toasts it as it stands), not
+    // the internal note "install already in progress".
     expect(result).toEqual({
       ok: false,
-      reason: 'install already in progress'
+      reason: 'A model download is already running. Wait for it to finish, then try again.'
     })
+    expect(userFacingError(result.ok ? '' : result.reason, "Couldn't download the model.").message).toBe(
+      result.ok ? '' : result.reason
+    )
   })
 
   it('reports the in-progress flag accurately', () => {
@@ -114,7 +180,26 @@ describe('runTranscribe — concurrency guard (audit round 6)', () => {
         { jobId: 'test', sourcePath: 'C:/test.mp4', language: 'en' },
         () => undefined
       )
-    ).rejects.toThrow(/already in progress/)
+    ).rejects.toThrow('A transcription is already running. Wait for it to finish, then try again.')
+  })
+
+  it('the refusal is a finished sentence the person is shown as it stands (T-113)', async () => {
+    __whisperTranscribeTesting__.setTranscribeInProgressForTest(true)
+    const err = await runTranscribe(
+      { jobId: 'test', sourcePath: 'C:/test.mp4', language: 'en' },
+      () => undefined
+    ).then(
+      () => null,
+      (e: unknown) => e
+    )
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(userFacingError(err, 'Transcription failed.').message).toBe(
+        'A transcription is already running. Wait for it to finish, then try again.'
+      )
+    } finally {
+      logged.mockRestore()
+    }
   })
 
   it('reports the in-progress flag accurately', () => {

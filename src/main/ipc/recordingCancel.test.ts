@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 let TMP = ''
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 
-const fakeWin = { webContents: { send: vi.fn() } }
+const fakeWin = { webContents: { isDestroyed: () => false, send: vi.fn() } }
 let saveDialogResult: { canceled: boolean; filePath?: string } = { canceled: true }
 // T-88: every options object the save dialog was opened with, so the title the
 // user reads can be asserted without an OS dialog.
@@ -50,16 +50,35 @@ vi.mock('electron', () => ({
 // under test is the shipped one rather than a test double's shape.
 type ConvertOutcome = 'ok' | 'cancelled' | 'crash'
 let convertOutcome: ConvertOutcome = 'ok'
+// T-120: the WebM branch's remux - what it was asked to copy where, and how it ends.
+let remuxOutcome: ConvertOutcome = 'ok'
+let remuxCalls: Array<{ input: string; output: string }> = []
+// T-115: what the handler handed the convert - the progress callback and the length of the take.
+let lastConvert: {
+  onProgress?: (p: { percent?: number }) => void
+  durationSec?: number
+} | null = null
 
 vi.mock('../ffmpeg/convert', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ffmpeg/convert')>()
   return {
     ...actual,
+    // T-120: the WebM branch's packet copy. Like the convert, it writes SOMETHING first (a half-written
+    // output is what a kill leaves), and what it does after is the test's choice.
+    remuxWebm: async (_owner: string, input: string, webmPath: string): Promise<void> => {
+      remuxCalls.push({ input, output: webmPath })
+      writeFileSync(webmPath, remuxOutcome === 'ok' ? 'remuxed-webm-bytes' : 'partial')
+      if (remuxOutcome === 'cancelled') throw new actual.ConvertCancelledError()
+      if (remuxOutcome === 'crash') throw new actual.ConvertFailedError(1, null, 'Invalid data found')
+    },
     convertToMp4: async (
       _owner: string,
       _input: string,
-      mp4Path: string
+      mp4Path: string,
+      onProgress?: (p: { percent?: number }) => void,
+      durationSec?: number
     ): Promise<void> => {
+      lastConvert = { onProgress, durationSec }
       // Every branch writes SOMETHING first: real ffmpeg has already put
       // bytes at the user's chosen path by the time it is killed, and that
       // stranded file is the point of the test.
@@ -121,6 +140,9 @@ const mainLog = vi.spyOn(console, 'error').mockImplementation(() => {})
 beforeEach(() => {
   TMP = mkdtempSync(path.join(tmpdir(), 'imagii-rec-cancel-'))
   convertOutcome = 'ok'
+  remuxOutcome = 'ok'
+  remuxCalls = []
+  lastConvert = null
   saveDialogResult = { canceled: true }
   saveDialogOptions = []
   fakeWin.webContents.send.mockClear()
@@ -251,6 +273,9 @@ describe('recordingConvertFailureMessage — what the user is told (T-59)', () =
     // The setting named in the copy is the one on the Record panel, so the
     // advice is followable rather than decorative.
     expect(msg).toContain('Convert to MP4 after recording')
+    // T-116: a box is checked and unchecked, never ticked (BRANDING_GUIDE, "Voice"); the label is quoted exactly.
+    expect(msg).toContain('uncheck "Convert to MP4 after recording" to keep the WebM.')
+    expect(msg).not.toMatch(/tick/i)
   })
 
   it('names the signal when the child died without an exit code', () => {
@@ -317,5 +342,122 @@ describe('the save dialog says what Cancel does (T-88)', () => {
     })
     expect(result).toBeNull()
     expect(existsSync(tempPathFor(id))).toBe(false)
+  })
+})
+
+describe('recording:finalize hands the convert the length of the take (T-115)', () => {
+  // The bar used to be `encoded seconds x 2`, because the convert was never told how long the take
+  // was. promoteTempWebm holds the recorder's own duration; the convert's percent is the encode
+  // position over it. (convertCancel.test.ts drives the percent; Layer 5 runs the real binary.)
+  async function finalizeWith(spec: Record<string, unknown>): Promise<void> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('webm chunk'))
+    saveDialogResult = { canceled: false, filePath: path.join(TMP, 'len.mp4') }
+    await invoke('recording:finalize', id, { filename: 'take.mp4', convertToMp4: true, ...spec })
+  }
+
+  it('passes spec.durationMs down as seconds', async () => {
+    await finalizeWith({ durationMs: 8000 })
+    expect(lastConvert?.durationSec).toBe(8)
+    await finalizeWith({ durationMs: 93_500 })
+    expect(lastConvert?.durationSec).toBe(93.5)
+  })
+
+  it.each([
+    ['no duration', {}],
+    ['a duration of 0', { durationMs: 0 }]
+  ])('passes none for %s, so the bar is indeterminate and nothing is invented', async (_label, spec) => {
+    await finalizeWith(spec)
+    expect(lastConvert).not.toBeNull()
+    expect(lastConvert?.durationSec).toBeUndefined()
+  })
+
+  it('forwards the convert\'s progress to the window as it came, a percent or none', async () => {
+    await finalizeWith({ durationMs: 8000 })
+    lastConvert?.onProgress?.({ percent: 25 })
+    lastConvert?.onProgress?.({})
+    expect(fakeWin.webContents.send.mock.calls).toEqual([
+      ['recording:progress', { percent: 25 }],
+      ['recording:progress', {}]
+    ])
+  })
+})
+
+describe('recording:finalize with Convert off saves a WebM whose header is repaired (T-120)', () => {
+  // A MediaRecorder webm is streamed, so its header has no duration and Video Studio's probe refuses it.
+  // The save used to be a plain copyFile of that file; it is now a packet copy into a fresh file
+  // (`remuxWebm`), with the same discard and cleanup the MP4 convert has. (Layer 5 runs the real binary
+  // on a MediaRecorder-shaped file and probes what it writes.)
+  async function recordAndSaveWebm(
+    outPath: string
+  ): Promise<{ id: string; result: unknown; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      const result = await invoke('recording:finalize', id, {
+        filename: 'take.webm',
+        durationMs: 5000,
+        convertToMp4: false
+      })
+      return { id, result, error: null }
+    } catch (err) {
+      return { id, result: undefined, error: err as Error }
+    }
+  }
+
+  it('hands the remux the temp take and the chosen path, and reports the file it wrote', async () => {
+    const outPath = path.join(TMP, 'kept.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    expect(remuxCalls).toEqual([{ input: tempPathFor(id), output: outPath }])
+    expect(readFileSync(outPath, 'utf8')).toBe('remuxed-webm-bytes')
+    expect(result).toMatchObject({
+      outputPath: outPath,
+      format: 'webm',
+      durationMs: 5000,
+      sizeBytes: 'remuxed-webm-bytes'.length
+    })
+    // The temp take is reaped as on every other branch.
+    expect(existsSync(tempPathFor(id))).toBe(false)
+  })
+
+  it('a Discard during the remux is a discard: null, the half-written webm and the temp are gone', async () => {
+    remuxOutcome = 'cancelled'
+    const outPath = path.join(TMP, 'discarded.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    expect(result).toBeNull()
+    expect(existsSync(outPath)).toBe(false)
+    expect(existsSync(tempPathFor(id))).toBe(false)
+  })
+
+  it('a remux that fails does not lose the take: it is saved as recorded, and the failure is logged', async () => {
+    remuxOutcome = 'crash'
+    const outPath = path.join(TMP, 'fallback.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    // The partial the remux left is replaced by the temp take's own bytes.
+    expect(readFileSync(outPath, 'utf8')).toBe('streamed webm')
+    expect(result).toMatchObject({ outputPath: outPath, format: 'webm', sizeBytes: 'streamed webm'.length })
+    expect(existsSync(tempPathFor(id))).toBe(false)
+    expect(mainLog).toHaveBeenCalledTimes(1)
+    const [prefix, logged] = mainLog.mock.calls[0] as [string, Error]
+    expect(prefix).toContain('remux failed')
+    expect(logged.message).toContain('Invalid data found')
+  })
+
+  it('the MP4 branch does not remux, and the WebM branch does not convert', async () => {
+    await recordAndFinalize(path.join(TMP, 'only-convert.mp4'))
+    expect(remuxCalls).toEqual([])
+    expect(lastConvert).not.toBeNull()
+
+    lastConvert = null
+    await recordAndSaveWebm(path.join(TMP, 'only-remux.webm'))
+    expect(remuxCalls).toHaveLength(1)
+    expect(lastConvert).toBeNull()
   })
 })

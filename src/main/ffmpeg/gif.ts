@@ -4,6 +4,9 @@ import { ffmpegPath } from './paths'
 import { cropToFrame, type SourceDimensions } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { CancelLatch, type LatchRun } from './cancelLatch'
+import { discardPartialOutput } from './partialOutput'
+import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
 
@@ -18,6 +21,12 @@ export interface GifJobSpec {
   speed: number
   /** The clip's manual crop (T-96): the GIF is made from that rectangle. */
   cropRect?: CropRect | null
+  /**
+   * The name of the file the person opened, without its extension, already safe to put in a file name (the handler sanitizes it;
+   * T-124 (17)). A converted import is played from a working copy with a nanoid in its name, and the GIF was named for that copy.
+   * Missing means the source path's own name.
+   */
+  sourceName?: string
 }
 
 /**
@@ -46,17 +55,33 @@ export function buildGifFilter(
 }
 
 const activeJobs = new Map<string, ChildProcess>()
+// T-98: a cropped GIF probes the source before it spawns; a Cancel in that wait
+// finds no child to kill, so the run is what it marks.
+const latch = new CancelLatch()
 
 export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: string }> {
-  const base = path.parse(spec.sourcePath).name
-  const outputPath = path.join(
-    spec.outDir,
-    `${base}_${spec.width}px_${Math.round(spec.fps)}fps.gif`
-  )
+  const run = latch.begin(spec.jobId)
+  try {
+    return await makeGif(spec, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function makeGif(spec: GifJobSpec, run: LatchRun): Promise<{ outputPath: string }> {
+  const base = spec.sourceName ?? path.parse(spec.sourcePath).name
 
   // Only a crop needs the frame's pixels; an uncropped GIF starts no extra process.
-  const probe = spec.cropRect ? await probeVideo(spec.sourcePath) : null
+  const probe = spec.cropRect ? await run.guard(probeVideo(spec.sourcePath)) : null
   const filter = buildGifFilter(spec, probe ? { width: probe.width, height: probe.height } : undefined)
+  // T-106: `<source>_<width>px_<fps>fps.gif` is the name WANTED; the next GIF with
+  // the same settings (a different part of the clip, a different crop) writes
+  // beside the last one instead of over it.
+  // T-125 (10): the folder is there before the name is chosen.
+  await run.guard(ensureOutputDir(spec.outDir))
+  const outputPath = await run.guard(
+    nextFreePath(path.join(spec.outDir, `${base}_${spec.width}px_${Math.round(spec.fps)}fps.gif`))
+  )
 
   const args = [
     '-y',
@@ -73,8 +98,11 @@ export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: stri
     outputPath
   ]
 
+  let spawnedAt: number | null = null
   await new Promise<void>((resolve, reject) => {
+    run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
+    spawnedAt = Date.now()
     activeJobs.set(spec.jobId, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
@@ -91,14 +119,19 @@ export async function runGifExport(spec: GifJobSpec): Promise<{ outputPath: stri
       if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`gif exit ${code}: ${stderr.slice(-500)}`)))
     })
+  }).catch(async (err: unknown) => {
+    // T-100: a GIF with no trailer opens in nothing; it is this job's wreckage.
+    await discardPartialOutput(outputPath, spawnedAt)
+    throw err
   })
 
   return { outputPath }
 }
 
 export function cancelGifJob(jobId: string): boolean {
+  const marked = latch.cancel(jobId)
   const child = activeJobs.get(jobId)
-  if (!child) return false
+  if (!child) return marked
   killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
@@ -107,6 +140,7 @@ export function cancelGifJob(jobId: string): boolean {
 // B2 fix (round 16): kill all in-flight gif jobs on app quit so an orphan
 // ffmpeg.exe can't keep encoding palette+gif after the window is gone.
 export function cancelAllGifJobs(): void {
+  latch.cancelAll()
   for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }
