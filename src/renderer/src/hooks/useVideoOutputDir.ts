@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { isSafeAbsolutePath } from '@shared/pathSafety'
+import { persistSetting } from '../lib/persistSetting'
 
 /**
  * Where the GIF, Compile, Reframe and picture-in-picture panels write (T-124 (21), T-125 (10)).
@@ -59,7 +60,7 @@ export async function resolveOutputDir(): Promise<string | null> {
 
 /** A file was written in `dir`: remember it for the next visit, and every panel follows now. */
 export function rememberOutputDir(dir: string): void {
-  void window.api.settings.set(VIDEO_OUTPUT_DIR_KEY, dir)
+  void persistSetting(VIDEO_OUTPUT_DIR_KEY, dir)
   setDir(dir)
 }
 

@@ -226,7 +226,7 @@ export function HighlightPanel(): JSX.Element | null {
                 >
                   {Math.round(h.combinedScore * 100)}
                 </span>
-                <span className="text-ink-dim flex-1 truncate">
+                <span className="text-ink-dim flex-1 truncate" title={h.reasons.join(' · ')}>
                   {h.reasons.join(' · ')}
                 </span>
                 <button
@@ -242,7 +242,7 @@ export function HighlightPanel(): JSX.Element | null {
                 <SignalBar label="Hype" value={h.signals.hypeWordScore} color={EMBER} />
               </div>
               {h.topChatMessages.length > 0 ? (
-                <div className="text-ink-dim italic truncate">
+                <div className="text-ink-dim italic truncate" title={h.topChatMessages.join(' · ')}>
                   {h.topChatMessages.join(' · ')}
                 </div>
               ) : null}

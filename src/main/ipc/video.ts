@@ -39,7 +39,7 @@ import {
 } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
 import { HOOK_MAX_SOURCE_SEC, HOOK_MIN_SEC } from '../../shared/highlights'
-import { assertSafeAbsolutePath, isSafeAbsolutePath } from '../../shared/pathSafety'
+import { assertSafeAbsolutePath, assertSafeId, isSafeAbsolutePath, SAFE_ID_RE } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
 import { isExistingFolder } from '../ffmpeg/outputPath'
 import { safeNamePart } from '../../shared/filename'
@@ -50,10 +50,9 @@ const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] a
 // Round 17 B2/B4/B5: validate a renderer-supplied job id (same alphabet as
 // nanoid) and fall back to a freshly-minted id when the renderer didn't
 // pass one. Keeps the IPC API safe for callers older than round 17.
-const SAFE_JOB_ID_RE = /^[A-Za-z0-9_-]+$/
 function pickJobId(provided: unknown): string {
   if (typeof provided === 'string' && provided.length > 0) {
-    assertAlways(SAFE_JOB_ID_RE.test(provided), 'jobId must match nanoid alphabet')
+    assertAlways(SAFE_ID_RE.test(provided), 'jobId must match nanoid alphabet')
     assertAlways(provided.length <= 64, 'jobId too long')
     return provided
   }
@@ -438,7 +437,10 @@ export function registerVideoIpc(): void {
     }
   )
   ipcMain.handle('video:deleteCustomPreset', (_e, id: string) => {
+    // T-128 (6): the id becomes `<userData>/export-presets/<id>.json` and is unlinked. The store checks it again; the handler is
+    // where it first arrives (the gate `audio:deletePreset` has had since T-117).
     assertNonEmptyString(id, 'preset id')
+    assertSafeId(id, 'preset id')
     return deleteCustomPreset(id)
   })
 
@@ -600,23 +602,23 @@ export function registerVideoIpc(): void {
   // when the ffmpeg child dies, and the panel's existing catch shows a toast.
   ipcMain.handle('video:cancelReframe', (_e, jobId: string) => {
     assertNonEmptyString(jobId, 'video:cancelReframe jobId')
-    assertAlways(SAFE_JOB_ID_RE.test(jobId), 'video:cancelReframe jobId malformed')
+    assertAlways(SAFE_ID_RE.test(jobId), 'video:cancelReframe jobId malformed')
     return cancelReframeJob(jobId)
   })
   ipcMain.handle('video:cancelGif', (_e, jobId: string) => {
     assertNonEmptyString(jobId, 'video:cancelGif jobId')
-    assertAlways(SAFE_JOB_ID_RE.test(jobId), 'video:cancelGif jobId malformed')
+    assertAlways(SAFE_ID_RE.test(jobId), 'video:cancelGif jobId malformed')
     return cancelGifJob(jobId)
   })
   ipcMain.handle('video:cancelConcat', (_e, jobId: string) => {
     assertNonEmptyString(jobId, 'video:cancelConcat jobId')
-    assertAlways(SAFE_JOB_ID_RE.test(jobId), 'video:cancelConcat jobId malformed')
+    assertAlways(SAFE_ID_RE.test(jobId), 'video:cancelConcat jobId malformed')
     return cancelConcatJob(jobId)
   })
   // PiP shares concat's activeJobs map (M3 fix round 15).
   ipcMain.handle('video:cancelPip', (_e, jobId: string) => {
     assertNonEmptyString(jobId, 'video:cancelPip jobId')
-    assertAlways(SAFE_JOB_ID_RE.test(jobId), 'video:cancelPip jobId malformed')
+    assertAlways(SAFE_ID_RE.test(jobId), 'video:cancelPip jobId malformed')
     return cancelConcatJob(jobId)
   })
   // Single-slot — no jobId required.

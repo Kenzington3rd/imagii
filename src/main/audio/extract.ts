@@ -5,6 +5,7 @@ import { mkdir, unlink } from 'node:fs/promises'
 import { nanoid } from 'nanoid'
 import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
+import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { assert } from '../../shared/assert'
 
 export interface ExtractedAudio {
@@ -39,7 +40,17 @@ export const EXTRACT_CLOCK_FILTER = 'aresample=async=1:first_pts=0'
  */
 const activeExtractions = new Set<ChildProcess>()
 
+/**
+ * T-128 (5), T-127 (3)'s "not covered": an extraction is a RUN (`cancelLatch.ts`) from its call until the scratch WAV it was writing is
+ * gone (or handed back). The quit sweep kills the child and then waits for every run to end; the unlink of a killed extraction's
+ * half-written WAV ran AFTER the kill, on later event-loop turns, and the process was gone first - a quit in the middle of a long VOD's
+ * extraction left up to gigabytes of WAV in %TEMP%\imagii-audio for the 6-hour reaper. Every caller shares it (Audio Studio's import,
+ * Clean audio, a restored project, the transcription's sound); the transcription is also its own run in `whisperManager`.
+ */
+const extractLatch = new CancelLatch()
+
 export function cancelAllExtractions(): void {
+  extractLatch.cancelAll()
   for (const child of activeExtractions) killAsCancelled(child)
   activeExtractions.clear()
 }
@@ -51,7 +62,7 @@ export const __extractTesting__ = { activeCount: (): number => activeExtractions
  * `onChild` hands the caller the ffmpeg child the moment it exists, so a job that
  * can be canceled (transcription, T-108) can kill it. An extraction that fails or
  * is killed removes the WAV it was writing: the name is fresh (`nanoid`), so the
- * file is this call's alone, and a half-written one is nobody's result.
+ * file is this call's alone, and a half-written one is nobody's result. T-128 (5): and the call is a run until that removal is done.
  */
 export async function extractAudioFromVideo(
   videoPath: string,
@@ -62,8 +73,23 @@ export async function extractAudioFromVideo(
     Number.isInteger(format.sampleRate) && format.sampleRate > 0 && Number.isInteger(format.channels) && format.channels > 0,
     'extract format must be a whole sample rate and channel count'
   )
+  const run = extractLatch.begin()
+  try {
+    return await extractUnderRun(videoPath, onChild, format, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function extractUnderRun(
+  videoPath: string,
+  onChild: ((child: ChildProcess) => void) | undefined,
+  format: ExtractFormat,
+  run: LatchRun
+): Promise<ExtractedAudio> {
   const dir = path.join(tmpdir(), 'imagii-audio')
-  await mkdir(dir, { recursive: true })
+  // A Cancel that lands while the folder is made ends the wait, and no child is spawned (T-98).
+  await run.guard(mkdir(dir, { recursive: true }))
   const wavPath = path.join(dir, `${nanoid(10)}.wav`)
 
   await new Promise<void>((resolve, reject) => {

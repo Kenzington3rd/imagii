@@ -454,8 +454,8 @@ describe('T-49 — the export panel carries no copy a user can never reach', () 
     // Both keys are written in the same block, so a future edit cannot drop
     // one and leave the export remembering half of one preference.
     const persist = panel.slice(panel.indexOf('if (watermark) {'), panel.indexOf('const sourceBase'))
-    expect(persist).toMatch(/settings\.set\('streamerHandle', watermark\.text\)/)
-    expect(persist).toMatch(/settings\.set\('watermarkPosition', watermark\.position\)/)
+    expect(persist).toMatch(/persistSetting\('streamerHandle', watermark\.text\)/)
+    expect(persist).toMatch(/persistSetting\('watermarkPosition', watermark\.position\)/)
   })
 
   // T-119 (13): and forgets them together. The guide says Clip Kit stamps "the watermark you last exported
@@ -464,8 +464,8 @@ describe('T-49 — the export panel carries no copy a user can never reach', () 
   it('a blank watermark clears the handle and the corner together, in the same block', () => {
     const persist = panel.slice(panel.indexOf('if (watermark) {'), panel.indexOf('const sourceBase'))
     const blank = persist.slice(persist.indexOf('} else {'))
-    expect(blank).toMatch(/settings\.set\('streamerHandle', undefined\)/)
-    expect(blank).toMatch(/settings\.set\('watermarkPosition', undefined\)/)
+    expect(blank).toMatch(/persistSetting\('streamerHandle', undefined\)/)
+    expect(blank).toMatch(/persistSetting\('watermarkPosition', undefined\)/)
   })
 })
 
@@ -1198,12 +1198,14 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
 
   // T-127 (11): three more handlers that went straight to a native dialog with no claim (executed: a double-click on "Save all" = two
   // choosers and eight files). With the eleven above, fourteen. E2E: image.spec.ts (Save all, and a variant's Save) and
-  // video-pipelines.spec.ts (Save .srt) put a 300 ms dialog in the window the second press lands in.
-  it('the three save handlers (a variant\'s Save, Save all, Save .srt) claim their ref before the first await, first of all, and give it back in a finally (T-127 (11))', () => {
+  // video-pipelines.spec.ts (Save .srt) put a 300 ms dialog in the window the second press lands in. T-128 (3): and the confirm of
+  // "Clear saved transcripts" (fifteen), which closes its dialog on the first press and must not clear twice.
+  it('the save handlers (a variant\'s Save, Save all, Save .srt) and the transcript clear claim their ref before the first await, first of all, and give it back in a finally (T-127 (11), T-128 (3))', () => {
     const handlers = [
       ['modules/image-studio/ThumbnailVariants.tsx', 'saveOne', 'startingRef', 'p: VariantPreview'],
       ['modules/image-studio/ThumbnailVariants.tsx', 'saveAll', 'startingRef', ''],
-      ['modules/video-studio/CaptionsPanel.tsx', 'saveSrt', 'saveSrtStartingRef', '']
+      ['modules/video-studio/CaptionsPanel.tsx', 'saveSrt', 'saveSrtStartingRef', ''],
+      ['modules/video-studio/CaptionsPanel.tsx', 'clearTranscripts', 'clearStartingRef', '']
     ] as const
     for (const [rel, fn, ref, params] of handlers) {
       const text = read(rel)
@@ -1528,7 +1530,7 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     expect(kit).toMatch(/window\.api\.settings\.get<string>\('clipKit\.lastOutputDir'\)/)
     expect(kit).toMatch(/window\.api\.video\.pickOutputDir\(\s*typeof lastDir === 'string' && lastDir\.length > 0 \? lastDir : undefined\s*\)/)
-    expect(kit).toMatch(/window\.api\.settings\.set\('clipKit\.lastOutputDir', parentDir\)/)
+    expect(kit).toMatch(/persistSetting\('clipKit\.lastOutputDir', parentDir\)/)
     // main: only a usable absolute path becomes the dialog's defaultPath.
     const video = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/video.ts'), 'utf8'))
     // T-125 (10): and only one that is a folder THAT EXISTS now (a deleted one, or an unplugged drive's, is ignored like a malformed one).
@@ -1935,5 +1937,66 @@ describe('T-126 (3) — a refused Source time is a full-width sentence under its
     const editor = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
     expect(editor).toMatch(/<label className="flex flex-wrap items-center gap-x-1\.5 gap-y-0\.5">\s*<span className="text-ink-muted shrink-0">Source time<\/span>/)
     expect(editor).toMatch(/<span className="flex flex-wrap items-center gap-x-1\.5 gap-y-0\.5">\s*<span className="text-ink-dim">→<\/span>/)
+  })
+})
+
+// T-128 (2): the three @fontsource CSS imports (latin-400/500/600) each listed a .woff fallback after the .woff2, and the build emitted all
+// six files; Chromium 126 (this Electron) reads woff2 and never requests the .woff, so 93 KB of the download was a font nothing could use.
+// The rules are inline now (top of styles/index.css) and name ONLY the package's woff2 files, which Vite asset-imports by that path.
+// smoke.spec.ts reads the BUILT folder (no .woff, every url() a file the build holds, the page loads all three weights from them).
+describe('T-128 (2) — Inter ships as woff2 alone, from inline @font-face rules', () => {
+  const noComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  /** What is wrong with the stylesheet's Inter faces: one entry per problem, empty when the set is the three weights, woff2 alone. */
+  function fontFaceProblems(css: string, fileExists: (spec: string) => boolean): string[] {
+    const faces = noComments(css).match(/@font-face\s*\{[^}]*\}/g) ?? []
+    const problems: string[] = []
+    const weights = faces.map((f) => /font-weight:\s*(\d+)/.exec(f)?.[1] ?? '?').sort()
+    if (weights.join() !== '400,500,600') problems.push(`faces for weights ${weights.join() || 'none'}, not 400,500,600`)
+    for (const face of faces) {
+      const label = `the ${/font-weight:\s*(\d+)/.exec(face)?.[1] ?? '?'} face`
+      if (!/font-family:\s*'Inter'/.test(face)) problems.push(`${label} is not the Inter family`)
+      const src = /src:\s*([^;]+);/.exec(face)?.[1] ?? ''
+      const urls = [...src.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g)].map((m) => m[1] as string)
+      if (urls.length !== 1) problems.push(`${label} lists ${urls.length} sources (woff2 alone: one)`)
+      for (const u of urls) {
+        if (!/^@fontsource\/inter\/files\/inter-latin-\d+-normal\.woff2$/.test(u)) problems.push(`${label} names ${u}, not a woff2 file of the package`)
+        else if (!fileExists(u)) problems.push(`${label} names ${u}, which the package does not hold`)
+      }
+      if (/format\(\s*['"]woff['"]\s*\)/.test(src)) problems.push(`${label} still carries a woff format`)
+    }
+    return problems
+  }
+  const NODE_MODULES = path.resolve(RENDERER_ROOT, '../../../node_modules')
+  const inPackage = (spec: string): boolean => {
+    try {
+      statSync(path.join(NODE_MODULES, spec))
+      return true
+    } catch {
+      return false
+    }
+  }
+  const face = (weight: number, src: string): string =>
+    `@font-face { font-family: 'Inter'; font-style: normal; font-display: swap; font-weight: ${weight}; src: ${src}; }`
+  const ok = (w: number): string => face(w, `url('@fontsource/inter/files/inter-latin-${w}-normal.woff2') format('woff2')`)
+
+  it('the renderer entry imports no @fontsource css, and the style sheet holds the three weights as woff2 files of the package', () => {
+    expect(noComments(read('main.tsx'))).not.toMatch(/@fontsource/)
+    expect(fontFaceProblems(read('styles/index.css'), inPackage)).toEqual([])
+  })
+
+  it('the finder discriminates: a woff fallback, a lost weight, a file the package lacks and another family are each found', () => {
+    const set = [ok(400), ok(500), ok(600)].join('\n')
+    expect(fontFaceProblems(set, () => true)).toEqual([])
+    const fallback = face(600, "url('@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2'), url('@fontsource/inter/files/inter-latin-600-normal.woff') format('woff')")
+    const withFallback = fontFaceProblems([ok(400), ok(500), fallback].join('\n'), () => true)
+    expect(withFallback.join('|')).toMatch(/lists 2 sources/)
+    expect(withFallback.join('|')).toMatch(/inter-latin-600-normal\.woff, not a woff2 file/)
+    expect(withFallback.join('|')).toMatch(/still carries a woff format/)
+    expect(fontFaceProblems([ok(400), ok(500)].join('\n'), () => true).join('|')).toMatch(/weights 400,500, not 400,500,600/)
+    expect(fontFaceProblems(set, (u) => !u.includes('-500-')).join('|')).toMatch(/500 face names .*-500-.*does not hold/)
+    expect(fontFaceProblems(set.replace("font-family: 'Inter'", "font-family: 'Roboto'"), () => true).join('|')).toMatch(/is not the Inter family/)
+    // A commented-out rule is not a rule.
+    expect(fontFaceProblems(`${set}\n/* ${face(700, "url('x.woff')")} */`, () => true)).toEqual([])
   })
 })

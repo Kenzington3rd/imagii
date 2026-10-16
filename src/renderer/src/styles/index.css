@@ -1,3 +1,32 @@
+/* T-126 (18), T-128 (2): Inter, bundled (DESIGN_GUIDE: "Inter, with system-ui fallbacks"; BRANDING: the wordmark is Inter Semibold). The
+   three weights the guide names, latin only, from the installed @fontsource/inter package: Vite emits each woff2 beside the page and
+   the sheet points at it, so the app draws Inter on a machine that has never had it and asks nobody for it (local-first). WOFF2 ALONE:
+   the package's own latin-NNN.css lists a .woff fallback after each file, and Chromium 126 (this Electron) has read woff2 since
+   Chromium 36, so the build was emitting three files (93 KB) nothing could request. The rest of each rule is the package's own. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2');
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

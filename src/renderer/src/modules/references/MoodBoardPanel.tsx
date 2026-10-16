@@ -152,7 +152,7 @@ export function MoodBoardPanel(): JSX.Element {
                   aria-label={`${c.name}, ${countOf(c.items.length, 'item')}`}
                   className="w-full flex items-center justify-between px-2 py-1.5 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
-                  <span className="truncate flex-1">{c.name}</span>
+                  <span className="truncate flex-1" title={c.name}>{c.name}</span>
                   <span className="text-xs text-ink-dim ml-2">{c.items.length}</span>
                 </button>
               </li>
@@ -187,7 +187,7 @@ export function MoodBoardPanel(): JSX.Element {
         {collection ? (
           <>
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-lg font-semibold truncate">{collection.name}</h3>
+              <h3 className="text-lg font-semibold truncate" title={collection.name}>{collection.name}</h3>
               <div className="flex gap-2 text-sm">
                 <button className="btn-ghost px-3 py-1" onClick={() => setRenaming(true)}>
                   Rename
@@ -232,7 +232,7 @@ export function MoodBoardPanel(): JSX.Element {
                       />
                       {/* T-115/T-116: shown on keyboard focus as well as hover (see ReferencePanel). */}
                       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
-                        <span className="text-xs text-ink-base line-clamp-2">{item.title}</span>
+                        <span className="text-xs text-ink-base line-clamp-2" title={item.title}>{item.title}</span>
                         <button
                           className="btn-primary px-3 py-1 text-xs"
                           onClick={() => sendToCanvas(src, item.title)}

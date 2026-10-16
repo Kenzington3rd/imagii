@@ -17,12 +17,17 @@ import {
   captionPhaseLabel,
   captionSizeReadout,
   captionsReadyMessage,
+  clearedTranscriptsMessage,
   staleCaptionsMessage
 } from '@shared/captions'
+import { countOf } from '@shared/plural'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
 import { Icon } from '../../components/Icon'
+import { Modal } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { formatClock } from '@shared/clockTime'
 
 export function CaptionsPanel(): JSX.Element | null {
@@ -52,12 +57,18 @@ export function CaptionsPanel(): JSX.Element | null {
   // T-127 (11): the same claim for "Save .srt", which goes straight to a native Save dialog (a double-click opened two, and answered
   // twice wrote the file twice). Claimed first, given back in a finally.
   const saveSrtStartingRef = useRef(false)
+  // T-128 (3): "Clear saved transcripts" - how many transcripts the captions folder holds (null until main has answered), the confirm
+  // that stands in front of deleting them, and the same claim-first guard for the confirm button (one press, one clear).
+  const [transcriptCount, setTranscriptCount] = useState<number | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const clearStartingRef = useRef(false)
   // Phase 4E: Whisper model auto-install state
   const [installing, setInstalling] = useState(false)
   const [installProgress, setInstallProgress] = useState<ModelInstallProgress | null>(null)
 
   useEffect(() => {
     void window.api.captions.status().then(setStatus)
+    void refreshTranscriptCount()
   }, [])
 
   // Bug fix: clear local segment + progress state when the source video
@@ -85,6 +96,44 @@ export function CaptionsPanel(): JSX.Element | null {
   async function refreshStatus(): Promise<void> {
     const s = await window.api.captions.status()
     setStatus(s)
+  }
+
+  /** How many transcripts are saved, for the line under the panel and the Clear button. A count main could not read leaves the line out. */
+  async function refreshTranscriptCount(): Promise<void> {
+    try {
+      setTranscriptCount(await window.api.captions.countTranscripts())
+    } catch (err) {
+      console.warn('[imagii] could not count the saved transcripts', err)
+      setTranscriptCount(null)
+    }
+  }
+
+  /**
+   * T-128 (3), T-110 (s): the confirm's "Clear transcripts". Every transcript in the captions folder goes, including the one for the video
+   * that is open, so the panel goes back to "not transcribed yet" (its Save .srt and Burn into video would be pointing at a file that is
+   * gone). Claimed first and given back in a finally: one press, one clear.
+   */
+  async function clearTranscripts(): Promise<void> {
+    if (clearStartingRef.current) return
+    clearStartingRef.current = true
+    try {
+      // The video the clear was pressed for, held across the await like a job's (T-112): the forgetting below is for it, not for what is open by then.
+      const startedFor = source?.filePath
+      setConfirmClear(false)
+      const result = await window.api.captions.clearTranscripts()
+      const message = clearedTranscriptsMessage(result)
+      if (message.error) toast.error(message.text, { duration: ERROR_TOAST_MS })
+      else toast.success(message.text, { duration: result.failed > 0 ? ACTION_TOAST_MS : undefined })
+      if (result.removed > 0) {
+        setSegments(null)
+        if (startedFor) setSrtPathFor(startedFor, null)
+      }
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't clear the saved transcripts." })
+    } finally {
+      clearStartingRef.current = false
+      void refreshTranscriptCount()
+    }
   }
 
   async function transcribe(): Promise<void> {
@@ -117,6 +166,7 @@ export function CaptionsPanel(): JSX.Element | null {
       reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
     } finally {
       setJob(null)
+      void refreshTranscriptCount()
       // T-100 + T-108: the row below the header shows a job that is running. One that
       // stopped is not, whatever phase its last event named; and one that finished is
       // not either — "Done 100%" with nothing to press stayed there for good. The toast
@@ -591,6 +641,48 @@ export function CaptionsPanel(): JSX.Element | null {
         Captions are English only. Captions burn into the original video, not the platform
         exports.
       </p>
+      {/* T-128 (3), T-110 (s): every transcription keeps its .srt in imagii's data folder for good. This is the way to empty it from
+          here: the line says how many are kept, the button is off with none (and while a job runs, which may be reading one). */}
+      {transcriptCount !== null ? (
+        <div className="flex items-center gap-2 text-xs text-ink-dim border-t border-ink-dim/20 pt-2">
+          <span>
+            {transcriptCount === 0
+              ? 'No saved transcripts.'
+              : `${countOf(transcriptCount, 'saved transcript')} kept on this computer.`}
+          </span>
+          <button
+            className="btn-ghost px-2 py-1 ml-auto inline-flex items-center gap-1.5 disabled:opacity-50"
+            onClick={() => setConfirmClear(true)}
+            disabled={running || transcriptCount === 0}
+          >
+            <Icon name="trash" size={13} /> Clear saved transcripts
+          </button>
+        </div>
+      ) : null}
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Clear saved transcripts?"
+        className="max-w-md w-full p-5"
+      >
+        <h2 className="text-lg font-semibold mb-3">Clear saved transcripts?</h2>
+        <p className="text-sm text-ink-base mb-2">
+          This deletes the {countOf(transcriptCount ?? 0, 'saved transcript')} imagii keeps on this computer, including the one for
+          the video you have open. Transcribe again whenever you need one.
+        </p>
+        <p className="text-xs text-ink-muted mb-4">
+          Captions you already saved as .srt files or burned into a video are not touched.
+        </p>
+        <div className="flex justify-end gap-2">
+          {/* Opens on Cancel, the safe answer (T-114): the trap would otherwise focus the first button it finds. */}
+          <button className="btn-ghost px-3 py-1.5 text-sm" data-initial-focus onClick={() => setConfirmClear(false)}>
+            Cancel
+          </button>
+          <button className="btn-primary px-4 py-1.5 text-sm" onClick={() => void clearTranscripts()}>
+            Clear transcripts
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }

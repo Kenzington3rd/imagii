@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, unlink } from 'node:fs/promises'
 import { nanoid } from 'nanoid'
 import { ffmpegPath } from './paths'
 import { EVEN_PICTURE } from './filters'
+import { CancelLatch, type LatchRun } from './cancelLatch'
 import { CancelledError } from '../../shared/cancel'
 import { burnInPercent } from '../../shared/captions'
 
@@ -38,7 +39,12 @@ export interface ConvertProgress {
  * message would be guessing; this is the fact.
  */
 export class ConvertCancelledError extends CancelledError {
-  constructor() {
+  /**
+   * T-128 (5): true when the app is QUITTING (`cancelAllConverts`, the before-quit sweep), false when a person pressed Discard. The two
+   * end the same child the same way, and a save's cleanup has to tell them apart: a discard throws the take away (that is what the person
+   * asked), a quit must not - the raw take is the only copy, and the person asked to close a window, not to lose a recording.
+   */
+  constructor(readonly byQuit = false) {
     super()
     // T-84: same sentinel message as every other cancellable runner
     // (shared/cancel.ts) — the class stays so recording.ts can tell a
@@ -87,9 +93,26 @@ interface ActiveConvert {
   child: ChildProcess
   owner: ConvertOwner
   cancelled: boolean
+  /** Set with `cancelled`: the kill was the quit sweep's (T-128 (5)). */
+  byQuit: boolean
 }
 
 const activeConverts = new Set<ActiveConvert>()
+
+/**
+ * T-128 (5), T-127 (3)'s "not covered": a convert is a RUN, like every other runner (`cancelLatch.ts`), for as long as it and the cleanup
+ * of what it was writing take. `before-quit` kills the child and then waits (bounded) for every run to END; a convert was invisible to that
+ * wait, so a quit in the middle of the recording's save left its half-written mp4 at the name the person chose in the Save dialog (and the
+ * raw take beside it), and one in the middle of an import left its transcode in %TEMP%. The caller that owns the cleanup opens the run
+ * (`beginConvertRun` for the recording's save, `convertForImport` for itself) and ends it AFTER that cleanup; the cancel functions below mark
+ * the runs they are aimed at, by owner. The child registry above still does the killing.
+ */
+const convertLatch = new CancelLatch()
+
+/** A run for the recording's save (`promoteTempWebm`): from the chosen output name until the temp take is removed. */
+export function beginConvertRun(owner: ConvertOwner): LatchRun {
+  return convertLatch.begin(owner)
+}
 
 /**
  * `durationSec` is the length of the output, when the caller knows it (the recording knows
@@ -166,7 +189,7 @@ function runConvertChild(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { windowsHide: true })
-    const active: ActiveConvert = { child, owner, cancelled: false }
+    const active: ActiveConvert = { child, owner, cancelled: false, byQuit: false }
     activeConverts.add(active)
     let stderr = ''
     child.stdout.setEncoding('utf8')
@@ -194,13 +217,13 @@ function runConvertChild(
     })
     child.on('error', (err) => {
       activeConverts.delete(active)
-      reject(active.cancelled ? new ConvertCancelledError() : err)
+      reject(active.cancelled ? new ConvertCancelledError(active.byQuit) : err)
     })
     child.on('close', (code, signal) => {
       activeConverts.delete(active)
       // A cancel we asked for wins over whatever exit code the kill
       // produced — SIGKILL mid-encode looks exactly like a crash otherwise.
-      if (active.cancelled) reject(new ConvertCancelledError())
+      if (active.cancelled) reject(new ConvertCancelledError(active.byQuit))
       else if (code === 0) resolve()
       else reject(new ConvertFailedError(code, signal, stderr.slice(-500)))
     })
@@ -216,21 +239,34 @@ export async function convertForImport(
   inputPath: string,
   onProgress: (p: ConvertProgress) => void = () => {}
 ): Promise<string> {
-  const dir = path.join(tmpdir(), 'imagii-import')
-  await mkdir(dir, { recursive: true })
-  const base = path.basename(inputPath, path.extname(inputPath))
-  const mp4Path = path.join(dir, `${base}-${nanoid(8)}.mp4`)
-  await convertToMp4('import', inputPath, mp4Path, onProgress)
-  return mp4Path
+  const run = convertLatch.begin('import')
+  try {
+    const dir = path.join(tmpdir(), 'imagii-import')
+    await run.guard(mkdir(dir, { recursive: true }))
+    const base = path.basename(inputPath, path.extname(inputPath))
+    const mp4Path = path.join(dir, `${base}-${nanoid(8)}.mp4`)
+    try {
+      await convertToMp4('import', inputPath, mp4Path, onProgress)
+    } catch (err) {
+      // T-128 (5): a transcode that stops (a quit, a crash, a source ffmpeg cannot read) leaves an mp4 with no moov atom at the working-copy
+      // name. Nothing can play it and the next launch's sweep was the only thing that would ever remove it.
+      await unlink(mp4Path).catch(() => undefined)
+      throw err
+    }
+    return mp4Path
+  } finally {
+    run.end()
+  }
 }
 
-function cancelWhere(match: (active: ActiveConvert) => boolean): boolean {
+function cancelWhere(match: (active: ActiveConvert) => boolean, byQuit = false): boolean {
   let killed = false
   for (const active of activeConverts) {
     if (!match(active)) continue
     // Flag first, kill second: the close handler reads the flag, and a
     // SIGKILL mid-encode is indistinguishable from a crash without it.
     active.cancelled = true
+    active.byQuit = byQuit
     try {
       active.child.kill('SIGKILL')
     } catch {
@@ -250,6 +286,7 @@ function cancelWhere(match: (active: ActiveConvert) => boolean): boolean {
  * tell a deliberate discard from a real failure (T-44).
  */
 export function cancelConverts(owner: ConvertOwner): boolean {
+  convertLatch.cancel(owner)
   return cancelWhere((active) => active.owner === owner)
 }
 
@@ -259,5 +296,6 @@ export function cancelConverts(owner: ConvertOwner): boolean {
  * allowed to reach another owner's work.
  */
 export function cancelAllConverts(): boolean {
-  return cancelWhere(() => true)
+  convertLatch.cancelAll()
+  return cancelWhere(() => true, true)
 }

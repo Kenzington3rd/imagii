@@ -18,6 +18,7 @@ import type { MoodBoardCollection, SearchResponse, SearchResult } from '../../sh
 import { validateSearchResult } from '../../shared/search'
 import { assertNonEmptyString } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
+import { SAFE_ID_RE } from '../../shared/pathSafety'
 
 // Round 17 phase-2: every moodboard handler now passes its renderer-supplied
 // inputs through the same gates the rest of the IPC surface uses. The
@@ -25,7 +26,6 @@ import { assertAlways } from '../../shared/assert'
 // IPC boundary is where untrusted input first arrives so a hostile/buggy
 // renderer can't trigger an internal assertion message; it gets a clean
 // validation error instead.
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
 const MAX_BOARD_NAME = 200
 function assertSafeId(value: unknown, name: string): asserts value is string {
   assertNonEmptyString(value, name)

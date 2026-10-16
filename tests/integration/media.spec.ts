@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -24,8 +24,10 @@ import {
   convertToMp4,
   remuxWebm,
   cancelConverts,
+  cancelAllConverts,
   ConvertCancelledError
 } from '../../src/main/ffmpeg/convert'
+import { drainRuns } from '../../src/main/ffmpeg/cancelLatch'
 import { extractAudioFromVideo, cancelAllExtractions } from '../../src/main/audio/extract'
 import { runReframe, cancelReframeJob } from '../../src/main/ffmpeg/reframe'
 import {
@@ -4996,6 +4998,101 @@ describe('import conversion for non-native containers (real ffmpeg)', () => {
       await expect(convertForImport(src)).rejects.toThrow(/signal|exit/)
     },
     60_000
+  )
+})
+
+/**
+ * T-128 (5), T-127 (3)'s "not covered": the quit kills the child, then WAITS (`drainRuns`, what `before-quit` calls) for the cleanup the kill
+ * starts. The unit tests hold that with a fake child and a slow unlink; this is the real SIGKILL on a real ffmpeg, the real `close`, and
+ * the real removal of what the job was writing - on both majors. `os.tmpdir()` is read at each call, so each case points it at a folder
+ * of its own and the scratch folder holds only what the job made.
+ */
+describe('a quit in the middle of a transcode or an extraction (real ffmpeg, T-128 (5))', () => {
+  async function inOwnTmp<T>(work: (tmp: string) => Promise<T>): Promise<T> {
+    const tmp = await mkdtemp(path.join(workDir, 'quit-tmp-'))
+    const prior = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP }
+    process.env.TMPDIR = tmp
+    process.env.TMP = tmp
+    process.env.TEMP = tmp
+    try {
+      return await work(tmp)
+    } finally {
+      for (const [key, value] of Object.entries(prior)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  }
+
+  it(
+    'a transcode killed by the quit sweep leaves no mp4 in the working-copy folder once the quit\'s wait is over',
+    async () => {
+      const src = path.join(workDir, 'quit-import.flv')
+      await ff([
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc2=duration=30:size=1280x720:rate=30',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=30',
+        '-shortest',
+        src
+      ])
+      await inOwnTmp(async (tmp) => {
+        let ticks = 0
+        const importing = convertForImport(src, () => {
+          ticks++
+        }).then(
+          () => null as unknown,
+          (err: unknown) => err
+        )
+        // ffmpeg emits `out_time` only while it is encoding: this is "the partial mp4 is open and growing".
+        const deadline = Date.now() + 60_000
+        while (ticks === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+        expect(ticks, 'the transcode is running').toBeGreaterThan(0)
+        const folder = path.join(tmp, 'imagii-import')
+        expect(await readdir(folder), 'one working copy, being written').toHaveLength(1)
+
+        cancelAllConverts() // what before-quit does...
+        await expect(drainRuns(10_000)).resolves.toBe('drained') // ...and then waits for
+
+        expect(await readdir(folder), 'the half-written mp4 (no moov atom) is gone').toEqual([])
+        const err = await importing
+        expect(err).toBeInstanceOf(ConvertCancelledError)
+        expect((err as ConvertCancelledError).byQuit, 'and it says the quit did it').toBe(true)
+      })
+    },
+    180_000
+  )
+
+  it(
+    'an extraction killed by the quit sweep leaves no scratch WAV once the quit\'s wait is over',
+    async () => {
+      // 50 minutes of silence in FLAC: about 0.6 GB of WAV and a couple of seconds of ffmpeg, long enough to be killed part-way.
+      const sound = path.join(workDir, 'quit-silence.mka')
+      await ff(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '3000', '-c:a', 'flac', sound])
+      await inOwnTmp(async (tmp) => {
+        const folder = path.join(tmp, 'imagii-audio')
+        const extracting = extractAudioFromVideo(sound).then(
+          () => null as unknown,
+          (err: unknown) => err
+        )
+        const sizeNow = async (): Promise<number> => {
+          const names = existsSync(folder) ? await readdir(folder) : []
+          const first = names[0]
+          return first === undefined ? 0 : (await stat(path.join(folder, first))).size
+        }
+        const deadline = Date.now() + 60_000
+        while ((await sizeNow()) < 2_000_000 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+        const size = await sizeNow()
+        expect(size, 'the WAV is open and growing').toBeGreaterThan(2_000_000)
+        expect(size, 'and the extraction is still far from done (0.58 GB when it is)').toBeLessThan(500_000_000)
+
+        cancelAllExtractions()
+        await expect(drainRuns(10_000)).resolves.toBe('drained')
+
+        expect(await readdir(folder), 'the half-written WAV is gone').toEqual([])
+        expect(isCancelledError(await extracting), 'and the extraction ended as a cancel').toBe(true)
+      })
+    },
+    180_000
   )
 })
 

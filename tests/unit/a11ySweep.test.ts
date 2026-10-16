@@ -39,6 +39,11 @@ import { parseSource, sourceFilesUnder } from './renderedStrings'
  *      background that changes on focus (1.06:1 against its card), the one field in the app with no visible
  *      focus, and nothing in the sweep looked at the combination. The one exemption is the dialog card
  *      (`role="dialog"`), which is only ever focused by script so a screen reader announces its title.
+ * *   6. A name the layout cuts with an ellipsis (`truncate`, or `line-clamp-N`, the same cut over two lines) carries the whole of it as a `title`, on the
+ *      span itself or on an element around it (T-128 (1); T-127 (15) did the four the sweep named and
+ *      the ledger listed the rest): hovering is the person's only way to read the end of a long board,
+ *      layer, source or output name. An ancestor's `title` counts - the browser shows the nearest one - and
+ *      so does a span that is its own element's only text and sits in a button that names it.
  *
  * The scan reads source text and syntax, not the page: it cannot see conditional rendering, so
  * a green run means "wired", and tests/e2e/* asserts the attributes on the live page.
@@ -189,6 +194,27 @@ export function outlineWithoutRing(sf: ts.SourceFile): Hit[] {
   return hits
 }
 
+/** True when `el` has a `title` attribute of its own. */
+const hasTitle = (el: ts.JsxOpeningLikeElement): boolean => el.attributes.properties.some((a) => attrName(a) === 'title')
+
+/** A tag the browser draws (`span`, `button`), not a component: a component's `title` prop is whatever the component does with it (`<Modal title>` is a heading). */
+const isHostTag = (el: ts.JsxOpeningLikeElement): boolean => /^[a-z]/.test(tagOf(el))
+
+/** Rule 6: a `truncate` / `line-clamp-N` element with no `title` on it or on any element around it. */
+export function truncatedWithoutTitle(sf: ts.SourceFile): Hit[] {
+  const hits: Hit[] = []
+  for (const el of jsxElements(sf)) {
+    if (!/(?<![\w-])(?:truncate|line-clamp-\d+)(?![\w-])/.test(classText(el.attributes))) continue
+    if (hasTitle(el)) continue
+    let covered = false
+    for (let up: ts.Node | undefined = el.parent?.parent; up && !covered; up = up.parent) {
+      if (ts.isJsxElement(up) && isHostTag(up.openingElement) && hasTitle(up.openingElement)) covered = true
+    }
+    if (!covered) hits.push({ file: sf.fileName, line: sf.getLineAndCharacterOfPosition(el.getStart(sf)).line + 1 })
+  }
+  return hits
+}
+
 const files = sourceFilesUnder(RENDERER_ROOT).filter((f) => f.endsWith('.tsx'))
 const rel = (h: Hit): string => `${path.relative(RENDERER_ROOT, h.file)}:${h.line}`
 
@@ -210,6 +236,11 @@ describe('the accessibility class sweep (T-113)', () => {
 
   it('nothing reachable by keyboard is shown on hover alone', () => {
     const hits = files.flatMap((f) => hoverOnlyControls(parseSource(f)))
+    expect(hits.map(rel)).toEqual([])
+  })
+
+  it('every name the layout cuts with an ellipsis carries its whole self as the title (T-128 (1))', () => {
+    const hits = files.flatMap((f) => truncatedWithoutTitle(parseSource(f)))
     expect(hits.map(rel)).toEqual([])
   })
 
@@ -298,6 +329,29 @@ describe('the accessibility class sweep (T-113)', () => {
       expect(scan(outlineWithoutRing, field('bg-bg-base rounded px-2'))).toBe(0)
       // A class that merely CONTAINS the letters is not the utility.
       expect(scan(outlineWithoutRing, field('no-outline-nonexistent'))).toBe(0)
+    })
+
+    it('rule 6 flags a truncated span with no title, and accepts a title on it or on an element around it (T-128 (1))', () => {
+      const span = (attrs: string): string => `const a = <li><span className="truncate flex-1" ${attrs}>{name}</span></li>`
+      expect(scan(truncatedWithoutTitle, span(''))).toBe(1)
+      expect(scan(truncatedWithoutTitle, span('title={name}'))).toBe(0)
+      // The button's title is what the browser shows over the span inside it (the folder chip, the recent-files row).
+      expect(scan(truncatedWithoutTitle, 'const a = <button title={path}><span className="truncate">{name}</span></button>')).toBe(0)
+      expect(scan(truncatedWithoutTitle, 'const a = <button><span className="truncate">{name}</span></button>')).toBe(1)
+      // A component's `title` is a prop, not a tooltip (a Modal's is its heading): it covers nothing inside it.
+      expect(scan(truncatedWithoutTitle, 'const a = <Modal title="Thumbnail variants"><span className="truncate">{name}</span></Modal>')).toBe(1)
+      // A title on a SIBLING or a descendant covers nothing: only the element itself and the ones around it.
+      expect(scan(truncatedWithoutTitle, 'const a = <div><span title={x}>y</span><span className="truncate">{name}</span></div>')).toBe(1)
+      expect(scan(truncatedWithoutTitle, 'const a = <span className="truncate">{a}<span title={x}>{b}</span></span>')).toBe(1)
+      // Self-closing and an element with a heading tag are the same shape; a class that merely CONTAINS the word is not the utility.
+      expect(scan(truncatedWithoutTitle, 'const a = <h3 className="text-lg font-semibold truncate">{name}</h3>')).toBe(1)
+      expect(scan(truncatedWithoutTitle, 'const a = <span className="no-truncate-here untruncated truncate-none">{name}</span>')).toBe(0)
+      // The two-line cut is the same cut; `line-clamp-none` removes one and cuts nothing.
+      expect(scan(truncatedWithoutTitle, 'const a = <span className="text-xs line-clamp-2">{name}</span>')).toBe(1)
+      expect(scan(truncatedWithoutTitle, 'const a = <span className="text-xs line-clamp-2" title={name}>{name}</span>')).toBe(0)
+      expect(scan(truncatedWithoutTitle, 'const a = <span className="text-xs line-clamp-none">{name}</span>')).toBe(0)
+      // Two cut spans, one titled: one hit.
+      expect(scan(truncatedWithoutTitle, 'const a = <p><b className="truncate" title={a}>{a}</b><i className="truncate">{b}</i></p>')).toBe(1)
     })
 
     it('rule 2 ignores a scroller with no height bound (a page area, not a box)', () => {

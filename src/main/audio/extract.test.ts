@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CANCELLED_MESSAGE, isCancelledError } from '../../shared/cancel'
 import { TRANSCRIPTION_AUDIO } from '../../shared/captions'
+import { drainRuns, openRunCount } from '../ffmpeg/cancelLatch'
 
 /**
  * T-113 (10) — this file's temp folder is its own. The extractor writes `tmpdir()/imagii-audio`,
@@ -42,6 +43,19 @@ afterAll(() => {
  * The extractor takes the format as an argument; the default is Audio Studio's.
  * (Layer 5 asks a real ffmpeg for both and ffprobes the files.)
  */
+/** T-128 (5): when set, removing a scratch WAV takes this long (a slow disk, an antivirus scan). */
+let slowUnlinkMs = 0
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    unlink: async (file: Parameters<typeof real.unlink>[0]) => {
+      if (slowUnlinkMs > 0 && String(file).endsWith('.wav')) await new Promise((resolve) => setTimeout(resolve, slowUnlinkMs))
+      return real.unlink(file)
+    }
+  }
+})
+
 class FakePipe extends EventEmitter {
   setEncoding(): void {
     /* not used by the extractor */
@@ -84,6 +98,7 @@ const settle = (p: Promise<unknown>): Promise<unknown> =>
 beforeEach(() => {
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-extract-'))
   spawned = []
+  slowUnlinkMs = 0
   cancelAllExtractions()
 })
 afterEach(() => {
@@ -181,6 +196,67 @@ describe('the extraction registry (T-111)', () => {
     expect(__extractTesting__.activeCount()).toBe(0)
     spawned[0]?.child.emit('close', null, 'SIGKILL')
     expect(isCancelledError(await done)).toBe(true)
+  })
+})
+
+// T-128 (5), T-127 (3)'s "not covered": the quit kills the extraction child and the half-written WAV was unlinked LATER, on event-loop turns the
+// process never reached - up to gigabytes in %TEMP%\imagii-audio for the 6-hour reaper. An extraction is a run until that unlink is done, and
+// the quit's wait (`drainRuns`, what `before-quit` calls after the kills) covers it.
+describe('a quit in the middle of an extraction waits for the scratch WAV to go (T-128 (5))', () => {
+  it('the sweep kills the child, the half-written WAV takes 150 ms to remove, and the quit is released only after it is gone', async () => {
+    const done = settle(extractAudioFromVideo('/vod.mp4'))
+    await vi.waitFor(() => expect(spawned).toHaveLength(1))
+    const wav = wavOf(spawned[0] as Spawned)
+    writeFileSync(wav, 'RIFF....half a wav') // ffmpeg opened it
+    expect(openRunCount(), 'the extraction is a run').toBe(1)
+    slowUnlinkMs = 150
+
+    cancelAllExtractions() // what the quit sweep and cancelAllAudioJobs call
+    // A real ffmpeg closes a few ms after the signal.
+    setTimeout(() => spawned[0]?.child.emit('close', null, 'SIGKILL'), 5)
+    await expect(drainRuns(3000)).resolves.toBe('drained')
+
+    expect(existsSync(wav), 'released only when the WAV is gone').toBe(false)
+    expect(isCancelledError(await done), 'and the extraction ended as a cancel').toBe(true)
+    expect(openRunCount()).toBe(0)
+  })
+
+  it('a quit that lands while the folder is being made spawns nothing', async () => {
+    const done = settle(extractAudioFromVideo('/vod.mp4'))
+    cancelAllExtractions() // synchronously after the call: mkdir has not finished
+    expect(isCancelledError(await done)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(spawned, 'no child was ever started').toHaveLength(0)
+    expect(openRunCount()).toBe(0)
+  })
+
+  it('every way an extraction ends gives its run back: success, a failed exit, a process that cannot start', async () => {
+    const ok = extractAudioFromVideo('/a.mp4')
+    await vi.waitFor(() => expect(spawned).toHaveLength(1))
+    expect(openRunCount()).toBe(1)
+    spawned[0]?.child.emit('close', 0, null)
+    await ok
+    expect(openRunCount(), 'success: the WAV is handed back, the run is over').toBe(0)
+
+    const failed = settle(extractAudioFromVideo('/b.mp4'))
+    await vi.waitFor(() => expect(spawned).toHaveLength(2))
+    spawned[1]?.child.emit('close', 1, null)
+    await failed
+    expect(openRunCount()).toBe(0)
+
+    const broken = settle(extractAudioFromVideo('/c.mp4'))
+    await vi.waitFor(() => expect(spawned).toHaveLength(3))
+    spawned[2]?.child.emit('error', new Error('spawn ENOENT'))
+    await broken
+    expect(openRunCount()).toBe(0)
+  })
+
+  it('a cancel with nothing running marks nothing: the next extraction runs', async () => {
+    cancelAllExtractions()
+    const done = extractAudioFromVideo('/after.mp4')
+    await vi.waitFor(() => expect(spawned).toHaveLength(1))
+    spawned[0]?.child.emit('close', 0, null)
+    await expect(done).resolves.toMatchObject({ wavPath: expect.stringMatching(/\.wav$/) })
   })
 })
 

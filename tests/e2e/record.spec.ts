@@ -1127,6 +1127,34 @@ test.describe('T-27 Record Studio', () => {
     }
   })
 
+  // T-128 (1): a source tile shows an OS window's own title, which is as long as the program makes it, cut with an ellipsis at the tile's
+  // width - and nothing else on the screen says the rest (the thumbnail's alt is not drawn). The tile's name carries it as its title.
+  test('a long window title on a source tile is cut with an ellipsis and carries its whole self as the title (T-128 (1))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('sourcetitle')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      const longTitle = 'imagii - Stream highlights season finale, the whole run from the first clip to the last - Visual Studio Code [Administrator]'
+      await stubSourceList(app, [longTitle, 'Entire screen'])
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+
+      const name = window.locator('button.card div.truncate', { hasText: longTitle })
+      await expect(name).toBeVisible({ timeout: 20_000 })
+      expect(await name.evaluate((n) => n.scrollWidth > n.clientWidth), 'the title is really cut here, so the tooltip is what reads the rest').toBe(true)
+      await expect(name).toHaveAttribute('title', longTitle)
+      // A short name is whole and carries the same tooltip (a rule with no exceptions is one nobody has to remember).
+      await expect(window.locator('button.card div.truncate', { hasText: 'Entire screen' })).toHaveAttribute('title', 'Entire screen')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('Refresh sources lists the real screen, auto-selects the first, and enables Start', async () => {
     test.setTimeout(120_000)
     ensureScreenshots()

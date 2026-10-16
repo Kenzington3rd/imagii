@@ -85,13 +85,18 @@ copied from. In a className, use Tailwind's own `/NN` suffix
 (`bg-accent/25`).
 
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
-weights 400/500/600. It is BUNDLED (T-126 (18)): `main.tsx` imports the latin
-400, 500 and 600 files of `@fontsource/inter`, the build emits the font files
-beside the page, and the stylesheet points at them, so the app draws Inter on
-a machine that has never had it and requests it from no one (local-first). The
-stack stays as the fallback for a glyph the latin subset lacks. The built-app
-E2E (`smoke.spec.ts`) asks the page's `document.fonts` for all three weights
-and reads the built style sheets for a `url()` that is not a bundled file.
+weights 400/500/600. It is BUNDLED (T-126 (18)): three `@font-face` rules at the
+top of `styles/index.css` point at the latin 400, 500 and 600 **woff2** files of
+`@fontsource/inter` (T-128 (2): the package's own CSS also lists a `.woff`
+fallback after each, which Chromium 126 never requests, so the build emitted
+three files, 93 KB, that nothing could load; Vite resolves the package path in
+`url()` and emits the woff2 beside the page, nothing else). The app draws Inter
+on a machine that has never had it and requests it from no one (local-first).
+The stack stays as the fallback for a glyph the latin subset lacks. The built-app
+E2E (`smoke.spec.ts`) asks the page's `document.fonts` for all three weights,
+reads the built style sheets for a `url()` that is not a bundled file, and fails
+on any `.woff` in them or in the assets folder; `interactionWiring.test.ts`
+holds the source (no `@fontsource` CSS import, three faces, one woff2 source each).
 
 **Documented raw-color exceptions.** These places use raw hex or rgba
 deliberately; nowhere else may. For HEX that is mechanical since T-104:
@@ -218,11 +223,19 @@ button out of the card by 55 px. The chip is `max-w-[9rem]` with `w-full` (never
 `min-w-0 truncate` span and the full path as its `title`; the icon is `shrink-0`, and the
 accessible name still reads "Output folder: " and then the whole name. A new chip of a
 user-given name (a file, a board, a preset) gets the same three parts. **A name that a layout cuts
-with an ellipsis always carries its whole self as its `title` (T-127 (15))**: the second track's
-"Role: file name" line, the file name in the Video and Audio Studio headers (cut at 40 characters)
-and the Cleanup preset rows had no tooltip, so the rest of a long name could not be read anywhere
-(each is pinned in `interactionWiring.test.ts` and read in the built app by audio.spec.ts and
-video-core.spec.ts).
+with an ellipsis (`truncate`, or `line-clamp-N`, the same cut over two lines) always carries its whole self as a `title`, on the
+element itself or on a browser-drawn element around it (T-127 (15), T-128 (1))**. T-127 (15) did the second track's
+"Role: file name" line, the file name in the Video and Audio Studio headers (cut at 40 characters) and the Cleanup preset rows
+(each is pinned in `interactionWiring.test.ts` and read in the built app by audio.spec.ts and video-core.spec.ts);
+T-128 (1) did the rest and made the rule a test: the mood board's names (list row and heading) and a saved reference's title
+on its tile, the post checklist's output name and hashtag preview, the variant labels, Record's source names, the layer names,
+the highlight and chat-peak lines, and the Export panel's preset labels and queue rows. `a11ySweep.test.ts` rule 6 fails on the
+next cut name without one (a component's `title` prop is not a tooltip: a Modal's is its heading, so only a tag the browser draws
+counts). Two are the cases where the tooltip is the ONLY place the end of the name exists: a Record source tile shows an OS window's
+own title, which is as long as the program makes it (about 33 characters fit the tile at the 1024 px minimum width), and the
+mood-board heading; record.spec.ts and references.spec.ts read both in the built app. What the rule does not reach: a cut inside a
+sentence that is not drawn by the layout (the output-folder refusal ends a long folder name with `…` in main's text), where a
+tooltip has nothing to hang on.
 
 **Panel section headers** are always the `PanelHeader` component
 (`components/PanelHeader.tsx`) — never a hand-written `<h3>`. It renders

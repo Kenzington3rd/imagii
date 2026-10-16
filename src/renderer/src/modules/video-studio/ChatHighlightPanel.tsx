@@ -165,7 +165,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
             >
               <span className="font-mono">{formatClock(p.bucketStart)}</span>
               <span className="text-ink-dim">{countOf(p.count, 'message')}</span>
-              <span className="flex-1 truncate text-ink-muted">{p.topMessages.join(' · ')}</span>
+              <span className="flex-1 truncate text-ink-muted" title={p.topMessages.join(' · ')}>{p.topMessages.join(' · ')}</span>
               <button
                 className="text-accent hover:underline"
                 onClick={() => addPeak(p, i)}

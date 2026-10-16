@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import type { SettingsKey } from '@shared/api'
+import { persistSetting } from '../lib/persistSetting'
 
 export type RecentFileBucket = 'video' | 'audio' | 'image'
 
@@ -35,14 +36,14 @@ export function useRecentFiles(bucket: RecentFileBucket): UseRecentFilesResult {
       if (!filePath) return
       const existing = (await window.api.settings.get<string[]>(KEY[bucket])) ?? []
       const next = [filePath, ...existing.filter((p) => p !== filePath)].slice(0, MAX_RECENT)
-      await window.api.settings.set(KEY[bucket], next)
+      await persistSetting(KEY[bucket], next)
       setRecent(next)
     },
     [bucket]
   )
 
   const clear = useCallback(async (): Promise<void> => {
-    await window.api.settings.set(KEY[bucket], [])
+    await persistSetting(KEY[bucket], [])
     setRecent([])
   }, [bucket])
 

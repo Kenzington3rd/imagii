@@ -24,6 +24,7 @@ import {
 import { useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
+import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 
 interface ClipKitButtonProps {
@@ -231,7 +232,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           { duration: 6000 }
         )
         // INIT-E (round 15): persist the parent on success.
-        void window.api.settings.set('clipKit.lastOutputDir', parentDir)
+        void persistSetting('clipKit.lastOutputDir', parentDir)
         // Reveal the folder so the user can grab it for posting: select the first
         // file the queue wrote, whatever the YouTube slot turned out to be named
         // (T-112: it is a Short when the CROP is vertical, so the name is read off

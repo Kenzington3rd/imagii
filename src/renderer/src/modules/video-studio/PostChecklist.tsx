@@ -194,6 +194,9 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     save(diary.filter((e) => e.id !== entry.id))
   }
 
+  // T-128 (1): the pack as one line, for the preview (cut with an ellipsis), its tooltip and the Copy button.
+  const hashtagLine = (HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' ')
+
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="clipboard">Posting helpers</PanelHeader>
@@ -234,12 +237,12 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
           ))}
         </select>
         <div className="flex items-center gap-2 text-xs">
-          <code className="bg-bg-hover rounded px-2 py-1 flex-1 truncate font-mono">
-            {(HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' ')}
+          <code className="bg-bg-hover rounded px-2 py-1 flex-1 truncate font-mono" title={hashtagLine}>
+            {hashtagLine}
           </code>
           <button
             className="text-accent hover:underline"
-            onClick={() => copy((HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' '))}
+            onClick={() => copy(hashtagLine)}
           >
             Copy
           </button>
@@ -294,7 +297,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
               className="bg-bg-hover rounded px-2 py-1.5 text-xs flex flex-col gap-1"
             >
               <div className="flex items-center gap-2">
-                <span className="font-medium flex-1 truncate">{e.outputName}</span>
+                <span className="font-medium flex-1 truncate" title={e.outputName}>{e.outputName}</span>
                 <span className="text-ink-dim">{e.platforms.join(' · ')}</span>
                 <button
                   onClick={() => deleteEntry(e)}

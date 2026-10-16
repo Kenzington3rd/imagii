@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { isSafeAbsolutePath, assertSafeAbsolutePath, isSafeId, assertSafeId } from './pathSafety'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import path from 'node:path'
+import { isSafeAbsolutePath, assertSafeAbsolutePath, isSafeId, assertSafeId, SAFE_ID_RE } from './pathSafety'
 
 describe('isSafeAbsolutePath', () => {
   it('accepts well-formed Windows absolute paths', () => {
@@ -100,5 +102,61 @@ describe('assertSafeId', () => {
   it('throws with the named field and the alphabet on rejection', () => {
     expect(() => assertSafeId('../config', 'preset id')).toThrow(/preset id must match nanoid alphabet/)
     expect(() => assertSafeId(42, 'preset id')).toThrow(/preset id/)
+  })
+})
+
+// T-128 (6), T-110 (ad): the alphabet nanoid mints was spelled out in five more places beside the one T-117 made shared, and a sixth copy
+// would be the next place a fix (a wider id, a length cap) lands in five of six. ONE definition; the sites import it.
+const SRC_ROOT = path.resolve(__dirname, '..')
+
+/** Every non-test `.ts` / `.tsx` file under `dir`, as an absolute path. */
+function sourceFiles(dir: string, depth = 0): string[] {
+  if (depth > 8) return []
+  return readdirSync(dir).flatMap((name) => {
+    const full = path.join(dir, name)
+    if (statSync(full).isDirectory()) return sourceFiles(full, depth + 1)
+    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !/\.d\.ts$/.test(name) ? [full] : []
+  })
+}
+
+/** The code of a file, comments removed, so the sentence that NAMES the alphabet in a docstring is not a copy of it. */
+const withoutComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+/** How many times `text` spells the alphabet class out (`[A-Za-z0-9_-]`), comments aside. */
+const alphabetLiterals = (text: string): number => (withoutComments(text).match(/\[A-Za-z0-9_-\]/g) ?? []).length
+
+describe('one nanoid alphabet (T-128 (6), T-110 (ad))', () => {
+  it('the alphabet is written out once in src, in this module', () => {
+    const copies = sourceFiles(SRC_ROOT)
+      .map((f) => [path.relative(SRC_ROOT, f).split(path.sep).join('/'), alphabetLiterals(readFileSync(f, 'utf8'))] as const)
+      .filter(([, n]) => n > 0)
+    expect(copies, 'every other file imports SAFE_ID_RE from shared/pathSafety').toEqual([['shared/pathSafety.ts', 1]])
+  })
+
+  it.each([
+    'main/customPresets.ts',
+    'main/search/moodboard.ts',
+    'main/ipc/search.ts',
+    'main/ipc/recording.ts',
+    'main/ipc/video.ts'
+  ])('%s imports the shared gate and tests against it', (rel) => {
+    const code = withoutComments(readFileSync(path.join(SRC_ROOT, rel), 'utf8'))
+    expect(code).toMatch(/import\s*\{[^}]*\bSAFE_ID_RE\b[^}]*\}\s*from\s*'[^']*shared\/pathSafety'/)
+    expect(code).toMatch(/\bSAFE_ID_RE\.test\(/)
+  })
+
+  it('the scan sees a second copy, and not a docstring that names the alphabet', () => {
+    expect(alphabetLiterals('const A_RE = /^[A-Za-z0-9_-]+$/')).toBe(1)
+    expect(alphabetLiterals("const B = new RegExp('^[A-Za-z0-9_-]+$')")).toBe(1)
+    expect(alphabetLiterals('/** nanoid emits only [A-Za-z0-9_-] */\n// and [A-Za-z0-9_-] again\nconst x = 1')).toBe(0)
+    // Other classes that merely look alike are not this alphabet (base64 carries + and /; \w is wider than the alphabet's letters).
+    expect(alphabetLiterals('const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/')).toBe(0)
+  })
+
+  it('the shared pattern is the one isSafeId reads, and a test() on it keeps no state between calls', () => {
+    for (const id of ['abc', 'A_b-9', '../config', 'a/b', 'abc\n', '']) expect(SAFE_ID_RE.test(id), JSON.stringify(id)).toBe(isSafeId(id))
+    // A global or sticky regex remembers lastIndex: the second test() of the same id would answer differently.
+    expect(SAFE_ID_RE.global || SAFE_ID_RE.sticky).toBe(false)
+    expect([SAFE_ID_RE.test('abc'), SAFE_ID_RE.test('abc')]).toEqual([true, true])
   })
 })
