@@ -4330,6 +4330,152 @@ IMG-PREC.
 
 ---
 
+## T-128 — small-debt batch from the T-110 ledger (round 78)
+
+- **Spec:** the Tier-1 residue, owner-authorized 2026-10-16
+  ("proceed with the tech debt"). Six items.
+  1. **Titles on the remaining truncated names.** The
+     INTERACTION_COVERAGE round-77 found-not-fixed list names the
+     truncate spans still without a `title` (mood board, post
+     checklist, thumbnail variant labels, Record, layers,
+     highlights). Every one gets `title` = the full text, the
+     T-127 (15) pattern; one pin covering the set and one e2e
+     spot-check.
+  2. **Only woff2 ships.** The build emits the three .woff
+     fallbacks (93 KB) Chromium 126 never requests. Replace the
+     three @fontsource CSS imports with inline @font-face rules
+     (in index.css or a local fonts.css) whose `src` references
+     ONLY the woff2 files from the @fontsource package (vite
+     asset-imports the files); the built output then carries
+     woff2 alone. The smoke e2e's font-faces-loaded and
+     built-css url() scans keep passing; DESIGN_GUIDE's font note
+     updated.
+  3. **Letter (s): transcripts can be cleared.** A "Clear saved
+     transcripts" action in the Captions panel: confirm modal
+     (Modal component), an IPC that empties ONLY
+     `<userData>/captions` (path validated server-side), a toast
+     naming the count removed, disabled/empty state when there is
+     nothing to clear. IC row, e2e (seeded transcripts dir →
+     cleared, count in the toast), USER_GUIDE's transcripts note
+     updated.
+  4. **Letter (x): no bare awaited settings write outside a
+     try.** The ~47 awaited `window.api.*` setting-persist calls
+     sitting outside any try: route the fire-and-forget ones
+     through one tiny shared helper (void + reportFailure-style
+     catch — the write's failure must not break the interaction),
+     keep a real await only where the next line depends on it
+     (then inside the existing try). A unit scan pins the rule
+     (no bare awaited settings.set outside try/helper) with a
+     round-21 negative.
+  5. **Quit covers convert and extraction.** T-127 (3)'s named
+     not-covered list: make the recording-save/import convert and
+     `audio:extractFromVideo` latch runs (cancelLatch), so the
+     before-quit drain waits for their cleanup too; a quit
+     mid-convert leaves no partial at a final name and a quit
+     mid-extraction unlinks the scratch WAV. e2e per the T-127
+     (3) pattern (window-X mid-convert; mid-extraction), red
+     against pre-fix bytes; LESSONS/IC updated.
+  6. **Letter (ad): one nanoid alphabet.** Five older copies of
+     the alphabet remain; one shared constant in src/shared, all
+     five sites import it, unit pin that no second literal
+     exists.
+- **Acceptance criteria:** standard bars — red-first on every
+  behavior item with sha256 content-replace restores; IC rows and
+  LESSONS entries; `npm run verify`, `npm run test:media` (item 5
+  touches extraction lifecycle — its L5 block re-run on both
+  majors), build + FULL Playwright green before handback. Work in
+  the assigned WORKTREE (run `npm install` there first); no git
+  write operations; no docs/TICKETS.md, package.json or lockfile
+  edits.
+- **Status:** open (dispatched round 78, worktree)
+
+---
+
+## T-129 — the waveform stops decoding whole files in the renderer (T-110 (ao); round 78)
+
+- **Spec:** the biggest real debt in the ledger,
+  owner-authorized 2026-10-16. Audio Studio hands the WHOLE file
+  to WebAudio to draw the waveform: a 1 h WAV peaks ~3.25 GB
+  renderer RSS, 2 h ~6.5 GB (measured, sweep 12), so a 2-hour
+  ceiling refuses longer files — the stopgap T-123 shipped. The
+  ledgered fix: MAIN computes the peaks and hands wavesurfer
+  `peaks` + `duration`, while the media element keeps streaming
+  over the Range-capable imagii-file protocol; the renderer never
+  decodes, and the ceiling retires.
+  Mechanism:
+  1. A main-side peaks job: ffmpeg decodes the file as a stream
+     (s16le, mono downmix, reduced rate is fine) piped to node;
+     fold min/max pairs into a bounded bucket array (~4000
+     buckets) WITHOUT buffering the file; return
+     `{peaks: Float32Array-able array, duration}` over IPC
+     (size-bounded payload). Registered with cancelLatch (quit
+     drain) and the per-job cancel registry; progress events the
+     way extraction reports (a 3 h file takes real seconds).
+  2. The renderer passes `peaks` + `duration` + the imagii-file
+     url to wavesurfer and never calls its decode path. Playback,
+     regions, cuts, seek behavior unchanged.
+  3. The 2-hour ceiling retires: `waveformCeilingRefusal` and its
+     pre-check/backstop uses are removed with their pins flipped
+     (the refusal that remains is for a file whose PEAKS job
+     fails, with a finished sentence in the T-84 voice); the
+     panel/guide copy that mentions the 2-hour limit is updated.
+     The T-127 (10) hasVideo plumbing stays exactly as is.
+  4. IMG-PREC: Layer 5 case proving the peaks of a known fixture
+     (tone bursts at known times) land in the right buckets at
+     the right amplitudes, both majors; e2e: a LONG (>=2 h,
+     generated cheaply at low bitrate) file loads, the waveform
+     draws, and the renderer's process memory stays an order of
+     magnitude under the old path (assert a generous ceiling,
+     e.g. < 800 MB, red against pre-fix bytes where the old path
+     refuses/explodes); the cancel and quit paths covered.
+  5. LESSONS entry; IC rows (the import path's end state
+     changed); TESTING counts; the (ao) letter's resolution noted
+     in your handback for the expediter's ledger close.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  restores; both-majors L5; full gates (verify, test:media, build
+  + FULL Playwright) green in the WORKTREE (run `npm install`
+  first); no git writes; no docs/TICKETS.md, package.json or
+  lockfile edits. If wavesurfer's current major cannot take
+  external peaks + duration without decoding, STOP and hand back
+  with what you found rather than working around it with a
+  renderer decode.
+- **Status:** open (dispatched round 78, worktree)
+
+---
+
+## T-130 — platform-rate and kit-art debt: (q), (t), (an) (round 79)
+
+- **Spec:** owner-authorized 2026-10-16; the design calls fall
+  to the usability tiebreaker and are recorded here.
+  1. **Letter (q): the output follows the source's rate up to
+     60.** Compile derives its fps from the max source rate of
+     its clips, capped at 60 (COMPILE_FPS becomes a derivation;
+     the fps stage and `-r` take the derived value); a built-in
+     "YouTube 1080p60" preset joins both preset tables (8M→12M
+     bitrate per YouTube's guide for 1080p60). Layer 5: a 60 fps
+     source compiles at 60 with events on the ideal timeline;
+     the 1080p60 preset exports 60 fps with the fps stage; both
+     majors. Preset-table pins updated; USER_GUIDE's rate note
+     updated.
+  2. **Letter (t): Clip Kit thumbnails honor the crop.** Pass
+     the clip's cropRect into extractFrame (crop filter before
+     scale); a 9:16-cropped clip's three thumbnails are the
+     cropped picture. L5 pixel case (cropped region's content
+     present, outside content absent).
+  3. **Letter (an): the watermark clears platform UI on 9:16.**
+     Per-preset margins replace the flat 20 px: vertical presets
+     (TikTok/Reels/Shorts-shaped frames) take an inset that
+     clears the caption rail and top bar (define one constant
+     pair in the preset table, documented; landscape presets
+     keep 20 px). The T-51 win32 pixel pins and the Layer 5
+     pixel case land with the chosen margins.
+- **Acceptance criteria:** standard bars; red-first; both-majors
+  L5 for every ffmpeg change; full gates in the worktree; no git
+  writes; no TICKETS/package.json/lockfile edits.
+- **Status:** open (wave 2 — dispatch after T-128/T-129 land)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a

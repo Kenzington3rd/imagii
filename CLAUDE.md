@@ -197,7 +197,15 @@ Makenah's directive for how agent work on this repo is organized:
   ride with its Sonnet worker rather than paying a second dispatch.
   The nine review agents also run with an explicit `model: "sonnet"`
   on dispatch (their definitions pin no model, which otherwise
-  inherits the expediter's).** The expediter itself keeps only what
+  inherits the expediter's).** **Owner amendment (2026-10-16): the
+  implementation tier is Haiku, Sonnet, or Opus — matched to the
+  ticket, Opus only where a Sonnet worker would likely fail the
+  ticket (deep architecture, risky platform surgery such as the
+  Electron upgrade or the waveform peaks pipeline). Usage goes to
+  its most effective place, and independent work items are
+  dispatched to multiple workers in parallel (isolated worktrees
+  when they touch source), rather than serialized.** The expediter
+  itself keeps only what
   this workflow reserves to it: tickets and the ledger, adjudication,
   re-running the gates, the independent mutation, and the files
   workers are forbidden from touching (package.json, the lockfile).
