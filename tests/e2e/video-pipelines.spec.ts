@@ -7503,10 +7503,10 @@ test.describe('T-112: review-gate fixes', () => {
     }
   })
 
-  // T-124 (6): the length of the open video is already in hand, so Clean audio on one over two hours is refused in the studio:
-  // before the "Replace the audio you're editing?" question and before an "Extracting audio…" toast, with no sound extracted.
-  // (Main asks the same question for the importer's drop and a restored project; the audio spec drives that.)
-  test('Clean audio on a video longer than two hours is refused at the button: no question, no extraction (T-124 (6))', async () => {
+  // T-124 (6) refused Clean audio on a video over two hours at the button (the most Audio Studio's waveform could hold while the
+  // renderer decoded it). T-129 retired that ceiling with the decode: the sound is extracted (a ~1.4 GB scratch WAV, removed by this
+  // case) and Audio Studio opens on it, its waveform drawn from main's peaks. This is the round-74 pin, flipped.
+  test('Clean audio on a video longer than two hours extracts its sound and opens Audio Studio on it (T-129, flipping T-124 (6))', async () => {
     test.setTimeout(300_000)
     const longVideo = path.join(root, 'source', 'two-hours-and-a-second.mp4')
     await ffmpeg([
@@ -7515,32 +7515,30 @@ test.describe('T-112: review-gate fixes', () => {
     ])
     const scratch = path.join(os.tmpdir(), 'imagii-audio')
     const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
-    const { app, window } = await launchWithVideo('t124cleanlong', longVideo)
+    const before = new Set(wavs())
+    const { app, window } = await launchWithVideo('t129cleanlong', longVideo)
     try {
       const dialogs: string[] = []
       window.on('dialog', async (dialog) => {
         dialogs.push(dialog.message())
         await dialog.dismiss()
       })
-      const before = new Set(wavs())
-      await installSpawnStall(app, [])
-      await window.waitForTimeout(1500) // the hook badge's own first look at the clip, so it is not mistaken for the extraction
-      const spawnedBefore = (await readSpawnLog(app)).length
       await window.getByRole('button', { name: 'Clean audio' }).click()
-      const sentence =
-        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
-        'Export the part you want from Video Studio first, then open that shorter file.'
-      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [200] }).toContain(sentence)
-      await window.waitForTimeout(1500)
-      // Refused where the length is known: still in Video Studio, no dialog, no extraction toast, nothing spawned, no WAV.
-      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible()
-      await expect(window.getByRole('button', { name: 'Clean audio' })).toBeEnabled()
+      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [200] }).toContain('Extracting audio…')
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 240_000 })
+      await expect(
+        window.locator('[data-tutorial="audio-waveform"]').getByRole('button', { name: 'Play', exact: true }),
+        'the waveform is drawn'
+      ).toBeEnabled({ timeout: 120_000 })
+      await expect(window.locator('header').getByText('two-hours-and-a-second.mp4', { exact: true })).toBeVisible()
+      // Audio Studio held nothing, so there was nothing to ask about replacing.
       expect(dialogs).toEqual([])
-      expect(await readToastLog(window)).not.toContain('Extracting audio…')
-      expect((await readSpawnLog(app)).slice(spawnedBefore)).toEqual([])
-      expect(wavs().filter((f) => !before.has(f))).toEqual([])
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/longer than 2 hours/)
+      expect(wavs().filter((f) => !before.has(f)), 'the extracted WAV is what Audio Studio holds').toHaveLength(1)
     } finally {
       await app.close()
+      // This case's own scratch WAV only: every file in imagii-audio that was not there before it began.
+      for (const f of wavs().filter((name) => !before.has(name) && name.endsWith('.wav'))) rmSync(path.join(scratch, f), { force: true })
     }
   })
 

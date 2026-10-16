@@ -216,7 +216,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:47', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 47, 47, /<PositionBox value=\{layer\.x\}/],
     ['ImportPanel.tsx:71', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 71, 71, /const maxDim = 800/],
-    ['src/main/index.ts:122-123', 'src/main/index.ts', 122, 123, /minWidth: 1024[\s\S]*minHeight: 640/]
+    ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]
 
   const spec = read('tests/e2e/image.spec.ts')
@@ -233,10 +233,27 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
   })
 })
 
-describe('the waveform ceiling is a marked simplification (T-123 (14))', () => {
-  it('the constant carries a `// simplification:` line that names the ledgered upgrade, T-110(ao)', () => {
+// T-123 (14) pinned the 2-hour waveform ceiling as a marked simplification naming its upgrade, T-110 (ao). T-129 IS that upgrade:
+// the peaks are computed in main and the ceiling is gone, so the pin is flipped - the simplification, its constant and the sentence
+// that named the limit are nowhere in the source the app is built from.
+describe('the waveform ceiling\'s simplification is retired by its own upgrade (T-129, flipping T-123 (14))', () => {
+  it('shared/audio.ts carries no ceiling and no simplification naming T-110(ao)', () => {
     const audio = read('src/shared/audio.ts')
-    expect(audio).toMatch(/\/\/ simplification: [^\n]*T-110\(ao\)[^\n]*\nexport const WAVEFORM_MAX_SEC = /)
+    expect(audio).not.toMatch(/WAVEFORM_MAX_SEC|waveformCeilingRefusal/)
+    expect(audio).not.toMatch(/\/\/ simplification: [^\n]*T-110\(ao\)/)
+  })
+
+  it('no source file still refuses, or describes, a 2-hour limit on Audio Studio', () => {
+    for (const file of [
+      'src/shared/audio.ts',
+      'src/main/ipc/audio.ts',
+      'src/renderer/src/modules/audio-studio/state/audioStore.ts',
+      'src/renderer/src/modules/video-studio/VideoStudio.tsx',
+      'src/renderer/src/modules/audio-studio/WaveformView.tsx'
+    ]) {
+      const code = read(file)
+      expect(code, file).not.toMatch(/longer than 2 hours|WAVEFORM_MAX_SEC|waveformCeilingRefusal/)
+    }
   })
 })
 

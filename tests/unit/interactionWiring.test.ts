@@ -1479,7 +1479,9 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     expect(wait, 'the handler waits with drainRuns()').toBeGreaterThan(0)
     for (const cancel of [
       'cancelAllExportJobs', 'cancelAllAudioJobs', 'cancelAllExtractions', 'cancelAllConcatJobs', 'cancelAllReframeJobs', 'cancelAllGifJobs',
-      'cancelAllHighlightJobs', 'cancelAllFrameJobs', 'cancelWhisperModelInstall', 'cancelTranscribe', 'cancelBurnIn', 'cancelAllConverts'
+      'cancelAllHighlightJobs', 'cancelAllFrameJobs', 'cancelWhisperModelInstall', 'cancelTranscribe', 'cancelBurnIn', 'cancelAllConverts',
+      // T-129: the waveform's peaks job (also reached through cancelAllAudioJobs; named here as the inventory entry, like extractions).
+      'cancelAllPeaks'
     ]) {
       const at = handler.indexOf(`${cancel}()`)
       expect(at, `${cancel}() is called in the handler`).toBeGreaterThan(0)
@@ -1658,29 +1660,62 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(validation).toMatch(/if \(!hasStudioState\(project\)\) \{\s*return \{ ok: false, reason: 'no studio state to save' \}/)
   })
 
-  it('the 2-hour gate is asked where the length is known, before the work, with the sentence for what the file is (6, 7)', () => {
-    // Clean audio: before the replace question and before the extraction, on the probe the open video already carries.
+  // T-129 flips the round-71 pin "the 2-hour gate is asked where the length is known, before the work, with the sentence for what the
+  // file is (6, 7)": the ceiling is RETIRED with the renderer's decode (the waveform is main's streamed peaks now), so no route asks it.
+  it('no route asks a length ceiling any more: Clean audio, the extraction handler and the load go straight to the work (T-129, flipping 6, 7)', () => {
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
     const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full overflow-auto'))
-    const gate = flow.indexOf("waveformCeilingRefusal(source.probe.duration, 'video')")
-    expect(gate, 'the gate reads the open video\'s probe').toBeGreaterThan(0)
-    expect(flow).toMatch(/if \(tooLong\) \{\s*reportFailure\(new Error\(tooLong\), \{ failed: "Couldn't extract the audio\." \}\)\s*return\s*\}/)
-    expect(flow.indexOf('confirmAudioClose(')).toBeGreaterThan(gate)
-    expect(flow.indexOf('window.api.audio.extractFromVideo')).toBeGreaterThan(gate)
-    // main: the probe, the refusal, THEN the extraction - for a video, so the Video Studio remedy.
+    expect(flow, 'Clean audio: no gate on the open video\'s length').not.toMatch(/waveformCeilingRefusal|tooLong|probe\.duration/)
+    // The replace question is still asked first, then the extraction.
+    expect(flow.indexOf('confirmAudioClose(')).toBeGreaterThan(0)
+    expect(flow.indexOf('window.api.audio.extractFromVideo')).toBeGreaterThan(flow.indexOf('confirmAudioClose('))
+    // main: the probe (for "no sound" and for the picture question), THEN the extraction, and nothing asked of the scratch WAV.
     const audio = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/audio.ts'), 'utf8'))
-    const handler = audio.slice(audio.indexOf("ipcMain.handle('audio:extractFromVideo'"), audio.indexOf("ipcMain.handle('audio:export'"))
-    // T-125 (4, 7): only "no sound" is the probe's verdict (any other probe failure is an UNKNOWN length and the extraction goes ahead,
-    // the WAV's own gate in the store being the backstop), and the sentence is chosen by what the file IS (an AIFF is not a video).
-    // T-126 (7): and the file is a VIDEO because its streams carry a picture (the probe's `hasVideo`), the extension only when the probe could not say.
+    const handler = audio.slice(audio.indexOf("ipcMain.handle('audio:extractFromVideo'"), audio.indexOf("ipcMain.handle('audio:peaks'"))
+    // T-125 (4): only "no sound" is the probe's verdict. T-126 (7) / T-127 (10): the picture question is answered from the streams, the
+    // extension only when the probe could not say (the renderer's `isPicture`). That plumbing stays exactly as it was.
     expect(handler).toMatch(
-      /let hasVideo: boolean \| null = null\s*try \{\s*const probe = await probeAudio\(videoPath\)\s*duration = probe\.duration\s*hasVideo = probe\.hasVideo \?\? null\s*\} catch \(err\) \{\s*if \(isNoAudioStreamError\(err\)\) throw err\s*if \(err instanceof NoUsableDurationError\) hasVideo = err\.hasVideo\s*console\.warn\([^)]*\)\s*\}\s*const kind = \(hasVideo \?\? isVideoFilename\(videoPath\)\) \? 'video' : 'audio'\s*const tooLong = duration === null \? null : waveformCeilingRefusal\(duration, kind\)\s*if \(tooLong\) throw new Error\(tooLong\)\s*const result = await extractAudioFromVideo\(videoPath\)/
+      /let hasVideo: boolean \| null = null\s*try \{\s*const probe = await probeAudio\(videoPath\)\s*hasVideo = probe\.hasVideo \?\? null\s*\} catch \(err\) \{\s*if \(isNoAudioStreamError\(err\)\) throw err\s*if \(err instanceof NoUsableDurationError\) hasVideo = err\.hasVideo\s*console\.warn\([^)]*\)\s*\}\s*const result = await extractAudioFromVideo\(videoPath\)\s*return \{ wavPath: result\.wavPath, hasVideo \}/
     )
-    // T-126 (8): a length that was unknown is asked of the WAV in main, and a refused WAV is deleted with the refusal.
-    expect(handler).toMatch(/if \(duration === null\) \{[\s\S]*?probeAudio\(result\.wavPath\)[\s\S]*?if \(late\) \{\s*await result\.cleanup\(\)\s*throw new Error\(late\)\s*\}\s*\}\s*return \{ wavPath: result\.wavPath, hasVideo \}/)
-    // the load: a sound that came out of a video is a video's problem, a file that was only ever sound is not.
+    expect(handler, 'the T-126 (8) backstop went with the ceiling').not.toMatch(/probeAudio\(result\.wavPath\)|result\.cleanup\(\)/)
+    // the load: no gate, and nothing in the tree still speaks of one.
     const store = strip(read('modules/audio-studio/state/audioStore.ts'))
-    expect(store).toMatch(/waveformCeilingRefusal\(probe\.duration, fromVideoPath \? 'video' : 'audio'\)/)
+    expect(store).not.toMatch(/waveformCeilingRefusal|WAVEFORM_MAX_SEC/)
+    for (const [label, code] of [['VideoStudio.tsx', studio], ['ipc/audio.ts', audio], ['audioStore.ts', store]] as const) {
+      expect(code, label).not.toMatch(/longer than 2 hours/)
+    }
+  })
+
+  it('the waveform is drawn from main\'s peaks and never decoded here: the job, its progress line, its Cancel on Close, and the quit sweep (T-129)', () => {
+    // The store opens the file, THEN runs the peaks job for it; Close and a superseding open stop a job still drawing.
+    const store = strip(read('modules/audio-studio/state/audioStore.ts'))
+    const load = store.slice(store.indexOf('loadSource: async'), store.indexOf('clearSource: () => {'))
+    expect(load).toMatch(/stopDrawing\(get\(\)\.drawing\)\s*const jobId = nanoid\(10\)\s*set\(\{\s*source,\s*waveform: null,\s*drawing: \{ jobId, percent: 0 \},/)
+    expect(load).toMatch(/void drawWaveform\(source, jobId\)/)
+    const clear = store.slice(store.indexOf('clearSource: () => {'), store.indexOf('setCurrentTime: (t)'))
+    expect(clear).toMatch(/stopDrawing\(get\(\)\.drawing\)/)
+    expect(store).toMatch(/function stopDrawing\(drawing: WaveformDrawing \| null\): void \{\s*if \(drawing\) window\.api\.audio\.cancel\(drawing\.jobId\)/)
+    const draw = store.slice(store.indexOf('async function drawWaveform'), store.indexOf('export const useAudioStore'))
+    expect(draw).toMatch(/const answer = await window\.api\.audio\.peaks\(source\.filePath, jobId\)\s*if \(!isWaveformPeaks\(answer\)\) throw new Error\(WAVEFORM_READ_FAILED\)/)
+    // A job whose file was closed or replaced answers nobody, in either direction.
+    expect(draw.match(/if \(getState\(\)\.source !== source\) return/g) ?? []).toHaveLength(2)
+    expect(draw).toMatch(/reportFailure\(err, \{ failed: "Couldn't draw the waveform\." \}\)/)
+    // wavesurfer: created only once there are peaks, and handed them with the length; no `url`-only load anywhere.
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    expect(view).toMatch(/if \(!source \|\| !waveform \|\| !containerRef\.current\) return/)
+    expect(view).toMatch(/WaveSurfer\.create\(\{\s*container: containerRef\.current,\s*url: source\.url,\s*peaks: waveform\.peaks,\s*duration: waveform\.duration,/)
+    expect(view.match(/WaveSurfer\.create\(/g) ?? []).toHaveLength(1)
+    expect(view).not.toMatch(/\.load\(|\.loadBlob\(/)
+    // While it draws, the box the waveform will fill says how far it has read (the expediter's T-129 note: not an empty dark box).
+    expect(view).toMatch(/role="progressbar"\s*aria-label="Drawing the waveform"/)
+    expect(view).toMatch(/Drawing the waveform… \{percent\}%/)
+    // main: the per-job Cancel and the quit sweep reach the peaks registry through the audio cancels, and before-quit names it.
+    const proc = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/audio/process.ts'), 'utf8'))
+    expect(proc).toMatch(/export function cancelAudioJob\(jobId: string\): boolean \{\s*const peaks = cancelPeaksJob\(jobId\)/)
+    expect(proc).toMatch(/if \(!child\) return marked \|\| peaks/)
+    expect(proc).toMatch(/export function cancelAllAudioJobs\(\): void \{[\s\S]*?cancelAllPeaks\(\)\s*\}/)
+    const audio = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/audio.ts'), 'utf8'))
+    expect(audio).toMatch(/ipcMain\.handle\('audio:peaks', async \(e, filePath: string, jobId: string\) => \{\s*assertSafeAbsolutePath\(filePath, 'audio:peaks filePath'\)\s*assertNonEmptyString\(jobId, 'audio:peaks jobId'\)\s*return readPeaks\(filePath, jobId, \(p\) => sendIfAlive\(e\.sender, 'audio:peaksProgress', p\)\)/)
   })
 
   it('Reframe carries the clip\'s whole recipe (crop, speed, color, text, Auto Zoom, Hype Shake: the fields Compile sends), and Reframe and GIF are named for the video the person opened (16, 17; T-125 (9))', () => {

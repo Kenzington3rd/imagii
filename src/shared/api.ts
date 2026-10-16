@@ -6,7 +6,9 @@ import type {
   AudioJobResult,
   AudioMuxSpec,
   ChainSpec,
-  ExtractedSound
+  ExtractedSound,
+  WaveformPeaks,
+  WaveformPeaksProgress
 } from './audio'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 import type {
@@ -186,6 +188,12 @@ export interface ImagiiApi {
     pickFile(): Promise<string | null>
     pickOutputFile(options: { defaultName?: string; format: string }): Promise<string | null>
     extractFromVideo(videoPath: string): Promise<ExtractedSound>
+    /**
+     * T-129: `filePath`'s waveform, read by main from a stream of its sound - the renderer never decodes the file. `jobId` is the
+     * caller's own, for `cancel(jobId)`; `onPeaksProgress` reports how much of the sound has been read.
+     */
+    peaks(filePath: string, jobId: string): Promise<WaveformPeaks>
+    onPeaksProgress(handler: (p: WaveformPeaksProgress) => void): Unsubscribe
     export(spec: AudioExportSpec): Promise<AudioJobResult>
     mux(spec: AudioMuxSpec): Promise<AudioJobResult>
     cancel(jobId: string): Promise<boolean>

@@ -6,7 +6,7 @@ import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
 import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
-import { WAVEFORM_ERROR_MESSAGE } from '@shared/audio'
+import { PLAYBACK_ERROR_MESSAGE } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { formatClock } from '@shared/clockTime'
 
@@ -26,6 +26,8 @@ const CUT_FILL = withAlpha(ACCENT, 0.35)
 
 export function WaveformView(): JSX.Element | null {
   const source = useAudioStore((s) => s.source)
+  const waveform = useAudioStore((s) => s.waveform)
+  const drawing = useAudioStore((s) => s.drawing)
   const cutRegions = useAudioStore((s) => s.chain.cutRegions)
   const setCurrentTime = useAudioStore((s) => s.setCurrentTime)
   const addCutRegion = useAudioStore((s) => s.addCutRegion)
@@ -39,12 +41,21 @@ export function WaveformView(): JSX.Element | null {
   const [mediaEl, setMediaEl] = useState<HTMLMediaElement | null>(null)
 
   useEffect(() => {
-    if (!source || !containerRef.current) return
+    // A file whose waveform is still being read has no player yet: nothing from the last one may stay ready.
+    setReady(false)
+    setMediaEl(null)
+    if (!source || !waveform || !containerRef.current) return
     const regions = RegionsPlugin.create()
     regionsRef.current = regions
+    // T-129 (T-110 (ao)): wavesurfer draws the PEAKS main read from a stream of the sound (`audioStore.drawWaveform`) over the
+    // length it measured, and never decodes the file: given `peaks`, its `load()` skips both the fetch of the whole file and
+    // WebAudio's decode (wavesurfer 7.12.6, `loadAudio`), which took 3.25 GB of this process for a 1 h WAV. The `url` is only
+    // the media element's, which plays the file by streaming it over the Range-capable imagii-file protocol.
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url: source.url,
+      peaks: waveform.peaks,
+      duration: waveform.duration,
       waveColor: ACCENT_MUTED,
       progressColor: ACCENT,
       cursorColor: EMBER,
@@ -77,14 +88,16 @@ export function WaveformView(): JSX.Element | null {
       setTime(t)
       setCurrentTime(t)
     })
-    // T-123 (14): a file that cannot be drawn (an ADPCM WAV the media element refuses, one whose bytes cannot be read)
-    // left a panel with no waveform and not a word: `WaveSurfer.create({ url })` swallows the load's rejection and tells
-    // only the `error` event. A failed `load()` emits it and RETHROWS into the constructor's own catch, which emits it again
-    // (a media-element error is emitted once), so the toast has an id and the second one lands on the first. The raw
-    // error is the console's.
+    // T-123 (14): a file the player could not take (an ADPCM WAV the media element refuses) left a panel with no word:
+    // `WaveSurfer.create` swallows the load's rejection and tells only the `error` event. A failed `load()` emits it and
+    // RETHROWS into the constructor's own catch, which emits it again (a media-element error is emitted once), so the toast
+    // has an id and the second one lands on the first. The raw error is the console's.
+    // T-129: the waveform itself is drawn from main's peaks now (ffmpeg reads an ADPCM WAV), so what fails here is PLAYBACK:
+    // the sentence says so, and Play goes back off (with peaks, `ready` comes before the media element has said anything).
     const offError = ws.on('error', (err) => {
-      console.error('[audio-waveform] could not draw the waveform', err)
-      toast.error(WAVEFORM_ERROR_MESSAGE, { id: 'waveform-error', duration: ERROR_TOAST_MS })
+      console.error('[audio-waveform] the player could not play the file', err)
+      setReady(false)
+      toast.error(PLAYBACK_ERROR_MESSAGE, { id: 'waveform-error', duration: ERROR_TOAST_MS })
     })
     const offPlay = ws.on('play', () => setPlaying(true))
     const offPause = ws.on('pause', () => setPlaying(false))
@@ -119,8 +132,10 @@ export function WaveformView(): JSX.Element | null {
       wsRef.current = null
       regionsRef.current = null
     }
-  }, [source, setCurrentTime, addCutRegion])
+  }, [source, waveform, setCurrentTime, addCutRegion])
 
+  // `waveform` is a dependency (T-129): the waveform arrives AFTER the file opened, and a restored project's cuts were set before
+  // there were regions to draw them on.
   useEffect(() => {
     const regions = regionsRef.current
     if (!regions) return
@@ -149,7 +164,7 @@ export function WaveformView(): JSX.Element | null {
       // for this; `drag:false` only makes its `onMove` a no-op.)
       if (region.element) region.element.style.pointerEvents = 'none'
     })
-  }, [cutRegions])
+  }, [cutRegions, waveform])
 
   if (!source) return null
 
@@ -157,9 +172,24 @@ export function WaveformView(): JSX.Element | null {
     wsRef.current?.playPause()
   }
 
+  const percent = drawing?.percent ?? 0
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <div ref={containerRef} className="bg-bg-base rounded-md overflow-hidden" />
+      <div ref={containerRef} className={waveform ? 'bg-bg-base rounded-md overflow-hidden' : 'hidden'} />
+      {/* T-129: main reads the sound for the waveform while the studio is open (a 3 h file takes real seconds); the box the
+          waveform will fill says how far it has read, where the old decode showed an empty dark box and a Play that stayed off. */}
+      {waveform ? null : (
+        <div
+          role="progressbar"
+          aria-label="Drawing the waveform"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          className="h-24 bg-bg-base rounded-md flex items-center justify-center text-sm text-ink-muted"
+        >
+          Drawing the waveform… {percent}%
+        </div>
+      )}
       <div className="flex items-center gap-3 text-sm">
         <button
           className="btn-ghost px-3 py-2"

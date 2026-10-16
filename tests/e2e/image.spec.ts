@@ -2281,7 +2281,7 @@ test.describe('Image Studio — export', () => {
         return { bytes: bytes as Buffer, stageW: (await stageGeom(window)).stageW }
       }
 
-      // Both sizes clear the 1024x640 window minimum (src/main/index.ts:122-123).
+      // Both sizes clear the 1024x640 window minimum (src/main/index.ts:123-124).
       const narrow = await exportAtWindowSize(1100, 700)
       const wide = await exportAtWindowSize(1560, 980)
 

@@ -120,7 +120,7 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 **Player hotkeys:** `Space` play/pause · `← →` nudge 0.1 s · `, .` frame step · `I O` set in/out · `?` show all shortcuts
 
 ### 🎚 Audio Studio
-1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown. Sound up to 2 hours long opens; a longer file is refused with a note, because the waveform is drawn from the whole file in memory.
+1. **Import.** Drop an audio file (MP3, WAV, FLAC, AAC, M4A, OGG, OPUS) or any video file (audio is extracted automatically). Recent files dropdown. Sound of any length opens: the waveform is read from the file as a stream, and the box it will fill shows how far the reading has got.
 2. **Cut regions (optional).** Drag on the waveform.
 3. **Volume meter** sits below the waveform — turns red on clipping.
 4. **Cleanup panel:** quieter background (light/medium/aggressive), low-rumble removal, hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds.

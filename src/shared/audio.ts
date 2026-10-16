@@ -346,44 +346,62 @@ export interface AudioJobResult {
 }
 
 /**
- * How long a file Audio Studio will open (T-123 (14)).
+ * T-129: how many points the waveform is drawn from, and so the most a peaks answer carries over IPC.
  *
- * The waveform is drawn from the WHOLE file, decoded in the renderer: measured in the built app, a 1 h WAV
- * took 3.25 GB of the renderer's memory and a 2 h one 6.5 GB, growing in step with the decoded sound. A 3 to 6 h
- * stream recording is 10 to 20 GB, which is a renderer that dies with its window looking alive and nothing said.
- * Two hours (about 6.5 GB at the limit) is the ceiling T-123 chose; past it the file is refused at load, with the reason.
- *
- * simplification: a flat ceiling on the length, not a computation of the memory. The upgrade is T-110(ao): peaks
- * computed in main and handed to wavesurfer as `peaks` + `duration` (the media element already streams the file
- * over the Range-capable imagii-file protocol), which needs no decode in the renderer and retires this ceiling.
+ * The waveform used to be drawn from the WHOLE file, decoded in the renderer (wavesurfer's `url` alone): a 1 h WAV took
+ * 3.25 GB of the renderer's memory and a 2 h one 6.5 GB (measured, sweep 12), so T-123 refused anything over two hours.
+ * Main now reads the sound as a stream (`main/audio/peaks.ts`) and folds it into this many highest/lowest pairs, whatever
+ * the length: 4000 is more bars than the panel has pixels at any window size (wavesurfer's own `exportPeaks` default is
+ * 8000 for its line mode), and two arrays of it are about 64 KB however long the recording is.
  */
-// simplification: a flat 2 h ceiling on the length, not a computation of the memory it needs; the upgrade is main-side peaks (T-110(ao)).
-export const WAVEFORM_MAX_SEC = 2 * 60 * 60
+export const PEAK_BUCKETS = 4000
 
 /**
- * The sentence shown when `durationSec` is over the ceiling, or null when the file is short enough (or the
- * probe has no usable length, which the load's other checks answer for). A finished sentence: `userFacingError`
- * lets it stand alone, so every route to `loadSource` (the importer, Clean audio, a restored project) says it.
- *
- * T-124 (7): the way out depends on what the file is. A VIDEO can be cut down in Video Studio and the shorter file
- * opened; an audio-only file cannot, because Video Studio refuses a file with no picture and sends the person back to
- * Audio Studio, so the old single sentence led a sound-only file in a circle. An audio-only file is split in another app.
- * `source` is required so that a caller has to decide.
+ * What `audio:peaks` answers (T-129): the waveform of a file, drawn by wavesurfer from these numbers and never from the
+ * file. `peaks[0]` is each bucket's highest sample and `peaks[1]` its lowest (-1..1), which is how wavesurfer's bars read
+ * two channels (the first is the top half, the second the bottom). `duration` is the length the buckets span, in seconds:
+ * the file's probed length, which is what the media element plays.
  */
-export function waveformCeilingRefusal(durationSec: number, source: 'video' | 'audio'): string | null {
-  if (!Number.isFinite(durationSec) || durationSec <= WAVEFORM_MAX_SEC) return null
-  return (
-    'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
-    (source === 'video'
-      ? 'Export the part you want from Video Studio first, then open that shorter file.'
-      : 'Split it into shorter files in another app first, then open one of them.')
-  )
+export interface WaveformPeaks {
+  peaks: [number[], number[]]
+  duration: number
+}
+
+/** The peaks job's progress (T-129): how much of the sound it has read, 0-100. */
+export interface WaveformPeaksProgress {
+  jobId: string
+  percent: number
 }
 
 /**
- * What the person reads when the waveform cannot be drawn for a file that did open (T-123 (14)): wavesurfer
- * could not decode it (an ADPCM WAV, a damaged file) and the panel would otherwise sit there with no waveform and
- * no word. The advice is the importer's own for a format imagii cannot read.
+ * True for a peaks answer the waveform can be drawn from: two equally long arrays of 1 to `PEAK_BUCKETS` numbers in -1..1
+ * and a positive length. What crosses IPC is checked where it lands (the renderer is not the only thing that could answer),
+ * and wavesurfer throws on an empty array or a zero duration.
  */
-export const WAVEFORM_ERROR_MESSAGE =
-  "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+export function isWaveformPeaks(value: unknown): value is WaveformPeaks {
+  if (typeof value !== 'object' || value === null) return false
+  const { peaks, duration } = value as Record<string, unknown>
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return false
+  if (!Array.isArray(peaks) || peaks.length !== 2) return false
+  const [high, low] = peaks as unknown[]
+  if (!Array.isArray(high) || !Array.isArray(low)) return false
+  if (high.length === 0 || high.length > PEAK_BUCKETS || low.length !== high.length) return false
+  const inRange = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v) && v >= -1 && v <= 1
+  return high.every(inRange) && low.every(inRange)
+}
+
+/**
+ * The refusal at load when main cannot read a file's sound to draw its waveform (T-129, T-84 voice): ffmpeg could not decode
+ * it. The export reads the sound the same way, so a file this refuses could not be cleaned either; the studio never holds it.
+ * Every route to `loadSource` (the importer, Clean audio, a restored project) shows it as written (`userFacingError`).
+ */
+export const WAVEFORM_READ_FAILED =
+  "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+
+/**
+ * What the person reads when the PLAYER cannot play a file that opened (T-123 (14), reworded by T-129): the waveform is drawn
+ * from main's peaks now, so an ADPCM WAV (ffmpeg reads it, Chromium's media element does not) shows its waveform, and what
+ * fails is playback. The advice is the importer's own for a format imagii cannot read.
+ */
+export const PLAYBACK_ERROR_MESSAGE =
+  "imagii can't play this file here. It may be damaged or in a format the player can't read. Re-export it as WAV or MP3 and try again."

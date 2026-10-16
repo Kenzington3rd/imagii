@@ -1,8 +1,9 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
 import { probeAudio } from '../audio/probe'
-import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, isVideoFilename } from '../../shared/mediaFormats'
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../shared/mediaFormats'
 import { extractAudioFromVideo } from '../audio/extract'
+import { readPeaks } from '../audio/peaks'
 import { runAudioExport, runAudioReattach, cancelAudioJob } from '../audio/process'
 import {
   listPresets as listChainPresets,
@@ -17,8 +18,7 @@ import {
   audioFileExtension,
   isLoudnessTarget,
   isNoAudioStreamError,
-  secondaryTrackProblem,
-  waveformCeilingRefusal
+  secondaryTrackProblem
 } from '../../shared/audio'
 import {
   assertNonEmptyString,
@@ -154,56 +154,37 @@ export function registerAudioIpc(): void {
 
   ipcMain.handle('audio:extractFromVideo', async (_e, videoPath: string) => {
     assertSafeAbsolutePath(videoPath, 'audio:extractFromVideo videoPath')
-    // T-124 (6): the length first. The 2-hour waveform ceiling used to be asked of the WAV AFTER it was written, so a 4 h
-    // VOD cost minutes of ffmpeg and a ~2.8 GB WAV in %TEMP%\imagii-audio that nothing deleted (this handler drops
-    // `cleanup`) before the gate refused it. A video with no sound fails at the probe too, before anything is spawned.
+    // T-129: no length gate. T-123's 2-hour waveform ceiling (asked here BEFORE the work since T-124 (6), and of the scratch WAV
+    // after it since T-126 (8)) is retired: the waveform is drawn from main's streamed peaks (`audio:peaks`), not decoded in the
+    // renderer, so a 4 h VOD is extracted and opened like any other recording. The probe stays for what it still answers before
+    // anything is spawned: a video with no sound fails here (the importer words it), and whether the file has a picture.
     //
-    // T-125 (4): ONLY that. A probe that fails any other way could not READ a length (a MediaRecorder WebM and a crashed MKV carry
-    // no duration in their header, so `probeAudio` refuses them), and the extraction handled those end to end: the person read
-    // "can't read this audio format" for a file that worked. An unknown length falls through to the extraction, whose WAV has a real
-    // one, and `audioStore.loadSource`'s gate (the same ceiling, on the WAV) is the backstop.
-    let duration: number | null = null
-    // T-126 (7): and whether the file has a PICTURE, read from its streams. null = the probe could not read the file.
+    // T-125 (4): ONLY "no sound" is the probe's verdict. A probe that fails any other way could not READ the file's length (a
+    // MediaRecorder WebM and a crashed MKV carry no duration in their header, so `probeAudio` refuses them), and the extraction
+    // handles those end to end: the person read "can't read this audio format" for a file that worked.
+    // T-126 (7): whether the file has a PICTURE, read from its streams. null = the probe could not read the file.
     let hasVideo: boolean | null = null
     try {
       const probe = await probeAudio(videoPath)
-      duration = probe.duration
       hasVideo = probe.hasVideo ?? null
     } catch (err) {
       if (isNoAudioStreamError(err)) throw err
       // T-127 (10): a probe that read the streams and found no LENGTH still knows whether there is a picture (a durationless WebM or
       // MKV is exactly what MediaRecorder writes), so the extension decides only when the streams were not read at all.
       if (err instanceof NoUsableDurationError) hasVideo = err.hasVideo
-      console.warn('[imagii] audio:extractFromVideo could not read a length; extracting without the pre-check:', err)
+      console.warn('[imagii] audio:extractFromVideo could not read the file\'s length; extracting anyway:', err)
     }
-    // T-125 (7): the sentence is for what the file IS. This handler also extracts an AIFF or a WMA (audio WebAudio cannot decode),
-    // and Video Studio refuses a file with no picture, so telling those to "export the part you want from Video Studio" led a
-    // sound-only file in a circle. T-126 (7): "what the file is" is its STREAMS, not its extension - an `.mkv` or `.mp4` holding sound
-    // alone is in the same circle - so the extension decides only when the probe could not read the file (T-127 (10): a file it read
-    // but could not measure is read; see above).
-    const kind = (hasVideo ?? isVideoFilename(videoPath)) ? 'video' : 'audio'
-    const tooLong = duration === null ? null : waveformCeilingRefusal(duration, kind)
-    if (tooLong) throw new Error(tooLong)
     const result = await extractAudioFromVideo(videoPath)
-    if (duration === null) {
-      // T-126 (8): the length was unknown, so the ceiling could not be asked before the work. It is asked of the WAV NOW, here, and
-      // a refused one is deleted with the refusal: the renderer's gate (`audioStore.loadSource`) refuses the same file too, but it
-      // never saw the scratch's path, and a multi-GB WAV stayed in %TEMP%\imagii-audio until the 6-hour reaper. That gate stays, as
-      // the last resort for a WAV whose length this cannot read.
-      const real = await probeAudio(result.wavPath).then(
-        (p) => p.duration,
-        (err: unknown) => {
-          console.warn('[imagii] audio:extractFromVideo could not read the extracted WAV\'s length; the importer will check it:', err)
-          return null
-        }
-      )
-      const late = real === null ? null : waveformCeilingRefusal(real, kind)
-      if (late) {
-        await result.cleanup()
-        throw new Error(late)
-      }
-    }
     return { wavPath: result.wavPath, hasVideo }
+  })
+
+  // T-129 (T-110 (ao)): the waveform's peaks, read here from a stream of the file's sound (`main/audio/peaks.ts`) and handed to the
+  // renderer as `PEAK_BUCKETS` highest/lowest pairs, never the file. The job id is the renderer's: its Close (or a second file
+  // opened while this one is drawing) cancels the job through `audio:cancel`, and the quit sweep stops it with the other audio jobs.
+  ipcMain.handle('audio:peaks', async (e, filePath: string, jobId: string) => {
+    assertSafeAbsolutePath(filePath, 'audio:peaks filePath')
+    assertNonEmptyString(jobId, 'audio:peaks jobId')
+    return readPeaks(filePath, jobId, (p) => sendIfAlive(e.sender, 'audio:peaksProgress', p))
   })
 
   ipcMain.handle('audio:export', async (e, spec: AudioExportSpec) => {

@@ -19,6 +19,7 @@ import { probeVideo } from '../ffmpeg/probe'
 import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { canStreamCopyIntoMp4 } from '../../shared/mediaFormats'
 import { cancelAllExtractions } from './extract'
+import { cancelAllPeaks, cancelPeaksJob } from './peaks'
 import type {
   AudioExportSpec,
   AudioJobProgress,
@@ -560,9 +561,11 @@ export async function runAudioReattach(
 }
 
 export function cancelAudioJob(jobId: string): boolean {
+  // T-129: the waveform's peaks job is an audio job too, named by the same kind of id, so the one Cancel reaches it.
+  const peaks = cancelPeaksJob(jobId)
   const marked = latch.cancel(jobId)
   const child = activeJobs.get(jobId)
-  if (!child) return marked
+  if (!child) return marked || peaks
   killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
@@ -579,4 +582,6 @@ export function cancelAllAudioJobs(): void {
   activeJobs.clear()
   // T-111: the ffmpeg that pulls a recording's sound out is an audio job too.
   cancelAllExtractions()
+  // T-129: and so is the one that reads a file's sound for its waveform.
+  cancelAllPeaks()
 }

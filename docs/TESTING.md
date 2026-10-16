@@ -286,6 +286,12 @@ covered at the deepest reachable layer instead and the ledger says so.
   that sees what the PLATFORM does (Electron's spellcheck dictionary and Chromium's DoH probes were the first finds); the source scan
   (`networkAllowlist.test.ts`) cannot. The DoH leg shows only where the machine's resolver is a DoH-capable provider, so the wiring pin in
   `interactionWiring.test.ts` holds the calls everywhere.
+- **The renderer's memory with a long file open (T-129, audio.spec.ts).** The long-file case reads the renderer process's high-water mark
+  (`VmHWM` in `/proc/<pid>/status` for `webContents.getOSProcessId()`; elsewhere Electron's `getAppMetrics()` sampled every 100 ms) after a
+  2 h 5 min file has opened and drawn, and asserts it under 800 MB (measured 182-184 MB; the round-77 renderer decode with its ceiling
+  lifted went 170 -> 1428 MB in six seconds and crashed). It also counts the page's own `fetch` / XHR requests for the file (0: wavesurfer
+  is given the peaks). Main's spawn is wrapped from the test (`recordPeaksChildren`) to see how the peaks ffmpeg ended - `SIGKILL` after a
+  Close, and already `SIGKILL` at `will-quit` after a quit.
 
 **What it deliberately doesn't cover.** Media processing flows. Spawning
 ffmpeg on a CI runner is slow and flaky; the unit layer covers the
@@ -668,6 +674,21 @@ with identical numbers.
   the header: what MediaRecorder writes), sound alone and a picture with sound, through the probe and the real handler: `false` and `true`;
   and the existing 2 h durationless audio-only case now expects the audio remedy. Red with the extension deciding:
   `expected 'That file is longer than 2 hours...' to match /Split it into shorter files in another app/`, `expected null to be false`.
+
+**Round 78 (T-129): the waveform's peaks, read in main, and the ceiling's two cases flipped.** All on the bundled 7.0.2 and on 6.1.1
+through the alias recipe.
+- *The peaks* (`the waveform is read from a stream of the sound in main, into the right buckets at the right heights`, 4 cases). A 20 s,
+  48 kHz STEREO file (the shape extraction writes) with 250 Hz bursts of 0.5 at 5.0-6.0 s and 0.25 at 12.0-12.5 s through the real
+  `readPeaks`: inside each burst every bucket's top and bottom are the burst's height (within -6 / +4 %, so neither halved nor doubled by the
+  downmix), its first and last bucket over half height are its start and end to one 5 ms bucket, the silence 30 ms clear of it is flat, and
+  progress rises to 100. A 2 h 5 min file (8 kHz u8, 60 MB, two seconds to write; 120 MB of PCM through the job) is 4000 pairs drawn the
+  whole length, and this process grows under 60 MB while it runs (measured +13 to +27 MB; a job that keeps the chunks grows +116 MB, both
+  majors). A WAV with an unknown format tag (ffprobe reads it, no decoder does: exit 234) is `WAVEFORM_READ_FAILED`. Cancel kills the real
+  ffmpeg mid-read: the job answers at once and no decoder is left (`pgrep`). Reds, each on both majors: the bucket time x1.05, `-ac 2`, an
+  unsigned read, ffmpeg's stderr as the message, Cancel without the kill, no final 100 (7.0.2), the chunks kept.
+- *The ceiling's cases, flipped* (the T-126 (7), (8) block). `an audio-only mkv over two hours is extracted` (a full-length 2 h 1 s WAV,
+  no picture) and `a durationless file longer than two hours is extracted too` (kept for the studio); each removes its own ~1.4 GB WAV.
+  Red on the round-77 handler, both majors: `That file is longer than 2 hours, ... Split it into shorter files in another app`.
 
 **Per-platform cases.** ffmpeg-static ships binaries from different
 upstream builders per platform, so some evidence is only obtainable
