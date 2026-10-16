@@ -4476,6 +4476,199 @@ IMG-PREC.
 
 ---
 
+## T-131 — review-gate fixes, sweep-17 findings (round 79)
+
+- **Spec:** the seventeenth sweep's verified findings. Expediter
+  verification behind the lead items: the Compile truncation
+  replicated personally through production runConcat (10 s
+  video / 6 s audio: segments [1,3],[7,9],[2,4] → 2.0 s instead
+  of 6.0 s; straddle → 5.014 s of 7); the guard probes executed
+  (eight spellings → eight []). Adjudication with mechanisms:
+  scratchpad/s17/adjudication.md. Two sweep findings were folded
+  into the in-flight T-128/T-129 workers by scope notes and are
+  NOT here.
+  1. **[MED, LEAD — a T-127 (4) regression] Compile survives
+     audio that does not cover a segment.** `-shortest` makes a
+     segment whose range sits past (or straddles) the source
+     audio's end collapse to an unreadable ~977-byte stub
+     (ffmpeg exits 0, "Output file is empty"); the join then
+     silently drops every segment from the stub on and the
+     panel toasts "Saved". Record's own mic-drop takes (T-125
+     (25)) are exactly such sources. MECHANISM (verified by the
+     sweep reviewer through a patched copy of the real runner,
+     BOTH majors): keep `-shortest` and append
+     `apad=whole_dur=<outSec>` as the LAST `-af` stage, always
+     emitted, where outSec is the value buildSegmentFilters
+     already computes ((end-start)/speed, toFixed(3)). WARNINGS
+     (banked measurements, do not deviate): bare `apad` without
+     whole_dur brings the 3/57/…/194 ms join drift back on
+     6.1.1 and hangs with `-c:v copy` on 7.0.2. ALSO: the join
+     must FAIL LOUDLY — a missing/unreadable segment is a hard
+     error surfaced as the job's failure, never an exit-0
+     partial with a success toast. Layer 5 (both majors):
+     audio-ends-mid-segment, clip entirely past the audio end,
+     audio-starts-late, the straddle; the T-127 (4) fractional
+     drift series re-run flat; the join hard-error case. The
+     Done entry corrects the T-127 (4) record.
+  2. **[LOW] Re-attach and PiP survive short audio.** The same
+     hazard, pre-existing: `-shortest` at process.ts:480
+     (attachAudio) and concat.ts:430 (compositePip) ends the
+     output where the audio ends (a mic-drop WebM: 12 s picture
+     re-attaches to 5.0 s; PiP base the same; the stream-copy
+     branch to 6.0 s). MECHANISM (reviewer-verified, both
+     majors, works with -c:v copy): finite
+     `apad=whole_dur=<picture length>` + keep `-shortest`
+     (12.000 s out). The :346-368 comment updated (it documents
+     -shortest only as the music-bed bound). Layer 5 per
+     surface, both majors.
+  3. **[LOW] Scan results die with their video.** HighlightPanel
+     and ChatHighlightPanel keep the previous video's
+     candidates/peaks/log when the source is replaced in place
+     (the Edit-in-Video-Studio route; CaptionsPanel:67-70 is
+     the guard that exists once), and a stale "+ Clip" row
+     makes a PAST-THE-END clip (appendRange: safeStart clamps
+     to duration, safeEnd becomes duration+0.1) with a "Clip
+     added" toast. MECHANISM: reset both panels' state keyed on
+     source.filePath (the CaptionsPanel pattern), AND
+     appendRange refuses startSec >= duration with a finished
+     sentence (T-84 voice). Unit + e2e through the
+     Edit-in-Video-Studio route; red-first.
+  4. **[LOW] The Fix wizard ignores a repeat press.** A
+     double-click on an answer answers the next question too
+     (executed: "Quick fix 3 of 3" from one dblclick; the
+     next step's full-width buttons render at the same spot).
+     T-120's held-Enter rule, now for clicks: answer buttons
+     ignore `e.detail > 1`. Unit pin + e2e; red-first.
+  5. **[LOW] Every remaining first-await-is-a-dialog picker is
+     claim-first.** Importer "Choose file…", AudioImporter,
+     SecondaryTrackPanel's role buttons (a second answer
+     silently replaces the track), PipPanel's two pickers, Home
+     "Open project"/"Save project" (executed: two choosers),
+     ExportPanel.pickOutDir, useVideoOutputDir's chip handler.
+     MECHANISM: ONE shared claim-first helper (the
+     ExportPanel.startingRef shape) applied to all; the
+     singleFlight pin list extended to cover them; one
+     delayed-chooser (300 ms stub) dblclick e2e per studio
+     entry point. The T-126/127 IC "pin-only, first await is a
+     native dialog" dispositions are REWRITTEN — that rationale
+     was disproven by execution. Red-first per pin.
+  6. **[LOW] The tour ignores a repeat press.** next()
+     advances once per discrete click, so a double-click skips
+     a step and can close the tour from the penultimate step
+     (steps sharing target+placement keep Next in place).
+     MECHANISM: ignore `e.detail > 1` on Next/Back/Done and the
+     coachmark scrim. e2e; red-first.
+  7. **[LOW] The `?` overlay is discoverable again.** Nothing
+     in the app names the `?` key (T-13's promise regressed;
+     README/FOR_MIKE still claim it). MECHANISM: append "? all
+     shortcuts" to the Player and Timeline hint lines and name
+     the key in the tour's final step; copy pins updated.
+  8. **[LOW] A closing dialog swallows the double-click's
+     second press.** The second press of a dblclick on a
+     closing dialog's button passes through to the page
+     (executed: "Keep running" dblclick flipped the Facebook
+     checkbox beneath, mid-batch). MECHANISM: when a Modal
+     unmounts, a capture-phase window listener swallows clicks
+     with `detail > 1` for ~500 ms (one shared change; the
+     T-123 (7) drag logic and the scrim's own guard stay).
+     e2e; red-first.
+  9. **[LOW] The cancel confirm dies with its batch.** The
+     >=2-jobs "Cancel running jobs?" modal outlives the batch
+     and reads "Cancel 0 running jobs?" (executed; same shape
+     in ClipKitButton). MECHANISM: close the confirm when
+     running flips false, both sites. e2e; red-first.
+  10. **[LOW] Guard: qualifier/value spellings.** `open(u)` and
+     window/globalThis/self/top-qualified open; indirect
+     eval/Function shapes; element access (navigator
+     ['sendBeacon'], net['request'], window['open']); a value
+     reference to a named network constructor (const WS =
+     WebSocket; subclass; `as any` cast). MECHANISM: judge
+     open/eval/Function by last segment, bare or parenthesized,
+     UNLESS the file binds the head locally (autosave.ts's fs
+     `open` is the mandatory negative); resolve x['name'] as
+     x.name; value references to the constructor set are sites;
+     reword the "last gaps" claims (header + IC:3325 +
+     LESSONS:53) to the declared residue. Round-21 proof per
+     branch.
+  11. **[LOW] Guard: dynamic element vocabulary.** A non-literal
+     first argument to createElement/setAttribute becomes a
+     `(dynamic)` site — the rule import()/require()/spawn()
+     already have. Cases + proof.
+  12. **[LOW] Guard: the three inversions (class-closers).**
+     (i) under src/ only .ts/.tsx/.d.ts/.css/index.html are
+     allowed (closes .mts/.cts unread+unflagged); (ii) any
+     `scheme://` literal whose scheme is not local
+     (imagii-file, file, data, blob) is a site (closes
+     rtmp/rtsp/srt/udp/tcp/sftp/smb); (iii) package.json
+     dependency AND devDependency names pinned to an in-test
+     allowlist (closes the HTTP-client name race). Riders: the
+     TESTING win32 hand-check gains the wpad/OS-proxy allowance
+     sentence; at expedite, probe whether CSP `connect-src ws:`
+     lets the built renderer fetch https (a non-routable https
+     URL; the CSP decision precedes routing) and record the
+     answer against ledger (m). Round-21 proof per inversion.
+  13. **[LOW] The folder chip sleeps while a job runs.** The
+     busy Reframe/Compile primaries shrink 23-26 px and the
+     LIVE folder chip sits under the double-click strip
+     (executed: a chooser opened mid-job on a 120 ms second
+     press). MECHANISM: disable the OutputDirLabel chip button
+     while running on the four chip panels (changing the folder
+     mid-job does nothing for the running job), plus min-width
+     on the Reframe/Compile primaries so no sibling inherits
+     the strip. e2e: second press at primary.x+4 while busy →
+     no chooser; red-first.
+  14. **[LOW] The filename template fits at 1024.** The inline
+     "Tokens:" hint takes the row and the input clips its own
+     default value (168 px box, 189 px value — the only cut
+     input app-wide). MECHANISM: the hint moves to its own line
+     under the box. e2e at 1024: input scrollWidth <=
+     clientWidth with the default template.
+  15. **[LOW] One multiplication glyph.** image-studio
+     ExportDialog is the one file spelling dimensions with the
+     letter x ("Output: 1280x720"; "28x28, …") against × on the
+     same screen. Swap to ×, keep each line's existing spacing;
+     update the five image.spec pins. (Spacing variance
+     elsewhere is out of scope.)
+  16. **[LOW, docs] STYLE_GUIDE speaks the pair rule.**
+     :604-606 still describes the per-box form rule; rewrite
+     for overlayTimePair (either value >= 1 h puts BOTH boxes
+     in clock form) + the unit rule; soften the textOverlay.ts
+     "never speaks two forms" comment (an overlay pair inside a
+     clip pair is two coherent pairs).
+  17. **[LOW, docs+comment] The quit story tells the Windows
+     truth.** Electron emits no before-quit on a Windows
+     shutdown/logoff (typings :172), so the index.ts comment
+     ("an OS session end") is corrected and the not-covered
+     lists (IC, LESSONS) gain the line; the optional
+     session-end handler is ledgered as (az), not built here.
+  18. **[LOW, compliance] Inter's license ships again.** The
+     devDependencies move stripped the asar's only copy of
+     Inter's OFL text while the woff2 still ship. MECHANISM:
+     electron-builder `extraResources` copies
+     node_modules/@fontsource/inter/LICENSE to
+     resources/licenses/Inter-OFL.txt at package time
+     (devDependencies are installed at build; the lockfile pins
+     it); a release-run hand-check line confirms the file in
+     the packaged tree. The guard's no-publish pin and the
+     packaging tests stay green.
+- **Acceptance criteria:** standard bars — red-first on every
+  behavior item with sha256 content-replace restores (`git
+  checkout --` forbidden); IMG-PREC: items 1 and 2 are ffmpeg
+  changes — real Layer 5 cases red-first on BOTH majors via the
+  alias pattern with transcripts, and item 1 re-runs the T-127
+  (4) drift series; items 3-9, 13-14 extend the e2e suites with
+  executed end states. LESSONS entries per fixed behavior bug
+  (item 1's entry corrects the T-127 (4) record); IC rows
+  updated (and item 5 REWRITES the disproven pin-only
+  dispositions); TESTING counts/timing refreshed; guides only
+  where an item says so (7, 12, 16, 17). `npm run verify`,
+  `npm run test:media` and the FULL Playwright suite green
+  before handback; no docs/TICKETS.md, package.json or lockfile
+  edits (electron-builder.yml IS yours for item 18).
+- **Status:** open (dispatched round 79)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -4839,7 +5032,39 @@ IMG-PREC.
   weak hook while its peak sits at 0:05, against the platforms'
   first-3-seconds rule; pad ~2 s instead, or have the badge
   teach the trim ("peak starts at 0:05") — an owner product
-  call.
+  call; (ax) burned captions on vertical sit inside the
+  platform UI band (sweep 17): the TikTok-bold default draws
+  one line with its bottom edge 266 px above the frame bottom
+  (fontSize 56, bottom, baseMarginV 40 scaled), and whisper
+  cues are never chunked (no -ml/-sow; a 60-char cue is 4 lines
+  reaching mid-frame), while current third-party safe-zone
+  guides reserve the bottom 25-35% (367-672 px of 1920) on
+  TikTok/Reels/Shorts — this CONTESTS the LESSONS "REFUTED
+  ~270 px clear of chrome" entry with newer figures (official
+  specs unreachable; the 270 px measurement itself was right,
+  the reserved-band claim moved). Options: raise the vertical
+  MarginV to clear ~35%, add a "Lower middle" position, chunk
+  cues (-ml 28 -sow, or split in parseSrt), correct the hint
+  and the LESSONS note — an owner design call against a
+  deliberate round-15 (INIT-B) decision; (ay) a vertical-crop
+  Clip Kit silently writes X and Facebook as 1280x720 cuts of
+  the middle 31% band upscaled 2.11x (sweep 17; only the
+  YouTube slot swaps on a vertical frame): documented ("It
+  never asks about cropping") but waste in an upload-ready
+  folder — skip the two slots on vertical, adapt their shape,
+  or name them in the kit's one question; an owner product
+  call; (az) a Windows shutdown or logoff emits NO before-quit
+  (Electron's own typings), so the quit autosave flush and the
+  T-127 (3)/T-131 drains never run on that one exit path — the
+  code comment and the not-covered lists are corrected by
+  T-131; the optional upgrade is a win32 `session-end` handler
+  doing a synchronous best-effort kill-and-unlink, which cannot
+  be verified on this Linux box and belongs beside (v) on the
+  win32 release-run checks; forward note for (ai): moving the
+  renderer packages out of dependencies would strip their
+  bundled MIT/OFL license files from the asar the way the
+  @fontsource move did (fixed for Inter by T-131) — the (ai)
+  work must ship a consolidated notices file.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)

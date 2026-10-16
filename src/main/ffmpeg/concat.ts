@@ -43,6 +43,14 @@ export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
 type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRecipe>
 
 /**
+ * What ffmpeg says (exit 0, both majors, measured) when a segment's range holds nothing to write: it wrote a ~970-byte Matroska stub.
+ * Layer 5 runs the real binary against this line (T-131 (1)), so a release whose wording changed fails there, not in the field.
+ */
+export const FFMPEG_EMPTY_OUTPUT = /Output file is empty/
+/** What the concat demuxer says (exit 0, both majors, measured) when it cannot open a listed segment, and stops there. */
+export const FFMPEG_UNREADABLE_PART = /Impossible to open/
+
+/**
  * The video filter that makes ONE compilation segment (T-96, T-105): the clip's
  * whole recipe, through the SAME builder a platform export uses
  * (`buildVideoFilter`) — speed, the crop and the centered cut of it to the
@@ -85,8 +93,18 @@ export function buildSegmentFilter(
  * its fade in and fade out) and its sound (`atempo` for the clip's speed, then
  * its fade in and fade out) — with the fades placed on the clip's length in the OUTPUT. A clip
  * at 2x is half as long as its range, and a fade-out that starts 0.3 s before the
- * end of the RANGE would start after the clip is over. `audio` is '' when there
- * is nothing to do, so the caller leaves `-af` off.
+ * end of the RANGE would start after the clip is over.
+ *
+ * T-131 (1): the sound's LAST stage is `apad=whole_dur=<the clip's length in the
+ * output>`. A segment is written with `-shortest` (below), so a source whose
+ * sound does not cover the range (a Record take whose microphone dropped, a sound
+ * that starts late) used to end the segment where the SOUND ended, and a range
+ * wholly past it came out as an empty stub that the join dropped along with every
+ * segment after it. The pad extends the sound with silence up to the picture's
+ * length, so `-shortest` ends the segment at the picture. The length is finite
+ * and exact on purpose: a bare `apad` is endless, hangs `-c:v copy` on the
+ * bundled 7.0.2, and brought the join drift back on 6.1.1. A source with no
+ * sound stream ignores the filter. So `audio` is never ''.
  */
 export function buildSegmentFilters(
   seg: SegmentClip,
@@ -111,6 +129,10 @@ export function buildSegmentFilters(
     video.push(`fade=t=out:st=${fadeOutStart}:d=${fadeOut}`)
     audio.push(`afade=t=out:st=${fadeOutStart}:d=${fadeOut}`)
   }
+  // simplification: the pad is at the END only. A source whose sound starts AFTER the segment's start (a clip taken from before the sound
+  // begins) keeps the gap, so that segment's sound is shorter than its picture by the picture's excess (measured: 60 ms for a 1.6 s gap)
+  // and the join pulls the next segment's sound earlier by the same. Upgrade: `aresample=async=1:first_pts=0` ahead of the pad fills the start.
+  audio.push(`apad=whole_dur=${outSec.toFixed(3)}`)
   return { video: video.join(','), audio: audio.join(',') }
 }
 
@@ -203,7 +225,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       '-vf',
       filters.video
     ]
-    if (filters.audio) args.push('-af', filters.audio)
+    args.push('-af', filters.audio)
     args.push(
       '-c:v',
       'libx264',
@@ -226,6 +248,8 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       // container's picture-led length, and the join's AAC encode swallows the gap in the sound: the picture fell further behind it at
       // every join (eight fractional segments of a 25 fps source, through this runner on both majors: 3 / 57 / 83 / 112 / 125 / 161 /
       // 194 / 194 ms, a flat 3 / -3 / 7 / 0 / 0 / 0 / 0 / 0 with this line) while every duration check stayed green.
+      // T-131 (1): "its shorter stream" is the picture ONLY because the `-af` above ends in `apad=whole_dur=<the segment's length>`
+      // (`buildSegmentFilters`). Without it a source whose sound is shorter than the range ended the segment at the sound.
       '-shortest',
       segPath
     )
@@ -238,9 +262,11 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       const childKey = `${spec.jobId}:seg-${i}`
       activeJobs.set(childKey, child)
       let stderr = ''
+      let wroteNothing = false
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (c: string) => {
         stderr += c
+        wroteNothing ||= FFMPEG_EMPTY_OUTPUT.test(stderr)
         // Round 18: cap like every other spawn site (round-16 lesson) — a
         // long many-segment compilation otherwise grows this unboundedly.
         if (stderr.length > 16384) stderr = stderr.slice(-16384)
@@ -251,7 +277,10 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       })
       child.on('close', (code) => {
         activeJobs.delete(childKey)
-        if (code === 0) resolve()
+        // T-131 (1): an empty segment is an exit-0 stub the join would silently drop, with every segment after it.
+        if (code === 0 && wroteNothing) {
+          reject(new Error(`Clip ${i + 1} of the compilation has no picture in the video (check its start and end), so nothing was saved.`))
+        } else if (code === 0) resolve()
         else reject(cancelledOr(child, new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`)))
       })
     })
@@ -302,9 +331,11 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
     const childKey = `${spec.jobId}:concat`
     activeJobs.set(childKey, child)
     let stderr = ''
+    let lostAPart = false
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => {
       stderr += c
+      lostAPart ||= FFMPEG_UNREADABLE_PART.test(stderr)
       // Round 18: cap like every other spawn site (round-16 lesson).
       if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
@@ -314,7 +345,11 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
     })
     child.on('close', (code) => {
       activeJobs.delete(childKey)
-      if (code === 0) resolve()
+      // T-131 (1): a segment the join cannot open ends the join THERE and ffmpeg still exits 0: a shorter file, "Saved". The catch
+      // below removes it like any failed join's output.
+      if (code === 0 && lostAPart) {
+        reject(new Error('The compilation could not be put together because one of its clips could not be read, so nothing was saved.'))
+      } else if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })
   }).catch(async (err: unknown) => {
@@ -394,6 +429,9 @@ async function compositePip(
 
   // T-125 (10): the folder is there before the name is chosen.
   await run.guard(ensureOutputDir(path.dirname(wantedPath)))
+  // T-131 (2): the output is the base's length (the overlay follows its frames), and the base's sound is padded to it below. A base whose
+  // length cannot be read (a recording with no duration) is not padded: the output ends where its sound does, as it always did.
+  const baseSec = await run.guard(probeVideo(basePath).then((p) => p.duration, () => null))
   const outputPath = await run.guard(nextFreePath(wantedPath))
   let spawnedAt: number | null = null
   await new Promise<void>((resolve, reject) => {
@@ -427,6 +465,10 @@ async function compositePip(
         'aac',
         '-b:a',
         '192k',
+        // T-131 (2): `-shortest` ended the output where a SHORTER base sound did (a Record take whose microphone dropped at 5 s of 12 came
+        // out 5.0 s long). The sound is padded with silence to the base's length (finite: a bare `apad` hangs), so `-shortest` ends at the
+        // picture whichever stream is shorter. It stays: it is also what ends the output when the overlay outlasts the base.
+        ...(baseSec === null ? [] : ['-af', `apad=whole_dur=${baseSec.toFixed(3)}`]),
         '-shortest',
         // B5 fix (round 15): PiP composite MP4 needs faststart so web players
         // don't stall while seeking the moov atom.

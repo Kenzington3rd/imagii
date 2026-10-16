@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -31,13 +31,23 @@ class FakeChild extends EventEmitter {
 let spawned: string[][] = []
 /** What the join's list file held at the moment the join was spawned (the runner removes it afterwards). */
 let listText = ''
+/** What the fake ffmpeg prints on its stderr before it exits 0, by command: null is silence. T-131 (1): ffmpeg says things and still exits 0. */
+let says: ((args: string[]) => string | null) | null = null
+/** The join writes its output file (as ffmpeg does) so a test can see whether the runner took it away again. */
+let joinWrites = false
 
 vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
     spawned.push(args)
-    if (args.includes('concat')) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
-    setImmediate(() => child.emit('close', 0, null))
+    const isJoin = args.includes('concat')
+    if (isJoin) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
+    if (isJoin && joinWrites) writeFileSync(args[args.length - 1] as string, 'half a compilation')
+    setImmediate(() => {
+      const text = says?.(args) ?? null
+      if (text !== null) child.stderr.emit('data', text)
+      child.emit('close', 0, null)
+    })
     return child
   }
 }))
@@ -54,14 +64,17 @@ vi.mock('./probe', () => ({
   })
 }))
 
-const { runConcat, SEGMENT_EXTENSION, SEGMENT_AUDIO_CODEC } = await import('./concat')
+const { runConcat, SEGMENT_EXTENSION, SEGMENT_AUDIO_CODEC, FFMPEG_EMPTY_OUTPUT, FFMPEG_UNREADABLE_PART } = await import('./concat')
 const { outputFolderRefusal } = await import('./outputPath')
+const { userFacingError } = await import('../../shared/userFacingError')
 
 let scratch = ''
 beforeEach(() => {
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-concat-runner-'))
   spawned = []
   listText = ''
+  says = null
+  joinWrites = false
 })
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
@@ -143,6 +156,77 @@ describe('a compilation segment is Matroska with PCM sound (T-125 (1))', () => {
     expect(middle).toContain('afade=t=out')
     expect(last).toContain('afade=t=in')
     expect(last, 'no fade out on the last segment').not.toContain('afade=t=out')
+  })
+})
+
+describe('a compilation never says Saved for a file with clips missing (T-131 (1))', () => {
+  // Layer 5 ("a compilation survives a source whose sound does not cover a segment") is the proof on real files, on both majors, and
+  // runs the real binary against the two patterns below. This is the half no decode can see: the commands, and what the runner does with
+  // an ffmpeg that exits 0 and says it wrote nothing.
+  const spec = (segments: Array<[number, number]>, extra = {}): Parameters<typeof runConcat>[0] => ({
+    jobId: 'cr-loud',
+    sourcePath: '/tmp/in.mp4',
+    outDir: scratch,
+    segments: segments.map(([startSec, endSec], i) => ({ startSec, endSec, name: `s${i}`, ...extra })),
+    fadeMs: 0,
+    width: 1280,
+    height: 720
+  })
+  const FAIL_SENTENCE = /^Clip 2 of the compilation has no picture in the video \(check its start and end\), so nothing was saved\.$/
+
+  it('every segment is padded to its length in the output: the last -af stage is apad=whole_dur, with -shortest kept', async () => {
+    const { segments } = await compile(0)
+    const lengths = ['2.000', '3.000', '2.000']
+    segments.forEach((args, i) => {
+      const af = (after(args, '-af') ?? '').split(',')
+      expect(af.at(-1), `segment ${i}: the pad is last`).toBe(`apad=whole_dur=${lengths[i]}`)
+      expect(args, `segment ${i} still ends at its shorter stream`).toContain('-shortest')
+    })
+  })
+
+  it('a clip at 2x is padded to HALF its range, the length it has in the output', async () => {
+    await runConcat(spec([[10, 14]], { speedMultiplier: 2 }))
+    expect(after(spawned[0] as string[], '-af')).toBe('atempo=2.0000,apad=whole_dur=2.000')
+  })
+
+  it('the two patterns are the lines ffmpeg prints (the wording Layer 5 reads off the real binary)', () => {
+    expect(FFMPEG_EMPTY_OUTPUT.test('[out#0/matroska @ 0x2b90c7c0] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)')).toBe(true)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x40dea0c0] Impossible to open '/tmp/imagii-concat/seg-x-1.mkv'")).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test('frame=  108 fps=0.0 q=-1.0 Lsize=     195kB')).toBe(false)
+    expect(FFMPEG_UNREADABLE_PART.test("Opening '/tmp/imagii-concat/seg-x-1.mkv' for reading")).toBe(false)
+  })
+
+  it('a segment ffmpeg wrote nothing for (exit 0, the stub) fails the job there, in a sentence, with no join', async () => {
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? '[out#0/matroska @ 0x1] Output file is empty, nothing was encoded' : null)
+    const err = await runConcat(spec([[1, 3], [20, 22], [2, 4]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(FAIL_SENTENCE)
+    expect(spawned, 'the empty segment is the last thing that ran: no third segment, no join').toHaveLength(2)
+    expect(spawned.some((a) => a.includes('concat'))).toBe(false)
+    // It reaches the person as it is written (a finished sentence), not as the generic fallback.
+    expect(userFacingError(err, 'Compilation failed.').message).toBe(err?.message)
+  })
+
+  it('the empty-segment line is found even when later output pushes it out of the kept tail', async () => {
+    const flood = 'frame=  108 fps=0.0 q=-1.0 size=    1kB time=00:00:04.00 bitrate= 2.0kbits/s speed=1x\n'.repeat(400)
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? `Output file is empty, nothing was encoded\n${flood}` : null)
+    const err = await runConcat(spec([[1, 3], [20, 22]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(FAIL_SENTENCE)
+  })
+
+  it('a join that cannot open a segment (exit 0, "Impossible to open") fails, in a sentence, and its short file is removed', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-loud-1.mkv'" : null)
+    const err = await runConcat(spec([[1, 3], [20, 22]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe('The compilation could not be put together because one of its clips could not be read, so nothing was saved.')
+    expect(userFacingError(err, 'Compilation failed.').message).toBe(err?.message)
+    const join = spawned.find((a) => a.includes('concat')) as string[]
+    expect(existsSync(join[join.length - 1] as string), 'the half a compilation the join wrote is gone').toBe(false)
+  })
+
+  it('a join that says nothing of the kind still succeeds, and keeps its file', async () => {
+    joinWrites = true
+    const { outputPath } = await runConcat(spec([[1, 3], [4, 6]]))
+    expect(existsSync(outputPath)).toBe(true)
   })
 })
 

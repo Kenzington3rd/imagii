@@ -15,7 +15,7 @@ import {
   type LoudnormMeasurement
 } from './chain'
 import { probeAudio } from './probe'
-import { probeVideo } from '../ffmpeg/probe'
+import { probeVideo, type ProbeResult } from '../ffmpeg/probe'
 import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { canStreamCopyIntoMp4 } from '../../shared/mediaFormats'
 import { cancelAllExtractions } from './extract'
@@ -40,8 +40,9 @@ const MIX_LIMITER = 'alimiter=limit=0.891:level=disabled'
 
 const activeJobs = new Map<string, ChildProcess>()
 // T-98: an export probes the file before its first child, and the picture mux
-// probes the cleaned audio before its own; a Cancel in either wait finds no
-// child, so the run is what it marks.
+// probes the picture (T-131 (2); the cleaned audio when the picture cannot be
+// read) before its own; a Cancel in either wait finds no child, so the run is
+// what it marks.
 const latch = new CancelLatch()
 
 function codecArgsFor(format: AudioOutputFormat, bitrate?: string): string[] {
@@ -365,6 +366,14 @@ async function exportAudio(
  * `-shortest` trims that tail where there is one (it trims the END of the
  * audio, it moves nothing). With no cuts it also trims the few-millisecond
  * tail difference between a video and the audio track extracted from it.
+ *
+ * T-131 (2): the same flag ended the output where a SHORTER sound ended. A
+ * Record take whose microphone dropped at 5 s of 12 re-attached to a 5.0 s
+ * file, the picture cut off with it (measured; the stream-copy branch too).
+ * The sound is now padded with silence to the picture's length
+ * (`apad=whole_dur=<the picture's length after the cuts>`, finite: a bare
+ * `apad` hangs `-c:v copy`), so `-shortest` ends the output at the PICTURE
+ * whichever stream is shorter, and the music-bed bound above is unchanged.
  */
 export async function runAudioMux(
   jobId: string,
@@ -383,13 +392,13 @@ export async function runAudioMux(
 }
 
 /**
- * The codec (ffprobe's name, lower case) of `videoPath`'s picture when it can be stream-copied into an mp4, else null. A probe that
- * fails is "no". T-126 (24): the answer is the codec and not a yes, because a copy of HEVC needs a tag the others do not.
+ * `videoPath`'s probe, or null when ffprobe cannot read it (a recording with no duration). T-126 (24): the codec decides the copy, and a
+ * copy of HEVC needs a tag the others do not. T-131 (2): the length decides the pad. A picture that cannot be read is neither: it is
+ * re-encoded, and its sound is not padded (the old behavior: the output ends where the sound ends).
  */
-async function copyableCodec(videoPath: string): Promise<string | null> {
+async function probePicture(videoPath: string): Promise<ProbeResult | null> {
   try {
-    const codec = (await probeVideo(videoPath)).videoCodec
-    return canStreamCopyIntoMp4(codec) ? codec.toLowerCase() : null
+    return await probeVideo(videoPath)
   } catch {
     return null
   }
@@ -412,11 +421,15 @@ async function attachAudio(
   // `-c:v copy` of wmv2 into mp4 died with "Could not find tag for codec wmv2". Such
   // a picture is re-encoded in this same step, exactly as a cut one is (a cut
   // already forces it), so the pass keeps its name and its bar — "attaching to
-  // video" — and nothing is converted to a scratch file first. A cut skips the probe.
+  // video" — and nothing is converted to a scratch file first.
   // A video that cannot be probed is re-encoded too: ffmpeg may still read what
   // ffprobe could not (a recording with no duration), and a copy of unknown video
   // is the one thing that can write a file nothing plays.
-  const copyCodec = pictureCut !== null ? null : await run.guard(copyableCodec(videoPath))
+  // T-131 (2): the probe is also how long the picture is, once the cuts are taken out
+  // of it, and a cut no longer skips it.
+  const picture = await run.guard(probePicture(videoPath))
+  const copyCodec = pictureCut === null && picture !== null && canStreamCopyIntoMp4(picture.videoCodec) ? picture.videoCodec.toLowerCase() : null
+  const pictureSec = picture === null ? null : keptDurationSec(picture.duration, cutRegions)
   const reencodePicture = copyCodec === null
   const args = [
     '-y',
@@ -477,6 +490,9 @@ async function attachAudio(
     'aac',
     '-b:a',
     '192k',
+    // T-131 (2): the sound reaches the picture's length, so the `-shortest` below ends the output at the PICTURE when the sound is the
+    // shorter stream (a take whose microphone dropped). Finite on purpose. A picture whose length is unknown is not padded.
+    ...(pictureSec === null ? [] : ['-af', `apad=whole_dur=${pictureSec.toFixed(3)}`]),
     '-shortest',
     // B7 fix (round 15): muxed MP4 also needs faststart so web players
     // (and most browser previewers) don't stall on the moov atom.
@@ -488,9 +504,10 @@ async function attachAudio(
     outputPath
   ]
   // A stream-copy mux is instant and needs no bar; the re-encode is minutes
-  // on a long recording, and the output is exactly as long as the (already
-  // cut) audio.
-  const total = reencodePicture ? (await run.guard(probeAudio(audioPath))).duration : 0
+  // on a long recording, and the output is as long as the (cut) picture: the
+  // sound is padded or trimmed to it (T-131 (2)). A picture whose length is
+  // unknown is measured against the cleaned audio, as it always was.
+  const total = reencodePicture ? (pictureSec ?? (await run.guard(probeAudio(audioPath))).duration) : 0
   await runFfmpegJob(args, jobId, total, 'mux', onProgress, run, outputPath)
   onProgress({ jobId, pass: 'mux', percent: 100 })
   return { jobId, outputPath, durationMs: Date.now() - startedAt }
