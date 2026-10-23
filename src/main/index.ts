@@ -21,6 +21,7 @@ import { sweepOrphanThumbs } from './search/moodboard'
 import { cancelAllExportJobs } from './ffmpeg/export'
 import { cancelAllAudioJobs } from './audio/process'
 import { cancelAllExtractions } from './audio/extract'
+import { cancelAllPeaks } from './audio/peaks'
 import { cancelAllConcatJobs } from './ffmpeg/concat'
 import { drainRuns, openRunCount } from './ffmpeg/cancelLatch'
 import { cancelAllReframeJobs } from './ffmpeg/reframe'
@@ -356,6 +357,13 @@ app.on('before-quit', (event) => {
   // entry that keeps the quit sweep complete if that ever changes.
   try {
     cancelAllExtractions()
+  } catch {
+    /* ignore */
+  }
+  // T-129: and the ffmpeg that reads a file's sound for its waveform (a 3 h file keeps it busy for seconds). The same pattern: the
+  // audio sweep reaches it, and this line is its inventory entry.
+  try {
+    cancelAllPeaks()
   } catch {
     /* ignore */
   }

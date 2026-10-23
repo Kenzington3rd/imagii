@@ -1,12 +1,15 @@
 import { create } from 'zustand'
+import { nanoid } from 'nanoid'
 import type {
   AudioProbe,
   ChainSpec,
   CutRegion,
-  SecondaryTrack
+  SecondaryTrack,
+  WaveformPeaks
 } from '@shared/audio'
-import { DEFAULT_CHAIN_SPEC, waveformCeilingRefusal } from '@shared/audio'
+import { DEFAULT_CHAIN_SPEC, WAVEFORM_READ_FAILED, isWaveformPeaks } from '@shared/audio'
 import { isVideoFilename } from '@shared/mediaFormats'
+import { reportFailure } from '../../../lib/reportFailure'
 
 export interface AudioSource {
   filePath: string
@@ -32,8 +35,18 @@ interface History {
   future: ChainSpec[]
 }
 
+/** T-129: the peaks job drawing the open file's waveform, while it runs: its id (what Close cancels) and how much it has read. */
+export interface WaveformDrawing {
+  jobId: string
+  percent: number
+}
+
 interface AudioStudioState {
   source: AudioSource | null
+  /** T-129: the open file's waveform, from main's peaks job; null until it is drawn (and with no file open). */
+  waveform: WaveformPeaks | null
+  /** T-129: the peaks job while it runs, null otherwise. The waveform panel shows its percent where the waveform will be. */
+  drawing: WaveformDrawing | null
   chain: ChainSpec
   history: History
   currentTime: number
@@ -42,7 +55,8 @@ interface AudioStudioState {
   /** `extractedFromPath`: the file `filePath` (a scratch WAV) was extracted from. A VIDEO makes it `fromVideo`; anything else
    *  (an AIFF, a WMA) makes it `extractedFrom` (T-125 (7)) - the one decision, `isPicture`, made here for every caller.
    *  `hasVideo` (T-126 (7)) is what the extraction's probe found in the file's STREAMS: true or false decides, and only null or
-   *  undefined (the probe could not read the file, or nobody asked) leaves it to the extension. */
+   *  undefined (the probe could not read the file, or nobody asked) leaves it to the extension.
+   *  T-129: it resolves once the file is OPEN; its waveform is drawn after that, by main's peaks job (`drawing`, then `waveform`). */
   loadSource: (filePath: string, extractedFromPath?: string, convertedFrom?: string, hasVideo?: boolean | null) => Promise<void>
   clearSource: () => void
   setCurrentTime: (t: number) => void
@@ -78,8 +92,45 @@ function pushHistory(history: History, spec: ChainSpec): History {
   }
 }
 
+/** Stop a peaks job nobody wants any more (the file was closed, or another one opened while it was drawing). */
+function stopDrawing(drawing: WaveformDrawing | null): void {
+  if (drawing) window.api.audio.cancel(drawing.jobId).catch(() => undefined)
+}
+
+/**
+ * T-129 (T-110 (ao)): draw `source`'s waveform from main's peaks job. The renderer used to hand wavesurfer the file and let it
+ * decode the WHOLE thing with WebAudio (3.25 GB of renderer memory for a 1 h WAV), which is why T-123 refused anything over two
+ * hours; main now reads the sound as a stream and answers `PEAK_BUCKETS` pairs, whatever the length, and the studio is open
+ * while it does (the panel shows how far it has read). A file main cannot read is REFUSED: the studio lets go of it and the
+ * person reads the finished sentence (`WAVEFORM_READ_FAILED`, or the cause `userFacingError` knows, such as a file that moved).
+ * A job whose file was closed or replaced meanwhile answers nobody: its cancel was the person's own Close or open.
+ */
+async function drawWaveform(source: AudioSource, jobId: string): Promise<void> {
+  const { getState, setState } = useAudioStore
+  const off = window.api.audio.onPeaksProgress((p) => {
+    const drawing = getState().drawing
+    if (p.jobId === jobId && drawing?.jobId === jobId && p.percent > drawing.percent) {
+      setState({ drawing: { jobId, percent: p.percent } })
+    }
+  })
+  try {
+    const answer = await window.api.audio.peaks(source.filePath, jobId)
+    if (!isWaveformPeaks(answer)) throw new Error(WAVEFORM_READ_FAILED)
+    if (getState().source !== source) return
+    setState({ waveform: answer, drawing: null })
+  } catch (err) {
+    if (getState().source !== source) return
+    setState({ source: null, waveform: null, drawing: null, chain: DEFAULT_CHAIN_SPEC, history: { past: [], future: [] }, currentTime: 0 })
+    reportFailure(err, { failed: "Couldn't draw the waveform." })
+  } finally {
+    off()
+  }
+}
+
 export const useAudioStore = create<AudioStudioState>((set, get) => ({
   source: null,
+  waveform: null,
+  drawing: null,
   chain: DEFAULT_CHAIN_SPEC,
   history: { past: [], future: [] },
   currentTime: 0,
@@ -95,39 +146,46 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
         extractedFromPath !== undefined && isPicture(extractedFromPath, hasVideo) ? extractedFromPath : undefined
       const extractedFrom = extractedFromPath !== undefined && fromVideoPath === undefined ? extractedFromPath : null
       const probe = await window.api.audio.probe(filePath)
-      // T-123 (14): refused here, before the studio holds the file, so the importer, Clean audio and a restored project
-      // all say it in the same sentence and none of them is left holding a source it cannot draw.
-      // T-124 (7): a sound that came out of a video is a video's problem (cut it down in Video Studio); a file that was only
-      // ever sound is not (Video Studio refuses it), and is told to split it elsewhere.
-      const tooLong = waveformCeilingRefusal(probe.duration, fromVideoPath ? 'video' : 'audio')
-      if (tooLong) throw new Error(tooLong)
+      // T-129: no length gate. T-123 refused a file over two hours here, in a sentence naming the limit, because the waveform was
+      // decoded in this process; it is drawn from main's peaks now (`drawWaveform`), and the ceiling is retired.
       const url = window.api.video.fileUrl(filePath)
+      const source: AudioSource = {
+        filePath,
+        fileName: fileNameFromPath(convertedFrom ?? fromVideoPath ?? extractedFrom ?? filePath),
+        url,
+        probe,
+        fromVideo: fromVideoPath
+          ? { videoPath: fromVideoPath, ...(convertedFrom ? { convertedFrom } : {}) }
+          : null,
+        extractedFrom
+      }
+      stopDrawing(get().drawing)
+      const jobId = nanoid(10)
       set({
-        source: {
-          filePath,
-          fileName: fileNameFromPath(convertedFrom ?? fromVideoPath ?? extractedFrom ?? filePath),
-          url,
-          probe,
-          fromVideo: fromVideoPath
-            ? { videoPath: fromVideoPath, ...(convertedFrom ? { convertedFrom } : {}) }
-            : null,
-          extractedFrom
-        },
+        source,
+        waveform: null,
+        drawing: { jobId, percent: 0 },
         chain: DEFAULT_CHAIN_SPEC,
         history: { past: [], future: [] },
         currentTime: 0
       })
+      void drawWaveform(source, jobId)
     } finally {
       set({ loading: false })
     }
   },
-  clearSource: () =>
+  clearSource: () => {
+    // T-129: a file closed while its waveform is still drawing stops the job (main kills its ffmpeg).
+    stopDrawing(get().drawing)
     set({
       source: null,
+      waveform: null,
+      drawing: null,
       chain: DEFAULT_CHAIN_SPEC,
       history: { past: [], future: [] },
       currentTime: 0
-    }),
+    })
+  },
   setCurrentTime: (t) => set({ currentTime: t }),
 
   patchChain: (patch) => {

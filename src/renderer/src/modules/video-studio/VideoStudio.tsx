@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
-import { waveformCeilingRefusal } from '@shared/audio'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { NO_SOUND_MESSAGE, useVideoStore, videoDiscardMessage, videoHasNoSound } from './store/videoStore'
@@ -71,15 +70,9 @@ export function VideoStudio(): JSX.Element {
 
   async function cleanAudioFlow(): Promise<void> {
     if (!source) return
-    // T-124 (6): the length is already in hand (`source.probe`), so a video Audio Studio will refuse (over 2 hours, the most
-    // its waveform can hold) is refused here, before the replace question and before a sound is extracted for it: the
-    // extraction of a 4 h VOD was minutes and a ~2.8 GB WAV in %TEMP% for a file the studio was going to turn away. Main
-    // asks the same question for the importer's drop and a restored project.
-    const tooLong = waveformCeilingRefusal(source.probe.duration, 'video')
-    if (tooLong) {
-      reportFailure(new Error(tooLong), { failed: "Couldn't extract the audio." })
-      return
-    }
+    // T-129: no length gate here any more. T-124 (6) refused a video over two hours at this button (the most Audio Studio's
+    // waveform could hold when the renderer decoded it); the waveform is drawn from main's peaks now, so a 4 h VOD is cleaned
+    // like any other recording.
     // T-112: handing this video's sound to Audio Studio REPLACES what that studio holds,
     // and the chain, the cuts and the undo history go with it. When it holds tuned work
     // the person is asked first, over the same list of what would be lost as Audio Studio's

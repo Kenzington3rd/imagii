@@ -4439,7 +4439,7 @@ IMG-PREC.
   external peaks + duration without decoding, STOP and hand back
   with what you found rather than working around it with a
   renderer decode.
-- **Status:** open (dispatched round 78, worktree)
+- **Status:** done (round 80, checkpoint 2 — see the Done entry)
 
 ---
 
@@ -5065,6 +5065,16 @@ IMG-PREC.
   bundled MIT/OFL license files from the asar the way the
   @fontsource move did (fixed for Inter by T-131) — the (ai)
   work must ship a consolidated notices file.
+  New letters from the T-129 landing (round 80): (ba) an
+  extraction past about 6.2 hours writes a WAV beyond the
+  header's 4 GB size field — the retired 2-hour ceiling used to
+  hide the path entirely; the source file is never at risk, the
+  failure is a bad scratch WAV. Candidate: `-rf64 auto` on the
+  extraction's output with its own both-majors Layer 5 case, and
+  a check that whisper-cli reads RF64 before it ships; (bb)
+  Clean audio's extraction has no user-facing Cancel (the quit
+  sweep covers it since T-128 (5); a button does not exist) —
+  carried from T-129's found-not-fixed list.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
@@ -5074,6 +5084,64 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 80, checkpoint 2 — T-129, the waveform stops decoding whole
+files in the renderer and the 2-hour ceiling retires (T-110 (ao)),
+landed in the commit that carries this entry. Worked by Opus in
+round 78 (paused 2026-10-16 as wip/t129-partial-20261016), resumed
+by a second Opus under the death protocol (all 94 named unit tests
+re-run by name; one red per finished sub-item re-broken and
+restored byte-identical; one predecessor restore row marked FORCED
+was re-proven with identical shas as v3b). The mechanism: main
+decodes the sound as a STREAM (ffmpeg, mono, 8 kHz, s16le to a
+pipe) and folds every chunk into 4000 highest/lowest pairs holding
+at most one carry byte between chunks; wavesurfer is given peaks +
+duration and never fetches or decodes the file (the STOP rule was
+re-verified against the installed 7.12.6 source: with peaks, both
+the fetch and the WebAudio decode branches are unreachable);
+playback streams over the Range-capable imagii-file protocol as it
+always did. The renderer shows "Drawing the waveform… NN%" from
+the job's progress events where the waveform will appear. The old
+path measured 173 → 1460 MB of renderer memory in ~8 s on a 2 h
+5 min file (render-process crash, exit 5, or an immediate decode
+refusal — run-dependent); the new path peaks at ~182 MB with main
+growing +1.5 to +29 MB, drawn in ~15 s. The 2-hour ceiling is
+retired everywhere (code, copy, pins: README, PRODUCT_GUIDE,
+USER_GUIDE, STYLE_GUIDE; the T-126 (8) scratch-WAV backstop went
+with the pre-check; a 4 h VOD now extracts and opens like any
+recording). A failed read refuses the file with its own sentence
+(WAVEFORM_READ_FAILED); a player that cannot play reports
+PLAYBACK_ERROR_MESSAGE separately; Close or opening another file
+cancels the job (per-job latch; the quit sweep stops it with the
+other audio jobs). The resume worker also fixed a test-design gap
+it found: the long-file e2e read renderer memory only after Play
+turned on, so the memory line could never fire — the wait now ends
+on the first of Play, the 800 MB line, or the player's error, and
+the percent is checked in the visible words. Expedited personally
+on the worker's tree: verify x2 (161/4397), test:media on 7.0.2
+(283 passed | 11 skipped of 294), the touched 6.1.1 blocks (10
+passed: the peaks block + both extraction flips), build + FULL
+Playwright 336/336; one independent mutation at a seam no ledger
+names (the peak folder's carry-path sign conversion → the two
+chunk-boundary unit cases red → restored byte-identical, 16/16
+green). Landed with hand-resolved merges in preload/api,
+media.spec.ts, video-pipelines.spec.ts, interactionWiring and the
+three count docs; the merged tree re-gated: verify 167/4468,
+test:media 285 passed | 11 skipped of 296, and the full Playwright
+suite. The first merged-tree suite run surfaced a pre-existing
+test race, root-caused by the expediter: two single-output e2e
+cases poll for the output file (which exists at ffmpeg's FIRST
+write) and then gave the rest of the encode, the close and the
+re-render only expect's 5 s default — measured 5.09 s under three
+concurrent suites, a razor's edge both parent trees happened to
+clear. Both enabled-checks now carry a 60 s ceiling with a comment
+naming the contract (the repo's own round-77 lesson: a green test
+that races the platform proves the platform's speed). The failure
+reproduced three times before the fix and the case passes with it;
+the full suite re-run after the fix is 344/344 (38.1 minutes with
+both sibling workers' suites running). Found-not-fixed carried to the
+T-110 ledger as (ba) the >4 GB WAV header past ~6.2 h extractions
+and (bb) no user-facing Cancel on Clean audio's extraction.
 
 Round 80, checkpoint 1 — T-128, the six-item small-debt batch,
 landed in the commit that carries this entry. Worked by Sonnet in

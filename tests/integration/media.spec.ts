@@ -29,6 +29,7 @@ import {
 } from '../../src/main/ffmpeg/convert'
 import { drainRuns } from '../../src/main/ffmpeg/cancelLatch'
 import { extractAudioFromVideo, cancelAllExtractions } from '../../src/main/audio/extract'
+import { readPeaks, cancelPeaksJob } from '../../src/main/audio/peaks'
 import { runReframe, cancelReframeJob } from '../../src/main/ffmpeg/reframe'
 import {
   runConcat,
@@ -58,6 +59,8 @@ import type { CustomPreset } from '../../src/shared/customPresets'
 import {
   DEFAULT_CHAIN_SPEC,
   NoUsableDurationError,
+  PEAK_BUCKETS,
+  WAVEFORM_READ_FAILED,
   audioFileExtension,
   type AudioExportSpec,
   type ChainSpec
@@ -6021,16 +6024,15 @@ describe('a sound that starts late in its container stays where it was through t
   }, 60_000)
 })
 
-describe('the extraction reads a picture from the streams, and a refused extraction leaves no scratch behind (real ffmpeg, T-126 (7), (8))', () => {
+describe('the extraction reads a picture from the streams, and a long file is extracted whole (real ffmpeg, T-126 (7), (8); T-129)', () => {
   // (7) `audio:extractFromVideo` decided "is this a video?" from the extension. An `.mkv` or `.mp4` that holds sound alone (a podcast, a
-  // voice memo, a stream's audio-only rip) is not one: its 2-hour refusal told the person to export a part from Video Studio (which
-  // refuses a file with no picture), and the renderer set the re-attach marker, so Re-attach was ON by default and its mux dies on
-  // `-map 0:v:0`. The probe reads the streams (cover art on an mp3 is a "video" stream that is not a picture), and the handler hands the
-  // answer to the renderer. (8) A file whose probe cannot read a length is extracted first, and the only gate on the result was the
-  // renderer's, which refused a 2-hour WAV after it was written and could not delete it: the handler asks the WAV for its length and deletes
-  // a refused one. The real handler runs here, behind a stand-in `ipcMain`; ffmpeg and ffprobe are real.
+  // voice memo, a stream's audio-only rip) is not one: the renderer set the re-attach marker, so Re-attach was ON by default and its mux
+  // dies on `-map 0:v:0` (and its 2-hour refusal sent the person to Video Studio, which refuses a file with no picture). The probe reads
+  // the streams (cover art on an mp3 is a "video" stream that is not a picture), and the handler hands the answer to the renderer.
+  // (8) asked a durationless file's scratch WAV for its length and deleted one over the 2-hour ceiling; T-129 retired the ceiling (the
+  // waveform is main's streamed peaks now), so a long file is extracted and kept. The real handler runs here, behind a stand-in `ipcMain`;
+  // ffmpeg and ffprobe are real.
   const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
-  const scratch = path.join(os.tmpdir(), 'imagii-audio')
   const files = {
     audioMkv: '', pictureMkv: '', coverMp3: '', audioMp4: '', longAudioMkv: '', durationlessWebm: '',
     shortDurationlessAudio: '', shortDurationlessPicture: ''
@@ -6041,7 +6043,6 @@ describe('the extraction reads a picture from the streams, and a refused extract
     if (!handler) throw new Error('audio:extractFromVideo is not registered')
     return handler({}, file) as Promise<Extracted>
   }
-  const scratchWavs = async (): Promise<string[]> => (existsSync(scratch) ? (await readdir(scratch)).filter((f) => f.endsWith('.wav')) : [])
 
   /** ffmpeg with its stdout captured to `file` (a streamed container: nothing is written back, so it has no duration). */
   async function ffToFile(args: string[], file: string): Promise<void> {
@@ -6149,28 +6150,33 @@ describe('the extraction reads a picture from the streams, and a refused extract
     }
   }, 120_000)
 
-  it('an audio-only mkv over two hours is told the AUDIO remedy (split it in another app), not "export a part from Video Studio", and nothing is extracted', async () => {
-    const before = await scratchWavs()
-    const err = await extract(files.longAudioMkv).catch((e: unknown) => e as Error)
-    expect(err, 'refused').toBeInstanceOf(Error)
-    expect((err as Error).message).toMatch(/Split it into shorter files in another app/)
-    expect((err as Error).message).not.toMatch(/Video Studio/)
-    expect(await scratchWavs(), 'refused before any work: no scratch WAV').toEqual(before)
-  }, 120_000)
+  // T-129 flips the next two: they pinned the 2-hour ceiling (a refusal before the work, and a refused scratch deleted with it). The
+  // ceiling is retired with the renderer's decode, so the same two files are EXTRACTED: the real WAV is the full length, it is the file
+  // the studio opens (not wreckage), and the picture answer still comes from the streams. Each WAV is ~1.4 GB, removed by the case.
+  it('an audio-only mkv over two hours is extracted (no ceiling, T-129): a full-length WAV, and no picture', async () => {
+    const { wavPath, hasVideo } = await extract(files.longAudioMkv)
+    try {
+      expect(hasVideo, 'sound alone: no Re-attach').toBe(false)
+      expect((await probeAudio(wavPath)).duration, 'the whole 2 h 1 s').toBeCloseTo(7201, 0)
+      expect(existsSync(wavPath), 'the scratch is the file the studio opens').toBe(true)
+    } finally {
+      await rm(wavPath, { force: true })
+    }
+  }, 300_000)
 
-  it('a durationless file that turns out longer than two hours is refused, and its multi-GB scratch WAV is deleted with the refusal', async () => {
+  it('a durationless file longer than two hours is extracted too (no ceiling, T-129), and its WAV is kept for the studio', async () => {
     const fixture = await ffprobeJson(files.durationlessWebm)
-    expect(fixture.format.duration, 'the trap: no duration in the header, so the pre-extract check cannot refuse it').toBeUndefined()
+    expect(fixture.format.duration, 'no duration in the header: the length is known only once it is extracted').toBeUndefined()
     expect(fixture.streams.map((s) => s.codec_type), 'and it is sound alone').toEqual(['audio'])
-    const before = await scratchWavs()
-    const err = await extract(files.durationlessWebm).catch((e: unknown) => e as Error)
-    expect(err, 'refused').toBeInstanceOf(Error)
-    // T-127 (10): the probe could not give a LENGTH but it read the streams, and this one is sound alone: the audio remedy (the extension
-    // said ".webm = video" and sent the person to Video Studio, which refuses a file with no picture).
-    expect((err as Error).message, 'the audio sentence: the streams say sound alone').toMatch(/longer than 2 hours.*Split it into shorter files in another app/)
-    expect((err as Error).message).not.toMatch(/Video Studio/)
-    const after = await scratchWavs()
-    expect(after.filter((f) => !before.includes(f)), 'a ~1.4 GB WAV left in %TEMP%\\imagii-audio until the 6-hour reaper').toEqual([])
+    const { wavPath, hasVideo } = await extract(files.durationlessWebm)
+    try {
+      // T-127 (10): the probe could not give a LENGTH but it read the streams, and this one is sound alone.
+      expect(hasVideo, 'the streams say sound alone, whatever the .webm extension says').toBe(false)
+      expect((await probeAudio(wavPath)).duration, 'over two hours').toBeGreaterThan(7200)
+      expect(existsSync(wavPath), 'kept: the T-126 (8) backstop that deleted it went with the ceiling').toBe(true)
+    } finally {
+      await rm(wavPath, { force: true })
+    }
   }, 300_000)
 
   it('a durationless file still answers whether it has a picture: sound alone false, a picture true (T-127 (10))', async () => {
@@ -6193,6 +6199,159 @@ describe('the extraction reads a picture from the streams, and a refused extract
       } finally {
         await rm(wavPath, { force: true })
       }
+    }
+  }, 120_000)
+})
+
+describe('the waveform is read from a stream of the sound in main, into the right buckets at the right heights (real ffmpeg, T-129)', () => {
+  // T-129 (T-110 (ao)): Audio Studio decoded the WHOLE file in the renderer to draw its waveform (3.25 GB of renderer memory for a 1 h
+  // WAV), so T-123 refused anything over two hours. Main now decodes the sound as a stream (mono, 8 kHz, raw PCM into a pipe) and folds
+  // each chunk into PEAK_BUCKETS highest/lowest pairs as it arrives. A unit test can only say what the command line looks like; this
+  // runs the real decode. The fixture is the shape extraction writes (48 kHz STEREO) with two 250 Hz bursts at known times and known
+  // heights - 0.5 at [5.0, 6.0) s and 0.25 at [12.0, 12.5) s, digital silence elsewhere - so a bucket that is wrong in time or in height,
+  // a downmix that halves or doubles a channel, or a fold that misreads a sign is a number on the page.
+  const BURSTS = [
+    { from: 5, to: 6, amp: 0.5 },
+    { from: 12, to: 12.5, amp: 0.25 }
+  ] as const
+  const LENGTH = 20
+  let burstWav = ''
+  let longWav = ''
+  let oddWav = ''
+
+  beforeAll(async () => {
+    burstWav = path.join(workDir, 't129-bursts.wav')
+    const expr = BURSTS.map((b) => `${b.amp}*sin(2*PI*250*t)*gte(t,${b.from})*lt(t,${b.to})`).join('+')
+    await ff(['-y', '-f', 'lavfi', '-i', `aevalsrc=exprs='${expr}|${expr}':s=48000:d=${LENGTH}`, '-c:a', 'pcm_s16le', burstWav])
+    // A 2 h 5 min file for the memory and Cancel cases: 8 kHz unsigned 8-bit mono, 60 MB, written in about two seconds; its decode
+    // pipes 120 MB of PCM through the job.
+    longWav = path.join(workDir, 't129-long.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=8000:duration=7500', '-c:a', 'pcm_u8', longWav])
+    // A WAV whose format tag no decoder knows (0x9999): ffprobe reads a sound stream and a 3 s length from its header, ffmpeg has
+    // nothing to decode it with (both majors: "Decoding requested, but no decoder found for: none", exit 234).
+    oddWav = path.join(workDir, 't129-unknown-format.wav')
+    const rate = 8000
+    const data = Buffer.alloc(rate * 2 * 3)
+    const fmt = Buffer.alloc(16)
+    fmt.writeUInt16LE(0x9999, 0)
+    fmt.writeUInt16LE(1, 2)
+    fmt.writeUInt32LE(rate, 4)
+    fmt.writeUInt32LE(rate * 2, 8)
+    fmt.writeUInt16LE(2, 12)
+    fmt.writeUInt16LE(16, 14)
+    const body = Buffer.concat([
+      Buffer.from('WAVEfmt '), Buffer.from([16, 0, 0, 0]), fmt, Buffer.from('data'), Buffer.alloc(4), data
+    ])
+    body.writeUInt32LE(data.length, 4 + 8 + 16 + 4)
+    const riff = Buffer.alloc(8)
+    riff.write('RIFF', 0)
+    riff.writeUInt32LE(body.length, 4)
+    await writeFile(oddWav, Buffer.concat([riff, body]))
+  }, 120_000)
+
+  it('each burst lands in the buckets of its time at its height, and the silence between is flat', async () => {
+    const progress: number[] = []
+    const { peaks, duration } = await readPeaks(burstWav, 't129-bursts', (p) => progress.push(p.percent))
+    const [high, low] = peaks
+    expect(duration).toBeCloseTo(LENGTH, 3)
+    expect(high).toHaveLength(PEAK_BUCKETS)
+    expect(low).toHaveLength(PEAK_BUCKETS)
+    const perSec = PEAK_BUCKETS / LENGTH // 200 buckets a second: 5 ms each
+    const bucketAt = (t: number): number => Math.floor(t * perSec)
+    for (const b of BURSTS) {
+      // Inside (20 ms clear of each edge, where the resampler's filter rings): the burst's own height, both halves, not halved by the
+      // downmix of two equal channels and not doubled either.
+      const inside = high.slice(bucketAt(b.from + 0.02), bucketAt(b.to - 0.02))
+      const insideLow = low.slice(bucketAt(b.from + 0.02), bucketAt(b.to - 0.02))
+      expect(Math.min(...inside), `burst at ${b.from} s: lowest bucket top`).toBeGreaterThan(b.amp * 0.94)
+      expect(Math.max(...inside), `burst at ${b.from} s: highest bucket top`).toBeLessThan(b.amp * 1.04)
+      expect(Math.max(...insideLow), `burst at ${b.from} s: shallowest bucket bottom`).toBeLessThan(-b.amp * 0.94)
+      expect(Math.min(...insideLow), `burst at ${b.from} s: deepest bucket bottom`).toBeGreaterThan(-b.amp * 1.04)
+      // Its edges: the first and last bucket over half its height are the buckets of its start and end, to one bucket (5 ms).
+      const half = b.amp / 2
+      const first = high.findIndex((v, i) => i >= bucketAt(b.from - 0.5) && v > half)
+      const last = high.length - 1 - [...high].reverse().findIndex((v, i) => high.length - 1 - i < bucketAt(b.to + 0.5) && v > half)
+      expect(Math.abs(first - bucketAt(b.from)), `burst at ${b.from} s starts in bucket ${first}, expected ${bucketAt(b.from)}`).toBeLessThanOrEqual(1)
+      expect(Math.abs(last - (bucketAt(b.to) - 1)), `burst at ${b.from} s ends in bucket ${last}, expected ${bucketAt(b.to) - 1}`).toBeLessThanOrEqual(1)
+    }
+    // The silence, 30 ms clear of every burst: flat.
+    const quiet = high
+      .map((v, i) => ({ v: Math.max(v, -(low[i] as number)), t: i / perSec }))
+      .filter(({ t }) => BURSTS.every((b) => t < b.from - 0.03 || t > b.to + 0.03))
+    expect(quiet.length).toBeGreaterThan(3000)
+    expect(Math.max(...quiet.map((q) => q.v)), 'silence draws no bar').toBeLessThan(0.005)
+    // Progress said how far it had read, never backwards, and ended at 100.
+    expect(progress[progress.length - 1]).toBe(100)
+    expect([...progress].sort((a, b) => a - b)).toEqual(progress)
+  }, 120_000)
+
+  it('a 2 h 5 min file is the same 4000 pairs, read as a stream: this process holds no more than a few MB more while 120 MB of sound goes through it', async () => {
+    const before = process.memoryUsage().rss
+    let peak = before
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, process.memoryUsage().rss)
+    }, 5)
+    let percents = 0
+    const started = Date.now()
+    let result: Awaited<ReturnType<typeof readPeaks>>
+    try {
+      result = await readPeaks(longWav, 't129-long', () => {
+        percents += 1
+        peak = Math.max(peak, process.memoryUsage().rss)
+      })
+    } finally {
+      clearInterval(sampler)
+    }
+    const grewMb = (peak - before) / 1048576
+    console.info(`[t129] 2h05m peaks: ${Date.now() - started} ms, rss ${Math.round(before / 1048576)} MB -> peak ${Math.round(peak / 1048576)} MB (+${grewMb.toFixed(1)} MB), ${percents} progress events`)
+    expect(result.duration).toBeCloseTo(7500, 0)
+    expect(result.peaks[0]).toHaveLength(PEAK_BUCKETS)
+    // lavfi's `sine` is 1/8 of full scale (0.125, 0.117 after 8-bit PCM and the resampler): every bucket of the 2 h is the tone's
+    // height, so the whole length was read and drawn, not a head of it.
+    expect(Math.min(...result.peaks[0]), 'the whole length is drawn').toBeGreaterThan(0.1)
+    expect(Math.max(...result.peaks[0])).toBeLessThan(0.14)
+    expect(percents, 'progress all the way through').toBeGreaterThanOrEqual(90)
+    // The decoded sound is 120 MB; a job that kept it (or kept the chunks to fold at the end) grows by about that much (measured: +116 MB
+    // with the chunks kept, +13 to +26 MB streamed - the garbage collector's own slack). Half of it is the line.
+    expect(grewMb, `this process grew ${grewMb.toFixed(1)} MB while reading a 2 h file`).toBeLessThan(60)
+  }, 120_000)
+
+  it('a file whose sound ffmpeg cannot decode is the finished sentence, not ffmpeg\'s words', async () => {
+    // The trap first: the probe reads it (a sound stream and a length), so nothing before the decode refuses it.
+    expect((await probeAudio(oddWav)).duration).toBeCloseTo(3, 1)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const err = await readPeaks(oddWav, 't129-odd', () => undefined).catch((e: unknown) => e as Error)
+      expect(err).toBeInstanceOf(Error)
+      expect((err as Error).message).toBe(WAVEFORM_READ_FAILED)
+      expect(String(quiet.mock.calls[0]?.[0]), 'ffmpeg\'s own words go to the console').toMatch(/no decoder found|Decoder|decod/i)
+    } finally {
+      quiet.mockRestore()
+    }
+  }, 60_000)
+
+  it('Cancel kills the real ffmpeg mid-read: the job answers the cancel sentinel at once, and no decoder is left running', async () => {
+    let started: () => void = () => undefined
+    const reading = new Promise<void>((resolve) => (started = resolve))
+    const job = readPeaks(longWav, 't129-cancel', () => started()).then(
+      () => 'finished',
+      (err: unknown) => err
+    )
+    await reading
+    const at = Date.now()
+    expect(cancelPeaksJob('t129-cancel'), 'the job was running').toBe(true)
+    const outcome = await job
+    expect(isCancelledError(outcome), `the job answered ${String(outcome)}`).toBe(true)
+    expect(Date.now() - at, 'answered at once, not when the decode would have finished').toBeLessThan(1500)
+    if (process.platform !== 'win32') {
+      const left = await new Promise<string>((resolve) => {
+        const p = spawn('pgrep', ['-f', `pcm_s16le.*${path.basename(longWav)}|${path.basename(longWav)}.*s16le`])
+        let out = ''
+        p.stdout.on('data', (b) => (out += String(b)))
+        p.on('close', () => resolve(out.trim()))
+        p.on('error', () => resolve(''))
+      })
+      expect(left, 'no ffmpeg still decoding the file').toBe('')
     }
   }, 120_000)
 })

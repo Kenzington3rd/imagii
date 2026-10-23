@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Clip } from '@shared/clip'
-import { waveformCeilingRefusal, type ChainSpec, type ExtractedSound } from '@shared/audio'
+import type { ChainSpec, ExtractedSound } from '@shared/audio'
 import type { CanvasDocument } from '@shared/canvas'
 import type { ImagiiProject } from '@shared/workspace'
 import {
@@ -174,6 +174,16 @@ const AUDIO_PROBE = {
   sizeBytes: 23_000_000
 }
 
+/**
+ * T-129: the waveform's half of the audio bridge. `loadSource` opens a file and main's peaks job (`audio:peaks`) draws it after;
+ * these answer at once, and Close's cancel of a job still drawing has somewhere to go.
+ */
+const PEAKS_BRIDGE = {
+  peaks: () => Promise.resolve({ peaks: [[0.5], [-0.5]], duration: 120 }),
+  onPeaksProgress: () => () => undefined,
+  cancel: () => Promise.resolve(true)
+}
+
 /** Mirrors the product load flow: validate first, apply only on ok. */
 async function loadProjectJson(raw: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   const result = validateProjectJsonString(raw)
@@ -206,6 +216,7 @@ beforeEach(() => {
         fileUrl: (p: string) => pathToImagiiFileUrl(p)
       },
       audio: {
+        ...PEAKS_BRIDGE,
         probe: (_p: string) => Promise.resolve(AUDIO_PROBE)
       }
     }
@@ -604,6 +615,7 @@ describe('applyProject: a studio whose file is gone does not take the rest down 
           fileUrl: (p: string) => pathToImagiiFileUrl(p)
         },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: (p: string) =>
             gone.includes(p) ? Promise.reject(MISSING(p)) : Promise.resolve(AUDIO_PROBE)
         }
@@ -761,6 +773,7 @@ describe('a sound extracted from a video is stored as the video (T-99)', () => {
           fileUrl: (p: string) => pathToImagiiFileUrl(p)
         },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: (p: string) =>
             gone.includes(p) ? Promise.reject(missing(p)) : Promise.resolve(AUDIO_PROBE),
           extractFromVideo: (video: string) => {
@@ -991,6 +1004,7 @@ describe('a video converted on import is stored as its original (T-107)', () => 
           }
         },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: (p: string) =>
             gone.includes(p) ? Promise.reject(missing(p)) : Promise.resolve(AUDIO_PROBE),
           extractFromVideo: (video: string) => {
@@ -1283,6 +1297,7 @@ describe('applyProject over a long wait (T-112)', () => {
           convertForImport: () => converting.promise
         },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: (_p: string) => Promise.resolve(AUDIO_PROBE),
           extractFromVideo: () => extracting.promise
         }
@@ -1409,6 +1424,7 @@ describe('applyProject over a long wait (T-112)', () => {
               convertError ? Promise.reject(convertError) : Promise.resolve(COPY)
           },
           audio: {
+            ...PEAKS_BRIDGE,
             probe: () => Promise.resolve(AUDIO_PROBE),
             extractFromVideo: () => (extractError ? Promise.reject(extractError) : Promise.resolve(sound(WAV)))
           }
@@ -1658,6 +1674,7 @@ describe('applyProject, second pass (T-113)', () => {
           convertForImport: () => converting.promise
         },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: (_p: string) => Promise.resolve(AUDIO_PROBE),
           extractFromVideo: () => extracting.promise
         }
@@ -1886,6 +1903,7 @@ describe('a sound extracted from an AIFF or a WMA is not a video\'s (T-125 (7))'
       api: {
         video: { probe: () => Promise.resolve(VIDEO_PROBE), fileUrl: (p: string) => pathToImagiiFileUrl(p) },
         audio: {
+          ...PEAKS_BRIDGE,
           probe: () => Promise.resolve({ ...AUDIO_PROBE, duration: probeDuration }),
           extractFromVideo: (file: string) => {
             extracted.push(file)
@@ -1966,15 +1984,16 @@ describe('a sound extracted from an AIFF or a WMA is not a video\'s (T-125 (7))'
     expect(useAudioStore.getState().chain).toEqual(CHAIN)
   })
 
-  it('a sound file over two hours is told to split it in another app, not to export a part from Video Studio - and a video over two hours still is', async () => {
+  // T-129 flips this pin: a sound file over two hours was refused (with the AIFF's own sentence, T-125 (7)); the ceiling is retired
+  // with the renderer's decode, so both kinds of source open, and reopen from a project, at three hours.
+  it('a sound file over two hours opens, as does a video\'s sound over two hours: no length ceiling (T-129)', async () => {
     bridge()
     probeDuration = 3 * 3600
-    const audioSentence = await useAudioStore.getState().loadSource(WAV, AIFF).then(() => '', (e: Error) => e.message)
-    expect(audioSentence).toBe(waveformCeilingRefusal(3 * 3600, 'audio'))
-    expect(audioSentence).not.toMatch(/Video Studio/)
-    const videoSentence = await useAudioStore.getState().loadSource(WAV, '/home/user/Videos/vod.mp4').then(() => '', (e: Error) => e.message)
-    expect(videoSentence).toBe(waveformCeilingRefusal(3 * 3600, 'video'))
-    expect(videoSentence).toMatch(/Video Studio/)
+    await useAudioStore.getState().loadSource(WAV, AIFF)
+    expect(useAudioStore.getState().source).toMatchObject({ extractedFrom: AIFF, fromVideo: null })
+    expect(useAudioStore.getState().source?.probe.duration).toBe(3 * 3600)
+    await useAudioStore.getState().loadSource(WAV, '/home/user/Videos/vod.mp4')
+    expect(useAudioStore.getState().source?.fromVideo).toEqual({ videoPath: '/home/user/Videos/vod.mp4' })
   })
 })
 
@@ -2002,7 +2021,7 @@ describe('replacedSince (T-112, T-113, T-125 (20))', () => {
 
   it('a reload of the same file counts: `loadSource` makes a new source object, and the person did something there', async () => {
     vi.stubGlobal('window', {
-      api: { audio: { probe: () => Promise.resolve(AUDIO_PROBE) }, video: { fileUrl: (p: string) => pathToImagiiFileUrl(p) } }
+      api: { audio: { ...PEAKS_BRIDGE, probe: () => Promise.resolve(AUDIO_PROBE) }, video: { fileUrl: (p: string) => pathToImagiiFileUrl(p) } }
     })
     await useAudioStore.getState().loadSource(AUDIO_PATH)
     const held = useAudioStore.getState().source

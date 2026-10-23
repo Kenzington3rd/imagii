@@ -262,6 +262,194 @@ async function dropAndWaitReady(studio: Studio, fileName = 'e2e-tone.wav'): Prom
   await expect(playButton(studio.window)).toBeEnabled({ timeout: 30_000 })
 }
 
+// ── T-129: long files, the waveform's own pixels, the renderer's memory, main's peaks children ──────────────────────────────────
+
+/**
+ * A 2 h 5 min MP3, made cheaply: one minute of a 440 Hz tone and one minute of silence are each encoded once (48 kHz mono, 32 kbps,
+ * under a second), then joined by STREAM COPY - 60 tone minutes, then 65 silent ones - which takes about a second and is 30 MB. The
+ * first hour is the tone, the rest silence, so the drawn waveform can be checked for where the sound is. 48 kHz is the rate the old
+ * renderer decode ran at (it decoded at the file's own rate before resampling), and decoding it in main takes real seconds (about 12 s
+ * on the bundled ffmpeg), which is what the progress line, the Close and the quit cases need.
+ */
+async function makeTwoHourMp3(dir: string): Promise<string> {
+  const tone = path.join(dir, 't129-tone-60s.mp3')
+  const quiet = path.join(dir, 't129-quiet-60s.mp3')
+  for (const [input, out] of [['sine=frequency=440:sample_rate=48000:duration=60', tone], ['anullsrc=r=48000:cl=mono:d=60', quiet]] as const) {
+    const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', input, '-ac', '1', '-c:a', 'libmp3lame', '-b:a', '32k', out])
+    if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+  }
+  const list = path.join(dir, 't129-list.txt')
+  writeFileSync(list, [...Array<string>(60).fill(`file '${tone}'`), ...Array<string>(65).fill(`file '${quiet}'`)].join('\n'))
+  const long = path.join(dir, 'two-hours-five.mp3')
+  const joined = await runBinary(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', long])
+  if (joined.code !== 0) throw new Error(`fixture ffmpeg exit ${joined.code}: ${joined.stderr.slice(-800)}`)
+  return long
+}
+
+/**
+ * A WAV whose format tag no decoder knows (0x9999): ffprobe reads a sound stream and a 3 s length from its header, ffmpeg has nothing to
+ * decode it with ("Decoding requested, but no decoder found", exit 234, on both majors).
+ */
+function unknownFormatWav(): Buffer {
+  const rate = 8000
+  const data = Buffer.alloc(rate * 2 * 3)
+  const fmt = Buffer.alloc(16)
+  fmt.writeUInt16LE(0x9999, 0)
+  fmt.writeUInt16LE(1, 2)
+  fmt.writeUInt32LE(rate, 4)
+  fmt.writeUInt32LE(rate * 2, 8)
+  fmt.writeUInt16LE(2, 12)
+  fmt.writeUInt16LE(16, 14)
+  const head = Buffer.alloc(44)
+  head.write('RIFF', 0)
+  head.writeUInt32LE(36 + data.length, 4)
+  head.write('WAVEfmt ', 8)
+  head.writeUInt32LE(16, 16)
+  fmt.copy(head, 20)
+  head.write('data', 36)
+  head.writeUInt32LE(data.length, 40)
+  return Buffer.concat([head, data])
+}
+
+/**
+ * The drawn waveform, column by column: for every pixel column of every canvas wavesurfer drew (its shadow root is open), the column's
+ * x in CSS pixels across the whole waveform and how many of its pixels are painted. A silent stretch draws 1-pixel bars.
+ */
+async function waveformColumns(window: Page): Promise<Array<{ x: number; h: number }>> {
+  return window.evaluate(() => {
+    const host = document.querySelector('[data-tutorial="audio-waveform"] .card > div > div')
+    const root = host?.shadowRoot
+    if (!root) throw new Error('the waveform has no shadow root: wavesurfer drew nothing')
+    const canvases = [...root.querySelectorAll('.canvases canvas')] as HTMLCanvasElement[]
+    const out: Array<{ x: number; h: number }> = []
+    for (const canvas of canvases) {
+      const ctx = canvas.getContext('2d')
+      if (!ctx || canvas.width === 0 || canvas.height === 0) continue
+      const left = parseFloat(canvas.style.left || '0')
+      const scale = canvas.width / (parseFloat(canvas.style.width) || canvas.width)
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      for (let x = 0; x < canvas.width; x++) {
+        let h = 0
+        for (let y = 0; y < canvas.height; y++) if ((data[(y * canvas.width + x) * 4 + 3] as number) > 0) h++
+        out.push({ x: left + x / scale, h: h / scale })
+      }
+    }
+    if (out.length === 0) throw new Error('the waveform has no painted canvas')
+    return out
+  })
+}
+
+/**
+ * The renderer's peak memory so far, readable at any moment (the long-file case watches it WHILE the waveform is drawn, so a renderer
+ * that climbs past the line and then dies is caught on the line, not later on a Play that never turns on). On Linux the kernel keeps
+ * the process's high-water mark (`VmHWM` in /proc/<pid>/status), which no sampling can miss, and once the process is gone its last
+ * reading stands; elsewhere Electron's own metrics are sampled every 100 ms until `stop()`.
+ */
+async function rendererMemory(app: ElectronApplication): Promise<{ peakMb: () => Promise<number>; stop: () => Promise<void>; how: string }> {
+  const pid = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId() ?? 0)
+  const status = `/proc/${pid}/status`
+  if (pid > 0 && existsSync(status)) {
+    let lastMb = 0
+    return {
+      how: `VmHWM of renderer pid ${pid}`,
+      peakMb: async () => {
+        if (!existsSync(status)) return lastMb
+        const m = /VmHWM:\s+(\d+) kB/.exec(readFileSync(status, 'utf8'))
+        if (!m) throw new Error(`no VmHWM in ${status}`)
+        lastMb = Math.round(Number(m[1]) / 1024)
+        return lastMb
+      },
+      stop: async () => undefined
+    }
+  }
+  let peakKb = 0
+  let stopped = false
+  const sample = async (): Promise<void> => {
+    while (!stopped) {
+      const kb = await app
+        .evaluate(({ app: electronApp }, wanted) => electronApp.getAppMetrics().find((m) => m.pid === wanted)?.memory.workingSetSize ?? 0, pid)
+        .catch(() => 0)
+      peakKb = Math.max(peakKb, kb)
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+  const running = sample()
+  return {
+    how: 'sampled workingSetSize',
+    peakMb: async () => Math.round(peakKb / 1024),
+    stop: async () => {
+      stopped = true
+      await running
+    }
+  }
+}
+
+/** The long-file case's memory line: an order of magnitude under the old path's gigabytes, and far over the ~185 MB measured. */
+const RENDERER_MEMORY_LINE_MB = 800
+
+/** Count the page's own `fetch` / XHR requests for the app's file protocol: the old waveform pulled the whole file in through one. */
+async function countRendererFileFetches(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const w = window as unknown as { __fileFetches: number }
+    w.__fileFetches = 0
+    const realFetch = window.fetch.bind(window)
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input instanceof Request ? input.url : input).startsWith('imagii-file:')) w.__fileFetches += 1
+      return realFetch(input, init)
+    }
+    const realOpen = XMLHttpRequest.prototype.open
+    XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
+      if (String(url).startsWith('imagii-file:')) w.__fileFetches += 1
+      return (realOpen as (...a: unknown[]) => void).call(this, method, url, ...rest)
+    } as typeof XMLHttpRequest.prototype.open
+  })
+}
+
+function rendererFileFetches(window: Page): Promise<number> {
+  return window.evaluate(() => (window as unknown as { __fileFetches: number }).__fileFetches)
+}
+
+interface PeaksChild {
+  pid: number
+  exit: { code: number | null; signal: string | null } | null
+}
+
+/**
+ * Record, in MAIN, every ffmpeg the app starts to read a file's sound for its waveform (its argv ends in raw 16-bit PCM on stdout), and
+ * how each one ended. With `reportAt`, the record is also written to that file at `will-quit` - after the quit's drain, the last moment
+ * the app is still there to say whether it had stopped its children.
+ */
+async function recordPeaksChildren(app: ElectronApplication, reportAt?: string): Promise<void> {
+  await app.evaluate(({ app: electronApp }, report) => {
+    const g = globalThis as unknown as { __peaksChildren: Array<{ pid: number; exit: { code: number | null; signal: string | null } | null }> }
+    g.__peaksChildren = []
+    const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+    const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => { pid?: number; on: (e: string, f: (...a: unknown[]) => void) => void } }
+    const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+    const real = cp.spawn
+    cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+      const child = real(cmd, args, opts)
+      if (Array.isArray(args) && args.includes('s16le') && args[args.length - 1] === 'pipe:1') {
+        const entry = { pid: child.pid ?? 0, exit: null as { code: number | null; signal: string | null } | null }
+        g.__peaksChildren.push(entry)
+        child.on('exit', (code: unknown, signal: unknown) => {
+          entry.exit = { code: (code as number | null) ?? null, signal: (signal as string | null) ?? null }
+        })
+      }
+      return child
+    }
+    mod.syncBuiltinESMExports()
+    if (report) {
+      const fs = getBuiltin('node:fs') as { writeFileSync: (p: string, d: string) => void }
+      electronApp.on('will-quit', () => fs.writeFileSync(report, JSON.stringify(g.__peaksChildren)))
+    }
+  }, reportAt ?? null)
+}
+
+function readPeaksChildren(app: ElectronApplication): Promise<PeaksChild[]> {
+  return app.evaluate(() => (globalThis as unknown as { __peaksChildren?: PeaksChild[] }).__peaksChildren ?? [])
+}
+
 /**
  * Replace the OS open-dialog in the MAIN process. Nothing in `src/` changes:
  * `dialog` is Electron's own object and the bundled `audio:pickFile` handler
@@ -1400,33 +1588,36 @@ test.describe('imagii Audio Studio', () => {
     }
   })
 
-  // T-123 (14): the waveform is drawn from the whole file, decoded in the renderer. An ADPCM WAV opens (ffprobe reads it, the
-  // import says "Loaded") and then wavesurfer cannot decode it: the panel was a dead waveform with no word, because
-  // `WaveSurfer.create({ url })` swallows the load's rejection and tells only the `error` event, which nothing listened to.
-  test('a file the waveform cannot be drawn for says so, once, in a finished sentence (T-123 (14))', async () => {
+  // T-123 (14): an ADPCM WAV opens (ffprobe reads it, the import says "Loaded") and the panel was a dead waveform with no word,
+  // because `WaveSurfer.create({ url })` swallows the load's rejection and tells only the `error` event, which nothing listened to.
+  // T-129: the waveform is drawn from MAIN's peaks now, and ffmpeg reads ADPCM, so the waveform IS drawn; what Chromium's media
+  // element cannot do is PLAY it. The sentence says that, once, and Play stays off.
+  test('a file the player cannot play still shows its waveform, and says it cannot be played, once, in a finished sentence (T-123 (14), T-129)', async () => {
     test.setTimeout(120_000)
     const studio = await openStudio('waveform-error')
     const { window } = studio
     // Written out, not imported: an E2E asserts the words a person reads (and a build without the constant can still run it).
-    const WAVEFORM_ERROR_MESSAGE =
-      "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+    const PLAYBACK_ERROR_MESSAGE =
+      "imagii can't play this file here. It may be damaged or in a format the player can't read. Re-export it as WAV or MP3 and try again."
     try {
       const adpcm = path.join(studio.root, 'source', 'adpcm.wav')
       const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'adpcm_ms', adpcm])
       if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
       await dropOnImporter(window, adpcm, 'adpcm.wav')
 
-      // The import itself succeeded (it is the picture of the sound that cannot be drawn)...
-      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(WAVEFORM_ERROR_MESSAGE)
-      await expect(window.getByText(WAVEFORM_ERROR_MESSAGE)).toBeVisible()
-      // ...and the person reads the sentence ONCE (the case below is the one where wavesurfer reports a failure twice).
+      // The import itself succeeded, and so did the picture of the sound: main read it...
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(PLAYBACK_ERROR_MESSAGE)
+      await expect(window.getByText(PLAYBACK_ERROR_MESSAGE)).toBeVisible()
+      const drawn = await waveformColumns(window)
+      expect(drawn.filter((c) => c.h > 4).length, 'the waveform is drawn from main\'s peaks (ffmpeg reads ADPCM)').toBeGreaterThan(50)
+      // ...and the person reads the sentence ONCE.
       await window.waitForTimeout(1000)
       const toasts = await readToastLog(window)
-      expect(toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE), `the sentence was toasted ${toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE).length} times: ${JSON.stringify(toasts)}`).toHaveLength(1)
+      expect(toasts.filter((t) => t === PLAYBACK_ERROR_MESSAGE), `the sentence was toasted ${toasts.filter((t) => t === PLAYBACK_ERROR_MESSAGE).length} times: ${JSON.stringify(toasts)}`).toHaveLength(1)
       // It is a sentence, not a cause: no decoder name, no DOMException, no envelope.
-      expect(toasts.join(' | ')).not.toMatch(/EncodingError|decodeAudioData|Unable to decode|Error invoking remote method/)
-      // The studio is open on the file (the cleanup and export still work: they read the file, not the picture), and
-      // the transport that needs the picture stays off.
+      expect(toasts.join(' | ')).not.toMatch(/EncodingError|decodeAudioData|Unable to decode|Error invoking remote method|MEDIA_ERR/)
+      // The studio is open on the file (the cleanup and export still work: they read the file, not the player), and the transport
+      // that needs the player stays off.
       await expect(window.locator(WAVEFORM)).toBeVisible()
       await expect(playButton(window)).toBeDisabled()
     } finally {
@@ -1434,125 +1625,204 @@ test.describe('imagii Audio Studio', () => {
     }
   })
 
-  // T-123 (14), the other way a waveform fails: the bytes cannot be read at all (the file moved or went away between the probe and
-  // the picture). wavesurfer's `load()` emits `error` and then REthrows into the constructor's own catch, which emits it again,
-  // so one failed fetch is two events: without a toast id the person reads the sentence twice. (The ADPCM case above is a media
-  // element error, which is emitted once, and cannot tell the two apart.) The page's `fetch` is made to refuse the app's file
-  // protocol, which is exactly what wavesurfer's fetcher calls.
-  test('a waveform whose file cannot be read says so once too, though wavesurfer reports it twice (T-123 (14))', async () => {
+  // T-123 (14) had a second case here: the page's `fetch` refused the app's file protocol, which is what wavesurfer's fetcher called
+  // to pull the WHOLE file into the renderer for its decode. T-129 removed that path (with `peaks`, wavesurfer fetches nothing; the
+  // long-file case below counts the renderer's fetches of the file and finds none), so the way a waveform fails now is MAIN failing to
+  // read the sound. That is the refusal that remains: a file ffprobe reads (a sound stream, a 3 s length) whose sound no decoder can
+  // read - a WAV with an unknown format tag - opens, its waveform job fails, and the studio lets go of it with one finished sentence.
+  test('a file main cannot read the sound of is refused while its waveform is drawn: one finished sentence, and the studio lets go (T-129)', async () => {
     test.setTimeout(120_000)
-    const studio = await openStudio('waveform-fetch')
+    const studio = await openStudio('waveform-unreadable')
     const { window } = studio
-    const WAVEFORM_ERROR_MESSAGE =
-      "Couldn't draw this file's waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+    const WAVEFORM_READ_FAILED =
+      "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
     try {
-      await window.evaluate(() => {
-        const real = window.fetch.bind(window)
-        ;(window as unknown as { __fetchRefused: number }).__fetchRefused = 0
-        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-          if (String(input).startsWith('imagii-file:')) {
-            ;(window as unknown as { __fetchRefused: number }).__fetchRefused += 1
-            return Promise.reject(new TypeError('Failed to fetch'))
-          }
-          return real(input, init)
-        }
-      })
-      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
-      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(WAVEFORM_ERROR_MESSAGE)
+      const odd = path.join(studio.root, 'source', 'unknown-format.wav')
+      writeFileSync(odd, unknownFormatWav())
+      await dropOnImporter(window, odd, 'unknown-format.wav')
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain(WAVEFORM_READ_FAILED)
+      await expect(window.getByText(WAVEFORM_READ_FAILED)).toBeVisible()
       await window.waitForTimeout(1000)
-      expect(await window.evaluate(() => (window as unknown as { __fetchRefused: number }).__fetchRefused), 'the waveform asked for the file').toBeGreaterThan(0)
       const toasts = await readToastLog(window)
-      expect(
-        toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE),
-        `the sentence was toasted ${toasts.filter((t) => t === WAVEFORM_ERROR_MESSAGE).length} times: ${JSON.stringify(toasts)}`
-      ).toHaveLength(1)
-      await expect(playButton(window)).toBeDisabled()
-    } finally {
-      await closeStudio(studio)
-    }
-  })
-
-  // T-123 (14): a 3 to 6 h stream recording decoded to 10-20 GB of renderer memory (measured: 3.25 GB for 1 h, 6.5 GB for
-  // 2 h) and took the window with it, with nothing said. Over two hours the file is refused at load, in a sentence that
-  // names the ceiling and why, and the studio never holds it. The fixture is 2 h and 1 s of 8 kHz mono, 58 MB.
-  test('a file longer than two hours is refused at load, naming the ceiling, and the studio never holds it (T-123 (14))', async () => {
-    test.setTimeout(180_000)
-    const studio = await openStudio('too-long')
-    const { window } = studio
-    try {
-      const longWav = path.join(studio.root, 'source', 'two-hours-and-a-second.wav')
-      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '7201', '-c:a', 'pcm_u8', longWav])
-      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
-      // Written out, not imported (see the waveform-error case): the sentence names the ceiling and the reason. T-124 (7): a
-      // file that is ONLY sound is not sent to Video Studio (which refuses a file with no picture and sends the person back
-      // here); it is told to split the file in another app.
-      const sentence =
-        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
-        'Split it into shorter files in another app first, then open one of them.'
-      await dropOnImporter(window, longWav, 'two-hours-and-a-second.wav')
-
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
-      await expect(window.getByText(sentence)).toBeVisible()
-      // Refused, not half-loaded: no "Loaded", no waveform, no export, still the drop zone.
-      expect(await readToastLog(window)).not.toContain('Loaded')
+      expect(toasts.filter((t) => t === WAVEFORM_READ_FAILED), `the sentence was toasted ${toasts.filter((t) => t === WAVEFORM_READ_FAILED).length} times: ${JSON.stringify(toasts)}`).toHaveLength(1)
+      // ffmpeg's words are the console's, not the person's.
+      expect(toasts.join(' | ')).not.toMatch(/decoder|Decoding requested|exit 234|Error invoking remote method/)
+      // Refused, not half-held: back to the drop zone, no waveform panel, no export.
       await expect(window.getByText('Drop audio or video here')).toBeVisible()
       await expect(window.locator(WAVEFORM)).toHaveCount(0)
       await expect(window.locator(EXPORT)).toHaveCount(0)
-      // And the way on works: a short file is taken straight after, on the same drop zone.
+      // And the way on works: a readable file is taken straight after.
       await dropAndWaitReady(studio)
-      await expect(window.locator(WAVEFORM)).toBeVisible()
     } finally {
       await closeStudio(studio)
     }
   })
 
-  // T-124 (6): a VIDEO over two hours dropped on the importer used to be extracted to a full-length WAV (a 4 h VOD: minutes
-  // of ffmpeg and ~2.8 GB in %TEMP%\\imagii-audio, never deleted) and only then refused by the same 2-hour gate. The length is asked
-  // first, and the refusal is the video sentence (Video Studio can cut it down). The fixture is 2 h and 1 s of 1 fps video and
-  // 8 kHz sound, 650 KB.
-  test('a video longer than two hours is refused before any sound is extracted: no ffmpeg, no WAV in %TEMP% (T-124 (6))', async () => {
+  // T-123 (14): a 3 to 6 h stream recording decoded to 10-20 GB of renderer memory (measured: 3.25 GB for 1 h, 6.5 GB for 2 h) and
+  // took the window with it, so T-123 refused anything over two hours at load. T-129 (T-110 (ao)) is the real fix: MAIN reads the sound
+  // as a stream into 4000 highest/lowest pairs and wavesurfer is handed those and the length, never the file to decode, while the
+  // media element streams the file for playback. This case is that pin FLIPPED: a 2 h 5 min file (the first hour a tone, the rest
+  // silence, 48 kHz - the rate the old path decoded at) opens; while main reads it the box the waveform will fill says how far it has
+  // got; the waveform then draws, tone where the tone is and flat where the silence is; the renderer never fetched the file; and the
+  // renderer's peak memory stays far under the old path's (a generous 800 MB line; the old path refused this file outright, and with
+  // its ceiling lifted it decoded it to gigabytes - measured, see LESSONS).
+  test('a file longer than two hours opens, shows how far its waveform has been read, draws it, and the renderer never holds the file (T-129, flipping T-123 (14))', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('long-file')
+    const { app, window } = studio
+    try {
+      const longMp3 = await makeTwoHourMp3(path.join(studio.root, 'source'))
+      const renderer = await rendererMemory(app)
+      await countRendererFileFetches(window)
+      await dropOnImporter(window, longMp3, 'two-hours-five.mp3')
+
+      // The studio opens on the file at once, and the box the waveform will fill says how far main has read (not an empty dark box).
+      const drawing = window.getByRole('progressbar', { name: 'Drawing the waveform' })
+      await expect(drawing).toBeVisible({ timeout: 30_000 })
+      await expect(drawing).toHaveText(/^Drawing the waveform… \d+%$/)
+      await expect.poll(async () => Number(await drawing.getAttribute('aria-valuenow').catch(() => '0')), { timeout: 60_000, intervals: [100] }).toBeGreaterThan(0)
+      // The words the person reads carry main's progress too (not only the attribute a screen reader reads).
+      const shownPercent = async (): Promise<number> =>
+        Number(/(\d+)%$/.exec((await drawing.textContent({ timeout: 1000 }).catch(() => '')) ?? '')?.[1] ?? '0')
+      await expect.poll(shownPercent, { timeout: 60_000, intervals: [100] }).toBeGreaterThan(0)
+      await expect(playButton(window), 'no player before there is a waveform').toBeDisabled()
+      await expect(window.locator('header').getByText('two-hours-five.mp3', { exact: true })).toBeVisible()
+
+      // Then the waveform replaces it. The renderer's memory and the player's word are watched the whole time it waits, because the
+      // old path (wavesurfer handed the file to decode) failed one of two ways on this file, measured: its decode climbed past a
+      // gigabyte in seconds and the renderer crashed, or the decode was refused at once and wavesurfer reported an error. Either must
+      // fail HERE, by name, not three minutes later on a Play that never turns on.
+      let drawnAtMb = 0
+      const verdict = async (): Promise<'over the line' | 'player error' | 'drawn' | 'waiting'> => {
+        drawnAtMb = await renderer.peakMb()
+        if (drawnAtMb >= RENDERER_MEMORY_LINE_MB) return 'over the line'
+        if ((await readToastLog(window).catch(() => [] as string[])).some((t) => /can't play this file/.test(t))) return 'player error'
+        return (await playButton(window).isEnabled({ timeout: 250 }).catch(() => false)) ? 'drawn' : 'waiting'
+      }
+      await expect.poll(verdict, { timeout: 180_000, intervals: [100] }).not.toBe('waiting')
+      expect(drawnAtMb, `the renderer peaked at ${drawnAtMb} MB while the waveform was read and drawn`).toBeLessThan(RENDERER_MEMORY_LINE_MB)
+      expect(await readToastLog(window), 'the long file plays: the player has nothing to say about it').not.toContainEqual(expect.stringMatching(/can't play this file/))
+      await expect(playButton(window)).toBeEnabled()
+      await expect(drawing).toHaveCount(0)
+      // 2 h 5 min and a few seconds: each joined minute carries its encoder's own padding (about 24 ms).
+      await expect(window.locator(`${WAVEFORM} .font-mono`).first()).toHaveText(/^0:00\.00 \/ 2:05:0\d\.\d\d$/)
+      const columns = await waveformColumns(window)
+      const width = Math.max(...columns.map((c) => c.x))
+      // The painted columns only: bars are 2 px wide with a 1 px gap, and a gap column is empty wherever it is.
+      const heightIn = (from: number, to: number): number[] =>
+        columns.filter((c) => c.x >= width * from && c.x <= width * to && c.h > 0).map((c) => c.h)
+      const tone = heightIn(0.05, 0.4)
+      const quiet = heightIn(0.55, 0.95)
+      expect(quiet.length, 'the silent part is drawn too (1 px bars)').toBeGreaterThan(20)
+      expect(tone.length).toBeGreaterThan(20)
+      expect(Math.min(...tone), 'the first hour is a tone: tall bars all the way').toBeGreaterThan(40)
+      expect(Math.max(...quiet), 'the rest is silence: flat').toBeLessThanOrEqual(2)
+      // The renderer never asked for the file: wavesurfer had the peaks, and the media element streams it (its own requests are not fetch).
+      expect(await rendererFileFetches(window), 'fetches of the file from the page').toBe(0)
+      // And after the drawn waveform was read back off its canvases: still under the line (VmHWM only rises).
+      const peakMb = await renderer.peakMb()
+      await renderer.stop()
+      console.info(`[t129] renderer peak memory with a 2 h 5 min file drawn: ${peakMb} MB (${renderer.how})`)
+      expect(peakMb, `the renderer peaked at ${peakMb} MB`).toBeLessThan(RENDERER_MEMORY_LINE_MB)
+      expect(await readToastLog(window)).toContain('Loaded')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-129: the peaks job is registered with the per-job cancel registry: a file closed while its waveform is still being read stops
+  // main's ffmpeg (Close and a superseding open are what send the Cancel), and the person, who pressed Close, is told nothing more.
+  test('Close while a long file is still being drawn stops main\'s job: its ffmpeg is killed, nothing is said, and the next file opens (T-129)', async () => {
     test.setTimeout(240_000)
-    const studio = await openStudio('too-long-video')
-    const { window, app } = studio
+    const studio = await openStudio('long-file-close')
+    const { app, window } = studio
+    try {
+      const longMp3 = await makeTwoHourMp3(path.join(studio.root, 'source'))
+      await recordPeaksChildren(app)
+      await dropOnImporter(window, longMp3, 'two-hours-five.mp3')
+      const drawing = window.getByRole('progressbar', { name: 'Drawing the waveform' })
+      await expect.poll(async () => Number(await drawing.getAttribute('aria-valuenow').catch(() => '0')), { timeout: 60_000, intervals: [100] }).toBeGreaterThan(0)
+      // Mid-read: the job's ffmpeg is running.
+      expect((await readPeaksChildren(app)).map((c) => c.exit)).toEqual([null])
+      await window.locator('header').getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      // Killed by the app, not left to read two hours of sound for nobody.
+      await expect.poll(async () => (await readPeaksChildren(app)).map((c) => c.exit?.signal ?? c.exit?.code ?? null), { timeout: 10_000, intervals: [100] }).toEqual(['SIGKILL'])
+      await window.waitForTimeout(1500)
+      const toasts = await readToastLog(window)
+      expect(toasts.join(' | '), 'their own Close is not news').not.toMatch(/waveform|Canceled|canceled|couldn't|Couldn't/)
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+      // And the way on works.
+      await dropAndWaitReady(studio)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-129: and with the quit sweep and the quit's drain (T-127 (3)): a quit while a long file is being drawn kills the job's ffmpeg,
+  // and the app waits for that run to end before it goes, so no decoder is left running after the window.
+  test('quitting while a long file is being drawn kills main\'s job before the app is gone (T-129)', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('long-file-quit')
+    const { app, window } = studio
+    const report = path.join(studio.root, 'peaks-at-will-quit.json')
+    try {
+      const longMp3 = await makeTwoHourMp3(path.join(studio.root, 'source'))
+      await recordPeaksChildren(app, report)
+      await dropOnImporter(window, longMp3, 'two-hours-five.mp3')
+      const drawing = window.getByRole('progressbar', { name: 'Drawing the waveform' })
+      await expect.poll(async () => Number(await drawing.getAttribute('aria-valuenow').catch(() => '0')), { timeout: 60_000, intervals: [100] }).toBeGreaterThan(0)
+      expect((await readPeaksChildren(app)).map((c) => c.exit)).toEqual([null])
+      await app.close()
+      const atQuit = JSON.parse(readFileSync(report, 'utf8')) as PeaksChild[]
+      expect(atQuit.map((c) => c.exit?.signal ?? null), `the peaks ffmpeg at will-quit: ${JSON.stringify(atQuit)}`).toEqual(['SIGKILL'])
+    } finally {
+      rmSync(studio.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-124 (6): a VIDEO over two hours dropped on the importer was refused before any sound was extracted (the 2-hour gate asked first).
+  // T-129 retired the gate: the sound of a 2 h 1 s video is extracted (a ~1.4 GB scratch WAV, 48 kHz stereo) and opens, its waveform
+  // drawn from main's peaks of that WAV, with Re-attach offered (it has a picture). The fixture is 2 h 1 s of 1 fps video and 8 kHz sound,
+  // 650 KB; the WAV this case makes is removed by it.
+  test('a video longer than two hours is extracted and opens, its waveform drawn from main\'s peaks (T-129, flipping T-124 (6))', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('long-video')
+    const { window } = studio
     const scratch = path.join(os.tmpdir(), 'imagii-audio')
     const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
+    const before = new Set(wavs())
     try {
-      const longVideo = path.join(studio.root, 'source', 'four-hour-vod.mp4')
+      const longVideo = path.join(studio.root, 'source', 'two-hour-vod.mp4')
       const made = await runBinary(ffmpegPath, [
         '-y', '-f', 'lavfi', '-i', 'color=c=black:s=64x48:r=1:d=7201', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
         '-t', '7201', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '600', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '8k', '-shortest', longVideo
       ])
       if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
-      const before = new Set(wavs())
-      await installSpawnStall(app, []) // no stall: the log of what the app spawns from here on
-      const sentence =
-        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
-        'Export the part you want from Video Studio first, then open that shorter file.'
-      await dropOnImporter(window, longVideo, 'four-hour-vod.mp4')
-
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
-      await expect(window.getByText(sentence)).toBeVisible()
-      // Refused before the work: the app looked at the file's length (an ffprobe) and never started an ffmpeg...
-      await window.waitForTimeout(1500)
-      expect(await readSpawnLog(app), 'no sound extraction was started for a file the gate refuses').not.toContain('ffmpeg')
-      // ...so nothing was written where scratch audio goes.
-      expect(wavs().filter((f) => !before.has(f)), 'a full-length WAV was left in %TEMP%\\imagii-audio').toEqual([])
-      expect(await readToastLog(window)).not.toContain('Loaded')
-      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await dropOnImporter(window, longVideo, 'two-hour-vod.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 240_000 })
+      await expect(window.locator('header').getByText('two-hour-vod.mp4', { exact: true })).toBeVisible()
+      await expect(window.locator(`${WAVEFORM} .font-mono`).first()).toHaveText(/^0:00\.00 \/ 2:00:0[01]\.\d\d$/)
+      await expect(window.locator(EXPORT).getByText('Re-attach to video (output .mp4)'), 'it has a picture to put the sound back on').toBeVisible()
+      const toasts = await readToastLog(window)
+      expect(toasts).toContain('Loaded')
+      expect(toasts.join(' | ')).not.toMatch(/longer than 2 hours/)
+      expect(wavs().filter((f) => !before.has(f)), 'the extracted WAV is the file the studio holds').toHaveLength(1)
     } finally {
       await closeStudio(studio)
+      // This case's own scratch WAV only (~1.4 GB): every file in imagii-audio that was not there before it began.
+      for (const f of wavs().filter((name) => !before.has(name) && name.endsWith('.wav'))) rmSync(path.join(scratch, f), { force: true })
     }
   })
 
   // T-126 (7): "is this a video?" was decided from the file NAME. An .mkv or .mp4 that holds sound alone (a podcast, a voice memo, a stream's
   // audio-only rip) was treated as one: Re-attach was ON by default and its mux dies on `-map 0:v:0` (there is no picture), and a 2-hour one was told
   // to export a part from Video Studio, which refuses a file with no picture and sends the person back here. The probe reads the streams now.
-  test('an audio-only .mkv loads as sound: no Re-attach is offered, it exports as plain audio, and over two hours it is told to split the file in another app (T-126 (7))', async () => {
+  // (T-129 retired the 2-hour ceiling, and with it the sentence this case also pinned; see the end of the case.)
+  test('an audio-only .mkv loads as sound: no Re-attach is offered, and it exports as plain audio (T-126 (7))', async () => {
     test.setTimeout(240_000)
     const studio = await openStudio('audio-only-mkv')
     const { app, window } = studio
-    const scratch = path.join(os.tmpdir(), 'imagii-audio')
-    const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
     try {
       const podcast = path.join(studio.root, 'source', 'podcast.mkv')
       const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'aac', podcast])
@@ -1577,25 +1847,9 @@ test.describe('imagii Audio Studio', () => {
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       const probed = await probeFile(out)
       expect(probed.codecs, 'an audio file: no video stream').toEqual(['mp3'])
-
-      // Over two hours: the AUDIO sentence, not "Export the part you want from Video Studio", and no sound is extracted for it.
-      await window.getByRole('button', { name: 'Close', exact: true }).click()
-      await expect(window.getByText('Drop audio or video here')).toBeVisible()
-      const longMkv = path.join(studio.root, 'source', 'podcast-two-hours.mkv')
-      const longMade = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono', '-t', '7201', '-c:a', 'pcm_s16le', longMkv])
-      if (longMade.code !== 0) throw new Error(`fixture ffmpeg exit ${longMade.code}: ${longMade.stderr.slice(-800)}`)
-      const before = new Set(wavs())
-      await installSpawnStall(app, [])
-      const sentence =
-        'That file is longer than 2 hours, which is more than Audio Studio can draw a waveform for without running out of memory. ' +
-        'Split it into shorter files in another app first, then open one of them.'
-      await dropOnImporter(window, longMkv, 'podcast-two-hours.mkv')
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(sentence)
-      await window.waitForTimeout(1500)
-      expect(await readToastLog(window)).not.toContain('Export the part you want from Video Studio first, then open that shorter file.')
-      expect(await readSpawnLog(app), 'no sound extraction was started for a file the gate refuses').not.toContain('ffmpeg')
-      expect(wavs().filter((f) => !before.has(f)), 'no WAV left in %TEMP%').toEqual([])
-      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      // T-129: this case also pinned the 2-hour ceiling's AUDIO sentence for a long audio-only mkv ("split it in another app", never
+      // "export a part from Video Studio"). The ceiling is retired, so there is no sentence to choose: a long audio-only mkv is extracted
+      // and opened like this short one (Layer 5: "an audio-only mkv over two hours is extracted", hasVideo false at 2 h 1 s).
     } finally {
       await closeStudio(studio)
     }

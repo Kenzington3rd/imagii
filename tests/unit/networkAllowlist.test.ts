@@ -365,6 +365,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // spawn imagii's own ffmpeg and ffprobe (`ffmpegPath`, `ffprobePath`: the call scan below judges every `spawn(` separately, and
   // lists any command that is not one of the three binaries); none of them spawns anything else, and none touches a network.
   'main/audio/extract.ts': ['import:child_process'],
+  // T-129: the waveform's peaks job decodes the file's sound with imagii's ffmpeg into a pipe (`ffmpegPath`; no file, no network).
+  'main/audio/peaks.ts': ['import:child_process'],
   'main/audio/probe.ts': ['import:child_process'],
   'main/audio/process.ts': ['import:child_process'],
   'main/ffmpeg/concat.ts': ['import:child_process'],
@@ -399,8 +401,9 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   'renderer/src/modules/image-studio/ThumbnailVariants.tsx': ['new Image(', '<img>'],
   'renderer/src/modules/image-studio/ImportPanel.tsx': ['new Image('],
   // T-125 (26): the Player's `<video src>` is the person's own file (an `imagii-file:` or `blob:` address; CSP `media-src` allows no
-  // remote one), and the waveform's `WaveSurfer.create({ url })` fetches the same kind of address (CSP `connect-src` allows
-  // `imagii-file:` and the `ws:` named below, no `http(s)`).
+  // remote one), and the waveform's `WaveSurfer.create({ url })` is handed the same kind of address. T-129: with `peaks` it fetches
+  // nothing and only gives the address to its media element (CSP `media-src`; `connect-src` allows `imagii-file:` and the `ws:` named
+  // below, no `http(s)`, either way).
   'renderer/src/modules/video-studio/Player.tsx': ['<video>'],
   // T-126 (1): wavesurfer is imported twice (the library and its regions plugin); each import is a site.
   'renderer/src/modules/audio-studio/WaveformView.tsx': ['import:wavesurfer.js', 'import:wavesurfer.js', 'WaveSurfer.create('],

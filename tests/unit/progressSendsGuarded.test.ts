@@ -9,9 +9,10 @@ import { parseSource, sourceFilesUnder } from './renderedStrings'
  * `sendIfAlive` (`src/main/sendIfAlive.ts`) is the one way main reports to a window: a destroyed
  * WebContents throws on `send`, and a progress callback has nothing above it to catch the throw
  * (the "JavaScript error in the main process" dialog, 3 of 40 real closes mid-export). The ticket
- * said eleven sites; the count in the tree is TEN call sites of `sendIfAlive` over EIGHT channels
+ * said eleven sites; the count in the tree was TEN call sites of `sendIfAlive` over EIGHT channels
  * (recording:progress, captions:progress, captions:modelProgress, video:progress,
- * video:jobComplete, video:reframeProgress, video:highlightProgress, audio:progress), and the
+ * video:jobComplete, video:reframeProgress, video:highlightProgress, audio:progress; T-129 added
+ * the eleventh, audio:peaksProgress, the waveform's), and the
  * ticket said to grep for siblings. This scan IS that grep, kept: every call
  * whose callee is `<anything>.send(...)` in a non-test file under `src/main` is in the helper
  * itself or in the one place that wraps its own call in a `try` (`quitFlush.ts`, whose `catch`

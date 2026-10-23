@@ -16,11 +16,13 @@ import {
   NoUsableDurationError,
   commitLoudnessTarget,
   secondaryTrackProblem,
-  WAVEFORM_ERROR_MESSAGE,
-  WAVEFORM_MAX_SEC,
-  waveformCeilingRefusal,
+  PEAK_BUCKETS,
+  PLAYBACK_ERROR_MESSAGE,
+  WAVEFORM_READ_FAILED,
+  isWaveformPeaks,
   type AudioOutputFormat
 } from './audio'
+import * as audioModule from './audio'
 import { userFacingError } from './userFacingError'
 import { describeImportError } from './importDiagnostics'
 
@@ -219,73 +221,83 @@ describe('secondaryTrackProblem — the numbers of a second track that reach the
   })
 })
 
-describe('waveformCeilingRefusal (T-123 (14), T-124 (7))', () => {
-  it('the ceiling is two hours', () => {
-    expect(WAVEFORM_MAX_SEC).toBe(7200)
+// T-129: the 2-hour ceiling T-123 (14) put on Audio Studio (because the waveform was decoded in the renderer) is RETIRED with the
+// decode: the waveform is drawn from main's streamed peaks. These pins were the ceiling's; they now pin that it is gone.
+describe('the waveform has no length ceiling any more (T-129, retiring T-123 (14) / T-124 (7))', () => {
+  it('the ceiling and its kind-aware refusal are gone from the shared module', () => {
+    expect(Object.keys(audioModule)).not.toContain('WAVEFORM_MAX_SEC')
+    expect(Object.keys(audioModule)).not.toContain('waveformCeilingRefusal')
+    // ...and the playback sentence replaced the old "couldn't draw" one (the drawing is main's now).
+    expect(Object.keys(audioModule)).not.toContain('WAVEFORM_ERROR_MESSAGE')
+  })
+})
+
+describe('isWaveformPeaks: what the waveform is drawn from, checked where it lands (T-129)', () => {
+  const answer = (n: number, duration = 60): { peaks: [number[], number[]]; duration: number } => ({
+    peaks: [Array.from({ length: n }, () => 0.5), Array.from({ length: n }, () => -0.5)],
+    duration
   })
 
-  it.each(['video', 'audio'] as const)('lets a file of exactly the ceiling, and any shorter one, through (%s)', (kind) => {
-    expect(waveformCeilingRefusal(WAVEFORM_MAX_SEC, kind)).toBeNull()
-    expect(waveformCeilingRefusal(3600, kind)).toBeNull()
-    expect(waveformCeilingRefusal(0.5, kind)).toBeNull()
+  it('takes two equally long arrays of 1 to PEAK_BUCKETS numbers in -1..1 over a positive length', () => {
+    expect(PEAK_BUCKETS).toBe(4000)
+    expect(isWaveformPeaks(answer(PEAK_BUCKETS))).toBe(true)
+    expect(isWaveformPeaks(answer(1, 0.0001))).toBe(true)
+    expect(isWaveformPeaks({ peaks: [[1, -1], [-1, 1]], duration: 9 * 3600 })).toBe(true)
   })
 
-  it.each(['video', 'audio'] as const)('refuses a file one second over the ceiling, and a 6 hour VOD (%s)', (kind) => {
-    expect(waveformCeilingRefusal(WAVEFORM_MAX_SEC + 1, kind)).not.toBeNull()
-    expect(waveformCeilingRefusal(6 * 3600, kind)).not.toBeNull()
+  it('refuses an answer bigger than the bound (the payload is size-bounded) or empty (wavesurfer throws on it)', () => {
+    expect(isWaveformPeaks(answer(PEAK_BUCKETS + 1))).toBe(false)
+    expect(isWaveformPeaks(answer(0))).toBe(false)
   })
 
-  it.each(['video', 'audio'] as const)('answers null for a length the probe could not give (the load has other checks for those) (%s)', (kind) => {
-    expect(waveformCeilingRefusal(NaN, kind)).toBeNull()
-    expect(waveformCeilingRefusal(Infinity, kind)).toBeNull()
-    expect(waveformCeilingRefusal(-1, kind)).toBeNull()
+  it('refuses a length that is not a positive number', () => {
+    for (const duration of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(isWaveformPeaks(answer(10, duration)), String(duration)).toBe(false)
+    expect(isWaveformPeaks({ peaks: answer(10).peaks, duration: '60' })).toBe(false)
+    expect(isWaveformPeaks({ peaks: answer(10).peaks })).toBe(false)
   })
 
-  it('names the ceiling and the reason for both kinds of source', () => {
-    for (const kind of ['video', 'audio'] as const) {
-      const sentence = waveformCeilingRefusal(3 * 3600, kind) ?? ''
-      expect(sentence, kind).toMatch(/longer than 2 hours/)
-      expect(sentence, kind).toMatch(/out of memory/)
-    }
+  it('refuses arrays of different lengths, the wrong number of arrays, and values that are not samples', () => {
+    const [high, low] = answer(10).peaks
+    expect(isWaveformPeaks({ peaks: [high, low.slice(1)], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [high], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [high, low, low], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [[...high.slice(1), 1.5], low], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [high, [...low.slice(1), -1.01]], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [[...high.slice(1), Number.NaN], low], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: [[...high.slice(1), '0.5'], low], duration: 1 })).toBe(false)
+    expect(isWaveformPeaks({ peaks: 'peaks', duration: 1 })).toBe(false)
+    expect(isWaveformPeaks(null)).toBe(false)
+    expect(isWaveformPeaks(undefined)).toBe(false)
+  })
+})
+
+describe('WAVEFORM_READ_FAILED: the refusal that remains, for a file main cannot read (T-129)', () => {
+  it('is a finished sentence that says what failed and what to try', () => {
+    expect(WAVEFORM_READ_FAILED).toMatch(/^imagii couldn't read the sound in this file to draw its waveform\./)
+    expect(WAVEFORM_READ_FAILED).toMatch(/Re-export it as WAV or MP3 and try again\.$/)
+    expect(WAVEFORM_READ_FAILED.length).toBeLessThanOrEqual(240)
+    expect(WAVEFORM_READ_FAILED).not.toContain('\n')
   })
 
-  // T-124 (7): the sentence sent an AUDIO-ONLY file to Video Studio, which rejects it right back ("This file has no picture,
-  // only sound. Open it in Audio Studio instead."): a remedy that loops. The Video Studio remedy is for a video source only.
-  it('a video source is told to export the part it wants from Video Studio', () => {
-    expect(waveformCeilingRefusal(3 * 3600, 'video')).toMatch(/Export the part you want from Video Studio first, then open that shorter file\./)
-  })
-
-  it('an audio-only source is NOT sent to Video Studio, and is told what to do instead: split it in another app', () => {
-    const sentence = waveformCeilingRefusal(3 * 3600, 'audio') ?? ''
-    expect(sentence).not.toMatch(/Video Studio/)
-    expect(sentence).toMatch(/Split it into shorter files in another app first, then open one of them\./)
-    // The Video Studio importer's refusal of a sound-only file is the loop the old sentence sent the person into.
-    const loop = describeImportError(new Error('No video stream found in file'), '/x/long.wav', 'video')
-    expect(loop).toMatch(/Open it in Audio Studio instead/)
-  })
-
-  it('is a finished sentence that every route to the load shows as written, for both kinds', () => {
-    for (const kind of ['video', 'audio'] as const) {
-      const sentence = waveformCeilingRefusal(3 * 3600, kind) ?? ''
-      expect(sentence.length, kind).toBeLessThanOrEqual(240)
-      expect(sentence).not.toContain('\n')
-      expect(sentence).toMatch(/[.!?]$/)
-      // The importer's catch (describeImportError) and Clean audio's (reportFailure -> userFacingError) both stand it alone.
-      const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-      expect(userFacingError(new Error(sentence), 'Fallback.').message).toBe(sentence)
-      expect(describeImportError(new Error(sentence), '/x/long.wav', 'audio')).toBe(sentence)
-      // ...and across the IPC envelope too (a restored project's probe runs in main, the load's own error does not).
-      expect(describeImportError(new Error(`Error invoking remote method 'x': Error: ${sentence}`), '/x/long.wav', 'audio')).toBe(sentence)
+  it('reaches the person as written, across the IPC envelope, through both the importer\'s words and the generic ones', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const wrapped = new Error(`Error invoking remote method 'audio:peaks': Error: ${WAVEFORM_READ_FAILED}`)
+      expect(userFacingError(wrapped, "Couldn't draw the waveform.").message).toBe(WAVEFORM_READ_FAILED)
+      // The importer's own classifier must not mistake it for one of its known shapes ("codec", "decoder", "can't find").
+      expect(describeImportError(wrapped, '/x/odd.wav', 'audio')).toBe(WAVEFORM_READ_FAILED)
+    } finally {
       quiet.mockRestore()
     }
   })
 })
 
-describe('WAVEFORM_ERROR_MESSAGE (T-123 (14))', () => {
-  it('is a finished sentence that says what failed and what to try', () => {
-    expect(WAVEFORM_ERROR_MESSAGE).toMatch(/^Couldn't draw this file's waveform\./)
-    expect(WAVEFORM_ERROR_MESSAGE).toMatch(/Re-export it as WAV or MP3 and try again\.$/)
-    expect(WAVEFORM_ERROR_MESSAGE.length).toBeLessThanOrEqual(240)
+describe('PLAYBACK_ERROR_MESSAGE (T-123 (14), reworded by T-129)', () => {
+  it('names what fails now - playing the file, not drawing it - and what to try', () => {
+    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/^imagii can't play this file here\./)
+    expect(PLAYBACK_ERROR_MESSAGE).not.toMatch(/waveform/)
+    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/Re-export it as WAV or MP3 and try again\.$/)
+    expect(PLAYBACK_ERROR_MESSAGE.length).toBeLessThanOrEqual(240)
   })
 })
 

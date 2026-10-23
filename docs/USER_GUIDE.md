@@ -378,14 +378,15 @@ The posting helpers sit at the bottom of Video Studio, in three parts:
 Drop in audio, or any video, and imagii extracts its audio. (One file loads at a
 time: if you drop another, or pick one from **Recent**, while the last is still being
 extracted, imagii says it is still working on the last one and leaves the new one alone.)
-Audio Studio opens sound up to 2 hours long: it draws the waveform from the whole file
-in memory, so a longer one is refused with a note saying so. The length is checked
-first, before any sound is pulled out of a video: **Clean audio** on a video over 2
-hours, or a long video dropped here, is refused at once, with nothing extracted and
-nothing left in your temporary folder. For a longer video, the note says to export the
-part you want from Video Studio first and open that shorter file; for a longer sound
-file, it says to split it into shorter files in another app first. If imagii cannot
-draw a file's waveform (a damaged file, or a format it cannot read here), it says so too.
+Audio Studio opens sound of any length, a whole stream recording included. The studio
+opens on the file at once, and while imagii reads the sound to draw its waveform, the
+box where the waveform will be says how far it has got ("Drawing the waveform… 42%").
+A long recording takes a few seconds; the cleanup and level panels work meanwhile, and
+**Close** stops the reading. (A video's sound is pulled out to a temporary file first,
+about 0.7 GB for each hour; see "Where your data lives".) If imagii cannot read a file's
+sound at all (a damaged file, or a format it cannot read), it says so and lets go of the
+file; if it can draw the waveform but the player cannot play the file here, it says that
+instead.
 
 - **Help me fix this** runs a short wizard that picks cleanup settings for you
   if you're not sure.

@@ -772,16 +772,21 @@ If you write the same markup a third time, extract it.
   offset, BEFORE `even()` (so `x + w <= width` and `y + h <= height` whatever got through): `crop=3842:2160:0:0` on a
   3840 px source failed the whole export with no output. `cropToFrame` is the one place a platform export, a compilation segment,
   a GIF and the Clip Kit build their crop, so the one clamp covers all four.
-- **The waveform has a ceiling, and an error says so (T-123).** Audio Studio draws the waveform from the whole file, decoded in the
-  renderer (3.25 GB for 1 h of WAV, 6.5 GB for 2 h). `audioStore.loadSource` refuses a file over `WAVEFORM_MAX_SEC` (2 h) before the
-  studio holds it, in a finished sentence (`waveformCeilingRefusal`, `@shared/audio`) every caller shows (the importer, Clean audio,
-  a restored project), and `WaveformView` listens to wavesurfer's `error` (it emits it twice for one failed load, so the toast has
-  an id) with `WAVEFORM_ERROR_MESSAGE`. T-124 (6, 7): the length is read BEFORE the work, and the sentence says what the file is
-  (`waveformCeilingRefusal(duration, 'video' | 'audio')`: a video's remedy is "export the part you want from Video Studio first",
-  a sound file's is to split it in another app). `audio:extractFromVideo` probes first and throws the video sentence before
-  ffmpeg is spawned, and Clean audio in Video Studio refuses on the probe the open video already carries, ahead of the
-  replace question: a 3 h video used to be fully extracted to a multi-gigabyte WAV in `%TEMP%` and only then refused. The ceiling is a simplification marked in the code; its upgrade is main-side peaks
-  handed to wavesurfer as `peaks` + `duration` (T-110 (ao)).
+- **The waveform is main's peaks; the renderer never decodes a file (T-129, retiring T-123's ceiling).** Audio Studio used to hand
+  wavesurfer the file's address alone, and wavesurfer fetched the WHOLE file and decoded it with WebAudio in the renderer (3.25 GB
+  for 1 h of WAV, 6.5 GB for 2 h), so T-123 refused anything over two hours. Now `audio:peaks` (`main/audio/peaks.ts`) has ffmpeg
+  decode the first sound stream, mono at 8 kHz, as raw PCM into a pipe, and folds each chunk as it arrives into `PEAK_BUCKETS`
+  (4000) highest/lowest pairs - nothing of the stream is kept, in main or anywhere - and `WaveformView` creates wavesurfer only
+  once those exist, with `url` + `peaks` + `duration` (given `peaks`, wavesurfer 7 skips both its fetch and its decode; the `url`
+  is only its media element's, which streams the file over imagii-file's Range support). `audioStore.loadSource` opens the file
+  (the studio shows it at once) and `drawWaveform` runs the job: `drawing` carries its percent, which the panel shows in the box
+  the waveform will fill ("Drawing the waveform… N%", a `role="progressbar"`), and `waveform` its answer, checked by
+  `isWaveformPeaks` (a size-bounded payload). A file main cannot read is REFUSED there - the studio lets go of it and every route
+  shows `WAVEFORM_READ_FAILED` as written (`reportFailure`) - and a file closed or replaced while it draws has its job stopped
+  through `audio:cancel` (the job has a per-job registry and a `CancelLatch` run, so the quit sweep and the quit's drain cover it).
+  `WaveformView` listens to wavesurfer's `error` (it can emit it twice for one failed load, so the toast has an id): with peaks,
+  what fails there is PLAYBACK, so the sentence is `PLAYBACK_ERROR_MESSAGE` and Play goes back off. There is no length gate
+  anywhere: `audio:extractFromVideo` probes only for "no sound" and for whether the file has a picture (T-126 (7), T-127 (10)).
 - **What the Player owns, the Timeline asks for through the store (T-120, T-121).** The Player registers a `PlayerTransport` (`readTime`, the
   element's exact `currentTime`; `togglePlay`, its own play / pause) with `registerTransport` while it is mounted. The Timeline's Space
   calls `togglePlay`, and its arrows, `,` / `.` and I / O read `playheadNow(state)`: the element's time, else the store's `currentTime`, which is

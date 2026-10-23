@@ -6,7 +6,8 @@ import type {
   AudioExportSpec,
   AudioJobProgress,
   AudioMuxSpec,
-  ChainSpec
+  ChainSpec,
+  WaveformPeaksProgress
 } from '../shared/audio'
 import type { ImageSaveManyRequest, ImageSaveRequest } from '../shared/canvas'
 import type { ReframePhase } from '../shared/reframe'
@@ -96,6 +97,13 @@ const api: ImagiiApi = {
     pickOutputFile: (options) => ipcRenderer.invoke('audio:pickOutputFile', options),
     extractFromVideo: (videoPath: string) =>
       ipcRenderer.invoke('audio:extractFromVideo', videoPath),
+    // T-129: the waveform's peaks, computed in main; the renderer never decodes the file.
+    peaks: (filePath: string, jobId: string) => ipcRenderer.invoke('audio:peaks', filePath, jobId),
+    onPeaksProgress: (handler: (p: WaveformPeaksProgress) => void) => {
+      const listener = (_e: unknown, p: WaveformPeaksProgress): void => handler(p)
+      ipcRenderer.on('audio:peaksProgress', listener)
+      return () => ipcRenderer.removeListener('audio:peaksProgress', listener)
+    },
     export: (spec: AudioExportSpec) => ipcRenderer.invoke('audio:export', spec),
     mux: (spec: AudioMuxSpec) => ipcRenderer.invoke('audio:mux', spec),
     cancel: (jobId: string) => ipcRenderer.invoke('audio:cancel', jobId),
