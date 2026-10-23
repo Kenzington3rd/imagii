@@ -11,6 +11,7 @@ import { isCancelledError } from '@shared/cancel'
 import { formatTimer } from '@shared/clockTime'
 import { localStamp } from '@shared/filename'
 import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
+import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
@@ -767,7 +768,7 @@ export function RecordStudio(): JSX.Element {
                       alt={s.name}
                       className="w-full rounded mb-2"
                     />
-                    <div className="text-xs font-medium truncate">{s.name}</div>
+                    <div className="text-xs font-medium truncate" title={s.name}>{s.name}</div>
                     <div className="text-xs text-ink-dim">{s.type}</div>
                   </button>
                 ))}
@@ -848,7 +849,7 @@ export function RecordStudio(): JSX.Element {
                     onChange={(e) => {
                       const corner = e.target.value as WebcamCorner
                       setWebcamCorner(corner)
-                      void window.api.settings.set('record.webcamCorner', corner)
+                      void persistSetting('record.webcamCorner', corner)
                     }}
                   >
                     {WEBCAM_CORNERS.map((c) => (
@@ -874,7 +875,7 @@ export function RecordStudio(): JSX.Element {
                   onChange={(e) => {
                     const on = e.target.checked
                     setConvertToMp4(on)
-                    void window.api.settings.set('record.convertToMp4', on)
+                    void persistSetting('record.convertToMp4', on)
                   }}
                 />
                 <span>

@@ -310,6 +310,31 @@ export function captionSizeReadout(
   return `about ${effectiveCaptionPx(fontSize)} px tall on ${CAPTION_REFERENCE_HEIGHT}p`
 }
 
+/** What `captions:clearTranscripts` answers (T-128 (3)): how many transcripts went, and how many would not. */
+export interface ClearTranscriptsResult {
+  removed: number
+  failed: number
+}
+
+/**
+ * The toast after "Clear saved transcripts". `error` is a clear that removed nothing because every file refused; one that removed some and not
+ * all is a plain toast that says how far it got and what to do. A press that found nothing (the count was stale) says that, as a result and not
+ * an error. The verb is the button's, in the past tense (BRANDING, "Destruction verbs").
+ */
+export function clearedTranscriptsMessage(r: ClearTranscriptsResult): { text: string; error: boolean } {
+  if (r.removed === 0 && r.failed === 0) return { text: 'No saved transcripts to clear', error: false }
+  if (r.removed === 0) {
+    return { text: "Couldn't clear the saved transcripts. Close anything that has them open, then try again.", error: true }
+  }
+  if (r.failed === 0) return { text: `Cleared ${countOf(r.removed, 'saved transcript')}`, error: false }
+  return {
+    text:
+      `Cleared ${r.removed} of ${countOf(r.removed + r.failed, 'saved transcript')}. ` +
+      'The rest are open in another program; close it and clear again.',
+    error: false
+  }
+}
+
 /** The toast after a transcription: lines of caption, counted properly. */
 export function captionsReadyMessage(segmentCount: number): string {
   return `Captions ready (${countOf(segmentCount, 'line')})`

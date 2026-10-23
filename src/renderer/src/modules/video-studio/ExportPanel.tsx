@@ -23,6 +23,7 @@ import { Icon } from '../../components/Icon'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
+import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 
 /** Why Export is disabled when no platform is checked on any clip (T-112). */
@@ -331,14 +332,16 @@ export function ExportPanel(): JSX.Element | null {
     // field blank is the last one and the watermark is forgotten: both keys go together, as they are
     // written together. Left alone, a person who cleared the field to stop stamping still got the old handle
     // on every kit file.
+    // T-128 (4): remembered for Clip Kit and the next visit, and nothing below depends on it: these used to be awaited bare, so a write
+    // main refused ended `startExport` here and the export never began (no toast, no rows). Fire-and-forget through the helper.
     if (watermark) {
-      await window.api.settings.set('streamerHandle', watermark.text)
-      await window.api.settings.set('watermarkPosition', watermark.position)
+      void persistSetting('streamerHandle', watermark.text)
+      void persistSetting('watermarkPosition', watermark.position)
     } else {
-      await window.api.settings.set('streamerHandle', undefined)
-      await window.api.settings.set('watermarkPosition', undefined)
+      void persistSetting('streamerHandle', undefined)
+      void persistSetting('watermarkPosition', undefined)
     }
-    if (filenameTemplate) await window.api.settings.set('filenameTemplate', filenameTemplate)
+    if (filenameTemplate) void persistSetting('filenameTemplate', filenameTemplate)
     const sourceBase = source.fileName.replace(/\.[^.]+$/, '')
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []
@@ -391,7 +394,7 @@ export function ExportPanel(): JSX.Element | null {
       toast.success(`Exported ${countOf(queue.length, 'file')}`)
       // INIT-E (round 15): persist the choice on success so the next batch
       // defaults to the same folder.
-      void window.api.settings.set('export.lastOutputDir', dir)
+      void persistSetting('export.lastOutputDir', dir)
     } catch (err) {
       // T-84: one verdict for the toast AND the rows. A cancel is neutral and
       // says what survived; a failure is plain words. Either way the rows that
@@ -605,7 +608,7 @@ export function ExportPanel(): JSX.Element | null {
                         : togglePreset(selectedClip.id, target.info.id)
                     }
                   />
-                  <span className="font-medium truncate">{target.info.label}</span>
+                  <span className="font-medium truncate" title={target.info.label}>{target.info.label}</span>
                   {target.custom ? (
                     <span className="text-xs uppercase tracking-wide text-ink-dim border border-ink-dim/40 rounded px-1 shrink-0">
                       Custom
@@ -641,7 +644,7 @@ export function ExportPanel(): JSX.Element | null {
           {jobs.map((j) => (
             <div key={j.jobId} className="flex flex-col gap-0.5">
               <div className="flex items-center gap-3 text-sm">
-                <span className="flex-1 min-w-0 truncate">
+                <span className="flex-1 min-w-0 truncate" title={`${j.clipName} · ${j.presetLabel}`}>
                   {j.clipName} · {j.presetLabel}
                   {/* T-112: the file this row wrote, by the name main gave it —
                       "clip (2).mp4" when the name was taken (T-106) — so a numbered

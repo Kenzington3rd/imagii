@@ -409,6 +409,42 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-128 (4), T-110 (x): the Welcome screen's button awaited the write of `welcomeSeen` BEFORE it let the person in, so a write main refused
+  // (a full disk, a config it cannot replace) left "Let's go" doing nothing, with nothing said. Main's `settings:set` is made to refuse here
+  // (the same ipcMain handler swapped in the running app; every other channel is the real one).
+  test('Welcome "Let\'s go" still lets the person in when main refuses to remember it, and says so in one sentence (T-128 (4))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('welcome-refused')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, {})
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toBeVisible({ timeout: 30_000 })
+      await installToastLog(window)
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('settings:set')
+        ipcMain.handle('settings:set', () => {
+          throw new Error('config write refused')
+        })
+      })
+
+      await window.getByRole('button', { name: "Let's go" }).click()
+
+      await expect(window.locator('h1', { hasText: 'imagii' }), 'the person is let in').toBeVisible({ timeout: 15_000 })
+      await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toHaveCount(0)
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't save your settings.")
+      expect(readConfig(userDataDir).welcomeSeen, 'and nothing was written: the next launch asks again').toBeUndefined()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('HotkeyOverlay: ? opens the route table, the Esc button and Escape both close it', async () => {
     test.setTimeout(120_000)
     const root = makeRoot('hotkeys')

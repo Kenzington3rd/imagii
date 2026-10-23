@@ -486,3 +486,37 @@ describe('abandonOpenRecordingSessions: the reload after a crash frees what the 
     expect(existsSync(tempPathFor(id))).toBe(false)
   })
 })
+
+// T-128 (5): the QUIT's sweep had the opposite rule to the reload's above. `abandonAllRecordingStreams` unlinked every registered session's
+// webm, including the one a finalize was saving: the take's only copy went while the person read the Save dialog (or while the convert
+// ran, with its half-written mp4 left at the chosen name). It reaps what was still being recorded and leaves a closed session to the
+// handler that owns it; recordingQuit.test.ts drives the convert's own end.
+describe('abandonAllRecordingStreams: the quit sweep leaves the take that is being saved (T-128 (5))', () => {
+  async function openTake(text: string): Promise<string> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes(text))
+    return id
+  }
+
+  it('reaps the take still being recorded, and leaves the one mid-finalize (the Save dialog is open) with its webm', async () => {
+    const finalizing = await openTake('the take being saved')
+    const recording = await openTake('the take still being recorded')
+    let release: () => void = () => undefined
+    saveDialogGate = new Promise<void>((resolve) => (release = resolve))
+    const outPath = path.join(TMP, 'saved.webm')
+    saveDialogResult = { canceled: false, filePath: outPath }
+    const saving = invoke<{ outputPath: string } | null>('recording:finalize', finalizing, { filename: 'take.webm', convertToMp4: false })
+    for (let i = 0; i < 200 && saveDialogAsked === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(saveDialogAsked).toBe(1)
+
+    abandonAllRecordingStreams()
+
+    expect(existsSync(tempPathFor(recording)), 'a recording that was still going has no one to save it: its partial is the sweep\'s').toBe(false)
+    expect(readFileSync(tempPathFor(finalizing), 'utf8'), 'the take being saved is the only copy and is not').toBe('the take being saved')
+
+    release()
+    const result = await saving
+    expect(result?.outputPath, 'and the save the sweep did not touch still finishes').toBe(outPath)
+    expect(readFileSync(outPath, 'utf8')).toBe('the take being saved')
+  })
+})

@@ -104,6 +104,15 @@ Repeated UI is a component, not copy-paste:
   `.message` in a `catch` outside a `console` call** —
   `tests/unit/failurePathLanguage.test.ts` parses the renderer and fails on
   it, and lists every site that must route through the helper.
+- **`persistSetting(key, value)`** (`lib/persistSetting.ts`, T-128 (4)) - how a screen remembers a preference without letting the remembering
+  break what the person pressed. `window.api.settings.set` is an IPC round trip main can refuse (a full disk, a config it cannot
+  replace); written bare in a handler it ended the handler (the Welcome screen's "Let's go" stayed put; Export, which saved the
+  watermark before it built its queue, did nothing) or was an unhandled rejection. The helper never rejects: a refusal is one
+  `reportFailure` sentence, "Couldn't save your settings.", and the raw error goes to the console. `void` it when nothing depends on the
+  write; `await` it where the order matters (the recent-files list); a write the NEXT line depends on (the posting diary's migration deletes the
+  old copy once the new one is stored) stays an `await` in a `try` with a `catch`. `failurePathLanguage.test.ts` fails on any other
+  `window.api.settings.set` that is neither awaited inside a `try` with a `catch` nor `.catch`ed (a `void` call inside a `try` is not caught by
+  it: the rejection arrives after the `try` is over). The pickers, cancels and reads that are also awaited bare are not this rule's.
 - **Cancel is a fact, not a string.** Pressing Cancel SIGKILLs the child,
   which exits non-zero exactly like a crash. Main marks the kill —
   `killAsCancelled(child)` in a runner's cancel function,
@@ -144,7 +153,14 @@ Repeated UI is a component, not copy-paste:
   in `ClipKitButton`). A new cancelable runner needs a run, a `check` before its
   spawn, a `guard` around each await before it (the probe, and — T-106 —
   `nextFreePath`'s choosing of the output's name), and a row in the pre-spawn table
-  in `cancelSentinel.test.ts`.
+  in `cancelSentinel.test.ts`. T-128 (5): the convert (`beginConvertRun` for the recording's save, held from the chosen
+  output name until the temp take is dealt with; `convertForImport` for its own) and the extraction (`extractAudioFromVideo`, until the scratch
+  WAV is gone) are runs too, so `before-quit`'s wait covers their cleanup; the two whose only pre-spawn wait is a folder's creation
+  are held by `convertQuit.test.ts` and `extract.test.ts` ("a cancel that lands while the folder is made spawns nothing") and not by the
+  table. **A quit is not a Discard**: `ConvertCancelledError.byQuit` (set by `cancelAllConverts`) tells the save's cleanup which it is.
+  Both remove the half-written output; only a Discard removes the raw take (`userData/recordings/<id>.webm`, the only copy), and the
+  quit's sweep (`abandonAllRecordingStreams`) leaves a CLOSED session (mid-finalize) to the handler that owns it, as the reload's does
+  (T-124 (3)): what the sweep owns is a take still being recorded.
 - **A job that stops removes the file it was writing (T-100).** ffmpeg opens its
   output when it starts and writes the index (an MP4's moov atom, a GIF's trailer)
   when it ends, so a killed run leaves a file with a real name that nothing plays,
@@ -155,7 +171,8 @@ Repeated UI is a component, not copy-paste:
   older than the spawn: ffmpeg truncates its output when it OPENS it, which for a
   slow input is well after the spawn, and a Cancel before that leaves last week's
   export of the same name exactly as it was. Earlier jobs' files are never
-  touched — each job knows only its own path.
+  touched — each job knows only its own path. T-128 (5): the import transcode (`convertForImport`) removes its partial the same way on
+  any failure or cancel.
 - **A progress number is a measurement, or it is absent (T-89).** A progress
   event carries `percent` only when main KNOWS how far along the work is — a
   download's byte count, `done` = 100, the burn-in's encode position over the
@@ -330,8 +347,10 @@ Repeated UI is a component, not copy-paste:
   newline) at the store AND at the IPC handler, and at the parse of a file that carries an id the list hands
   back (`parseChainPreset`). "They are not paths" is not a reason to skip it: `audio:deletePreset` joined its id
   into `<userData>/audio-presets/<id>.json` and unlinked it, and `../config` reached `unlink` behind a one-line
-  rationale in LESSONS that said otherwise. `customPresets.ts`, `search/moodboard.ts` and `ipc/search.ts` still
-  spell the same pattern out locally (recorded in the ledger); a new site calls the shared one.
+  rationale in LESSONS that said otherwise. T-128 (6): the alphabet is spelled out ONCE, as the exported `SAFE_ID_RE` in
+  `pathSafety.ts`; the custom export presets, the mood boards, `ipc/search.ts`, the recording sessions and the video job ids import it
+  (`pathSafety.test.ts` fails on a second `[A-Za-z0-9_-]` anywhere in `src`), and `video:deleteCustomPreset` holds the
+  handler-level `assertSafeId` that `audio:deletePreset` has. A new site calls `isSafeId` / `assertSafeId` or imports the constant.
 - **"Outside the folder" is a real parent segment, asked in ONE place (T-117).** `isOutsideFolder(root, target)`
   (`main/pathConfine.ts`): `path.relative` is `..`, starts with `..` AND a separator, or is absolute (another
   drive). `rel.startsWith('..')` also refuses a file INSIDE the folder whose own name starts with two dots,

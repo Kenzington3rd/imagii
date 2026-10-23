@@ -195,6 +195,11 @@ test.describe('imagii Electron smoke', () => {
     }
     const fonts = urls.filter((u) => /inter-latin-(?:400|500|600)-normal-[\w-]+\.woff2$/.test(u))
     expect(fonts.length, 'the three weights are in the built sheet').toBe(3)
+    // T-128 (2): and woff2 ALONE. The package's own css listed a .woff after each, which Chromium 126 never requests: the build emitted three
+    // files (93 KB) that nothing could load. The sheet names no .woff and the assets folder holds none.
+    expect(urls.filter((u) => /\.woff(?![\w])/.test(u)), 'no sheet names a .woff (woff2 alone)').toEqual([])
+    expect(readdirSync(assets).filter((f) => /\.woff$/.test(f)), 'the build holds no .woff file').toEqual([])
+    expect(readdirSync(assets).filter((f) => f.endsWith('.woff2')).length, 'and exactly the three woff2 files').toBe(3)
 
     const userDataDir = path.join(os.tmpdir(), `imagii-e2e-font-${Date.now().toString(36)}`)
     mkdirSync(userDataDir, { recursive: true })

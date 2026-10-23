@@ -150,7 +150,7 @@ SAME verb, and the toast that follows uses its past tense.
 |---|---|---|
 | **Delete** | Destroy something saved under its own name. It always asks first, and says so when Ctrl+Z can bring it back. | Delete preset, Delete board, Delete a posting-log entry |
 | **Remove** | Take one item out of what you are editing. It lives in the document, so Undo puts it back. | Remove clip, Remove layer, Remove overlay |
-| **Clear** | Empty something that stays: the file or cache is still there, with nothing in it. | Clear the autosave, Clear thumbnail cache |
+| **Clear** | Empty something that stays: the file or cache is still there, with nothing in it. | Clear the autosave, Clear thumbnail cache, Clear saved transcripts |
 | **Discard** | Abandon something that was never saved. | Discard the recording, Close this video (its edits are discarded) |
 
 ### Toasts

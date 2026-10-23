@@ -13,6 +13,7 @@ import {
 } from '../sidecars/whisperManager'
 import { captionsOutputDir } from '../sidecars/paths'
 import { isOutsideFolder } from '../pathConfine'
+import { clearTranscripts, countTranscripts } from '../transcripts'
 import { shiftSrtToRange, type TranscribeRequest, type BurnInRequest } from '../../shared/captions'
 import {
   assertFiniteNonNeg,
@@ -124,6 +125,11 @@ export function registerCaptionsIpc(): void {
       return result.filePath
     }
   )
+
+  // T-128 (3), T-110 (s): the transcripts every transcription keeps in <userData>/captions, counted and emptied. NO argument: the folder
+  // is main's own, so no renderer can aim a clear anywhere else (transcripts.ts holds what counts as a transcript and what is never touched).
+  ipcMain.handle('captions:countTranscripts', () => countTranscripts(captionsOutputDir()))
+  ipcMain.handle('captions:clearTranscripts', () => clearTranscripts(captionsOutputDir()))
 
   ipcMain.handle('captions:pickBurnInOutput', async (_e, defaultName: string) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]

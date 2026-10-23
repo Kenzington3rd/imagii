@@ -189,6 +189,15 @@ describe('setSrtPathFor — captions go to the video they were made from (T-112)
     expect(useVideoStore.getState().srtPath).toBe('/tmp/a.srt')
   })
 
+  it('null forgets the transcript of the open video, and only of the open video (T-128 (3))', () => {
+    useVideoStore.setState({ srtPath: '/tmp/a.srt' })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', null)).toBe(true)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    useVideoStore.setState({ source: VIDEO_B, srtPath: '/tmp/b.srt' })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', null)).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/b.srt')
+  })
+
   it('transcribe A, open B, A finishes: B gets nothing, and the store says it did not apply', () => {
     useVideoStore.setState({ source: VIDEO_B, srtPath: null })
     expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(false)

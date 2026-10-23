@@ -1688,6 +1688,80 @@ test.describe('CaptionsPanel', () => {
     }
   })
 
+  // T-128 (3), T-110 (s): every transcription keeps its .srt in <userData>/captions for good, and the only way to get rid of one was to find the
+  // folder. The Captions panel says how many are kept and has a button for it, behind a confirm. Seeded here: three transcripts (one of them the
+  // open video's own), a burn-in's temp copy and a notes file in the same folder (neither is a transcript), and a `.srt` in the models folder
+  // beside it (not ours to touch). The folder is read from disk after every step.
+  test('Clear saved transcripts: the line counts them, Escape and Cancel change nothing, Clear empties the folder of transcripts and of nothing else, and the open video is no longer transcribed (T-128 (3))', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchHome('captionsclear')
+    const { app, window, userDataDir } = studio
+    try {
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      const cue = '1\n00:00:00,000 --> 00:00:01,000\nhello\n'
+      const tempCopy = 'seeded.srt.clip-0b6f3a52-1c3e-4f0e-9d77-2f7a9c1d8e44.srt'
+      for (const name of ['seeded.srt', 'older-1.srt', 'older-2.srt', tempCopy]) writeFileSync(path.join(captionsDir, name), cue, 'utf8')
+      writeFileSync(path.join(captionsDir, 'notes.txt'), 'mine', 'utf8')
+      const modelsDir = path.join(userDataDir, 'models')
+      mkdirSync(modelsDir, { recursive: true })
+      writeFileSync(path.join(modelsDir, 'keep.srt'), 'not a transcript', 'utf8')
+      const projectPath = path.join(root, `captionsclear-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath: path.join(captionsDir, 'seeded.srt') }
+        }),
+        'utf8'
+      )
+      await stubDialogs(app, { open: [projectPath] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+
+      const card = captionsCard(window)
+      const everything = [tempCopy, 'notes.txt', 'older-1.srt', 'older-2.srt', 'seeded.srt'].sort()
+      await expect(card.getByText('3 saved transcripts kept on this computer.'), 'the temp copy and the notes file are not transcripts').toBeVisible()
+      await expect(card.getByRole('button', { name: 'Save .srt' }), 'the open video has its transcript').toBeVisible()
+      const clear = card.getByRole('button', { name: 'Clear saved transcripts' })
+      await expect(clear).toBeEnabled()
+      const dialog = window.getByRole('dialog', { name: 'Clear saved transcripts?' })
+
+      // Escape: the question closes and nothing is touched.
+      await clear.click()
+      await expect(dialog).toBeVisible()
+      await expect(dialog, 'it says how many it will delete').toContainText('deletes the 3 saved transcripts')
+      await expect(dialog.getByRole('button', { name: 'Cancel' }), 'it opens on the safe answer').toBeFocused()
+      await window.keyboard.press('Escape')
+      await expect(dialog).toBeHidden()
+      expect(readdirSync(captionsDir).sort(), 'Escape deleted nothing').toEqual(everything)
+      // Cancel: the same.
+      await clear.click()
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).toBeHidden()
+      expect(readdirSync(captionsDir).sort(), 'Cancel deleted nothing').toEqual(everything)
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toBeVisible()
+
+      // Clear: the three transcripts go - the folder keeps what is not one, and the models folder is untouched.
+      await clear.click()
+      await dialog.getByRole('button', { name: 'Clear transcripts' }).click()
+      await expect(dialog).toBeHidden()
+      await expectToast(window, 'Cleared 3 saved transcripts')
+      expect(readdirSync(captionsDir).sort(), 'only the transcripts went').toEqual([tempCopy, 'notes.txt'].sort())
+      expect(readdirSync(modelsDir), 'the folder beside it is not ours to empty').toEqual(['keep.srt'])
+      await expect(card.getByText('No saved transcripts.')).toBeVisible()
+      await expect(clear, 'nothing left to clear').toBeDisabled()
+      await expect(card.getByRole('button', { name: 'Save .srt' }), 'the open video went back to not transcribed').toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
   // T-115, T-116: "Save .srt" on a transcript it cannot save. `captions:saveSrt` reads only from
   // <userData>/captions. A project file may name any safe absolute path as its srtPath, so the button
   // can be pressed on a transcript outside that folder (main refuses) or on one the app no longer
@@ -5185,6 +5259,39 @@ test.describe('single-output panels', () => {
     }
   })
 
+  // T-128 (4), T-110 (x): Export saved the watermark handle, its corner and the file-name template with bare awaited writes BEFORE it built the
+  // queue, so a write main refused ended `startExport` there: the button came back, no row, no toast, no file. The writes are remembered
+  // preferences, not the export; a refusal is one sentence and the export goes on. `settings:set` is made to refuse in the running app.
+  test('Export still runs when main refuses to remember the watermark and the template, and says so in one sentence (T-128 (4))', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t128refused-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t128refused', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('settings:set')
+        ipcMain.handle('settings:set', () => {
+          throw new Error('config write refused')
+        })
+      })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      const output = path.join(seeded, 'pipeline_Clip 1_youtube.mp4')
+      await expect.poll(() => existsSync(output), { timeout: 120_000, intervals: [250] }).toBe(true)
+      await expect(card.getByRole('button', { name: 'Export 1 file', exact: true }), 'free again once it has finished').toBeEnabled({ timeout: 60_000 })
+      const toasts = await readToastLog(window)
+      expect(toasts, 'it said it exported').toContain('Exported 1 file')
+      expect(toasts, 'and that the preferences were not saved, in one plain sentence').toContain("Couldn't save your settings.")
+      expect(mp4sIn(seeded)).toEqual(['pipeline_Clip 1_youtube.mp4'])
+      // T-128 (1): and the finished row's two cut names carry their whole selves (the clip and preset, and the file the row wrote).
+      await expect(card.locator('span.truncate[title="Clip 1 \u00b7 YouTube"]'), 'the row\'s name').toHaveCount(1)
+      await expect(card.locator('span.truncate[title$="pipeline_Clip 1_youtube.mp4"]'), 'the row\'s file, titled with its full path').toHaveCount(1)
+    } finally {
+      await app.close()
+    }
+  })
+
   // T-127 (3): the window's X (and `app.quit()`) in the middle of a job. Cancel deletes the half-written output (T-100); a quit did not: the
   // kills before-quit issues only START the cleanup, and the process was gone before it ran. Executed on the unfixed build 6 times out of 6:
   // `vid_c1_youtube.mp4` (~1.5 MB, no moov atom) at its final name, and the next export of the clip landed at "(2)". The job here is real and
@@ -5246,6 +5353,148 @@ test.describe('single-output panels', () => {
       await expect.poll(() => existsSync(scratch) && statSync(scratch).size > 3_000_000, { timeout: 120_000, intervals: [200] }).toBe(true)
       await quitByWindowX(app)
       expect(readdirSync(outDir), 'no .cleaned.wav and no result.mp4 after the quit').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  // T-128 (5), T-127 (3)'s "not covered": the same window X in the middle of the three jobs the quit's wait did not see - the recording's save
+  // (the MP4 convert), an import transcode and the extraction of a recording's sound. Each runs in an app whose temp folder is its own
+  // (`TMPDIR`), so the scratch the job makes is the only thing in it and a parallel run on the machine cannot be mistaken for the job's.
+  // The folders are read after the app has exited.
+  async function launchHomeInOwnTmp(name: string): Promise<Studio & { tmp: string }> {
+    const stamp = Date.now().toString(36)
+    const userDataDir = path.join(root, `ud-${name}-${stamp}`)
+    const outDir = path.join(root, `out-${name}-${stamp}`)
+    const tmp = path.join(root, `tmp-${name}-${stamp}`)
+    mkdirSync(outDir, { recursive: true })
+    mkdirSync(tmp, { recursive: true })
+    seedUserData(userDataDir)
+    const app = await electron.launch({
+      args: [path.resolve(__dirname, '../../out/main/index.js'), `--user-data-dir=${userDataDir}`],
+      env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp, ELECTRON_DISABLE_SANDBOX: '1' }
+    })
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+    return { app, window, userDataDir, outDir, tmp }
+  }
+
+  /**
+   * A slow disk (an antivirus scan, a busy drive): removing a file whose name ends in one of `suffixes` takes `ms` in the app's MAIN process.
+   * The cleanup after a kill is a few milliseconds of work on an idle disk, and the window's teardown takes about as long, so on a fast
+   * machine the unfixed app wins the race by luck (executed: the extraction's WAV and the transcode's mp4 were both removed in time). The
+   * technique is `installSpawnStall`'s: patch the built-in module in main and publish the patch to the app's named imports.
+   */
+  async function slowUnlinkInMain(app: ElectronApplication, suffixes: string[], ms: number): Promise<void> {
+    await app.evaluate((_electron, rule) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fsp = getBuiltin('node:fs/promises') as { unlink: (p: unknown) => Promise<void> }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = fsp.unlink
+      fsp.unlink = async (p: unknown): Promise<void> => {
+        if (rule.suffixes.some((suffix) => String(p).endsWith(suffix))) await new Promise((resolve) => setTimeout(resolve, rule.ms))
+        return real(p)
+      }
+      mod.syncBuiltinESMExports()
+    }, { suffixes, ms })
+  }
+
+  /** One minute of 720p VP8 at a low bitrate: a small file (a MediaRecorder take) that libx264 takes a good while to convert. Made once, for both tests. */
+  let webmTake: Promise<string> | null = null
+  function makeWebmTake(): Promise<string> {
+    webmTake ??= (async () => {
+      const dir = path.join(root, `t128take-${Date.now().toString(36)}`)
+      mkdirSync(dir, { recursive: true })
+      const file = path.join(dir, 't128-take.webm')
+      await ffmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=60', '-c:v', 'libvpx', '-b:v', '800k', '-deadline', 'realtime', '-cpu-used', '8', '-an', file])
+      return file
+    })()
+    return webmTake
+  }
+
+  test("quitting the app in the middle of a recording's MP4 convert leaves no half-written mp4 and keeps the raw take (T-128 (5))", async () => {
+    test.setTimeout(300_000)
+    const webm = await makeWebmTake()
+    const { app, window, userDataDir, outDir } = await launchHomeInOwnTmp('t128recquit')
+    try {
+      const outPath = path.join(outDir, 'take.mp4')
+      await stubDialogs(app, { save: [outPath] })
+      await slowUnlinkInMain(app, ['.mp4'], 600)
+      const url = await window.evaluate((p) => window.api.video.fileUrl(p), webm)
+      // The renderer's own calls (the Record studio's Stop runs exactly these): begin, the bytes in slices, then finalize with Convert on.
+      void window
+        .evaluate(async (u) => {
+          const bytes = await (await fetch(u)).arrayBuffer()
+          const { id } = await window.api.recording.begin()
+          for (let at = 0; at < bytes.byteLength; at += 4 * 1024 * 1024) await window.api.recording.appendChunk(id, bytes.slice(at, Math.min(at + 4 * 1024 * 1024, bytes.byteLength)))
+          return window.api.recording.finalize(id, { filename: 'take', convertToMp4: true, durationMs: 60_000 }).then(
+            (r) => JSON.stringify(r),
+            (e: unknown) => `ERR ${String(e)}`
+          )
+        }, url)
+        .catch(() => undefined)
+      // The convert has opened its output at the name the person chose, and the raw take is in userData.
+      await expect.poll(() => existsSync(outPath) && statSync(outPath).size > 300_000, { timeout: 120_000, intervals: [200] }).toBe(true)
+      const recordings = path.join(userDataDir, 'recordings')
+      const takes = readdirSync(recordings)
+      expect(takes, 'the raw take is the one webm in userData/recordings while the convert runs').toHaveLength(1)
+      const rawSize = statSync(path.join(recordings, takes[0] as string)).size
+      expect(rawSize, 'and it is the whole take').toBe(statSync(webm).size)
+
+      await quitByWindowX(app)
+
+      expect(existsSync(outPath), 'no half-written mp4 at the name the person chose').toBe(false)
+      expect(readdirSync(recordings), 'and the raw take survived the quit: a take is never both gone').toEqual(takes)
+      expect(statSync(path.join(recordings, takes[0] as string)).size).toBe(rawSize)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('quitting the app in the middle of an import transcode leaves no half-written mp4 in the working-copy folder (T-128 (5))', async () => {
+    test.setTimeout(300_000)
+    const source = await makeWebmTake()
+    const { app, window, tmp } = await launchHomeInOwnTmp('t128impquit')
+    try {
+      const importDir = path.join(tmp, 'imagii-import')
+      const partials = (): string[] => (existsSync(importDir) ? readdirSync(importDir) : [])
+      await slowUnlinkInMain(app, ['.mp4'], 600)
+      void window.evaluate((p) => window.api.video.convertForImport(p).catch((e: unknown) => String(e)), source).catch(() => undefined)
+      await expect
+        .poll(() => partials().some((f) => statSync(path.join(importDir, f)).size > 300_000), { timeout: 120_000, intervals: [200] })
+        .toBe(true)
+      expect(partials(), 'the transcode is writing its working copy: one mp4 named for the source').toHaveLength(1)
+      expect(partials()[0]).toMatch(/^t128-take-[\w-]{8}\.mp4$/)
+
+      await quitByWindowX(app)
+
+      expect(partials(), 'nothing is left in the folder after the quit: a transcode that stops removes its partial').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test("quitting the app in the middle of an extraction removes the half-written scratch WAV (T-128 (5))", async () => {
+    test.setTimeout(300_000)
+    const dir = path.join(root, `t128extquit-${Date.now().toString(36)}`)
+    mkdirSync(dir, { recursive: true })
+    // 115 minutes of silence in FLAC (1.6 MB): under the 2-hour waveform ceiling, and 1.3 GB of WAV once it is extracted (about 4 s of ffmpeg).
+    const sound = path.join(dir, 'long.mka')
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '6900', '-c:a', 'flac', sound])
+    const { app, window, tmp } = await launchHomeInOwnTmp('t128extquit')
+    try {
+      const scratch = path.join(tmp, 'imagii-audio')
+      const wavs = (): string[] => (existsSync(scratch) ? readdirSync(scratch) : [])
+      await slowUnlinkInMain(app, ['.wav'], 600)
+      void window.evaluate((p) => window.api.audio.extractFromVideo(p).catch((e: unknown) => String(e)), sound).catch(() => undefined)
+      await expect.poll(() => wavs().some((f) => statSync(path.join(scratch, f)).size > 5_000_000), { timeout: 120_000, intervals: [50] }).toBe(true)
+      expect(wavs(), 'the extraction is writing its scratch WAV').toHaveLength(1)
+      expect(statSync(path.join(scratch, wavs()[0] as string)).size, 'and it is still going (1.3 GB when finished)').toBeLessThan(1_000_000_000)
+
+      await quitByWindowX(app)
+
+      expect(wavs(), 'nothing is left in the scratch folder after the quit').toEqual([])
     } finally {
       await app.close().catch(() => undefined)
     }

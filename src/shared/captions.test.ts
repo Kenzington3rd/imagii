@@ -11,6 +11,7 @@ import {
   captionPlayResY,
   captionsReadyMessage,
   captionSizeReadout,
+  clearedTranscriptsMessage,
   DEFAULT_CAPTION_STYLE,
   effectiveCaptionPx,
   escapeSubtitlesPath,
@@ -501,6 +502,30 @@ describe('captionPhaseLabel — plain words for each phase (T-89)', () => {
       // sentence case, not a shouted identifier.
       expect(captionPhaseLabel(phase)).toMatch(/^[A-Z][a-z]/)
     }
+  })
+})
+
+describe('clearedTranscriptsMessage — what "Clear saved transcripts" reports (T-128 (3))', () => {
+  it('names the count, in the button\'s verb, with the singular handled and no trailing period', () => {
+    expect(clearedTranscriptsMessage({ removed: 3, failed: 0 })).toEqual({ text: 'Cleared 3 saved transcripts', error: false })
+    expect(clearedTranscriptsMessage({ removed: 1, failed: 0 })).toEqual({ text: 'Cleared 1 saved transcript', error: false })
+  })
+
+  it('a press that found nothing (the count was stale) says so, as a result and not an error', () => {
+    expect(clearedTranscriptsMessage({ removed: 0, failed: 0 })).toEqual({ text: 'No saved transcripts to clear', error: false })
+  })
+
+  it('a clear that got part of the way says how far, and what to do about the rest', () => {
+    const m = clearedTranscriptsMessage({ removed: 2, failed: 1 })
+    expect(m.error).toBe(false)
+    expect(m.text).toBe('Cleared 2 of 3 saved transcripts. The rest are open in another program; close it and clear again.')
+    expect(clearedTranscriptsMessage({ removed: 1, failed: 1 }).text).toMatch(/^Cleared 1 of 2 saved transcripts\./)
+  })
+
+  it('a clear that removed nothing because every file refused is an error, in a finished sentence with its period', () => {
+    const m = clearedTranscriptsMessage({ removed: 0, failed: 2 })
+    expect(m.error).toBe(true)
+    expect(m.text).toBe("Couldn't clear the saved transcripts. Close anything that has them open, then try again.")
   })
 })
 

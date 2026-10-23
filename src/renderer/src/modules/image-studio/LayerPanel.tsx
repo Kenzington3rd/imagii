@@ -111,7 +111,7 @@ export function LayerPanel(): JSX.Element {
                 {/* T-124 (12): `w-full`. The name is a `truncate` span inside a column-flex BUTTON (T-114 made the row's name a
                     button for the keyboard), and a button sizes its content to max-content: the span kept the name's full width,
                     painted over the row's buttons and was never cut. At the span's own width the ellipsis works. */}
-                <span className="truncate w-full">{layer.name}</span>
+                <span className="truncate w-full" title={layer.name}>{layer.name}</span>
                 {/* T-91: said where the user is looking, not only in docs — a
                     hint or a reference stays on the canvas but is left out of
                     every export. Text, not just color, and AA on the row. */}

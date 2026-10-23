@@ -96,10 +96,12 @@ export function assertSafeAbsolutePath(p: unknown, name: string): asserts p is s
  * is held to the alphabet nanoid mints, `[A-Za-z0-9_-]`. A dot, a slash, a backslash, a space or
  * a newline cannot be in it, so `../config` cannot leave the folder and `x.json` cannot smuggle
  * an extension. `$` without the `m` flag matches only the very end of the string, so a trailing
- * newline is refused too. (customPresets.ts, search/moodboard.ts and ipc/search.ts each spell the
- * same pattern out locally; the audio presets use this one.)
+ * newline is refused too. T-128 (6): this is the ONE spelling of the alphabet in `src` - the custom export
+ * presets, the mood boards, the search handlers, the recording sessions and the video job ids import the
+ * constant instead of writing it out again, and a unit pin fails on a second copy. The pattern has no `g` or
+ * `y` flag, so `test()` keeps no state between calls.
  */
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
+export const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
 
 export function isSafeId(id: unknown): id is string {
   return typeof id === 'string' && SAFE_ID_RE.test(id)

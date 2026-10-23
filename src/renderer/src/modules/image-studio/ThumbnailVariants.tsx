@@ -281,7 +281,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                   >
                     <img src={p.dataUrl} alt={p.label} className="w-full rounded flex-1 object-contain" />
                     <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-medium truncate">{p.label}</span>
+                      <span className="font-medium truncate" title={p.label}>{p.label}</span>
                       <button className="text-accent hover:underline" onClick={() => saveOne(p)}>
                         Save
                       </button>

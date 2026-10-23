@@ -4387,7 +4387,7 @@ IMG-PREC.
   the assigned WORKTREE (run `npm install` there first); no git
   write operations; no docs/TICKETS.md, package.json or lockfile
   edits.
-- **Status:** open (dispatched round 78, worktree)
+- **Status:** done (round 80, checkpoint 1 — see the Done entry)
 
 ---
 
@@ -5074,6 +5074,44 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 80, checkpoint 1 — T-128, the six-item small-debt batch,
+landed in the commit that carries this entry. Worked by Sonnet in
+round 78 (paused 2026-10-16 as wip/t128-partial-20261016), resumed
+by a second Sonnet under the death protocol (inherited ledger
+re-verified: named tests re-run, one red per completed item
+re-broken and restored byte-identical). The six: (1) titles on
+every remaining truncated name, with an a11ySweep rule that counts
+the pattern so a new truncate without a title fails the build —
+DESIGN_GUIDE 220-222 is now true; (2) woff2-only Inter via three
+explicit @font-face rules, the build emits 3 woff2 and 0 woff
+(e2e-asserted), @fontsource stays out of the asar; (3) Clear saved
+transcripts (T-110 (s)) — main/transcripts.ts counts and empties
+only main's own <userData>/captions (lstat never follows links; a
+shifted burn-in copy is not a transcript; the IPC takes no
+argument), CaptionsPanel confirms with the count and reports
+removed/failed distinctly; (4) persistSetting() (T-110 (x)) — a
+refused settings write is one reportFailure sentence and the press
+still works, with a failurePathLanguage rule failing any bare
+settings.set; (5) quit coverage for convert + extraction (the
+T-127 (3) "not covered" list) — both are latch runs until their
+cleanup is done so the before-quit drain waits for it, proven on
+real ffmpeg on both majors (no moov-less mp4, no scratch WAV), and
+the CRITICAL half: the quit sweep never touches a finalizing
+take — ConvertCancelledError.byQuit tells a quit from a Discard, a
+quit-ended save keeps the raw webm (the only copy) and removes the
+half-written mp4 (e2e: window-X mid-convert); (6) one id alphabet
+(T-110 (ad)) — SAFE_ID_RE exported from pathSafety.ts is the single
+spelling, with a pin that fails on a second copy. Expedited
+personally on the worker's tree: verify x2 (166/4457), test:media
+on 7.0.2 (281 passed | 11 skipped of 292), the touched 6.1.1
+blocks (22 passed; the 1 failure re-run by name and confirmed as
+the known mpegts platform pin), build + FULL Playwright 342/342;
+one independent mutation at a seam no ledger names
+(cancelAllConverts' byQuit argument → both quit-keeps-the-take
+unit cases red through the real convert.ts → restored
+byte-identical, 5/5 green); verify + the touched L5 blocks re-run
+on the landed tree.
 
 Round 77 — review-gate fixes, the sixteenth pass's findings:
 T-127, all 16 items (item 2's packaging half was done

@@ -34,8 +34,12 @@ import { RENDERER_ROOT } from './routeSources'
  * writes that do not reject in practice, so a blanket rule would need a 47-row
  * allow-list and would be mostly noise. The one that could and did reject, `CaptionsPanel.saveSrt`
  * (`captions:saveSrt` throws for a transcript outside the captions folder, and a
- * project file may name one), is pinned BY NAME in the last block of this file. The upgrade is
- * the scan with the allow-list, written when a second site turns up.
+ * project file may name one), is pinned BY NAME in the `Save .srt` block of this file. T-128 (4), T-110 (x): the
+ * family that needed no allow-list is scanned in the last block - a settings write
+ * (`window.api.settings.set`) is never a bare promise: the writes that are not worth a
+ * user's interaction go through `persistSetting`, the ones the next line depends on sit
+ * in a `try` with a `catch`. The pickers, cancels and reads of the old count are not scanned
+ * (T-128's ledger lists what was audited).
  */
 
 function listSources(dir: string, out: string[] = []): string[] {
@@ -355,5 +359,77 @@ describe('Save .srt reports its own failure (T-115)', () => {
     expect(guardedAwait(parse(bare), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: false, failed: null })
     expect(guardedAwait(parse(swallowed), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: false, failed: null })
     expect(guardedAwait(parse(real), 'saveSrt', 'captions.saveSrt')).toEqual({ awaited: true, guarded: true, failed: 'Nope.' })
+  })
+})
+
+describe('a settings write is never a bare promise (T-128 (4), T-110 (x))', () => {
+  /**
+   * Every `window.api.settings.set(...)` call that is neither AWAITED inside the `try` of a try-with-catch (in its own function) nor the
+   * receiver of a `.catch(...)`. Such a call rejects into nothing: awaited, it ends the click handler that awaited it (the Welcome screen's
+   * "Let's go" stayed on the Welcome screen; Export did nothing); not awaited, it is an unhandled rejection - and a `void` call inside a
+   * `try` is not caught by it, because the rejection arrives after the `try` has been left.
+   */
+  function bareSettingsWrites(sf: ts.SourceFile): string[] {
+    const hits: string[] = []
+    const isWrite = (n: ts.Node): n is ts.CallExpression =>
+      ts.isCallExpression(n) && /(^|\.)settings\.set$/.test(n.expression.getText(sf))
+    const isCaughtHere = (n: ts.CallExpression): boolean =>
+      ts.isPropertyAccessExpression(n.parent) &&
+      n.parent.name.text === 'catch' &&
+      ts.isCallExpression(n.parent.parent) &&
+      n.parent.parent.expression === n.parent
+    const visit = (n: ts.Node, guarded: boolean): void => {
+      if (ts.isFunctionLike(n)) guarded = false
+      if (ts.isTryStatement(n) && n.catchClause) {
+        visit(n.tryBlock, true)
+        visit(n.catchClause, guarded)
+        if (n.finallyBlock) visit(n.finallyBlock, guarded)
+        return
+      }
+      const awaitedHere = isWrite(n) && ts.isAwaitExpression(n.parent)
+      if (isWrite(n) && !(guarded && awaitedHere) && !isCaughtHere(n)) {
+        hits.push(`line ${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}: ${n.getText(sf).slice(0, 70)}`)
+      }
+      ts.forEachChild(n, (c) => visit(c, guarded))
+    }
+    visit(sf, false)
+    return hits
+  }
+
+  it('no renderer source writes a setting with a promise nothing handles', () => {
+    const offenders = FILES.flatMap((f) => bareSettingsWrites(f.ast).map((h) => `${f.rel} ${h}`))
+    expect(offenders, 'route it through persistSetting (lib/persistSetting.ts), or put the await in a try with a catch').toEqual([])
+  })
+
+  it('the one helper that writes a setting for the rest is one of the files scanned, and its write sits in a try with a catch', () => {
+    const helper = FILES.find((f) => f.rel === 'lib/persistSetting.ts')
+    expect(helper, 'lib/persistSetting.ts exists').toBeDefined()
+    expect(helper?.text).toMatch(/window\.api\.settings\.set\(/)
+    expect(helper?.text).toMatch(/reportFailure\(err, \{ failed: "Couldn't save your settings\." \}\)/)
+    expect(bareSettingsWrites((helper as (typeof FILES)[number]).ast)).toEqual([])
+  })
+
+  it('the finder discriminates: an awaited write, a void write, a write in a try WITHOUT a catch, and one in a nested function are found; the guarded shapes are not', () => {
+    const parse = (code: string): ts.SourceFile =>
+      ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    const hits = (code: string): number => bareSettingsWrites(parse(code)).length
+    expect(hits("async function f() { await window.api.settings.set('a', 1) }")).toBe(1)
+    expect(hits("function f() { void window.api.settings.set('a', 1) }")).toBe(1)
+    expect(hits("function f() { window.api.settings.set('a', 1).then(() => x()) }")).toBe(1)
+    expect(hits("async function f() { try { await window.api.settings.set('a', 1) } finally { y() } }")).toBe(1)
+    expect(hits("async function f() { try { y() } catch { await window.api.settings.set('a', 1) } }")).toBe(1)
+    expect(hits("async function f() { try { y() } catch { y() } finally { await window.api.settings.set('a', 1) } }")).toBe(1)
+    expect(hits("async function f() { try { go(() => { window.api.settings.set('a', 1) }) } catch { y() } }")).toBe(1)
+    expect(hits("async function f() { await api.settings.set('a', 1); await window.api.settings.set('b', 2) }")).toBe(2)
+    // A `try` catches what is awaited inside it, not a promise left running: the rejection arrives after the `try` is over.
+    expect(hits("function f() { try { void window.api.settings.set('a', 1) } catch { y() } }")).toBe(1)
+    expect(hits("function f() { try { window.api.settings.set('a', 1) } catch { y() } }")).toBe(1)
+    expect(hits("async function f() { try { return window.api.settings.set('a', 1) } catch { y() } }")).toBe(1)
+    expect(hits("async function f() { try { return await window.api.settings.set('a', 1) } catch { y() } }")).toBe(0)
+    expect(hits("async function f() { try { await window.api.settings.set('a', 1) } catch (err) { z(err) } }")).toBe(0)
+    expect(hits("function f() { void window.api.settings.set('a', 1).catch(() => toast.error('x')) }")).toBe(0)
+    expect(hits("async function f() { try { y(); await window.api.settings.set('a', 1); y() } catch { z() } }")).toBe(0)
+    // Reading is another question (a `get` that rejects is a different ticket); another object's `set` is not a setting.
+    expect(hits("async function f() { await window.api.settings.get('a'); map.set('a', 1); store.settings.size }")).toBe(0)
   })
 })

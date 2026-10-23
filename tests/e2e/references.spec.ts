@@ -485,6 +485,36 @@ test.describe('imagii References studio', () => {
     }
   })
 
+  // T-128 (1): a board name the layout cuts with an ellipsis is readable by hovering. The list row's name and the detail card's heading
+  // were two of the spans the T-127 (15) ledger listed as still without a title (the post checklist, the variant labels, Record's sources,
+  // the layer names and the highlight lines were the rest; `a11ySweep.test.ts` rule 6 holds all of them in source, this reads the built page).
+  test('a long board name is cut with an ellipsis and carries its whole self as the title, in the list and in the heading (T-128 (1))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-longname')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const name = 'Stream highlights season finale, the whole run from the first clip to the last, every platform, 2026 edition'
+      const nameInput = window.getByPlaceholder('New board name', { exact: false })
+      await nameInput.fill(name)
+      await nameInput.press('Enter')
+
+      const heading = window.locator('h3.text-lg')
+      await expect(heading).toHaveText(name)
+      const rowName = window.locator('li button span.truncate').first()
+      await expect(rowName).toHaveText(name)
+      for (const [label, el] of [['the list row', rowName], ['the heading', heading]] as const) {
+        const cut = await el.evaluate((n) => n.scrollWidth > n.clientWidth)
+        expect(cut, `${label}: the name really is cut with an ellipsis here, so the title is what reads the rest`).toBe(true)
+        await expect(el, `${label} carries the whole name as its title`).toHaveAttribute('title', name)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
   /**
    * T-58 — the References studio can undo, like the other three.
    *

@@ -109,8 +109,9 @@ interface VideoStudioState {
   /** T-112 — apply a transcription's SRT to the video it was made from, and only
    *  to it. `sourcePath` is the file the job started on; if the studio holds
    *  anything else by the time the job finishes (another video opened, or none)
-   *  nothing is stored and the answer is false. */
-  setSrtPathFor: (sourcePath: string, srtPath: string) => boolean
+   *  nothing is stored and the answer is false. `null` forgets the transcript (T-128 (3): "Clear
+   *  saved transcripts" deleted the file), under the same rule. */
+  setSrtPathFor: (sourcePath: string, srtPath: string | null) => boolean
 
   addClip: () => void
   /** The ONE add-a-clip-from-a-range action (T-101 deleted its manual twin,

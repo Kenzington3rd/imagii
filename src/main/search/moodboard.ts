@@ -7,6 +7,7 @@ import { moodboardsDir, thumbsCacheDir } from '../sidecars/paths'
 import { isOutsideFolder } from '../pathConfine'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '../../shared/search'
 import { parseCollection } from '../../shared/moodboardParse'
+import { SAFE_ID_RE } from '../../shared/pathSafety'
 
 async function ensureDirs(): Promise<void> {
   await mkdir(moodboardsDir(), { recursive: true })
@@ -36,9 +37,9 @@ function withCollectionLock<T>(collectionId: string, fn: () => Promise<T>): Prom
 
 /**
  * INIT-C (round 15): renderer-supplied `id` strings reach path.join() —
- * gate with the nanoid alphabet so `../` can't escape the moodboards dir.
+ * gate with the nanoid alphabet (`SAFE_ID_RE`, shared/pathSafety.ts) so `../`
+ * can't escape the moodboards dir.
  */
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
 function assertSafeId(id: unknown, name: string): asserts id is string {
   if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
     throw new Error(`${name} must match nanoid alphabet`)

@@ -125,7 +125,11 @@ and webcam if you want them. Game and desktop sound are not captured.
    when you are done, then pick where to save. **Cancel** in the save dialog discards the take — the dialog's title
    says so. With **Convert to MP4** on, **Discard recording** stops the
    conversion; with it off, saving a WebM is a quick copy and there is nothing
-   to stop. Either way the saved file opens in Video Studio. If the window or screen
+   to stop. Either way the saved file opens in Video Studio. If you close imagii
+while the take is being saved, the half-written file is removed and the raw
+recording stays in a `recordings` folder inside imagii's own data folder (imagii
+deletes what is older than 6 hours the next time it starts), so closing a window
+never costs you the take; **Discard recording** is the way to throw it away. If the window or screen
 you are capturing goes away (you close it), the take ends on its own, with your
 microphone and webcam on or off, and saves the same way, with the saving card on
 screen instead of a live **REC**. If your microphone goes away mid-take (a headset
@@ -274,7 +278,11 @@ second alone.)
   Captions need a one-time setup; see **Captions setup** below. Every
   transcription also keeps its raw `.srt` transcript in a `captions` folder
   inside imagii's own data folder — on your machine only, like everything
-  else — and you can delete them there whenever you like.
+  else. The bottom of the panel says how many are kept, and **Clear saved
+  transcripts** deletes them all after asking (it goes back to "not
+  transcribed" for the video you have open; an `.srt` you saved yourself and
+  captions already burned into a video are not touched). You can also delete
+  them in that folder whenever you like.
 - **Color & motion**, **Export as GIF**, **Compile clips**, and
   **Picture-in-picture composite** are the other panels. The player does not
   show color changes — they appear in the exported file. **Temperature** warms

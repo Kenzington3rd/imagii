@@ -12,6 +12,7 @@ import type { SearchResponse, MoodBoardCollection, SearchResult } from './search
 import type {
   CaptionsInstallStatus,
   CaptionsProgress,
+  ClearTranscriptsResult,
   ModelInstallProgress,
   TranscribeRequest,
   TranscribeResult,
@@ -217,6 +218,10 @@ export interface ImagiiApi {
     /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). */
     burnIn(req: BurnInRequest): Promise<{ outputPath: string; captioned: boolean }>
     saveSrt(srtPath: string, defaultName: string): Promise<string | null>
+    /** How many transcripts `<userData>/captions` holds (T-128 (3)). No argument: the folder is main's. */
+    countTranscripts(): Promise<number>
+    /** Empties that folder of its transcripts and says how many went and how many would not (T-128 (3)). */
+    clearTranscripts(): Promise<ClearTranscriptsResult>
     /**
      * The Clip Kit's captions (T-113): the transcript `srtPath` re-expressed on the clock of the
      * clip `startSec`-`endSec` played at `speed`, written to `dest`. `written` is false when no

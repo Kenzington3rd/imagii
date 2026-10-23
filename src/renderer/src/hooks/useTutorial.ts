@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TutorialDef, TutorialId, TutorialStep } from '../tutorials/types'
+import { persistSetting } from '../lib/persistSetting'
 
 const settingsKey = (id: TutorialId): string => `tutorialSeen.${id}`
 
@@ -100,7 +101,7 @@ export function useTutorial(def: TutorialDef, ready = true): UseTutorialResult {
 
   function stop(): void {
     setShown(null)
-    window.api.settings.set(settingsKey(def.id) as never, true)
+    void persistSetting(settingsKey(def.id) as never, true)
   }
 
   return { active: shown !== null, def: shown ?? def, start, stop }

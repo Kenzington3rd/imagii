@@ -4,12 +4,14 @@ import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'nod
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import {
+  beginConvertRun,
   convertToMp4,
   remuxWebm,
   cancelConverts,
   ConvertCancelledError,
   ConvertFailedError
 } from '../ffmpeg/convert'
+import type { LatchRun } from '../ffmpeg/cancelLatch'
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
@@ -21,6 +23,7 @@ import {
   assertPlainObject
 } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
+import { SAFE_ID_RE } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
 
 function recordingsDir(): string {
@@ -54,11 +57,6 @@ interface RecordingStreamSession {
 }
 
 const streamSessions = new Map<string, RecordingStreamSession>()
-
-// Same alphabet gate as video.ts SAFE_JOB_ID_RE (round 17 B2): session ids
-// are minted here with nanoid and echoed back by the renderer, so anything
-// outside the nanoid alphabet is a forged/corrupt id.
-const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]+$/
 
 // One live recording per window is the app's model; a small cap keeps a
 // buggy/compromised renderer from opening unbounded write streams.
@@ -99,7 +97,13 @@ function toBuffer(chunk: ArrayBuffer | ArrayBufferView): Buffer {
  * as the cancelAll* family in main/index.ts's before-quit hook.
  */
 export function abandonAllRecordingStreams(): void {
-  for (const [, session] of streamSessions) {
+  for (const [id, session] of streamSessions) {
+    // T-128 (5): a CLOSED session is mid-finalize (the Save dialog, the convert), owned by a handler that is still running and reaps it
+    // itself (`abandonOpenRecordingSessions` has said so since T-124). Its temp webm is the ONLY copy of the take: this sweep unlinked it
+    // while the half-written mp4 stayed at the name the person chose, so a quit in the middle of a save lost the recording. What the
+    // sweep owns is the take that was still being RECORDED - its partial webm is nobody's.
+    if (session.closed) continue
+    streamSessions.delete(id)
     try {
       session.closed = true
       session.stream.destroy()
@@ -112,7 +116,6 @@ export function abandonAllRecordingStreams(): void {
       /* ignore */
     }
   }
-  streamSessions.clear()
 }
 
 /**
@@ -243,6 +246,12 @@ async function promoteTempWebm(
   // destroyed BrowserWindow throws on `.webContents` itself, the WebContents only answers
   // `isDestroyed()` (T-123 (1)).
   const sender = win.webContents
+  // T-128 (5): the save is a run from the moment there is a name to write to until the temp take is gone, so `before-quit` (which kills the
+  // convert and then waits for every run to end) waits for the reaping below. Opened AFTER the Save dialog: a dialog nobody has answered
+  // is not work, and a quit with one open should not wait on it.
+  let run: LatchRun | undefined
+  // T-128 (5): true when the save ended because the APP is quitting - the raw take is then kept (see the catches below).
+  let keepTake = false
   try {
     const baseName = spec.filename.replace(/\.(webm|mp4)$/i, '')
     const targetExt = spec.convertToMp4 ? 'mp4' : 'webm'
@@ -264,6 +273,7 @@ async function promoteTempWebm(
     }
 
     const outputPath = result.filePath
+    run = beginConvertRun('recording')
     if (spec.convertToMp4) {
       try {
         // T-115: the length of the take is what turns ffmpeg's position into a percent. The
@@ -304,7 +314,12 @@ async function promoteTempWebm(
         } catch {
           /* never created, or already gone */
         }
-        if (err instanceof ConvertCancelledError) return null
+        if (err instanceof ConvertCancelledError) {
+          // A Discard throws the take away; a quit does not (T-128 (5)): the half-written mp4 above is gone either way, but the webm in
+          // userData is the only copy of what was recorded, and the person asked to close the window.
+          keepTake = err.byQuit
+          return null
+        }
         console.error('[recording] convert failed:', err)
         throw new Error(recordingConvertFailureMessage(err))
       }
@@ -320,6 +335,7 @@ async function promoteTempWebm(
           } catch {
             /* never created, or already gone */
           }
+          keepTake = err.byQuit
           return null
         }
         throw err
@@ -337,11 +353,16 @@ async function promoteTempWebm(
   } finally {
     // Cleanup is best-effort and idempotent. Ignore ENOENT since some
     // branches already removed the temp file (e.g. successful path).
-    try {
-      await unlink(tempPath)
-    } catch {
-      /* ignore */
+    // A save the quit ended keeps the raw take (T-128 (5)); the launch sweep reaps it with the rest of recordings/ in time.
+    if (!keepTake) {
+      try {
+        await unlink(tempPath)
+      } catch {
+        /* ignore */
+      }
     }
+    // The last thing the save does (T-128 (5)): after the half-written output (the catch above) and the temp take.
+    if (run) run.end()
   }
 }
 
@@ -432,7 +453,9 @@ export function registerRecordingIpc(): void {
     'recording:appendChunk',
     async (_e, id: string, chunk: ArrayBuffer): Promise<void> => {
       assertNonEmptyString(id, 'recording:appendChunk id')
-      assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:appendChunk id malformed')
+      // Session ids are minted here with nanoid and echoed back by the renderer (round 17 B2), so anything outside the nanoid
+      // alphabet - the one shared SAFE_ID_RE, as for video.ts's job ids (T-128 (6)) - is a forged or corrupt id.
+      assertAlways(SAFE_ID_RE.test(id), 'recording:appendChunk id malformed')
       assertAlways(
         chunk instanceof ArrayBuffer || ArrayBuffer.isView(chunk),
         'recording:appendChunk chunk must be an ArrayBuffer or typed array'
@@ -463,7 +486,7 @@ export function registerRecordingIpc(): void {
     'recording:finalize',
     async (_e, id: string, spec: RecordingFinalizeSpec): Promise<RecordingResult | null> => {
       assertNonEmptyString(id, 'recording:finalize id')
-      assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:finalize id malformed')
+      assertAlways(SAFE_ID_RE.test(id), 'recording:finalize id malformed')
       assertPlainObject(spec, 'recording:finalize spec')
       assertNonEmptyString(spec.filename, 'spec.filename')
       assertAlways(typeof spec.convertToMp4 === 'boolean', 'spec.convertToMp4 must be a boolean')
@@ -480,6 +503,8 @@ export function registerRecordingIpc(): void {
       // Gate further appends immediately — a straggler arriving while the
       // save dialog is up must reject, not corrupt the file.
       session.closed = true
+      // promoteTempWebm reaps (or, on a quit, deliberately keeps) the temp take itself; the finally below is for the paths that never reach it.
+      let reachedSave = false
       try {
         await new Promise<void>((resolve, reject) => {
           session.stream.end((err?: Error | null) => (err ? reject(err) : resolve()))
@@ -490,16 +515,20 @@ export function registerRecordingIpc(): void {
         }
         const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
         if (!win) return null
+        reachedSave = true
         return await promoteTempWebm(win, session.tempPath, spec)
       } finally {
         streamSessions.delete(id)
         // promoteTempWebm reaps the temp on the paths that reach it; this
         // covers the ones that don't (empty recording, no window, stream
-        // error). Second unlink no-ops with ENOENT.
-        try {
-          await unlink(session.tempPath)
-        } catch {
-          /* ignore */
+        // error). T-128 (5): and only those - a second unlink after a save the
+        // quit ended would take the one copy of the take that save kept.
+        if (!reachedSave) {
+          try {
+            await unlink(session.tempPath)
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
@@ -507,7 +536,7 @@ export function registerRecordingIpc(): void {
 
   ipcMain.handle('recording:abandon', async (_e, id: string): Promise<boolean> => {
     assertNonEmptyString(id, 'recording:abandon id')
-    assertAlways(SAFE_SESSION_ID_RE.test(id), 'recording:abandon id malformed')
+    assertAlways(SAFE_ID_RE.test(id), 'recording:abandon id malformed')
     return abandonSession(id)
   })
 

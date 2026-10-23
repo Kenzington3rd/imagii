@@ -125,6 +125,8 @@ const api: ImagiiApi = {
     burnIn: (req: BurnInRequest) => ipcRenderer.invoke('captions:burnIn', req),
     saveSrt: (srtPath: string, defaultName: string) =>
       ipcRenderer.invoke('captions:saveSrt', srtPath, defaultName),
+    countTranscripts: () => ipcRenderer.invoke('captions:countTranscripts'),
+    clearTranscripts: () => ipcRenderer.invoke('captions:clearTranscripts'),
     writeKitSrt: (params) => ipcRenderer.invoke('captions:writeKitSrt', params),
     pickBurnInOutput: (defaultName: string) =>
       ipcRenderer.invoke('captions:pickBurnInOutput', defaultName),
