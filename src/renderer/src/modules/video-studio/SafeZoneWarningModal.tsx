@@ -57,7 +57,11 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
       >
         {affectedClips.map((row) => (
           <li key={row.clipName}>
-            <span className="font-medium">{row.clipName}</span>
+            {/* T-134 (5): a clip's name is whatever was typed, unbroken included; a long one is cut here (the whole of it is the tooltip) instead of
+                making this scroller scroll sideways. */}
+            <span className="font-medium block truncate" title={row.clipName}>
+              {row.clipName}
+            </span>
             {row.clippedZones.map((zone) => (
               <div key={zone} className="text-ink-muted">
                 {zone}

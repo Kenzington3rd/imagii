@@ -91,6 +91,11 @@ interface ReferencesStudioState {
 }
 
 export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
+  // T-134 (3): which request owns the results grid. A counter, not a flag, because requests can overlap (a corrected query goes out while the
+  // typo's is still in flight) and only the newest one's outcome is drawn.
+  let latestRequest = 0
+  let latestQuery = ''
+
   function snapshot(): BoardsSnapshot {
     const { collections, selectedCollectionId } = get()
     return { collections, selectedCollectionId }
@@ -122,24 +127,27 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     setTab: (t) => set({ tab: t }),
 
     search: async (query: string) => {
-      // T-133 (8): one search at a time. The button is disabled while a request is out and the input's Enter was not, so a second press
-      // (or a held key) sent a second request, and whichever answered LAST owned the grid. Read from the store, not a render's closure: two
+      // T-133 (8): one request per query. The button is disabled while a request is out and the input's Enter was not, so a second press (or a held
+      // key) of the SAME query sent a second request, and whichever answered LAST owned the grid. Read from the store, not a render's closure: two
       // presses in one breath see the same render.
-      if (get().searchLoading) return
+      if (get().searchLoading && query === latestQuery) return
+      // T-134 (3): a DIFFERENT query is not a duplicate. T-133 (8) refused every press while a request was out, which threw away a corrected query
+      // (type, Enter, spot the typo, fix it, Enter): the typo's answer then filled a grid that no query on the page named. The newest request
+      // owns the grid: an answer (or a failure) that is not the newest request's is dropped, and the panel stays busy until the newest settles.
+      const mine = ++latestRequest
+      latestQuery = query
       set({ searchLoading: true, searchError: null })
       try {
         const response = await window.api.search.images(query)
-        set({ searchResponse: response })
+        if (mine === latestRequest) set({ searchResponse: response })
       } catch (err) {
         // T-84: a REJECTED search is a bug or a bridge fault — an outage comes
         // back as a `notice` on a normal response (T-30) — so this is the
         // generic card, in plain words, with the raw error in the console.
-        set({
-          searchError: userFacingError(err, 'Search failed.').message,
-          searchResponse: null
-        })
+        const failure = userFacingError(err, 'Search failed.').message
+        if (mine === latestRequest) set({ searchError: failure, searchResponse: null })
       } finally {
-        set({ searchLoading: false })
+        if (mine === latestRequest) set({ searchLoading: false })
       }
     },
 

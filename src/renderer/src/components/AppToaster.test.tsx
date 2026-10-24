@@ -22,7 +22,8 @@ describe('AppToaster', () => {
   })
 
   // T-133 (2): react-hot-toast styles the message `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no
-  // break opportunity (an underscores-only name, a long hash) ran up to 81 px outside the card in a real render. The six `Saved ${basename}`
+  // break opportunity (an underscores-only name, a long hash) ran outside the card in a real render, by as much as the name was long (81 px for
+  // one name, 228 px for the 90-underscore one the e2e uses). The six `Saved ${basename}`
   // sites and T-132's "Extracted the sound from" toast all quote a file name the person chose. `anywhere` (not `break-word`) also lets the
   // card's min-content shrink, so the word breaks inside the 350 px instead of widening the card.
   it('lets a long unbroken file name wrap inside the card (T-133 (2))', () => {

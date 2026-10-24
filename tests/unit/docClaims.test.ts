@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { RENDERER_ROOT } from './routeSources'
-import { sourceFilesUnder } from './renderedStrings'
+import ts from 'typescript'
+import { parseSource, sourceFilesUnder } from './renderedStrings'
 
 /**
  * T-123 (21)-(34): claims in the docs and the comments that a test can hold, held.
@@ -58,7 +59,7 @@ describe('the autosave banner the guides quote is the one the app draws (T-123 (
 
   it('the component says "imagii autosaved your work {age}. Want to pick up where you left off?" with Restore, Clear and Later', () => {
     expect(banner).toMatch(/imagii autosaved your work \{ageText\}\. Want to pick up where you left off\?/)
-    for (const label of ['Restore', 'Clear', 'Later']) expect(banner, label).toMatch(new RegExp(`>\\s*(?:\\{busy \\? 'Restoring…' : )?'?${label}'?\\}?\\s*<`))
+    for (const label of ['Restore', 'Clear', 'Later']) expect(banner, label).toMatch(new RegExp(`>\\s*(?:\\{restoring \\? 'Restoring…' : )?'?${label}'?\\}?\\s*<`))
   })
 
   it.each(['README.md', 'FOR_MIKE.md'])('%s quotes it, and says it appears after a normal close as well as a crash', (rel) => {
@@ -389,12 +390,108 @@ describe('three claims the guides make that the code can contradict (T-133 (11))
     expect(guide).toMatch(/A long recording takes from a few seconds up to a few tens of seconds/)
   })
 
-  it('the "every runner that writes a video" claim names the runners, in the comment and in STYLE_GUIDE (the burn-in is one of them)', () => {
+  it('the claim about which runners read the frame count names the runners, in the comment and in STYLE_GUIDE (the burn-in is one of them; a compilation\'s segments are not)', () => {
     const comment = flat(read('src/main/ffmpeg/noPicture.ts').replace(/^\s*\*\s?/gm, ''))
     expect(comment).not.toMatch(/Every runner that writes a video/)
-    expect(comment).toMatch(/Every runner that cuts a video out of a RANGE of a source reads both - Export, Reframe, a compilation's segments, and \(T-133 \(4\)\) the caption burn-in/)
+    // T-134 (4): "Export, Reframe, a compilation's segments and the burn-in read both" was an over-claim - the segments read the stderr line alone.
+    expect(comment, 'a compilation\'s segments are not among the readers of both facts').not.toMatch(/Export, Reframe, a compilation's segments/)
+    expect(comment).toMatch(/Three runners that cut a video out of a RANGE of a source read both, through `wroteNoPicture` - Export, Reframe and \(T-133 \(4\)\) the caption burn-in/)
+    expect(comment).toMatch(/A compilation's segments \(`concat\.ts`\) read the stderr line alone, which is sufficient THERE/)
     const guide = flat(read('docs/STYLE_GUIDE.md'))
     expect(guide).not.toMatch(/Every runner that writes a video closes on/)
-    expect(guide).toMatch(/Every runner that cuts a video out of a RANGE of a source \(Export, Reframe, a compilation's segments, and, since T-133 \(4\), the caption burn-in/)
+    expect(guide).not.toMatch(/Export, Reframe, a compilation's segments, and, since T-133/)
+    expect(guide).toMatch(/Three runners that cut a video out of a RANGE of a source \(Export, Reframe and, since T-133 \(4\), the caption burn-in/)
+    expect(guide).toMatch(/A compilation's segments are the fourth cutter and read the stderr line alone \(`concat\.ts`, T-134 \(4\)\), which is sufficient there/)
+  })
+
+  it('the runners that close on wroteNoPicture are exactly the three the comment and STYLE_GUIDE name, and a compilation\'s segments read the stderr line alone (T-134 (4))', () => {
+    // The scan: every non-test source under src/main that CALLS wroteNoPicture. A fourth caller (or one fewer) fails here until the two sentences above are re-read.
+    const noPicture = path.join(ROOT, 'src', 'main', 'ffmpeg', 'noPicture.ts')
+    const callers = sourceFilesUnder(path.join(ROOT, 'src', 'main'))
+      .filter((file) => file !== noPicture && /\bwroteNoPicture\(/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(ROOT, file).split(path.sep).join('/'))
+      .sort()
+    expect(callers).toEqual(['src/main/ffmpeg/export.ts', 'src/main/ffmpeg/reframe.ts', 'src/main/sidecars/whisperManager.ts'])
+    // The fourth writer of a ranged video reads the stderr line and nothing else; Layer 5 holds why that is enough (the 5 s picture / 9 s sound case).
+    const concat = read('src/main/ffmpeg/concat.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    expect(concat).toMatch(/wroteNothing \|\|= FFMPEG_EMPTY_OUTPUT\.test\(stderr\)/)
+    expect(concat).not.toMatch(/wroteNoPicture|PictureFrames/)
+  })
+})
+
+// T-134 (6): the native-dialog inventory in INTERACTION_COVERAGE.md is what /guide-sync checks, and it had drifted three ways: a row cited a confirm that
+// moved to another file (Record's, T-133 (1)), several line numbers were off, and a confirm T-133 (6) added had no row. A table of file:line cites is a
+// claim about the tree, so it is read against the tree: every native confirm / prompt / alert call in the renderer has a row at the line it is on, and
+// every cite in the table points at a line that still holds one (or the question's asker / the dialog that replaced it).
+describe('the native-dialog inventory lists every native dialog call in the renderer at the line it is on (T-134 (6))', () => {
+  const NATIVE = new Set(['confirm', 'alert', 'prompt'])
+
+  /** Every call of the NATIVE confirm / alert / prompt in a source, as 1-based lines. A name the file declares itself (NameDialog's `confirm()`) is not the native one. */
+  function nativeDialogCalls(sf: ts.SourceFile): number[] {
+    const declared = new Set<string>()
+    const declare = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name) declared.add(n.name.text)
+      ts.forEachChild(n, declare)
+    }
+    declare(sf)
+    const lines: number[] = []
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n)) {
+        const callee = n.expression
+        const bare = ts.isIdentifier(callee) && NATIVE.has(callee.text) && !declared.has(callee.text)
+        const onWindow = ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'window' && NATIVE.has(callee.name.text)
+        if (bare || onWindow) lines.push(sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1)
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    return lines
+  }
+
+  const guide = read('docs/INTERACTION_COVERAGE.md')
+  const section = guide.slice(guide.indexOf('## Native-dialog inventory'), guide.indexOf('## Headless-limited categories'))
+  const files = sourceFilesUnder(RENDERER_ROOT)
+
+  it('finds the calls and the table (a scan that matched nothing would look like a clean tree)', () => {
+    const total = files.reduce((n, file) => n + nativeDialogCalls(parseSource(file)).length, 0)
+    expect(total).toBeGreaterThanOrEqual(10)
+    expect(section.length).toBeGreaterThan(500)
+  })
+
+  it('every call has a row that cites the file and the line it is on', () => {
+    const missing: string[] = []
+    for (const file of files) {
+      const rel = path.relative(RENDERER_ROOT, file).split(path.sep).join('/')
+      for (const line of nativeDialogCalls(parseSource(file))) {
+        // The cite is the file's name (or its path from the renderer's lib / components folder) and the line: `VideoStudio.tsx:69`, `lib/liveTake.ts:34`.
+        const base = rel.split('/').pop() as string
+        const cite = new RegExp(`(?:^|[^\\w])(?:${rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|${base.replace('.', '\\.')}):${line}(?!\\d)`)
+        if (!cite.test(section)) missing.push(`${rel}:${line}`)
+      }
+    }
+    expect(missing, 'native dialog calls with no row at their line').toEqual([])
+  })
+
+  it('every file:line the table cites still holds a native dialog call, the live-take asker, or the NameDialog that replaced one', () => {
+    const stale: string[] = []
+    for (const m of section.matchAll(/(?:[A-Za-z]+\/)?([A-Za-z]+\.tsx?):(\d+)(?!\d)/g)) {
+      const [, name, lineText] = m
+      const hit = files.find((f) => f.endsWith(`/${name}`))
+      if (!hit) {
+        stale.push(`${name}:${lineText} (no such file in the renderer)`)
+        continue
+      }
+      const text = (readFileSync(hit, 'utf8').split('\n')[Number(lineText) - 1] ?? '').trim()
+      if (!/\b(?:confirm|alert|prompt)\(|<NameDialog|mayLeaveLiveTake/.test(text)) stale.push(`${name}:${lineText} is "${text.slice(0, 60)}"`)
+    }
+    expect(stale, 'cites that point at something else').toEqual([])
+  })
+
+  it('discriminates: a local function named confirm is not the native one; a window.confirm and a bare prompt are', () => {
+    const calls = (code: string): number[] => nativeDialogCalls(parseSource('x.tsx', code))
+    expect(calls('function confirm() {}\nconfirm()')).toEqual([])
+    expect(calls('const a = 1\nif (window.confirm("x")) go()')).toEqual([2])
+    expect(calls('prompt("name")\nalert("x")')).toEqual([1, 2])
+    expect(calls('const ok = confirm(\n"x")')).toEqual([1])
   })
 })

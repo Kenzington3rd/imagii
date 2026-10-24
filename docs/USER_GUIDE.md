@@ -104,7 +104,8 @@ controls:
   state of every studio at once. imagii also **autosaves** — if it finds a
   recent autosave on launch, it offers to pick up where you left off, and
   **Restore** takes you back to the studio you were in, with your selections
-  and the playhead where you left them. Choosing **Later** or **Clear**
+  and the playhead where you left them (if you have gone to another screen while a long restore was
+  still loading, it leaves you where you are). Choosing **Later** or **Clear**
   starts a fresh session instead; nothing is restored unless you ask for it.
 
 ---
@@ -177,7 +178,8 @@ second alone.)
   playhead where you want it and press `I` and `O` to set the in and out points
   there. `,` and `.` step one frame, `Space` plays and pauses, and `←` / `→` nudge 0.1 seconds.
   The two handles are for the mouse; the keyboard's way to the same trim is `I` and `O`,
-  and pressed while the video plays they mark the frame you are looking at.
+  and pressed while the video plays they mark the frame you are looking at. Holding the key marks once, and one
+  Undo takes the mark back.
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
   **+ Add clip** adds another clip that spans the whole video; trim it with the
   handles. Each clip has its own name, crop, platforms and text.
@@ -520,8 +522,10 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
 - **Reference Search** — search images. SafeSearch is always on (strict):
   DuckDuckGo does the filtering, and imagii doesn't scan images itself. Reference
   Search is one of the two features that go online; the other is the one-time
-  caption model download. Press **Enter** or click **Search**; while a search is
-  running another does nothing, so a second press never sends a second request. Hover a result and click **Save** to add it to the
+  caption model download. Press **Enter** or click **Search**; pressing Enter again with the same
+  words while that search is running does nothing, so a second press never sends a second request.
+  Change the words and press Enter and the new search goes out at once; its results are the ones you
+  see, even if the first search answers later. Hover a result and click **Save** to add it to the
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
 - **Mood Boards** — your saved boards. Hover an item and click **→ Canvas**
@@ -569,7 +573,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   imagii says so and offers to clear it rather than loading it. An autosave from an earlier version restores too. If you open a
   different video while Restore is still loading the autosave's, Restore skips that
   video and says so; the autosave then holds what you have open, so the skipped
-  video and its clips do not come back from it.
+  video and its clips do not come back from it. If you go to another screen while Restore is
+  loading (a long recording's sound is extracted again first), you stay there when it finishes:
+  the restored work is in its studio, and "Restored from autosave" says it is done.
 - **The window remembers its size and position** between launches, and
   re-centers itself if the display it was on is no longer connected. That
   happens whatever you choose in the restore banner.

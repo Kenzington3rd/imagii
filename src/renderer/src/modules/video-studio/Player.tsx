@@ -287,15 +287,18 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         e.preventDefault()
         step(1)
         break
+      // T-134 (2): a marker is one decision per press, as Space is. A held I re-set the in point on every auto-repeat (about 30 a second): each
+      // one is an undo step, so a second of holding evicted real edits from the 50-step history, and during playback the point drifted to the
+      // last repeat's frame. `preventDefault` still runs on a repeat (a held key must not reach the page's own shortcuts).
       case 'i':
       case 'I':
         e.preventDefault()
-        setMarker('in')
+        if (!e.repeat) setMarker('in')
         break
       case 'o':
       case 'O':
         e.preventDefault()
-        setMarker('out')
+        if (!e.repeat) setMarker('out')
         break
       default:
     }

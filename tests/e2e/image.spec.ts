@@ -2059,7 +2059,8 @@ async function dropPng(window: Page, base64: string, fileName: string): Promise<
 }
 
 // T-133 (2): react-hot-toast styles a toast's message `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break
-// opportunity (an underscores-only name, a hash) ran up to 81 px OUTSIDE the card in a real render. Six `Saved ${basename}` sites, T-132's "Extracted
+// opportunity (an underscores-only name, a hash) ran OUTSIDE the card in a real render, by as much as the name was long (81 px for one name, 228
+// px for the 90-underscore one below). Six `Saved ${basename}` sites, T-132's "Extracted
 // the sound from" and this panel's `Added ${file.name}` quote a name the person chose. The card's `overflow-wrap: anywhere` breaks it inside.
 test.describe('Image Studio — a toast that quotes a long file name (T-133 (2))', () => {
   test('a name with no break in it wraps inside the toast card instead of running out of it', async () => {

@@ -144,15 +144,16 @@ export function Timeline(): JSX.Element | null {
       case 'End':
         next = duration
         break
+      // T-134 (2): one mark per press, as the Player's I / O are (see there); the arrows and , . above repeat on purpose.
       case 'i':
       case 'I':
         e.preventDefault()
-        setMarker('in')
+        if (!e.repeat) setMarker('in')
         return
       case 'o':
       case 'O':
         e.preventDefault()
-        setMarker('out')
+        if (!e.repeat) setMarker('out')
         return
       default:
         return

@@ -4960,7 +4960,7 @@ IMG-PREC.
   majors; `npm run verify`, `npm run test:media` and the FULL
   Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits.
-- **Status:** open (round 83)
+- **Status:** done (round 83 — see the Done entry)
 
 ---
 
@@ -5392,6 +5392,49 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 83 — T-134, all 7 of the twentieth sweep's verified findings,
+landed in the commit that carries this entry. Worked by one Sonnet
+in a fresh clone of eed3101; 41 ledger mutations all killed and
+restored byte-identical, 11 reds (the new e2e cases proven red on a
+build of the unchanged base tree). The MED (item 1): Autosave
+Restore now navigates to the snapshot's route only if the person is
+still on Home when the restore settles —
+`if (route && currentRoute() === '/home') navigate(route)` — so a
+take started on Record during a long restore is no longer cut; the
+wiring-table rationale now states the click-time premise and the
+negative e2e holds it (restore held open, take started, still on
+Record and recording). A held I or O sets its marker once
+(`if (!e.repeat)` in Player and Timeline, the T-133 (7b) pattern;
+preventDefault still runs on repeat so the browser does nothing
+either), keeping auto-repeat from flooding the 50-step undo
+history. The reference search applies answers by sequence number —
+the worker's judged deviation from the ticket's follow-up sketch,
+accepted: a corrected query goes out immediately, only the newest
+request's answer (or failure) is drawn, the panel stays busy until
+the newest settles, and a same-query press while that query is out
+is still refused; the pinned drop-test flipped, e2e type → Enter →
+correct → Enter answers the corrected query. The compile claim is
+now the measured truth in noPicture.ts and the STYLE_GUIDE
+(segments close on the stderr line alone, which both majors prove
+sufficient), with a scan test listing the wroteNoPicture users and
+an optional 5 s/9 s compile pin at Layer 5; the "up to 81 px"
+wording now reports 228 px measured. Custom-preset names truncate
+with a title (input capped at 60; SafeZoneWarningModal's clipName
+row got the same cap); the IC native-dialog inventory is refreshed
+and a self-checking docClaims scan — the worker's second judged
+deviation, accepted — keeps its rows pointing at real lines; Clear
+and Restore no longer share a busy flag, so Clear reads "Clearing…"
+and Restore keeps its label. Expedited personally: verify x2
+(174/4751), test:media on 7.0.2 (337 passed | 13 skipped of 350),
+the touched T-132 (4) block on 6.1.1 (10/10), build + FULL
+Playwright 392/392 with zero flakes on both the worker's and the
+expediter's runs; one independent mutation at a seam no ledger row
+names (referencesStore's `latestQuery = query` made a no-op → the
+"one request for three presses of one query" case red, plus its
+correction-undone sibling → restored byte-identical, sha256
+verified, 22/22 green). Landed conflict-free onto its own base;
+the landed tree's gates are this entry's commit.
 
 Round 82 — T-133, all 11 of the nineteenth sweep's verified
 findings, landed in the commit that carries this entry. Worked by

@@ -84,7 +84,7 @@ Repeated UI is a component, not copy-paste:
   opts back in with `pointer-events-auto` (`lib/savedToast.tsx` does). T-133 (2): the card's `overflowWrap` is `anywhere`:
   react-hot-toast sets the message `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break
   opportunity (an underscores-only name, a hash; the `Saved ${basename}` sites, "Extracted the sound from", "Added ${name}")
-  ran up to 81 px OUT of the card in a real render; `anywhere` (not `break-word`) also lowers the min-content width, so the
+  ran OUT of the card in a real render, by as much as the name was long (81 px for one name, 228 px for a 90-underscore one); `anywhere` (not `break-word`) also lowers the min-content width, so the
   flex row shrinks the message instead of widening the card (`AppToaster.test.tsx` pins the style; image.spec.ts measures the
   rects). Mounted exactly once, in
   `App.tsx` beside `HotkeyOverlay`, so every route has it. Never mount a
@@ -264,8 +264,12 @@ Repeated UI is a component, not copy-paste:
   until it is decided; each entry point has a delayed-chooser (300 ms) `dblclick` E2E. **A guard goes in the function every entry
   point calls, not in one of them (T-133 (8)):** Reference Search's button was `disabled={loading}` and its input's Enter was not, so a
   second Enter (or a held one) sent a second request and the LAST answer owned the grid. `referencesStore.search` reads
-  `get().searchLoading` and returns, so the button, Enter and any future shortcut share one rule; a render's closure would not
-  do (two presses in one breath see the same render).
+  `get().searchLoading` and returns for the query that is already out, so the button, Enter and any future shortcut share one rule; a
+  render's closure would not do (two presses in one breath see the same render). **A guard that refuses must not refuse a different
+  question (T-134 (3)):** T-133 (8) refused EVERY press while a request was out, which threw away a corrected query (type, Enter, spot the
+  typo, fix it, Enter) and left the typo's answer on a grid no query on the page named. A different query goes out at once; each request
+  takes a number, and only the newest request's answer, failure and idle state are drawn (an older one is dropped, still logged), so a slow
+  typo can neither fill the grid nor clear the busy button of the search that replaced it.
 - **Waiting for an event that may already have fired hangs (T-119).** `recording:abandon` waited for the temp file's
   stream to emit `close`. A `WriteStream` that failed a write has auto-destroyed and emitted its one `close` already,
   so the renderer's own failure path (the append rejects, finalize throws, abandon runs) never got an answer, and the
@@ -638,7 +642,9 @@ Repeated UI is a component, not copy-paste:
   window; a fresh press, a key-up and a window blur clear it). It is keyed on the KEY and not on a clock because the first repeat arrives
   after the OS's repeat delay (250 ms to 1 s on Windows), later than any fixed window can promise, and it listens from the moment the module
   loads because it has to SEE the key go down. A toggle is one decision per press (T-133 (7b)): Space on the Player and the Timeline and the
-  `?` overlay ignore `e.repeat`; the nudge and frame-step keys repeat by design and are not guarded.
+  `?` overlay ignore `e.repeat`; so does a marker (T-134 (2)): a held I or O set the point on every auto-repeat, each an undo step, and a second
+  of holding filled the store's 50-step history and evicted real edits. The nudge (arrows) and frame-step (`,` `.`) keys repeat by design and
+  are not guarded.
 - **`DraftField`** (`components/DraftField.tsx`, T-113 for Size and Color, lifted by T-123) — a box that keeps what is typed
   to itself until typing ends. A controlled number input that judges every keystroke cannot be typed into: `Number(typed)
   || 360` snapped an emptied box to 360, so "600" typed after clearing it was 360600 (and the PiP composite failed with a bare
@@ -860,7 +866,12 @@ If you write the same markup a third time, extract it.
   tracks, and a LIVE TAKE was cut short. A job that can outlast its screen reads `currentRoute()` (`ProjectIO.ts`, the router's own hash) AFTER
   the wait, navigates only a person who is still on the screen that started it, and otherwise loads the result and raises a toast whose
   action is the way there (`toastWithActions`; on the destination itself, no action). Clean audio is the case; `ProjectIO.applyPlace`'s
-  "nothing teleports the user" is the same rule for a project open. **A toast outlives its screen, so its buttons ask where the person
+  "nothing teleports the user" is the same rule for a project open. **The autosave Restore is the case a click-time premise hid (T-134 (1)):**
+  `AutosaveRestore` awaits `applyProjectHeld` (minutes, for a sound that is extracted again) and then went to the snapshot's route; the T-133
+  navigate table had blessed it as "on Home", which is true at the click and false at the `navigate`. It goes only if `currentRoute()` is
+  still `/home` once the apply is over, and otherwise says nothing more than "Restored from autosave" (a person who went to Record and started
+  a take stays on Record, recording). Its two buttons have a busy flag each (`restoring`, `clearing`; both dim while either runs), so Clear
+  never relabels Restore "Restoring…". **A toast outlives its screen, so its buttons ask where the person
   IS before they take them anywhere (T-133 (1)):** the "Open Audio Studio" button that fix put in an 8 s toast sat over the REC screen, and
   one press unmounted RecordStudio and cut the take. A take that is being recorded is REGISTERED (`registerLiveTake`, `lib/liveTake.ts`,
   for as long as the phase is "recording") and every way off that screen asks `mayLeaveLiveTake()` first: the Home link, the toast's "Open
@@ -868,14 +879,18 @@ If you write the same markup a third time, extract it.
   question word for word (`LIVE_TAKE_MESSAGE`); OK stops the take and its normal save runs where the person is, Cancel keeps recording, and
   either way the caller does not navigate now. `interactionWiring.test.ts` holds the set of renderer `navigate()` calls to a decided
   table, so a new exit fails until it is decided.
-- **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4), T-133 (4), (5)).** A range that lies past the PICTURE exits 0 having written a
-  261-byte stream-less container ("Output file is empty") or an audio-only mp4 (the sound outlasts the picture; no such line). Every runner
-  that cuts a video out of a RANGE of a source (Export, Reframe, a compilation's segments, and, since T-133 (4), the caption burn-in, which
-  was the one left out and said "Captions burned in" over an audio-only file) closes on `wroteNoPicture(sawEmptyOutput, frames)`
+- **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4), T-133 (4), (5), T-134 (4)).** A range that lies past the PICTURE exits 0 having written a
+  261-byte stream-less container ("Output file is empty") or an audio-only mp4 (the sound outlasts the picture; no such line). Three runners
+  that cut a video out of a RANGE of a source (Export, Reframe and, since T-133 (4), the caption burn-in, which
+  was the one left out and said "Captions burned in" over an audio-only file) close on `wroteNoPicture(sawEmptyOutput, frames)`
   (`ffmpeg/noPicture.ts`): the sticky stderr line OR the final `frame=0` of `-progress pipe:1` (`PictureFrames`, which keeps an unfinished
-  line until it is whole), rejects with a finished sentence (`BURN_IN_NO_PICTURE_MESSAGE` for the burn-in), and lets the existing
-  `discardPartialOutput` remove the wreckage (and the burn-in's shifted SRT goes in its `finally`). Layer 5 holds each on both majors (a GIF of such
-  a range needs no guard: it already fails, exit 234 on both). A
+  line until it is whole), reject with a finished sentence (`BURN_IN_NO_PICTURE_MESSAGE` for the burn-in), and let the existing
+  `discardPartialOutput` remove the wreckage (and the burn-in's shifted SRT goes in its `finally`). A compilation's segments are the fourth cutter and
+  read the stderr line alone (`concat.ts`, T-134 (4)), which is sufficient there: a segment ends in `apad` and `-shortest`, so a range past the
+  picture, even one inside a sound that runs on, is a truly streamless ~970-byte stub with the line printed at the verbosity the app runs
+  (measured on both majors by three parties; the earlier text said the segments read both facts, which over-claimed). `docClaims.test.ts` lists the
+  runners that call `wroteNoPicture`, so a fourth caller fails until this paragraph is re-read. Layer 5 holds each on both majors, the segment shape
+  too (a 5 s picture with 9 s of sound; a GIF of such a range needs no guard: it already fails, exit 234 on both). A
   stream that never reported a count is not accused. `extractFrame` is not one of these (a JPEG has no frame count): after its exit 0 it asks
   `wroteOutput`, which asks only whether a non-empty regular file is at the path, and no clock (T-133 (5): it borrowed the discard path's
   "newer than the spawn, 2 s of slack" and refused a GOOD thumbnail on a share whose clock ran more than 2 s behind, aborting the kit). What

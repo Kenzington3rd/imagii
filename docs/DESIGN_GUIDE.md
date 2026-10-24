@@ -229,7 +229,7 @@ element itself or on a browser-drawn element around it (T-127 (15), T-128 (1))**
 (each is pinned in `interactionWiring.test.ts` and read in the built app by audio.spec.ts and video-core.spec.ts);
 T-128 (1) did the rest and made the rule a test: the mood board's names (list row and heading) and a saved reference's title
 on its tile, the post checklist's output name and hashtag preview, the variant labels, Record's source names, the layer names,
-the highlight and chat-peak lines, and the Export panel's preset labels and queue rows. `a11ySweep.test.ts` rule 6 fails on the
+the highlight and chat-peak lines, and the Export panel's preset labels and queue rows. T-134 (5) added the Custom presets dialog's saved rows (the name gives way, the numbers and Delete never move: an 80-character unbroken name had pushed Delete out of the card; the name box also takes at most 60 characters, but a cap on the box does not shorten a name already on disk, so the row cuts it too) and the safe-zone warning's clip names. `a11ySweep.test.ts` rule 6 fails on the
 next cut name without one (a component's `title` prop is not a tooltip: a Modal's is its heading, so only a tag the browser draws
 counts). Two are the cases where the tooltip is the ONLY place the end of the name exists: a Record source tile shows an OS window's
 own title, which is as long as the program makes it (about 33 characters fit the tile at the 1024 px minimum width), and the

@@ -2735,6 +2735,55 @@ test.describe('ExportPanel', () => {
     }
   })
 
+  // T-134 (5): the warning lists each affected clip by name, and a clip's name is whatever the person typed (the rename box has no cap): an unbroken
+  // one made the list scroll SIDEWAYS inside its card (the list is an `overflow-y-auto` box, which makes the other axis scroll too). The row now
+  // cuts the name with an ellipsis and carries all of it as its tooltip, like every other name a layout cuts (DESIGN_GUIDE, the chip rule).
+  test('a clip with a very long unbroken name is cut with an ellipsis in the safe-zone warning, and the list does not scroll sideways (T-134 (5))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchWithVideo('safezone-longname')
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      const longName = 'ClipNamedByAStreamerWhoNeverHitTheSpaceBar'.repeat(3)
+      const rename = clipListCard(window).locator('input[type="text"]').first()
+      await rename.fill(longName)
+      await expect(rename).toHaveValue(longName)
+      await rename.press('Tab')
+      await presetBox(window, 'Reels').check()
+      await card.getByRole('button', { name: 'Export 2' }).click()
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()).toBeVisible()
+
+      const list = modal.getByRole('list', { name: 'Clips that will be cropped' })
+      const name = list.locator('li > span').first()
+      await expect(name).toHaveText(longName)
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        await check(() => expectEllipsized(name, longName, `the clip name in the warning at ${where}`))
+        await check(() => expectNoHorizontalOverflow(list, `the cropped-clips list at ${where}`))
+        await check(() => expectNoHorizontalOverflow(modal, `the safe-zone dialog at ${where}`))
+        await check(() => expectControlsWhole(modal, modal.getByRole('button'), `the dialog's buttons at ${where}`))
+      }
+      expect(problems, 'the long name is cut, and nothing scrolls sideways').toEqual([])
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+    } finally {
+      await app.close()
+    }
+  })
+
   test('the safe-zone pre-flight warns before a mixed-aspect batch, and both answers are honoured', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('safezone')
@@ -3709,6 +3758,75 @@ test.describe('CustomPresetManager', () => {
       await modal.getByRole('button', { name: '+ Save preset' }).click()
       await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
       await expect(modal.locator('span.font-mono', { hasText: '60 fps' })).toContainText('1280×720 · 60 fps')
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-134 (5): a saved preset's name was drawn whole in a flex row with no way to give: an 80-character unbroken name (measured in real Chromium)
+  // put Delete at x=905 against a card that ends at 848, and the button could not be pressed without scrolling the dialog sideways. The name is cut
+  // with an ellipsis and carries all of itself as its tooltip, Delete never moves, and the name box takes no more than 60 characters. The long
+  // names are WRITTEN to the presets folder (a preset saved before the cap, or edited by hand): the row has to cope with whatever is on disk.
+  test('a very long unbroken preset name is cut with an ellipsis and Delete stays inside the dialog; the name box takes at most 60 characters (T-134 (5))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchWithVideo('preset-longname')
+    const { app, window, userDataDir } = studio
+    try {
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      mkdirSync(presetsDir, { recursive: true })
+      const names = ['PresetNamedByAStreamerWhoNeverHitTheSpaceBarAtAll_0123456789'.padEnd(80, 'x'), 'Y'.repeat(200), 'Discord 1080p']
+      names.forEach((name, i) => {
+        const id = `longname${i}`
+        writeFileSync(
+          path.join(presetsDir, `${id}.json`),
+          JSON.stringify({ id, name, width: 1280, height: 720, fps: 60, videoBitrate: '5M', audioBitrate: '256k', basePlatformId: 'reels' }),
+          'utf8'
+        )
+      })
+      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByText('Saved presets (3)')).toBeVisible({ timeout: 15_000 })
+      const rows = modal.locator('ul > li')
+      await expect(rows).toHaveCount(3)
+
+      // The box: the cap is on the input itself, so a longer name is not typed (or pasted) in the first place.
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      await expect(nameInput).toHaveAttribute('maxlength', '60')
+      await nameInput.pressSequentially('z'.repeat(75))
+      await expect(nameInput, 'typing stops at the cap').toHaveValue('z'.repeat(60))
+      await nameInput.fill('')
+
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      const deletes = modal.getByRole('button', { name: 'Delete' })
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        for (const name of names.slice(0, 2)) {
+          await check(() => expectEllipsized(modal.locator('li > span.font-medium', { hasText: name.slice(0, 20) }), name, `the ${name.length}-character name at ${where}`))
+        }
+        await check(() => expectControlsWhole(modal, deletes, `the Delete buttons at ${where}`))
+        await check(() => expectNoHorizontalOverflow(modal, `the presets dialog at ${where}`))
+        // A short name is not cut: the cap only bites when the room is gone.
+        await check(async () => {
+          const short = modal.locator('li > span.font-medium', { hasText: 'Discord 1080p' })
+          expect(await short.evaluate((el) => el.scrollWidth <= el.clientWidth), `"Discord 1080p" is drawn whole at ${where}`).toBe(true)
+        })
+      }
+      expect(problems, 'the long names are cut and every Delete is inside the dialog at both window sizes').toEqual([])
+
+      // And the button still does its job, on the longest row.
+      window.once('dialog', (dialog) => void dialog.accept())
+      await rows.filter({ hasText: (names[0] as string).slice(0, 20) }).getByRole('button', { name: 'Delete' }).click()
+      await expect(modal.getByText('Saved presets (2)')).toBeVisible({ timeout: 15_000 })
     } finally {
       await app.close()
     }

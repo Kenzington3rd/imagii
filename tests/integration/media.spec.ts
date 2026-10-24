@@ -35,6 +35,9 @@ import {
   runConcat,
   runPipComposite,
   cancelConcatJob,
+  buildSegmentFilters,
+  SEGMENT_AUDIO_CODEC,
+  SEGMENT_EXTENSION,
   FFMPEG_EMPTY_OUTPUT,
   FFMPEG_UNREADABLE_PART,
   unreadableSegmentIndex,
@@ -8241,6 +8244,53 @@ describe('a clip with no picture is an error in a sentence, not a file that says
     expect(normalFrames.none, 'a normal clip reports frames').toBe(false)
     expect(normal.stderr).not.toMatch(FFMPEG_EMPTY_OUTPUT)
   }, 60_000)
+
+  // T-134 (4): the comment and the guide said a compilation's segments read BOTH facts (the stderr line and `frame=0`); `concat.ts` reads the line
+  // alone, and the sweep asked whether that is enough for the audio-only shape (the sound outlasts the picture), the one the line cannot catch in
+  // Export. Measured on both majors by three parties: it is. A segment is written with `apad=whole_dur` and `-shortest`, so a range past the last
+  // frame of this 5 s picture / 9 s sound source ends where the PICTURE does: a truly streamless stub and the line, never an audio-only file.
+  it('a compilation segment past the last frame of a 5 s picture with 9 s of sound is a streamless stub AND the empty-output line, so the line alone is enough (T-134 (4), this binary)', async () => {
+    // The segment as the runner writes it: the production filters, the production codecs, -shortest.
+    const writeSegment = async (startSec: number, endSec: number, out: string): Promise<{ stderr: string }> => {
+      const filters = buildSegmentFilters({ startSec, endSec }, { width: 320, height: 180 }, 320, 180, 0, 0, 30)
+      return ff([
+        '-y', '-ss', startSec.toFixed(3), '-to', endSec.toFixed(3), '-i', longAudio,
+        '-vf', filters.video, '-af', filters.audio,
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', SEGMENT_AUDIO_CODEC, '-r', '30',
+        '-shortest',
+        out
+      ])
+    }
+    const dir = await outDirFor('segment-shape')
+    const stub = path.join(dir, `past.${SEGMENT_EXTENSION}`)
+    const written = await writeSegment(6, 8, stub)
+    expect(written.stderr, 'the line the runner reads').toMatch(FFMPEG_EMPTY_OUTPUT)
+    expect((await stat(stub)).size, 'a stub of a kilobyte, not a media file').toBeLessThan(2048)
+    // ffprobe cannot read it at all (a stream-less Matroska header: "Read error", exit 1), so ask for the streams and accept the failure.
+    const streamTypes = await new Promise<string[]>((resolve, reject) => {
+      const child = spawn(ffprobePath, ['-v', 'quiet', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', stub])
+      let out = ''
+      child.stdout.on('data', (b) => (out += String(b)))
+      child.on('error', reject)
+      child.on('close', () => resolve(out.split('\n').map((l) => l.trim()).filter((l) => l !== '')))
+    })
+    expect(streamTypes, 'with no picture and no sound in it').toEqual([])
+    // (The other three runners cannot do with the line alone: their commands have no `-shortest`/`apad`, and the same range there is an audio-only
+    // file with no line at all - pinned just above, "what ffmpeg prints for each shape".) Through the production runner, in a list: the clip that
+    // has no picture is named, and nothing is left behind.
+    const outDir = await outDirFor('segment-run')
+    const err = await runConcat({
+      jobId: 't134-4-segments',
+      sourcePath: longAudio,
+      outDir,
+      segments: [{ startSec: 1, endSec: 2, name: 'a' }, { startSec: 6, endSec: 8, name: 'b' }],
+      fadeMs: 0,
+      width: 320,
+      height: 180
+    }).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe('The clip "b" has no picture in the video (check its start and end), so nothing was saved.')
+    expect(await readdir(outDir), 'no compilation was written').toEqual([])
+  }, 120_000)
 })
 
 describe('a ranged caption burn-in of a range with no picture is an error in a sentence, not "Captions burned in" (real ffmpeg, T-133 (4))', () => {

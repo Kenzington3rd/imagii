@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
-import { audioSettled, describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
+import { audioSettled, currentRoute, describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
@@ -41,7 +41,10 @@ export function AutosaveRestore(): JSX.Element | null {
   // (the undo histories went with it). Asked once per mount, ahead of both banners; a damaged file is announced at the
   // next launch instead, when nothing is open.
   const [holdsWork] = useState(sessionHoldsWork)
-  const [busy, setBusy] = useState(false)
+  // T-134 (7): one flag per button. They shared one, so pressing Clear relabelled Restore "Restoring…" for the unlink's duration - a word about
+  // an action nobody took. Either one running still dims both buttons (`restoring || clearing`): the two act on the same file.
+  const [restoring, setRestoring] = useState(false)
+  const [clearing, setClearing] = useState(false)
   // Round 17 B7: lightweight metadata (size + age) shown via `autosave.info`
   // without loading the whole project. Lets the home page show "Last
   // autosave: 5 min ago" even after the user dismissed the restore prompt.
@@ -102,7 +105,7 @@ export function AutosaveRestore(): JSX.Element | null {
 
   async function restore(): Promise<void> {
     if (!snapshot?.project) return
-    setBusy(true)
+    setRestoring(true)
     try {
       // T-113: autosave is held for the apply alone (see `applyProjectHeld`).
       const outcome = await applyProjectHeld(snapshot.project)
@@ -123,12 +126,16 @@ export function AutosaveRestore(): JSX.Element | null {
       // the playhead applyProject just put back. Only on the user's own
       // click — continuity is what Restore means, never something that
       // happens to a session that said Later.
+      // T-134 (1): and only if they are STILL on Home. The apply above takes minutes for a sound that has to be extracted again, the person is
+      // free to go anywhere meanwhile, and `navigate` still works from a component that unmounted: it used to land them on the snapshot's route
+      // wherever they were - from /record that unmounts RecordStudio, whose cleanup stops the tracks and cut a LIVE TAKE short (T-132 (1), T-133
+      // (1): the same class). What is on screen is read off the hash now, not from the click; "Restored from autosave" already says it finished.
       const route = snapshot.project.place?.route
-      if (route) navigate(route)
+      if (route && currentRoute() === '/home') navigate(route)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't restore the autosave." })
     } finally {
-      setBusy(false)
+      setRestoring(false)
     }
   }
 
@@ -136,7 +143,7 @@ export function AutosaveRestore(): JSX.Element | null {
   // autosave file, the same call whether the file is good or damaged. The
   // healthy banner used to call it Discard and the damaged one Clear.
   async function clearAutosave(): Promise<void> {
-    setBusy(true)
+    setClearing(true)
     try {
       await window.api.autosave.clear()
       toast('Autosave cleared', { icon: <Icon name="trash" size={18} /> })
@@ -155,7 +162,7 @@ export function AutosaveRestore(): JSX.Element | null {
       // Clear button are still there, so the sentence says only what is true.
       reportFailure(err, { failed: "Couldn't clear the autosave. It's still on disk." })
     } finally {
-      setBusy(false)
+      setClearing(false)
     }
   }
 
@@ -183,7 +190,7 @@ export function AutosaveRestore(): JSX.Element | null {
         <button
           className="btn-ghost px-3 py-1 text-xs disabled:opacity-50"
           onClick={() => void clearAutosave()}
-          disabled={busy}
+          disabled={restoring || clearing}
           title="Clear the autosave"
         >
           Clear
@@ -209,14 +216,14 @@ export function AutosaveRestore(): JSX.Element | null {
       <button
         className="btn-primary px-3 py-1 text-xs disabled:opacity-50"
         onClick={() => void restore()}
-        disabled={busy}
+        disabled={restoring || clearing}
       >
-        {busy ? 'Restoring…' : 'Restore'}
+        {restoring ? 'Restoring…' : 'Restore'}
       </button>
       <button
         className="btn-ghost px-3 py-1 text-xs disabled:opacity-50"
         onClick={() => void clearAutosave()}
-        disabled={busy}
+        disabled={restoring || clearing}
         title="Clear the autosave"
       >
         Clear

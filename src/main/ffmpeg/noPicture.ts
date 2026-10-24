@@ -9,10 +9,13 @@
  *  - the range is past the last frame of a file whose SOUND runs longer than its picture: the output is an audio-only mp4, and stderr says
  *    nothing of the kind. The one fact that holds in both is ffmpeg's own progress block: `frame=0` in the last of them.
  *
- * Every runner that cuts a video out of a RANGE of a source reads both - Export, Reframe, a compilation's segments, and (T-133 (4)) the caption
- * burn-in - and a legitimate 10-20 ms segment (one frame) stays a success. (The Clip Kit's thumbnails ask `wroteOutput` instead: a JPEG has no
- * frame count; and a GIF of such a range already fails, exit 234, measured on both majors.) The burn-in was the one writer left out until T-133: it
- * said "Captions burned in" over an audio-only file.
+ * Three runners that cut a video out of a RANGE of a source read both, through `wroteNoPicture` - Export, Reframe and (T-133 (4)) the caption
+ * burn-in - and a legitimate 10-20 ms segment (one frame) stays a success. A compilation's segments (`concat.ts`) read the stderr line alone,
+ * which is sufficient THERE (T-134 (4), measured on both majors by three parties): a segment ends in `apad` and `-shortest`, so a range past the
+ * picture comes out as a truly streamless ~970-byte stub AND the "Output file is empty" line at the verbosity the app runs, never the audio-only
+ * file the other three can meet. (The Clip Kit's thumbnails ask `wroteOutput` instead: a JPEG has no frame count; and a GIF of such a range
+ * already fails, exit 234, measured on both majors.) The burn-in was the one writer left out until T-133: it said "Captions burned in" over an
+ * audio-only file.
  */
 
 /**

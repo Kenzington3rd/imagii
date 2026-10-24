@@ -1506,6 +1506,98 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  // T-134 (2): I and O set a marker, and a marker is one decision per PRESS. They ran on every auto-repeat of a held key (about 30 a second): each
+  // repeat is an undo step, so a second of holding filled the store's 50-step history and evicted the person's real edits (executed against the real
+  // store: three addClip edits became un-undoable), and during playback the point drifted to the last repeat's frame. Playwright marks a keydown for a
+  // key that is already down as a repeat, which is what a held key does. The witness is Undo: after a held key ONE Undo takes the marker back to where
+  // it was (before the fix the repeats were their own steps, and the first Undo restored a point the repeat had just set again).
+  test('a held I or O marks once: one Undo takes it back, in the Player and on the Timeline (T-134 (2))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('heldmarker')
+    try {
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const hold = async (key: string, downs: number): Promise<void> => {
+        for (let i = 0; i < downs; i++) await window.keyboard.down(key)
+        await window.keyboard.up(key)
+      }
+      const near = (actual: number, wanted: number, what: string): void => {
+        expect(Math.abs(actual - wanted), `${what}: wanted about ${wanted} s, read ${actual} s`).toBeLessThan(0.25)
+      }
+      const [in0, , out0] = await timelineReadouts(window)
+      expect(in0, 'the clip starts as the whole video').toBe(0)
+
+      // ── The Player's column: In at about 0.5 s, held for four keydowns, then ONE Undo ──
+      const column = window.locator('[data-tutorial="video-player"] [tabindex="0"]')
+      await seekTo(window, dur * 0.25)
+      await column.focus()
+      await hold('i', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'the first keydown set the In point' }).toBeGreaterThan(0.3)
+      near((await timelineReadouts(window))[0], dur * 0.25, 'In from a held I in the Player')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'ONE Undo took the held I back to the start (the repeats were not steps)' })
+        .toBe(0)
+
+      // ... and Out at about 1.5 s.
+      await seekTo(window, dur * 0.75)
+      await column.focus()
+      await hold('o', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'the first keydown set the Out point' }).toBeLessThan(1.8)
+      near((await timelineReadouts(window))[2], dur * 0.75, 'Out from a held O in the Player')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'ONE Undo took the held O back to the end' })
+        .toBe(out0)
+
+      // ── The Timeline: click the track (the slider takes the keyboard), hold the key ──
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      const at25 = await trackPointAt(window, 0.25)
+      await window.mouse.click(at25.x, at25.y)
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await expectScrubbedTo(window, dur * 0.25, 'a click at 25% of the track')
+      await hold('i', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'a held I on the track set the In point' }).toBeGreaterThan(0.3)
+      near((await timelineReadouts(window))[0], dur * 0.25, 'In from a held I on the Timeline')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'ONE Undo took the held I on the track back' })
+        .toBe(0)
+
+      const at75 = await trackPointAt(window, 0.75)
+      await window.mouse.click(at75.x, at75.y)
+      await expect(slider).toBeFocused()
+      await expectScrubbedTo(window, dur * 0.75, 'a click at 75% of the track')
+      await hold('o', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'a held O on the track set the Out point' }).toBeLessThan(1.8)
+      near((await timelineReadouts(window))[2], dur * 0.75, 'Out from a held O on the Timeline')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'ONE Undo took the held O on the track back' })
+        .toBe(out0)
+
+      // A press at a time of the person's own is still a marker: the rule is the repeat, not the key (two separate presses are two steps).
+      await seekTo(window, dur * 0.25)
+      await column.focus()
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.3)
+      await seekTo(window, dur * 0.4)
+      await column.focus()
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.6)
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'two separate presses are two steps: one Undo goes back to the first' })
+        .toBeGreaterThan(0.3)
+      expect((await timelineReadouts(window))[0]).toBeLessThan(0.7)
+    } finally {
+      await app.close()
+    }
+  })
+
   // T-120 (14): the Timeline's I and O marked the store's `currentTime`, which is written on `timeupdate` (about every
   // 250 ms during playback), while the Player's own I and O read the element. The store's number is made stale on
   // purpose here (the element's timeupdate is stopped before React hears it), so the two readings are a second

@@ -31,6 +31,9 @@ const SIZE_MIN = 64
 const SIZE_MAX = 16384
 const FPS_MIN = 1
 const FPS_MAX = 120
+// T-134 (5): the name box takes no more than this. The name is drawn in the Export panel's preset labels and the queue rows too (each cuts it
+// with an ellipsis), so a name nobody can read whole in any of them is a name nobody needs; the row below cuts a longer one that is already on disk.
+const PRESET_NAME_MAX = 60
 
 export function CustomPresetManager({
   open,
@@ -157,6 +160,7 @@ export function CustomPresetManager({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="bg-bg-base rounded px-2 py-1.5"
+                maxLength={PRESET_NAME_MAX}
                 // M11 fix (round 15): the visible label "Preset name (e.g. …)"
                 // is the placeholder, which AT does not treat as a label.
                 aria-label="Custom preset name"
@@ -266,13 +270,17 @@ export function CustomPresetManager({
                     key={p.id}
                     className="flex items-center gap-3 px-3 py-2 bg-bg-hover rounded text-sm"
                   >
-                    <span className="font-medium">{p.name}</span>
-                    <span className="text-xs text-ink-dim font-mono">
+                    {/* T-134 (5): the name gives way (an ellipsis, the whole of it as the tooltip); the numbers and Delete never move. An 80-character
+                        unbroken name used to push Delete past the card's edge. */}
+                    <span className="font-medium min-w-0 truncate" title={p.name}>
+                      {p.name}
+                    </span>
+                    <span className="text-xs text-ink-dim font-mono shrink-0">
                       {p.width}×{p.height} · {p.fps} fps · {formatBitrate(p.videoBitrate)} ·{' '}
                       {PLATFORM_INFO[p.basePlatformId].label}
                     </span>
                     <button
-                      className="ml-auto text-ink-dim hover:text-danger text-xs"
+                      className="ml-auto shrink-0 text-ink-dim hover:text-danger text-xs"
                       onClick={() => remove(p)}
                     >
                       Delete

@@ -353,11 +353,12 @@ describe('T-57 — clearing an autosave has an error path', () => {
       banner.indexOf('imagii autosaved your work')
     )
     expect(corruptionBanner).toMatch(/>\s*Clear\s*</)
-    expect(corruptionBanner).toMatch(/disabled=\{busy\}/)
+    // T-134 (7): the flag is per button now (`restoring`, `clearing`); either one running dims the file's buttons.
+    expect(corruptionBanner).toMatch(/disabled=\{restoring \|\| clearing\}/)
     // T-92: the healthy banner's button is "Clear" too (it was "Discard"), and
     // starts the same call, so it is held to the same disabled-while-busy rule.
     const healthyBanner = banner.slice(banner.indexOf('imagii autosaved your work'))
-    expect(healthyBanner).toMatch(/onClick=\{\(\) => void clearAutosave\(\)\}\s*disabled=\{busy\}/)
+    expect(healthyBanner).toMatch(/onClick=\{\(\) => void clearAutosave\(\)\}\s*disabled=\{restoring \|\| clearing\}/)
     expect(healthyBanner).toMatch(/>\s*Clear\s*</)
     expect(healthyBanner).not.toMatch(/Discard/)
   })
@@ -1124,8 +1125,9 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     expect(read('lib/keyOwnership.ts')).toMatch(
       /return \(\s*isTextEntryTarget\(tagName, inputType\) \|\|\s*tagName\.toUpperCase\(\) === 'SELECT' \|\|\s*controlOwnsKey\(tagName, inputType, key\)\s*\)/
     )
-    expect(handler).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*setMarker\('in'\)/)
-    expect(handler).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*setMarker\('out'\)/)
+    // T-134 (2): on the press only (`if (!e.repeat)`); the T-134 pin at the end of this file holds that half.
+    expect(handler).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)/)
+    expect(handler).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)/)
     // T-121: from the frame on screen (`now`, `playheadNow`), where this pin used to read the store's `currentTime`
     // (the bug: it trails playback). The T-121 pin below holds all four relative keys.
     expect(handler).toMatch(/case ',':\s*next = now - 1 \/ fps/)
@@ -2434,12 +2436,14 @@ describe('T-133 (7) — a held key is one decision, and a key held through a clo
     const player = strip(read('modules/video-studio/Player.tsx'))
     const playerSpace = player.slice(player.indexOf("case ' ':"), player.indexOf("case 'ArrowLeft':"))
     expect(playerSpace).toMatch(/e\.preventDefault\(\)\s*if \(!e\.repeat\) togglePlay\(\)/)
-    const playerRest = player.slice(player.indexOf("case 'ArrowLeft':"), player.indexOf('default:'))
-    expect(playerRest, 'the arrows, , . and I / O are not guarded').not.toMatch(/repeat/)
+    // T-134 (2): the I / O markers joined Space as one decision per press (their own pin is in the T-134 block below); what repeats is the
+    // arrows, `,` and `.`.
+    const playerRest = player.slice(player.indexOf("case 'ArrowLeft':"), player.indexOf("case 'i':"))
+    expect(playerRest, 'the arrows, , and . are not guarded').not.toMatch(/repeat/)
     const timeline = strip(read('modules/video-studio/Timeline.tsx'))
     const timelineSpace = timeline.slice(timeline.indexOf("case ' ':"), timeline.indexOf("case 'ArrowLeft':"))
     expect(timelineSpace).toMatch(/e\.preventDefault\(\)\s*if \(!e\.repeat\) useVideoStore\.getState\(\)\.transport\?\.togglePlay\(\)\s*return/)
-    expect(timeline.slice(timeline.indexOf("case 'ArrowLeft':"), timeline.indexOf('if (!source || !clip')), 'nor the Timeline\'s').not.toMatch(/repeat/)
+    expect(timeline.slice(timeline.indexOf("case 'ArrowLeft':"), timeline.indexOf("case 'i':")), 'nor the Timeline\'s').not.toMatch(/repeat/)
   })
 
   it('(b) the ? overlay hands the event\'s repeat flag to its predicate', () => {
@@ -2481,12 +2485,75 @@ describe('T-133 (1) — every way off the Record screen asks about a live take',
       // Mood board / Asset Library "send to canvas": the person is on References, pressing a button on the screen; no take can be live there.
       'modules/references/MoodBoardPanel.tsx': 1,
       'modules/references/AssetLibraryPanel.tsx': 1,
-      // The autosave Restore is on Home.
+      // The autosave Restore: its click is on Home, but its navigate runs after an apply that can take MINUTES (a sound extracted again), so "it is
+      // on Home" is a premise of the click and false at the navigate. It asks where the person is NOW and goes only if that is still Home (T-134
+      // (1), pinned in the T-134 block at the end of this file); this table blessed it as "on Home" until the twentieth sweep ran a take through it.
       'components/AutosaveRestore.tsx': 1,
       // Clean audio: the stay-here branch (the person is on /video) and the toast's button, which asks (below).
       'modules/video-studio/VideoStudio.tsx': 2,
       // The "Edit in Video Studio" bridge, which asks first (above).
       'lib/editInVideoStudio.ts': 1
     })
+  })
+})
+
+// T-134 (1), (2), (7): the twentieth sweep's wiring, where the person reaches it. E2E: record.spec.ts "an autosave Restore that finishes after the person
+// went to another screen leaves them there (T-134 (1))"; video-core.spec.ts "a held I or O marks once ..."; continuity.spec.ts "Clear does not relabel Restore".
+describe('T-134 — a Restore that outlasts the person does not move them, a held marker key is one mark, Clear does not relabel Restore', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const restoreSrc = (): string => strip(read('components/AutosaveRestore.tsx'))
+  const restoreBody = (): string => {
+    const src = restoreSrc()
+    return src.slice(src.indexOf('async function restore()'), src.indexOf('async function clearAutosave()'))
+  }
+
+  it('(1) Restore navigates only if the person is STILL on Home when the apply finishes - the router location is read after the await, off the hash', () => {
+    const body = restoreBody()
+    expect(body, 'found the function').toContain('await applyProjectHeld(snapshot.project)')
+    expect(body).toMatch(/const route = snapshot\.project\.place\?\.route\s*if \(route && currentRoute\(\) === '\/home'\) navigate\(route\)/)
+    expect(body.indexOf('await applyProjectHeld('), 'asked AFTER the wait, not before it').toBeLessThan(body.indexOf('currentRoute()'))
+    expect(restoreSrc()).toMatch(/import \{[^}]*\bcurrentRoute\b[^}]*\} from '\.\.\/modules\/project\/ProjectIO'/)
+    // The renderer's navigate() table (T-133 (1)) names this site as the screen's own only while the guard is there.
+    expect(restoreSrc().match(/\bnavigate\(/g) ?? []).toHaveLength(1)
+  })
+
+  it('(7) Restore and Clear each have their own busy flag: only Restore\'s sets the "Restoring…" label', () => {
+    const src = restoreSrc()
+    expect(src).toMatch(/const \[restoring, setRestoring\] = useState\(false\)/)
+    expect(src).toMatch(/const \[clearing, setClearing\] = useState\(false\)/)
+    expect(src, 'no shared flag is left').not.toMatch(/\bsetBusy\b/)
+    const label = src.slice(src.indexOf('btn-primary'), src.indexOf('Clear\n', src.indexOf('btn-primary')))
+    expect(label).toMatch(/\{restoring \? 'Restoring…' : 'Restore'\}/)
+    const clearFn = src.slice(src.indexOf('async function clearAutosave()'), src.indexOf('const ageText'))
+    expect(clearFn, 'Clear runs on its own flag').toMatch(/setClearing\(true\)[\s\S]*setClearing\(false\)/)
+    expect(clearFn, 'and never touches Restore\'s').not.toMatch(/setRestoring/)
+    expect(restoreBody(), 'nor Restore Clear\'s').not.toMatch(/setClearing/)
+    // Either running dims all of the banner's buttons that act on the file: one at a time, as before.
+    expect(src.match(/disabled=\{restoring \|\| clearing\}/g) ?? [], 'Restore and Clear in the healthy banner, Clear in the damaged one').toHaveLength(3)
+  })
+
+  it('(2) I and O mark on the press only, in the Player and on the Timeline - a held key is one undo step and one point, not the keyboard\'s repeat rate', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    const playerKeys = player.slice(player.indexOf("case 'i':"), player.indexOf('default:', player.indexOf("case 'i':")))
+    expect(playerKeys).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*break/)
+    expect(playerKeys).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*break/)
+    const timeline = strip(read('modules/video-studio/Timeline.tsx'))
+    const timelineKeys = timeline.slice(timeline.indexOf("case 'i':"), timeline.indexOf('default:', timeline.indexOf("case 'i':")))
+    expect(timelineKeys).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*return/)
+    expect(timelineKeys).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*return/)
+  })
+
+  it('(5) a custom preset\'s name is capped in its box, cut with an ellipsis (and carried whole as the tooltip) in its row, and the safe-zone warning cuts a clip name the same way', () => {
+    const manager = strip(read('modules/video-studio/CustomPresetManager.tsx'))
+    expect(manager).toMatch(/const PRESET_NAME_MAX = 60/)
+    expect(manager).toMatch(/aria-label="Custom preset name"/)
+    const nameBox = manager.slice(manager.lastIndexOf('<input', manager.indexOf('aria-label="Custom preset name"')), manager.indexOf('aria-label="Custom preset name"'))
+    expect(nameBox, 'the cap is on the input itself').toMatch(/maxLength=\{PRESET_NAME_MAX\}/)
+    const row = manager.slice(manager.indexOf('{presets.map((p) => ('), manager.indexOf('</ul>', manager.indexOf('{presets.map((p) => (')))
+    expect(row).toMatch(/<span className="font-medium min-w-0 truncate" title=\{p\.name\}>/)
+    expect(row, 'the numbers do not give way').toMatch(/<span className="text-xs text-ink-dim font-mono shrink-0">/)
+    expect(row, 'and neither does Delete').toMatch(/className="ml-auto shrink-0 text-ink-dim hover:text-danger text-xs"/)
+    const warning = strip(read('modules/video-studio/SafeZoneWarningModal.tsx'))
+    expect(warning).toMatch(/<span className="font-medium block truncate" title=\{row\.clipName\}>/)
   })
 })

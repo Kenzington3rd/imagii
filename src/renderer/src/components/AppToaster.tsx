@@ -23,7 +23,8 @@ export const TOAST_STYLE = {
   // `pointer-events-auto`, which also keeps the toast up while it is pointed at.
   pointerEvents: 'none',
   // T-133 (2): the message is `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break opportunity (an
-  // underscores-only name, a hash) ran up to 81 px outside the card in a real render. `anywhere` lets it break inside the card, and, unlike
+  // underscores-only name, a hash) ran outside the card in a real render, by as much as the name was long (81 px for one name, 228 px for a
+  // 90-underscore one). `anywhere` lets it break inside the card, and, unlike
   // `break-word`, lowers the card's min-content too, so the flex row shrinks the message instead of widening past `max-width`.
   overflowWrap: 'anywhere'
 } as const

@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
+import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
 import { installSpawnStall } from './mainSpawn'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
@@ -2135,6 +2136,97 @@ test.describe('T-27 Record Studio', () => {
       await expect(window.locator('header').getByText('tour.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
     } finally {
       await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-134 (1): the autosave Restore awaits the apply (minutes for a sound that must be extracted again) and THEN navigated to the snapshot's route,
+  // wherever the person was by then - the T-132 (1)/T-133 (1) class at the one site left. Executed by the twentieth sweep: a 14 s held extraction,
+  // Restore, a take started on Record -> the take was cut and the app landed on /video. The extraction here is held 14 s, so the apply ends in
+  // the middle of the take: the person stays on Record, the clock keeps running, the take is saved whole, and the restored sound is in Audio Studio.
+  // (A person who is still on Home when it ends IS taken to the studio they were in: continuity.spec.ts "two studios, a window close, and a relaunch".)
+  test('an autosave Restore that finishes after the person went to another screen leaves them there, and a live take runs on (T-134 (1))', async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('restoreduring')
+    const userDataDir = path.join(root, 'userData')
+    const take = path.join(root, 'take.mp4')
+    const clip = path.join(root, 'tour.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+    const made = await runBinary(ffmpegPath, [
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip
+    ])
+    if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+    // The session the person left: Audio Studio holding the sound of a video (so Restore extracts it again), and the place they were in: Video Studio.
+    mkdirSync(path.join(userDataDir, 'autosave'), { recursive: true })
+    writeFileSync(
+      path.join(userDataDir, 'autosave', 'autosave.json'),
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        place: { route: '/video' },
+        audioStudio: { sourcePath: clip, extractedFromVideo: true, chain: DEFAULT_CHAIN_SPEC }
+      }),
+      'utf8'
+    )
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // The extraction ffmpeg is the first one the restore starts; it is held for 14 s.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 14_000 }])
+      await window.getByRole('button', { name: 'Restore' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      // Meanwhile: Record, and a live take.
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await stubSaveDialog(app, take)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+
+      // The restore ends in the middle of the take.
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toEqual(
+        expect.arrayContaining([expect.stringContaining('Restored from autosave')])
+      )
+      await window.waitForTimeout(1500)
+      expect(await window.evaluate(() => window.location.hash), 'the restore did not take the person to the studio it saved').toBe('#/record')
+      await expect(window.locator('h1', { hasText: 'Record' }), 'still on Record').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Stop' }), 'the take is still running').toBeVisible()
+      const clock = async (): Promise<number> => {
+        const text = (await window.getByText(/REC \d\d:\d\d/).first().textContent()) ?? ''
+        const m = /REC (\d\d):(\d\d)/.exec(text)
+        return m ? Number(m[1]) * 60 + Number(m[2]) : -1
+      }
+      const at = await clock()
+      expect(at).toBeGreaterThanOrEqual(1)
+      await expect.poll(clock, { timeout: 15_000, intervals: [250], message: 'the clock keeps counting after the restore ended' }).toBeGreaterThan(at)
+
+      // Stop: the save goes ahead on Record and the take is a whole file with a picture, as long as the clock said.
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: 'Edit in Video Studio' })).toBeVisible({ timeout: 120_000 })
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      expect(existsSync(take), 'the take was saved').toBe(true)
+      const probe = await probeFile(take)
+      expect(probe.streams?.some((st) => st.codec_type === 'video')).toBe(true)
+      expect(Number(probe.format?.duration), 'and it is as long as the clock said (not cut at the restore)').toBeGreaterThanOrEqual(at)
+
+      // The restore itself was not lost: the sound is waiting in Audio Studio.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('tour.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
       cleanup(root)
     }
   })

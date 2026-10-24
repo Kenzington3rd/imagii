@@ -14,6 +14,53 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-24 — T-134 (round 83): a table that blessed a premise of the click, a held key that was a hundred decisions, and a guard that refused the question that had changed
+
+The twentieth pass (7 items, expediter-ticketed). Ledger: r83/ledger.md (every red a test run against the old product code, a build of the unchanged tree `eed3101` for the Playwright cases, or a content-replace mutation of the finished code with a sha256 triple, every restore byte-identical; item 4's Layer 5 pin on both ffmpeg majors). The items that taught something:
+
+### (1) [MED] - the autosave Restore navigated after a wait the person had spent elsewhere
+
+- **Bug.** `AutosaveRestore.restore()` awaits `applyProjectHeld` (minutes, when a long recording's sound is extracted again) and then called `navigate(snapshot.place.route)` wherever the person was by then. `navigate` still works from a component that unmounted, so a person who went to Record and started a take was taken to /video, which unmounted RecordStudio, whose cleanup stops the tracks: the take was cut (executed by the sweep in a built app: a 14 s held extraction, Restore, a take started; the hash became `#/video` and Stop was gone). Four reviewers found it independently. It was the T-132 (1) / T-133 (1) class at the one site left, and T-133's own navigate table had listed it as safe with the comment "The autosave Restore is on Home."
+- **Fix.** After the await, `if (route && currentRoute() === '/home') navigate(route)`: a person still on Home gets the continuity Restore promises; anyone else keeps their screen, and "Restored from autosave" already says it is done. The table's comment now says why the old one was wrong.
+- **Test.** record.spec.ts "an autosave Restore that finishes after the person went to another screen leaves them there, and a live take runs on" (red on the unchanged build: `Expected: "#/record" Received: "#/video"`); continuity.spec.ts keeps the other half (a person still on Home IS taken to the studio); the wiring pin holds that the read comes after the await.
+- **Lesson.** **A review table that decides a set of call sites by one sentence of rationale ("it is on Home") has decided them at the moment of the click. For anything that awaits before it acts, the premise has to hold at the act, so the rationale must name the await.** The table existed to make a new exit fail until it was decided; it did, and the decision was wrong because it was made about the press and not about the navigate.
+
+### (2) [LOW] - a held I or O re-set the marker on every auto-repeat
+
+- **Bug.** T-133 (7b) made Space one decision per press and left the markers: a held I or O ran `setMarker` on each auto-repeat (about 30 a second), and each is an undo step, so 60 repeats filled the store's 50-step history and evicted real edits (executed against the real store: three `addClip` edits became un-undoable), and during playback the in point drifted to the last repeat's frame.
+- **Fix.** `if (!e.repeat)` on the i/o cases in the Player and the Timeline, exactly as Space got it; `preventDefault` still runs on a repeat; the nudge and frame-step keys still repeat.
+- **Test.** video-core.spec.ts "a held I or O marks once: one Undo takes it back, in the Player and on the Timeline" (the witness is Undo: after four keydowns of one held key ONE Undo takes the point back to where it started; red on the unchanged build: `Expected: 0 Received: 0.5`); the wiring pins.
+- **Lesson.** **When a fix makes one key of a family "a decision per press", the same sentence has to be asked of every key in the family. A held key is a decision per auto-repeat unless something says otherwise, and the cost of the wrong answer is not the extra work, it is what the extra work pushed out of a bounded history.**
+
+### (3) [LOW] - the single-flight search discarded a CORRECTED query
+
+- **Bug.** T-133 (8) refused every press while a request was out, to stop a held Enter sending duplicates. A person who typed, pressed Enter, saw a typo and corrected it was silently refused, and the typo's answer then filled a grid that no query on the page named. The pinned drop-test called that intended.
+- **Fix.** The guard refuses the SAME query only (a held Enter is one request); a different query goes out at once; each request takes a number and only the newest request's answer, failure and idle state are drawn (an older one is dropped, but its failure is still logged). The ticket's other option, one follow-up after the flight, would have made a person on a slow connection wait for the typo and then for the correction.
+- **Test.** `referencesStore.test.ts` (the drop-test flipped; the typo is never drawn, even for a moment, whichever answers first; a typo's failure leaves no error over the newest search); references.spec.ts "a held Enter is one request, a corrected query is answered, and the typo's late answer never replaces it" (red on the unchanged build: the corrected query was never asked).
+- **Lesson.** **A single-flight guard has to say what "the same" means. "Anything while one is out" is the cheapest thing to write and refuses the one request that mattered most; "the same question while it is out, and the newest question owns the answer" costs a counter and is what the person meant.**
+
+### (5) [LOW] - a long unbroken name pushed Delete out of its dialog
+
+- **Bug.** A saved preset's name was drawn whole in a flex row with nothing to give: an 80-character spaceless name put Delete at x=905 against a card that ends at 848 (measured in real Chromium; the threshold is about 72 characters). The safe-zone warning listed a clip's name the same way, in a box that scrolls sideways once a line is too long.
+- **Fix.** The names are cut with an ellipsis and carry the whole name as the tooltip (the DESIGN_GUIDE chip rule); the numbers and Delete do not shrink; the name box takes at most 60 characters.
+- **Test.** video-pipelines.spec.ts "a very long unbroken preset name is cut with an ellipsis and Delete stays inside the dialog ..." and "a clip with a very long unbroken name is cut with an ellipsis in the safe-zone warning ..." (geometry at the default window and the 1024 px minimum; the long names are WRITTEN to disk, because a cap on the box does not shorten what is already saved); the wiring pin and `a11ySweep.test.ts` rule 6.
+- **Lesson.** **A cap on an input is not a layout fix: the layout has to survive whatever is already stored, so the test writes the long value past the input.**
+
+### (7) [LOW] - Clear relabelled Restore
+
+- **Bug.** The banner's two buttons shared one busy flag, so pressing Clear showed "Restoring…" on Restore for the unlink's duration: a word about an action nobody took. The T-133 (9) ledger row had called that intended.
+- **Fix.** A flag per button (`restoring`, `clearing`); either one running still dims both, since they act on one file.
+- **Test.** continuity.spec.ts "Clear does not relabel Restore ..." (main's clear is held open; red on the unchanged build: `Expected: "Restore" Received: "Restoring…"`); the wiring pin.
+- **Lesson.** **A label that describes a state belongs to the flag for that state. One flag shared by two buttons can only be right for one of them.**
+
+### (4), (6) - three documentation claims the code contradicted
+
+- **(4)** `noPicture.ts` and STYLE_GUIDE said a compilation's segments close on `wroteNoPicture(sawEmptyOutput, frames)`; `concat.ts` reads the stderr line alone. The runtime worry (an audio-only segment slipping through `-shortest`) was measured on both majors by three parties and does not happen: a segment ends in `apad` + `-shortest`, so a range past the picture is a streamless ~970-byte stub and the line is printed. The sentences were corrected, the `docClaims` pin that held the over-claim now holds the correction, a scan lists the callers of `wroteNoPicture` (the T-133 (4) lesson, "every X does Y" is unverified until something lists X, applied to its own fix), and a Layer 5 case pins the 5 s picture / 9 s sound shape on both majors. "Ran up to 81 px OUT" became "by as much as the name was long": the ledger's own red measured 228 px, so "up to" was never a bound.
+- **(6)** The native-dialog inventory was stale three ways (a confirm that moved files, line numbers that drifted, a confirm with no row). It is refreshed, and a `docClaims.test.ts` scan now reads it against the renderer: every native `confirm` / `alert` / `prompt` call has a row at its line and every cite points at a line that still holds one.
+- **Lesson.** **A table of file:line cites is a claim about the tree. Re-pointing it by hand fixes it for the length of one sweep; a test that parses the table and the source fixes it for good.**
+
+---
+
 ## 2026-10-24 — T-133 (round 82): the fix's own button that cut the take it protected, a tolerance borrowed from the wrong side of a failure, and a guess about how long a human holds a key
 
 The nineteenth pass (11 items, expediter-ticketed). Ledger: r82/ledger.md (every red a test run against the old product code or a content-replace mutation of the finished code with a sha256 triple, every restore byte-identical; the e2e reds were run against a build of the unchanged tree at `d90c01b`; item 4 on both ffmpeg majors). The items that taught something:

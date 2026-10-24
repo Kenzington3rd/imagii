@@ -342,37 +342,110 @@ describe('a rejected search (T-84)', () => {
   })
 })
 
-describe('one search at a time (T-133 (8))', () => {
+describe('one search at a time (T-133 (8)), and the newest query is the one that is answered (T-134 (3))', () => {
   // The Search button is disabled while a request is out; the input's Enter was not, so a second press (or a held key) sent a second request and
-  // whichever answered LAST won the results grid - a slow first answer overwrote the newer search. The guard is in the store's `search`, the one
-  // function every caller goes through, so no entry point (button, Enter, a future shortcut) can skip it.
+  // whichever answered LAST won the results grid - a slow first answer overwrote the newer search. T-133 (8) closed that by refusing every press
+  // while a request was out, which also threw away a CORRECTED query (the typo's answer then filled a grid that no query on the page named).
+  // Now: a press of the query that is already out sends nothing (a held Enter is one request); a different query goes out at once; and an answer
+  // is drawn only if it belongs to the newest request. The guard is in the store's `search`, the one function every caller goes through.
   function stubGatedSearch(): { images: ReturnType<typeof vi.fn>; release: (query: string) => void } {
-    const waiting: Array<(query: string) => void> = []
+    const waiting: Array<{ query: string; resolve: (answered: string) => void }> = []
     const images = vi.fn(
       (query: string) =>
         new Promise((resolve) => {
-          waiting.push((answered) => resolve({ query: answered, provider: 'duckduckgo', results: [] }))
-          void query
+          waiting.push({ query, resolve: (answered) => resolve({ query: answered, provider: 'duckduckgo', results: [] }) })
         })
     )
     vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
-    return { images, release: (query) => waiting.shift()?.(query) }
+    // `release(query)` answers the OLDEST request that was made for that query.
+    return {
+      images,
+      release: (query) => {
+        const at = waiting.findIndex((w) => w.query === query)
+        if (at >= 0) waiting.splice(at, 1)[0]?.resolve(query)
+      }
+    }
+  }
+  const answersDrawn = (): Array<string | undefined> => {
+    const seen: Array<string | undefined> = []
+    const stop = useReferencesStore.subscribe((s) => {
+      if (seen[seen.length - 1] !== s.searchResponse?.query) seen.push(s.searchResponse?.query)
+    })
+    return Object.assign(seen, { stop })
   }
 
-  it('a second search while one is out sends nothing, and the first answer is the one on screen', async () => {
+  it('a second press of the query that is out sends nothing, and its answer is the one on screen', async () => {
     const { images, release } = stubGatedSearch()
     const first = store().search('mountains')
     expect(store().searchLoading).toBe(true)
 
     // Not awaited: a press that is not refused would wait on its own gate.
     const second = store().search('mountains')
-    const third = store().search('a different query typed meanwhile')
-    expect(images, 'one request for three presses').toHaveBeenCalledTimes(1)
+    const third = store().search('mountains')
+    expect(images, 'one request for three presses of one query').toHaveBeenCalledTimes(1)
 
     release('mountains')
     await Promise.all([first, second, third])
     expect(store().searchLoading).toBe(false)
     expect(store().searchResponse?.query).toBe('mountains')
+  })
+
+  it('a CORRECTED query typed while one is out goes out, and its answer is what the grid shows - the typo\'s late answer is never drawn', async () => {
+    const { images, release } = stubGatedSearch()
+    const drawn = answersDrawn() as Array<string | undefined> & { stop: () => void }
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+    expect(images, 'the corrected query is asked, not dropped').toHaveBeenCalledTimes(2)
+    expect(images).toHaveBeenLastCalledWith('mountains')
+    expect(store().searchLoading, 'still waiting for the newest').toBe(true)
+
+    // The newest answers first: the grid shows it, and the button is idle even though the typo's request is still out.
+    release('mountains')
+    await corrected
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+
+    // The typo's answer arrives late: it belongs to a question nothing on the page names any more.
+    release('mountians')
+    await typo
+    expect(store().searchResponse?.query, 'the late answer did not overwrite the newest').toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+    expect(drawn.filter((q) => q === 'mountians'), 'the typo\'s answer was never on screen').toEqual([])
+    drawn.stop()
+  })
+
+  it('the corrected query answers LAST and the typo FIRST: the typo is not drawn even for a moment, and the button stays busy until the newest is in', async () => {
+    const { release } = stubGatedSearch()
+    const drawn = answersDrawn() as Array<string | undefined> & { stop: () => void }
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+
+    release('mountians')
+    await typo
+    expect(store().searchResponse, 'an older answer is not drawn while a newer request is out').toBeNull()
+    expect(store().searchLoading, 'and the panel is still searching').toBe(true)
+
+    release('mountains')
+    await corrected
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+    expect(drawn.filter((q) => q === 'mountians')).toEqual([])
+    drawn.stop()
+  })
+
+  it('typing the query that is out back in (a correction undone) is not a second request, but a different one after a different one is', async () => {
+    const { images, release } = stubGatedSearch()
+    const a = store().search('rivers')
+    const b = store().search('rivers') // the same: nothing
+    expect(images).toHaveBeenCalledTimes(1)
+    const c = store().search('lakes') // different: asked
+    expect(images).toHaveBeenCalledTimes(2)
+    const d = store().search('lakes') // now 'lakes' is the one that is out: nothing
+    expect(images).toHaveBeenCalledTimes(2)
+    release('lakes')
+    release('rivers')
+    await Promise.all([a, b, c, d])
+    expect(store().searchResponse?.query).toBe('lakes')
   })
 
   it('once the answer is in, the next search goes out', async () => {
@@ -398,6 +471,30 @@ describe('one search at a time (T-133 (8))', () => {
     await store().search('again')
     expect(images).toHaveBeenCalledTimes(2)
     expect(store().searchResponse?.query).toBe('again')
+    errorSpy.mockRestore()
+  })
+
+  it('a typo whose request FAILS after the corrected query was asked leaves no error over the newest search', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const rejectors: Array<(e: Error) => void> = []
+    const answers: Array<(r: unknown) => void> = []
+    const images = vi.fn(
+      (query: string) =>
+        new Promise((resolve, reject) => {
+          if (query === 'mountians') rejectors.push(reject)
+          else answers.push(resolve)
+        })
+    )
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+    answers[0]?.({ query: 'mountains', provider: 'duckduckgo', results: [] })
+    await corrected
+    rejectors[0]?.(new Error('boom'))
+    await typo
+    expect(store().searchError, 'the newest search succeeded; the typo\'s failure is not shown over it').toBeNull()
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(errorSpy, 'the failure is still logged for whoever debugs it').toHaveBeenCalled()
     errorSpy.mockRestore()
   })
 })

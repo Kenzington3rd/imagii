@@ -1474,9 +1474,12 @@ test.describe('imagii References studio', () => {
   })
 
   // T-133 (8): the Search button is disabled while a request is out and the input's Enter was not, so a second press (or a held key) sent a second
-  // request, and whichever answered LAST owned the grid. Main's handler is held open here (and counts its calls), so "while a request is out" is a
-  // state the test creates: Enter three times and a different query typed meanwhile are ONE request; when the answer is in, the next Enter goes out.
-  test('Reference Search: Enter while a search is out sends nothing more, and the next one goes out when it is answered (T-133 (8))', async () => {
+  // request, and whichever answered LAST owned the grid. T-134 (3): the guard it landed refused EVERY press while a request was out, which threw
+  // away a corrected query (type, Enter, spot the typo, fix it, Enter) and left the typo's answer on a grid no query on the page named. Now a press
+  // of the query that is already out sends nothing (a held Enter is one request), a DIFFERENT query goes out at once, and an answer is drawn only if
+  // it belongs to the newest request. Main's handler holds the first request open (and counts its calls), so "while a request is out" is a state the
+  // test creates; every result is a one-pixel data: image titled with the query it answers (no network), so the grid says whose answer it is.
+  test('Reference Search: a held Enter is one request, a corrected query is answered, and the typo\'s late answer never replaces it (T-133 (8), T-134 (3))', async () => {
     test.setTimeout(120_000)
     const fx = makeFixture('refs-search-once')
     const app = await launchApp(fx.userDataDir)
@@ -1489,33 +1492,50 @@ test.describe('imagii References studio', () => {
         const gate = new Promise<void>((resolve) => {
           g.__releaseSearch = resolve
         })
+        const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
         ipcMain.removeHandler('search:images')
         ipcMain.handle('search:images', async (_e, query: unknown) => {
           g.__searchCalls.push(String(query))
+          // Only the FIRST request (the typo) is held open; everything after it answers at once.
           if (g.__searchCalls.length === 1) await gate
-          return { query: String(query), provider: 'duckduckgo', results: [] }
+          return {
+            query: String(query),
+            provider: 'duckduckgo',
+            results: [{ id: 'r1', thumbnail: PIXEL, fullUrl: PIXEL, source: 'local', title: `answer to ${String(query)}` }]
+          }
         })
       })
       const calls = (): Promise<string[]> => app.evaluate(() => (globalThis as unknown as { __searchCalls: string[] }).__searchCalls)
       const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
       const searchButton = window.locator('.card', { has: input }).getByRole('button')
 
-      await input.fill('minimalist mountain photography')
+      // A typo, Enter, and the key held: ONE request for three presses of one query.
+      await input.fill('minimalist mountian photography')
       await input.press('Enter')
       await expect(searchButton).toHaveText('Searching…')
       await input.press('Enter')
       await input.press('Enter')
-      await input.fill('a different query typed meanwhile')
-      await input.press('Enter')
-      await window.waitForTimeout(500)
-      expect(await calls(), 'one request for four presses').toEqual(['minimalist mountain photography'])
+      await window.waitForTimeout(400)
+      expect(await calls(), 'one request for three presses of one query').toEqual(['minimalist mountian photography'])
 
-      // The answer arrives: the panel is idle again, and the next Enter is a search.
-      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
-      await expect(searchButton).toHaveText('Search')
-      await expect(window.getByText('No results.')).toBeVisible()
+      // The person sees the typo, corrects it, presses Enter: that is a different question, and it is asked now.
+      await input.fill('minimalist mountain photography')
       await input.press('Enter')
-      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountain photography', 'a different query typed meanwhile'])
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountian photography', 'minimalist mountain photography'])
+      // ... and its answer is on the grid, the panel idle, while the typo's request is STILL out.
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible({ timeout: 10_000 })
+      await expect(searchButton).toHaveText('Search')
+
+      // The typo's answer arrives late: it must not take the grid back.
+      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
+      await window.waitForTimeout(700)
+      await expect(window.locator('img[alt="answer to minimalist mountian photography"]'), 'the late answer to the typo was drawn').toHaveCount(0)
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible()
+      await expect(searchButton).toHaveText('Search')
+
+      // Once nothing is out, the next Enter is a search like any other.
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toHaveLength(3)
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
