@@ -839,7 +839,10 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
     expect(kit.indexOf('removeKitDir(')).toBeLessThan(kit.indexOf('reportFailure(err'))
     // Every file the kit writes moves the count: a finished job and a finished thumbnail.
     expect(kit).toMatch(/finished \+= 1\s*landed \+= 1/)
-    expect(kit).toMatch(/outputPath: outPath\s*\}\)\s*landed \+= 1/)
+    // (T-130 (t): the extract also carries the clip's crop, so the call has one more field after the path.)
+    expect(kit).toMatch(/outputPath: outPath,[^}]*\}\)\s*landed \+= 1/)
+    // T-130 (t): and the crop it carries is the clip's, so a thumbnail is the picture the platform files are cut from.
+    expect(kit).toMatch(/video\.extractFrame\(\{[^}]*cropRect: clip\.cropRect/)
     // Main side: a non-recursive rmdir behind the path gate, on the preload's channel.
     const main = readFileSync(path.join(__dirname, '../../src/main/ffmpeg/frame.ts'), 'utf8')
     expect(main).toMatch(/await rmdir\(kitDir\)/)

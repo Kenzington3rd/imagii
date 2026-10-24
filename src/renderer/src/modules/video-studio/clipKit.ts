@@ -1,7 +1,7 @@
 import { clipForExport, clipSpeed, type Clip, type ExportJobSpec, type PlatformId, type WatermarkSpec } from '@shared/clip'
 import { cropFrameSize } from '@shared/safeZone'
 import {
-  ALL_PLATFORM_IDS,
+  KIT_PLATFORM_IDS,
   PLATFORM_INFO,
   outputDurationSec,
   spanAdjective,
@@ -47,7 +47,7 @@ function isVerticalFrame(source: KitSource, clip: Pick<Clip, 'cropRect'>): boole
 /** The presets the kit really exports, in queue order, with the YouTube slot swapped when the clip's frame is vertical. */
 export function kitEffectivePresets(source: KitSource, clip: Pick<Clip, 'cropRect'>): PlatformId[] {
   const vertical = isVerticalFrame(source, clip)
-  return ALL_PLATFORM_IDS.map((p) => (p === 'youtube' && vertical ? 'reels' : p))
+  return KIT_PLATFORM_IDS.map((p) => (p === 'youtube' && vertical ? 'reels' : p))
 }
 
 /**
@@ -74,7 +74,7 @@ const YOUTUBE_SHORT_INFO: PlatformInfo = {
  */
 export function kitLimitTargets(source: KitSource, clip: Pick<Clip, 'cropRect'>): PlatformInfo[] {
   const vertical = isVerticalFrame(source, clip)
-  return ALL_PLATFORM_IDS.map((p) => (p === 'youtube' && vertical ? YOUTUBE_SHORT_INFO : PLATFORM_INFO[p]))
+  return KIT_PLATFORM_IDS.map((p) => (p === 'youtube' && vertical ? YOUTUBE_SHORT_INFO : PLATFORM_INFO[p]))
 }
 
 /**
@@ -126,7 +126,7 @@ export function buildKitQueue(args: {
 }): ExportJobSpec[] {
   const { source, clip, kitDir, safeName, watermark, newJobId } = args
   const vertical = isVerticalFrame(source, clip)
-  return ALL_PLATFORM_IDS.map((preset: PlatformId) => {
+  return KIT_PLATFORM_IDS.map((preset: PlatformId) => {
     const effectivePreset: PlatformId = preset === 'youtube' && vertical ? 'reels' : preset
     const filenameSuffix = preset === 'youtube' && vertical ? 'youtube_short' : preset
     return {

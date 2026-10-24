@@ -41,12 +41,14 @@ vi.mock('node:child_process', () => ({
     return child
   }
 }))
+/** The frame rate the faked probe reports (T-130 (q)): 0 is "the file does not say". */
+let probedFps = 30
 vi.mock('./probe', () => ({
   probeVideo: async () => ({
     duration: 60,
     width: 1920,
     height: 1080,
-    fps: 30,
+    fps: probedFps,
     videoCodec: 'h264',
     audioCodec: 'aac',
     bitrate: 0,
@@ -62,6 +64,7 @@ beforeEach(() => {
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-concat-runner-'))
   spawned = []
   listText = ''
+  probedFps = 30
 })
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
@@ -143,6 +146,56 @@ describe('a compilation segment is Matroska with PCM sound (T-125 (1))', () => {
     expect(middle).toContain('afade=t=out')
     expect(last).toContain('afade=t=in')
     expect(last, 'no fade out on the last segment').not.toContain('afade=t=out')
+  })
+})
+
+// T-130 (q): the compilation was written at 30 fps whatever the recording was, so a 60 fps recording lost half its frames in a montage while a
+// 60 fps platform export did not. The rate is the source's up to 60 (`compileFps`), written into the fps stage AND `-r` of every segment. The
+// real files are read back in Layer 5 ("the compilation follows the source's rate"); this is the half no decode can see - that `-r` and the
+// stage are the SAME derived value, on every segment, and that the probe's "no rate" falls back rather than writing `-r 0`.
+describe('a compilation segment is written at the source\'s rate, up to 60 (T-130 (q))', () => {
+  const rateOf = (args: string[]): { r: string | undefined; stage: string | undefined } => ({
+    r: after(args, '-r'),
+    stage: (after(args, '-vf') ?? '').split(',')[0]
+  })
+
+  it.each([
+    [24, '24'],
+    [25, '25'],
+    [30, '30'],
+    [50, '50'],
+    [60, '60']
+  ])('a %s fps source: every segment\'s -r and fps stage say %s', async (fps, text) => {
+    probedFps = fps
+    const { segments } = await compile(0)
+    segments.forEach((args, i) => expect(rateOf(args), `segment ${i}`).toEqual({ r: text, stage: `fps=${text}` }))
+  })
+
+  it('a source faster than 60 is written at 60', async () => {
+    probedFps = 120
+    const { segments } = await compile(0)
+    segments.forEach((args, i) => expect(rateOf(args), `segment ${i}`).toEqual({ r: '60', stage: 'fps=60' }))
+  })
+
+  it('59.94 stays 59.94 (not 60), and 29.97 stays 29.97', async () => {
+    for (const fps of [60000 / 1001, 30000 / 1001]) {
+      probedFps = fps
+      spawned = []
+      const { segments } = await compile(0)
+      segments.forEach((args, i) => expect(rateOf(args), `segment ${i} of ${fps}`).toEqual({ r: String(fps), stage: `fps=${fps}` }))
+    }
+  })
+
+  it('a file that states no rate (the probe\'s 0) is written at the fallback 30, never at -r 0', async () => {
+    probedFps = 0
+    const { segments } = await compile(0)
+    segments.forEach((args, i) => expect(rateOf(args), `segment ${i}`).toEqual({ r: '30', stage: 'fps=30' }))
+  })
+
+  it('every segment of one compilation has the same rate, so the stream-copy join sees one', async () => {
+    probedFps = 50
+    const { segments } = await compile(300)
+    expect(new Set(segments.map((a) => after(a, '-r'))).size).toBe(1)
   })
 })
 

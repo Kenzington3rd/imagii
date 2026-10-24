@@ -159,3 +159,52 @@ describe('resolveExportPreset snaps odd sizes to even pixels (T-111)', () => {
     expect(resolveExportPreset('youtube', { ...odd, width: 16383, height: 16383 })).toMatchObject({ width: 16382, height: 16382 })
   })
 })
+
+/**
+ * T-130 (q) - "YouTube 1080p60". Every platform row was 30 fps, so a streamer whose game runs at 60 had no way to export it at 60 short of
+ * building a custom preset by hand. The row is YouTube's 1080p row at 60 fps and YouTube's recommended 1080p60 video bitrate (12 Mbps,
+ * against 8 Mbps at 30); everything else about the platform - its audio, its codec, its length advice - is the same platform's.
+ */
+describe('YouTube 1080p60 (T-130 (q))', () => {
+  const p60 = PLATFORM_PRESETS.youtube60
+  const p30 = PLATFORM_PRESETS.youtube
+
+  it('is a listed preset the export gate accepts', () => {
+    expect(ALL_PRESET_IDS).toContain('youtube60')
+    expect(() => assertEnum('youtube60', ALL_PRESET_IDS, 'preset')).not.toThrow()
+  })
+
+  it('is 1920x1080 at 60 fps and 12M, named for what it is', () => {
+    expect(p60.id).toBe('youtube60')
+    expect(p60.label).toBe('YouTube 1080p60')
+    expect([p60.width, p60.height]).toEqual([1920, 1080])
+    expect(p60.fps).toBe(60)
+    expect(p60.videoBitrate).toBe('12M')
+    expect(p60.aspectRatio).toBeCloseTo(16 / 9, 10)
+  })
+
+  it('has the 1080p row\'s audio, codecs and length advice, so the only differences are the rate and its bitrate', () => {
+    const { id: _id, label: _label, fps: _fps, videoBitrate: _bitrate, ...rest60 } = p60
+    const { id: _id30, label: _label30, fps: _fps30, videoBitrate: _bitrate30, ...rest30 } = p30
+    expect(rest60).toEqual(rest30)
+    expect(p60.audioBitrate).toBe('192k')
+    expect(p30.fps, 'the 30 fps row is untouched').toBe(30)
+    expect(p30.videoBitrate).toBe('8M')
+  })
+
+  it('a custom preset built on it resolves like one built on any platform', () => {
+    const custom: CustomPreset = {
+      id: 'cp60',
+      name: 'Stream 720p60',
+      width: 1280,
+      height: 720,
+      fps: 60,
+      videoBitrate: '6M',
+      audioBitrate: '128k',
+      basePlatformId: 'youtube60'
+    }
+    const resolved = resolveExportPreset('youtube60', custom)
+    expect([resolved.id, resolved.width, resolved.height, resolved.fps]).toEqual(['youtube60', 1280, 720, 60])
+    expect(resolveExportPreset('youtube60', null)).toBe(p60)
+  })
+})

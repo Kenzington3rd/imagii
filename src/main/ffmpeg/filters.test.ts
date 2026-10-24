@@ -9,7 +9,7 @@ import {
   type FilterClip,
   type FilterFrame
 } from './filters'
-import { PLATFORM_PRESETS } from './presets'
+import { PLATFORM_PRESETS, resolveExportPreset } from './presets'
 import { OVERLAY_FONTS } from '../../shared/textOverlay'
 import type { Clip, TextOverlay } from '../../shared/clip'
 
@@ -1189,5 +1189,67 @@ describe('EVEN_PICTURE - the stage every re-encoding command opens with (T-113, 
     // A crop leaves every surviving pixel as it was. Layer 5 proves it on a 1-px checkerboard.
     expect(EVEN_PICTURE.startsWith('crop=')).toBe(true)
     expect(EVEN_PICTURE).not.toMatch(/scale/)
+  })
+})
+
+/**
+ * T-130 (an) - the watermark's position expressions, per frame shape. Landscape frames keep the margin they always had, byte for byte; a
+ * vertical frame (the shape decides, not the platform's name: a custom 1280x720 built on Reels is landscape) takes the inset that clears the
+ * platform's header and caption. Layer 5 (win32, T-51's block) draws them and measures the bands; ffmpeg's drawtext evaluates `h-th-480`
+ * itself, so the numbers below are the only place they are written.
+ */
+describe('the watermark clears the platform interface on a vertical frame (T-130 (an))', () => {
+  const POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
+  const mark = (position: (typeof POSITIONS)[number]) => ({ text: '@imagii', position, fontSizePct: 3.5, opacity: 0.85 })
+  const placeOn = (frame: FilterFrame, position: (typeof POSITIONS)[number]): { x: string | undefined; y: string | undefined } => {
+    const graph = buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [] }, frame, { width: 1920, height: 1080 }, mark(position))
+    const { options } = parseDrawtext(graph.slice(graph.indexOf('drawtext=') + 'drawtext='.length))
+    return { x: options.x, y: options.y }
+  }
+
+  it('landscape presets: the flat 20 px on every side, exactly as before', () => {
+    for (const id of ['youtube', 'youtube60', 'twitter', 'facebook'] as const) {
+      const frame = PLATFORM_PRESETS[id]
+      expect(placeOn(frame, 'top-left'), id).toEqual({ x: '20', y: '20' })
+      expect(placeOn(frame, 'top-right'), id).toEqual({ x: 'w-tw-20', y: '20' })
+      expect(placeOn(frame, 'bottom-left'), id).toEqual({ x: '20', y: 'h-th-20' })
+      expect(placeOn(frame, 'bottom-right'), id).toEqual({ x: 'w-tw-20', y: 'h-th-20' })
+    }
+  })
+
+  it('Reels and TikTok (1080x1920): 288 px down from the top, 480 px up from the bottom, 20 px from the sides', () => {
+    for (const id of ['reels', 'tiktok'] as const) {
+      const frame = PLATFORM_PRESETS[id]
+      expect(placeOn(frame, 'top-left'), id).toEqual({ x: '20', y: '288' })
+      expect(placeOn(frame, 'top-right'), id).toEqual({ x: 'w-tw-20', y: '288' })
+      expect(placeOn(frame, 'bottom-left'), id).toEqual({ x: '20', y: 'h-th-480' })
+      expect(placeOn(frame, 'bottom-right'), id).toEqual({ x: 'w-tw-20', y: 'h-th-480' })
+    }
+  })
+
+  it('a custom preset is judged by its own shape: 720x1280 on a YouTube base is vertical, 1280x720 on a Reels base is not', () => {
+    const custom = (width: number, height: number, basePlatformId: 'youtube' | 'reels') =>
+      resolveExportPreset(basePlatformId, { id: 'cp', name: 'Mine', width, height, fps: 30, videoBitrate: '5M', audioBitrate: '128k', basePlatformId })
+    expect(placeOn(custom(720, 1280, 'youtube'), 'bottom-right')).toEqual({ x: 'w-tw-20', y: 'h-th-320' })
+    expect(placeOn(custom(720, 1280, 'youtube'), 'top-left')).toEqual({ x: '20', y: '192' })
+    expect(placeOn(custom(1280, 720, 'reels'), 'bottom-right')).toEqual({ x: 'w-tw-20', y: 'h-th-20' })
+    expect(placeOn(custom(1280, 720, 'reels'), 'top-left')).toEqual({ x: '20', y: '20' })
+  })
+
+  it('a square or 4:5 custom preset has no caption rail to clear and keeps the flat margin', () => {
+    const custom = (width: number, height: number) =>
+      resolveExportPreset('reels', { id: 'cp', name: 'Mine', width, height, fps: 30, videoBitrate: '5M', audioBitrate: '128k', basePlatformId: 'reels' })
+    expect(placeOn(custom(1080, 1080), 'bottom-right')).toEqual({ x: 'w-tw-20', y: 'h-th-20' })
+    expect(placeOn(custom(1080, 1350), 'top-right')).toEqual({ x: 'w-tw-20', y: '20' })
+  })
+
+  it('nothing else about the drawtext moved: the face, the size, the box and the opacity are the vertical frame\'s own', () => {
+    const graph = buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [] }, PLATFORM_PRESETS.reels, { width: 1080, height: 1920 }, mark('bottom-right'))
+    const { options } = parseDrawtext(graph.slice(graph.indexOf('drawtext=') + 'drawtext='.length))
+    expect(options.fontsize).toBe('67')
+    expect(options.fontcolor).toBe('white@0.85')
+    expect(options.box).toBe('1')
+    expect(options.boxborderw).toBe('8')
+    expect(options.fontfile).toBe('C:/Windows/Fonts/arialbd.ttf')
   })
 })

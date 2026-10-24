@@ -14,6 +14,26 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-23 — T-130 (round 79): a "no red pixels" check that read nothing, and a list that meant two things
+
+The platform-rate and kit-art debt: a compilation that follows its source's rate up to 60 (and a YouTube 1080p60 row), Clip Kit thumbnails that honor the crop, a watermark that clears the platform's own interface on a vertical frame. Two things the work found are not about frame rates.
+
+### (1) [test] - a pixel count of zero from a reader that read no pixels
+
+- **Bug.** The pixel reader every Layer 5 and e2e colour case shares seeks first (`-ss <t>`), then decodes one frame. On a JPEG, `-ss 0 -i thumb.jpg` decodes NO frame at all, on both majors (executed: 0 bytes on 7.0.2 and on 6.1.1, 691200 without the `-ss`). The thumbnail cases for (t) assert "no red pixels outside the crop": against a reader that reads nothing, that is true of every file ever written.
+- **Fix.** The readers in `media.spec.ts` and `video-pipelines.spec.ts` leave `-ss` off for a still image, and the e2e one throws "pixel read returned no frame" for an empty read instead of counting it as zero.
+- **Test.** The control in the Layer 5 block: the same reader on the uncropped thumbnail must find more than 100 000 red pixels. **Red-first:** it read `expected 0 to be greater than 100000` before the reader was fixed, which is how the empty read was caught; the cropped case also asserts what IS there (the strip's green over 90% of the file, the white square where the crop puts it), so it cannot pass on emptiness.
+- **Lesson.** **A negative pixel assertion needs a positive control run through the same reader.** "Zero of X" is a measurement only if the same call finds X somewhere it should. Count the bytes a reader returned before you count what is in them.
+
+### (2) [design] - one list that was both the grid and the kit
+
+- **Bug.** `ALL_PLATFORM_IDS` was "the platforms the Export grid offers" and, by reuse, "the platforms Clip Kit writes a file for". Adding YouTube 1080p60 to the grid would have made the kit write a sixth file (the clip at 60 fps whatever it was recorded at, at 12 Mbps), changed its button to "Clip Kit (6 + thumbs)" and its cancel question.
+- **Fix.** `KIT_PLATFORM_IDS` (the five, in queue order) in `presets.ts`; the kit's queue, effective presets, limit targets, button and confirm read it.
+- **Test.** `presetTablesInSync.test.ts` (the kit list is the five, without the new id, each in the grid), the e2e case that ticks 1080p60 beside YouTube and still reads "Clip Kit (5 + thumbs)". **Red-first mutation:** the kit list given the new id fails both.
+- **Lesson.** **A list reused for a second job is a coupling nobody wrote down.** When a row is added to a shared list, grep who else reads the list and ask each reader whether the new row is theirs; give a reader that means something narrower its own list.
+
+---
+
 ## 2026-10-16 — T-129 (round 78): the waveform stops decoding whole files in the renderer, and the 2-hour ceiling retires
 
 T-110 (ao), owner-authorized. Audio Studio handed wavesurfer the file's address alone, and wavesurfer did what that means: it fetched the WHOLE file into the renderer and decoded it with WebAudio to draw the picture. Sweep 12 measured 3.25 GB of renderer memory for a 1 h WAV and 6.5 GB for 2 h, and T-123 shipped the stopgap - a flat 2-hour ceiling, marked `// simplification:` with this letter as its upgrade - which then grew a pre-check before extraction (T-124 (6)), a kind-aware sentence (T-124 (7)), a backstop on the scratch WAV (T-126 (8)) and a durationless branch (T-127 (10)): four rounds of machinery around a limit a streamer's ordinary 3-6 h VOD always hit.

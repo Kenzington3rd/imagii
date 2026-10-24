@@ -322,6 +322,16 @@ third layer; compose `<Modal>` and inherit the one that exists.
   boxes in a 300 px card gives each a third, and a `<select>` or a label of more than a short word does not
   fit in it: the Picture-in-picture card is two boxes to a row and the Position select on a row of its
   own (T-125 (12)), and a label column is as wide as its longest label ("Size (px)": `w-14`).
+- **A watermark clears the platform's own interface on a vertical frame (T-130 (an)).** The watermark is drawn into the exported
+  picture, so its margin is a layout decision about someone else's screen. A landscape frame keeps the flat 20 px it always had
+  (`WATERMARK_EDGE_PX`). A 9:16 or taller frame (the shape decides, not the platform's name: `isVerticalFrame`, so a custom 720×1280
+  preset is vertical and a 4:5 or square one is not) is played full-screen under the app's header and over its caption, so the top corners
+  sit `VERTICAL_WATERMARK_INSET.top` (15% of the height, 288 px of 1080×1920) down and the bottom corners `.bottom` (25%, 480 px) up. That
+  ONE pair lives in `src/shared/watermark.ts` (`watermarkInset` turns it into pixels for a frame), beside the doc comment that says which
+  published safe-zone figures it was chosen against; the sides stay 20 px. It does not clear the right-hand column of like and share
+  buttons: a handle that must avoid it goes in a left corner. Changing the pair is a change to
+  `watermark.test.ts`, `filters.test.ts`, `clipKitWatermark.test.ts` and the win32 pixel case in the T-51 block of `media.spec.ts`
+  (bands measured against the box's 8 px border), and to the USER_GUIDE sentence that names the numbers.
 
 ---
 

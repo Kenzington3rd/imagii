@@ -2,11 +2,14 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, rmdir } from 'node:fs/promises'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
+import { cropToFrame } from './filters'
+import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch } from './cancelLatch'
 import { discardPartialOutput } from './partialOutput'
 import { nextFreePath } from './outputPath'
 import { assert } from '../../shared/assert'
+import type { CropRect } from '../../shared/clip'
 import { localDate, sanitizeFilename } from '../../shared/filename'
 
 // B4 fix (round 16): single-slot tracker for the in-flight extractFrame
@@ -32,11 +35,22 @@ export function cancelAllFrameJobs(): void {
  *
  * Single fast pass: -ss {time} -frames:v 1 -q:v 2 → high quality JPG,
  * typically completes in <500ms.
+ *
+ * T-130 (t): `cropRect` is the clip's manual crop. The kit's thumbnails are the
+ * clip as the platform files show it, and the crop is the new frame of that clip
+ * (T-83) — taken from the whole source they were three pictures of everything
+ * the crop had thrown away. The stage is `cropToFrame`'s, the one every other
+ * runner builds (even pixels for libx264/yuv420p, clamped inside the frame), and
+ * it is the ONLY filter: the thumbnail is the crop at the source's own pixels, so
+ * there is no scale for it to come before. Its numbers are pixels of the source,
+ * so the source is probed first — only for a crop, so a clip without one runs the
+ * command it always did, with no probe.
  */
 export async function extractFrame(
   sourcePath: string,
   timeSec: number,
-  outputPath: string
+  outputPath: string,
+  cropRect?: CropRect | null
 ): Promise<{ outputPath: string }> {
   assert(typeof sourcePath === 'string' && sourcePath.length > 0, 'sourcePath required')
   assert(Number.isFinite(timeSec) && timeSec >= 0, 'timeSec must be finite >= 0')
@@ -47,12 +61,19 @@ export async function extractFrame(
   try {
     await run.guard(mkdir(path.dirname(outputPath), { recursive: true }))
 
+    const crop: string[] = []
+    if (cropRect) {
+      const probe = await run.guard(probeVideo(sourcePath))
+      crop.push('-vf', cropToFrame(cropRect, { width: probe.width, height: probe.height }, null).join(','))
+    }
+
     const args = [
       '-y',
       '-ss',
       timeSec.toFixed(3),
       '-i',
       sourcePath,
+      ...crop,
       '-frames:v',
       '1',
       '-q:v',

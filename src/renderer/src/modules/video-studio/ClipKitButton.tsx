@@ -7,7 +7,7 @@ import { CancelledError } from '@shared/cancel'
 import { userFacingError } from '@shared/userFacingError'
 import { sanitizeFilename } from '@shared/filename'
 import { buildWatermark } from '@shared/watermark'
-import { ALL_PLATFORM_IDS, outputDurationSec, type PlatformInfo } from './presets'
+import { KIT_PLATFORM_IDS, outputDurationSec, type PlatformInfo } from './presets'
 import {
   buildKitQueue,
   buildKitSrtRequest,
@@ -196,7 +196,9 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           await window.api.video.extractFrame({
             sourcePath: source.filePath,
             timeSec,
-            outputPath: outPath
+            outputPath: outPath,
+            // T-130 (t): the thumbnails are the clip's picture, so the crop that is the clip's frame.
+            cropRect: clip.cropRect
           })
           landed += 1
         }
@@ -279,7 +281,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-ink-base disabled:opacity-50 inline-flex items-center gap-1.5"
       >
         <Icon name="package" size={13} />
-        {running ? phase || 'Working…' : `Clip Kit (${ALL_PLATFORM_IDS.length} + thumbs)`}
+        {running ? phase || 'Working…' : `Clip Kit (${KIT_PLATFORM_IDS.length} + thumbs)`}
       </button>
       {running ? (
         // B8 fix (round 15) + INIT-I (round 16): the Clip Kit batch can run
@@ -336,7 +338,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       >
         <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
         <p className="text-sm text-ink-base mb-4">
-          Cancel the Clip Kit batch ({ALL_PLATFORM_IDS.length} exports + thumbnails)?
+          Cancel the Clip Kit batch ({KIT_PLATFORM_IDS.length} exports + thumbnails)?
         </p>
         <div className="flex justify-end gap-2">
           <button

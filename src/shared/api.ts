@@ -136,6 +136,8 @@ export interface ImagiiApi {
       sourcePath: string
       timeSec: number
       outputPath: string
+      /** The clip's manual crop (T-130 (t)): the thumbnail is the cropped picture. Absent or null: the whole frame. */
+      cropRect?: CropRect | null
     }): Promise<{ outputPath: string }>
     makeKitDir(params: { parentDir: string; clipName: string }): Promise<string>
     /** Removes the kit folder only if it is empty (a non-recursive rmdir); never rejects for a folder that stays. */

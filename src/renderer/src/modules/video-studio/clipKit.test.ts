@@ -15,7 +15,7 @@ import {
   kitThumbLabel,
   platformsOverLimit
 } from './clipKit'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO, evaluateSuccess } from './presets'
+import { KIT_PLATFORM_IDS, PLATFORM_INFO, evaluateSuccess } from './presets'
 import { sanitizeFilename } from '@shared/filename'
 import { isSafeAbsolutePath } from '@shared/pathSafety'
 
@@ -216,7 +216,7 @@ describe('platformsOverLimit — the kit asks once, and only about a platform th
 
   it('a long enough clip names all five, in the kit order', () => {
     const over = platformsOverLimit(range(13 * 3600), kit)
-    expect(over.map((p) => p.id)).toEqual(ALL_PLATFORM_IDS.slice().sort((a, b) => kit.indexOf(a) - kit.indexOf(b)))
+    expect(over.map((p) => p.id)).toEqual(KIT_PLATFORM_IDS.slice().sort((a, b) => kit.indexOf(a) - kit.indexOf(b)))
     expect(over).toHaveLength(5)
   })
 
@@ -312,7 +312,7 @@ describe('the kit button\'s label counts its work (T-112)', () => {
   })
 
   it('is the kit\'s own size: the number is the length of the queue, not a literal', () => {
-    expect(kitExportLabel(0, ALL_PLATFORM_IDS.length)).toContain(`of ${ALL_PLATFORM_IDS.length}`)
+    expect(kitExportLabel(0, KIT_PLATFORM_IDS.length)).toContain(`of ${KIT_PLATFORM_IDS.length}`)
   })
 })
 
@@ -483,7 +483,7 @@ describe('every file a kit writes passes the path gate, whatever the clip is cal
       ...[0, 1, 2].map((i) => kitThumbFilename(safeName, i)),
       kitSrtFilename(safeName)
     ]
-    expect(names).toHaveLength(ALL_PLATFORM_IDS.length + 3 + 1)
+    expect(names).toHaveLength(KIT_PLATFORM_IDS.length + 3 + 1)
     for (const file of names) {
       expect(isSafeAbsolutePath(`${KIT_DIR}/${file}`), `${file} in ${safeName}`).toBe(true)
     }
@@ -505,7 +505,7 @@ describe('every file a kit writes passes the path gate, whatever the clip is cal
       ...[0, 1, 2].map((i) => kitThumbFilename(safeName, i)),
       kitSrtFilename(safeName)
     ]
-    expect(names).toHaveLength(ALL_PLATFORM_IDS.length + 3 + 1)
+    expect(names).toHaveLength(KIT_PLATFORM_IDS.length + 3 + 1)
     for (const file of names) {
       expect(file.startsWith(safeName), file).toBe(true)
       expect(isSafeAbsolutePath(`${KIT_DIR}/${file}`), `${file} in ${safeName}`).toBe(true)

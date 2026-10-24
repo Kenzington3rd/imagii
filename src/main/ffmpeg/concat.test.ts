@@ -257,3 +257,29 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
     }
   })
 })
+
+describe('the compilation\'s rate follows the source (T-130 (q))', () => {
+  it('the fps stage and the zoom carry the rate they are given, at the head of the chain', () => {
+    expect(buildSegmentFilter(seg, src, 1920, 1080, 60)).toBe(`fps=60,${SCALE}`)
+    expect(buildSegmentFilter(seg, src, 1920, 1080, 25)).toBe(`fps=25,${SCALE}`)
+    const zoom = buildSegmentFilter({ ...seg, autoZoom: true }, src, 1920, 1080, 60)
+    expect(zoom).toContain('fps=60,zoompan=')
+    expect(zoom).toContain(':s=1920x1080:fps=60')
+    expect(zoom, 'no 30 left over from the old constant').not.toContain('fps=30')
+  })
+
+  it('an NTSC rate goes into the graph as it is, not rounded to a whole number', () => {
+    const ntsc = 60000 / 1001
+    expect(buildSegmentFilter(seg, src, 1920, 1080, ntsc)).toBe(`fps=${ntsc},${SCALE}`)
+  })
+
+  it('with no rate given it is the fallback, so a caller with nothing to derive from is what it always was', () => {
+    expect(buildSegmentFilter(seg, src, 1920, 1080)).toBe(`fps=${COMPILE_FPS},${SCALE}`)
+  })
+
+  it('buildSegmentFilters hands the rate on to the picture and leaves the fades and the sound alone', () => {
+    const f = buildSegmentFilters({ startSec: 2, endSec: 6 }, src, 1920, 1080, 0.4, 0.4, 60)
+    expect(f.video).toBe(`fps=60,${SCALE},fade=t=in:st=0:d=0.4,fade=t=out:st=3.600:d=0.4`)
+    expect(f.audio).toBe('afade=t=in:st=0:d=0.4,afade=t=out:st=3.600:d=0.4')
+  })
+})

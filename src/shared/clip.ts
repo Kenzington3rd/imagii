@@ -1,11 +1,11 @@
 import type { CustomPreset } from './customPresets'
 
-/** The five built-in platforms, as data. `ALL_PLATFORM_IDS` (renderer) and
- *  `ALL_PRESET_IDS` (main) are the ordered display copies of this list and
+/** The built-in export presets, as data: the five platforms, with YouTube's 1080p60 row (T-130 (q)) beside the 30 fps one. `ALL_PLATFORM_IDS`
+ *  (renderer) and `ALL_PRESET_IDS` (main) are the ordered display copies of this list and
  *  are pinned equal to each other by `presetTablesInSync.test.ts`; this one
  *  exists so code with no table in reach — the custom-preset parser — can
  *  still tell a real platform id from a hand-edited one. */
-export const PLATFORM_IDS = ['youtube', 'reels', 'tiktok', 'twitter', 'facebook'] as const
+export const PLATFORM_IDS = ['youtube', 'youtube60', 'reels', 'tiktok', 'twitter', 'facebook'] as const
 
 export type PlatformId = (typeof PLATFORM_IDS)[number]
 

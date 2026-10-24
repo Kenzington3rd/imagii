@@ -34,6 +34,24 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     durationHardLimit: 12 * 60 * 60,
     aspectRatio: 16 / 9
   },
+  // T-130 (q): YouTube's 1080p at 60 fps. Every row above and below is 30, so a streamer whose game runs at 60 could export 60 only by
+  // building a custom preset by hand. 12M is YouTube's own recommended video bitrate for 1080p60 (8M at 30); the sound, the codecs and the
+  // length advice are YouTube's, so this row is the one above it with the two numbers that change with the rate.
+  youtube60: {
+    id: 'youtube60',
+    label: 'YouTube 1080p60',
+    width: 1920,
+    height: 1080,
+    fps: 60,
+    videoBitrate: '12M',
+    audioBitrate: '192k',
+    videoCodec: 'libx264',
+    audioCodec: 'aac',
+    pixFmt: 'yuv420p',
+    durationSweetSpot: { min: 60, max: 600 },
+    durationHardLimit: 12 * 60 * 60,
+    aspectRatio: 16 / 9
+  },
   reels: {
     id: 'reels',
     label: 'Instagram Reels',
@@ -102,7 +120,7 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
   }
 }
 
-export const ALL_PRESET_IDS: PlatformId[] = ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']
+export const ALL_PRESET_IDS: PlatformId[] = ['youtube', 'youtube60', 'reels', 'tiktok', 'twitter', 'facebook']
 
 /**
  * T-50 — the one place a job's encoder settings are decided.

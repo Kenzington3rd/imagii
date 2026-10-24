@@ -2,6 +2,7 @@ import { clipSpeed } from '../../shared/clip'
 import type { Clip, ClipRecipe, CropRect, TextOverlay, WatermarkSpec, ColorGrade } from '../../shared/clip'
 import type { PlatformPreset } from './presets'
 import type { OverlayFont } from '../../shared/textOverlay'
+import { WATERMARK_EDGE_PX, watermarkInset } from '../../shared/watermark'
 
 export interface SourceDimensions {
   width: number
@@ -507,31 +508,38 @@ function hypeShakeFilter(): string {
  * `drawTextFilter` above: this string only renders on win32, and its pixels
  * are pinned by the win32-gated T-51 tests in the Layer 5 suite (all four
  * corners, against a control render of the same source).
+ *
+ * T-130 (an): the margin is 20 px from the sides, and from the top and bottom of
+ * a landscape frame; on a 9:16 frame the top and bottom take the inset that
+ * clears the platform's header and caption (`watermarkInset`, shared/watermark.ts,
+ * which says what it clears). The frame's SHAPE decides - this reads the
+ * preset's own size, so a custom preset gets the right one.
  */
 function watermarkFilter(spec: WatermarkSpec, preset: FilterFrame): string {
   const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
   const fontSize = Math.max(12, Math.round((spec.fontSizePct / 100) * preset.height))
   const text = escapeDrawtext(spec.text)
-  const padding = 20
+  const padding = WATERMARK_EDGE_PX
+  const inset = watermarkInset(preset)
   let x: string
   let y: string
   switch (spec.position) {
     case 'top-left':
       x = `${padding}`
-      y = `${padding}`
+      y = `${inset.top}`
       break
     case 'top-right':
       x = `w-tw-${padding}`
-      y = `${padding}`
+      y = `${inset.top}`
       break
     case 'bottom-left':
       x = `${padding}`
-      y = `h-th-${padding}`
+      y = `h-th-${inset.bottom}`
       break
     case 'bottom-right':
     default:
       x = `w-tw-${padding}`
-      y = `h-th-${padding}`
+      y = `h-th-${inset.bottom}`
       break
   }
   const alpha = Math.max(0, Math.min(1, spec.opacity)).toFixed(2)

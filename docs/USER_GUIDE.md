@@ -196,8 +196,8 @@ second alone.)
   export is the one that runs at it. The GIF panel has a **Speed** of its own,
   and its warning that a GIF over about 10 s gets huge counts the GIF you are about
   to make, at that speed.
-- **Export** — check the platforms you post to: **YouTube**, **Reels**,
-  **TikTok**, **X / Twitter**, and **Facebook**. Each shows a green, yellow, or
+- **Export** — check the platforms you post to: **YouTube**, **YouTube 1080p60**,
+  **Reels**, **TikTok**, **X / Twitter**, and **Facebook**. Each shows a green, yellow, or
   red mark predicting how well your clip fits there. A red one says why —
   **Wrong shape** or **Too long** — and the reason is printed on the card. Lengths
   are advice until a platform really refuses them: a Reel past 3 minutes is yellow
@@ -210,16 +210,23 @@ second alone.)
   platform is checked it is off, and a line beside it says to check one. If you
   press it before choosing a folder, imagii opens the folder chooser and goes on from
   there. Each row of the queue shows the file it wrote — **name (2).mp4** when the
-  name was taken. Every export
-  is encoded at 30 fps (a custom preset uses its own frame rate), and each
+  name was taken. Every platform export is encoded at 30 fps, except **YouTube 1080p60**,
+  which is 1920×1080 at 60 fps and 12 Mbps (YouTube's own recommendation for 1080p60) for a recording
+  made at 60 (a custom preset uses its own frame rate), and each
   platform's card shows its size and rate (**1920×1080 · 30 fps**).
   Add a **watermark** by typing your handle in the **Watermark** field and
   choosing a corner. Your handle and corner are saved when you export, and they
   fill in again next time. Exporting with the field blank forgets them, so Clip Kit
-  stamps nothing until you type a handle and export again. GIF, reframe, compilation and picture-in-picture
-  don't take one.
+  stamps nothing until you type a handle and export again. On a landscape export the watermark
+  sits 20 px from its corner. On a vertical one (Reels, TikTok, a YouTube Short, or any
+  9:16 or taller size) the top corners sit 15% of the height down, below the app's header, and
+  the bottom corners 25% up, above its caption (288 px and 480 px on 1080×1920); a bottom
+  corner on the right still shares a column with the like and share buttons, so pick a left
+  corner if that matters. GIF, reframe, compilation and picture-in-picture don't take one.
 - **Clip Kit** — one click exports a clip for all five platforms plus three
-  thumbnails into a single folder. It stamps the watermark you last exported
+  thumbnails into a single folder (YouTube 1080p60 is not part of it: it is one file per
+  platform, at 30 fps). The thumbnails are your clip's picture: with a crop drawn, each
+  thumbnail is the cropped picture, not the whole frame. It stamps the watermark you last exported
   with, and it asks once before it starts only if the clip is longer than a
   platform's typical limit. It never asks about cropping: each platform takes a
   centered cut of your picture. When the clip's picture is vertical — a 9:16 crop
@@ -344,7 +351,10 @@ know how long speech will take — so its bar slides instead of filling.
 ### Compile
 
 **Compile clips** stitches every clip in the list, in list order, into one
-1920×1080 MP4 at 30 fps, whatever the clips were recorded at. Each clip is compiled as you built it: its crop, its speed (the
+1920×1080 MP4 at the frame rate of the recording, up to 60 fps (a 24 fps film stays 24, an
+OBS capture at 60 stays 60, 59.94 stays 59.94, and a 120 fps one is brought down to 60; a
+recording that does not say its rate is 30). The card names the rate before you compile.
+Each clip is compiled as you built it: its crop, its speed (the
 sound too), its color, **Auto-zoom**, **Hype shake** and text. A clip that is not
 16:9 is cut to 16:9 around its middle rather than stretched, and the card tells
 you what that cut costs before you compile — one row per clip, **Great** or **OK**

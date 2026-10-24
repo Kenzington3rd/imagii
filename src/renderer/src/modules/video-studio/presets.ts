@@ -1,5 +1,6 @@
 import { clipSpeed, type Clip, type PlatformId } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
+import { COMPILE_FPS } from '@shared/compileFps'
 import { cropFrameSize } from '@shared/safeZone'
 
 export interface PlatformInfo {
@@ -23,6 +24,17 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1920,
     height: 1080,
     fps: 30,
+    aspectRatio: 16 / 9,
+    durationSweetSpot: { min: 60, max: 600 },
+    durationHardLimit: 12 * 60 * 60
+  },
+  // T-130 (q): the same platform at 60 fps (main's table has the bitrate; the grid prints the size and the rate).
+  youtube60: {
+    id: 'youtube60',
+    label: 'YouTube 1080p60',
+    width: 1920,
+    height: 1080,
+    fps: 60,
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
     durationHardLimit: 12 * 60 * 60
@@ -100,11 +112,19 @@ export const TIKTOK_REWARDS_MIN_SEC = 60
 
 export const ALL_PLATFORM_IDS: PlatformId[] = [
   'youtube',
+  'youtube60',
   'reels',
   'tiktok',
   'twitter',
   'facebook'
 ]
+
+/**
+ * The platforms Clip Kit writes a file for (T-130 (q)): the five, in queue order. The grid lists YouTube 1080p60 beside YouTube, but a
+ * kit is one version per PLATFORM, and a second YouTube file would be the clip at 60 fps whatever the recording was (a 30 fps source
+ * upsampled to twice the frames, at 12 Mbps). Its button, its jobs and its length question read this list, not the grid's.
+ */
+export const KIT_PLATFORM_IDS: PlatformId[] = ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']
 
 /**
  * T-50 — a saved custom preset seen through the advisory table's own shape,
@@ -139,8 +159,8 @@ export function customPresetInfo(preset: CustomPreset): PlatformInfo {
 /**
  * The frame a compilation is written at (T-105). The Compile panel sends this to
  * main AND judges every clip against it, so the file and the verdict cannot be
- * about two different frames. Main's own copy of the rate is `COMPILE_FPS`
- * (ffmpeg/concat.ts).
+ * about two different frames. The rate is the source's up to 60, derived by
+ * `compileFps` (@shared/compileFps) in main AND in the card, from the same probe.
  */
 export const COMPILE_SIZE = { width: 1920, height: 1080 } as const
 
@@ -158,7 +178,8 @@ export const COMPILE_TARGET: PlatformInfo = {
   label: 'Compilation',
   width: COMPILE_SIZE.width,
   height: COMPILE_SIZE.height,
-  fps: 30,
+  // The fallback rate: a compilation is written at its source's (T-130 (q), `compileFps`), and the verdict this row stands for never reads it.
+  fps: COMPILE_FPS,
   aspectRatio: COMPILE_SIZE.width / COMPILE_SIZE.height,
   durationSweetSpot: { min: 0, max: Number.POSITIVE_INFINITY },
   durationHardLimit: Number.POSITIVE_INFINITY

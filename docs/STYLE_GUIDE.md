@@ -545,7 +545,7 @@ Repeated UI is a component, not copy-paste:
 - **A clip's recipe is built in ONE place (T-105).** `buildVideoFilter` (filters.ts) makes a clip's picture
   — speed, crop, shake, scale, grade, zoom, overlays — and `buildAudioSpeedFilter` its tempo. A platform
   export calls it with the platform's frame; a compilation segment calls it with the compilation's
-  (`buildSegmentFilter`, concat.ts: 1920x1080, 16:9, 30 fps), so a stage added to the export reaches Compile
+  (`buildSegmentFilter`, concat.ts: 1920x1080, 16:9, the source's frame rate up to 60 - `compileFps`, `@shared/compileFps`, T-130 (q)), so a stage added to the export reaches Compile
   with no second edit. What crosses the IPC bridge for a segment is `CompileSegment` (`@shared/clip`): the
   range, the name, and `clipRecipe(clip)` — the fields that decide how a clip looks and sounds, nothing about
   which platforms it is checked for. `clip.test.ts` fails when a field is added to `Clip` and neither carried

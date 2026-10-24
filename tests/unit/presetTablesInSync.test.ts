@@ -7,6 +7,7 @@ import {
 import {
   PLATFORM_INFO,
   ALL_PLATFORM_IDS,
+  KIT_PLATFORM_IDS,
   COMPILE_SIZE,
   COMPILE_TARGET,
   REELS_RECOMMEND_CUTOFF_SEC,
@@ -44,6 +45,37 @@ describe('platform preset tables stay in sync', () => {
   it('both display lists are the shared PLATFORM_IDS source', () => {
     expect(ALL_PRESET_IDS).toEqual([...PLATFORM_IDS])
     expect(ALL_PLATFORM_IDS).toEqual([...PLATFORM_IDS])
+  })
+})
+
+/**
+ * T-130 (q): "YouTube 1080p60" is a row in BOTH tables, and the two say the same thing about it - the grid prints its size and rate, the
+ * encoder writes them. Clip Kit is the five platforms and stays so (a sixth file for the same platform would be a 30 fps source upsampled
+ * to 60), which is why it reads its own list and not the grid's.
+ */
+describe('YouTube 1080p60 is one preset on both sides of the bridge (T-130 (q))', () => {
+  it('both tables carry it, at 1920x1080 and 60 fps', () => {
+    for (const row of [PLATFORM_PRESETS.youtube60, PLATFORM_INFO.youtube60]) {
+      expect(row.id).toBe('youtube60')
+      expect([row.width, row.height, row.fps]).toEqual([1920, 1080, 60])
+    }
+    expect(PLATFORM_PRESETS.youtube60.videoBitrate).toBe('12M')
+  })
+
+  it('the grid lists it straight after YouTube, and the shared id list names it', () => {
+    expect(ALL_PLATFORM_IDS.slice(0, 2)).toEqual(['youtube', 'youtube60'])
+    expect(PLATFORM_IDS).toContain('youtube60')
+  })
+
+  it('it is YouTube\'s length advice: the same platform, the same limits', () => {
+    expect(PLATFORM_INFO.youtube60.durationSweetSpot).toEqual(PLATFORM_INFO.youtube.durationSweetSpot)
+    expect(PLATFORM_INFO.youtube60.durationHardLimit).toBe(PLATFORM_INFO.youtube.durationHardLimit)
+  })
+
+  it('Clip Kit is still the five platforms, in the order the guide names them, without it', () => {
+    expect(KIT_PLATFORM_IDS).toEqual(['youtube', 'reels', 'tiktok', 'twitter', 'facebook'])
+    expect(KIT_PLATFORM_IDS).not.toContain('youtube60')
+    for (const id of KIT_PLATFORM_IDS) expect(ALL_PLATFORM_IDS).toContain(id)
   })
 })
 

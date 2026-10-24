@@ -105,6 +105,7 @@ const __dirname = path.dirname(__filename)
  *              question about the colour of pixels, not about a filename.
  *   shortSrc (T-105) — 320x240 / 6 s: under the GIF panel's 10-second warning at
  *              1x, so only a SLOW GIF of it is long enough to be warned about.
+ *   rate60Src (T-130) — 320x240 / 2 s at 60 fps: the compilation and YouTube 1080p60 follow its rate.
  *
  * ── Timeouts ──────────────────────────────────────────────────────────
  *
@@ -163,6 +164,8 @@ let toneSrc = ''
 let cropMarkerSrc = ''
 /** 320x240 / 6 s (T-105): inside the GIF panel's 10-second warning at 1x, outside it at 0.5x. */
 let shortSrc = ''
+/** 320x240 / 2 s / 60 fps + 440 Hz (T-130): a recording at OBS's usual rate, for the compilation that follows the source's rate and the 60 fps preset. */
+let rate60Src = ''
 /** Real duration of longSrc, read back from ffprobe after the loop. */
 let longSeconds = 0
 
@@ -173,6 +176,7 @@ interface ProbeStream {
   height?: number
   sample_aspect_ratio?: string
   display_aspect_ratio?: string
+  r_frame_rate?: string
 }
 
 interface ProbeJson {
@@ -250,7 +254,8 @@ async function redPixelCount(file: string, timeSec: number): Promise<number> {
   const raw = path.join(root, `red-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.raw`)
   const result = await runBinary(ffmpegPath, [
     '-y',
-    '-ss', String(timeSec),
+    // A still image (a Clip Kit thumbnail, T-130) has no clock: `-ss 0` on a JPEG decodes nothing at all.
+    ...(/\.(jpe?g|png)$/i.test(file) ? [] : ['-ss', String(timeSec)]),
     '-i', file,
     '-vf', 'format=rgb24',
     '-frames:v', '1',
@@ -262,6 +267,8 @@ async function redPixelCount(file: string, timeSec: number): Promise<number> {
   }
   const buf = readFileSync(raw)
   rmSync(raw, { force: true })
+  // A read that returned no frame would count zero red pixels: say so rather than let an absence pass for a measurement.
+  if (buf.length === 0) throw new Error(`pixel read returned no frame for ${file}`)
   let red = 0
   for (let i = 0; i + 2 < buf.length; i += 3) {
     const r = buf[i] ?? 0
@@ -877,6 +884,14 @@ test.beforeAll(async () => {
     '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=15:duration=6',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     shortSrc
+  ])
+  rate60Src = path.join(sourceDir, 'rate60.mp4')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi', '-i', `testsrc2=size=${CLIP_WIDTH}x${CLIP_HEIGHT}:rate=60:duration=${CLIP_SECONDS}`,
+    '-f', 'lavfi', '-i', `sine=frequency=440:duration=${CLIP_SECONDS}`,
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest',
+    rate60Src
   ])
   flvSrc = path.join(sourceDir, 'stream.flv')
   await ffmpeg([
@@ -2242,7 +2257,8 @@ test.describe('CaptionsPanel', () => {
 
 /** One platform checkbox in the Export panel's grid. */
 function presetBox(window: Page, label: string): Locator {
-  return exportCard(window).locator('label').filter({ hasText: label }).getByRole('checkbox')
+  // T-130 (q): by the EXACT name on the card. 'YouTube' is a substring of 'YouTube 1080p60', and a substring filter matched both cards.
+  return exportCard(window).locator('label').filter({ has: window.getByText(label, { exact: true }) }).getByRole('checkbox')
 }
 
 test.describe('ExportPanel', () => {
@@ -2381,7 +2397,7 @@ test.describe('ExportPanel', () => {
       await expect(window.getByRole('dialog')).toHaveCount(0)
 
       // ── queue it alongside a platform preset ──
-      await expect(card.getByRole('checkbox')).toHaveCount(6)
+      await expect(card.getByRole('checkbox')).toHaveCount(7)
       await presetBox(window, 'Discord 540p').check()
       const exportButton = card.getByRole('button', { name: 'Export 2' })
       await expect(exportButton).toBeEnabled()
@@ -2434,7 +2450,7 @@ test.describe('ExportPanel', () => {
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-13-custompreset.png') })
 
       // ── the deleted preset is unqueued everywhere: no ghost row ──
-      await expect(card.getByRole('checkbox')).toHaveCount(5)
+      await expect(card.getByRole('checkbox')).toHaveCount(6)
       await expect(card.locator('label').filter({ hasText: 'Discord 540p' })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
       await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible()
@@ -3681,11 +3697,11 @@ test.describe('CustomPresetManager', () => {
       // It joins the five platform checkboxes in the per-clip grid, carrying
       // its own name, its stored geometry and a "custom" tag — the same
       // checkbox, one more row. Pinned in both directions: the count went
-      // 5 -> 6, and the entry that used to be absent is present.
+      // 6 -> 7 (T-130: the six built-in cards, YouTube 1080p60 among them), and the entry that used to be absent is present.
       await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       const card = exportCard(window)
-      await expect(card.getByRole('checkbox')).toHaveCount(6)
+      await expect(card.getByRole('checkbox')).toHaveCount(7)
       const customTile = card.locator('label').filter({ hasText: 'Discord 1080p' })
       await expect(customTile).toHaveCount(1)
       await expect(customTile).toContainText('Custom')
@@ -3695,7 +3711,7 @@ test.describe('CustomPresetManager', () => {
         /1280×720 · 60 fps/
       )
       // No platform tile wears the tag — it is what separates the groups.
-      await expect(card.locator('label').filter({ hasText: 'YouTube' })).not.toContainText(
+      await expect(card.locator('label').filter({ hasText: /^YouTube$/ })).not.toContainText(
         'Custom'
       )
 
@@ -3734,7 +3750,7 @@ test.describe('CustomPresetManager', () => {
       // still alive and interactive (no crash boundary, no dead panel).
       await modal.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
-      await expect(card.getByRole('checkbox')).toHaveCount(5)
+      await expect(card.getByRole('checkbox')).toHaveCount(6)
       await expect(card.getByText('Discord 1080p')).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
       await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible()
@@ -4834,6 +4850,8 @@ test.describe('single-output panels', () => {
       const v = videoStream(probe)
       expect(v.width).toBe(1920)
       expect(v.height).toBe(1080)
+      // T-130 (q): and at the recording's own rate (this fixture is 15 fps), which the card said before the file was written.
+      expect(v.r_frame_rate).toBe('15/1')
       // Two full-length copies of a 2 s clip, normalized to one 1080p file.
       expect(Number(probe.format?.duration)).toBeGreaterThan(2 * CLIP_SECONDS - 0.5)
       expect(Number(probe.format?.duration)).toBeLessThan(2 * CLIP_SECONDS + 0.5)
@@ -7061,6 +7079,8 @@ test.describe('T-92 microcopy mechanics', () => {
       const card = exportCard(window)
       const platforms: Array<[string, string]> = [
         ['YouTube', '1920×1080 · 30 fps'],
+        // T-130 (q): the same platform at 60 fps, its own card beside it.
+        ['YouTube 1080p60', '1920×1080 · 60 fps'],
         ['Reels', '1080×1920 · 30 fps'],
         ['TikTok', '1080×1920 · 30 fps'],
         ['X / Twitter', '1280×720 · 30 fps'],
@@ -7217,6 +7237,18 @@ test.describe('T-112: review-gate fixes', () => {
       expect([short.width, short.height]).toEqual([1080, 1920])
       // No landscape YouTube file beside it: the slot IS the Short.
       expect(readdirSync(kitDir)).not.toContain('Clip_1_youtube.mp4')
+      // T-130 (t): and the three thumbnails are the clip's CROPPED picture, not the whole 640x360 frame the crop threw most of away. The 9:16
+      // button draws 90% of the frame's height (182x324 of this fixture) and the red block (x 20-100) is outside it; the source frame is the
+      // control that the count can see the block.
+      expect(await redPixelCount(cropMarkerSrc, 0.5), 'the control: the source frame has the red block').toBeGreaterThan(5000)
+      for (const n of [1, 2, 3]) {
+        const thumb = videoStream(await ffprobeJson(path.join(kitDir, `Clip_1_thumb_${n}.jpg`)))
+        expect(thumb.height, `thumbnail ${n} is the crop's height, not the frame's 360`).toBeLessThan(360)
+        expect(thumb.height).toBeGreaterThan(300)
+        expect(thumb.width, `thumbnail ${n} is 9:16, not the 640 px frame`).toBeLessThan(220)
+        expect(Math.abs((thumb.width ?? 0) / (thumb.height ?? 1) - 9 / 16), `thumbnail ${n}'s shape`).toBeLessThan(0.02)
+        expect(await redPixelCount(path.join(kitDir, `Clip_1_thumb_${n}.jpg`), 0), `thumbnail ${n}: no red block, it is outside the crop`).toBe(0)
+      }
       await expectToast(window, 'Saved your Clip Kit')
     } finally {
       await app.close()
@@ -7485,8 +7517,8 @@ test.describe('T-112: review-gate fixes', () => {
     try {
       await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
       const card = compileCard(window)
-      // The frame and the rate are the compilation's own, said before the file is written.
-      await expect(card).toContainText('1920×1080, 30 fps')
+      // The frame is the compilation's own and the rate is the recording's (T-130 (q): this fixture is 15 fps), said before the file is written.
+      await expect(card).toContainText('1920×1080, 15 fps')
       // Nothing crossfades: the picture and sound dip to black and come back.
       await expect(card).not.toContainText(/crossfade/i)
       await expect(card.getByText('Fade between clips', { exact: true })).toBeVisible()
@@ -7514,6 +7546,55 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(
         list.locator('li').first().locator('span[title="Boss fight, final phase, no deaths"]')
       ).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a 60 fps recording: the Compile card says 60 fps and the compilation is a 60 fps file (T-130 (q))', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t130compile60', rate60Src)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      const card = compileCard(window)
+      // The rate is the recording's up to 60, derived from the same probe main reads (it was 30 for every compilation).
+      await expect(card).toContainText('1920×1080, 60 fps')
+      await expect(card).not.toContainText('30 fps')
+      await card.getByRole('slider', { name: 'Fade between clips, in milliseconds' }).fill('0')
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      const output = path.join(outDir, 'rate60_compilation.mp4')
+      await expect.poll(() => existsSync(output), { timeout: 540_000, intervals: [500] }).toBe(true)
+      await expectToast(window, `Saved ${path.basename(output)}`)
+      const v = videoStream(await ffprobeJson(output))
+      expect([v.width, v.height]).toEqual([1920, 1080])
+      expect(v.r_frame_rate, 'the file is as fast as the recording').toBe('60/1')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('YouTube 1080p60 is a card of its own: ticked beside YouTube it writes a 60 fps file next to the 30 fps one, and Clip Kit is still five (T-130 (q))', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t130youtube60', rate60Src)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await expect(presetBox(window, 'YouTube 1080p60')).not.toBeChecked()
+      await presetBox(window, 'YouTube 1080p60').check()
+      await card.getByRole('button', { name: 'Export 2 files' }).click()
+      await expect.poll(() => mp4sIn(outDir).length, { timeout: 540_000, intervals: [500] }).toBe(2)
+      await expectToast(window, 'Exported 2 files')
+      expect(mp4sIn(outDir)).toEqual(['rate60_Clip 1_youtube.mp4', 'rate60_Clip 1_youtube60.mp4'])
+      const plain = videoStream(await ffprobeJson(path.join(outDir, 'rate60_Clip 1_youtube.mp4')))
+      const sixty = videoStream(await ffprobeJson(path.join(outDir, 'rate60_Clip 1_youtube60.mp4')))
+      expect([plain.width, plain.height, plain.r_frame_rate]).toEqual([1920, 1080, '30/1'])
+      expect([sixty.width, sixty.height, sixty.r_frame_rate]).toEqual([1920, 1080, '60/1'])
+      // The kit is one version per platform: it did not gain a sixth.
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)')
     } finally {
       await app.close()
     }

@@ -387,7 +387,7 @@ export function registerVideoIpc(): void {
   // and create-named-subfolder, both small fast ops.
   ipcMain.handle(
     'video:extractFrame',
-    async (_e, params: { sourcePath: string; timeSec: number; outputPath: string }) => {
+    async (_e, params: { sourcePath: string; timeSec: number; outputPath: string; cropRect?: CropRect | null }) => {
       assertPlainObject(params, 'video:extractFrame params')
       assertNonEmptyString(params.sourcePath, 'sourcePath')
       assertFiniteNonNeg(params.timeSec, 'timeSec')
@@ -395,7 +395,9 @@ export function registerVideoIpc(): void {
       // INIT-C (round 15)
       assertSafeAbsolutePath(params.sourcePath, 'sourcePath')
       assertSafeAbsolutePath(params.outputPath, 'outputPath')
-      return extractFrame(params.sourcePath, params.timeSec, params.outputPath)
+      // T-130 (t): the clip's crop becomes a `crop=` stage in the filter string, as on the other four paths - refused in the same one sentence.
+      assertUsableCrop(params.cropRect, 'video:extractFrame', 'cropRect')
+      return extractFrame(params.sourcePath, params.timeSec, params.outputPath, params.cropRect ?? null)
     }
   )
 

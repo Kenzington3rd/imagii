@@ -914,6 +914,16 @@ const PRE_SPAWN: PreSpawnCase[] = [
     perJob: false
   },
   {
+    // T-130 (t): a thumbnail of a CROPPED clip reads the source's size first (the crop is a fraction of the frame), so it has a probe to be
+    // canceled in, which the uncropped extract above has not.
+    name: 'single-frame extract of a cropped clip (probes the source first)',
+    start: () =>
+      extractFrame('/tmp/in.mp4', 1, path.join(scratch, 'thumbs', 'frame.jpg'), { x: 0.25, y: 0, w: 0.5, h: 1 }),
+    cancels: [{ via: 'cancelAllFrameJobs', run: () => cancelAllFrameJobs() }],
+    probe: true,
+    perJob: false
+  },
+  {
     name: 'transcription (extracts the sound first)',
     start: (jobId) =>
       runTranscribe({ jobId, sourcePath: '/tmp/in.mp4', language: 'en' }, () => undefined),

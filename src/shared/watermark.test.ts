@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildWatermark,
+  isVerticalFrame,
   isWatermarkPosition,
+  watermarkInset,
   DEFAULT_WATERMARK_POSITION,
+  VERTICAL_WATERMARK_INSET,
+  WATERMARK_EDGE_PX,
   WATERMARK_FONT_SIZE_PCT,
   WATERMARK_MAX_LENGTH,
   WATERMARK_OPACITY,
@@ -79,5 +83,56 @@ describe('isWatermarkPosition', () => {
     for (const p of ['center', 'left', '', null, undefined, 1]) {
       expect(isWatermarkPosition(p)).toBe(false)
     }
+  })
+})
+
+/**
+ * T-130 (an) - where a watermark sits, so that it clears the platform's own interface on a vertical frame.
+ *
+ * It sat a flat 20 px from its corner on every preset. On a 9:16 frame (Reels, TikTok, Shorts) the top 15% is the app's header and the bottom
+ * 25% is the caption, the account name and the sound, so a handle in the bottom corner was drawn under the caption it was meant to sit beside
+ * and a top one under the header. Layer 5 measures the pixels (win32: the shipped binary has drawtext); this pins the numbers.
+ */
+describe('the watermark\'s margins (T-130 (an))', () => {
+  it('a landscape frame keeps the flat 20 px: the constants the product names', () => {
+    expect(WATERMARK_EDGE_PX).toBe(20)
+    expect(VERTICAL_WATERMARK_INSET).toEqual({ top: 0.15, bottom: 0.25 })
+    for (const frame of [{ width: 1920, height: 1080 }, { width: 1280, height: 720 }, { width: 3840, height: 2160 }]) {
+      expect(watermarkInset(frame), `${frame.width}x${frame.height}`).toEqual({ top: 20, bottom: 20 })
+    }
+  })
+
+  it('a 1080x1920 frame is inset 288 px at the top and 480 px at the bottom: 15% and 25% of its height', () => {
+    expect(watermarkInset({ width: 1080, height: 1920 })).toEqual({ top: 288, bottom: 480 })
+  })
+
+  it('the inset is a share of the frame\'s height, so a smaller or larger vertical frame has the same proportions', () => {
+    expect(watermarkInset({ width: 720, height: 1280 })).toEqual({ top: 192, bottom: 320 })
+    expect(watermarkInset({ width: 2160, height: 3840 })).toEqual({ top: 576, bottom: 960 })
+    expect(watermarkInset({ width: 1080, height: 2340 })).toEqual({ top: 351, bottom: 585 })
+  })
+
+  it('only a frame at least as tall as 9:16 is vertical: 4:5, square and every landscape shape are not', () => {
+    for (const frame of [{ width: 1080, height: 1920 }, { width: 720, height: 1280 }, { width: 1080, height: 2340 }, { width: 1080, height: 1918 }, { width: 1080, height: 1920 - 2 }]) {
+      expect(isVerticalFrame(frame), `${frame.width}x${frame.height}`).toBe(true)
+    }
+    for (const frame of [{ width: 1080, height: 1350 }, { width: 1080, height: 1080 }, { width: 1080, height: 1440 }, { width: 1920, height: 1080 }, { width: 1280, height: 720 }]) {
+      expect(isVerticalFrame(frame), `${frame.width}x${frame.height}`).toBe(false)
+      expect(watermarkInset(frame), `${frame.width}x${frame.height}`).toEqual({ top: 20, bottom: 20 })
+    }
+  })
+
+  it('a frame with no usable size is not vertical, and gets the flat margin', () => {
+    for (const frame of [{ width: 0, height: 1920 }, { width: 1080, height: 0 }, { width: Number.NaN, height: 1920 }, { width: 1080, height: Number.POSITIVE_INFINITY }]) {
+      expect(isVerticalFrame(frame)).toBe(false)
+      expect(watermarkInset(frame)).toEqual({ top: 20, bottom: 20 })
+    }
+  })
+
+  it('the vertical bottom inset is deeper than the top, and both are deeper than the flat margin at any size a video can be', () => {
+    expect(VERTICAL_WATERMARK_INSET.bottom).toBeGreaterThan(VERTICAL_WATERMARK_INSET.top)
+    const small = watermarkInset({ width: 144, height: 256 })
+    expect(small.top).toBeGreaterThan(WATERMARK_EDGE_PX)
+    expect(small.bottom).toBeGreaterThan(WATERMARK_EDGE_PX)
   })
 })

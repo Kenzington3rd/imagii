@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import { clipRecipe } from '@shared/clip'
+import { compileFps } from '@shared/compileFps'
 import { countOf } from '@shared/plural'
 import { formatFps } from '@shared/units'
 import { useVideoStore } from './store/videoStore'
@@ -86,14 +87,14 @@ export function CompilationPanel(): JSX.Element | null {
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="film">Compile clips ({clips.length})</PanelHeader>
-      {/* T-112: the frame and the rate are the compilation's, not the source's: every clip
-          is cut to 16:9 at 1920×1080 and 30 fps whatever it was recorded at, and the card
-          did not say so until the file was written. Both numbers are the constants the
-          encoder and the verdicts below use. */}
+      {/* T-112: the frame is the compilation's, not the source's: every clip is cut to 16:9 at
+          1920×1080, and the card did not say so until the file was written. T-130 (q): the
+          rate is the recording's, up to 60 (`compileFps`, the same call main makes from the
+          same probe), so the card names the rate the file will have. */}
       <p className="text-xs text-ink-dim">
         Stitch all clips into one montage MP4 ({COMPILE_SIZE.width}×{COMPILE_SIZE.height},{' '}
-        {formatFps(COMPILE_TARGET.fps)}), in clip list order. Each clip keeps its crop, speed,
-        color and effects.
+        {formatFps(compileFps([source.probe.fps]))}), in clip list order. Each clip keeps its crop,
+        speed, color and effects.
       </p>
       {needsSecondClip ? (
         <p className="text-xs text-warn">Add a second clip to compile.</p>

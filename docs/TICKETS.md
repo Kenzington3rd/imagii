@@ -4472,7 +4472,7 @@ IMG-PREC.
 - **Acceptance criteria:** standard bars; red-first; both-majors
   L5 for every ffmpeg change; full gates in the worktree; no git
   writes; no TICKETS/package.json/lockfile edits.
-- **Status:** open (wave 2 — dispatch after T-128/T-129 land)
+- **Status:** done (round 80, checkpoint 3 — see the Done entry)
 
 ---
 
@@ -5084,6 +5084,57 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 80, checkpoint 3 — T-130, the platform-rate and kit-art debt
+((q), (t), (an)), landed in the commit that carries this entry.
+Worked by Sonnet in a fresh clone of 1f3c12e; a container restart
+killed it mid-round and a second Sonnet resumed under the death
+protocol (all 30 ledger rows' shas matched their before state — no
+residue; one red per item re-broken and restored byte-identical).
+(q): the compilation follows its source's rate up to 60 —
+`compileFps()` in shared takes the fastest clip rate as a number
+(NTSC stays fractional), caps at `MAX_COMPILE_FPS = 60`, and falls
+back to `COMPILE_FPS = 30` only when no clip states one; the fps
+stage and `-r` both take the derived value, and the Compile card
+shows it. A "YouTube 1080p60" preset (1920x1080, 60 fps, 12M per
+YouTube's 1080p60 guide) joins both preset tables — and the Clip
+Kit now reads its own `KIT_PLATFORM_IDS` so the kit stays five
+files instead of silently gaining a sixth. (t): Clip Kit
+thumbnails honor the clip's crop — `extractFrame` takes `cropRect`
+and applies the shared even-pixel clamped `cropToFrame` stage (the
+only filter: the thumbnail is the crop at source pixels, so there
+is no scale to order against); the source is probed only when a
+crop exists. L5 pixel cases prove the inside color present and the
+outside absent, with a positive control that caught `-ss 0`
+decoding zero frames from a JPEG (a lesson entry: a negative pixel
+assertion needs a positive control through the same reader). (an):
+the watermark clears platform UI on 9:16 — `isVerticalFrame`
+(shape-judged, 2% snap tolerance; 4:5 and square are not vertical)
+takes `VERTICAL_WATERMARK_INSET = { top: 0.15, bottom: 0.25 }` of
+the frame height (288/480 px at 1080x1920, clearing the published
+TikTok/Reels/Shorts header and collapsed-caption rail), landscape
+keeps the flat 20 px; the side action rail is documented as not
+cleared (a left corner is the answer). Worker deviations accepted
+by the expediter: the rate reads the probe's existing fps (average
+first — the Timeline's own reading; keeps the Record WebM 1000/1
+clock as "no rate"), the inset pair lives in shared/watermark.ts
+because main, renderer and tests all read it, and the T-127 (4)
+fractional-series fixture starts moved onto the 25 fps grid the
+compile now actually runs at (adjudicated: the drop-`-shortest`
+mutation still reds the case at 0/10/30/60/80/110/130/130 ms).
+Found in the round and ledgered: two settings unit tests fail when
+TMPDIR exceeds ~31 chars (the fixture path overflows
+streamerHandle's 80-char schema cap), and the e2e suite fails
+under a symlinked TMPDIR — both in IC's found-not-fixed. Expedited
+personally on the worker's tree: verify x2 (168/4522), test:media
+on 7.0.2 (295 passed | 13 skipped of 308), the whole Layer 5 file
+on 6.1.1 (288 passed + exactly the 7 known pins), build + FULL
+Playwright 344/344; one independent mutation at a seam no ledger
+row names (the vertical inset computed from the frame's WIDTH
+instead of its height → 4 unit pins red → restored byte-identical,
+142/142 green). Landed with hand-resolved doc merges; the merged
+tree re-gated: verify 169/4533 plus the full media and Playwright
+suites (results in this entry's commit).
 
 Round 80, checkpoint 2 — T-129, the waveform stops decoding whole
 files in the renderer and the 2-hour ceiling retires (T-110 (ao)),

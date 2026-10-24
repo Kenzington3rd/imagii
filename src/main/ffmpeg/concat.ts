@@ -18,6 +18,10 @@ import { discardPartialOutput } from './partialOutput'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
 import { clipSpeed, type ClipRecipe, type CompileSegment } from '../../shared/clip'
+import { COMPILE_FPS, compileFps } from '../../shared/compileFps'
+
+// The fallback rate lives in shared (the Compile card derives the same rate from the same probe); main keeps exporting it by this name.
+export { COMPILE_FPS }
 
 export interface ConcatJobSpec {
   jobId: string
@@ -33,9 +37,6 @@ export interface ConcatJobSpec {
   sourceName?: string
 }
 
-/** The compilation's frame rate: every segment is written at it, so the stream-copy join sees one rate. */
-export const COMPILE_FPS = 30
-
 /** A segment is Matroska with PCM sound (T-125 (1)): nothing in it for a stream-copy join to misplace. */
 export const SEGMENT_EXTENSION = 'mkv'
 export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
@@ -49,7 +50,8 @@ type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRec
  * compilation's shape (T-83: the crop is the new frame, so nothing is
  * stretched), hype shake, the scale that normalizes every segment to one size so
  * the stream-copy join below sees identical streams, color grade, auto zoom and
- * text overlays. The compilation is "a preset" with its own size, 16:9 and 30 fps.
+ * text overlays. The compilation is "a preset" with its own size, 16:9 and the rate of its source (T-130 (q): `compileFps`, up to 60;
+ * `fps` is that rate, and `COMPILE_FPS` - 30 - when the caller has none to give).
  *
  * Why the builder and not a copy of its stages: a compilation that carried only
  * the crop (T-96) compiled a 2x clip at 1x with its color, text and zoom gone,
@@ -62,7 +64,8 @@ export function buildSegmentFilter(
   seg: SegmentClip,
   source: SourceDimensions,
   width: number,
-  height: number
+  height: number,
+  fps: number = COMPILE_FPS
 ): string {
   // M4 fix (round 15): even W/H so libx264 doesn't reject the encode.
   // The IPC validator already enforces 16..16384 but doesn't snap to even.
@@ -77,7 +80,7 @@ export function buildSegmentFilter(
     autoZoom: seg.autoZoom,
     hypeShake: seg.hypeShake
   }
-  return buildVideoFilter(clip, { width: w, height: h, aspectRatio: w / h, fps: COMPILE_FPS }, source)
+  return buildVideoFilter(clip, { width: w, height: h, aspectRatio: w / h, fps }, source)
 }
 
 /**
@@ -94,12 +97,13 @@ export function buildSegmentFilters(
   width: number,
   height: number,
   fadeIn: number,
-  fadeOut: number
+  fadeOut: number,
+  fps: number = COMPILE_FPS
 ): { video: string; audio: string } {
   const speed = clipSpeed(seg)
   const outSec = Math.max(0.1, (seg.endSec - seg.startSec) / speed)
   const fadeOutStart = Math.max(0, outSec - fadeOut).toFixed(3)
-  const video = [buildSegmentFilter(seg, source, width, height)]
+  const video = [buildSegmentFilter(seg, source, width, height, fps)]
   const audio: string[] = []
   const tempo = buildAudioSpeedFilter(speed)
   if (tempo) audio.push(tempo)
@@ -177,6 +181,9 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
   // for every segment (main reads them, as a platform export does).
   const probe = await run.guard(probeVideo(spec.sourcePath))
   const source = { width: probe.width, height: probe.height, colorSpace: probe.colorSpace }
+  // T-130 (q): the compilation is written at its source's rate up to 60 (a compilation is one source, so the fastest of its clips is
+  // that source's), the fps stage and `-r` both. A source that states no rate is `COMPILE_FPS`.
+  const fps = compileFps([probe.fps])
   const segCount = spec.segments.length
   for (let i = 0; i < segCount; i++) {
     run.check()
@@ -190,7 +197,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
     const segPath = path.join(tempDir, `seg-${spec.jobId}-${i}.${SEGMENT_EXTENSION}`)
     const fadeIn = i === 0 ? 0 : fade
     const fadeOut = i === segCount - 1 ? 0 : fade
-    const filters = buildSegmentFilters(seg, source, spec.width, spec.height, fadeIn, fadeOut)
+    const filters = buildSegmentFilters(seg, source, spec.width, spec.height, fadeIn, fadeOut, fps)
 
     const args = [
       '-y',
@@ -220,7 +227,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       '-c:a',
       SEGMENT_AUDIO_CODEC,
       '-r',
-      String(COMPILE_FPS),
+      String(fps),
       // T-127 (4): a segment ends where its SHORTER stream does. A length that is not a whole number of frames wrote one or two extra
       // video frames (the fps stage, a fractional -ss, the EOF fill), the join's concat demuxer offsets the next segment by the
       // container's picture-led length, and the join's AAC encode swallows the gap in the sound: the picture fell further behind it at

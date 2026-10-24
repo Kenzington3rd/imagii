@@ -14,6 +14,7 @@ import { newTextOverlay } from '../../shared/textOverlay'
 const handlers = new Map<string, (e: unknown, req: unknown) => Promise<unknown>>()
 const runConcat = vi.fn(async () => ({ outputPath: '/out/compilation.mp4' }))
 const runGifExport = vi.fn(async () => ({ outputPath: '/out/clip.gif' }))
+const extractFrame = vi.fn(async (_source: string, _timeSec: number, outputPath: string, _crop?: unknown) => ({ outputPath }))
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -30,6 +31,12 @@ vi.mock('../ffmpeg/concat', () => ({
   runConcat: (...args: unknown[]) => (runConcat as (...a: unknown[]) => unknown)(...args),
   runPipComposite: vi.fn(),
   cancelConcatJob: vi.fn()
+}))
+vi.mock('../ffmpeg/frame', () => ({
+  extractFrame: (...args: [string, number, string, unknown]) => extractFrame(...args),
+  makeKitDir: vi.fn(),
+  removeKitDir: vi.fn(),
+  cancelAllFrameJobs: vi.fn()
 }))
 vi.mock('../ffmpeg/gif', () => ({
   runGifExport: (...args: unknown[]) => (runGifExport as (...a: unknown[]) => unknown)(...args),
@@ -73,6 +80,7 @@ const gif = (extra: Record<string, unknown>): Promise<unknown> =>
 beforeEach(() => {
   runConcat.mockClear()
   runGifExport.mockClear()
+  extractFrame.mockClear()
   handlers.clear()
   registerVideoIpc()
 })
@@ -320,5 +328,38 @@ describe('video:concat carries the display name of the video (T-125 (22))', () =
   it.each([undefined, '', '   ', 5, null])('%s passes none: the runner falls back to the source file\'s own name', async (sourceName) => {
     await withName({ sourceName })
     expect(lastConcatSpec().sourceName).toBeUndefined()
+  })
+})
+
+// T-130 (t): a Clip Kit thumbnail is the clip's crop, so video:extractFrame carries it. It becomes `crop=` in an ffmpeg filter string like the
+// other four paths' crops, so it is refused in the same one sentence before the runner (and its probe) is touched, and a good one, no
+// crop and an absent one all reach the runner as the fourth argument it takes.
+describe('video:extractFrame carries the clip\'s crop (T-130 (t))', () => {
+  const frame = (extra: Record<string, unknown>): Promise<unknown> =>
+    call('video:extractFrame', { sourcePath: source, timeSec: 1.5, outputPath: path.join(outDir, 'thumb.jpg'), ...extra })
+
+  it('hands a good crop to the runner untouched, and no crop (null or absent) as null', async () => {
+    await frame({ cropRect: GOOD_CROP })
+    await frame({ cropRect: null })
+    await frame({})
+    expect(extractFrame.mock.calls.map((c) => c[3])).toEqual([GOOD_CROP, null, null])
+    expect(extractFrame.mock.calls[0]?.slice(0, 3)).toEqual([source, 1.5, path.join(outDir, 'thumb.jpg')])
+  })
+
+  it.each(BAD_CROPS)('refuses %s with the plain sentence, before the runner is touched', async (_l, crop, detail) => {
+    const { err, logged } = await refusal(() => frame({ cropRect: crop }))
+    expect((err as Error).message).toBe(SENTENCE)
+    expect(logged).toMatch(detail)
+    expect(extractFrame).not.toHaveBeenCalled()
+  })
+
+  it('reaches the person as that sentence alone, through Electron\'s envelope', () => {
+    const wrapped = new Error(`Error invoking remote method 'video:extractFrame': Error: ${SENTENCE}`)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(userFacingError(wrapped, 'Clip Kit failed.')).toEqual({ cancelled: false, message: SENTENCE })
+    } finally {
+      logged.mockRestore()
+    }
   })
 })

@@ -73,7 +73,7 @@ import {
   TRANSCRIPTION_AUDIO
 } from '../../src/shared/captions'
 import { ALL_PRESET_IDS, PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
-import { buildWatermark } from '../../src/shared/watermark'
+import { buildWatermark, watermarkInset } from '../../src/shared/watermark'
 import { OVERLAY_FONTS } from '../../src/shared/textOverlay'
 import { buildKitQueue } from '../../src/renderer/src/modules/video-studio/clipKit'
 
@@ -265,9 +265,11 @@ async function samplePixels(
   pixFmt: 'gray' | 'rgb24'
 ): Promise<Buffer> {
   const raw = path.join(workDir, `sample-${pixelSampleSeq++}.raw`)
+  // A still image (a Clip Kit thumbnail, T-130) has no clock: `-ss 0` on a JPEG decodes nothing at all.
+  const stillImage = /\.(jpe?g|png)$/i.test(file)
   await ff([
     '-y',
-    '-ss', String(timeSec),
+    ...(stillImage ? [] : ['-ss', String(timeSec)]),
     '-i', file,
     '-vf', `${crop},format=${pixFmt}`,
     '-frames:v', '1',
@@ -825,6 +827,8 @@ describe('video export presets (real ffmpeg)', () => {
     expect(v?.pix_fmt).toBe('yuv420p')
     expect(v?.width).toBe(preset.width)
     expect(v?.height).toBe(preset.height)
+    // T-130 (q): the preset's own rate (30 on the platforms, 60 on YouTube 1080p60) - from a 30 fps source either way.
+    expect(v?.avg_frame_rate).toBe(`${preset.fps}/1`)
     expect(a?.codec_name).toBe('aac')
     const dur = Number(info.format.duration)
     expect(dur).toBeGreaterThan(2.5)
@@ -2594,6 +2598,85 @@ describe('watermark + text-overlay pixels (drawtext, T-51)', () => {
         const mirror = await countTintedPixels(res.outputPath, SAMPLE_T, MIRROR_REGION, 0)
         expect(mirror, `${JSON.stringify(text)} stays on the side it was placed (${mirror} red px)`).toBe(0)
       }
+    },
+    600_000
+  )
+
+  /**
+   * T-130 (an) - the margins, in pixels. A 9:16 export (Reels, TikTok; the Short is Reels' geometry) is played under the platform's header
+   * and over its caption, so the watermark sits between them: `watermarkInset` says where (288 px from the top, 480 px from the bottom of
+   * 1080x1920). The bands are measured on the flat-gray fixture cut to 9:16 (a flat picture stays flat), against the box's 8 px border and
+   * 4 px of slack: the header band (rows above the box) and the caption band (rows below it) are the flat value to the pixel in every one of the
+   * four renders, and the watermark's own band, in its own half of the frame, carries both halves of it (white glyphs, the dark box).
+   */
+  it.skipIf(process.platform !== 'win32')(
+    'T-130 (an): on a 9:16 export the watermark sits between the header and the caption in every corner, and the bands above and below it stay flat',
+    async () => {
+      const W = 1080
+      const H = 1920
+      const { top, bottom } = watermarkInset({ width: W, height: H })
+      expect([top, bottom], 'the margins the product names, at 1080x1920').toEqual([288, 480])
+      const BOX = 8 // boxborderw
+      const SLACK = 4
+      const SPAN = 200 // rows searched for the watermark inside its band
+      const HALF = W / 2
+      const header = `crop=${W}:${top - BOX - SLACK}:0:0`
+      const caption = `crop=${W}:${bottom - BOX - SLACK}:0:${H - (bottom - BOX - SLACK)}`
+      const flat = async (file: string, crop: string, what: string): Promise<void> => {
+        const q = await regionLuma(file, SAMPLE_T, crop)
+        expect(q.max, `${what} (luma ${q.min}..${q.max}, flat ${flatLuma})`).toBeLessThanOrEqual(flatLuma + 4)
+        expect(q.min, `${what} (luma ${q.min}..${q.max}, flat ${flatLuma})`).toBeGreaterThanOrEqual(flatLuma - 4)
+      }
+      for (const position of POSITIONS) {
+        const watermark: WatermarkSpec = { text: WATERMARK_TEXT, position, opacity: WATERMARK_OPACITY, fontSizePct: WATERMARK_FONT_SIZE_PCT }
+        const res = await runExportJob(
+          {
+            ...makeJob(flatGraySrc, 'reels', watermarkClip(), `job-wm-vertical-${position}`),
+            watermark,
+            outputFilename: `watermark-vertical-${position}.mp4`
+          },
+          () => {}
+        )
+        const v = (await ffprobeJson(res.outputPath)).streams.find((s) => s.codec_type === 'video')
+        expect([v?.width, v?.height], 'a 9:16 file').toEqual([W, H])
+
+        // The platform's own bands are untouched, whichever corner the handle is in.
+        await flat(res.outputPath, header, `"${position}": the header band (rows 0..${top - BOX - SLACK})`)
+        await flat(res.outputPath, caption, `"${position}": the caption band (rows ${H - (bottom - BOX - SLACK)}..${H})`)
+
+        // The watermark is in its own half of the band beside the header or above the caption, and not in the other half.
+        // The band is SPAN rows: the ones just below the header's clear rows, or the ones just above the caption's.
+        const rowY = position.startsWith('top') ? top - BOX - SLACK : H - bottom - SPAN + BOX + SLACK
+        const half = (right: boolean): string => `crop=${HALF}:${SPAN}:${right ? HALF : 0}:${rowY}`
+        const own = await regionLuma(res.outputPath, SAMPLE_T, half(position.endsWith('right')))
+        expect(own.max, `"${position}": white glyph pixels in its band (rows from ${rowY}, max luma ${own.max}, flat ${flatLuma})`).toBeGreaterThan(flatLuma + 60)
+        expect(own.min, `"${position}": the watermark's dark box in its band (min luma ${own.min}, flat ${flatLuma})`).toBeLessThan(flatLuma - 15)
+        await flat(res.outputPath, half(!position.endsWith('right')), `"${position}": the other half of the band is untouched`)
+      }
+    },
+    600_000
+  )
+
+  /**
+   * T-130 (an), the other side of it: a landscape export keeps its flat 20 px. The box (text plus its 8 px border) ends 12 px above the bottom
+   * edge of a bottom-right watermark, so the last 10 rows are the flat value and the 60 rows above them are not.
+   */
+  it.skipIf(process.platform !== 'win32')(
+    'T-130 (an): a landscape export keeps the flat 20 px - the last rows of the frame are flat and the box sits just above them',
+    async () => {
+      const watermark: WatermarkSpec = { text: WATERMARK_TEXT, position: 'bottom-right', opacity: WATERMARK_OPACITY, fontSizePct: WATERMARK_FONT_SIZE_PCT }
+      const res = await runExportJob(
+        { ...makeJob(flatGraySrc, 'youtube', watermarkClip(), 'job-wm-landscape-20'), watermark, outputFilename: 'watermark-landscape-20.mp4' },
+        () => {}
+      )
+      const edge = await regionLuma(res.outputPath, SAMPLE_T, 'crop=1920:10:0:1070')
+      expect(edge.max, `the last ten rows (luma ${edge.min}..${edge.max}, flat ${flatLuma})`).toBeLessThanOrEqual(flatLuma + 4)
+      expect(edge.min, `the last ten rows (luma ${edge.min}..${edge.max}, flat ${flatLuma})`).toBeGreaterThanOrEqual(flatLuma - 4)
+      // The box reaches 12 px from the edge (20 less its 8 px border): its last rows are dark, 14..20 px up.
+      const reach = await regionLuma(res.outputPath, SAMPLE_T, 'crop=500:6:1400:1060')
+      expect(reach.min, `the dark box reaches rows 1060..1066 (min luma ${reach.min}, flat ${flatLuma})`).toBeLessThan(flatLuma - 15)
+      const glyphs = await regionLuma(res.outputPath, SAMPLE_T, 'crop=500:60:1400:1010')
+      expect(glyphs.max, `...and its glyphs are above it (max luma ${glyphs.max})`).toBeGreaterThan(flatLuma + 60)
     },
     600_000
   )
@@ -5271,6 +5354,40 @@ describe('the convert reports a measured progress, or none (real ffmpeg, T-115)'
   }, 120_000)
 })
 
+/** Encode to a pipe, then blank the DefaultDuration element: a MediaRecorder-shaped webm. */
+async function mediaRecorderWebm(codec: 'libvpx-vp9' | 'libvpx', file: string, sec = 3): Promise<void> {
+  const chunks: Buffer[] = []
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpegPath, [
+      '-v', 'error', '-y',
+      '-f', 'lavfi', '-i', `testsrc2=size=320x240:rate=30:duration=${sec}`,
+      '-fps_mode', 'passthrough', '-enc_time_base', '1:1000',
+      '-c:v', codec, '-deadline', 'realtime', '-cpu-used', '8',
+      // The jitter MediaRecorder's timestamps have: each packet lands within +-11 ms of its slot.
+      '-bsf:v', "setts=ts='trunc(N*1000/30+11*sin(N*N))'",
+      '-live', '1', '-f', 'webm', 'pipe:1'
+    ])
+    let stderr = ''
+    child.stdout.on('data', (b: Buffer) => chunks.push(b))
+    child.stderr.on('data', (b) => (stderr += String(b)))
+    child.on('error', reject)
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-400)}`))
+    )
+  })
+  const buf = Buffer.concat(chunks)
+  // DefaultDuration is element id 23 E3 83; its size byte is 0x80 | length. An EBML Void is id 0xEC, so the
+  // same bytes become a Void of the same total length and the file parses as before without the element.
+  const at = buf.indexOf(Buffer.from([0x23, 0xe3, 0x83]))
+  if (at >= 0) {
+    const total = 4 + ((buf[at + 3] ?? 0) & 0x7f)
+    buf.fill(0, at, at + total)
+    buf[at] = 0xec
+    buf[at + 1] = 0x80 | (total - 2)
+  }
+  await writeFile(file, buf)
+}
+
 describe('a MediaRecorder take: saved as WebM and converted to MP4 (real ffmpeg, T-120)', () => {
   /**
    * What Chromium's MediaRecorder writes is a STREAMED webm: the header has no duration (ffprobe prints
@@ -5294,39 +5411,6 @@ describe('a MediaRecorder take: saved as WebM and converted to MP4 (real ffmpeg,
   const SEC = 3
   const fixtures: Record<'vp9' | 'vp8', string> = { vp9: '', vp8: '' }
 
-  /** Encode to a pipe, then blank the DefaultDuration element: a MediaRecorder-shaped webm. */
-  async function mediaRecorderWebm(codec: 'libvpx-vp9' | 'libvpx', file: string): Promise<void> {
-    const chunks: Buffer[] = []
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(ffmpegPath, [
-        '-v', 'error', '-y',
-        '-f', 'lavfi', '-i', `testsrc2=size=320x240:rate=30:duration=${SEC}`,
-        '-fps_mode', 'passthrough', '-enc_time_base', '1:1000',
-        '-c:v', codec, '-deadline', 'realtime', '-cpu-used', '8',
-        // The jitter MediaRecorder's timestamps have: each packet lands within +-11 ms of its slot.
-        '-bsf:v', "setts=ts='trunc(N*1000/30+11*sin(N*N))'",
-        '-live', '1', '-f', 'webm', 'pipe:1'
-      ])
-      let stderr = ''
-      child.stdout.on('data', (b: Buffer) => chunks.push(b))
-      child.stderr.on('data', (b) => (stderr += String(b)))
-      child.on('error', reject)
-      child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-400)}`))
-      )
-    })
-    const buf = Buffer.concat(chunks)
-    // DefaultDuration is element id 23 E3 83; its size byte is 0x80 | length. An EBML Void is id 0xEC, so the
-    // same bytes become a Void of the same total length and the file parses as before without the element.
-    const at = buf.indexOf(Buffer.from([0x23, 0xe3, 0x83]))
-    if (at >= 0) {
-      const total = 4 + ((buf[at + 3] ?? 0) & 0x7f)
-      buf.fill(0, at, at + total)
-      buf[at] = 0xec
-      buf[at + 1] = 0x80 | (total - 2)
-    }
-    await writeFile(file, buf)
-  }
 
   /** ffprobe's own reading of the first video stream, plus (optionally) the frames and packets it counts. */
   async function streamFacts(
@@ -7003,7 +7087,7 @@ describe('multi-clip concat (real ffmpeg)', () => {
   // Note on shape: runConcat takes ONE sourcePath plus N ranges, so "two
   // clips with different properties" means two ranges of a source whose
   // resolution (640x480), frame rate (24) and audio layout (mono 44.1k) all
-  // differ from the 1280x720 @ 30fps target it normalizes to.
+  // differ from the 1280x720 target it normalizes to (the rate it keeps: T-130 (q)).
 
   it('joins two ranges of a mismatched-property source into one compilation', async () => {
     const { outputPath } = await runConcat({
@@ -7026,7 +7110,11 @@ describe('multi-clip concat (real ffmpeg)', () => {
     expect(v?.codec_name).toBe('h264')
     expect(v?.width).toBe(1280)
     expect(v?.height).toBe(720)
-    expect(v?.avg_frame_rate).toBe('30/1')
+    // T-130 (q): the source is 24 fps, and a compilation follows its source's rate (it was 30 for everything). The container's own rate is
+    // exact; the average over a join is not (its stamps are whole milliseconds: 24 fps reads 32000/1333), so that one gets a quarter of a percent.
+    expect(v?.r_frame_rate).toBe('24/1')
+    const [avgN, avgD] = (v?.avg_frame_rate ?? '0/1').split('/').map(Number)
+    expect(Math.abs((avgN ?? 0) / (avgD || 1) - 24) / 24, `average ${v?.avg_frame_rate}`).toBeLessThan(0.0025)
     expect(a?.codec_name).toBe('aac')
 
     // Duration is the sum of the two ranges (2s + 2s), within half a second.
@@ -7235,8 +7323,13 @@ describe('fractional segments do not walk the picture off its sound across the j
   const SECS = 40
   // Every boundary falls in the dark part of its second (the source flashes in the first 0.1 s), so no segment cuts a flash in half and
   // the number of flashes in a segment is exact: the integers in its range.
+  // T-130 (q): a compilation is written at its source's rate now (25 fps here; it was converted to 30), and a picture can only show a flash on
+  // a frame: 40 ms apart, where 33 ms were. A start that puts the first flash BETWEEN two frames (1.37 s: 25.25 frames before the flash at 2 s)
+  // is read up to half a frame (20 ms) from the beep whatever the join does, and the series' 15 ms bound then measures the rounding, not the
+  // drift. So every START is on the 25 fps grid (the whole frames to the next flash: 16, 19, 17, 13, 3, 15, 20, 18) and every END is not (the
+  // segment lengths stay a fraction of a frame, which is the shape the defect needs).
   const SEGMENTS: Array<[number, number]> = [
-    [1.37, 4.91], [7.23, 10.58], [12.34, 15.77], [17.5, 20.62], [22.9, 26.33], [27.4, 29.9], [31.2, 33.8], [35.3, 38.7]
+    [1.36, 4.91], [7.24, 10.58], [12.32, 15.77], [17.48, 20.62], [22.88, 26.33], [27.4, 29.9], [31.2, 33.8], [35.28, 38.7]
   ]
   const flashesIn = ([a, b]: [number, number]): number => Math.floor(b) - Math.ceil(a) + 1
   let src = ''
@@ -7404,6 +7497,234 @@ describe('the picture lands on its sound at every frame rate (real ffmpeg, T-126
     const v = (await ffprobeJson(res.outputPath)).streams.find((s) => s.codec_type === 'video')
     near(Number(v?.duration), 5, 0.04, 'the sped-up picture')
   }, 180_000)
+})
+
+describe('the compilation follows the source\'s frame rate, up to 60 (real ffmpeg, T-130 (q))', () => {
+  // Every compilation was written at 30 fps, so the montage of a 60 fps recording (OBS's usual) had half its frames while a platform export of
+  // the same recording had all of them, and a 24 fps film gained duplicated ones. The rate is now the source's, capped at 60: the fps stage and
+  // `-r` of every segment. Each source has a flash and a beep on the same instant at the start of every second, so the output is judged on the
+  // clock: two 3 s ranges (source seconds 2-5 and 7-10) are 6 s with a flash at 0, 1, 2, 3, 4 and 5 s, and a count of frames that is the rate
+  // times six. `r_frame_rate` is ffprobe's reading of the container (the exact rate), not the average over a join.
+  const SECS = 12
+  const RANGES = [{ startSec: 2, endSec: 5, name: 'a' }, { startSec: 7, endSec: 10, name: 'b' }]
+  const sources: Record<'fps60' | 'ntsc60' | 'fps120', string> = { fps60: '', ntsc60: '', fps120: '' }
+
+  async function flashBeepAt(file: string, rate: string): Promise<void> {
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', `color=c=black:s=640x360:r=${rate}:d=${SECS},drawbox=x=0:y=0:w=640:h=360:color=white:t=fill:enable='lt(mod(t,1),0.1)'`,
+      '-f', 'lavfi', '-i', `aevalsrc='if(lt(mod(t,1),0.1),0.8*sin(2*PI*1000*t),0)':s=48000:d=${SECS}`,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '1', '-shortest', file
+    ])
+  }
+
+  /** The container's exact rate (`r_frame_rate`) is `exact`, and the average over the whole file is within `within` (a quarter of a percent) of `rate` (a join's stamps are whole milliseconds). */
+  const expectRate = async (file: string, exact: string, rate: number, what: string, within = 0.0025): Promise<void> => {
+    const v = (await ffprobeJson(file)).streams.find((s) => s.codec_type === 'video')
+    expect(v?.r_frame_rate, `${what}: the container's rate`).toBe(exact)
+    const [n, d] = (v?.avg_frame_rate ?? '0/1').split('/').map(Number)
+    const avg = (n ?? 0) / (d || 1)
+    expect(Math.abs(avg - rate) / rate, `${what}: average ${v?.avg_frame_rate} = ${avg} fps`).toBeLessThan(within)
+  }
+
+  /** The compilation of RANGES from `src`, with the flashes and beeps read back. */
+  async function compileRanges(src: string, jobId: string): Promise<{ outputPath: string; flashes: number[]; lags: number[]; frames: number }> {
+    const { outputPath } = await runConcat({ jobId, sourcePath: src, outDir: workDir, segments: RANGES, fadeMs: 0, width: 640, height: 360 })
+    const flashes = await flashStarts(outputPath)
+    const beeps = await soundBurstStarts(outputPath, 0.3, 0.5)
+    expect(beeps, 'a beep for every flash').toHaveLength(flashes.length)
+    return {
+      outputPath,
+      flashes,
+      lags: flashes.map((f, i) => Math.round((f - (beeps[i] ?? 0)) * 1000)),
+      frames: (await videoPacketTimes(outputPath)).length
+    }
+  }
+
+  /** Six flashes, each on its second of the compiled timeline to within `toleranceSec`, and each on its beep to within 30 ms. */
+  function onTheIdealTimeline(got: { flashes: number[]; lags: number[] }, toleranceSec: number, what: string): void {
+    expect(got.flashes, `${what}: a flash for each of the six whole seconds`).toHaveLength(6)
+    got.flashes.forEach((f, i) => near(f, i, toleranceSec, `${what}: flash ${i}`))
+    expect(Math.max(...got.lags.map(Math.abs)), `${what}: picture minus sound at each flash is ${got.lags.join(' / ')} ms`).toBeLessThanOrEqual(30)
+  }
+
+  beforeAll(async () => {
+    sources.fps60 = path.join(workDir, 't130-q-60.mp4')
+    sources.ntsc60 = path.join(workDir, 't130-q-5994.mp4')
+    sources.fps120 = path.join(workDir, 't130-q-120.mp4')
+    await flashBeepAt(sources.fps60, '60')
+    await flashBeepAt(sources.ntsc60, '60000/1001')
+    await flashBeepAt(sources.fps120, '120')
+  }, 180_000)
+
+  it('the fixtures are what they say: 60, 59.94 and 120 fps', async () => {
+    await expectRate(sources.fps60, '60/1', 60, 'the 60 fps source')
+    await expectRate(sources.ntsc60, '60000/1001', 60000 / 1001, 'the 59.94 source')
+    await expectRate(sources.fps120, '120/1', 120, 'the 120 fps source')
+  })
+
+  it('a 60 fps source is compiled at 60: 360 frames in six seconds, and every flash on its second and on its beep', async () => {
+    const got = await compileRanges(sources.fps60, 't130-q-60')
+    await expectRate(got.outputPath, '60/1', 60, 'the 60 fps compilation')
+    expect(Math.abs(got.frames - 360), `${got.frames} frames in the six seconds (a 30 fps compilation has 180)`).toBeLessThanOrEqual(3)
+    onTheIdealTimeline(got, 0.03, 'the 60 fps compilation')
+  }, 240_000)
+
+  it('59.94 stays 59.94 - the container reads 60000/1001, not 60 - and keeps its frames and its flashes', async () => {
+    const got = await compileRanges(sources.ntsc60, 't130-q-5994')
+    await expectRate(got.outputPath, '60000/1001', 60000 / 1001, 'the 59.94 compilation')
+    expect(Math.abs(got.frames - 360), `${got.frames} frames`).toBeLessThanOrEqual(3)
+    onTheIdealTimeline(got, 0.04, 'the 59.94 compilation')
+  }, 240_000)
+
+  it('a 120 fps source is brought down to 60, not written at 120', async () => {
+    const got = await compileRanges(sources.fps120, 't130-q-120')
+    await expectRate(got.outputPath, '60/1', 60, 'the 120 fps compilation')
+    expect(Math.abs(got.frames - 360), `${got.frames} frames (720 at 120 fps)`).toBeLessThanOrEqual(3)
+    onTheIdealTimeline(got, 0.03, 'the 120 fps compilation')
+  }, 240_000)
+
+  it('a source slower than 30 keeps its own rate: the 24 fps ramp compiles at 24, with its content in order', async () => {
+    const { outputPath } = await runConcat({
+      jobId: 't130-q-24',
+      sourcePath: rampSrc,
+      outDir: workDir,
+      segments: [{ startSec: 2, endSec: 4, name: 'first' }, { startSec: 12, endSec: 14, name: 'second' }],
+      fadeMs: 0,
+      width: 640,
+      height: 360
+    })
+    await expectRate(outputPath, '24/1', 24, 'the 24 fps compilation')
+    near((await videoPacketTimes(outputPath)).length / 24, 4, 0.1, 'four seconds of 24 fps frames')
+    // The ramp's luma is 12 * t: 0.5 s into each range is source seconds 2.5 and 12.5.
+    near(await meanLuma(outputPath, 0.5), 30, 12, 'the first range, by its luma')
+    near(await meanLuma(outputPath, 2.5), 150, 12, 'the second range, by its luma')
+  }, 120_000)
+
+  it('a source whose container states no rate (a Record take, 1000/1) falls back to 30, not to the cap', async () => {
+    // The trap the fallback exists for: the stream's own rate reads 1000, which is its clock; taking it at its word and capping it would write a
+    // 60 fps compilation of a recording made at about 30. The probe reads it as "no rate" (0, T-120) and the compilation is the fallback.
+    const raw = path.join(workDir, 't130-q-record.webm')
+    const saved = path.join(workDir, 't130-q-record-saved.webm')
+    await mediaRecorderWebm('libvpx', raw, 4)
+    await remuxWebm('recording', raw, saved)
+    expect((await ffprobeJson(saved)).streams.find((s) => s.codec_type === 'video')?.avg_frame_rate, 'the fixture reads 1000/1').toBe('1000/1')
+    expect((await probeVideo(saved)).fps, 'and the product\'s probe says it states no rate').toBe(0)
+    const { outputPath } = await runConcat({
+      jobId: 't130-q-record',
+      sourcePath: saved,
+      outDir: workDir,
+      segments: [{ startSec: 0.2, endSec: 1.6, name: 'a' }, { startSec: 2, endSec: 3.4, name: 'b' }],
+      fadeMs: 0,
+      width: 320,
+      height: 240
+    })
+    // A jittered take (+-11 ms a packet) and a `-shortest` edge on each range: a few percent of slack on the average, none on the container's rate.
+    await expectRate(outputPath, '30/1', 30, 'the fallback compilation', 0.03)
+    near((await videoPacketTimes(outputPath)).length / 30, 2.8, 0.15, 'the 2.8 s of the two ranges at 30 fps')
+  }, 240_000)
+
+  it('YouTube 1080p60 exports a 60 fps recording at 60: 300 frames in five seconds, every flash on its second and its beep', async () => {
+    const clip = makeClip({ startSec: 2, endSec: 7, selectedPresets: ['youtube60'] })
+    const res = await runExportJob(makeJob(sources.fps60, 'youtube60', clip, 't130-q-youtube60'), () => {})
+    await expectRate(res.outputPath, '60/1', 60, 'the YouTube 1080p60 export')
+    const v = (await ffprobeJson(res.outputPath)).streams.find((s) => s.codec_type === 'video')
+    expect([v?.width, v?.height]).toEqual([1920, 1080])
+    expect(Math.abs((await videoPacketTimes(res.outputPath)).length - 300)).toBeLessThanOrEqual(2)
+    const flashes = await flashStarts(res.outputPath)
+    const beeps = await soundBurstStarts(res.outputPath, 0.3, 0.5)
+    expect(flashes, 'a flash in each of the five seconds').toHaveLength(5)
+    flashes.forEach((f, i) => near(f, i, 0.03, `flash ${i}`))
+    expect(Math.max(...flashes.map((f, i) => Math.abs(f - (beeps[i] ?? 0)) * 1000)), 'picture on its sound').toBeLessThanOrEqual(30)
+  }, 240_000)
+
+  it('YouTube 1080p60 of a 30 fps recording is still a 60 fps file (the preset\'s rate is the fps stage\'s, whatever the source was)', async () => {
+    const clip = makeClip({ startSec: 1, endSec: 4, selectedPresets: ['youtube60'] })
+    const res = await runExportJob(makeJob(landscapeSrc, 'youtube60', clip, 't130-q-youtube60-from30'), () => {})
+    await expectRate(res.outputPath, '60/1', 60, 'the YouTube 1080p60 export of a 30 fps recording')
+    near(Number(((await ffprobeJson(res.outputPath)).format.duration)), 3, 0.15, 'the clip\'s three seconds')
+  }, 240_000)
+})
+
+describe('a Clip Kit thumbnail is the clip\'s cropped picture (real ffmpeg, T-130 (t))', () => {
+  // The kit's three thumbnails were taken from the WHOLE frame, so a 16:9 recording cropped to 9:16 (the usual way a streamer makes a vertical clip)
+  // got three landscape pictures of everything the crop had thrown away. The fixture is a red frame (the part the crop excludes) with a blue square
+  // outside the crop, and inside it a green strip (the exact 9:16 cut of the frame's middle) carrying a white square: "the crop reached the picture"
+  // is a question about the colors of its pixels. 220/640 and 200/640 are exact in binary, so the region is exactly 200x360 at x=220.
+  const CROP = { x: 220 / 640, y: 0, w: 200 / 640, h: 1 }
+  let src = ''
+
+  beforeAll(async () => {
+    src = path.join(workDir, 't130-t-thumb-source.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i',
+      'color=c=red:s=640x360:r=5:d=2,drawbox=x=60:y=100:w=60:h=60:color=blue:t=fill,drawbox=x=220:y=0:w=200:h=360:color=green:t=fill,drawbox=x=230:y=20:w=40:h=40:color=white:t=fill',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv444p', src
+    ])
+  }, 60_000)
+
+  const sizeOf = async (file: string): Promise<[number | undefined, number | undefined]> => {
+    const v = (await ffprobeJson(file)).streams.find((s) => s.codec_type === 'video')
+    return [v?.width, v?.height]
+  }
+
+  it('the control: with no crop the thumbnail is the whole frame - the red, the blue square and the green strip are all in it', async () => {
+    const out = path.join(workDir, 't130-t-thumb-whole.jpg')
+    await extractFrame(src, 1, out)
+    expect(await sizeOf(out)).toEqual([640, 360])
+    expect(await countTintedPixels(out, 0, 'null', 0), 'red pixels (outside the crop)').toBeGreaterThan(100_000)
+    expect(await countTintedPixels(out, 0, 'null', 2), 'blue pixels (outside the crop)').toBeGreaterThan(2000)
+    expect(await countTintedPixels(out, 0, 'null', 1), 'green pixels (the strip)').toBeGreaterThan(50_000)
+  }, 60_000)
+
+  it('a cropped clip\'s thumbnail is the crop: 200x360, the strip and its white square in, no red and no blue anywhere', async () => {
+    const out = path.join(workDir, 't130-t-thumb-cropped.jpg')
+    await extractFrame(src, 1, out, CROP)
+    expect(await sizeOf(out), 'exactly the cropped region, not the frame').toEqual([200, 360])
+    expect(await countTintedPixels(out, 0, 'null', 0), 'no red: everything outside the crop is gone').toBe(0)
+    expect(await countTintedPixels(out, 0, 'null', 2), 'no blue: the square outside the crop is gone').toBe(0)
+    const green = await countTintedPixels(out, 0, 'null', 1)
+    expect(green, `${green} of ${200 * 360} pixels are the strip's green`).toBeGreaterThan(200 * 360 * 0.9)
+    // The white square sits at (10, 20) of the crop, 40 px across: its middle is white, the strip's green is not.
+    const square = await regionLuma(out, 0, 'crop=20:20:20:30')
+    const strip = await regionLuma(out, 0, 'crop=20:20:140:250')
+    expect(square.min, `the white square is where the crop puts it (luma ${square.min}..${square.max})`).toBeGreaterThan(220)
+    expect(strip.max, `the strip beside it is not (luma ${strip.min}..${strip.max})`).toBeLessThan(200)
+  }, 60_000)
+
+  it('the three kit moments of a cropped clip are all the crop', async () => {
+    // The kit takes its thumbnails at 25 / 50 / 75 % of the clip, one extractFrame each, all with the clip's crop.
+    for (const [i, at] of [0.25, 0.5, 0.75].entries()) {
+      const out = path.join(workDir, `t130-t-thumb-kit-${i}.jpg`)
+      await extractFrame(src, at * 2, out, CROP)
+      expect(await sizeOf(out), `thumbnail ${i + 1}`).toEqual([200, 360])
+      expect(await countTintedPixels(out, 0, 'null', 0), `thumbnail ${i + 1}: no red`).toBe(0)
+    }
+  }, 120_000)
+
+  it('a crop with odd edges (the editor\'s fractions are never whole pixels) still writes a JPEG of even size inside the frame', async () => {
+    const out = path.join(workDir, 't130-t-thumb-odd.jpg')
+    await extractFrame(src, 1, out, { x: 0.3417, y: 0.0101, w: 0.3123, h: 0.9701 })
+    const [w, h] = await sizeOf(out)
+    expect([(w ?? 1) % 2, (h ?? 1) % 2], `${w}x${h}`).toEqual([0, 0])
+    expect(w, '0.3123 of 640 is 199.9: the even pixel below it').toBe(198)
+    expect(h, 'about 0.9701 of 360').toBeLessThanOrEqual(350)
+  }, 60_000)
+
+  it('an odd-sized source (1919x1079) with a crop writes a thumbnail of the crop', async () => {
+    const odd = path.join(workDir, 't130-t-thumb-odd-source.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i',
+      'color=c=red:s=1919x1079:r=5:d=1,drawbox=x=600:y=0:w=640:h=1079:color=green:t=fill',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv444p', odd
+    ])
+    const out = path.join(workDir, 't130-t-thumb-odd-source.jpg')
+    await extractFrame(odd, 0.5, out, { x: 610 / 1919, y: 0, w: 600 / 1919, h: 1 })
+    const [w, h] = await sizeOf(out)
+    expect([(w ?? 1) % 2, (h ?? 1) % 2], `${w}x${h}`).toEqual([0, 0])
+    expect(await countTintedPixels(out, 0, 'null', 0), 'no red: the crop is inside the green strip').toBe(0)
+  }, 60_000)
 })
 
 // ---------------------------------------------------------------------------
