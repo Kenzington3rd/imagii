@@ -5147,6 +5147,187 @@ IMG-PREC.
   handback; no docs/TICKETS.md, package.json or lockfile edits.
 - **Status:** done (round 84 — see the Done entry)
 
+## T-136 — sweep-22 fixes (round 85)
+
+- **Spec:** the twenty-second sweep's verified findings — each
+  confirmed by the expediter against source; the Importer, preview
+  copy and model-download items were EXECUTED in the built app by
+  the electron reviewer, and one reviewer theory (loudnorm on sub-3 s
+  silence) was refuted by expediter measurement on both majors.
+  Clean lens this sweep: privacy. 16 distinct findings, written as
+  15 items in two tracks with DISJOINT source files so they can be
+  worked in parallel; the theme is the edges of T-135 (1): long jobs
+  its module-store conversion did not reach, and state it introduced.
+  **Track A (job state, the Player, the shared Cancel):**
+  1. **[MED] A running Clip Kit can become uncancelable.** The run is
+     keyed by `clipId` (ClipKitButton.tsx:51-54), Cancel renders only
+     for the owning clip, and ClipList renders ONE kit button, for the
+     selected clip (ClipList.tsx:105-107) — so selecting another clip
+     hides the progress and Cancel behind a disabled button whose
+     title gives no reason, and removing the owning clip (✕ → confirm
+     → removeClip) or Closing the video leaves every kit button
+     disabled and NO Cancel anywhere until the kit ends minutes later
+     (only quit stops it). Before T-135 the single button instance
+     kept its Cancel across selection. The "one button per row"
+     premise at ClipKitButton.tsx:48 and STYLE_GUIDE:297 is false.
+     Fix direction: whenever `kitRun !== null`, the rendered kit
+     button shows the running kit's label AND its Cancel whichever
+     clip is selected, naming the clip it is for ("Clip Kit for
+     "<name>": Exporting 2 of 5…" — the name from the run, so it
+     survives the clip's removal and a Close); flip the e2e pin at
+     video-pipelines.spec.ts:2764-2769; correct USER_GUIDE:331-333,
+     STYLE_GUIDE:297 and the component comment. e2e: start a kit,
+     select another clip → Cancel reachable; remove the owning clip →
+     Cancel reachable and cancels; Close the video → same.
+  2. **[MED] A conversion can run twice, and its late landing
+     replaces the video being edited.** The Importer's
+     flv/ts/wmv/mpg conversion and Player's "Make a preview copy"
+     keep their busy state in the component (Importer.tsx:21-31;
+     Player.tsx:100-102), and main's `video:convertForImport`
+     (ipc/video.ts:191-195) has no single-flight — EXECUTED: a round
+     trip re-arms both, two libx264 converts run at once, and the
+     Importer's second landing reset 2 edited clips to 1 with no
+     confirm (loadSource is not undoable); the preview copy's
+     resume-position restore runs on the unmounted instance's refs,
+     so the picture restarts at 0:00. Fix direction (one guard in the
+     shared function): an `extractingFor`-shaped single-flight on
+     main's `video:convertForImport` (claimed before the first await,
+     released in finally, the refusal names the file being
+     converted) — this also covers ProjectIO's open-path convert;
+     `runs.ts` slots for the import and the preview copy so a
+     remounted Importer/Player shows the busy label and refuses a
+     second start; the Importer's landing asks whether a video
+     arrived while it converted (any source in the store that was not
+     there at the start) and, if so, does NOT replace it — a T-84
+     sentence instead ("Skipped <file> because you opened another
+     video while it was converting"); the preview copy's resume
+     position lives with its run, not in component refs. e2e: leave
+     mid-convert and return (busy shown, second start refused); open
+     an mp4 while a conversion runs (the mp4 is kept); preview copy
+     leave-and-return (button busy, one convert, position kept).
+  3. **[MED] Autosave never fires while anything plays.**
+     useAutosave subscribes `scheduleSave` to whole stores with no
+     selector (useAutosave.ts:181-183) and every call re-arms the 5 s
+     debounce; Player.tsx:399 writes `currentTime` on `timeupdate`
+     (~4 Hz) and WaveformView.tsx:88/92 during audio playback, so the
+     timer never elapses while playback runs — clips marked during a
+     long review are not autosaved until playback stops for 5 s,
+     against USER_GUIDE's and the crash screen's "every few seconds".
+     Fix direction: the subscription ignores playhead-only changes
+     (compare state vs prev and skip when only `currentTime` /
+     `transport` changed in video, `currentTime` in audio), AND a max
+     wait (a pending change is written no later than 30 s after it
+     was first scheduled) so no future high-frequency field can
+     starve it again. Unit (fake timers): an edit followed by 60 s of
+     250 ms playhead updates writes within ~5 s; churn on a
+     non-playhead field still writes by 30 s.
+  4. **[LOW] The caption-model download loses its bar and Cancel on a
+     round trip** (CaptionsPanel.tsx:71-72 `installing` /
+     `installProgress` are useState; EXECUTED: progressbar 1 → 0,
+     Cancel 1 → 0, Download re-enabled and refused by main; the
+     finishing closure refreshes status on the unmounted instance so
+     Transcribe reopens setup). IC:2628 is now false. Fix: a run slot
+     for the install holding its progress; status refreshed through
+     the store when it ends; correct IC:2628. e2e with `net.request`
+     stubbed (the electron reviewer's harness): leave mid-download,
+     return → bar + Cancel; Cancel works.
+  5. **[LOW] The preview-unavailable notice may not be announced:**
+     its `role="status"` mounts together with its content
+     (Player.tsx:416-433) — the pattern GifPanel.tsx:88-94 documents
+     as not reliably read. Fix: an always-mounted status wrapper per
+     GifPanel (empty while the picture draws); wiring pin.
+  6. **[LOW] The Output preview stays a silent black box** for a
+     picture the Player says it cannot draw (OutputPreview.tsx:40-59,
+     111-114: black fill under "Live snapshot at the playhead
+     position…"). Fix: share the no-picture fact through the video
+     store and say so in the card until a preview copy exists.
+  7. **[LOW] The running-job Cancel is hand-copied 8 times and two
+     Cancels are off-pattern** (STYLE_GUIDE:731 "If you write the same
+     markup a third time, extract it"): the audio export's Cancel
+     (ExportDialog.tsx:194-201: not btn-ghost, no danger ink, no
+     title) and the Clip Kit's; the progress track is copied 7 times.
+     Fix: one shared running-job Cancel (and progress track) used at
+     every site, documented in STYLE_GUIDE; a scan test that fails on
+     hand-written running-job Cancel markup outside it.
+  8. **[LOW, copy] "Cancel PiP composite"** (PipPanel.tsx:192) is the
+     only user-facing "PiP"; the heading and toast say
+     "Picture-in-picture". Fix: "Cancel picture-in-picture composite"
+     (lands with item 7).
+  **Track B (small self-contained surfaces):**
+  9. **[LOW] The chat spike panel:** (a) T-135 (3)'s merge made row
+     length unbounded while the row shows only the start
+     (ChatHighlightPanel.tsx:131-133) and rows rank by SUMMED count,
+     so a long, moderately busy raid outranks a short explosion and
+     "+ Clip" can add a ~5 min clip unannounced — show start → end
+     (as Smart highlight rows do) and rank by the densest bucket's
+     count; (b) "Extra seconds around each clip" accepts negatives
+     (`Number(v) || 0`, advisory min) → zero/reversed windows whose
+     "+ Clip" refusal blames the log (executed: pad −5 → [105,105]) —
+     clamp 0..60 through DraftField like the bucket box (and clamp in
+     findChatPeaks); (c) an empty result is a 4 s toast and the panel
+     then looks unanalyzed (`[]` renders nothing) — keep an inline
+     line naming the rule ("No chat spikes in N messages: a spike
+     needs at least 5 messages in one window and twice the usual
+     rate"), and name the rule in USER_GUIDE:345-354; (d) the two
+     number boxes sit 16 px apart where the long label wraps
+     (measured at 1024/1632/1920) — align the controls (justify-end
+     or mt-auto). Unit: ranking + pad clamp; e2e: range text, empty
+     line, alignment in the existing layout case.
+  10. **[LOW] The pick-time no-sound refusal says "Remove it"** when
+     nothing was added (SecondaryTrackPanel.tsx:64-71 reuses the
+     export sentence; the e2e pins Remove count 0 right after it).
+     Fix: a pick-time sentence of its own ("That file has no sound in
+     it. Pick another file."); keep the export one; update
+     USER_GUIDE:457-459 and the unit/e2e/L5 pins.
+  11. **[LOW] "Last autosave: N ago" stays up right after "Autosave
+     cleared"** (AutosaveRestore.tsx:92-103,145-151: the dismissed
+     branch draws from mount-time `info`). Fix: a successful Clear
+     sets `info` to not-exists; e2e asserts absence right after
+     Clear (not only after a revisit).
+  12. **[LOW] Two mood-board writes have no catch:** Clear thumbnail
+     cache (MoodBoardPanel.tsx:208-213) and the tile ✕
+     (removeFromCollection, :285) — T-135 (8) sibling sites. Fix:
+     reportFailure on both; failurePathLanguage rows.
+  13. **[LOW] The extraction's stderr accumulator is uncapped**
+     (extract.ts:128) against LESSONS_LEARNED's every-spawn rule
+     (peaks.ts:146, export.ts:170 cap at 16 KB); T-129 made
+     multi-hour extractions reachable. Fix: the 16 KB tail idiom, and
+     a source scan test that every `stderr` accumulator in src/main
+     is capped (kills the class).
+  14. **[LOW] The importer's keyword classifier rewrites a finished
+     sentence from main** when the quoted file name contains a
+     keyword (importDiagnostics.ts:133 matches 'codec'/'decoder'
+     anywhere; EXECUTED: "Still extracting the sound from
+     "codec_test.mp4"…" became the unreadable-format sentence). Fix:
+     match keywords against the message with quoted spans removed;
+     unit with the codec_test.mp4 case and a clean-name control.
+  15. **[LOW] A compilation whose FIRST segment is lost at the join
+     gets a misdirecting sentence** (EXECUTED on both majors):
+     concat.ts:386 guards `code === 0 && lostAPart`, but the concat
+     demuxer exits 254 when it cannot open its FIRST input, so the
+     raw "concat exit 254" reaches userFacingError — "A file imagii
+     needs isn't there" (reads as the person's source) or, for a
+     Windows lock's unmapped "Permission denied", the generic
+     video-tool sentence; a lost later segment gets the clip-naming
+     `lostPartMessage`. Fix: key the guard on `lostAPart` alone (any
+     exit), so every lost part names its clip; runner case + a
+     Layer 5 case for segment 0 on BOTH majors (IMG-PREC).
+  **Docs (ride with Track B):** DESIGN_GUIDE "Modals" list (ClipKit
+  ×2, the Captions confirm and the Export cancel confirm use Modal);
+  STYLE_GUIDE NameDialog entry gains `maxLength`; ProjectIO.ts:435-436
+  comment ("can run beside") is false since T-135's single-flight.
+  (Track A owns ClipKit/USER_GUIDE:331-333/STYLE_GUIDE:297.)
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; every behavior item lands
+  with its e2e (items 1, 2, 3 (unit with fake timers), 4, 9, 11) or
+  unit/wiring pin; items 13 and 15 touch main-process runners and
+  item 15 takes both-majors Layer 5 (IMG-PREC); new cases go in NEW describe blocks appended at
+  the end of shared spec/test files (the two tracks land serially);
+  `npm run verify`, `npm run test:media` and the FULL Playwright
+  suite green before handback; no docs/TICKETS.md, package.json or
+  lockfile edits.
+- **Status:** open (round 85, two tracks)
+
 ---
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
@@ -5213,7 +5394,9 @@ IMG-PREC.
   in-flight job state is panel-local React state in six panels —
   leaving a studio orphans a running job's Cancel/progress (the
   batch now refuses a duplicate and the SRT got a source guard, but
-  store-held job state is the architectural fix) — and (sweep 13)
+  store-held job state is the architectural fix; ADDRESSED by
+  T-135 (1)'s module stores and T-136 (1), (2), (4) for the sites
+  it did not reach) — and (sweep 13)
   DERIVED RESULTS are the same family: highlight scan candidates,
   chat spikes and the transcript preview live in panel state, so
   a multi-minute VOD scan is re-run after any trip to Home; (k) retry after a
@@ -5592,6 +5775,17 @@ IMG-PREC.
   if the bundled binary ever moves majors; candidate: a Layer 5
   pin on the range end per major, or `-t` arithmetic instead of
   `-to`.
+  From sweep 22's privacy review (expediter-measured with real
+  Electron 31.7.7 on loopback): (bi) every main-process `net.fetch`
+  (the mood-board thumbnail copy) and every renderer `<img>` load
+  (search-result and mood-board thumbnails) sends Electron's default
+  User-Agent, "… imagii/<version> Chrome/… Electron/…", so the image
+  hosts learn the app and its version; the DuckDuckGo calls set
+  their own generic UA. No guide promises UA anonymity (the
+  thumbnails promise https + no referrer, both hold), so not
+  gate-holding; candidate: `app.userAgentFallback` (or the
+  session's) set to a generic Chromium UA at startup, pinned by the
+  loopback probe.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
