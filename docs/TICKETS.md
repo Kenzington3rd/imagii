@@ -4669,6 +4669,124 @@ IMG-PREC.
 
 ---
 
+## T-132 — sweep-18 fixes (round 81)
+
+- **Spec:** the eighteenth review sweep's verified findings — every
+  item below was confirmed by the expediter against source, and the
+  measured ones replicated on the real binaries. 14 items.
+  1. **[MED] Clean audio's completion navigates wherever the person
+     is.** `VideoStudio.tsx` `cleanAudioFlow`: after the extraction
+     (now minutes long with the ceiling retired), `navigate('/audio')`
+     fires unconditionally — react-router's `activeRef` never resets,
+     so it works from the unmounted component; landing on `/record`
+     unmounts RecordStudio, whose cleanup stops the tracks and cuts a
+     LIVE TAKE short (the save dialog then opens over Audio Studio).
+     Fix: capture the router location and navigate only if the person
+     is still on `/video`; otherwise load silently and toast with an
+     "Open Audio Studio" action (the action-toast pattern exists).
+     e2e: extraction ends while on `/record` mid-take → no navigation
+     and the take continues; the stay-on-`/video` path still
+     navigates. ProjectIO.ts's "nothing teleports the user" rule is
+     the product sentence this enforces.
+  2. **[MED] PRODUCT_GUIDE.md:35 still states the retired 2-hour
+     ceiling.** A checkpoint-3 merge resolution took T-130's side of
+     the studio table (built pre-T-129) and reverted T-129's fix —
+     the only reverted line of the wave (verified by two reviewers'
+     line-level diffs of every checkpoint pair). Restore the T-129
+     sentence ("Opens sound of any length (the waveform is computed
+     in the main process from a stream of the sound)"), correct
+     INTERACTION_COVERAGE:3416's claim, and extend the
+     `docClaims.test.ts` no-2-hour-limit scan to README.md,
+     docs/PRODUCT_GUIDE.md and docs/USER_GUIDE.md so a merge cannot
+     revert it silently again.
+  3. **[MED] The "Clear saved transcripts" button wraps its label**
+     onto two lines at every window up to 1920 px (measured in the
+     built app; the only single-label button that wraps; the
+     DESIGN_GUIDE wrap rule). Fix: `flex-wrap` on the row,
+     `whitespace-nowrap` on the button, and the layout e2e case at
+     DEFAULT_WINDOW and MIN_WINDOW per the T-123 pattern.
+  4. **[LOW] Export, Reframe and extractFrame say "Saved" for empty
+     or audio-only output.** Their closers check only `code === 0`.
+     Two executed triggers (both majors): a restored project whose
+     source file got shorter (OBS reusing a filename) exports a
+     261-byte streamless stub as success; a source whose sound
+     outlasts its picture exports a clip past the last frame as an
+     audio-only mp4, and `extractFrame` resolves with NO file (Clip
+     Kit then toasts "Saved your Clip Kit" over stubs and missing
+     thumbnails). Compile (T-131 (1)) and GIF already fail loudly.
+     Fix: reuse the `FFMPEG_EMPTY_OUTPUT` sticky-stderr guard in
+     export.ts and reframe.ts, stat-after-exit-0 in frame.ts, each
+     rejecting with a finished user sentence through the existing
+     discard path. Layer 5 on both majors with the two triggers,
+     plus discrimination (a legitimate 10-20 ms segment stays
+     green).
+  5. **[LOW] The waveform's bottom half clips on asymmetric audio.**
+     `WaveformView` passes `normalize: true` and wavesurfer 7.12.6's
+     `calculateVerticalScale` computes its max from channel 0 (the
+     highs) alone, so louder lows draw past the canvas edge and the
+     whole bottom half is mis-scaled. Fix: pass
+     `maxPeak = max(|high|, |low|)` to `WaveSurfer.create` (typed
+     and honored); a unit or Layer 5 case with an asymmetric burst.
+  6. **[LOW] A held Enter walks the whole tour.** `tutorialKeyIntent`
+     answers 'none' for Enter on a button (no preventDefault), focus
+     is forced onto Next each step, and `stepOnce` passes detail-0
+     clicks, so auto-repeat walks to Done and persists "seen" — the
+     exact mechanism FixWizard's `ignoreHeldEnter` guards (T-120,
+     red-first in the repo). Fix: an `e.repeat` Enter guard in the
+     tour's keydown (or share `ignoreHeldEnter` on the card); an e2e
+     that holds Enter and expects one step.
+  7. **[LOW] A custom preset based on "YouTube 1080p60" starts at
+     30 fps / 8M**, while INTERACTION_COVERAGE:3431 says it starts
+     at 60. Tiebreaker: fix the code — `loadFromBase` also sets fps
+     and bitrate from the base row (give the renderer table the
+     fields it needs); unit case; keep the ledger sentence true.
+  8. **[LOW] Copy made stale by the 12M row:** USER_GUIDE:146 and
+     the RecordStudio comment say recordings use "up to 8 Mbps (the
+     top export preset's rate)" — the top is now 12M (reword: the
+     recording ceiling is its own 8 Mbps, no longer tied to "the top
+     preset"); ExportPanel's three "five platforms" comments now
+     count six.
+  9. **[LOW] Play looks live while the waveform draws.** The Play
+     button is `disabled={!ready}` with no `disabled:opacity-50`,
+     and T-129 makes that state last seconds to tens of seconds.
+     Add the class.
+  10. **[LOW] PLAYBACK_ERROR_MESSAGE gives circular advice.** For an
+     ADPCM .wav it says "Re-export it as WAV or MP3" — it already is
+     a WAV — and never says the waveform, cuts and export still
+     work. Reword (say what still works; tell WAV owners "a standard
+     PCM WAV"); move the unit and e2e pins with the sentence.
+  11. **[LOW] "Loaded" and the Recent entry land before the deferred
+     waveform read can refuse the file** (T-129 made the read
+     asynchronous after open). A refused file flashes a green
+     "Loaded" and stays in Recent. Fix: push to Recent and toast
+     Loaded when the waveform arrives (Home's "Project loaded" has
+     the same shape); e2e: the refusing fixture gets no green toast
+     and never lands in Recent.
+  12. **[LOW] The compilation refusals under-name.** The
+     empty-segment sentence says "Clip ${i+1}" by position — default
+     names are creation-numbered, so position lies; `seg.name` is on
+     the wire, use it. The lost-part join sentence names no clip and
+     no next step; add what to do.
+  13. **[LOW] A refused settings write stacks identical toasts.**
+     `reportFailure` passes no toast id, and Export fires up to four
+     `persistSetting` calls (verified stacking in react-hot-toast
+     2.6.0). Give the persistSetting failure a fixed toast id so
+     repeats coalesce.
+  14. **[LOW] A partial transcript clear gets a green tick.**
+     `clearedTranscriptsMessage` documents a plain toast for a
+     partial clear; the panel calls `toast.success`. Use the
+     warning-icon toast pattern (Home.tsx) when `failed > 0`; flip
+     the pin.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores recorded in a ledger; item 4 is an ffmpeg
+  change and takes both-majors Layer 5 (IMG-PREC); items 1, 3, 6 and
+  11 land with their e2e cases; `npm run verify`, `npm run
+  test:media` and the FULL Playwright suite green before handback;
+  no docs/TICKETS.md, package.json or lockfile edits.
+- **Status:** open (round 81)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -5069,9 +5187,12 @@ IMG-PREC.
   extraction past about 6.2 hours writes a WAV beyond the
   header's 4 GB size field — the retired 2-hour ceiling used to
   hide the path entirely; the source file is never at risk, the
-  failure is a bad scratch WAV. Candidate: `-rf64 auto` on the
-  extraction's output with its own both-majors Layer 5 case, and
-  a check that whisper-cli reads RF64 before it ships; (bb)
+  failure is a bad scratch WAV. The sweep-18 audio reviewer
+  widened it: `runAudioExport`'s WAV output hits the same field
+  for a directly imported file of that length, so the fix covers
+  both writers. Candidate: `-rf64 auto` on the WAV outputs with
+  their own both-majors Layer 5 cases, and a check that
+  whisper-cli reads RF64 before it ships; (bb)
   Clean audio's extraction has no user-facing Cancel (the quit
   sweep covers it since T-128 (5); a button does not exist) —
   carried from T-129's found-not-fixed list.
