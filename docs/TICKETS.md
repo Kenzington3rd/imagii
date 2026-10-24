@@ -4787,6 +4787,106 @@ IMG-PREC.
 
 ---
 
+## T-133 — sweep-19 fixes (round 82)
+
+- **Spec:** the nineteenth review sweep's verified findings — each
+  confirmed by the expediter against source; the measured ones were
+  executed by the reviewers (real binaries, a real Electron render)
+  and spot-replicated. 11 items.
+  1. **[MED] The "Open Audio Studio" toast action navigates off a
+     live take with no confirm** — the T-132 (1) failure, reachable
+     through the fix's own 8 s toast sitting over the REC screen;
+     one click unmounts RecordStudio and cuts the take. Same
+     family, older and lower odds: the saved-toast "Edit in Video
+     Studio" action. Fix: a shared "a take is live" check — the
+     toast action (and editInVideoStudio) asks the same confirm the
+     Home link asks, or the button is omitted while
+     `currentRoute() === '/record'` with a live take. e2e: click
+     the action mid-take → the confirm appears (or no button) and
+     the take continues.
+  2. **[MED] Toast text escapes its card on a long unbroken file
+     name.** react-hot-toast styles the message `pre-line` at
+     350 px with no overflow-wrap, so an underscores-only name runs
+     up to 81 px outside the card (measured in a real render; six
+     older `Saved ${basename}` sites plus T-132's "Extracted the
+     sound from" toast). Fix: `overflowWrap: 'anywhere'` in
+     TOAST_STYLE (the reviewer's harness verified it); pin it in
+     the toaster unit test.
+  3. **[LOW] clipNameForSentence truncates by UTF-16 unit** and can
+     keep a lone high surrogate before the ellipsis (executed: a
+     broken glyph in the refusal). Fix: code-point truncation
+     (`Array.from(flat).slice(0, 49)`), plus an astral-name unit
+     case in noPicture.test.ts.
+  4. **[LOW] The ranged caption burn-in is the one ranged video
+     writer without the no-picture guard** (executed, both majors:
+     a range past the picture exits 0, prints nothing to stderr,
+     frame=0, audio-only output — then "Captions burned in"). Fix:
+     feed runBurnIn's existing -progress stdout to PictureFrames
+     and its stderr to FFMPEG_EMPTY_OUTPUT; on exit 0 +
+     wroteNoPicture reject with a finished sentence (the discard
+     path removes the stub). Both-majors Layer 5. Soften the
+     "every runner that writes a video" claim in noPicture.ts:12
+     and STYLE_GUIDE:835 — or make it true, which this does.
+  5. **[LOW] wroteOutput's 2 s mtime slack now refuses GOOD
+     thumbnails** on a share whose clock runs >2 s behind, aborting
+     the kit with a false "no picture" — T-110 (p)'s documented
+     cost ("a leftover file, never a lost one") no longer holds on
+     the success path. Fix: extractFrame writes into a fresh
+     makeKitDir folder, so require only `isFile() && size > 0`
+     there (no mtime test; a pre-existing file is impossible by
+     construction — assert the target absent before the spawn).
+     Update (p)'s wording and the partialOutput comment.
+  6. **[LOW] Clean audio silently replaces work tuned DURING the
+     extraction.** The replace-ask runs once before the minutes-
+     long wait; replacedSince is identity-only; loadSource resets
+     the chain and history with no Undo — against USER_GUIDE's
+     "asks first". Fix: after the wait, when confirmAudioClose
+     would now ask (the held source is unchanged but its chain has
+     edits), ask again; a decline takes the existing "Skipped…"
+     toast path. e2e: tune during a held extraction → the question
+     appears; decline keeps the tuning.
+  7. **[LOW] The repeat family's boundary.** (a) A held Enter on
+     Done or Skip closes the tour and the surviving auto-repeats
+     click the refocused "?" and REOPEN it; FixWizard's Apply →
+     "Help me fix this" has the same exposure. Fix:
+     swallowRepeatClicks also installs a capture-phase keydown that
+     cancels `e.repeat` Enter and Space for REPEAT_SWALLOW_MS (one
+     shared guard covers the tour, the wizard and every Modal);
+     red-first with a hold-at-Done e2e. (b) Pre-existing: Space
+     (Player and Timeline) and the `?` overlay toggle on EVERY
+     auto-repeat (~30 Hz stutter; AbortError spam). Fix:
+     `if (e.repeat) return` on the toggle cases only — the nudge
+     and frame-step keys keep repeating by design.
+  8. **[LOW] Reference search's Enter bypasses the loading guard**
+     (the button is disabled={loading}; submit() checks only the
+     query): duplicate requests, and a stale response can overwrite
+     newer results. Fix: `if (loading) return` in submit(); unit or
+     e2e pin.
+  9. **[LOW] Five disabled buttons have no disabled look**
+     (AutosaveRestore ×3, Importer, AudioImporter — Importer's
+     label does not even change), while interactionWiring:1817,
+     audio.spec:1762 and IC:3521 claim "every other disabled
+     button" is dimmed. Fix: add `disabled:opacity-50` to the five
+     and make the claims true.
+  10. **[LOW] WAVEFORM_READ_FAILED still gives the circular
+     "Re-export it as WAV" advice** T-132 (10) removed from the
+     playback sentence; its documented trigger IS a WAV. Fix: name
+     "a standard PCM WAV or MP3"; move the pins.
+  11. **[LOW] Doc corrections:** USER_GUIDE:399's waveform timing
+     ("a few seconds" → up to a few tens of seconds, per the T-129
+     measurement); STYLE_GUIDE:89's reportFailure signature gains
+     the `id?` option; the burn-in guard's IC/TESTING rows land
+     with item 4.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; item 4 is an ffmpeg change
+  and takes both-majors Layer 5 (IMG-PREC); items 1, 6 and 7 land
+  with their e2e cases; `npm run verify`, `npm run test:media` and
+  the FULL Playwright suite green before handback; no
+  docs/TICKETS.md, package.json or lockfile edits.
+- **Status:** open (round 82)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
