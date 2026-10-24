@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { countOf } from '@shared/plural'
+import { MAX_BOARD_NAME } from '@shared/search'
 import { useReferencesStore } from './state/referencesStore'
 import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvasStore'
+import { currentRoute } from '../project/ProjectIO'
 import { NameDialog } from '../../components/NameDialog'
+import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
@@ -40,7 +43,10 @@ export function MoodBoardPanel(): JSX.Element {
       // T-125 (19): "it won't be in your export" is the fact the person needs before they build on it, and the studio changes
       // under the toast as it appears (`navigate`), so it is held as long as an action toast.
       toast.success("Added to canvas as a reference — it won't be in your export", { duration: ACTION_TOAST_MS })
-      navigate('/image')
+      // T-135 (13): the picture's load above is a wait (a network fetch when the tile fell back to the URL it came from), and `navigate` still works
+      // from a screen that was left. The person is taken to the canvas only if they are still on References; the layer is added and the toast says so
+      // either way (the T-134 (1) rule, which this site's "the person is on References" premise had been blessed under).
+      if (currentRoute() === '/references') navigate('/image')
     } catch (err) {
       reportFailure(err, { failed: "Couldn't add that image to the canvas." })
     }
@@ -68,19 +74,40 @@ export function MoodBoardPanel(): JSX.Element {
   // question, asked with the app's own dialog.
   const [renaming, setRenaming] = useState(false)
 
+  // T-135 (8): the board writes are IPC calls main can refuse (a name past the cap, a full disk, a locked folder), and none of the three had a catch: the
+  // press looked as if it had worked. Each reports in a sentence (`reportFailure`) and leaves what the person typed where it was.
+  const renamingRef = useRef(false)
+
   async function onCreate(): Promise<void> {
     const name = newName.trim()
     if (!name) return
-    await createCollection(name)
+    try {
+      await createCollection(name)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't create that board." })
+      return
+    }
     setNewName('')
   }
 
   async function onRename(next: string): Promise<void> {
-    setRenaming(false)
-    if (!collection) return
-    // Through the store, which is what makes a rename undoable like every
-    // other board edit (T-58's history subscribes here, not to the IPC).
-    await renameCollection(collection.id, next)
+    // The dialog stays up until the rename has landed (a refusal keeps the name that was typed for the retry), so a second press while it is out
+    // is the same rename: claimed first, given back in a finally.
+    await claimFirst(renamingRef, async () => {
+      if (!collection) {
+        setRenaming(false)
+        return
+      }
+      try {
+        // Through the store, which is what makes a rename undoable like every
+        // other board edit (T-58's history subscribes here, not to the IPC).
+        await renameCollection(collection.id, next)
+      } catch (err) {
+        reportFailure(err, { failed: "Couldn't rename that board." })
+        return
+      }
+      setRenaming(false)
+    })
   }
 
   async function onDelete(): Promise<void> {
@@ -89,7 +116,12 @@ export function MoodBoardPanel(): JSX.Element {
       `Delete "${collection.name}" and all ${countOf(collection.items.length, 'item')}?`
     )
     if (!ok) return
-    await deleteCollection(collection.id)
+    try {
+      await deleteCollection(collection.id)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't delete that board." })
+      return
+    }
     // T-66: reversible since T-58, and the toast is the only place the user is
     // looking when it happens. The header's Undo button says the same thing,
     // but a board that just vanished is exactly when nobody is reading a
@@ -105,6 +137,7 @@ export function MoodBoardPanel(): JSX.Element {
       label="Board name"
       initialValue={collection?.name ?? ''}
       confirmLabel="Rename"
+      maxLength={MAX_BOARD_NAME}
       onCancel={() => setRenaming(false)}
       onConfirm={(next) => void onRename(next)}
     />
@@ -118,6 +151,7 @@ export function MoodBoardPanel(): JSX.Element {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && onCreate()}
             placeholder="New board name…"
+            maxLength={MAX_BOARD_NAME}
             className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-sm"
           />
           <button

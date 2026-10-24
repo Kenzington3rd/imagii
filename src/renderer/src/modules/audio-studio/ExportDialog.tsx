@@ -1,28 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
-import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
+import type { AudioOutputFormat } from '@shared/audio'
 import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
 import { useAudioStore } from './state/audioStore'
+import { useAudioExport } from './state/audioExport'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
-
-interface JobState {
-  jobId: string
-  pass: 'measure' | 'render' | 'mux'
-  /** The passes this export will make, so the row can say "Step 2 of 2" (T-100). */
-  plan: Array<'measure' | 'render' | 'mux'>
-  percent: number
-  outputPath?: string
-  /** Why the export did not finish — the sentence the toast showed. Set on a
-   *  failure AND a cancel; `canceled` says which and picks the word on the row,
-   *  as the video queue's rows do (T-84, T-100). */
-  error?: string
-  canceled?: boolean
-}
 
 const FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'flac', 'aac']
 
@@ -32,8 +19,12 @@ export function ExportDialog(): JSX.Element | null {
   const [format, setFormat] = useState<AudioOutputFormat>('mp3')
   const [bitrate, setBitrate] = useState('192k')
   const [muxBack, setMuxBack] = useState(true)
-  const [job, setJob] = useState<JobState | null>(null)
-  const [running, setRunning] = useState(false)
+  // T-135 (1): the export's row and running flag are a module store, not this dialog's state - leaving Audio Studio unmounts the dialog, and it came
+  // back idle (Export enabled, no Cancel) over an export main was still rendering. The row is drawn for the file it was made from (or while it runs).
+  const exportJob = useAudioExport((s) => s.job)
+  const running = useAudioExport((s) => s.running)
+  const exportSource = useAudioExport((s) => s.sourcePath)
+  const job = exportJob !== null && (running || exportSource === source?.filePath) ? exportJob : null
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
   // in that gap: two save dialogs, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -42,13 +33,6 @@ export function ExportDialog(): JSX.Element | null {
   // T-124 (20): the re-attached video is a finished file Video Studio can open - the same next step Record's take and Reframe's
   // 9:16 file offer, through the same ask-before-replace bridge.
   const editInVideoStudio = useEditInVideoStudio("Couldn't open the cleaned video in Video Studio.")
-
-  useEffect(() => {
-    const off = window.api.audio.onProgress((p: AudioJobProgress) => {
-      setJob((prev) => (prev && prev.jobId === p.jobId ? { ...prev, ...p } : prev))
-    })
-    return off
-  }, [])
 
   if (!source) return null
 
@@ -83,8 +67,9 @@ export function ExportDialog(): JSX.Element | null {
         loudnorm: chain.loudnorm,
         reattach: Boolean(source.fromVideo && muxBack)
       })
-      setJob({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 })
-      setRunning(true)
+      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, source.filePath)) return
+      // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).
+      const offProgress = window.api.audio.onProgress((p) => useAudioExport.getState().progress(p))
       try {
         if (source.fromVideo && muxBack) {
           await window.api.audio.mux({
@@ -112,7 +97,7 @@ export function ExportDialog(): JSX.Element | null {
           })
           toast.success('Cleaned audio exported')
         }
-        setJob((prev) => (prev ? { ...prev, percent: 100, outputPath } : prev))
+        useAudioExport.getState().done(outputPath)
       } catch (err) {
         // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
         // call — carrying the sentinel, so the neutral line is raised from ONE
@@ -122,9 +107,10 @@ export function ExportDialog(): JSX.Element | null {
           canceled: 'Audio export canceled.'
         })
         // T-100: the toast fades in a few seconds; the row says what became of it.
-        setJob((prev) => (prev ? { ...prev, error: message, canceled: cancelled } : prev))
+        useAudioExport.getState().fail({ error: message, canceled: cancelled })
       } finally {
-        setRunning(false)
+        offProgress()
+        useAudioExport.getState().finish()
       }
     } finally {
       startingRef.current = false

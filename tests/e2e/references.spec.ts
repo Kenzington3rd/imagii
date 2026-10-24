@@ -4,6 +4,7 @@ import {
   _electron as electron,
   type Dialog,
   type ElectronApplication,
+  type Locator,
   type Page
 } from '@playwright/test'
 import {
@@ -1536,6 +1537,348 @@ test.describe('imagii References studio', () => {
       // Once nothing is out, the next Enter is a search like any other.
       await input.press('Enter')
       await expect.poll(calls, { timeout: 10_000 }).toHaveLength(3)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (5): T-134 (3) made a corrected query go out, but only on Enter: the Search button was `disabled={loading}`, so a pointer or voice-control
+  // user could not send the correction. It is off now only for the question that is already out (typed text equals the in-flight query), and a
+  // click on it sends the correction exactly as Enter does. And the input was the panel's own state while the grid is the store's: a trip to Mood
+  // Boards and back drew the grid over a blank box (the state STYLE_GUIDE calls a defect). The input is seeded from the store's query on mount.
+  // Same stand-in handler as the case above: the first request is held, every other one answers at once, one-pixel data: images named for the query.
+  test('Reference Search: a corrected query is sent BY CLICK while the typo is out, and the box names the grid after a trip to another tab (T-135 (5))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-search-click')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        const g = globalThis as unknown as { __searchCalls: string[]; __releaseSearch: () => void }
+        g.__searchCalls = []
+        const gate = new Promise<void>((resolve) => {
+          g.__releaseSearch = resolve
+        })
+        const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async (_e, query: unknown) => {
+          g.__searchCalls.push(String(query))
+          if (g.__searchCalls.length === 1) await gate
+          return {
+            query: String(query),
+            provider: 'duckduckgo',
+            results: [{ id: 'r1', thumbnail: PIXEL, fullUrl: PIXEL, source: 'local', title: `answer to ${String(query)}` }]
+          }
+        })
+      })
+      const calls = (): Promise<string[]> => app.evaluate(() => (globalThis as unknown as { __searchCalls: string[] }).__searchCalls)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const searchButton = window.locator('.card', { has: input }).getByRole('button')
+      const referenceTab = window.getByRole('button', { name: 'Reference Search', exact: true })
+
+      // The typo goes out by CLICK and is held: the button says so and is off - for this question.
+      await input.fill('minimalist mountian photography')
+      await searchButton.click()
+      await expect(searchButton).toHaveText('Searching…')
+      await expect(searchButton).toBeDisabled()
+      await searchButton.click({ force: true }) // a second press of the same question is not sent
+      await window.waitForTimeout(300)
+      expect(await calls(), 'one request for the typo').toEqual(['minimalist mountian photography'])
+
+      // A trip to Mood Boards and back while the typo is out: the box still says what was asked, and the button still says it is out.
+      await moodBoardTab(window).click()
+      await expect(input).toHaveCount(0)
+      await referenceTab.click()
+      await expect(input, 'the box names the question that is out').toHaveValue('minimalist mountian photography')
+      await expect(searchButton).toHaveText('Searching…')
+      await expect(searchButton).toBeDisabled()
+
+      // The correction: the button is a button again the moment the text differs, and a click sends it.
+      await input.fill('minimalist mountain photography')
+      await expect(searchButton).toBeEnabled()
+      await expect(searchButton).toHaveText('Search')
+      await searchButton.click()
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountian photography', 'minimalist mountain photography'])
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible({ timeout: 10_000 })
+
+      // The typo's late answer is dropped, as it is for Enter.
+      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
+      await window.waitForTimeout(500)
+      await expect(window.locator('img[alt="answer to minimalist mountian photography"]')).toHaveCount(0)
+      await expect(searchButton).toHaveText('Search')
+
+      // Away and back with the grid on screen: the box names it (it was blank over the grid).
+      await input.fill('something half typed')
+      await moodBoardTab(window).click()
+      await referenceTab.click()
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]'), 'the grid is the store\'s and is still there').toBeVisible()
+      await expect(input, 'and the box says which search it is').toHaveValue('minimalist mountain photography')
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (13): "→ Canvas" awaits the picture's load before it adds the layer, and the load can be a NETWORK fetch (a tile whose cached thumbnail is gone
+  // falls back to the URL it came from). `navigate('/image')` ran after that wait wherever the person was: the T-134 (1) class at one more site, blessed
+  // by the same click-time premise ("the person is on References, pressing a button on the screen"). The layer is added and the toast reports it
+  // either way; the person is taken to the canvas only if they are still on References when the picture arrives. The renderer's content policy allows
+  // images from https only, so a held network fetch cannot be served from here; the test holds the bridge's own `new Image()` instead (the page's
+  // `HTMLImageElement.src` setter parks the assignment for a file named "slow" until the test releases it), which is exactly the wait the premise
+  // missed: the load is started by the press and ends whenever the test says.
+  test('→ Canvas that finishes after the person went to another screen adds the layer and leaves them where they are; one they waited for still opens the canvas (T-135 (13))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-tocanvas-away')
+    const thumbPath = path.join(fx.thumbsDir, 'slow-thumb.png')
+    writeFileSync(thumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, 'slowboard.json'),
+      JSON.stringify({
+        id: 'slowboard',
+        name: 'Slow board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'slowitem',
+            collectionId: 'slowboard',
+            thumbnail: 'https://example.invalid/slow-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Slow reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      const ADDED = "Added to canvas as a reference \u2014 it won't be in your export"
+      // Park every `img.src = <a slow-thumb file>` until released (the load starts when the assignment lands).
+      await window.evaluate(() => {
+        const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+        w.__parked = []
+        w.__holdSlow = true
+        const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+        if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+        const { get, set } = desc
+        Object.defineProperty(HTMLImageElement.prototype, 'src', {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return get.call(this)
+          },
+          set(value: string) {
+            if (w.__holdSlow && String(value).includes('slow-thumb')) w.__parked.push(() => set.call(this, value))
+            else set.call(this, value)
+          }
+        })
+      })
+      const parked = (): Promise<number> => window.evaluate(() => (window as unknown as { __parked: unknown[] }).__parked.length)
+      const release = (): Promise<void> =>
+        window.evaluate(() => {
+          const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+          w.__holdSlow = false
+          for (const go of w.__parked.splice(0)) go()
+        })
+
+      // ── away: press → Canvas, go Home while the picture is loading, then let it arrive ──
+      await toCanvas.focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/home')
+      await release()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain(ADDED)
+      await window.waitForTimeout(700)
+      expect(window.url(), 'the person was not taken to Stream Graphics from the screen they went to').toContain('#/home')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toHaveCount(0)
+      // The add itself happened: the canvas holds the reference layer.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+
+      // ── control: a person who waits on References gets the canvas, as before ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible({ timeout: 15_000 })
+      await moodBoardTab(window).click()
+      await window.evaluate(() => {
+        ;(window as unknown as { __holdSlow: boolean }).__holdSlow = true
+      })
+      await toCanvas.focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await expect(window.locator('h1', { hasText: 'References' }), 'still here while the picture loads').toBeVisible()
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/image')
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (8): a board's name is capped at 200 in main (it THROWS past that), and neither name box had a cap; create / rename / delete had no catch, and the
+  // first-save flow closed its dialog BEFORE the create landed, so a refused first save dropped the picture being saved without a word. The boxes take
+  // at most 200 characters now; a write main still refuses (the test puts a 201-character name past the cap with `fill`, which a person cannot do by typing
+  // or pasting) is reported in a sentence, and the dialog keeps what the person typed and the picture they were saving until the write has landed.
+  const LONG_BOARD_NAME = 'B'.repeat(201)
+  // `fill` goes through the browser's text insertion, which honors `maxlength`; assigning `.value` (as a script, a drop or an autofill does) does not.
+  // The box's cap stops a person typing or pasting past it; this is the name that gets past it anyway.
+  const setValuePastCap = (field: Locator, value: string): Promise<void> =>
+    field.evaluate((el, v) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      if (!set) throw new Error('no value setter')
+      set.call(el, v)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }, value)
+
+  test('the board-name boxes take at most 200 characters (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-name-cap')
+    writeFileSync(
+      path.join(fx.boardsDir, 'capboard.json'),
+      JSON.stringify({ id: 'capboard', name: 'Cap board', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const create = window.getByPlaceholder('New board name…')
+      await expect(create).toHaveAttribute('maxlength', '200')
+      await create.pressSequentially('c'.repeat(205))
+      await expect(create, 'typing stops at the cap').toHaveValue('c'.repeat(200))
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await expect(field).toHaveAttribute('maxlength', '200')
+      await field.press('Control+a')
+      await field.pressSequentially('r'.repeat(205))
+      await expect(field, 'the rename box stops at the cap too').toHaveValue('r'.repeat(200))
+      await window.keyboard.press('Escape')
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused first save says so, keeps the dialog with the name that was typed and the picture being saved, and the retry saves it (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-firstsave-refused')
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+      res.end(png)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await expect(field).toHaveAttribute('maxlength', '200')
+
+      // main refuses a name past 200: the person cannot type one, so the test sets it.
+      await setValuePastCap(field, LONG_BOARD_NAME)
+      await expect(field).toHaveValue(LONG_BOARD_NAME)
+      await dialog.getByRole('button', { name: 'Create & save' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't create that board.")
+      await expect(dialog, 'the dialog is still there').toBeVisible()
+      await expect(field, 'with the name that was typed').toHaveValue(LONG_BOARD_NAME)
+      expect(readBoardsFromDisk(fx.boardsDir), 'no board was made').toHaveLength(0)
+      expect((await readToastLog(window)).some((t) => t.includes('Saved to')), 'and no success was claimed').toBe(false)
+
+      // The retry, with a name main takes, saves the SAME picture the first press was holding.
+      await field.fill('Inspiration')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readToastLog(window)).toContain('Saved to "Inspiration"')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Inspiration'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items.map((i) => i.title)).toEqual(['Stubbed reference'])
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused Create and a refused Rename are reported, and keep what was typed (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-name-refused')
+    writeFileSync(
+      path.join(fx.boardsDir, 'keepboard.json'),
+      JSON.stringify({ id: 'keepboard', name: 'Keep me', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+
+      // ── Create (the + beside the box) ──
+      const create = window.getByPlaceholder('New board name…')
+      await setValuePastCap(create, LONG_BOARD_NAME)
+      await expect(create).toHaveValue(LONG_BOARD_NAME)
+      await window.getByRole('button', { name: 'Create board' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't create that board.")
+      await expect(create, 'the box keeps the name for the retry').toHaveValue(LONG_BOARD_NAME)
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await create.fill('Second board')
+      await window.getByRole('button', { name: 'Create board' }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible({ timeout: 15_000 })
+      await expect(create, 'a board that was made empties the box').toHaveValue('')
+
+      // ── Rename ──
+      await window.getByRole('button', { name: /^Keep me/ }).click()
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await setValuePastCap(field, LONG_BOARD_NAME)
+      await expect(field).toHaveValue(LONG_BOARD_NAME)
+      await dialog.getByRole('button', { name: 'Rename', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't rename that board.")
+      await expect(dialog, 'the rename dialog is still there').toBeVisible()
+      await expect(field, 'with the name that was typed').toHaveValue(LONG_BOARD_NAME)
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort(), 'nothing was renamed on disk').toEqual(['Keep me', 'Second board'])
+      await field.fill('Kept and renamed')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Kept and renamed', 'Second board'])
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

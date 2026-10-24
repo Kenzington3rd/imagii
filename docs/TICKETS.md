@@ -5145,7 +5145,7 @@ IMG-PREC.
   1, 2, 4, 5 and 6 land with their e2e cases; `npm run verify`,
   `npm run test:media` and the FULL Playwright suite green before
   handback; no docs/TICKETS.md, package.json or lockfile edits.
-- **Status:** open (round 84)
+- **Status:** done (round 84 — see the Done entry)
 
 ---
 
@@ -5601,6 +5601,59 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 84 — T-135, all 14 of the twenty-first sweep's verified
+findings, landed in the commit that carries this entry. Worked by
+one Sonnet in a fresh clone of 2b0f717; 133 ledger mutations all
+restored byte-identical (six survived a first run and are listed:
+three killed after the test was strengthened, three killed at unit
+level where an e2e cannot reach the seam), 58 reds, every new or
+changed Playwright case proven red on a build of the unchanged
+base. The three MEDs: a panel's long job now lives in a module
+store (lib/runStore.ts, one slot per panel in
+video-studio/store/runs.ts, the Export queue in exportQueue.ts,
+the audio export in audioExport.ts), so leaving a studio and coming
+back finds the progress rows and Cancel that USER_GUIDE promises,
+and main's `audio:extractFromVideo` is single-flight with a
+refusal that names the running video; the Player listens to its
+element's own error (decode or no-supported-source) and says
+"imagii can't preview this video's picture format — trimming,
+scanning and export still work.", with "Make a preview copy"
+through the existing convert, and Play follows what the element
+does; the chat spike finder (now src/shared/chatPeaks.ts, unit
+tested) merges neighbouring buckets by index and spans the merged
+window, so one 30 s explosion is one row. The LOWs: derived results
+(scan candidates, the pasted chat log and its spikes, the
+transcript preview) live in the video store; the corrected query
+goes out by click as by Enter and the box names the grid after a
+tab swap; SafeZone zone lines truncate with a title; the
+Clear-transcripts confirm names the open video only when it has a
+transcript; board and preset writes report refusals (board names
+capped at 200 in one shared constant) and the first-save dialog
+keeps its picture until the board exists; both remaining project
+sound-load closures carry the T-113 guard; unknown preset ids are
+dropped on open; a soundless second track and an all-cut chain are
+refused before anything spawns (the all-cut shape — exit 0 over a
+header-only file — pinned at Layer 5 on both majors); sendToCanvas
+navigates only from References; the stale home-chrome comment is
+corrected. Worker's disclosed deviations, accepted: the Export
+store's late-completion race it found with its own e2e (rows now
+also take files from the batch's results); two older tests that
+pinned the removed panel-local shape revised rather than deleted;
+the audio.spec "header has no duration" one-shot toast read turned
+into a poll — the expediter reproduced the race independently on
+a build of the unchanged base with the original test, 7 of 12
+repeats failing with the identical symptom. Expedited personally:
+verify x2 (179/4870), test:media on 7.0.2 (352 passed | 13 skipped
+of 365), the T-135 Layer 5 blocks on 6.1.1 (15/15), build + FULL
+Playwright 415/415 with zero flakes; integrity and ledger audit
+clean (no forbidden files, no file left at a mutant's sha); one
+independent mutation at a seam no ledger row names (the extraction
+slot released only on success → "and when it fails or is canceled"
+and the probe-refusal case red, the success case green → restored
+byte-identical, sha256 verified, 9/9 green). Landed conflict-free
+onto its own base, every patched path byte-identical to the
+expedited clone; the landed tree's gates are this entry's commit.
 
 Round 83 — T-134, all 7 of the twentieth sweep's verified findings,
 landed in the commit that carries this entry. Worked by one Sonnet

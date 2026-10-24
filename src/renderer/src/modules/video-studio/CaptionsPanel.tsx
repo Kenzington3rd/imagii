@@ -3,7 +3,6 @@ import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
 import type {
-  CaptionSegment,
   CaptionsInstallStatus,
   CaptionsProgress,
   CaptionStyle,
@@ -18,11 +17,13 @@ import {
   captionSizeReadout,
   captionsReadyMessage,
   clearedTranscriptsMessage,
+  clearTranscriptsQuestion,
   staleCaptionsMessage
 } from '@shared/captions'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
+import { useCaptionsProgress, useCaptionsRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -41,10 +42,15 @@ export function CaptionsPanel(): JSX.Element | null {
   const [status, setStatus] = useState<CaptionsInstallStatus | null>(null)
   // T-112: WHICH job is running, not just that one is. The header button said
   // "Transcribing…" for a burn-in too, because both shared one boolean.
-  const [job, setJob] = useState<'transcribe' | 'burn-in' | null>(null)
+  // T-135 (1), (4): which job is running and the progress line main last sent are a module store, and the transcript preview is the open video's own
+  // result in the video store. They were this panel's state, so leaving the studio left it idle over a transcription main was still running (Burn
+  // into video enabled, no Cancel: USER_GUIDE promises one) and forgot a transcription that took minutes.
+  const captionsRun = useCaptionsRun((s) => s.run)
+  const job = captionsRun?.job ?? null
   const running = job !== null
-  const [progress, setProgress] = useState<CaptionsProgress | null>(null)
-  const [segments, setSegments] = useState<CaptionSegment[] | null>(null)
+  const progress: CaptionsProgress | null = useCaptionsProgress((s) => s.progress)
+  const segments = useVideoStore((s) => s.derived.transcript)
+  const setDerived = useVideoStore((s) => s.setDerived)
   const [showSetup, setShowSetup] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
@@ -70,17 +76,10 @@ export function CaptionsPanel(): JSX.Element | null {
     void refreshTranscriptCount()
   }, [])
 
-  // Bug fix: clear local segment + progress state when the source video
-  // changes. Without this, after loading a new video, the captions panel
-  // showed segments transcribed from the *previous* video. The store's
-  // srtPath already clears on loadSource — segments needs to follow.
+  // (The transcript preview used to be cleared HERE when the video changed, so it also cleared on every mount: it is the video store's now, and
+  // `loadSource` / `clearSource` empty it with the srtPath it goes with.)
   useEffect(() => {
-    setSegments(null)
-    setProgress(null)
-  }, [source?.filePath])
-
-  useEffect(() => {
-    const off = window.api.captions.onProgress((p) => setProgress(p))
+    const off = window.api.captions.onProgress((p) => useCaptionsProgress.setState({ progress: p }))
     return off
   }, [])
 
@@ -127,7 +126,7 @@ export function CaptionsPanel(): JSX.Element | null {
       else if (result.failed > 0) toast(message.text, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
       else toast.success(message.text)
       if (result.removed > 0) {
-        setSegments(null)
+        setDerived({ transcript: null })
         if (startedFor) setSrtPathFor(startedFor, null)
       }
     } catch (err) {
@@ -148,8 +147,8 @@ export function CaptionsPanel(): JSX.Element | null {
     // it, drop another, and the result arrived to attach itself to whatever was open.
     const startedFor = source.filePath
     const startedName = source.fileName
-    setJob('transcribe')
-    setProgress(null)
+    if (!useCaptionsRun.getState().begin({ job: 'transcribe' })) return
+    useCaptionsProgress.setState({ progress: null })
     try {
       const result = await window.api.captions.transcribe({
         jobId: nanoid(10),
@@ -162,18 +161,18 @@ export function CaptionsPanel(): JSX.Element | null {
         })
         return
       }
-      setSegments(result.segments)
+      useVideoStore.getState().setDerivedFor(startedFor, { transcript: result.segments })
       toast.success(captionsReadyMessage(result.segments.length))
     } catch (err) {
       reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
     } finally {
-      setJob(null)
-      void refreshTranscriptCount()
       // T-100 + T-108: the row below the header shows a job that is running. One that
       // stopped is not, whatever phase its last event named; and one that finished is
       // not either — "Done 100%" with nothing to press stayed there for good. The toast
       // says it finished, as in every other single-job panel.
-      setProgress(null)
+      useCaptionsProgress.setState({ progress: null })
+      useCaptionsRun.getState().end()
+      void refreshTranscriptCount()
     }
   }
 
@@ -215,7 +214,8 @@ export function CaptionsPanel(): JSX.Element | null {
         toast.error('Pick a clip first to use trim-to-clip burn-in.')
         return
       }
-      setJob('burn-in')
+      if (!useCaptionsRun.getState().begin({ job: 'burn-in' })) return
+      useCaptionsProgress.setState({ progress: null })
       try {
         const result = await window.api.captions.burnIn({
           jobId: nanoid(10),
@@ -241,11 +241,11 @@ export function CaptionsPanel(): JSX.Element | null {
       } catch (err) {
         reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
       } finally {
-        setJob(null)
         // T-100 + T-108: without this a stopped burn froze at "Burning in… 40%" with a
         // Cancel button for a job that no longer existed, and a finished one left
         // "Done 100%" for good. The toast says what happened; the row goes back to idle.
-        setProgress(null)
+        useCaptionsProgress.setState({ progress: null })
+        useCaptionsRun.getState().end()
       }
     } finally {
       burnStartingRef.current = false
@@ -670,10 +670,7 @@ export function CaptionsPanel(): JSX.Element | null {
         className="max-w-md w-full p-5"
       >
         <h2 className="text-lg font-semibold mb-3">Clear saved transcripts?</h2>
-        <p className="text-sm text-ink-base mb-2">
-          This deletes the {countOf(transcriptCount ?? 0, 'saved transcript')} imagii keeps on this computer, including the one for
-          the video you have open. Transcribe again whenever you need one.
-        </p>
+        <p className="text-sm text-ink-base mb-2">{clearTranscriptsQuestion(transcriptCount ?? 0, srtPath !== null)}</p>
         <p className="text-xs text-ink-muted mb-4">
           Captions you already saved as .srt files or burned into a video are not touched.
         </p>

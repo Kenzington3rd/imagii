@@ -1750,6 +1750,67 @@ describe('applyProject, second pass (T-113)', () => {
     })
   })
 
+  // T-135 (9): T-113's guard was written into `extractAgain` alone. The other two ways a project's sound opens - a plain audio file, and the scratch
+  // WAV a v1-3 project wrote beside its video - called `loadSource` unguarded, so the same sound the person opened and tuned during the VIDEO's wait
+  // was replaced by the project's (executed in a scratch repro with a deferred conversion; `skipped` stayed empty), against the rule's own comment.
+  describe('(e) the sound that needs no wait of its own is guarded from the START too (T-135 (9))', () => {
+    const PROJECT_AUDIO = '/home/user/Audio/project-sound.wav'
+    const plainAudio = { sourcePath: PROJECT_AUDIO, chain: CHAIN }
+    const scratchAudio = { sourcePath: WAV, fromVideoPath: ORIGINAL, chain: CHAIN }
+
+    it.each([
+      ['a plain audio file', plainAudio],
+      ['the scratch WAV of a v1-3 project (and the video beside it)', scratchAudio]
+    ])('%s: audio the person opened and tuned during the video\'s wait is not replaced, and the skip is reported', async (_label, audioStudio) => {
+      const held = heldBridge()
+      const pending = applyProject(savedConvertedProject({ audioStudio }))
+      await tick()
+
+      await useAudioStore.getState().loadSource(OTHER_AUDIO)
+      const theirs = useAudioStore.getState().source
+      useAudioStore.setState({ chain: { ...DEFAULT_CHAIN_FOR_TEST, gainDb: 4 } })
+
+      held.converting.resolve(COPY)
+      const outcome = await pending
+
+      expect(useAudioStore.getState().source, 'their sound is still the one open').toBe(theirs)
+      expect(useAudioStore.getState().source?.filePath).toBe(OTHER_AUDIO)
+      expect(useAudioStore.getState().chain.gainDb, 'and their tuning with it').toBe(4)
+      expect(outcome.skipped, 'the skip is counted, not silent').toEqual(['audio'])
+      expect(outcome.unavailable).toEqual([])
+      expect(outcome.failed).toEqual([])
+      // The video, which nobody touched, still opened.
+      expect(useVideoStore.getState().source?.filePath).toBe(COPY)
+    })
+
+    it.each([
+      ['a plain audio file', plainAudio, PROJECT_AUDIO],
+      ['the scratch WAV of a v1-3 project', scratchAudio, WAV]
+    ])('control, %s: a sound that was already open before Open project is what the project replaces', async (_label, audioStudio, opens) => {
+      const held = heldBridge()
+      await useAudioStore.getState().loadSource(OTHER_AUDIO)
+      const pending = applyProject(savedConvertedProject({ audioStudio }))
+      await tick()
+      held.converting.resolve(COPY)
+      const outcome = await pending
+      expect(outcome.skipped).toEqual([])
+      expect(useAudioStore.getState().source?.filePath).toBe(opens)
+      expect(useAudioStore.getState().chain.gainDb, 'the project\'s chain came with it').toBe(CHAIN.gainDb)
+    })
+
+    it('control: a studio the person CLOSED during the wait is not "something else" - the project\'s sound opens in it', async () => {
+      const held = heldBridge()
+      await useAudioStore.getState().loadSource(OTHER_AUDIO)
+      const pending = applyProject(savedConvertedProject({ audioStudio: plainAudio }))
+      await tick()
+      useAudioStore.getState().clearSource()
+      held.converting.resolve(COPY)
+      const outcome = await pending
+      expect(outcome.skipped).toEqual([])
+      expect(useAudioStore.getState().source?.filePath).toBe(PROJECT_AUDIO)
+    })
+  })
+
   describe('(b) the playhead and the clip selection belong to a video that actually opened', () => {
     const place = { videoClipId: CLIP_B.id, videoTimeSec: 42 }
 

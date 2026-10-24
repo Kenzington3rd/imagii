@@ -107,11 +107,32 @@ describe('the audio export\'s progress is over the length of the file it writes 
     expect(only).toBeCloseTo(100 / 3, 6)
   })
 
-  it('cuts that cover everything cannot divide by zero: the bar is capped at 100', async () => {
-    const seen = await progressOf({ cutRegions: [{ startSec: 0, endSec: 300 }] })
+  it('cuts that leave next to nothing cannot divide by zero: the bar is capped at 100', async () => {
+    // T-135 (12): a chain that cuts EVERYTHING is refused before any child runs (below), so the smallest export that can reach the bar keeps 0.1 s.
+    outTimeSec = 5 // far more than the 0.1 s the chain writes
+    const seen = await progressOf({ cutRegions: [{ startSec: 0, endSec: 299.9 }] })
+    expect(seen.length).toBeGreaterThan(0)
     for (const e of seen) {
       expect(Number.isFinite(e.percent)).toBe(true)
       expect(e.percent).toBeLessThanOrEqual(100)
     }
+  })
+
+  it('cuts that cover everything are refused before any child runs: no pass, no event (T-135 (12))', async () => {
+    const seen: Event[] = []
+    await expect(
+      runAudioExport(
+        {
+          jobId: 'all-cut',
+          sourcePath: path.join(tmpdir(), 'long.wav'),
+          outputPath: path.join(tmpdir(), 'out.wav'),
+          chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [{ startSec: 0, endSec: 300 }] },
+          format: 'wav'
+        },
+        (p) => seen.push({ pass: p.pass, percent: p.percent })
+      )
+    ).rejects.toThrow('Everything is cut out. Click a mark to put a part back.')
+    expect(spawned, 'nothing was spawned').toEqual([])
+    expect(seen).toEqual([])
   })
 })

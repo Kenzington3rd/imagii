@@ -5,6 +5,7 @@ import { compileFps } from '@shared/compileFps'
 import { countOf } from '@shared/plural'
 import { formatFps } from '@shared/units'
 import { useVideoStore } from './store/videoStore'
+import { useCompileRun } from './store/runs'
 import { COMPILE_SIZE, COMPILE_TARGET } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
@@ -19,9 +20,8 @@ export function CompilationPanel(): JSX.Element | null {
   const [fadeMs, setFadeMs] = useState(300)
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
-  const [busy, setBusy] = useState(false)
-  // Round 17 B4: track the in-flight jobId for the Cancel button.
-  const jobIdRef = useRef<string | null>(null)
+  // T-135 (1): the run is a module store, not this panel's state: leaving the studio does not lose it (see GifPanel).
+  const busy = useCompileRun((s) => s.run !== null)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -41,9 +41,8 @@ export function CompilationPanel(): JSX.Element | null {
       if (!source) return
       const dir = await resolveOutDir()
       if (!dir) return
-      setBusy(true)
       const jobId = nanoid(10)
-      jobIdRef.current = jobId
+      if (!useCompileRun.getState().begin({ jobId })) return
       try {
         const result = await window.api.video.concat({
           jobId,
@@ -70,8 +69,7 @@ export function CompilationPanel(): JSX.Element | null {
       } catch (err) {
         reportFailure(err, { failed: 'Compilation failed.', canceled: 'Compilation canceled.' })
       } finally {
-        setBusy(false)
-        jobIdRef.current = null
+        useCompileRun.getState().end()
       }
     } finally {
       startingRef.current = false
@@ -79,7 +77,7 @@ export function CompilationPanel(): JSX.Element | null {
   }
 
   async function cancel(): Promise<void> {
-    const id = jobIdRef.current
+    const id = useCompileRun.getState().run?.jobId
     if (!id) return
     await window.api.video.cancelConcat(id)
   }

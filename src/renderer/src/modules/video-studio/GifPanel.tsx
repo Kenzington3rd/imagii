@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import { useVideoStore } from './store/videoStore'
+import { useGifRun } from './store/runs'
 import { outputDurationSec } from './presets'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -15,11 +16,11 @@ export function GifPanel(): JSX.Element | null {
   const [width, setWidth] = useState(480)
   const [fps, setFps] = useState(15)
   const [speed, setSpeed] = useState(1)
-  const [busy, setBusy] = useState(false)
+  // T-135 (1): the run is a module store, not this panel's state - the person can leave the studio while it works, and the panel that mounts again
+  // draws it (Exporting…, and the Cancel).
+  const busy = useGifRun((s) => s.run !== null)
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
-  // Round 17 B2: jobId for the Cancel button.
-  const jobIdRef = useRef<string | null>(null)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -43,9 +44,8 @@ export function GifPanel(): JSX.Element | null {
       if (!source || !clip) return
       const dir = await resolveOutDir()
       if (!dir) return
-      setBusy(true)
       const jobId = nanoid(10)
-      jobIdRef.current = jobId
+      if (!useGifRun.getState().begin({ jobId })) return
       try {
         const result = await window.api.video.exportGif({
           jobId,
@@ -69,8 +69,7 @@ export function GifPanel(): JSX.Element | null {
       } catch (err) {
         reportFailure(err, { failed: 'GIF export failed.', canceled: 'GIF canceled.' })
       } finally {
-        setBusy(false)
-        jobIdRef.current = null
+        useGifRun.getState().end()
       }
     } finally {
       startingRef.current = false
@@ -78,7 +77,7 @@ export function GifPanel(): JSX.Element | null {
   }
 
   async function cancel(): Promise<void> {
-    const id = jobIdRef.current
+    const id = useGifRun.getState().run?.jobId
     if (!id) return
     await window.api.video.cancelGif(id)
   }

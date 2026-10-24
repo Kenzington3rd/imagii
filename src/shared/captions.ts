@@ -336,6 +336,16 @@ export function clearedTranscriptsMessage(r: ClearTranscriptsResult): { text: st
   }
 }
 
+/**
+ * What the "Clear saved transcripts" confirm says it will delete (T-135 (7)). The count is the whole captions folder's, so the open video's own
+ * transcript is named only when the open video HAS one (`srtPath` is set: the panel offers Save .srt and Burn into video); a video that was
+ * never transcribed is not promised a deletion. The second sentence is the way back, and the "files you saved yourself" line stays in the panel.
+ */
+export function clearTranscriptsQuestion(count: number, openVideoHasOne: boolean): string {
+  const open = openVideoHasOne ? ', including the one for the video you have open' : ''
+  return `This deletes the ${countOf(count, 'saved transcript')} imagii keeps on this computer${open}. Transcribe again whenever you need one.`
+}
+
 /** The toast after a transcription: lines of caption, counted properly. */
 export function captionsReadyMessage(segmentCount: number): string {
   return `Captions ready (${countOf(segmentCount, 'line')})`

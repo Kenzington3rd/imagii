@@ -1256,3 +1256,128 @@ describe('the Player transport: exact playhead and play / pause for the Timeline
     }
   })
 })
+
+/**
+ * T-135 (2) - a preview copy is a way to WATCH the open video, not a different video.
+ *
+ * Chromium decodes what it has a decoder for (H.264, VP9, AV1), and ProRes or 10-bit HEVC probes fine, loads, plays its sound and draws
+ * no picture. The Player says so and offers a copy ffmpeg converts for the preview. The copy replaces only the address the element plays:
+ * `source` (its object, its `filePath` that every export reads, its probe, its clips) is untouched, so a project saved now still points at
+ * the original and an export is made from the original's pixels.
+ */
+describe('setPreviewCopyFor - the preview plays a copy, everything else keeps the original (T-135 (2))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mov', fileName: 'a.mov', url: 'imagii-file://v/a.mov' }
+  const VIDEO_B: VideoSource = { ...FAKE_SOURCE, filePath: '/v/b.mp4', fileName: 'b.mp4', url: 'imagii-file://v/b.mp4' }
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}` } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null, previewUrl: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts with no preview copy: the element plays the source itself', () => {
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('applies when the video the copy was made for is still open, says so, and leaves the source object and its path alone', () => {
+    const before = useVideoStore.getState().source
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(true)
+    expect(useVideoStore.getState().previewUrl).toBe('imagii-file:///tmp/imagii-import/a-xyz.mp4')
+    expect(useVideoStore.getState().source, 'the same object: a swap would read as "replaced" to a project open waiting on this studio').toBe(before)
+    expect(useVideoStore.getState().source?.filePath, 'exports and the saved project still read the original').toBe('/v/a.mov')
+  })
+
+  it('make a copy of A, open B, the copy finishes: B plays B, and the store says it did not apply', () => {
+    useVideoStore.setState({ source: VIDEO_B })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(false)
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('a video that was closed meanwhile takes nothing', () => {
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(false)
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('clearing the source forgets the copy, so the next video starts on its own address', () => {
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('loading another source forgets it too', async () => {
+    vi.stubGlobal('window', {
+      api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } }
+    })
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+    expect(useVideoStore.getState().source?.filePath).toBe('/v/b.mp4')
+  })
+})
+
+/**
+ * T-135 (4) - what the panels derive from the open video lives with the video.
+ *
+ * Scan candidates, the pasted chat logs and their spikes, and the transcript preview were each panel's `useState`, so leaving the studio (or
+ * pressing Clean audio, which navigates) threw the lot away: the person came back to a studio that had forgotten a scan that took minutes. They are
+ * store state now, and the store's own `loadSource` / `clearSource` resets keep their lifetime exactly right: a different video starts empty, the
+ * same video keeps its results across any number of visits.
+ */
+describe('derived results - kept with the open video, gone with it (T-135 (4))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mp4', fileName: 'a.mp4' }
+  const CANDIDATES = [{ startSec: 10, endSec: 20, peakDb: -4, reason: 'loud' as const }]
+  const SEGMENTS = [{ startSec: 0, endSec: 2, text: 'hello' }]
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null })
+    useVideoStore.getState().setDerived({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts empty', () => {
+    expect(useVideoStore.getState().derived).toEqual({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+
+  it('setDerived patches the fields it is given and keeps the others', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES })
+    useVideoStore.getState().setDerived({ highlightChat: '[0:42] a: POG' })
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+    expect(useVideoStore.getState().derived.highlightChat).toBe('[0:42] a: POG')
+  })
+
+  it('a result is applied to the video it was made for, and only that one (a scan that finishes after the video was replaced is dropped)', () => {
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { transcript: SEGMENTS })).toBe(true)
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS)
+    useVideoStore.setState({ source: { ...VIDEO_A, filePath: '/v/b.mp4', fileName: 'b.mp4' } })
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { scanCandidates: CANDIDATES })).toBe(false)
+    expect(useVideoStore.getState().derived.scanCandidates).toBeNull()
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { scanCandidates: CANDIDATES })).toBe(false)
+  })
+
+  it('loading another video starts its results empty - all five fields', async () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES, highlightChat: 'x', spikeChat: 'y', spikes: [], transcript: SEGMENTS })
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().derived).toEqual({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+
+  it('closing the video clears them too', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES, spikeChat: 'y', transcript: SEGMENTS })
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().derived.scanCandidates).toBeNull()
+    expect(useVideoStore.getState().derived.spikeChat).toBe('')
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('what a panel leaves behind when it unmounts is still there when the next one mounts (nothing to reset on mount)', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES })
+    // "Leaving the studio" is no store event at all: the next reader sees the same results.
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+  })
+})

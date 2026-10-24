@@ -167,6 +167,8 @@ let cropMarkerSrc = ''
 let shortSrc = ''
 /** 320x240 / 2 s / 60 fps + 440 Hz (T-130): a recording at OBS's usual rate, for the compilation that follows the source's rate and the 60 fps preset. */
 let rate60Src = ''
+/** 320x240 / 2 s ProRes + PCM sound in a .mov (T-135 (2)): ffprobe reads it, Chromium has no decoder for its picture (the element plays the sound and draws nothing). */
+let proresSrc = ''
 /** Real duration of longSrc, read back from ffprobe after the loop. */
 let longSeconds = 0
 
@@ -710,6 +712,23 @@ function chatLogWithEarlySpike(): string {
   return lines.join('\n')
 }
 
+/**
+ * T-135 (3): one 30-second explosion of chat, three ADJACENT 10 s buckets. A quiet bed of one message in every bucket from 0 s to 190 s except
+ * 120, 130 and 140 (median 1, so the threshold is the floor of 5), and 8 messages inside each of those three buckets. The finder must list it
+ * as ONE spike: 24 messages, from 120 - 15 = 105 s (1:45) to 140 + 10 + 15 = 165 s (2:45).
+ */
+function chatLogWithThreeBucketSpike(): string {
+  const lines: string[] = []
+  for (let t = 1; t < 200; t += 10) {
+    if (t >= 120 && t < 150) continue
+    lines.push(`[${mmss(t)}] viewer${t}: quiet chatter ${t}`)
+  }
+  for (const bucket of [120, 130, 140]) {
+    for (let i = 0; i < 8; i++) lines.push(`[${mmss(bucket + i)}] hype${bucket}x${i}: POG that was insane`)
+  }
+  return lines.join('\n')
+}
+
 /** Same bed, no spike — every bucket sits under the threshold of 5. */
 function chatLogWithNoSpike(): string {
   const lines: string[] = []
@@ -880,6 +899,14 @@ test.beforeAll(async () => {
   await ffmpeg(['-y', '-stream_loop', '79', '-i', loopBase, '-c', 'copy', longSrc])
   longSeconds = Number((await ffprobeJson(longSrc)).format?.duration ?? 0)
   expect(longSeconds).toBeGreaterThan(600)
+  proresSrc = path.join(sourceDir, 'undecodable-prores.mov')
+  await ffmpeg([
+    '-y',
+    '-f', 'lavfi', '-i', `testsrc2=size=${CLIP_WIDTH}x${CLIP_HEIGHT}:rate=${CLIP_FPS}:duration=${CLIP_SECONDS}`,
+    '-f', 'lavfi', '-i', `sine=frequency=440:duration=${CLIP_SECONDS}`,
+    '-c:v', 'prores_ks', '-profile:v', '0', '-c:a', 'pcm_s16le', '-shortest',
+    proresSrc
+  ])
 })
 
 test.afterAll(() => {
@@ -989,6 +1016,29 @@ test.describe('ChatHighlightPanel', () => {
         name: 'Chat spike 1',
         range: '0:30 → 0:35'
       })
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-135 (3): the finder compared the next bucket's UNPADDED key with the previous row's PADDED start, so with the defaults (10 s buckets, 15 s of padding)
+  // adjacent hype buckets read 25 < 20 = false and one 30 s explosion became three overlapping rows (and the 12-row cap filled with near-duplicates).
+  test('three adjacent hype buckets are ONE row, and + Clip lands the whole spike with its padding (T-135 (3))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('chat3', longSrc)
+    try {
+      const card = chatCard(window)
+      await card.locator('textarea').fill(chatLogWithThreeBucketSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expectToast(window, 'Found 1 chat spike')
+      await expect(card.locator('li'), 'one spike, one row').toHaveCount(1)
+      const row = card.locator('li').first()
+      await expect(row.locator('span.font-mono')).toHaveText('1:45')
+      await expect(row.getByText('24 messages')).toBeVisible()
+      await row.getByRole('button', { name: '+ Clip' }).click()
+      await expectToast(window, 'Clip added')
+      // The window covers all three buckets: 105 s .. 165 s.
+      expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '1:45 → 2:45' }])
     } finally {
       await app.close()
     }
@@ -1722,6 +1772,7 @@ test.describe('CaptionsPanel', () => {
       await clear.click()
       await expect(dialog).toBeVisible()
       await expect(dialog, 'it says how many it will delete').toContainText('deletes the 3 saved transcripts')
+      await expect(dialog, 'and that the open video\'s transcript is among them (this one has one: Save .srt is on the panel)').toContainText('including the one for the video you have open')
       await expect(dialog.getByRole('button', { name: 'Cancel' }), 'it opens on the safe answer').toBeFocused()
       await window.keyboard.press('Escape')
       await expect(dialog).toBeHidden()
@@ -1744,6 +1795,37 @@ test.describe('CaptionsPanel', () => {
       await expect(clear, 'nothing left to clear').toBeDisabled()
       await expect(card.getByRole('button', { name: 'Save .srt' }), 'the open video went back to not transcribed').toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-135 (7): the confirm said "including the one for the video you have open" whether or not the open video has a transcript (the count is the folder's).
+  // With no transcript for the open video it says what the count is and stops.
+  test('Clear saved transcripts: a video with no transcript of its own is not named in the confirm (T-135 (7))', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchHome('captionsclear-none')
+    const { app, window, userDataDir } = studio
+    try {
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      const cue = '1\n00:00:00,000 --> 00:00:01,000\nhello\n'
+      for (const name of ['elsewhere-1.srt', 'elsewhere-2.srt']) writeFileSync(path.join(captionsDir, name), cue, 'utf8')
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await expect(card.getByText('2 saved transcripts kept on this computer.')).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Save .srt' }), 'the open video was never transcribed').toHaveCount(0)
+      await card.getByRole('button', { name: 'Clear saved transcripts' }).click()
+      const dialog = window.getByRole('dialog', { name: 'Clear saved transcripts?' })
+      await expect(dialog).toBeVisible()
+      await expect(dialog).toContainText('deletes the 2 saved transcripts imagii keeps on this computer.')
+      await expect(dialog, 'no claim about a transcript this video does not have').not.toContainText('video you have open')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).toBeHidden()
+      expect(readdirSync(captionsDir).sort(), 'Cancel deleted nothing').toEqual(['elsewhere-1.srt', 'elsewhere-2.srt'])
     } finally {
       await app.close()
     }
@@ -2392,6 +2474,425 @@ function presetBox(window: Page, label: string): Locator {
   return exportCard(window).locator('label').filter({ has: window.getByText(label, { exact: true }) }).getByRole('checkbox')
 }
 
+// ═════════════ Player — a picture the preview cannot decode (T-135 (2)) ═════════════
+
+test.describe('Player — a picture the preview cannot decode (T-135 (2))', () => {
+  // Chromium has decoders for H.264, VP9 and AV1. A ProRes (or 10-bit HEVC) file probes fine, passes the importer ("Video loaded"), plays its sound and
+  // draws nothing: no `error` event, no sentence, and the README said these "should work". The element's own tell is `videoWidth` 0 at `loadedmetadata`
+  // for a file ffprobe says has a picture. The Player says so, in one sentence that also says what still works, and offers a copy ffmpeg converts for
+  // watching; the original stays the file every export reads.
+  const SENTENCE = "imagii can't preview this video's picture format — trimming, scanning and export still work."
+  const elementState = (window: Page): Promise<{ w: number; h: number; src: string; error: number | null }> =>
+    window.evaluate(() => {
+      const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement | null }).__imagiiVideoEl
+      // Between one Player and the next there is no element for a moment: -1 is "not there yet", and a poll tries again.
+      if (!v) return { w: -1, h: -1, src: '', error: null }
+      return { w: v.videoWidth, h: v.videoHeight, src: v.currentSrc, error: v.error ? v.error.code : null }
+    })
+
+  test('a ProRes file says so, keeps trim and export working, and a preview copy shows the picture while exports still read the original', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchWithVideo('prores', proresSrc)
+    const { app, window, outDir } = studio
+    try {
+      await expect(window.getByText(SENTENCE), 'the sentence').toBeVisible({ timeout: 30_000 })
+      const before = await elementState(window)
+      expect(before.w, 'the real tell: the element drew no picture for a file that has one').toBe(0)
+      expect(before.error, 'and raised no error: an error listener alone would never have heard it').toBeNull()
+      const copy = window.getByRole('button', { name: 'Make a preview copy' })
+      await expect(copy).toBeEnabled()
+      expect(await clipRows(window)).toEqual([{ name: 'Clip 1', range: '0:00 → 0:02' }])
+
+      // ── export stays reachable from the undecodable preview, and writes a real file ──
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: /^Export 1 file/ }).click()
+      await expectToast(window, 'Exported 1 file')
+      expect(mp4sIn(outDir)).toHaveLength(1)
+      const first = await ffprobeJson(path.join(outDir, mp4sIn(outDir)[0] as string))
+      expect(first.streams?.some((st) => st.codec_type === 'video'), 'with a picture in it').toBe(true)
+
+      // ── the preview copy: made through the importer's convert, swapped in for playback only ──
+      await copy.click()
+      await expect(window.getByText(SENTENCE), 'the sentence goes once the picture can be drawn').toBeHidden({ timeout: 120_000 })
+      await expect.poll(async () => (await elementState(window)).w, { timeout: 30_000 }).toBe(CLIP_WIDTH)
+      const after = await elementState(window)
+      expect(after.src, 'the element plays a working copy from imagii\'s import folder').toMatch(/imagii-import/)
+      expect(await clipRows(window), 'the clips and their edits are untouched').toEqual([{ name: 'Clip 1', range: '0:00 → 0:02' }])
+      await expect(window.getByRole('button', { name: 'Make a preview copy' })).toHaveCount(0)
+      // The header names the file the person opened, not the copy.
+      await expect(window.locator('header').getByText('undecodable-prores.mov', { exact: true })).toBeVisible()
+      // Export still works, from the original: another file, with a picture.
+      await card.getByRole('button', { name: /^Export 1 file/ }).click()
+      await expect.poll(() => mp4sIn(outDir).length, { timeout: 120_000, intervals: [500] }).toBe(2)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a video the preview can decode says nothing and offers no copy', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('decodable')
+    try {
+      await expect.poll(async () => (await elementState(window)).w, { timeout: 30_000 }).toBe(CLIP_WIDTH)
+      await window.waitForTimeout(500)
+      await expect(window.getByText(SENTENCE)).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Make a preview copy' })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // The two element-level signals a real file can also give (a file with no decodable stream at all fails with code 4; `play()` rejects with
+  // NotSupportedError). Neither can be had from a fixture that Chromium happens to fail on every machine, so the page's element is made to do what
+  // it does then: harness stubs of the element, not of the app.
+  test('a play() the element refuses leaves the button on Play and says why; an element error says it too', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('play-refused')
+    try {
+      await expect.poll(async () => (await elementState(window)).w, { timeout: 30_000 }).toBe(CLIP_WIDTH)
+      await expect(window.getByText(SENTENCE)).toHaveCount(0)
+      await window.evaluate(() => {
+        const proto = HTMLMediaElement.prototype as unknown as { play: () => Promise<void>; __realPlay?: () => Promise<void> }
+        proto.__realPlay = proto.play
+        proto.play = () => Promise.reject(new DOMException('The element has no supported sources.', 'NotSupportedError'))
+      })
+      const play = window.getByRole('button', { name: 'Play', exact: true })
+      await play.click()
+      await expect(window.getByText(SENTENCE), 'the refusal is said').toBeVisible({ timeout: 10_000 })
+      await expect(window.getByRole('button', { name: 'Play', exact: true }), 'the control did not flip to Pause on a play that never started').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Pause', exact: true })).toHaveCount(0)
+
+      // Put the real play() back, then load a fresh video; an element `error` (code 4, no supported source) raises the same sentence.
+      await window.evaluate(() => {
+        const proto = HTMLMediaElement.prototype as unknown as { play: () => Promise<void>; __realPlay?: () => Promise<void> }
+        if (proto.__realPlay) proto.play = proto.__realPlay
+      })
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect.poll(async () => (await elementState(window)).w, { timeout: 30_000 }).toBe(CLIP_WIDTH)
+      await expect(window.getByText(SENTENCE), 'a new video starts clean').toHaveCount(0)
+      await window.evaluate(() => {
+        const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl
+        Object.defineProperty(v, 'error', { configurable: true, get: () => ({ code: 4, message: 'DEMUXER_ERROR_NO_SUPPORTED_STREAMS' }) })
+        v.dispatchEvent(new Event('error'))
+      })
+      await expect(window.getByText(SENTENCE), 'an element error is said too').toBeVisible({ timeout: 10_000 })
+      // An aborted load (code 1) is not a verdict on the picture: it says nothing.
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect.poll(async () => (await elementState(window)).w, { timeout: 30_000 }).toBe(CLIP_WIDTH)
+      await window.evaluate(() => {
+        const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl
+        Object.defineProperty(v, 'error', { configurable: true, get: () => ({ code: 1, message: 'aborted' }) })
+        v.dispatchEvent(new Event('error'))
+      })
+      await window.waitForTimeout(500)
+      await expect(window.getByText(SENTENCE), 'an aborted load is not "cannot preview"').toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═════════ Leaving a studio mid-job (T-135 (1)) and what the panels keep (T-135 (4)) ═════════
+
+/** T-135 (1): leave Video Studio for Home and come back to it. The video stays loaded (its store outlives the route); a panel that had a job in its state does not. */
+async function leaveAndReturn(window: Page): Promise<void> {
+  await window.getByRole('link', { name: 'Home' }).click()
+  await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+  await gotoVideoStudio(window)
+  await expect(window.locator('video')).toHaveCount(1)
+}
+
+test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
+  // The job panels kept their busy flag and their job's id in the panel's state, so a route change unmounted them: the panel came back idle, its
+  // primary enabled, over a job main was still running, with no Cancel anywhere (USER_GUIDE promises one while a render runs) - and a retry hit
+  // main's "An export is already running". The jobs are the 20-minute fixture's, so each is still running when the person is back.
+  test('a job that is running when the person leaves the studio is still running, with its Cancel, when they come back: Reframe, GIF and Compile', async () => {
+    test.setTimeout(600_000)
+    const studio = await launchWithVideo('leave-panels', longSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click() // Compile needs two
+
+      // ── Reframe ──
+      await reframeCard(window).getByRole('button', { name: 'Choose folder…' }).click()
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect(reframeCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await leaveAndReturn(window)
+      await expect(reframeCard(window).getByRole('button', { name: 'Reframing…' }), 'not idle: a job is running').toBeDisabled()
+      await expect(reframeCard(window).getByRole('progressbar'), 'and its bar is drawn').toBeVisible()
+      await reframeCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Reframe canceled.')
+      await expect(reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({ timeout: 30_000 })
+      await expect(reframeCard(window).getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+
+      // ── GIF ──
+      await gifCard(window).getByRole('button', { name: 'Export GIF' }).click()
+      await expect(gifCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await leaveAndReturn(window)
+      await expect(gifCard(window).getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await gifCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'GIF canceled.')
+      await expect(gifCard(window).getByRole('button', { name: 'Export GIF' })).toBeEnabled({ timeout: 30_000 })
+
+      // ── Compile ──
+      await compileCard(window).getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compileCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await leaveAndReturn(window)
+      await expect(compileCard(window).getByRole('button', { name: 'Stitching…' })).toBeDisabled()
+      await compileCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Compilation canceled.')
+      await expect(compileCard(window).getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(mp4sIn(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Picture-in-picture: a composite that is running when the person leaves is still running, with its Cancel, when they come back', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchWithVideo('leave-pip', clipSrc)
+    const { app, window, outDir } = studio
+    try {
+      // Base, overlay, then the folder: two 20-minute sources make a composite that is still running when the person is back.
+      await stubDialogs(app, { open: [longSrc, longSrc, outDir] })
+      await pipCard(window).getByRole('button', { name: 'Base: none' }).click()
+      await pipCard(window).getByRole('button', { name: 'Overlay: none' }).click()
+      await pipCard(window).getByRole('button', { name: 'Composite' }).click()
+      await expect(pipCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 60_000 })
+      await leaveAndReturn(window)
+      // The picked files are the panel's own settings and do not survive a visit; the job does.
+      await expect(pipCard(window).getByRole('button', { name: 'Compositing…' })).toBeDisabled()
+      await pipCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Picture-in-picture canceled.')
+      await expect(pipCard(window).getByRole('button', { name: 'Composite' })).toBeEnabled({ timeout: 30_000 })
+      expect(mp4sIn(outDir).filter((f) => f.endsWith('_pip.mp4'))).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Export: the queue, its progress and its Cancel are still there after a trip to Home', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchWithVideo('leave-export', longSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = (): Locator => exportCard(window)
+      await card().getByRole('button', { name: 'Choose folder…' }).click()
+      await card().getByRole('button', { name: /^Export 1 file/ }).click()
+      await expect(card().getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(card().getByRole('progressbar', { name: 'Clip 1 · YouTube' })).toBeVisible()
+
+      await leaveAndReturn(window)
+      // Back: not idle. The same row, still running; Export is off; and the Cancel is there.
+      await expect(card().getByRole('button', { name: 'Exporting…' }), 'Export is off while the batch runs').toBeDisabled()
+      await expect(card().getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'the queue row is drawn').toBeVisible()
+      const cancel = card().getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toBeVisible()
+      // Progress still arrives for a batch the panel was away from: the bar moves past where it was when the person left.
+      await expect
+        .poll(async () => Number(await card().getByRole('progressbar', { name: 'Clip 1 · YouTube' }).getAttribute('aria-valuenow')), { timeout: 120_000, intervals: [500] })
+        .toBeGreaterThan(0)
+      await cancel.click()
+      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(card().getByText('Canceled', { exact: true })).toBeVisible()
+      await expect(card().getByRole('button', { name: /^Export 1 file/ })).toBeEnabled({ timeout: 30_000 })
+      expect(mp4sIn(outDir), 'the canceled job left nothing behind').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Export: a batch that ends while the person is away shows its finished row when they come back', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchWithVideo('leave-export-done', clipSrc)
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
+      await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 4000 }])
+      const card = (): Locator => exportCard(window)
+      await card().getByRole('button', { name: 'Choose folder…' }).click()
+      await card().getByRole('button', { name: /^Export 1 file/ }).click()
+      await expect(card().getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      // The batch ends while nobody is looking at the panel: its file lands and its toast says so.
+      await expect.poll(() => mp4sIn(outDir).length, { timeout: 120_000, intervals: [500] }).toBe(1)
+      await expectToast(window, 'Exported 1 file')
+      await gotoVideoStudio(window)
+      await expect(card().getByRole('button', { name: /^Export 1 file/ }), 'idle again, ready for the next batch').toBeEnabled()
+      const bar = card().getByRole('progressbar', { name: 'Clip 1 · YouTube' })
+      await expect(bar, 'the row is there with its result').toHaveAttribute('aria-valuenow', '100')
+      await expect(card().getByText(mp4sIn(outDir)[0] as string)).toBeVisible()
+      await card().getByRole('button', { name: 'Show in folder' }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000 }).toEqual([path.join(outDir, mp4sIn(outDir)[0] as string)])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Clip Kit: a kit that is running when the person leaves is still running, with its Cancel, when they come back - and only on its own clip\'s row', async () => {
+    test.setTimeout(600_000)
+    const studio = await launchWithVideo('leave-kit')
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+      const kits = clipListCard(window).getByTitle('Export this clip for all 5 platforms + 3 thumbnails into one folder')
+      await expect(kits.first()).toBeVisible()
+      // Job 2's probe is held so the kit is still in its export phase when the person is back.
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+      await kits.first().click()
+      await expect(kits.first()).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+      await leaveAndReturn(window)
+      await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+      await expect(kits.first(), 'the running kit\'s button says where it is').toHaveText(EXPORTING_N_OF_5)
+      await expect(kits.first()).toBeDisabled()
+      const cancel = clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel, 'and its Cancel is there').toHaveCount(1)
+      // The kit belongs to the first clip. The other clip's button (the list shows one kit button, for the selected clip) is off while it
+      // works, does not borrow its label, and has no Cancel of its own.
+      await clipListCard(window).locator('li').nth(1).getByRole('button', { name: /^Select clip/ }).click()
+      await expect(kits.first()).toBeDisabled()
+      await expect(kits.first()).toHaveText('Clip Kit (5 + thumbs)')
+      await expect(clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+      await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+      await expect(kits.first()).toHaveText(EXPORTING_N_OF_5)
+      await cancel.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+      await expect(kits.first()).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      await expect(kits.first()).toBeEnabled()
+      await clipListCard(window).locator('li').nth(1).getByRole('button', { name: /^Select clip/ }).click()
+      await expect(kits.first(), 'the other clip is free again').toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Scan VOD: a scan that is running when the person leaves is still running, with its Cancel, when they come back; a second press is not possible', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('leave-scan', longSrc)
+    try {
+      const scan = (): Locator => highlightCard(window)
+      await scan().getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(scan().getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await leaveAndReturn(window)
+      const scanning = scan().getByRole('button', { name: 'Scanning…' })
+      await expect(scanning, 'not "Scan VOD" again: the scan is running and the button is off').toBeDisabled()
+      await expect(scan().getByRole('progressbar', { name: 'Scanning the video for highlights' })).toBeVisible()
+      await scan().getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Scan canceled.')
+      await expect(scan().getByRole('button', { name: 'Scan VOD' })).toBeEnabled({ timeout: 30_000 })
+      await expect(scan().getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-135 (4): a scan's candidates, a pasted chat log and the spikes found in it were each panel's state, lost with every visit - and with Clean audio's
+  // own navigation. They belong to the open video now (the video store empties them on load and close), so the same video keeps them across any
+  // number of visits and a different video starts clean. (The transcript preview is held the same way; a transcription needs the speech engine, which
+  // is not on this machine, so that half is the store's unit case and the wiring pin.)
+  test('scan candidates, pasted chat logs and found spikes are still there after a trip to Home, and a different video starts clean', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('leave-results', burstSrc)
+    try {
+      const scan = (): Locator => highlightCard(window)
+      await scan().getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(scan().locator('li')).toHaveCount(1, { timeout: 60_000 })
+      await scan().getByRole('button', { name: 'Add chat log (optional)' }).click()
+      await scan().locator('textarea').fill(chatLogOverBurst())
+      await expect(scan().locator('li').first().getByText('Chat')).toBeVisible()
+      const chat = (): Locator => chatCard(window)
+      await chat().locator('textarea').fill(chatLogWithOneSpike())
+      await chat().getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(chat().locator('li')).toHaveCount(1)
+
+      await leaveAndReturn(window)
+      await expect(scan().locator('li'), 'the scan\'s candidates are still listed').toHaveCount(1)
+      await expect(scan().getByRole('button', { name: 'Re-scan' })).toBeVisible()
+      await expect(scan().locator('textarea'), 'the chat log is where it was left').toHaveValue(chatLogOverBurst())
+      await expect(chat().locator('textarea')).toHaveValue(chatLogWithOneSpike())
+      await expect(chat().locator('li'), 'the spikes are still listed').toHaveCount(1)
+      await expect(chat().locator('li').first().locator('span.font-mono')).toHaveText('0:15')
+
+      // Clean audio navigates to Audio Studio: the same trip.
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 60_000 })
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await expect(scan().locator('li')).toHaveCount(1)
+      await expect(chat().locator('li')).toHaveCount(1)
+
+      // A different video starts clean: close this one and drop another.
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(scan().locator('li')).toHaveCount(0)
+      await expect(scan().getByRole('button', { name: 'Scan VOD' })).toBeVisible()
+      await expect(chat().locator('textarea')).toHaveValue('')
+      await expect(chat().locator('li')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Clean audio: the button stays off while its extraction runs, after a trip to Home; and a second extraction from the Audio Studio importer is refused by name', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('leave-clean', clipSrc)
+    try {
+      await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      const clean = (): Locator => window.getByRole('button', { name: 'Clean audio' })
+      await clean().click()
+      await expectToast(window, 'Extracting audio')
+      await expect(clean()).toBeDisabled()
+
+      // Away and back: still off. (This used to re-arm the button, and a second press ran a second extraction.)
+      await leaveAndReturn(window)
+      await expect(clean(), 'not re-armed by the visit').toBeDisabled()
+
+      // A second extraction from the other door - the Audio Studio importer - is refused in a sentence that names the one that is running.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await window.evaluate((file) => {
+        const zone = document.querySelector('[data-tutorial="audio-importer"] .card')
+        if (!zone) throw new Error('Audio Studio drop zone not found')
+        const f = new File([new Uint8Array([0])], 'friday.mp4', { type: '' })
+        Object.defineProperty(f, 'path', { value: file })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [f] } })
+        zone.dispatchEvent(event)
+      }, burstSrc)
+      await expectToast(window, 'Still extracting the sound from "pipeline.mp4". Wait for it to finish, then try again.')
+      await expect(window.locator('[data-tutorial="audio-waveform"]'), 'nothing was opened by the refused drop').toHaveCount(0)
+      // The first extraction was never disturbed: it finishes and its sound opens in Audio Studio.
+      await expect(window.locator('[data-tutorial="audio-waveform"]')).toBeVisible({ timeout: 120_000 })
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toBeVisible()
+      // And the slot is given back when it ends: the button is armed again for the next one.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await expect(clean(), 'the finished extraction gave the run back').toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
 test.describe('ExportPanel', () => {
   test('a two-clip, two-preset queue writes four files named by the template, and persists what it used', async () => {
     test.setTimeout(600_000)
@@ -2738,20 +3239,39 @@ test.describe('ExportPanel', () => {
   // T-134 (5): the warning lists each affected clip by name, and a clip's name is whatever the person typed (the rename box has no cap): an unbroken
   // one made the list scroll SIDEWAYS inside its card (the list is an `overflow-y-auto` box, which makes the other axis scroll too). The row now
   // cuts the name with an ellipsis and carries all of it as its tooltip, like every other name a layout cuts (DESIGN_GUIDE, the chip rule).
-  test('a clip with a very long unbroken name is cut with an ellipsis in the safe-zone warning, and the list does not scroll sideways (T-134 (5))', async () => {
+  // T-135 (6): that capped the clip-name span only. Each zone line under it embeds `preset.label`, which for a custom preset is the preset's NAME
+  // (a 60-character name measured scrollWidth 474 against 406; the 80-character one already on disk, 977), so the lines scrolled sideways just the
+  // same. The long preset is WRITTEN to the presets folder (a cap on the box does not shorten what is saved) and queued beside YouTube, so both
+  // directions of the collision carry its name.
+  test('a clip and a custom preset with very long unbroken names are cut with an ellipsis in the safe-zone warning, and the list does not scroll sideways (T-134 (5), T-135 (6))', async () => {
     test.setTimeout(240_000)
     const studio = await launchWithVideo('safezone-longname')
-    const { app, window, outDir } = studio
+    const { app, window, outDir, userDataDir } = studio
     try {
       await stubDialogs(app, { open: [outDir] })
       const card = exportCard(window)
       await card.getByRole('button', { name: 'Choose folder…' }).click()
       const longName = 'ClipNamedByAStreamerWhoNeverHitTheSpaceBar'.repeat(3)
+      const presetName = 'PresetNamedByAStreamerWhoNeverHitTheSpaceBarAtAll_0123456789'.padEnd(80, 'x')
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      mkdirSync(presetsDir, { recursive: true })
+      writeFileSync(
+        path.join(presetsDir, 'zonelong0.json'),
+        JSON.stringify({ id: 'zonelong0', name: presetName, width: 720, height: 1280, fps: 30, videoBitrate: '5M', audioBitrate: '192k', basePlatformId: 'reels' }),
+        'utf8'
+      )
+      // The Export panel read its list when it mounted; opening the Presets dialog reads the folder again.
+      await card.getByRole('button', { name: 'Presets' }).click()
+      const manager = window.getByRole('dialog', { name: 'Custom export presets' })
+      await expect(manager.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      await manager.getByRole('button', { name: 'Close', exact: true }).first().click()
+      await expect(manager).toBeHidden()
       const rename = clipListCard(window).locator('input[type="text"]').first()
       await rename.fill(longName)
       await expect(rename).toHaveValue(longName)
       await rename.press('Tab')
-      await presetBox(window, 'Reels').check()
+      // YouTube (16:9, ticked by default) beside the custom 9:16 preset: each one's centered cut loses the other's frame.
+      await card.locator('[data-export-target="zonelong0"]').getByRole('checkbox').check()
       await card.getByRole('button', { name: 'Export 2' }).click()
       const modal = window.getByRole('dialog')
       await expect(modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()).toBeVisible()
@@ -2759,6 +3279,9 @@ test.describe('ExportPanel', () => {
       const list = modal.getByRole('list', { name: 'Clips that will be cropped' })
       const name = list.locator('li > span').first()
       await expect(name).toHaveText(longName)
+      // Both directions of the collision name the preset; each is one line of the list.
+      const zones = [`${presetName} frame → cut down for YouTube`, `YouTube frame → cut down for ${presetName}`]
+      await expect(list.locator('li > div')).toHaveText(zones)
       const problems: string[] = []
       const check = async (run: () => Promise<void>): Promise<void> => {
         try {
@@ -2773,11 +3296,14 @@ test.describe('ExportPanel', () => {
       ] as const) {
         await setWindowSize(app, window, size)
         await check(() => expectEllipsized(name, longName, `the clip name in the warning at ${where}`))
+        for (const [i, zone] of zones.entries()) {
+          await check(() => expectEllipsized(list.locator('li > div').nth(i), zone, `the zone line "${zone.slice(0, 40)}..." at ${where}`))
+        }
         await check(() => expectNoHorizontalOverflow(list, `the cropped-clips list at ${where}`))
         await check(() => expectNoHorizontalOverflow(modal, `the safe-zone dialog at ${where}`))
         await check(() => expectControlsWhole(modal, modal.getByRole('button'), `the dialog's buttons at ${where}`))
       }
-      expect(problems, 'the long name is cut, and nothing scrolls sideways').toEqual([])
+      expect(problems, 'the long names are cut, and nothing scrolls sideways').toEqual([])
       await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
     } finally {
       await app.close()
@@ -3827,6 +4353,39 @@ test.describe('CustomPresetManager', () => {
       window.once('dialog', (dialog) => void dialog.accept())
       await rows.filter({ hasText: (names[0] as string).slice(0, 20) }).getByRole('button', { name: 'Delete' }).click()
       await expect(modal.getByText('Saved presets (2)')).toBeVisible({ timeout: 15_000 })
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-135 (8): the Presets dialog's Save and Delete had no catch (the audio PresetPanel has had one since T-90): a refused write was an unhandled rejection and the
+  // dialog looked as if it had worked, with the typed name cleared only on success but nothing said on failure. The refusal here is REAL: the presets folder is
+  // replaced by a file after the dialog has read it, so the save's mkdir fails.
+  test('a refused preset save is reported and the form keeps what was typed; once the folder is back, the retry saves (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchWithVideo('preset-refused')
+    const { app, window, userDataDir } = studio
+    try {
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByText('Saved presets (0)')).toBeVisible({ timeout: 15_000 })
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      await nameInput.fill('Refused once')
+      // The folder (the dialog's own read made it) is replaced by a file: the save cannot make it.
+      rmSync(presetsDir, { recursive: true, force: true })
+      writeFileSync(presetsDir, 'not a folder', 'utf8')
+      await modal.getByRole('button', { name: '+ Save preset' }).click()
+      await expectToast(window, "Couldn't save that preset.")
+      await expect(nameInput, 'the name is still in the box').toHaveValue('Refused once')
+      await expect(modal.getByText('Saved presets (0)')).toBeVisible()
+      expect((await readToastLog(window)).some((t) => t.includes('Saved "Refused once"')), 'no success was claimed').toBe(false)
+      // The folder comes back; the same form saves.
+      rmSync(presetsDir, { force: true })
+      await modal.getByRole('button', { name: '+ Save preset' }).click()
+      await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      await expect(nameInput, 'a preset that was saved empties the box').toHaveValue('')
+      await expectToast(window, 'Saved "Refused once"')
     } finally {
       await app.close()
     }
@@ -8397,13 +8956,18 @@ test.describe('T-112: review-gate fixes', () => {
     }
   })
 
-  test('pressing Export again after leaving Video Studio and coming back is refused while the first batch still runs (T-111 / T-112)', async () => {
+  // T-111 / T-112 pinned a returning panel that "believes nothing runs" and a second press that main refused. T-135 (1) removed the belief: the batch is
+  // the Export queue store's, so a panel that comes back mid-batch is not idle (no Export button to press: it reads "Exporting…", the row and the
+  // Cancel are there). Main's one-batch-at-a-time gate (T-111) stays the backstop, and it is still reachable from another door: Clip Kit runs its
+  // five exports as a batch too. Pressing it while the Export batch runs is refused by main in a finished sentence, the running batch is untouched,
+  // and the kit's empty folder goes with the refusal (T-112).
+  test('after leaving Video Studio mid-batch there is no Export to press, and Clip Kit, the other door, is refused by main while the first batch runs (T-111 / T-112 / T-135 (1))', async () => {
     test.setTimeout(300_000)
-    // The panel's job state is panel-local (T-110 j), so a returning panel believes nothing runs. Main
-    // knows better (round 61): one batch at a time. The first batch is held 60 s inside its encode.
     const { app, window, outDir } = await launchWithVideo('t112again')
     try {
-      await stubDialogs(app, { open: [outDir] })
+      const kitParent = path.join(root, `kit-again-${Date.now().toString(36)}`)
+      mkdirSync(kitParent, { recursive: true })
+      await stubDialogs(app, { open: [outDir, kitParent] })
       const card = exportCard(window)
       await card.getByRole('button', { name: 'Choose folder…' }).click()
       await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 60_000 }])
@@ -8416,29 +8980,32 @@ test.describe('T-112: review-gate fixes', () => {
         })
         .toBe(1)
 
-      // Leave, and come back to a fresh panel.
+      // Leave, and come back: the panel draws the batch that is running. There is nothing to press twice.
       await window.getByRole('link', { name: 'Home' }).click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
       await gotoVideoStudio(window)
       const again = exportCard(window)
-      const button = again.getByRole('button', { name: /^Export 1/ })
-      await expect(button).toBeEnabled({ timeout: 30_000 })
+      await expect(again.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(again.getByRole('button', { name: /^Export 1/ }), 'no Export button to press a second time').toHaveCount(0)
+      await expect(again.getByRole('progressbar', { name: 'Clip 1 · YouTube' })).toBeVisible()
+      await expect(again.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
       // T-115: the returning panel's hook badge asks for its loudness 250 ms after it mounts (a real
       // ffmpeg that is the badge's, not the refused batch's): let it finish before the log is counted.
       await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
       const spawnedBefore = (await readSpawnLog(app)).length
-      await button.click()
 
+      // The other door: Clip Kit's batch is refused by main, in words, and starts nothing.
+      await clipListCard(window).getByTitle('Export this clip for all 5 platforms + 3 thumbnails into one folder').click()
       const REFUSAL =
         'An export is already running. Wait for it to finish, or cancel it, then try again.'
       await expectToast(window, REFUSAL)
       const entry = (await readToastEntries(window)).find((e) => e.text === REFUSAL)
       expect(entry?.hasIcon, 'a refusal is an error toast').toBe(true)
-      // The row says the same, in text, on the job that was refused…
-      await expect(again.getByText(REFUSAL, { exact: true })).toBeVisible()
-      await expect(again.getByText('Failed', { exact: true })).toHaveCount(1)
-      // …and the refused batch started nothing: no probe, no encoder, no file.
-      await window.waitForTimeout(500)
+      // The batch that IS running is untouched: no Failed row, its Cancel still there.
+      await expect(again.getByText('Failed', { exact: true })).toHaveCount(0)
+      await expect(again.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+      // ...and the refused kit started nothing: no probe, no encoder, no file, and no empty folder left behind.
+      await expect.poll(() => readdirSync(kitParent), { timeout: 15_000, intervals: [200] }).toEqual([])
       expect((await readSpawnLog(app)).length).toBe(spawnedBefore)
       expect(mp4sIn(outDir)).toEqual([])
     } finally {

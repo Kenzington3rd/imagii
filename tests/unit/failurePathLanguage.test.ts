@@ -176,7 +176,8 @@ describe('every site the ticket named routes through the helper', () => {
   const SITES: Array<[string, string, number]> = [
     ['routes/Home.tsx', 'reportFailure(', 3],
     ['components/AutosaveRestore.tsx', 'reportFailure(', 2],
-    ['modules/video-studio/ExportPanel.tsx', 'reportFailure(', 1],
+    // T-135 (1): the batch (and so its failure verdict) moved into the queue's store, which outlives the panel.
+    ['modules/video-studio/store/exportQueue.ts', 'reportFailure(', 1],
     ['modules/video-studio/ClipKitButton.tsx', 'reportFailure(', 1],
     ['modules/video-studio/GifPanel.tsx', 'reportFailure(', 1],
     ['modules/video-studio/CompilationPanel.tsx', 'reportFailure(', 1],
@@ -190,7 +191,10 @@ describe('every site the ticket named routes through the helper', () => {
     ['modules/image-studio/ExportDialog.tsx', 'reportFailure(', 1],
     ['modules/image-studio/ImportPanel.tsx', 'reportFailure(', 1],
     ['modules/image-studio/ThumbnailVariants.tsx', 'reportFailure(', 3],
-    ['modules/references/MoodBoardPanel.tsx', 'reportFailure(', 1],
+    // T-135 (8): sendToCanvas, and now create / rename / delete.
+    ['modules/references/MoodBoardPanel.tsx', 'reportFailure(', 4],
+    ['modules/references/ReferencePanel.tsx', 'reportFailure(', 2],
+    ['modules/video-studio/CustomPresetManager.tsx', 'reportFailure(', 2],
     // T-123 (18): the "Edit in Video Studio" failure sentence moved out of RecordStudio into the hook Record and Reframe share.
     ['lib/editInVideoStudio.ts', 'reportFailure(', 1],
     ['modules/record-studio/RecordStudio.tsx', 'reportFailure(', 4],
@@ -288,57 +292,57 @@ describe('the words on the failure path', () => {
   })
 })
 
-describe('Save .srt reports its own failure (T-115)', () => {
-  /**
-   * What `fn` does with the `window.api.*` call it awaits: whether the await sits inside a `try`
-   * whose `catch` calls `reportFailure(…, { failed: <string> })`, and that sentence.
-   */
-  function guardedAwait(sf: ts.SourceFile, fn: string, needle: string): { awaited: boolean; guarded: boolean; failed: string | null } {
-    const out = { awaited: false, guarded: false, failed: null as string | null }
-    const inspect = (node: ts.Node): void => {
-      if (ts.isFunctionDeclaration(node) && node.name?.text === fn && node.body) walkFn(node.body)
-      ts.forEachChild(node, inspect)
-    }
-    const walkFn = (body: ts.Node): void => {
-      const visit = (n: ts.Node, tryCatch: ts.CatchClause | null): void => {
-        if (ts.isTryStatement(n) && n.catchClause) {
-          visit(n.tryBlock, n.catchClause)
-          visit(n.catchClause, tryCatch)
-          if (n.finallyBlock) visit(n.finallyBlock, tryCatch)
-          return
-        }
-        if (ts.isAwaitExpression(n) && n.expression.getText(sf).includes(needle)) {
-          out.awaited = true
-          if (tryCatch) {
-            let failed: string | null = null
-            const find = (c: ts.Node): void => {
-              if (ts.isCallExpression(c) && c.expression.getText(sf) === 'reportFailure') {
-                const copy = c.arguments[1]
-                if (copy && ts.isObjectLiteralExpression(copy)) {
-                  for (const p of copy.properties) {
-                    if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'failed' && ts.isStringLiteralLike(p.initializer)) {
-                      failed = p.initializer.text
-                    }
+/**
+ * What `fn` does with the `window.api.*` call it awaits: whether the await sits inside a `try`
+ * whose `catch` calls `reportFailure(…, { failed: <string> })`, and that sentence.
+ */
+function guardedAwait(sf: ts.SourceFile, fn: string, needle: string): { awaited: boolean; guarded: boolean; failed: string | null } {
+  const out = { awaited: false, guarded: false, failed: null as string | null }
+  const inspect = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === fn && node.body) walkFn(node.body)
+    ts.forEachChild(node, inspect)
+  }
+  const walkFn = (body: ts.Node): void => {
+    const visit = (n: ts.Node, tryCatch: ts.CatchClause | null): void => {
+      if (ts.isTryStatement(n) && n.catchClause) {
+        visit(n.tryBlock, n.catchClause)
+        visit(n.catchClause, tryCatch)
+        if (n.finallyBlock) visit(n.finallyBlock, tryCatch)
+        return
+      }
+      if (ts.isAwaitExpression(n) && n.expression.getText(sf).includes(needle)) {
+        out.awaited = true
+        if (tryCatch) {
+          let failed: string | null = null
+          const find = (c: ts.Node): void => {
+            if (ts.isCallExpression(c) && c.expression.getText(sf) === 'reportFailure') {
+              const copy = c.arguments[1]
+              if (copy && ts.isObjectLiteralExpression(copy)) {
+                for (const p of copy.properties) {
+                  if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'failed' && ts.isStringLiteralLike(p.initializer)) {
+                    failed = p.initializer.text
                   }
                 }
               }
-              ts.forEachChild(c, find)
             }
-            find(tryCatch)
-            if (failed !== null) {
-              out.guarded = true
-              out.failed = failed
-            }
+            ts.forEachChild(c, find)
+          }
+          find(tryCatch)
+          if (failed !== null) {
+            out.guarded = true
+            out.failed = failed
           }
         }
-        ts.forEachChild(n, (c) => visit(c, tryCatch))
       }
-      visit(body, null)
+      ts.forEachChild(n, (c) => visit(c, tryCatch))
     }
-    inspect(sf)
-    return out
+    visit(body, null)
   }
+  inspect(sf)
+  return out
+}
 
+describe('Save .srt reports its own failure (T-115)', () => {
   const panel = FILES.find((f) => f.rel === 'modules/video-studio/CaptionsPanel.tsx')
 
   it('CaptionsPanel awaits captions.saveSrt inside a try whose catch is reportFailure with a plain sentence', () => {
@@ -432,5 +436,30 @@ describe('a settings write is never a bare promise (T-128 (4), T-110 (x))', () =
     expect(hits("async function f() { try { y(); await window.api.settings.set('a', 1); y() } catch { z() } }")).toBe(0)
     // Reading is another question (a `get` that rejects is a different ticket); another object's `set` is not a setting.
     expect(hits("async function f() { await window.api.settings.get('a'); map.set('a', 1); store.settings.size }")).toBe(0)
+  })
+})
+
+// T-135 (8): the board and preset writes that had no catch. Each await of a write main can refuse sits in a try whose catch reports, in the sentence the
+// panel owns; the E2Es (references.spec.ts, video-pipelines.spec.ts) drive the refusals that can be reached for real.
+describe('the board and preset writes report their refusals (T-135 (8))', () => {
+  const file = (rel: string): (typeof FILES)[number] => {
+    const f = FILES.find((x) => x.rel === rel)
+    if (!f) throw new Error(`${rel} not found`)
+    return f
+  }
+  const cases: Array<[string, string, string, string]> = [
+    ['modules/references/MoodBoardPanel.tsx', 'onCreate', 'createCollection', "Couldn't create that board."],
+    ['modules/references/MoodBoardPanel.tsx', 'onRename', 'renameCollection', "Couldn't rename that board."],
+    ['modules/references/MoodBoardPanel.tsx', 'onDelete', 'deleteCollection', "Couldn't delete that board."],
+    ['modules/references/ReferencePanel.tsx', 'saveInto', 'addToCollection', "Couldn't save that picture."],
+    ['modules/references/ReferencePanel.tsx', 'createBoardAndSave', 'createCollection', "Couldn't create that board."],
+    ['modules/video-studio/CustomPresetManager.tsx', 'save', 'video.saveCustomPreset', "Couldn't save that preset."],
+    ['modules/video-studio/CustomPresetManager.tsx', 'remove', 'video.deleteCustomPreset', "Couldn't delete that preset."]
+  ]
+  it.each(cases)('%s %s() awaits %s in a try whose catch is reportFailure', (rel, fn, needle, sentence) => {
+    const found = guardedAwait(file(rel).ast, fn, needle)
+    expect(found.awaited, `${fn} still awaits ${needle}`).toBe(true)
+    expect(found.guarded, 'the await has a catch that reports').toBe(true)
+    expect(found.failed).toBe(sentence)
   })
 })

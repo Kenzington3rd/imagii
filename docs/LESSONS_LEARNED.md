@@ -14,6 +14,79 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-24 — T-135 (round 84): a job that lived in the panel's state, a preview that said nothing, and a guard that answered for the click instead of the state
+
+The twenty-first pass (14 items, expediter-ticketed). Ledger: r84/ledger.md (58 red rows and 133 mutation rows, 133 of 133 restores byte-identical; 6 mutants survived their first run, each either killed on a rerun after the test was strengthened or killed by a unit test at another layer; every red a test run against the old product code, a build of the unchanged tree `2b0f717` for the Playwright cases, or a content-replace mutation of the finished code with a sha256 triple; every restore byte-identical; items 11 and 12 at Layer 5 on both ffmpeg majors).
+
+### (1) [MED] - leaving a studio mid-job lost the job's state and its Cancel
+
+- **Bug.** The long-job panels (Reframe, GIF, Compile, PiP, Scan VOD, Captions, Clip Kit, Clean audio, the Export batch, the audio export) kept their busy flag, their job id and their rows in `useState` / `useRef`, and their progress listeners in an effect. A trip to Home unmounted all of it: the panel came back idle with its primary button enabled over a job main was still running, no Cancel anywhere (USER_GUIDE promises one), and a retry hit main's "An export is already running". Clean audio's button state was the studio's, so a second press ran a second concurrent extraction.
+- **Root cause.** A job's lifetime is longer than a screen's, and the state that describes the job was given the screen's lifetime.
+- **Fix.** The run is a module store (`lib/runStore.ts` + `video-studio/store/runs.ts`; `store/exportQueue.ts`; `audio-studio/state/audioExport.ts`): the closure that runs the job writes to the store after its panel is gone and a remounted panel draws what is there. `begin()` is the claim (before the first await), `end()` is in a `finally`. Clip Kit's run records the clip that owns it, so only that row shows the label and the Cancel and the others are off. Main's `audio:extractFromVideo` is single-flight and refuses a second start in a sentence that names the video that is running. While writing the Export store a real race showed up that the old always-on listener had hidden: the batch's job-complete event can be dispatched AFTER the call has resolved, and a listener that lasts one batch is already gone, so the rows stayed at 100% with no file and no "Show in folder"; the rows now also take each file from the batch's own results.
+- **Test.** `runStore.test.ts`, `exportQueue.test.ts` (including the late event), `audioExport.test.ts`, `audioExtractSingleFlight.test.ts`, the T-135 wiring pins; video-pipelines.spec.ts "Leaving a studio mid-job (T-135 (1), (4))" (eight cases, red on the unchanged build) and audio.spec.ts "an export that is running when the person leaves Audio Studio ..." and "an export that ends while the person is away ...". Two older cases pinned the old shape and were revised, not deleted: the T-111/T-112 "pressing Export again after leaving Video Studio" case (a returning panel that believes nothing runs) became "there is no Export to press, and Clip Kit, the other door, is refused by main", and the first full Playwright run caught the T-89 captions-progress case, which sends the engine's events from main with no job running: the progress line is its own store, not a field of the run.
+- **Lesson.** **State that describes a job outlives the screen that started it, or the screen lies when it comes back. Ask of every `useState` in a panel that starts something slow: "what is true of this when the person is on another screen?" And a listener that lasts exactly one call must not be the only way the call's result reaches the UI: events and replies race, so the reply carries the record.**
+
+### (2) [MED] - a video the preview cannot decode was a silent dead end
+
+- **Bug.** ProRes, some H.265 and 10-bit files load in the `<video>` element with `videoWidth` 0, `readyState` 4, no `error` event and a `play()` that resolves (measured in this Electron). Play flipped to Pause over a black rectangle, with nothing said; README promised "H.264, H.265, VP9, ProRes, AV1 in any common container should work".
+- **Fix.** The Player hears the element's three signals (the `error` event, codes 3 and 4; `play()` rejected as `NotSupportedError`; the metadata tell: width 0 for a file ffprobe says has a picture), `togglePlay` follows the `play()` promise, and a note under the picture says what still works with a "Make a preview copy" button through the importer's own convert. The copy is `previewUrl` in the video store, not a swapped `source`, so exports, projects and the `replacedSince` identity keep the original. README narrowed.
+- **Test.** video-pipelines.spec.ts "Player — a picture the preview cannot decode (T-135 (2))" (a real ProRes fixture), `videoStore.test.ts`, `mediaFormats.test.ts`, the wiring pin.
+- **Lesson.** **An element that stays quiet has not said yes. The Player's error listener alone would never have heard this file; measure what the element does with the worst file you can make before deciding which signals to listen for.**
+
+### (3) [MED] - the chat spike finder never merged neighbouring buckets
+
+- **Bug.** A spike over three buckets listed as three rows, two of them heads of the same moment, each with its own padding.
+- **Fix.** `findChatPeaks` (`shared/chatPeaks.ts`): buckets whose unpadded keys are adjacent merge, and a row runs from the first bucket minus the padding to the last bucket's end plus the padding.
+- **Test.** `chatPeaks.test.ts`; video-pipelines.spec.ts "three adjacent hype buckets are ONE row, and + Clip lands the whole spike with its padding".
+- **Lesson.** **Merge on the keys you bucketed by, not on the padded windows: padding makes any two nearby buckets overlap and the merge swallows quiet gaps.**
+
+### (4) [LOW] - derived results died when the studio was left
+
+- **Bug.** A scan's candidates, the pasted chat logs, the spikes found in them and the transcript preview were panels' `useState`; every visit to Home emptied them.
+- **Fix.** They are `derived` in the video store (`setDerivedFor` drops a result that arrives after the video was replaced; load and close empty them).
+- **Test.** `videoStore.test.ts`; video-pipelines.spec.ts "scan candidates, pasted chat logs and found spikes are still there after a trip to Home, and a different video starts clean". The transcript preview has no end-to-end case (it needs the speech engine; INTERACTION_COVERAGE says so).
+- **Lesson.** **A result belongs to the thing it was computed from. If the thing outlives the screen, so does the result, and the store that holds the thing is where it lives.**
+
+### (5) [LOW] - the corrected-query fix was Enter-only, and the box could be blank over a grid
+
+- **Bug.** The Search button was `disabled={loading}`, so a pointer or voice-control user could not send the correction Enter could; and the input was panel state while the grid was store state, so Mood Boards and back drew the grid over an empty box.
+- **Fix.** The store holds the newest request's query (`searchQuery`); the button is off only when loading and the typed text equals it; the input starts as it.
+- **Test.** `referencesStore.test.ts`, the wiring pin; references.spec.ts "a corrected query is sent BY CLICK while the typo is out, and the box names the grid after a trip to another tab".
+- **Lesson.** **When a guard learns to tell "the same question" from "a different one", every entry point has to learn it, not only the one the bug was found through.**
+
+### (6)-(8) [LOW] - a zone line that scrolled sideways, a confirm that over-claimed, writes that failed silently
+
+- **(6)** The safe-zone warning's zone lines carry a custom preset's name and were plain divs (474 and 977 px against 406): `truncate` and a `title`. **(7)** "Clear saved transcripts" said it would delete the open video's transcript whether or not it had one (`clearTranscriptsQuestion`, conditional copy). **(8)** Board create / rename / delete / save and preset save / delete were bare awaits, the first-save dialog closed before the create landed, and the name boxes had no cap although main enforced 200: each reports a sentence and keeps what was typed, the dialog closes after the board exists, `MAX_BOARD_NAME` is one number.
+- **Test.** video-pipelines.spec.ts (zone lines, Clear transcripts, the preset refusal), references.spec.ts (the cap, the refused first save, the refused create and rename), `captions.test.ts`, `failurePathLanguage.test.ts`, the wiring pins.
+- **Lesson.** **A write the other side can refuse needs a sentence and must not throw away what the person typed. And a number main enforces is exported once, so the box cannot disagree with it.**
+
+### (9)-(10) [LOW] - two loads that trusted what they had been handed
+
+- **(9)** Opening a project or restoring an autosave replaced a sound the person opened during the video's wait; two of the three closures were unguarded (`replacedSince`, by identity, on all three). **(10)** An unknown preset id in a project's clip survived validation and killed Export at the batch; unknown ids are dropped on the way in, with the rest of the file kept.
+- **Test.** `ProjectIO.test.ts` (the plain path was the red-first case), `projectValidation.test.ts`.
+- **Lesson.** **A guard added to one of three sibling closures is a guard on one of three. Grep the siblings when you add it, and drop (do not refuse the file for) a value the build no longer knows.**
+
+### (11)-(12) [LOW] - two audio exports that said the wrong thing
+
+- **(11)** A second track with no sound failed late, at ffmpeg's `[1:a] matches no streams` (exit 234), and the sentence blamed the primary file. It is probed when picked and again at the top of `exportAudio`, in its own sentence. **(12)** A chain whose cuts remove everything exits 0 from ffmpeg with a header-only file (78 bytes of WAV, about 257 of AAC, about 620 of MP3, measured on both majors) and "Cleaned audio exported" was said over nothing; an export that keeps less than 0.05 s is refused before ffmpeg is spawned (`cutsLeaveNothing` reads the unfloored length, because `keptDurationSec` floors at 0.1 s).
+- **Test.** Layer 5 `media.spec.ts` "T-135 (11)" and "T-135 (12)" on the bundled 7.0.2 and the distro's 6.1.1; `chain.test.ts`, `audio.test.ts`, `exportProgress.test.ts`; audio.spec.ts "a second track with no sound in it is refused ..." and "a chain that cuts the whole file is refused ...".
+- **Lesson.** **A success exit code is not a success: when the input can be empty, pin the exit-0-empty shape against the real binary. And a floor that exists for one purpose (a duration that is never zero) must not be reused as a test for another (nothing is left).**
+
+### (13), (14) - a navigate after a wait, and a stale comment
+
+- **(13)** "→ Canvas" awaits the picture's load (a network fetch for a tile whose cached thumbnail is gone) and navigated to `/image` wherever the person was; it now navigates only if `currentRoute() === '/references'`, read after the await. The layer and the toast are not behind the guard. **(14)** The stale comment at `home-chrome.spec.ts:1226` says what the case does.
+- **Test.** references.spec.ts "→ Canvas that finishes after the person went to another screen ..." (the load is held by parking the page's `HTMLImageElement.src` setter), the wiring pin.
+- **Lesson.** **The T-132 (1) and T-134 (1) rule again, at one more site: any `navigate` after an `await` asks where the person IS. Grep for `navigate(` after every await when a wait can be long.**
+
+
+### Found while gating - a toast log read once, right after the waveform
+
+- **Bug.** audio.spec.ts "a recording whose header has no duration (a MediaRecorder WebM) imports ..." read the toast log once, as soon as the waveform and the Play button were up, and expected "Loaded" in it. The toast is raised a few milliseconds after the waveform is drawn, so the case failed about one run in three (4 of 12 on the unchanged build, 2 of 8 on this one) and failed once in this ticket's second full Playwright run.
+- **Fix.** The case waits for the toast (`expect.poll` over the log, 15 s) and then reads the log for the negative assertion. The assertions are the same; only the wait is new.
+- **Test.** The case itself: 0 failures in 20 standalone runs after the change.
+- **Lesson.** **A log that is read once is a snapshot, not a wait. When a case asserts an event is IN a log, poll for it; a one-shot read is only right for "nothing was logged" after the thing it is waiting for has been seen.**
+---
+
 ## 2026-10-24 — T-134 (round 83): a table that blessed a premise of the click, a held key that was a hundred decisions, and a guard that refused the question that had changed
 
 The twentieth pass (7 items, expediter-ticketed). Ledger: r83/ledger.md (every red a test run against the old product code, a build of the unchanged tree `eed3101` for the Playwright cases, or a content-replace mutation of the finished code with a sha256 triple, every restore byte-identical; item 4's Layer 5 pin on both ffmpeg majors). The items that taught something:

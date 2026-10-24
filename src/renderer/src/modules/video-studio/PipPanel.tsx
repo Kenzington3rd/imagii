@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
+import { usePipRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { DraftField } from '../../components/DraftField'
@@ -24,9 +25,8 @@ export function PipPanel(): JSX.Element {
   const [margin, setMargin] = useState(32)
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
-  const [busy, setBusy] = useState(false)
-  // Round 17 B5
-  const jobIdRef = useRef<string | null>(null)
+  // T-135 (1): the run is a module store, not this panel's state: leaving the studio does not lose it (see GifPanel).
+  const busy = usePipRun((s) => s.run !== null)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -54,9 +54,8 @@ export function PipPanel(): JSX.Element {
       }
       const dir = await resolveOutDir()
       if (!dir) return
-      setBusy(true)
       const jobId = nanoid(10)
-      jobIdRef.current = jobId
+      if (!usePipRun.getState().begin({ jobId })) return
       try {
         const result = await window.api.video.pipComposite({
           jobId,
@@ -76,8 +75,7 @@ export function PipPanel(): JSX.Element {
           canceled: 'Picture-in-picture canceled.'
         })
       } finally {
-        setBusy(false)
-        jobIdRef.current = null
+        usePipRun.getState().end()
       }
     } finally {
       startingRef.current = false
@@ -85,7 +83,7 @@ export function PipPanel(): JSX.Element {
   }
 
   async function cancel(): Promise<void> {
-    const id = jobIdRef.current
+    const id = usePipRun.getState().run?.jobId
     if (!id) return
     await window.api.video.cancelPip(id)
   }

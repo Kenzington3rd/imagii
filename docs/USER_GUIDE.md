@@ -180,6 +180,12 @@ second alone.)
   The two handles are for the mouse; the keyboard's way to the same trim is `I` and `O`,
   and pressed while the video plays they mark the frame you are looking at. Holding the key marks once, and one
   Undo takes the mark back.
+- **A video the preview cannot draw.** imagii reads more formats than its built-in player can
+  show: ProRes, and some H.265 or 10-bit files, load with no picture. When that happens a note under the
+  player says "imagii can't preview this video's picture format — trimming, scanning and export still
+  work", and the **Play** button stays on **Play** instead of turning into **Pause** over a black
+  rectangle. Everything else works on the file as it is; **Make a preview copy** converts a copy just for
+  watching in the player. Your video, your clips and every export are untouched.
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
   **+ Add clip** adds another clip that spans the whole video; trim it with the
   handles. Each clip has its own name, crop, platforms and text.
@@ -295,8 +301,9 @@ second alone.)
   transcription also keeps its raw `.srt` transcript in a `captions` folder
   inside imagii's own data folder — on your machine only, like everything
   else. The bottom of the panel says how many are kept, and **Clear saved
-  transcripts** deletes them all after asking (it goes back to "not
-  transcribed" for the video you have open; an `.srt` you saved yourself and
+  transcripts** deletes them all after asking (the question names the video you have open only when
+  it has a transcript of its own; that video goes back to "not
+  transcribed"; an `.srt` you saved yourself and
   captions already burned into a video are not touched). If a transcript is open
   in another program, that one stays: imagii says how many it cleared, with a
   warning, and clearing again after you close the program takes the rest. You can also delete
@@ -318,6 +325,13 @@ second alone.)
   that didn't are marked **Canceled** (gray, not red). A batch that fails stops at
   the job that failed: that row is **Failed**, in red, with the reason printed on it,
   and the rows behind it that never started say **Not run**.
+- **Leaving a studio does not stop a job.** A render, a scan, a transcription or an export keeps running
+  when you go to Home or another studio. When you come back the panel shows it as running — its button
+  reads "Exporting…", "Scanning…" or the like and is off, the progress bar is there, and so is **Cancel**
+  — and a batch that finished while you were away shows its finished rows with **Show in folder**. Clip Kit
+  belongs to the clip it was started on: that clip's button shows where it is and offers **Cancel**, and the
+  other clips' kit buttons wait. The scan's candidates, the chat log you pasted, the spikes found in it and
+  the transcript preview stay with the open video until you open or close another.
 - **When something fails,** the message says what happened and what to try, in
   plain words — and the Export row that failed is marked **Failed** with the reason
   under it, so you can still see which one, and why, after the message fades.
@@ -333,7 +347,8 @@ second alone.)
 Paste a Twitch chat log, one message per line in the form
 `[mm:ss] user: message`, and click **Find chat spikes**. imagii counts messages
 in short time windows (the **Spike window (s)** field) and lists the busiest
-moments with the messages in them. **+ Clip** on a moment adds it as a clip named
+moments with the messages in them. A spike that runs over several windows in a row is
+one moment, not several. **+ Clip** on a moment adds it as a clip named
 **Chat spike N**, with **Extra seconds around each clip** on either side. Like
 the Smart highlight finder, the first one you add replaces the untouched
 whole-video **Clip 1**.
@@ -431,13 +446,17 @@ never called loaded.
     measured the way stereo speakers play it (the one channel on both sides), so its
     target is what you hear. Whatever you switch on or cut out, peaks above −1 dBFS
     are limited when you export, so a boost cannot clip; an export with nothing
-    switched on and nothing cut keeps the file's levels as they are.
+    switched on and nothing cut keeps the file's levels as they are. If your cuts take out
+    everything, **Export** says "Everything is cut out. Click a mark to put a part back." and
+    writes nothing.
   - **Cleanup presets** — **Save current** keeps your cleanup settings (noise,
     levels and voice treatments) under a name, so you can apply or remove them
     later. Cuts and the second track belong to the recording, so they are not
     saved in a preset.
   - **Add a second track** — layer in background music, a co-host's mic, or game
-    audio. **Duck under your voice** lowers it while you speak.
+    audio. **Duck under your voice** lowers it while you speak. A file with no sound in it is
+    refused when you pick it ("The second track has no sound in it. Remove it or pick another
+    file."), and an export says the same if the file loses its sound before you export.
 - The wizard's last card lists exactly the settings it is about to apply — the
   hum line names the power-line frequency it keeps (**Hum removal: on (50 Hz
   mains)**). **Start over** goes back to its first question; **Close** leaves it.
@@ -522,14 +541,16 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
 - **Reference Search** — search images. SafeSearch is always on (strict):
   DuckDuckGo does the filtering, and imagii doesn't scan images itself. Reference
   Search is one of the two features that go online; the other is the one-time
-  caption model download. Press **Enter** or click **Search**; pressing Enter again with the same
+  caption model download. Press **Enter** or click **Search**; pressing it again with the same
   words while that search is running does nothing, so a second press never sends a second request.
-  Change the words and press Enter and the new search goes out at once; its results are the ones you
-  see, even if the first search answers later. Hover a result and click **Save** to add it to the
+  Change the words and press Enter or click **Search** and the new search goes out at once; its results are the ones you
+  see, even if the first search answers later. The box always says which search the results on screen
+  are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
-- **Mood Boards** — your saved boards. Hover an item and click **→ Canvas**
-  to add it to the Stream Graphics canvas as a 40%-opacity reference layer. A
+- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). Hover an item and click **→ Canvas**
+  to add it to the Stream Graphics canvas as a 40%-opacity reference layer; if the picture takes a
+  moment to load and you have gone elsewhere, the layer is still added and imagii leaves you where you are. A
   reference is a guide only: it is tagged **reference — won't export** and is
   left out of exports.
   **Clear thumbnail cache** (on this tab) empties imagii's on-disk copy of the

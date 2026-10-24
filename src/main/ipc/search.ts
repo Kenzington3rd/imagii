@@ -15,7 +15,7 @@ import {
   clearThumbCache
 } from '../search/moodboard'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '../../shared/search'
-import { validateSearchResult } from '../../shared/search'
+import { MAX_BOARD_NAME, validateSearchResult } from '../../shared/search'
 import { assertNonEmptyString } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
 import { SAFE_ID_RE } from '../../shared/pathSafety'
@@ -26,7 +26,6 @@ import { SAFE_ID_RE } from '../../shared/pathSafety'
 // IPC boundary is where untrusted input first arrives so a hostile/buggy
 // renderer can't trigger an internal assertion message; it gets a clean
 // validation error instead.
-const MAX_BOARD_NAME = 200
 function assertSafeId(value: unknown, name: string): asserts value is string {
   assertNonEmptyString(value, name)
   assertAlways(SAFE_ID_RE.test(value), `${name} must match nanoid alphabet`)

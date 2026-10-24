@@ -4,6 +4,7 @@ import {
   keptDurationSec,
   buildChain,
   chainEndsWithLoudnorm,
+  cutsLeaveNothing,
   denoiseFilter,
   humFrequency,
   parseLoudnormJson,
@@ -491,5 +492,36 @@ describe('keptDurationSec - what an audio export writes (T-125 (6))', () => {
   it('a reversed or empty region removes nothing, and a chain that cuts it all still divides by something', () => {
     expect(keptDurationSec(300, [{ startSec: 100, endSec: 100 }, { startSec: 200, endSec: 150 }])).toBe(300)
     expect(keptDurationSec(300, [{ startSec: 0, endSec: 300 }])).toBe(0.1)
+  })
+})
+
+// T-135 (12): ffmpeg exits 0 for a chain whose cuts remove every second and writes a header-only file, so the export asks BEFORE it spawns. The ask
+// cannot be `keptDurationSec`, which never goes below 0.1 s (a progress bar's divisor); `cutsLeaveNothing` is the same arithmetic without the floor.
+describe('cutsLeaveNothing - an export with nothing left to write (T-135 (12))', () => {
+  it('a chain with no cuts, and one that cuts a part, leaves something', () => {
+    expect(cutsLeaveNothing(8, [])).toBe(false)
+    expect(cutsLeaveNothing(8, [{ startSec: 2, endSec: 4 }])).toBe(false)
+  })
+
+  it('cuts that cover the whole file leave nothing: one region, several that tile it, overlapping ones, and ones that run past either end', () => {
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 8 }])).toBe(true)
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 3 }, { startSec: 3, endSec: 8 }])).toBe(true)
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 6 }, { startSec: 4, endSec: 8 }])).toBe(true)
+    expect(cutsLeaveNothing(8, [{ startSec: -2, endSec: 30 }])).toBe(true)
+  })
+
+  it('the line is 0.05 s kept: under it is nothing, at it is a file', () => {
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 7.96 }])).toBe(true)
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 7.949 }])).toBe(false)
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 7.8 }])).toBe(false)
+  })
+
+  it('a reversed or empty region removes nothing, so it cannot make a chain empty', () => {
+    expect(cutsLeaveNothing(8, [{ startSec: 4, endSec: 4 }, { startSec: 7, endSec: 1 }])).toBe(false)
+  })
+
+  it('keeps the floor on the progress length: a chain that cuts everything still divides by 0.1 s', () => {
+    expect(keptDurationSec(8, [{ startSec: 0, endSec: 8 }])).toBe(0.1)
+    expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 8 }])).toBe(true)
   })
 })

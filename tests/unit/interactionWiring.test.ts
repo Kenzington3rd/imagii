@@ -809,7 +809,8 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
     expect(captions).toMatch(/setSrtPathFor\(startedFor, result\.srtPath\)/)
     expect(captions).not.toMatch(/\bsetSrtPath\(/)
     // ...and the words and segments of a refused result are not applied either.
-    expect(captions.indexOf('setSrtPathFor(')).toBeLessThan(captions.indexOf('setSegments(result.segments)'))
+    // T-135 (4): the preview is the video store's, set for the video the job started on - after the guard has said that video is still open.
+    expect(captions.indexOf('setSrtPathFor(')).toBeLessThan(captions.indexOf('setDerivedFor(startedFor, { transcript: result.segments })'))
   })
 
   it('Clean audio asks Audio Studio\'s own question before it extracts, and is off for a video with no sound', () => {
@@ -880,7 +881,11 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
   it('Export opens the chooser instead of toasting when there is no folder, and settles its rows through settleJobs', () => {
     expect(exportPanel).not.toMatch(/Choose an output folder first/)
     expect(exportPanel).toMatch(/dir = await window\.api\.video\.pickOutputDir\(\)/)
-    expect(exportPanel).toMatch(/setJobs\(\(prev\) => settleJobs\(prev, \{ cancelled, message \}\)\)/)
+    // T-135 (1): the settling moved with the batch into the queue's store (the panel can be gone when the batch ends); the panel hands the batch over.
+    expect(exportPanel).toMatch(/await runExportBatch\(\{ queue, statuses, dir, sourcePath: source\.filePath \}\)/)
+    const queueStore = read('modules/video-studio/store/exportQueue.ts')
+    expect(queueStore).toMatch(/set\(\{ jobs: settleJobs\(get\(\)\.jobs, end\) \}\)/)
+    expect(queueStore).toMatch(/useExportQueue\.getState\(\)\.settle\(\{ cancelled, message \}\)/)
     // The old blanket: every unfinished row painted with the one verdict.
     expect(exportPanel).not.toMatch(/j\.percent < 100 \? \{ \.\.\.j, error: message, canceled: cancelled \}/)
   })
@@ -1642,7 +1647,7 @@ describe('T-122 — the round-72 fixes are wired where the person reaches them',
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     // The one sanitized name, then the folder asked for with it: the raw `clip.name` never reaches `video:makeKitDir`.
     expect(kit).toMatch(
-      /const safeName = sanitizeFilename\(clip\.name\)\s*setPhase\('Creating folder…'\)\s*kitDir = await window\.api\.video\.makeKitDir\(\{\s*parentDir,\s*clipName: safeName\s*\}\)/
+      /const safeName = sanitizeFilename\(clip\.name\)\s*useKitRun\.getState\(\)\.patch\(\{ phase: 'Creating folder…' \}\)\s*kitDir = await window\.api\.video\.makeKitDir\(\{\s*parentDir,\s*clipName: safeName\s*\}\)/
     )
     expect(kit).not.toMatch(/clipName: clip\.name/)
     expect((kit.match(/sanitizeFilename\(/g) ?? []).length).toBe(1)
@@ -2011,7 +2016,7 @@ describe('T-125 (round 75): the layout, copy and listener fixes are wired where 
   })
 
   it('the Video tour\'s Clip Kit step points at a button that carries its anchor (24)', () => {
-    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{running\}\s*data-tutorial="video-clipkit"/)
+    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{running \|\| otherKitRunning\}\s*data-tutorial="video-clipkit"/)
   })
 
   it('every overlay field\'s name begins with the text drawn beside it (27)', () => {
@@ -2174,21 +2179,24 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
   const MAIN_INDEX_FOR_T131 = path.resolve(RENDERER_ROOT, '../../main/index.ts')
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
 
-  it('(3) the highlight finder and the chat spike finder clear their results with the open video, on the key CaptionsPanel uses', () => {
+  it('(3) the highlight finder, the chat spike finder and the transcript preview clear their results with the open video: the store empties them on load and close (T-135 (4) moved them there from three effects keyed on the path)', () => {
+    // The three panels used to reset on `[openPath]` / `[source?.filePath]`, which also ran on every MOUNT (T-135 (4)): a result lasted until the
+    // person left the studio. Now `loadSource` and `clearSource` empty them, so a replaced video starts clean and the same video keeps its results.
+    const store = strip(read('modules/video-studio/store/videoStore.ts'))
+    expect(store.match(/derived: EMPTY_DERIVED/g) ?? [], 'initial state, loadSource and clearSource').toHaveLength(3)
     const captions = strip(read('modules/video-studio/CaptionsPanel.tsx'))
-    expect(captions).toMatch(/useEffect\(\(\) => \{\s*setSegments\(null\)\s*setProgress\(null\)\s*\}, \[source\?\.filePath\]\)/)
+    expect(captions).not.toMatch(/\[source\?\.filePath\]/)
     const highlight = strip(read('modules/video-studio/HighlightPanel.tsx'))
-    expect(highlight).toMatch(/const openPath = source\?\.filePath/)
-    expect(highlight).toMatch(
-      /useEffect\(\(\) => \{\s*setAudioCandidates\(null\)\s*setProgress\(0\)\s*setChatText\(''\)\s*setDebouncedChat\(''\)\s*\}, \[openPath\]\)/
-    )
-    // A scan that finishes after the video was replaced is for a video that is gone.
+    expect(highlight).not.toMatch(/\[openPath\]/)
+    const chat = strip(read('modules/video-studio/ChatHighlightPanel.tsx'))
+    expect(chat).not.toMatch(/\[openPath\]/)
+    // A scan that finishes after the video was replaced is for a video that is gone: its candidates are stored for the video it started on, and
+    // the store drops them (and the toast with them) when that video is no longer the open one.
     const scan = highlight.slice(highlight.indexOf('async function scan()'), highlight.indexOf('function addAsClip'))
     expect(scan).toMatch(/const startedFor = source\.filePath/)
-    expect(scan).toMatch(/await window\.api\.video\.findHighlights\(startedFor\)\s*if \(openPathRef\.current !== startedFor\) return/)
-    const chat = strip(read('modules/video-studio/ChatHighlightPanel.tsx'))
-    expect(chat).toMatch(/const openPath = source\?\.filePath/)
-    expect(chat).toMatch(/useEffect\(\(\) => \{\s*setChatText\(''\)\s*setPeaks\(null\)\s*\}, \[openPath\]\)/)
+    expect(scan).toMatch(/await window\.api\.video\.findHighlights\(startedFor\)/)
+    expect(scan).toMatch(/setDerivedFor\(startedFor, \{ scanCandidates: found \}\)/)
+    expect(scan).toMatch(/if \(!stored\(narrowed\)\) return/)
     // ...and the store refuses what neither panel can any longer hand it.
     expect(strip(read('modules/video-studio/store/videoStore.ts'))).toMatch(
       /if \(duration - startSec < MIN_SCANNED_CLIP_SEC\) return 'refused'/
@@ -2482,9 +2490,13 @@ describe('T-133 (1) — every way off the Record screen asks about a live take',
       if (n > 0) calls[path.relative(RENDERER_ROOT, file).split(path.sep).join('/')] = n
     }
     expect(calls).toEqual({
-      // Mood board / Asset Library "send to canvas": the person is on References, pressing a button on the screen; no take can be live there.
-      'modules/references/MoodBoardPanel.tsx': 1,
+      // Asset Library "drop to canvas": the person is on References, pressing a button on the screen, and the drop is synchronous (no await between the
+      // press and the navigate); no take can be live there.
       'modules/references/AssetLibraryPanel.tsx': 1,
+      // Mood board "→ Canvas": the same click, but the navigate runs after an AWAIT (the picture's load, a network fetch when the tile fell back to the URL
+      // it came from), so "the person is on References" is a premise of the click and false at the navigate - the table blessed it as the screen's own
+      // until the twenty-first sweep (T-135 (13)). It goes only if `currentRoute()` is still /references (pinned in the T-135 block at the end of this file).
+      'modules/references/MoodBoardPanel.tsx': 1,
       // The autosave Restore: its click is on Home, but its navigate runs after an apply that can take MINUTES (a sound extracted again), so "it is
       // on Home" is a premise of the click and false at the navigate. It asks where the person is NOW and goes only if that is still Home (T-134
       // (1), pinned in the T-134 block at the end of this file); this table blessed it as "on Home" until the twentieth sweep ran a take through it.
@@ -2555,5 +2567,175 @@ describe('T-134 — a Restore that outlasts the person does not move them, a hel
     expect(row, 'and neither does Delete').toMatch(/className="ml-auto shrink-0 text-ink-dim hover:text-danger text-xs"/)
     const warning = strip(read('modules/video-studio/SafeZoneWarningModal.tsx'))
     expect(warning).toMatch(/<span className="font-medium block truncate" title=\{row\.clipName\}>/)
+  })
+})
+
+// T-135: the twenty-first sweep's wiring, where the person reaches it. E2E per item: references.spec.ts "→ Canvas that finishes after the person went
+// to another screen ... (T-135 (13))".
+describe('T-135 — the twenty-first sweep', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(13) → Canvas navigates only if the person is STILL on References when the picture has loaded - the route is read after the await', () => {
+    const src = strip(read('modules/references/MoodBoardPanel.tsx'))
+    const fn = src.slice(src.indexOf('async function sendToCanvas'), src.indexOf('useEffect(() => {'))
+    expect(fn, 'found the function').toContain('await loadImageDimensions(src)')
+    expect(fn).toMatch(/if \(currentRoute\(\) === '\/references'\) navigate\('\/image'\)/)
+    expect(fn.indexOf('await loadImageDimensions('), 'asked AFTER the wait, not before it').toBeLessThan(fn.indexOf('currentRoute()'))
+    expect(src).toMatch(/import \{ currentRoute \} from '\.\.\/project\/ProjectIO'/)
+    // The layer and the toast are not behind the guard: the add is reported wherever the person is.
+    expect(fn.indexOf('addCanvasLayer('), 'the layer is added before the route is asked').toBeLessThan(fn.indexOf('currentRoute()'))
+    expect(fn.indexOf('toast.success('), 'and so is the toast').toBeLessThan(fn.indexOf('currentRoute()'))
+    expect(src.match(/\bnavigate\(/g) ?? [], 'the navigate() table (T-133 (1)) counts one site here').toHaveLength(1)
+  })
+
+  it('(6) each zone line of the safe-zone warning is cut with an ellipsis and carries the whole line as its tooltip (a custom preset\'s name is in it)', () => {
+    const warning = strip(read('modules/video-studio/SafeZoneWarningModal.tsx'))
+    expect(warning).toMatch(/<div key=\{zone\} className="text-ink-muted truncate" title=\{zone\}>/)
+    // The clip-name span (T-134 (5)) is still cut the same way.
+    expect(warning).toMatch(/<span className="font-medium block truncate" title=\{row\.clipName\}>/)
+  })
+
+  it('(5) the Search button is off only for the question that is already out, and the input starts as the query the grid answers', () => {
+    const refs = strip(read('modules/references/ReferencePanel.tsx'))
+    expect(refs, 'the input is seeded from the store on mount').toMatch(/useState\(\(\) => useReferencesStore\.getState\(\)\.searchQuery\)/)
+    expect(refs).toMatch(/const sameQueryOut = loading && query === inFlightQuery/)
+    expect(refs).toMatch(/onClick=\{submit\} disabled=\{sameQueryOut\}/)
+    expect(refs, 'not off for a different question').not.toMatch(/disabled=\{loading\}/)
+    const store = strip(read('modules/references/state/referencesStore.ts'))
+    expect(store, 'the query is named when the request goes out').toMatch(/set\(\{ searchLoading: true, searchError: null, searchQuery: query \}\)/)
+    expect(store, 'and the store\'s own refusal reads the same field').toMatch(/get\(\)\.searchLoading && query === get\(\)\.searchQuery/)
+  })
+
+  it('(8) a board\'s name is capped by ONE number (shared with main) on the three boxes that take it, and the first-save dialog closes only once the board exists', () => {
+    const shared = strip(read('../../shared/search.ts'))
+    expect(shared).toMatch(/export const MAX_BOARD_NAME = 200/)
+    const main = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/search.ts'), 'utf8'))
+    expect(main, 'main reads the shared number').toMatch(/import \{ MAX_BOARD_NAME, validateSearchResult \} from '\.\.\/\.\.\/shared\/search'/)
+    expect(main, 'and has no copy of it').not.toMatch(/MAX_BOARD_NAME = \d+/)
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(board).toMatch(/placeholder="New board name…"\s*maxLength=\{MAX_BOARD_NAME\}/)
+    expect(board).toMatch(/confirmLabel="Rename"\s*maxLength=\{MAX_BOARD_NAME\}/)
+    const refs = strip(read('modules/references/ReferencePanel.tsx'))
+    expect(refs).toMatch(/confirmLabel="Create & save"\s*maxLength=\{MAX_BOARD_NAME\}/)
+    expect(strip(read('components/NameDialog.tsx'))).toMatch(/aria-label=\{label\}\s*maxLength=\{maxLength\}/)
+    // The picture and the dialog are kept until the create has landed: nothing clears `pendingResult` ahead of the await.
+    const fn = refs.slice(refs.indexOf('async function createBoardAndSave'), refs.indexOf('return (', refs.indexOf('async function createBoardAndSave')))
+    expect(fn.indexOf('await createCollection('), 'found the create').toBeGreaterThan(-1)
+    expect(fn.indexOf('setPendingResult(null)'), 'the dialog is closed AFTER the create, not before it').toBeGreaterThan(fn.indexOf('await createCollection('))
+    expect(fn, 'one press makes one board').toMatch(/await claimFirst\(creatingRef,/)
+    // Rename keeps its dialog until the rename has landed, behind the same claim.
+    const rename = board.slice(board.indexOf('async function onRename'), board.indexOf('async function onDelete'))
+    expect(rename).toMatch(/await claimFirst\(renamingRef,/)
+    expect(rename.indexOf('setRenaming(false)\n    })'), 'closed after the write').toBeGreaterThan(rename.indexOf('await renameCollection('))
+  })
+
+  it('(2) the Player hears the element\'s own verdicts on the picture, follows play() instead of assuming it, and offers a preview copy through the importer\'s convert', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    // Both signals: the `error` event (codes 3 and 4 only) and the metadata tell (width 0 for a file ffprobe says has a picture).
+    expect(player).toMatch(/onLoadedMetadata=\{onLoadedMetadata\}\s*onError=\{onElementError\}/)
+    expect(player).toMatch(/if \(code === 3 \|\| code === 4\) setNoPicture\(true\)/)
+    expect(player).toMatch(/source\.probe\.width > 0 && v\.videoWidth === 0\) setNoPicture\(true\)/)
+    // togglePlay: no optimistic `setPlaying(true)`; the rejection is handled; the element's play / pause events own the flag.
+    const toggle = player.slice(player.indexOf('function togglePlay()'), player.indexOf('function onElementError('))
+    expect(toggle).toMatch(/v\.play\(\)\.catch\(\(err: unknown\) => \{/)
+    expect(toggle).toMatch(/err\.name === 'NotSupportedError'\) setNoPicture\(true\)/)
+    expect(toggle, 'no hopeful flip to Pause').not.toMatch(/setPlaying\(true\)/)
+    expect(toggle, 'and no bare void play()').not.toMatch(/void v\.play\(\)/)
+    expect(player).toMatch(/onPlay=\{\(\) => setPlaying\(true\)\}/)
+    // The element plays the copy when there is one; the copy is made by the importer's own convert and stored for the video it was made for, one at a time.
+    expect(player).toMatch(/src=\{previewUrl \?\? source\.url\}/)
+    const copy = player.slice(player.indexOf('async function makePreviewCopy()'), player.indexOf('function nudge('))
+    expect(copy).toMatch(/await claimFirst\(copyingRef,/)
+    expect(copy).toMatch(/await window\.api\.video\.convertForImport\(startedFor\)/)
+    expect(copy).toMatch(/useVideoStore\.getState\(\)\.setPreviewCopyFor\(startedFor, copyPath\)/)
+    expect(copy).toMatch(/reportFailure\(err, \{ failed: "Couldn't make a preview copy\.", canceled: 'Preview copy canceled\.' \}\)/)
+    expect(player).toMatch(/\{PREVIEW_UNAVAILABLE_MESSAGE\}/)
+    // The README promises only what the preview decodes.
+    const readme = readFileSync(path.resolve(RENDERER_ROOT, '../../../README.md'), 'utf8')
+    expect(readme).not.toMatch(/H\.264, H\.265, VP9, ProRes, AV1 in any common container should work/)
+    expect(readme).toMatch(/imagii reads H\.264, H\.265, VP9, ProRes and AV1/)
+  })
+
+  // (1): a long job's busy flag and handle outlive the screen that started it. E2E: video-pipelines.spec.ts "a job that is running when the person
+  // leaves the studio is still running, with its Cancel, when they come back" (one case per panel), audio.spec.ts "an audio export that is running ...".
+  it.each([
+    ['modules/video-studio/GifPanel.tsx', 'useGifRun', 'exportGif'],
+    ['modules/video-studio/CompilationPanel.tsx', 'useCompileRun', 'exportCompilation'],
+    ['modules/video-studio/PipPanel.tsx', 'usePipRun', 'run'],
+    ['modules/video-studio/ReframePanel.tsx', 'useReframeRun', 'reframe'],
+    ['modules/video-studio/HighlightPanel.tsx', 'useScanRun', 'scan'],
+    ['modules/video-studio/CaptionsPanel.tsx', 'useCaptionsRun', 'transcribe'],
+    ['modules/video-studio/ClipKitButton.tsx', 'useKitRun', 'runKit'],
+    ['modules/video-studio/VideoStudio.tsx', 'useCleanAudioRun', 'cleanAudioFlow']
+  ])('(1) %s holds its job in %s, claimed at the start and given back in a finally - not in the panel\'s state', (rel, store, fn) => {
+    const src = strip(read(rel))
+    expect(src, 'reads the run from the module store').toMatch(new RegExp(`${store}\\(\\(s\\) => s\\.run`))
+    const body = src.slice(src.indexOf(`function ${fn}(`))
+    expect(body, 'the run is claimed with begin()').toMatch(new RegExp(`${store}\\.getState\\(\\)\\.begin\\(`))
+    expect(body, 'and given back with end() in a finally').toMatch(new RegExp(`finally \\{\\s*(?:useCaptionsProgress\\.setState\\(\\{ progress: null \\}\\)\\s*)?${store}\\.getState\\(\\)\\.end\\(\\)`))
+    // None of the component-state spellings this replaced.
+    expect(src).not.toMatch(/\bset(Busy|Running|Scanning|ExtractingAudio|Job)\(/)
+    expect(src).not.toMatch(/\bjobIdRef\b/)
+    expect(src).not.toMatch(/\bcanceledRef\b/)
+  })
+
+  it('(1) the Export panel draws the queue store and hands the batch to it: no rows or running flag of its own, no listeners of its own', () => {
+    const panel = strip(read('modules/video-studio/ExportPanel.tsx'))
+    expect(panel).toMatch(/useExportQueue\(\(s\) => s\.jobs\)/)
+    expect(panel).toMatch(/useExportQueue\(\(s\) => s\.running\)/)
+    expect(panel).not.toMatch(/\bset(Jobs|Running)\(/)
+    expect(panel, 'its rows are drawn while a batch runs or for the video they were made from, never under another one').toMatch(/\(running \|\| queueSource === source\?\.filePath\)/)
+    expect(panel, 'the progress and completion listeners are the batch\'s').not.toMatch(/window\.api\.video\.on(Progress|JobComplete)/)
+    const queue = strip(read('modules/video-studio/store/exportQueue.ts'))
+    expect(queue).toMatch(/const offProgress = window\.api\.video\.onProgress\(/)
+    expect(queue).toMatch(/const offDone = window\.api\.video\.onJobComplete\(/)
+    expect(queue, 'the listeners come off in the finally').toMatch(/finally \{\s*offProgress\(\)\s*offDone\(\)\s*useExportQueue\.getState\(\)\.finish\(\)/)
+  })
+
+  it('(1) Captions: the progress line main sends is its own store (the row draws what main reports), emptied when a job starts and when it ends', () => {
+    const src = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(src).toMatch(/const progress: CaptionsProgress \| null = useCaptionsProgress\(\(s\) => s\.progress\)/)
+    expect(src).toMatch(/window\.api\.captions\.onProgress\(\(p\) => useCaptionsProgress\.setState\(\{ progress: p \}\)\)/)
+    expect(src.match(/useCaptionsProgress\.setState\(\{ progress: null \}\)/g) ?? [], 'cleared at the start and at the end of both jobs').toHaveLength(4)
+    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in' \}>\(\)/)
+  })
+
+  it('(1) the audio export dialog draws the audio export store and registers its progress listener for the length of its own export', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/useAudioExport\(\(s\) => s\.running\)/)
+    expect(dialog).not.toMatch(/\bset(Job|Running)\(/)
+    expect(dialog, 'no effect-scoped listener').not.toMatch(/useEffect/)
+    expect(dialog).toMatch(/const offProgress = window\.api\.audio\.onProgress\(/)
+    expect(dialog).toMatch(/finally \{\s*offProgress\(\)\s*useAudioExport\.getState\(\)\.finish\(\)/)
+  })
+
+  it('(1) Clip Kit\'s run belongs to ONE clip\'s row: that row shows the label and the Cancel, the others are off while it works', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toMatch(/const running = kitRun !== null && kitRun\.clipId === clip\.id/)
+    expect(kit).toMatch(/const otherKitRunning = kitRun !== null && kitRun\.clipId !== clip\.id/)
+    expect(kit, 'and the button is off for both').toMatch(/disabled=\{running \|\| otherKitRunning\}/)
+    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, phase: '', canceled: false \}\)/)
+    // The cancel latch is the run's field, set by the confirm and read by every step.
+    expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)/)
+    expect(kit).toMatch(/if \(useKitRun\.getState\(\)\.run\?\.canceled\) throw new CancelledError\(\)/)
+  })
+
+  it('(1) main refuses a second audio extraction, claimed before the handler\'s first await and given back in a finally', () => {
+    const audio = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/audio.ts'), 'utf8'))
+    const handler = audio.slice(audio.indexOf("ipcMain.handle('audio:extractFromVideo'"), audio.indexOf('async function extractSound('))
+    expect(handler).toMatch(/assertSafeAbsolutePath\(videoPath, 'audio:extractFromVideo videoPath'\)\s*if \(extractingFor !== null\) throw new Error\(extractionBusyMessage\(extractingFor\)\)\s*extractingFor = videoPath\s*try \{\s*return await extractSound\(videoPath\)\s*\} finally \{\s*extractingFor = null\s*\}/)
+  })
+
+  it('(4) the scan\'s candidates, both pasted chat logs, the spikes and the transcript preview are read from the video store, written to it, and reset by nothing in the panels', () => {
+    for (const [rel, reads] of [
+      ['modules/video-studio/HighlightPanel.tsx', ['derived.scanCandidates', 'derived.highlightChat']],
+      ['modules/video-studio/ChatHighlightPanel.tsx', ['derived.spikeChat', 'derived.spikes']],
+      ['modules/video-studio/CaptionsPanel.tsx', ['derived.transcript']]
+    ] as const) {
+      const src = strip(read(rel))
+      for (const field of reads) expect(src, `${rel} reads ${field}`).toContain(`s.${field}`)
+      expect(src, `${rel} keeps no copy of them`).not.toMatch(/useState<(AudioCandidate|ChatPeak|CaptionSegment)\[\]/)
+      expect(src, `${rel} resets nothing on mount`).not.toMatch(/useEffect\(\(\) => \{\s*set(AudioCandidates|ChatText|Peaks|Segments)\(/)
+    }
   })
 })

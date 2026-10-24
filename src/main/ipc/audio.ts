@@ -29,6 +29,7 @@ import {
 import { assertAlways } from '../../shared/assert'
 import { assertSafeAbsolutePath, assertSafeId } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
+import { clipNameForSentence } from '../ffmpeg/noPicture'
 
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'aac'] as const
 
@@ -101,6 +102,19 @@ function validateChainSpec(chain: unknown): asserts chain is ChainSpec {
   }
 }
 
+/**
+ * T-135 (1): the video whose sound `audio:extractFromVideo` is pulling out right now, or null. One extraction at a time, whoever asks: Clean audio's
+ * button state was the studio's, so a trip to Home re-armed it over an extraction still running and a second press ran a second concurrent one
+ * (two ffmpegs, two scratch WAVs of up to gigabytes, completions that cross-talk in the renderer); Audio Studio's importer takes the same channel.
+ * A second start is refused in a finished sentence that names the one that is running. Claimed before the handler's first await, given back in a `finally`.
+ */
+let extractingFor: string | null = null
+
+function extractionBusyMessage(runningFor: string): string {
+  const name = clipNameForSentence({ name: path.basename(runningFor) })
+  return `Still extracting the sound from ${name ? `"${name}"` : 'another video'}. Wait for it to finish, then try again.`
+}
+
 export function registerAudioIpc(): void {
   ipcMain.handle('audio:probe', async (_e, filePath: string) => {
     // B6 fix (round 16): tighten path validators on every audio IPC handler
@@ -154,6 +168,17 @@ export function registerAudioIpc(): void {
 
   ipcMain.handle('audio:extractFromVideo', async (_e, videoPath: string) => {
     assertSafeAbsolutePath(videoPath, 'audio:extractFromVideo videoPath')
+    if (extractingFor !== null) throw new Error(extractionBusyMessage(extractingFor))
+    extractingFor = videoPath
+    try {
+      return await extractSound(videoPath)
+    } finally {
+      extractingFor = null
+    }
+  })
+
+  /** The body of `audio:extractFromVideo` (the single-flight claim is the handler's). */
+  async function extractSound(videoPath: string): Promise<{ wavPath: string; hasVideo: boolean | null }> {
     // T-129: no length gate. T-123's 2-hour waveform ceiling (asked here BEFORE the work since T-124 (6), and of the scratch WAV
     // after it since T-126 (8)) is retired: the waveform is drawn from main's streamed peaks (`audio:peaks`), not decoded in the
     // renderer, so a 4 h VOD is extracted and opened like any other recording. The probe stays for what it still answers before
@@ -176,7 +201,7 @@ export function registerAudioIpc(): void {
     }
     const result = await extractAudioFromVideo(videoPath)
     return { wavPath: result.wavPath, hasVideo }
-  })
+  }
 
   // T-129 (T-110 (ao)): the waveform's peaks, read here from a stream of the file's sound (`main/audio/peaks.ts`) and handed to the
   // renderer as `PEAK_BUCKETS` highest/lowest pairs, never the file. The job id is the renderer's: its Close (or a second file

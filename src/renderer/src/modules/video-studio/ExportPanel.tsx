@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import {
   clipForExport,
   type Clip,
   type ExportJobSpec,
-  type ExportProgress,
   type WatermarkSpec
 } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
@@ -15,6 +13,7 @@ import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/saf
 import { assertDefined } from '@shared/assert'
 import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
 import { useVideoStore } from './store/videoStore'
+import { runExportBatch, settleJobs, useExportQueue, type JobStatus } from './store/exportQueue'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
@@ -25,7 +24,6 @@ import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 import { persistSetting } from '../../lib/persistSetting'
-import { reportFailure } from '../../lib/reportFailure'
 
 /** Why Export is disabled when no platform is checked on any clip (T-112). */
 const NOTHING_QUEUED = 'Check at least one platform below to export.'
@@ -119,59 +117,10 @@ export function findSafeZoneIssues(
   return rows
 }
 
-export interface JobStatus {
-  jobId: string
-  clipName: string
-  /** What the queue row shows — a platform's label or the user's own
-   *  preset name. Carried rather than looked up, because a custom preset
-   *  deleted mid-batch would otherwise leave the row with nothing to
-   *  render (T-50). */
-  presetLabel: string
-  percent: number
-  /** The file the job wrote — the path main chose, `name (2).mp4` when the name
-   *  was taken (T-106). The row shows its basename (T-112). */
-  outputPath?: string
-  /** Why the row did not finish — the sentence the toast showed. Set on a
-   *  failure AND a cancel; `canceled` says which, and decides the word on the
-   *  row ("Failed" / "Canceled"). The row outlives the toast (T-84). */
-  error?: string
-  canceled?: boolean
-  /** T-112: the batch stopped at an earlier job's failure, so this one was never
-   *  started. Not a failure of its own and not the user's cancel: "Not run", in
-   *  neutral ink, with no reason of its own. */
-  notRun?: boolean
-}
-
-/**
- * How a finished-or-stopped batch leaves its rows (T-112).
- *
- * The queue is sequential and a failure ends it, so the row that FAILED is the
- * first one that had not finished — every row before it completed and every row
- * after it never started. That row reads Failed (red) with the reason as text; the
- * rest read Not run. A cancel is the user's own act on the whole batch and keeps
- * its T-84/T-100 reading: every unfinished row is Canceled, in neutral ink.
- *
- * // simplification: a batch main REFUSES before any job starts (a second batch
- * // at once, a damaged recipe) marks row 1 Failed with that sentence, because
- * // main sends no "job started" event to tell a refusal from a first job that
- * // failed in its probe. Upgrade path: a `video:jobStarted` event, then the
- * // running row is the one that started.
- */
-export function settleJobs(
-  jobs: ReadonlyArray<JobStatus>,
-  end: { cancelled: boolean; message: string }
-): JobStatus[] {
-  let failedOne = false
-  return jobs.map((job) => {
-    if (job.percent >= 100) return job
-    if (end.cancelled) return { ...job, error: end.message, canceled: true }
-    if (!failedOne) {
-      failedOne = true
-      return { ...job, error: end.message }
-    }
-    return { ...job, notRun: true }
-  })
-}
+// T-135 (1): the queue's rows and the batch that fills them live in `store/exportQueue.ts` (they outlive this panel); these two are what this
+// file's tests and its callers have always imported from here.
+export { settleJobs }
+export type { JobStatus }
 
 export function ExportPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -183,8 +132,13 @@ export function ExportPanel(): JSX.Element | null {
 
   const [customPresets, setCustomPresets] = useState<CustomPreset[]>([])
   const [outDir, setOutDir] = useState<string | null>(null)
-  const [jobs, setJobs] = useState<JobStatus[]>([])
-  const [running, setRunning] = useState(false)
+  // T-135 (1): the queue is a module store, not this panel's state - a route change unmounts the panel, and a batch main is still running must still
+  // show its rows, its progress and its Cancel when the person comes back. The rows are those of the last batch; they are drawn for the video the batch
+  // was made from (or while it runs), not under another video.
+  const queueJobs = useExportQueue((s) => s.jobs)
+  const running = useExportQueue((s) => s.running)
+  const queueSource = useExportQueue((s) => s.sourcePath)
+  const jobs = queueJobs.length > 0 && (running || queueSource === source?.filePath) ? queueJobs : []
   // T-125 (18): one start at a time, claimed the instant the function runs. `running` is state, set only after the awaits in
   // `startExport` (the chooser, then `runExportQueue`'s settings writes), so a fast double-click ran a second start in that gap: main's
   // gate (T-111) refused the second batch and its catch settled the rows - Failed, Not run - while the first one ran. The ref is the
@@ -252,25 +206,6 @@ export function ExportPanel(): JSX.Element | null {
   useEffect(() => {
     void refreshCustomPresets()
   }, [refreshCustomPresets])
-
-  useEffect(() => {
-    const offProgress = window.api.video.onProgress((p: ExportProgress) => {
-      setJobs((prev) =>
-        prev.map((j) => (j.jobId === p.jobId ? { ...j, percent: p.percent } : j))
-      )
-    })
-    const offDone = window.api.video.onJobComplete(({ jobId, outputPath }) => {
-      setJobs((prev) =>
-        prev.map((j) =>
-          j.jobId === jobId ? { ...j, outputPath, percent: 100 } : j
-        )
-      )
-    })
-    return () => {
-      offProgress()
-      offDone()
-    }
-  }, [])
 
   if (!source) return null
 
@@ -398,26 +333,9 @@ export function ExportPanel(): JSX.Element | null {
     // zero, so the queue can never arrive here empty. T-49 deleted the
     // nothing-queued toast that used to sit here — copy no path can reach is
     // copy nobody notices going wrong.
-    setJobs(statuses)
-    setRunning(true)
-    try {
-      await window.api.video.exportBatch(queue)
-      toast.success(`Exported ${countOf(queue.length, 'file')}`)
-      // INIT-E (round 15): persist the choice on success so the next batch
-      // defaults to the same folder.
-      void persistSetting('export.lastOutputDir', dir)
-    } catch (err) {
-      // T-84: one verdict for the toast AND the rows. A cancel is neutral and
-      // says what survived; a failure is plain words. Either way the rows that
-      // did not finish keep saying so after the toast fades.
-      const { cancelled, message } = reportFailure(err, {
-        failed: 'Export failed.',
-        canceled: 'Export canceled. Files already finished are in your folder.'
-      })
-      setJobs((prev) => settleJobs(prev, { cancelled, message }))
-    } finally {
-      setRunning(false)
-    }
+    // T-135 (1): the batch runs in the queue's store (its listeners, its toast, its settling of the rows), not in this component: the person can
+    // leave this studio while it runs, and it still ends where it should.
+    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath })
   }
 
   // Counts custom targets too, so the button's number is the number of files

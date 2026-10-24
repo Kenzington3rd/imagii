@@ -9732,3 +9732,178 @@ describe('an odd-sized picture through every other libx264 command (real ffmpeg,
     }, 120_000)
   })
 })
+
+describe('a chain that cuts everything is refused before ffmpeg runs, not exported as an empty file (real ffmpeg, T-135 (12))', () => {
+  // ffmpeg exits 0 for a chain whose cuts remove every sample, having written a header-only file: a 78-byte WAV (the container and no data) and a few
+  // hundred bytes of AAC / MP3 framing around silence. `exportAudio` computed `writtenSeconds` and never checked it, so "Cleaned audio exported" was
+  // said over nothing (the video exports got their empty-output guard in T-131 / T-132). The guard asks the kept length BEFORE the first child: a
+  // chain that leaves under 0.05 s refuses in a sentence, writes nothing, and spawns nothing. Run on both majors (bundled 7.0.2; 6.1.1 through the alias config).
+  const EVERYTHING_CUT = 'Everything is cut out. Click a mark to put a part back.'
+  const ALL_CUT: ChainSpec['cutRegions'] = [{ startSec: 0, endSec: 8 }]
+  const chainOf = (cutRegions: ChainSpec['cutRegions'], extra: Partial<ChainSpec> = {}): ChainSpec => ({ ...DEFAULT_CHAIN_SPEC, ...extra, cutRegions })
+  const specFor = (out: string, jobId: string, chain: ChainSpec, format: AudioExportSpec['format'] = 'wav'): AudioExportSpec => ({
+    jobId,
+    sourcePath: voiceWav,
+    outputPath: path.join(workDir, out),
+    chain,
+    format
+  })
+
+  it('the shape being guarded: the unguarded cut chain exits 0 and writes a header-only file, in a WAV, an AAC m4a and an MP3', async () => {
+    const af = buildChain(chainOf(ALL_CUT)).filterPass2
+    const cases: Array<[string, string[], number]> = [
+      ['t135-12-shape.wav', ['-c:a', 'pcm_s16le'], 100],
+      ['t135-12-shape.m4a', ['-c:a', 'aac', '-b:a', '192k'], 1024],
+      ['t135-12-shape.mp3', ['-c:a', 'libmp3lame', '-b:a', '192k'], 4096]
+    ]
+    for (const [name, codec, ceiling] of cases) {
+      const out = path.join(workDir, name)
+      await ff(['-y', '-i', voiceWav, '-vn', '-af', af, ...codec, '-ar', '48000', out])
+      const size = (await stat(out)).size
+      expect(size, `${name}: exit 0 and a file of ${size} bytes`).toBeLessThan(ceiling)
+      const info = await ffprobeJson(out).catch(() => null)
+      const seconds = Number(info?.format.duration ?? 0)
+      expect(seconds, `${name}: and no sound in it`).toBeLessThan(0.05)
+    }
+  }, 120_000)
+
+  it.each([
+    ['wav', 't135-12-refused.wav'],
+    ['mp3', 't135-12-refused.mp3'],
+    ['aac', 't135-12-refused.m4a']
+  ] as const)('runAudioExport of a chain that cuts the whole file (%s) refuses with the sentence, spawns nothing and leaves no file', async (format, out) => {
+    const events: string[] = []
+    const spec = specFor(out, `t135-12-${format}`, chainOf(ALL_CUT), format)
+    await expect(runAudioExport(spec, (p) => events.push(p.pass))).rejects.toThrow(EVERYTHING_CUT)
+    expect(events, 'no ffmpeg ran, so no pass reported').toEqual([])
+    expect(existsSync(spec.outputPath), 'and nothing was written').toBe(false)
+  }, 120_000)
+
+  it('the two-pass loudness chain refuses before its measure pass too (the whole minutes of it)', async () => {
+    const events: string[] = []
+    const spec = specFor('t135-12-loudnorm.wav', 't135-12-loudnorm', chainOf(ALL_CUT, { loudnorm: true }))
+    await expect(runAudioExport(spec, (p) => events.push(p.pass))).rejects.toThrow(EVERYTHING_CUT)
+    expect(events).toEqual([])
+    expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+
+  it('a second track in the mix does not change it (the cut is applied after the mix: the same refusal)', async () => {
+    const chain = chainOf(ALL_CUT, {
+      secondaryTrack: { filePath: musicWav, fileName: 'music.wav', role: 'music', gainDb: -10, duckUnderPrimary: false }
+    })
+    const spec = specFor('t135-12-mix.wav', 't135-12-mix', chain)
+    await expect(runAudioExport(spec, () => {})).rejects.toThrow(EVERYTHING_CUT)
+    expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+
+  it('Re-attach to video refuses the same way: no mp4, and no intermediate WAV left beside it', async () => {
+    const outDir = await mkdtemp(path.join(workDir, 't135-12-reattach-'))
+    const outputPath = path.join(outDir, 'cleaned.mp4')
+    await expect(
+      runAudioReattach({ jobId: 't135-12-reattach', videoPath: rampSrc, sourcePath: voiceWav, outputPath, chain: chainOf(ALL_CUT) }, () => {})
+    ).rejects.toThrow(EVERYTHING_CUT)
+    expect(await readdir(outDir), 'nothing at all in the folder').toEqual([])
+  }, 120_000)
+
+  it('the line: 0.04 s kept is refused, 0.2 s kept exports a real file with that much sound in it', async () => {
+    const tooLittle = specFor('t135-12-line-low.wav', 't135-12-line-low', chainOf([{ startSec: 0, endSec: 7.96 }]))
+    await expect(runAudioExport(tooLittle, () => {})).rejects.toThrow(EVERYTHING_CUT)
+    expect(existsSync(tooLittle.outputPath)).toBe(false)
+
+    const enough = specFor('t135-12-line-high.wav', 't135-12-line-high', chainOf([{ startSec: 0, endSec: 7.8 }]))
+    await runAudioExport(enough, () => {})
+    const seconds = Number((await ffprobeJson(enough.outputPath)).format.duration)
+    expect(seconds, 'a short but real file').toBeGreaterThan(0.1)
+    expect(seconds).toBeLessThan(0.4)
+  }, 120_000)
+
+  it('control: a chain with only a middle cut, and one with no cut at all, export as before', async () => {
+    const middle = specFor('t135-12-middle.wav', 't135-12-middle', chainOf([{ startSec: 2, endSec: 4 }]))
+    await runAudioExport(middle, () => {})
+    expect(Number((await ffprobeJson(middle.outputPath)).format.duration)).toBeGreaterThan(5.5)
+    const none = specFor('t135-12-none.wav', 't135-12-none', chainOf([]))
+    await runAudioExport(none, () => {})
+    expect(Number((await ffprobeJson(none.outputPath)).format.duration)).toBeGreaterThan(7.5)
+  }, 120_000)
+})
+
+describe('a second track with no sound is refused up front and named, not blamed on the source (real ffmpeg, T-135 (11))', () => {
+  // `SecondaryTrackPanel` accepts any file and nothing probed it: the export's `[1:a]` reference to a file with no sound stream exits 234 with "matches
+  // no streams", which no known-cause pattern matches, so the person read the generic source / disk sentence - after a minutes-long loudness
+  // measurement when Even volume is on. `exportAudio` probes the second track first and says which file it is. A file with a sound stream whose LENGTH
+  // is unknown (a streamed WebM) is not refused: ffmpeg mixes those. Run on both majors.
+  const NO_SOUND = 'The second track has no sound in it. Remove it or pick another file.'
+  let streamedWebm = ''
+  const withSecond = (file: string, extra: Partial<ChainSpec> = {}): ChainSpec => ({
+    ...DEFAULT_CHAIN_SPEC,
+    ...extra,
+    secondaryTrack: { filePath: file, fileName: path.basename(file), role: 'music', gainDb: -10, duckUnderPrimary: false }
+  })
+  const specFor = (out: string, jobId: string, chain: ChainSpec): AudioExportSpec => ({ jobId, sourcePath: voiceWav, outputPath: path.join(workDir, out), chain, format: 'wav' })
+
+  beforeAll(async () => {
+    streamedWebm = path.join(workDir, 't135-11-streamed.webm')
+    const chunks: Buffer[] = []
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=3000:sample_rate=48000:duration=8', '-c:a', 'libopus', '-live', '1', '-f', 'webm', 'pipe:1'])
+      child.stdout.on('data', (b: Buffer) => chunks.push(b))
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`))))
+    })
+    await writeFile(streamedWebm, Buffer.concat(chunks))
+  }, 60_000)
+
+  it('the shape being guarded: a [1:a] reference to a file with no sound exits non-zero with "matches no streams"', async () => {
+    const err = await ff(['-y', '-i', voiceWav, '-i', noAudioSrc, '-filter_complex', '[1:a]aresample=48000[x]', '-map', '[x]', path.join(workDir, 't135-11-shape.wav')]).then(
+      () => null,
+      (e: Error) => e
+    )
+    expect(err, 'ffmpeg refused it').not.toBeNull()
+    expect(err?.message).toMatch(/matches no streams/)
+    expect((await ffprobeJson(noAudioSrc)).streams.some((s) => s.codec_type === 'audio'), 'the fixture really has no sound').toBe(false)
+  }, 60_000)
+
+  it('runAudioExport refuses at once with the second-track sentence: before the measure pass, with no progress, no file', async () => {
+    const events: string[] = []
+    const spec = specFor('t135-11-refused.wav', 't135-11-refused', withSecond(noAudioSrc, { loudnorm: true }))
+    await expect(runAudioExport(spec, (p) => events.push(p.pass))).rejects.toThrow(NO_SOUND)
+    expect(events, 'the measuring pass never started').toEqual([])
+    expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+
+  it('the plain single-pass mix refuses the same way (no loudness chain needed)', async () => {
+    const spec = specFor('t135-11-plain.wav', 't135-11-plain', withSecond(noAudioSrc))
+    await expect(runAudioExport(spec, () => {})).rejects.toThrow(NO_SOUND)
+    expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+
+  it('Re-attach to video refuses it too, and leaves the folder empty', async () => {
+    const outDir = await mkdtemp(path.join(workDir, 't135-11-reattach-'))
+    await expect(
+      runAudioReattach({ jobId: 't135-11-reattach', videoPath: rampSrc, sourcePath: voiceWav, outputPath: path.join(outDir, 'cleaned.mp4'), chain: withSecond(noAudioSrc) }, () => {})
+    ).rejects.toThrow(NO_SOUND)
+    expect(await readdir(outDir)).toEqual([])
+  }, 120_000)
+
+  it('controls: a second track with sound exports, and so does a streamed WebM whose header has no length', async () => {
+    const raw = await ffprobeJson(streamedWebm)
+    expect(raw.format.duration ?? 'N/A', 'the fixture really has no length in its header').toBe('N/A')
+    const ok = specFor('t135-11-ok.wav', 't135-11-ok', withSecond(musicWav))
+    await runAudioExport(ok, () => {})
+    expect(Number((await ffprobeJson(ok.outputPath)).format.duration)).toBeGreaterThan(7)
+    const streamed = specFor('t135-11-streamed.wav', 't135-11-streamed', withSecond(streamedWebm))
+    await runAudioExport(streamed, () => {})
+    expect(Number((await ffprobeJson(streamed.outputPath)).format.duration), 'mixed under the voice').toBeGreaterThan(7)
+  }, 120_000)
+
+  it('a second track that is not there is still the missing-file failure it always was, and now it is said before the measure pass (the probe\'s own error stands)', async () => {
+    const events: string[] = []
+    const spec = specFor('t135-11-missing.wav', 't135-11-missing', withSecond(path.join(workDir, 'no-such-second-track.wav'), { loudnorm: true }))
+    const err = await runAudioExport(spec, (p) => events.push(p.pass)).then(() => null, (e: Error) => e)
+    expect(err, 'refused').not.toBeNull()
+    expect(err?.message).not.toBe(NO_SOUND)
+    expect(err?.message).toMatch(/No such file or directory/i)
+    expect(events, 'ahead of the measuring pass: the probe said so, not the render').toEqual([])
+    expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+})

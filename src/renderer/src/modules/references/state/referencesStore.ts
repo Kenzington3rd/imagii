@@ -56,6 +56,10 @@ interface ReferencesStudioState {
   searchResponse: SearchResponse | null
   searchLoading: boolean
   searchError: string | null
+  /** T-135 (5): the query of the newest request - the one in flight, or the one that was answered. The panel's input was its own state, so a trip to
+   *  Mood Boards and back drew the grid over a blank box; and its button needs it to tell "the question that is already out" (refused) from a
+   *  correction (sent). */
+  searchQuery: string
   collections: MoodBoardCollection[]
   selectedCollectionId: string | null
   /** T-58. Board create/rename/delete and item add/remove all push a step;
@@ -94,7 +98,6 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
   // T-134 (3): which request owns the results grid. A counter, not a flag, because requests can overlap (a corrected query goes out while the
   // typo's is still in flight) and only the newest one's outcome is drawn.
   let latestRequest = 0
-  let latestQuery = ''
 
   function snapshot(): BoardsSnapshot {
     const { collections, selectedCollectionId } = get()
@@ -120,6 +123,7 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     searchResponse: null,
     searchLoading: false,
     searchError: null,
+    searchQuery: '',
     collections: [],
     selectedCollectionId: null,
     history: EMPTY_HISTORY,
@@ -130,13 +134,12 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
       // T-133 (8): one request per query. The button is disabled while a request is out and the input's Enter was not, so a second press (or a held
       // key) of the SAME query sent a second request, and whichever answered LAST owned the grid. Read from the store, not a render's closure: two
       // presses in one breath see the same render.
-      if (get().searchLoading && query === latestQuery) return
+      if (get().searchLoading && query === get().searchQuery) return
       // T-134 (3): a DIFFERENT query is not a duplicate. T-133 (8) refused every press while a request was out, which threw away a corrected query
       // (type, Enter, spot the typo, fix it, Enter): the typo's answer then filled a grid that no query on the page named. The newest request
       // owns the grid: an answer (or a failure) that is not the newest request's is dropped, and the panel stays busy until the newest settles.
       const mine = ++latestRequest
-      latestQuery = query
-      set({ searchLoading: true, searchError: null })
+      set({ searchLoading: true, searchError: null, searchQuery: query })
       try {
         const response = await window.api.search.images(query)
         if (mine === latestRequest) set({ searchResponse: response })

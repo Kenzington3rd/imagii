@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import { REFRAME_TARGET, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
 import { clipRecipe } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
+import { useReframeRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
@@ -30,15 +31,15 @@ export function ReframePanel(): JSX.Element | null {
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const [position, setPosition] = useState<ReframePosition>('center')
-  const [running, setRunning] = useState(false)
-  // null until main has a measurement: checking the source has no length to
-  // measure (T-108), and the row draws an indeterminate bar rather than "0%".
-  const [progress, setProgress] = useState<number | null>(null)
-  const [phase, setPhase] = useState<ReframePhase>('starting')
+  // T-135 (1): the run, its progress and its phase are a module store, not this panel's state: leaving the studio does not lose them, and the panel
+  // that mounts again draws the run that is there (Reframing…, its bar and its Cancel). `percent` is null until main has a measurement: checking the
+  // source has no length to measure (T-108), and the row draws an indeterminate bar rather than "0%".
+  const reframeRun = useReframeRun((s) => s.run)
+  const running = reframeRun !== null
+  const progress: number | null = reframeRun?.percent ?? null
+  const phase: ReframePhase = reframeRun?.phase ?? 'starting'
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
-  // Round 17 B1: hold the in-flight jobId so the Cancel button can target it.
-  const jobIdRef = useRef<string | null>(null)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -50,8 +51,7 @@ export function ReframePanel(): JSX.Element | null {
 
   useEffect(() => {
     const off = window.api.video.onReframeProgress((p) => {
-      setProgress(p.percent ?? null)
-      setPhase(p.phase)
+      useReframeRun.getState().patch({ percent: p.percent ?? null, phase: p.phase })
     })
     return off
   }, [])
@@ -74,11 +74,8 @@ export function ReframePanel(): JSX.Element | null {
       // and that is passed down (T-124 (21): the remembered folder, else the chooser).
       const resolvedOutDir = await resolveOutDir()
       if (!resolvedOutDir) return
-      setRunning(true)
-      setProgress(null)
-      setPhase('starting')
       const jobId = nanoid(10)
-      jobIdRef.current = jobId
+      if (!useReframeRun.getState().begin({ jobId, percent: null, phase: 'starting' })) return
       try {
         const result = await window.api.video.reframe({
           jobId,
@@ -108,8 +105,7 @@ export function ReframePanel(): JSX.Element | null {
       } catch (err) {
         reportFailure(err, { failed: 'Reframe failed.', canceled: 'Reframe canceled.' })
       } finally {
-        setRunning(false)
-        jobIdRef.current = null
+        useReframeRun.getState().end()
       }
     } finally {
       startingRef.current = false
@@ -117,7 +113,7 @@ export function ReframePanel(): JSX.Element | null {
   }
 
   async function cancel(): Promise<void> {
-    const id = jobIdRef.current
+    const id = useReframeRun.getState().run?.jobId
     if (!id) return
     await window.api.video.cancelReframe(id)
   }

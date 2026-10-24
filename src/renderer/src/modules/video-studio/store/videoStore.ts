@@ -5,6 +5,9 @@ import type { VideoProbe } from '@shared/api'
 import { DEFAULT_COLOR_GRADE, clipSpeed } from '@shared/clip'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
 import { newTextOverlay, normalizeOverlayPatch } from '@shared/textOverlay'
+import type { CaptionSegment } from '@shared/captions'
+import type { ChatPeak } from '@shared/chatPeaks'
+import type { AudioCandidate } from '@shared/highlights'
 import { countOf } from '@shared/plural'
 import { NON_TEXT_INPUT_TYPES } from '../../../lib/keyOwnership'
 
@@ -20,6 +23,26 @@ export interface VideoSource {
    *  project stores this path instead and converts again on open. */
   convertedFrom?: string
 }
+
+/**
+ * What the panels derive from the open video (T-135 (4)): the loud moments a scan found, the chat logs pasted into the two finders and the spikes
+ * found in one, and the transcript the Captions panel previews. They were each panel's `useState`, so leaving the studio - or pressing Clean audio,
+ * which navigates - threw away a scan that took minutes. They belong to the open video: `loadSource` and `clearSource` empty them, which is exactly
+ * the lifetime they need (a different video starts clean, the same one keeps them across any number of visits), so no panel resets them on mount.
+ */
+export interface DerivedResults {
+  /** The highlight scan's candidates; null until a scan has finished for this video. */
+  scanCandidates: AudioCandidate[] | null
+  /** The chat log pasted into the highlight finder. */
+  highlightChat: string
+  /** The chat log pasted into the chat spike finder, and the spikes found in it (null: not analyzed). */
+  spikeChat: string
+  spikes: ChatPeak[] | null
+  /** The transcript the Captions panel previews (the file itself is `srtPath`); null until a transcription finished for this video. */
+  transcript: CaptionSegment[] | null
+}
+
+const EMPTY_DERIVED: DerivedResults = { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null }
 
 /** One undo step: the clip-editing state as it was before a mutation.
  *  selectedClipId travels with the clips so undoing a removal also
@@ -64,6 +87,12 @@ interface VideoStudioState {
   currentTime: number
   /** The Player's handle on its `<video>`, or null when no Player is mounted (T-120). */
   transport: PlayerTransport | null
+  /** T-135 (2): the address of a playable COPY of the open video, when the preview cannot decode its picture (ProRes, 10-bit HEVC) and the person
+   *  asked for one; null while the element plays the source itself. It replaces only what the `<video>` plays: `source` (the object, the path every
+   *  export reads, the probe) is untouched, so the saved project and the exports stay on the original. Cleared with the source. */
+  previewUrl: string | null
+  /** T-135 (4): scan results, pasted chat logs and spikes, and the transcript preview - kept with the open video (see `DerivedResults`). */
+  derived: DerivedResults
   /** The media element's OWN duration, published by the Player on
    *  `durationchange`. ffprobe reports the container's rounded number and the
    *  decoder has the real one (the E2E fixture probes 2.000 s and decodes
@@ -112,6 +141,14 @@ interface VideoStudioState {
    *  nothing is stored and the answer is false. `null` forgets the transcript (T-128 (3): "Clear
    *  saved transcripts" deleted the file), under the same rule. */
   setSrtPathFor: (sourcePath: string, srtPath: string | null) => boolean
+  /** T-135 (2) - play a converted copy of the open video in the preview. Like `setSrtPathFor`, the copy belongs to the video it was made for: if
+   *  that file is no longer the open one nothing is stored and the answer is false. `source` is not replaced (see `previewUrl`). */
+  setPreviewCopyFor: (sourcePath: string, copyPath: string) => boolean
+  /** T-135 (4) - patch the derived results of the open video (typing in a chat box). */
+  setDerived: (patch: Partial<DerivedResults>) => void
+  /** T-135 (4) - patch them with a RESULT, for the video the job started on and only that one (T-112's rule): false, and nothing stored, when it is no
+   *  longer the open video. A scan that finishes after the video was replaced is for a video that is gone. */
+  setDerivedFor: (sourcePath: string, patch: Partial<DerivedResults>) => boolean
 
   addClip: () => void
   /** The ONE add-a-clip-from-a-range action (T-101 deleted its manual twin,
@@ -382,6 +419,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     srtPath: null,
     history: EMPTY_HISTORY,
     historyKey: null,
+    previewUrl: null,
+    derived: EMPTY_DERIVED,
 
     loadSource: async (filePath: string, convertedFrom?: string) => {
       const probe = await window.api.video.probe(filePath)
@@ -409,6 +448,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         clips: [initial],
         selectedClipId: initial.id,
         srtPath: null,
+        previewUrl: null,
+        derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
       })
@@ -422,6 +463,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         clips: [],
         selectedClipId: null,
         srtPath: null,
+        previewUrl: null,
+        derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
       }),
@@ -452,6 +495,17 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     setSrtPathFor: (sourcePath, srtPath) => {
       if (get().source?.filePath !== sourcePath) return false
       set({ srtPath })
+      return true
+    },
+    setDerived: (patch) => set({ derived: { ...get().derived, ...patch } }),
+    setDerivedFor: (sourcePath, patch) => {
+      if (get().source?.filePath !== sourcePath) return false
+      set({ derived: { ...get().derived, ...patch } })
+      return true
+    },
+    setPreviewCopyFor: (sourcePath, copyPath) => {
+      if (get().source?.filePath !== sourcePath) return false
+      set({ previewUrl: window.api.video.fileUrl(copyPath) })
       return true
     },
 

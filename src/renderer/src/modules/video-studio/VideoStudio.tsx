@@ -9,6 +9,7 @@ import { confirmAudioClose, confirmReplaceAfterWait } from '../audio-studio/audi
 import { currentRoute, replacedSince } from '../project/ProjectIO'
 import { toastWithActions } from '../../lib/savedToast'
 import { mayLeaveLiveTake } from '../../lib/liveTake'
+import { useCleanAudioRun } from './store/runs'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
@@ -42,7 +43,9 @@ export function VideoStudio(): JSX.Element {
   const canRedo = useVideoStore((s) => s.canRedo())
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
-  const [extractingAudio, setExtractingAudio] = useState(false)
+  // T-135 (1): the extraction is a module store, not this studio's state - Clean audio's own navigation (and any trip to Home) unmounts the studio,
+  // and it came back with the button enabled over an extraction still running, whose second press ran a second concurrent one.
+  const extractingAudio = useCleanAudioRun((s) => s.run !== null)
   // T-38: the Player publishes its <video> here as it attaches, so the output
   // preview has the element on the very next render. It used to be read off a
   // global during the render that MOUNTS the Player — always null, and the
@@ -83,7 +86,7 @@ export function VideoStudio(): JSX.Element {
     // answers yes.)
     const chainAsked = useAudioStore.getState().chain
     if (!confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')) return
-    setExtractingAudio(true)
+    if (!useCleanAudioRun.getState().begin({ videoPath: source.filePath })) return
     toast.loading('Extracting audio…', { id: 'extract-audio' })
     // T-125 (20): what Audio Studio holds NOW, kept to compare with what it holds when the extraction ends. The question above is
     // asked before a wait that can be minutes long, and the person is free to go to Audio Studio and open a file in it meanwhile.
@@ -145,7 +148,7 @@ export function VideoStudio(): JSX.Element {
       toast.dismiss('extract-audio')
       reportFailure(err, { failed: "Couldn't extract the audio." })
     } finally {
-      setExtractingAudio(false)
+      useCleanAudioRun.getState().end()
     }
   }
 

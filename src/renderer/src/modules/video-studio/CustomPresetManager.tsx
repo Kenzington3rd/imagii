@@ -7,6 +7,7 @@ import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetStartFor } from './presets
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 import { DraftField } from '../../components/DraftField'
+import { reportFailure } from '../../lib/reportFailure'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface CustomPresetManagerProps {
@@ -99,15 +100,22 @@ export function CustomPresetManager({
     }
     setVideoBitrate(video.value)
     setAudioBitrate(audio.value)
-    await window.api.video.saveCustomPreset({
-      name: trimmed,
-      width,
-      height,
-      fps,
-      videoBitrate: video.value,
-      audioBitrate: audio.value,
-      basePlatformId: base
-    })
+    // T-135 (8): a refused write (a full disk, a folder that cannot be made) was an unhandled rejection and the form looked as if it had saved; the
+    // audio Cleanup presets have had this catch since T-90. The name stays in the box for the retry.
+    try {
+      await window.api.video.saveCustomPreset({
+        name: trimmed,
+        width,
+        height,
+        fps,
+        videoBitrate: video.value,
+        audioBitrate: audio.value,
+        basePlatformId: base
+      })
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save that preset." })
+      return
+    }
     setName('')
     await onChanged()
     toast.success(`Saved "${trimmed}"`)
@@ -115,7 +123,12 @@ export function CustomPresetManager({
 
   async function remove(p: CustomPreset): Promise<void> {
     if (!confirm(`Delete preset "${p.name}"?`)) return
-    await window.api.video.deleteCustomPreset(p.id)
+    try {
+      await window.api.video.deleteCustomPreset(p.id)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't delete that preset." })
+      return
+    }
     // The parent's refresh also prunes the deleted id off every clip, so the
     // checkbox and its queued job disappear together (T-50).
     await onChanged()

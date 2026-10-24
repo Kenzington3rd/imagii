@@ -453,10 +453,15 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     // reporting a file the person never chose — and if the VIDEO is gone, that is
     // the file named.
     const fromVideo = audio.extractedFromVideo ? null : (audio.fromVideoPath ?? null)
+    // T-135 (9): the guard is asked at the TOP of every way the sound opens, not only in `extractAgain`. The video's wait ahead of this
+    // section can be minutes, and the other two closures (the scratch WAV and a plain file) called `loadSource` unguarded, so a sound
+    // the person opened and tuned in that wait was replaced by the project's with nothing in `skipped`.
+    const replaced = (): boolean => replacedSince(heldBefore, useAudioStore.getState().source)
     const load = audio.extractedFromVideo
       ? () => extractAgain(sourcePath)
       : fromVideo
         ? async (): Promise<boolean> => {
+            if (replaced()) return false
             try {
               opened = await useAudioStore.getState().loadSource(sourcePath, fromVideo)
               return true
@@ -466,6 +471,7 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
             }
           }
         : async (): Promise<boolean> => {
+            if (replaced()) return false
             opened = await useAudioStore.getState().loadSource(sourcePath)
             return true
           }

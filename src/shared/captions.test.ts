@@ -12,6 +12,7 @@ import {
   captionsReadyMessage,
   captionSizeReadout,
   clearedTranscriptsMessage,
+  clearTranscriptsQuestion,
   DEFAULT_CAPTION_STYLE,
   effectiveCaptionPx,
   escapeSubtitlesPath,
@@ -526,6 +527,33 @@ describe('clearedTranscriptsMessage — what "Clear saved transcripts" reports (
     const m = clearedTranscriptsMessage({ removed: 0, failed: 2 })
     expect(m.error).toBe(true)
     expect(m.text).toBe("Couldn't clear the saved transcripts. Close anything that has them open, then try again.")
+  })
+})
+
+// T-135 (7): the confirm said "including the one for the video you have open" unconditionally, while its count is the whole folder's and the open
+// video may have no transcript at all.
+describe('clearTranscriptsQuestion — what the Clear confirm says it will delete (T-135 (7))', () => {
+  it('counts the folder, with the singular handled', () => {
+    expect(clearTranscriptsQuestion(3, false)).toMatch(/^This deletes the 3 saved transcripts imagii keeps on this computer/)
+    expect(clearTranscriptsQuestion(1, false)).toMatch(/^This deletes the 1 saved transcript imagii keeps on this computer/)
+  })
+
+  it('names the open video\'s transcript only when the open video has one', () => {
+    expect(clearTranscriptsQuestion(3, true)).toBe(
+      'This deletes the 3 saved transcripts imagii keeps on this computer, including the one for the video you have open. Transcribe again whenever you need one.'
+    )
+    expect(clearTranscriptsQuestion(3, false)).toBe(
+      'This deletes the 3 saved transcripts imagii keeps on this computer. Transcribe again whenever you need one.'
+    )
+    expect(clearTranscriptsQuestion(3, false), 'no claim about a video with no transcript').not.toMatch(/video you have open/)
+  })
+
+  it('is a finished sentence pair with a period, and has no hedge tacked on', () => {
+    for (const has of [true, false]) {
+      const text = clearTranscriptsQuestion(2, has)
+      expect(text.endsWith('.')).toBe(true)
+      expect(text).not.toMatch(/if it has one/)
+    }
   })
 })
 

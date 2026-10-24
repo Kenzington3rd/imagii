@@ -109,7 +109,11 @@ Repeated UI is a component, not copy-paste:
   writes of an Export) passes ONE fixed id, so the later cards replace the first instead of stacking. **Never write `toast.error(err.message)`, or read
   `.message` in a `catch` outside a `console` call** —
   `tests/unit/failurePathLanguage.test.ts` parses the renderer and fails on
-  it, and lists every site that must route through the helper.
+  it, and lists every site that must route through the helper. **A write main can refuse is awaited in a `try`, and what the person
+  typed stays until it landed (T-135 (8)):** the mood-board create / rename / delete / save and the custom-preset save / delete were bare
+  awaits, so a refusal looked like success and a dialog that closed first dropped the picture it held. Each reports one sentence ("Couldn't
+  create that board.") and keeps its dialog and its text; the first-save dialog closes after the board EXISTS, and a name box carries the
+  number main enforces (`MAX_BOARD_NAME`, one copy in `shared/search.ts`) as its `maxLength`.
 - **`persistSetting(key, value)`** (`lib/persistSetting.ts`, T-128 (4)) - how a screen remembers a preference without letting the remembering
   break what the person pressed. `window.api.settings.set` is an IPC round trip main can refuse (a full disk, a config it cannot
   replace); written bare in a handler it ended the handler (the Welcome screen's "Let's go" stayed put; Export, which saved the
@@ -269,7 +273,11 @@ Repeated UI is a component, not copy-paste:
   question (T-134 (3)):** T-133 (8) refused EVERY press while a request was out, which threw away a corrected query (type, Enter, spot the
   typo, fix it, Enter) and left the typo's answer on a grid no query on the page named. A different query goes out at once; each request
   takes a number, and only the newest request's answer, failure and idle state are drawn (an older one is dropped, still logged), so a slow
-  typo can neither fill the grid nor clear the busy button of the search that replaced it.
+  typo can neither fill the grid nor clear the busy button of the search that replaced it. **The button follows the same rule, and the box is
+  the grid's name (T-135 (5)):** `disabled={loading}` made the correction Enter-only, so a pointer or voice-control user could not send it. The
+  store holds the newest request's query (`searchQuery`, in flight or answered); the button is off only when `loading` and the typed text
+  equals it (the store's own refusal still backstops a double-click), and the panel's input starts as that query, so a trip to another tab
+  and back never draws the grid over a blank box.
 - **Waiting for an event that may already have fired hangs (T-119).** `recording:abandon` waited for the temp file's
   stream to emit `close`. A `WriteStream` that failed a write has auto-destroyed and emitted its one `close` already,
   so the renderer's own failure path (the append rejects, finalize throws, abandon runs) never got an answer, and the
@@ -278,6 +286,29 @@ Repeated UI is a component, not copy-paste:
   a `finally`. Skipping the wait on `destroyed` alone is wrong: a stream that is destroyed but still closing holds the
   file open, and Windows refuses to unlink an open file (the unit holds that case with a close it delays by 150 ms). A
   one-shot event is asked about before it is awaited, and the wait has a bound.
+- **A long job lives in a module store, not in the panel that started it (T-135 (1)).** A busy flag and a job id in a component's
+  `useState` / `useRef` die with the route: the panel came back idle, its primary button enabled, over a job main was still running, with
+  no Cancel (USER_GUIDE promises one while a render runs) and a retry that hit "An export is already running". The run is a zustand
+  store (the videoStore pattern): `createRunStore<T>()` (`lib/runStore.ts`: `run`, `begin` the claim, `patch`, `end`) for the single-run panels
+  (`video-studio/store/runs.ts`: GIF, Compile, PiP, Reframe, Scan VOD, Clean audio, Clip Kit, Captions), `useExportQueue` for the Export batch
+  (rows that outlive the run, listeners that last exactly one batch, the file names taken from the batch's own results, rows drawn for the
+  video they were made from) and `useAudioExport` for the audio export. The job's own closure writes to the store after its panel is gone;
+  the panel only reads it, and `begin()` is claimed before the first `await` and given back in a `finally` (the component-level
+  `startingRef` still covers the moments before a run, such as an open chooser). A job with one button per row (Clip Kit) records WHICH row owns
+  the run, so only that row shows the label and the Cancel and the others are off. A single slot in main (the audio extraction) refuses a second
+  start itself, in a sentence that names the video that is running. `interactionWiring.test.ts` pins each panel to its store; the stores have
+  unit tests; one Playwright case per panel leaves the studio and comes back with the job still running.
+- **A result belongs to the video it was made for (T-135 (4)).** A scan's candidates, the pasted chat logs, the spikes found in them and the
+  transcript preview were panels' `useState`, so every visit to Home emptied them. They are `derived` in the video store: applied with
+  `setDerivedFor(sourcePath, patch)` (a result that arrives after the video was replaced is dropped, the `setSrtPathFor` rule), emptied by
+  `loadSource` and `clearSource`, and reset by nothing on mount. A new per-video result goes there, not in a panel.
+- **A media element that stays quiet is not a verdict (T-135 (2)).** A ProRes, some H.265 or 10-bit file loads in Chromium's `<video>` with
+  `videoWidth` 0, `readyState` 4, no `error` event, and a `play()` that RESOLVES (audio only): the Player listened for nothing and Play flipped to
+  Pause over a black rectangle. The Player hears three signals - the `error` event (codes 3 and 4 only: 1 is an abort), a `play()` rejected as
+  `NotSupportedError`, and the metadata tell (width 0 for a file whose probe says it has a picture) - and `togglePlay` follows the `play()`
+  promise instead of setting the flag first. The note (`PREVIEW_UNAVAILABLE_MESSAGE`) says what still works and does not blame the file; "Make a
+  preview copy" runs the importer's own convert and stores the copy as `previewUrl` (NOT in `source`, so exports, projects and the
+  `replacedSince` identity keep the original), for the video it was made for.
 - **Main reports to a window through `sendIfAlive`, never a bare `.send(` (T-123).** `webContents.send` on a destroyed
   WebContents THROWS, and a job's progress callback runs from a child's stdout handler or a runner's own await with nothing
   above it to catch the throw, so closing the window mid-export raised Electron's blocking "A JavaScript error occurred in
@@ -870,7 +901,10 @@ If you write the same markup a third time, extract it.
   `AutosaveRestore` awaits `applyProjectHeld` (minutes, for a sound that is extracted again) and then went to the snapshot's route; the T-133
   navigate table had blessed it as "on Home", which is true at the click and false at the `navigate`. It goes only if `currentRoute()` is
   still `/home` once the apply is over, and otherwise says nothing more than "Restored from autosave" (a person who went to Record and started
-  a take stays on Record, recording). Its two buttons have a busy flag each (`restoring`, `clearing`; both dim while either runs), so Clear
+  a take stays on Record, recording). **"→ Canvas" was the same premise on References (T-135 (13)):** `MoodBoardPanel.sendToCanvas` awaits the
+  picture's load (which can be a network fetch for a tile whose cached thumbnail is gone) and then navigated to `/image` wherever the person
+  was. The layer is added and the toast reports it either way; the navigate happens only if `currentRoute() === '/references'`, read after the
+  await. Its two buttons have a busy flag each (`restoring`, `clearing`; both dim while either runs), so Clear
   never relabels Restore "Restoring…". **A toast outlives its screen, so its buttons ask where the person
   IS before they take them anywhere (T-133 (1)):** the "Open Audio Studio" button that fix put in an 8 s toast sat over the REC screen, and
   one press unmounted RecordStudio and cut the take. A take that is being recorded is REGISTERED (`registerLiveTake`, `lib/liveTake.ts`,

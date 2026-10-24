@@ -1,3 +1,5 @@
+import { ipcErrorMessage } from './ipcError'
+
 export interface AudioProbe {
   duration: number
   sampleRate: number
@@ -34,8 +36,25 @@ export interface ExtractedSound {
 export const NO_AUDIO_STREAM_MESSAGE = 'No audio stream found in file'
 
 export function isNoAudioStreamError(err: unknown): boolean {
-  return err instanceof Error && err.message === NO_AUDIO_STREAM_MESSAGE
+  // T-135 (11): read through the IPC envelope, so it answers in the renderer too (a probe that main threw arrives there as "Error invoking remote
+  // method 'audio:probe': Error: No audio stream found in file"). The message must still be the verdict EXACTLY: a longer one is another failure.
+  return err instanceof Error && ipcErrorMessage(err, '') === NO_AUDIO_STREAM_MESSAGE
 }
+
+/**
+ * The refusal for a second track whose file has no sound in it (T-135 (11)), T-84 voice, a finished sentence `userFacingError` lets stand.
+ * The export's `[1:a]` reference to such a file exits 234 with "matches no streams", which no known-cause pattern recognises, so the person
+ * read the generic source / disk sentence - after a minutes-long loudness measurement when Even volume is on - about the WRONG file. The
+ * export probes the second track first (and the panel when the file is picked) and says which file it is.
+ */
+export const SECOND_TRACK_NO_SOUND_MESSAGE = 'The second track has no sound in it. Remove it or pick another file.'
+
+/**
+ * The refusal for an export whose cuts remove everything (T-135 (12)), T-84 voice. ffmpeg exits 0 for such a chain having written a header-only
+ * file (a 78-byte WAV, a few hundred bytes of AAC / MP3 framing) and "Cleaned audio exported" was said over nothing. "A mark" is what the cuts are
+ * called on the waveform (`BAD_CUT`: "Click its mark to put it back").
+ */
+export const EVERYTHING_CUT_MESSAGE = 'Everything is cut out. Click a mark to put a part back.'
 
 /**
  * What the audio probe throws when it READ the streams but the container gave no usable length (T-127 (10)): a MediaRecorder WebM and a

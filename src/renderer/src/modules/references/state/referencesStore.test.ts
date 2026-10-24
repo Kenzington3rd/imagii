@@ -113,6 +113,7 @@ beforeEach(() => {
     searchResponse: null,
     searchError: null,
     searchLoading: false,
+    searchQuery: '',
     tab: 'reference'
   })
 })
@@ -446,6 +447,40 @@ describe('one search at a time (T-133 (8)), and the newest query is the one that
     release('rivers')
     await Promise.all([a, b, c, d])
     expect(store().searchResponse?.query).toBe('lakes')
+  })
+
+  // T-135 (5): the panel's input was its own state, so the store's grid outlived it. The query is the store's too, and it is what the button
+  // compares the typed text with.
+  it('remembers the newest request\'s query: the one in flight, then the one that was answered - so the grid always has a name', async () => {
+    const { release } = stubGatedSearch()
+    expect(store().searchQuery).toBe('')
+    const typo = store().search('mountians')
+    expect(store().searchQuery, 'named the moment the request goes out').toBe('mountians')
+    const corrected = store().search('mountains')
+    expect(store().searchQuery, 'a correction replaces it').toBe('mountains')
+    release('mountians')
+    await typo
+    expect(store().searchQuery, 'an older answer arriving does not take the name back').toBe('mountains')
+    release('mountains')
+    await corrected
+    expect(store().searchQuery, 'and the name stays after the answer is in').toBe('mountains')
+    expect(store().searchResponse?.query).toBe(store().searchQuery)
+  })
+
+  it('a query the store refuses as already out does not rename anything; a failed search keeps the name of what was asked', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { release } = stubGatedSearch()
+    const first = store().search('rivers')
+    void store().search('rivers')
+    expect(store().searchQuery).toBe('rivers')
+    release('rivers')
+    await first
+    const images = vi.fn().mockRejectedValue(new Error('boom'))
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    await store().search('lakes')
+    expect(store().searchError).toBe('Search failed.')
+    expect(store().searchQuery, 'the box can still say what was asked').toBe('lakes')
+    errorSpy.mockRestore()
   })
 
   it('once the answer is in, the next search goes out', async () => {

@@ -1223,7 +1223,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       const window = await app.firstWindow()
       await waitForHome(window)
       await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
-      // (Restore's label becomes "Restoring…" while ANY of the banner's actions runs: it is one busy flag)
+      // (Restore's label becomes "Restoring…" only while RESTORE runs: each button has a busy flag of its own since T-134 (7), so Clear
+      // running leaves the label "Restore" while both buttons dim. The pattern allows either label because this case does not pin which.)
       const restore = window.getByRole('button', { name: /^Restor(e|ing…)$/ })
       const clear = window.getByRole('button', { name: 'Clear', exact: true })
       const later = window.getByRole('button', { name: 'Later' })

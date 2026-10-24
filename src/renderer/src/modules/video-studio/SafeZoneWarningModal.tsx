@@ -62,8 +62,10 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
             <span className="font-medium block truncate" title={row.clipName}>
               {row.clipName}
             </span>
+            {/* T-135 (6): and so is each zone line, which embeds a custom preset's NAME (60 characters measured 474 px against the 406 px box, an 80-character
+                one already on disk 977): cut with an ellipsis, the whole line as the tooltip. */}
             {row.clippedZones.map((zone) => (
-              <div key={zone} className="text-ink-muted">
+              <div key={zone} className="text-ink-muted truncate" title={zone}>
                 {zone}
               </div>
             ))}

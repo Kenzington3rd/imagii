@@ -2004,8 +2004,10 @@ test.describe('imagii Audio Studio', () => {
       await dropOnImporter(window, webm, 'take-no-duration.webm')
       await expect(window.locator(WAVEFORM)).toBeVisible({ timeout: 60_000 })
       await expect(playButton(window)).toBeEnabled()
+      // The waveform and the Play button are up a few milliseconds before the "Loaded" toast is raised, so the toast is waited for (a one-shot read of
+      // the log after the waveform failed about one run in three, on the unchanged build too).
+      await expect.poll(() => readToastLog(window), { message: 'the file loaded', timeout: 15_000 }).toContain('Loaded')
       const log = await readToastLog(window)
-      expect(log, 'the file loaded').toContain('Loaded')
       expect(log.join(' | '), 'and nobody told the person the format cannot be read').not.toMatch(/can't read this audio format/)
     } finally {
       await closeStudio(studio)
@@ -2857,6 +2859,90 @@ test.describe('imagii Audio Studio', () => {
     }
   })
 
+  // T-135 (12): a chain whose cuts remove everything exits 0 from ffmpeg with a 78-byte WAV, and "Cleaned audio exported" was said over nothing.
+  // The cut is a real drag across the whole waveform; the save dialog is stubbed; the refusal comes from main before any ffmpeg is spawned.
+  test('a chain that cuts the whole file is refused in a sentence: a Failed row, no file written, and the button is free again (T-135 (12))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('allcut')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      // From before the left edge to past the right one: both ends of the region clamp to the file.
+      await dragCut(window, 0, 1)
+      await expect(cutChips(window)).toHaveCount(1)
+      const [start, end] = parseTimestampPair((await cutChips(window).first().textContent()) ?? '')
+      expect(start, 'the cut starts at the first sample').toBeLessThan(0.03)
+      expect(end, 'and ends at the last one').toBeGreaterThan(FIXTURE_SECONDS - 0.03)
+      const out = path.join(studio.root, 'nothing.wav')
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportButton.click()
+      const SENTENCE = 'Everything is cut out. Click a mark to put a part back.'
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(SENTENCE)
+      expect((await readToastLog(window)).some((t) => t.includes('Cleaned audio exported')), 'no success was claimed').toBe(false)
+      await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      expect(existsSync(out), 'and no file of any size was written').toBe(false)
+      // Putting the part back is the way out the sentence names: click the mark, and the same press exports.
+      await cutChips(window).first().click()
+      await expect(cutChips(window)).toHaveCount(0)
+      await exportButton.click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      expect(existsSync(out)).toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-135 (11): the second track's file was never looked at before the export, whose `[1:a]` reference to a file with no sound died late with a
+  // sentence about the source / the disk. It is looked at when it is picked (nothing is added, and the sentence names the second track), and again
+  // when the export starts (a file that lost its sound since: replaced on disk).
+  test('a second track with no sound in it is refused when picked, and when the file loses its sound before the export (T-135 (11))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('second-nosound')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      const silentMp4 = path.join(studio.root, 'source', 'picture-only.mp4')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `testsrc2=size=160x120:rate=15:duration=${FIXTURE_SECONDS}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', silentMp4])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      const SENTENCE = 'The second track has no sound in it. Remove it or pick another file.'
+
+      // ── picked: refused by name, nothing is added ──
+      await stubOpenDialog(app, silentMp4)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain(SENTENCE)
+      expect((await readToastLog(window)).some((t) => t.includes('Background music added')), 'no "added"').toBe(false)
+      await expect(panel).toContainText('Layer in background music')
+      await expect(panel.getByRole('button', { name: /Remove/ })).toHaveCount(0)
+
+      // ── a file with sound is added as before ──
+      const music = path.join(studio.root, 'source', 'bed.wav')
+      await makeFixtureWav(music)
+      await stubOpenDialog(app, music)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: bed.wav')
+
+      // ── the file loses its sound before the export: the export says which file ──
+      copyFileSync(silentMp4, music)
+      await stubSaveDialog(app, path.join(studio.root, 'mix.wav'))
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportButton.click()
+      // The pick said it once; the export says it again (the same words: it is the same fact about the same track).
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t === SENTENCE).length, { timeout: 60_000, intervals: [250] })
+        .toBe(2)
+      await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      expect(existsSync(path.join(studio.root, 'mix.wav'))).toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
   // T-126 (19): `ExportDialog.startExport` claimed "running" after the save dialog it awaits, so a double-click on Export opened TWO save
   // dialogs and ran two exports (executed in the built app). The dialog here answers after 300 ms, as a real one does: that is the window
   // the second press lands in. ExportPanel (Video Studio) has had the claim since T-125 (18).
@@ -2933,6 +3019,76 @@ test.describe('imagii Audio Studio', () => {
       await expect(cancel).toHaveCount(0)
       expect(existsSync(out)).toBe(false)
       expect(entries.map((e) => e.text)).not.toContain('Cleaned audio exported')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-135 (1): the export's row, its bar and its Cancel were the dialog's own state, and the progress listener its effect's, so a trip to Home mid-export
+  // came back to a dialog that said "Export" again with no Cancel while main kept rendering (and a second press ran a second render). The row is a
+  // module store now. The two-pass render of an hour of audio is the window: the measure pass runs for tens of seconds.
+  test('an export that is running when the person leaves Audio Studio is still running, with its Cancel and its bar, when they come back (T-135 (1))', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('exportleave')
+    const { app, window } = studio
+    try {
+      const long = path.join(studio.root, 'source', 'long-tone.mp3')
+      await makeLongMp3(long)
+      await dropOnImporter(window, long, 'long-tone.mp3')
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      await window.locator(LEVELS).getByRole('checkbox').check()
+
+      const out = path.join(studio.root, 'left.mp3')
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const cancel = exportPanel.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toBeVisible({ timeout: 30_000 })
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+
+      // Back: not idle. The same sound is loaded, Export is off and says why, the row's bar is drawn, and the Cancel is there.
+      await expect(exportPanel.getByRole('button', { name: 'Exporting…' }), 'not "Export" again over a render that is running').toBeDisabled()
+      await expect(exportPanel.getByRole('progressbar')).toBeVisible()
+      await expect(cancel).toBeVisible()
+      await cancel.click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+      await expect(exportPanel.getByText('Canceled', { exact: true }), 'the row says what became of it').toBeVisible()
+      await expect(cancel).toHaveCount(0)
+      expect(existsSync(out)).toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an export that ends while the person is away shows its finished row, with Show in folder, when they come back (T-135 (1))', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('exportdoneaway')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const out = path.join(studio.root, 'away.mp3')
+      await stubSaveDialog(app, out)
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 4_000 }])
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect(exportPanel.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      // It ends while nobody is looking at the dialog: the file lands and the toast says so.
+      await expect.poll(() => existsSync(out), { timeout: 90_000, intervals: [250] }).toBe(true)
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true }), 'idle again').toBeEnabled()
+      await expect(exportPanel.getByRole('progressbar'), 'and the row is there with its result').toHaveAttribute('aria-valuenow', '100')
+      await exportPanel.getByRole('button', { name: 'Show in folder' }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([out])
     } finally {
       await closeStudio(studio)
     }

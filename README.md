@@ -160,7 +160,7 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 
 **Slow launch (10–15 seconds, no window)** → Normal, and every launch does it: the portable .exe unpacks itself each time you start it. Wait for the window.
 
-**Video Studio won't import a file** → Check the codec (right-click → Properties). H.264, H.265, VP9, ProRes, AV1 in any common container should work. Some old AVI files use codecs FFmpeg can't decode.
+**Video Studio won't import a file** → Check the codec (right-click → Properties). imagii reads H.264, H.265, VP9, ProRes and AV1 in any common container, so trimming, the highlight scan and every export work on them. The preview is narrower: it plays only what imagii's built-in player can decode (H.264, VP9 and AV1 on every machine; ProRes, and some H.265 or 10-bit files, it cannot), so those show a note under the picture instead of a picture, with "Make a preview copy" to convert a copy just for watching. Some old AVI files use codecs FFmpeg can't decode.
 
 **Audio export is slow** → If "Even volume" is on, imagii measures the whole file first and then renders. Turn it off for a faster export.
 

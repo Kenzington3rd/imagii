@@ -4,8 +4,10 @@ import {
   AUDIO_SAVE_FORMATS,
   DEFAULT_DUCK_PARAMS,
   DUCK_LIMITS,
+  EVERYTHING_CUT_MESSAGE,
   LOUDNESS_TARGET_LUFS,
   SECONDARY_GAIN_DB,
+  SECOND_TRACK_NO_SOUND_MESSAGE,
   audioFileExtension,
   audioPassLabel,
   audioPassPlan,
@@ -300,6 +302,36 @@ describe('WAVEFORM_READ_FAILED: the refusal that remains, for a file main cannot
   })
 })
 
+describe('the two export refusals that need no encoder (T-135 (11), (12))', () => {
+  it('say which file / what happened, in a sentence main can throw as written', () => {
+    expect(SECOND_TRACK_NO_SOUND_MESSAGE).toBe('The second track has no sound in it. Remove it or pick another file.')
+    expect(EVERYTHING_CUT_MESSAGE).toBe('Everything is cut out. Click a mark to put a part back.')
+  })
+
+  it.each([
+    ['SECOND_TRACK_NO_SOUND_MESSAGE', SECOND_TRACK_NO_SOUND_MESSAGE],
+    ['EVERYTHING_CUT_MESSAGE', EVERYTHING_CUT_MESSAGE]
+  ])('%s is a finished sentence that userFacingError lets stand (no channel name, no path, nothing a known-cause pattern rewrites)', (_name, sentence) => {
+    expect(sentence.endsWith('.')).toBe(true)
+    expect(sentence.length).toBeLessThanOrEqual(240)
+    expect(sentence).not.toContain('\n')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      // Through Electron's envelope, as a renderer receives it.
+      const wrapped = new Error(`Error invoking remote method 'audio:export': Error: ${sentence}`)
+      expect(userFacingError(wrapped, 'Export failed.')).toEqual({ cancelled: false, message: sentence })
+      expect(userFacingError(new Error(sentence), 'Export failed.').message).toBe(sentence)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('the second-track sentence is not the no-sound verdict the importer words (that one is about the primary file)', () => {
+    expect(SECOND_TRACK_NO_SOUND_MESSAGE).not.toBe(NO_AUDIO_STREAM_MESSAGE)
+    expect(isNoAudioStreamError(new Error(SECOND_TRACK_NO_SOUND_MESSAGE))).toBe(false)
+  })
+})
+
 describe('PLAYBACK_ERROR_MESSAGE (T-123 (14), reworded by T-129 and T-132 (10))', () => {
   it('names what fails now - playing the file, not drawing it - what still works, and what to try', () => {
     expect(PLAYBACK_ERROR_MESSAGE).toMatch(/^imagii can't play this file here/)
@@ -361,6 +393,13 @@ describe('isNoAudioStreamError - the one probe outcome that is a verdict about t
     }
     expect(isNoAudioStreamError('No audio stream found in file'), 'a string is not an Error').toBe(false)
     expect(isNoAudioStreamError(undefined)).toBe(false)
+  })
+
+  it('answers through the IPC envelope too, so the renderer can ask it of a probe main threw (T-135 (11))', () => {
+    expect(isNoAudioStreamError(new Error("Error invoking remote method 'audio:probe': Error: No audio stream found in file"))).toBe(true)
+    expect(isNoAudioStreamError(new Error("Error invoking remote method 'audio:probe': Error: ffprobe exit 1: Invalid data found when processing input"))).toBe(false)
+    expect(isNoAudioStreamError(new Error("Error invoking remote method 'audio:probe': Error: ffprobe returned no usable duration for the audio stream"))).toBe(false)
+    expect(isNoAudioStreamError(new Error("Error invoking remote method 'audio:probe': Error: No audio stream found in file, and more"))).toBe(false)
   })
 })
 

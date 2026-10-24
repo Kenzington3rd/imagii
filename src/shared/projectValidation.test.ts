@@ -1222,3 +1222,61 @@ describe('structurally empty studios are refused, named by field (T-119)', () =>
     }
   })
 })
+
+/**
+ * T-135 (10) - a preset id this build does not have is dropped, not refused and not kept.
+ *
+ * `selectedPresets` entries were checked only as strings. An id outside `PLATFORM_IDS` (a hand-edited project, or one saved by a newer
+ * build with a preset this one lacks) opened a studio whose Export panel then read `PLATFORM_INFO[id]` for it, and `findSafeZoneIssues`
+ * and the queue builder threw: "Export" did nothing and `void startExport()` rejected unhandled. DROPPING the id keeps an older build able
+ * to open a newer build's project (refusing the whole file for one unknown preset would not), and what survives is the clip's own list.
+ */
+describe('a preset id this build does not have is dropped when a project opens (T-135 (10))', () => {
+  const withClips = (clips: unknown[]): unknown => ({
+    ...baseProject,
+    videoStudio: { sourcePath: 'C:/safe.mp4', clips, selectedClipId: null }
+  })
+  const presetsAfter = (selectedPresets: unknown[]): unknown => {
+    const result = validateProject(withClips([goodClip({ selectedPresets })]))
+    if (!result.ok) throw new Error(`refused: ${result.reason}`)
+    return result.project.videoStudio?.clips[0]?.selectedPresets
+  }
+
+  it('drops an id no preset has and keeps the others, in their order', () => {
+    expect(presetsAfter(['youtube', 'periscope', 'reels'])).toEqual(['youtube', 'reels'])
+  })
+
+  it('a clip whose every id is unknown opens with none queued, and the project still opens', () => {
+    expect(presetsAfter(['periscope', 'vine'])).toEqual([])
+  })
+
+  it('names that are not own preset ids are dropped too (a prototype key is not a preset)', () => {
+    expect(presetsAfter(['constructor', '__proto__', 'toString', 'tiktok', ''])).toEqual(['tiktok'])
+  })
+
+  it('drops from every clip, not just the first', () => {
+    const result = validateProject(
+      withClips([goodClip({ selectedPresets: ['mystery'] }), goodClip({ id: 'c2', selectedPresets: ['youtube60', 'mystery', 'twitter'] })])
+    )
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.project.videoStudio?.clips.map((c) => c.selectedPresets)).toEqual([[], ['youtube60', 'twitter']])
+  })
+
+  it('control: a project whose ids are all known loads exactly as written (every built-in id, order kept)', () => {
+    const all = ['youtube', 'youtube60', 'reels', 'tiktok', 'twitter', 'facebook']
+    expect(presetsAfter(all)).toEqual(all)
+    expect(presetsAfter([])).toEqual([])
+  })
+
+  it('an entry that is not a string is still refused, by name (malformed, not merely unknown)', () => {
+    const result = validateProject(withClips([goodClip({ selectedPresets: ['youtube', 7] })]))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('videoStudio.clips[0].selectedPresets[1] not a string')
+  })
+
+  it('the custom preset ids are not touched here (the Export panel prunes them against the folder it reads)', () => {
+    const result = validateProject(withClips([goodClip({ customPresetIds: ['gone-from-disk'] })]))
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.project.videoStudio?.clips[0]?.customPresetIds).toEqual(['gone-from-disk'])
+  })
+})

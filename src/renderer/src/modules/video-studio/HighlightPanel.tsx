@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
 import { countOf } from '@shared/plural'
@@ -13,6 +13,7 @@ import {
   useVideoStore,
   videoHasNoSound
 } from './store/videoStore'
+import { useScanRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
@@ -57,20 +58,26 @@ const CHAT_DEBOUNCE_MS = 300
 export function HighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const addScannedClip = useVideoStore((s) => s.addScannedClip)
-  const [scanning, setScanning] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [audioCandidates, setAudioCandidates] = useState<AudioCandidate[] | null>(null)
-  const [chatText, setChatText] = useState('')
+  // T-135 (1), (4): the scan (its progress, and whether one is running) is a module store, and its candidates and the pasted chat log are the open
+  // video's own results in the video store. Leaving the studio unmounted all of it when it was this panel's state: the panel came back with "Scan
+  // VOD" enabled over a scan main was still running (a second press overwrote main's single scan slot, orphaning the first from Cancel and from the
+  // quit sweep), and a scan that took minutes was forgotten. `loadSource` and `clearSource` empty the results, so a different video starts clean.
+  const scanRun = useScanRun((s) => s.run)
+  const scanning = scanRun !== null
+  const progress = scanRun?.percent ?? 0
+  const audioCandidates = useVideoStore((s) => s.derived.scanCandidates)
+  const chatText = useVideoStore((s) => s.derived.highlightChat)
+  const setDerived = useVideoStore((s) => s.setDerived)
   // Bug fix: parseChatLog + scoreHighlights are O(n) and can run hundreds
   // of times per second on a fast typist with a 50KB chat log pasted in.
   // Debounce the value used for scoring so each keystroke only triggers
-  // one rerun after the user stops typing.
-  const [debouncedChat, setDebouncedChat] = useState('')
-  const [showChatInput, setShowChatInput] = useState(false)
+  // one rerun after the user stops typing. (Seeded from the store: a returning panel scores what is already pasted at once.)
+  const [debouncedChat, setDebouncedChat] = useState(chatText)
+  const [showChatInput, setShowChatInput] = useState(chatText.length > 0)
 
   useEffect(() => {
     const off = window.api.video.onHighlightProgress((p) => {
-      setProgress(p.percent)
+      useScanRun.getState().patch({ percent: p.percent })
     })
     return off
   }, [])
@@ -79,21 +86,6 @@ export function HighlightPanel(): JSX.Element | null {
     const t = setTimeout(() => setDebouncedChat(chatText), CHAT_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [chatText])
-
-  // T-131 (3): the scan's results, its progress and the pasted chat log belong to the video they were made for. The panel stays mounted
-  // when the open video is REPLACED in place (Reframe's "Edit in Video Studio" loads the new file into this very studio), so the previous
-  // video's candidates stayed on screen beside the new one, and a stale "+ Clip" row made a clip past the end of the new video and
-  // said so as a success. CaptionsPanel resets on the same key (T-112's lesson). `openPathRef` is the video that is open NOW, for a scan
-  // that finishes after the swap: its result is for a video that is gone and is dropped.
-  const openPath = source?.filePath
-  const openPathRef = useRef(openPath)
-  openPathRef.current = openPath
-  useEffect(() => {
-    setAudioCandidates(null)
-    setProgress(0)
-    setChatText('')
-    setDebouncedChat('')
-  }, [openPath])
 
   // Phase 4B: combine audio candidates with chat data into a unified
   // ranked list. Chat input is optional — when empty, scoring degrades to
@@ -112,12 +104,13 @@ export function HighlightPanel(): JSX.Element | null {
   async function scan(): Promise<void> {
     if (!source || noSound) return
     const startedFor = source.filePath
-    setScanning(true)
-    setProgress(0)
+    // The claim is the store's: one scan at a time however many times this panel has been mounted (main has ONE scan slot).
+    if (!useScanRun.getState().begin({ percent: 0 })) return
     try {
       const candidates = await window.api.video.findHighlights(startedFor)
-      // T-131 (3): the video was replaced while the scan ran - its candidates are for the one that is gone.
-      if (openPathRef.current !== startedFor) return
+      // The result is for the video the scan started on (T-131 (3)): if it was replaced or closed while the scan ran, its candidates are for
+      // one that is gone. Stored in the video store, so they are there when the person comes back, and no toast is raised to a panel that is not.
+      const stored = (found: AudioCandidate[]): boolean => useVideoStore.getState().setDerivedFor(startedFor, { scanCandidates: found })
       // The IPC layer's signature returns reason as `string` but in
       // practice it's our union type — narrow defensively.
       const narrowed: AudioCandidate[] = candidates.map((c) => ({
@@ -126,7 +119,7 @@ export function HighlightPanel(): JSX.Element | null {
         peakDb: c.peakDb,
         reason: c.reason === 'sustained-loud' ? 'sustained-loud' : 'loud'
       }))
-      setAudioCandidates(narrowed)
+      if (!stored(narrowed)) return
       if (narrowed.length === 0) {
         toast('No standout moments detected', { icon: <Icon name="search" size={18} /> })
       } else {
@@ -135,7 +128,7 @@ export function HighlightPanel(): JSX.Element | null {
     } catch (err) {
       reportFailure(err, { failed: 'Scan failed.', canceled: 'Scan canceled.' })
     } finally {
-      setScanning(false)
+      useScanRun.getState().end()
     }
   }
 
@@ -196,7 +189,7 @@ export function HighlightPanel(): JSX.Element | null {
         {showChatInput ? (
           <textarea
             value={chatText}
-            onChange={(e) => setChatText(e.target.value)}
+            onChange={(e) => setDerived({ highlightChat: e.target.value })}
             rows={3}
             placeholder="[0:42] viewer1: POG&#10;[0:43] viewer2: NO WAY&#10;[0:43] viewer3: KEKW"
             className="bg-bg-base rounded px-2 py-1 text-xs font-mono resize-y w-full mt-1.5"

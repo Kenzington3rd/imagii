@@ -22,6 +22,7 @@ import {
   platformsOverLimit
 } from './clipKit'
 import { useVideoStore } from './store/videoStore'
+import { useKitRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { persistSetting } from '../../lib/persistSetting'
@@ -44,8 +45,13 @@ interface ClipKitButtonProps {
 export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const srtPath = useVideoStore((s) => s.srtPath)
-  const [running, setRunning] = useState(false)
-  const [phase, setPhase] = useState<string>('')
+  // T-135 (1): the kit's run is a module store, not this button's state - it is one of up to a dozen buttons in the clip list, and the list
+  // unmounts with the studio. The run belongs to ONE clip's row: that row's button shows the label and the Cancel, and the others are off
+  // while it works (main runs one batch at a time; a second press used to be refused with a sentence after a chooser had been answered).
+  const kitRun = useKitRun((s) => s.run)
+  const running = kitRun !== null && kitRun.clipId === clip.id
+  const otherKitRunning = kitRun !== null && kitRun.clipId !== clip.id
+  const phase = running ? kitRun.phase : ''
   // INIT-I (round 16): confirm before canceling. Clip Kit always has at
   // least 5 platform exports + 3 thumbs queued, so we always confirm here.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
@@ -65,8 +71,8 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   // SRT), and main can only cancel the call that is running — a Cancel that
   // lands between two of them found nothing to stop and the kit carried on to
   // "Saved your Clip Kit". So the click also sets this, and every step asks it
-  // first. It is cleared when the NEXT kit starts, so it cannot outlive one.
-  const canceledRef = useRef(false)
+  // first. T-135 (1): it is the run's `canceled` field, in the store, so a Cancel pressed on a remounted button reaches the kit that is
+  // still working; the next kit starts with it down, so it cannot outlive one.
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the settings read, the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two kits. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -106,7 +112,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
   /** Throws the T-84 sentinel when the user has canceled this kit. */
   function stopIfCanceled(): void {
-    if (canceledRef.current) throw new CancelledError()
+    if (useKitRun.getState().run?.canceled) throw new CancelledError()
   }
 
   async function runKit(): Promise<void> {
@@ -122,8 +128,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         typeof lastDir === 'string' && lastDir.length > 0 ? lastDir : undefined
       )
       if (!parentDir) return
-      canceledRef.current = false
-      setRunning(true)
+      if (!useKitRun.getState().begin({ clipId: clip.id, phase: '', canceled: false })) return
       // T-112: the folder is made before the first job, so a kit that is canceled or fails
       // before ANY file lands in it would leave an empty `<name>-kit-<date>` behind. `landed`
       // counts the files the kit has finished writing (a platform export, a thumbnail); the
@@ -142,7 +147,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         // the gate (main sanitizes again, which is idempotent) and the folder and every file
         // come from the one name.
         const safeName = sanitizeFilename(clip.name)
-        setPhase('Creating folder…')
+        useKitRun.getState().patch({ phase: 'Creating folder…' })
         kitDir = await window.api.video.makeKitDir({
           parentDir,
           clipName: safeName
@@ -174,11 +179,11 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         // Export panel's rows listen to); the job in progress is the one after the
         // finished ones.
         let finished = 0
-        setPhase(kitExportLabel(finished, queue.length))
+        useKitRun.getState().patch({ phase: kitExportLabel(finished, queue.length) })
         const offJobComplete = window.api.video.onJobComplete(() => {
           finished += 1
           landed += 1
-          setPhase(kitExportLabel(finished, queue.length))
+          useKitRun.getState().patch({ phase: kitExportLabel(finished, queue.length) })
         })
         try {
           await window.api.video.exportBatch(queue)
@@ -194,7 +199,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         const len = thumbTimes.length
         for (let i = 0; i < len; i++) {
           stopIfCanceled()
-          setPhase(kitThumbLabel(i, len))
+          useKitRun.getState().patch({ phase: kitThumbLabel(i, len) })
           const t = thumbTimes[i] ?? 0.5
           const timeSec = clip.startSec + t * clipDuration
           const outPath = path.join(kitDir, kitThumbFilename(safeName, i))
@@ -214,7 +219,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         stopIfCanceled()
         let noCaptions = false
         if (srtPath) {
-          setPhase('Bundling captions…')
+          useKitRun.getState().patch({ phase: 'Bundling captions…' })
           const srtDest = path.join(kitDir, kitSrtFilename(safeName))
           // T-113: the transcript is of the whole recording; the kit's video is this clip at its
           // speed, so main writes the cues on THAT file's clock (it used to copy them as they
@@ -260,8 +265,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           canceled: kitCanceledMessage(landed)
         })
       } finally {
-        setRunning(false)
-        setPhase('')
+        useKitRun.getState().end()
       }
     } finally {
       startingRef.current = false
@@ -272,7 +276,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
     <span className="inline-flex items-center gap-1">
       <button
         onClick={startKit}
-        disabled={running}
+        disabled={running || otherKitRunning}
         // T-125 (24): the Video tour's Clip Kit step points here.
         data-tutorial="video-clipkit"
         // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
@@ -356,7 +360,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
             className="btn-primary px-3 py-1.5 text-sm"
             onClick={() => {
               setShowCancelConfirm(false)
-              canceledRef.current = true
+              useKitRun.getState().patch({ canceled: true })
               void window.api.video.cancelAll()
             }}
           >

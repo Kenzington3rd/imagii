@@ -129,10 +129,27 @@ function disjointCuts(cuts: ChainSpec['cutRegions']): Array<{ startSec: number; 
  * only what is there. Never below 0.1 s, so a chain that cuts everything divides by something.
  */
 export function keptDurationSec(durationSec: number, cuts: ChainSpec['cutRegions']): number {
+  return Math.max(0.1, keptSecondsExact(durationSec, cuts))
+}
+
+/** The kept length with no floor: 0 for a chain whose cuts remove every second (T-135 (12)). */
+function keptSecondsExact(durationSec: number, cuts: ChainSpec['cutRegions']): number {
   const removed = disjointCuts(cuts)
     .map((c) => Math.max(0, Math.min(c.endSec, durationSec) - Math.min(c.startSec, durationSec)))
     .reduce((a, b) => a + b, 0)
-  return Math.max(0.1, durationSec - removed)
+  return Math.max(0, durationSec - removed)
+}
+
+/** Less than this much kept sound is not an export: the file is header and framing around silence (T-135 (12)). */
+export const MIN_KEPT_SEC = 0.05
+
+/**
+ * Does this chain's cut list remove everything? (T-135 (12).) ffmpeg exits 0 for such a chain and writes a header-only file, so the export asks
+ * BEFORE it spawns anything - it is `keptDurationSec` without the 0.1 s floor that exists to keep a progress bar's divisor off zero, which is
+ * why this cannot be read off `keptDurationSec` itself.
+ */
+export function cutsLeaveNothing(durationSec: number, cuts: ChainSpec['cutRegions']): boolean {
+  return keptSecondsExact(durationSec, cuts) < MIN_KEPT_SEC
 }
 
 /**

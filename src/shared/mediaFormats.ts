@@ -110,6 +110,15 @@ export function audioNeedsExtraction(name: string): boolean {
   return isVideoFilename(name) || hasExtension(name, EXTRACT_AUDIO_EXTENSIONS)
 }
 
+/**
+ * What the Player says when it cannot draw a video's picture (T-135 (2)). The preview is Chromium's `<video>`, which decodes what Chromium has a
+ * decoder for (H.264, VP9, AV1); ProRes and 10-bit HEVC probe fine, load ("Video loaded"), play their sound and draw nothing, with no error to hear.
+ * Everything else reads the file with ffmpeg, so the sentence says what still works (the person's next worry is whether the file is lost) and does
+ * not blame the file. The Player offers a preview copy beside it.
+ */
+export const PREVIEW_UNAVAILABLE_MESSAGE =
+  "imagii can't preview this video's picture format — trimming, scanning and export still work."
+
 /** "MP4, MOV, AVI" — uppercase hint copy for drop zones, from one list. */
 export function formatHint(extensions: readonly string[]): string {
   return extensions.map((e) => e.toUpperCase()).join(', ')

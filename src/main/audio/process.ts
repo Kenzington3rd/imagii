@@ -8,6 +8,7 @@ import {
   aselectForCuts,
   buildChain,
   chainEndsWithLoudnorm,
+  cutsLeaveNothing,
   EMPTY_CHAIN,
   keptDurationSec,
   parseLoudnormJson,
@@ -28,7 +29,13 @@ import type {
   AudioOutputFormat,
   CutRegion
 } from '../../shared/audio'
-import { DEFAULT_DUCK_PARAMS } from '../../shared/audio'
+import {
+  DEFAULT_DUCK_PARAMS,
+  EVERYTHING_CUT_MESSAGE,
+  NoUsableDurationError,
+  SECOND_TRACK_NO_SOUND_MESSAGE,
+  isNoAudioStreamError
+} from '../../shared/audio'
 import { assertAlways } from '../../shared/assert'
 
 export type AudioProgressListener = (p: AudioJobProgress) => void
@@ -126,6 +133,21 @@ async function runFfmpegJob(
   })
 }
 
+/**
+ * T-135 (11): does the second track's file have a sound stream? Only "no sound stream" is the verdict. A stream whose LENGTH the container does not
+ * give (a streamed MediaRecorder WebM) is a file ffmpeg mixes, and any other probe failure (a file that is not there, one that is not media) keeps the
+ * error it would have had: the probe's text carries the same missing-file / damaged-file patterns the export's own failure did.
+ */
+async function assertSecondTrackHasSound(filePath: string, run: LatchRun): Promise<void> {
+  try {
+    await run.guard(probeAudio(filePath))
+  } catch (err) {
+    if (isNoAudioStreamError(err)) throw new Error(SECOND_TRACK_NO_SOUND_MESSAGE)
+    if (err instanceof NoUsableDurationError) return
+    throw err
+  }
+}
+
 export async function runAudioExport(
   spec: AudioExportSpec,
   onProgress: AudioProgressListener
@@ -145,6 +167,12 @@ async function exportAudio(
 ): Promise<AudioJobResult> {
   const startedAt = Date.now()
   const probe = await run.guard(probeAudio(spec.sourcePath))
+
+  // T-135 (11), (12): the two refusals that need no encoder, asked before the first child (before the measure pass, which on a long recording is
+  // minutes). A second track with no sound names ITSELF (its `[1:a]` reference dies with "matches no streams", which read as a source / disk
+  // problem), and a chain whose cuts remove everything is refused: ffmpeg exits 0 for it and writes a header-only file.
+  if (spec.chain.secondaryTrack) await assertSecondTrackHasSound(spec.chain.secondaryTrack.filePath, run)
+  if (cutsLeaveNothing(probe.duration, spec.chain.cutRegions)) throw new Error(EVERYTHING_CUT_MESSAGE)
 
   let measurement: LoudnormMeasurement | undefined
 

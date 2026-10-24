@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { parseChatLog, type ChatMessage } from '@shared/chatLog'
+import { parseChatLog } from '@shared/chatLog'
+import { findChatPeaks, type ChatPeak } from '@shared/chatPeaks'
 import { countOf } from '@shared/plural'
 import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
@@ -9,49 +10,6 @@ import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 import { formatClock } from '@shared/clockTime'
 
-interface ChatPeak {
-  bucketStart: number
-  count: number
-  topMessages: string[]
-}
-
-function findPeaks(msgs: ChatMessage[], bucketSec: number, padSec: number): ChatPeak[] {
-  if (msgs.length === 0) return []
-  const buckets = new Map<number, ChatMessage[]>()
-  for (const m of msgs) {
-    const key = Math.floor(m.tSec / bucketSec) * bucketSec
-    const arr = buckets.get(key) ?? []
-    arr.push(m)
-    buckets.set(key, arr)
-  }
-  const counts = [...buckets.entries()].map(([k, arr]) => ({ k, n: arr.length }))
-  if (counts.length < 3) return []
-  counts.sort((a, b) => a.n - b.n)
-  const medianEntry = counts[Math.floor(counts.length / 2)]
-  const median = medianEntry?.n ?? 0
-  const threshold = Math.max(median * 2, 5)
-
-  const peakBuckets = [...buckets.entries()]
-    .filter(([, arr]) => arr.length >= threshold)
-    .sort((a, b) => a[0] - b[0])
-
-  const merged: ChatPeak[] = []
-  for (const [k, arr] of peakBuckets) {
-    const last = merged[merged.length - 1]
-    if (last && k - last.bucketStart < bucketSec * 2) {
-      last.count += arr.length
-      last.topMessages.push(...arr.slice(0, 2).map((m) => m.text))
-    } else {
-      merged.push({
-        bucketStart: Math.max(0, k - padSec),
-        count: arr.length,
-        topMessages: arr.slice(0, 3).map((m) => m.text)
-      })
-    }
-  }
-  return merged.sort((a, b) => b.count - a.count).slice(0, 12).sort((a, b) => a.bucketStart - b.bucketStart)
-}
-
 /** The spike window the box takes (s): the 3 to 60 its attributes say, enforced when typing ends. */
 const SPIKE_WINDOW_MIN = 3
 const SPIKE_WINDOW_MAX = 60
@@ -59,19 +17,15 @@ const SPIKE_WINDOW_MAX = 60
 export function ChatHighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const addScannedClip = useVideoStore((s) => s.addScannedClip)
-  const [chatText, setChatText] = useState('')
+  // T-135 (4): the pasted log and the spikes found in it are the open video's own results in the video store (they were this panel's state, lost
+  // with every visit). T-131 (3)'s reason holds as before: they are for the video they were pasted against, and `loadSource` / `clearSource` empty
+  // them, so a replaced video (Reframe's "Edit in Video Studio") never shows the old one's "+ Clip" rows. The spike window and the extra seconds are
+  // settings, not results, and stay with the panel.
+  const chatText = useVideoStore((s) => s.derived.spikeChat)
+  const peaks = useVideoStore((s) => s.derived.spikes)
+  const setDerived = useVideoStore((s) => s.setDerived)
   const [bucketSec, setBucketSec] = useState(10)
   const [padSec, setPadSec] = useState(15)
-  const [peaks, setPeaks] = useState<ChatPeak[] | null>(null)
-
-  // T-131 (3): the pasted log and the spikes found in it are for the video they were pasted against. The panel stays mounted when the open
-  // video is replaced in place (Reframe's "Edit in Video Studio"), and a stale "+ Clip" row made a clip past the end of the new video.
-  // The spike window and the extra seconds are settings, not results, and stay. CaptionsPanel resets on the same key.
-  const openPath = source?.filePath
-  useEffect(() => {
-    setChatText('')
-    setPeaks(null)
-  }, [openPath])
 
   if (!source) return null
 
@@ -83,8 +37,8 @@ export function ChatHighlightPanel(): JSX.Element | null {
       )
       return
     }
-    const found = findPeaks(msgs, bucketSec, padSec)
-    setPeaks(found)
+    const found: ChatPeak[] = findChatPeaks(msgs, bucketSec, padSec)
+    setDerived({ spikes: found })
     if (found.length === 0) {
       toast('No chat spikes detected', { icon: <Icon name="search" size={18} /> })
     } else {
@@ -100,8 +54,10 @@ export function ChatHighlightPanel(): JSX.Element | null {
     // segment, the wrong file), and clamping only the end turned those
     // peaks into a reversed range — which the store refuses in silence
     // while the toast below claimed a clip that never existed.
-    const start = Math.min(Math.max(0, p.bucketStart), duration)
-    const end = Math.min(duration, p.bucketStart + bucketSec + padSec * 2)
+    // T-135 (3): the window is the spike's own (first bucket less the padding .. last bucket's end plus the padding), so a spike of several buckets
+    // is clipped whole; this used to rebuild it from the padded start plus ONE bucket and two pads.
+    const start = Math.min(Math.max(0, p.startSec), duration)
+    const end = Math.min(duration, p.endSec)
     // Success is reported from what the store actually did, never assumed.
     // T-94: the scanner's add also retires the untouched whole-video clip
     // (one undo step with the add), and the user is told.
@@ -127,7 +83,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
       </p>
       <textarea
         value={chatText}
-        onChange={(e) => setChatText(e.target.value)}
+        onChange={(e) => setDerived({ spikeChat: e.target.value })}
         rows={4}
         placeholder="[0:42] viewer1: POG&#10;[0:42] viewer2: NO WAY&#10;[0:43] viewer3: WHAT"
         className="bg-bg-base rounded px-2 py-1 text-xs font-mono resize-y"
@@ -172,7 +128,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
               key={i}
               className="flex items-start gap-2 px-2 py-1.5 bg-bg-hover rounded text-xs"
             >
-              <span className="font-mono">{formatClock(p.bucketStart)}</span>
+              <span className="font-mono">{formatClock(p.startSec)}</span>
               <span className="text-ink-dim">{countOf(p.count, 'message')}</span>
               <span className="flex-1 truncate text-ink-muted" title={p.topMessages.join(' · ')}>{p.topMessages.join(' · ')}</span>
               <button

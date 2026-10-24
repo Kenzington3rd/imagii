@@ -15,7 +15,8 @@ import {
   audioNeedsExtraction,
   formatHint,
   canStreamCopyIntoMp4,
-  MP4_COPYABLE_VIDEO_CODECS
+  MP4_COPYABLE_VIDEO_CODECS,
+  PREVIEW_UNAVAILABLE_MESSAGE
 } from './mediaFormats'
 
 describe('mediaFormats lists', () => {
@@ -127,5 +128,20 @@ describe('canStreamCopyIntoMp4 — what an mp4 can carry as it is (T-111)', () =
 
   it('is the list the doc comment names, in lower case', () => {
     expect(MP4_COPYABLE_VIDEO_CODECS).toEqual(['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg'])
+  })
+})
+
+// T-135 (2): a video whose picture the preview cannot decode (ProRes, 10-bit HEVC) probes fine, loads, plays its sound and draws nothing. The Player says
+// so, in the one sentence, and offers a preview copy; the README no longer promises that every codec ffmpeg reads "should work" in the preview.
+describe('PREVIEW_UNAVAILABLE_MESSAGE - what the Player says when it cannot draw the picture (T-135 (2))', () => {
+  it('names what is true (the preview) and what still works (trimming, scanning, export), in one finished sentence', () => {
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).toBe("imagii can't preview this video's picture format — trimming, scanning and export still work.")
+    expect(PREVIEW_UNAVAILABLE_MESSAGE.endsWith('.')).toBe(true)
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).not.toContain('\n')
+    expect(PREVIEW_UNAVAILABLE_MESSAGE.length).toBeLessThanOrEqual(240)
+  })
+
+  it('does not blame the file or promise a fix the app does not make (no "corrupt", no "unsupported file")', () => {
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/corrupt|damaged|unsupported|invalid/i)
   })
 })

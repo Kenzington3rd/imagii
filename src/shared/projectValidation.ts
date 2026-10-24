@@ -2,6 +2,7 @@ import type { ImagiiProject, PlaceRecord, ReferencesTab } from './workspace'
 import { isSafeAbsolutePath } from './pathSafety'
 import { resolveOverlayColor } from './overlayColors'
 import { secondaryTrackProblem } from './audio'
+import { PLATFORM_IDS } from './clip'
 
 /**
  * Tech-debt fix: schema version is now ranged. Validator accepts any
@@ -170,6 +171,19 @@ function validateClipRequiredFields(clip: unknown, idx: number): string | null {
 }
 
 /**
+ * T-135 (10): a preset id this build has no preset for is dropped from the clip, in place, after the shape has been checked. The Export panel
+ * reads `PLATFORM_INFO[id]` for every id a clip holds, so one it has no row for (a hand-edited project, or a newer build's preset) made
+ * `findSafeZoneIssues` and the queue builder throw, and Export did nothing. DROPPED, not refused: an older build still opens a newer build's
+ * project, and what is left is the clip's own list. Only the string entries `validateClipRequiredFields` has already passed are judged;
+ * the custom preset ids are not touched (the panel prunes them against the folder it reads).
+ */
+function dropUnknownPresetIds(clip: unknown): void {
+  if (!isPlainObject(clip) || !Array.isArray(clip.selectedPresets)) return
+  const known: readonly string[] = PLATFORM_IDS
+  clip.selectedPresets = clip.selectedPresets.filter((id: unknown) => typeof id === 'string' && known.includes(id))
+}
+
+/**
  * T-119: the chain's fields the Audio Studio reads without a guard: `chain.gainDb.toFixed(1)` in the Levels
  * panel, the loudness box, `chain.cutRegions.length` in Close and Export, and each cut's times in its chip.
  * `audioStudio.chain` was only required to be an object, so `chain: {}` opened a studio that threw in render.
@@ -330,6 +344,8 @@ export function validateProject(input: unknown): ValidationResult {
     for (let i = 0; i < v.clips.length; i++) {
       const reason = validateClipRequiredFields(v.clips[i], i)
       if (reason !== null) return { ok: false, reason }
+      // T-135 (10): after the shape is known to be sound (every entry a string), before the studio reads the ids.
+      dropUnknownPresetIds(v.clips[i])
     }
     // v5: the marker says `sourcePath` is the original of a file converted on import.
     if (v.convertedForImport !== undefined && typeof v.convertedForImport !== 'boolean')
