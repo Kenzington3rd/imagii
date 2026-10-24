@@ -370,3 +370,31 @@ describe('the layout guide says what tests/e2e/layout.ts measures, and what a se
     expect(layout).toMatch(/ctx\.measureText\(text\)\.width/)
   })
 })
+
+// T-133 (11): three documentation lines the nineteenth sweep found stale, held so the next change to the thing or the sentence is a failing test.
+describe('three claims the guides make that the code can contradict (T-133 (11))', () => {
+  it('STYLE_GUIDE\'s reportFailure signature lists every option the function takes', () => {
+    const source = read('src/renderer/src/lib/reportFailure.ts')
+    const options = /copy: \{ ([^}]*) \}/.exec(source)?.[1] ?? ''
+    const names = options.split(';').map((o) => o.trim().replace(/\?.*$/, '').replace(/:.*$/, '')).filter(Boolean)
+    expect(names, 'read the option names off the real signature').toEqual(['failed', 'canceled', 'id'])
+    const guide = flat(read('docs/STYLE_GUIDE.md'))
+    const signature = /`reportFailure\(err, \{ ([^}]*) \}\)`/.exec(guide)?.[1] ?? ''
+    expect(signature.split(',').map((o) => o.trim().replace(/\?$/, ''))).toEqual(names)
+  })
+
+  it('USER_GUIDE does not promise "a few seconds" for a long recording\'s waveform (T-129 measured up to a few tens of seconds)', () => {
+    const guide = flat(read('docs/USER_GUIDE.md'))
+    expect(guide).not.toMatch(/A long recording takes a few seconds/)
+    expect(guide).toMatch(/A long recording takes from a few seconds up to a few tens of seconds/)
+  })
+
+  it('the "every runner that writes a video" claim names the runners, in the comment and in STYLE_GUIDE (the burn-in is one of them)', () => {
+    const comment = flat(read('src/main/ffmpeg/noPicture.ts').replace(/^\s*\*\s?/gm, ''))
+    expect(comment).not.toMatch(/Every runner that writes a video/)
+    expect(comment).toMatch(/Every runner that cuts a video out of a RANGE of a source reads both - Export, Reframe, a compilation's segments, and \(T-133 \(4\)\) the caption burn-in/)
+    const guide = flat(read('docs/STYLE_GUIDE.md'))
+    expect(guide).not.toMatch(/Every runner that writes a video closes on/)
+    expect(guide).toMatch(/Every runner that cuts a video out of a RANGE of a source \(Export, Reframe, a compilation's segments, and, since T-133 \(4\), the caption burn-in/)
+  })
+})

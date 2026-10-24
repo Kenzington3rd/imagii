@@ -1703,7 +1703,7 @@ test.describe('imagii Audio Studio', () => {
     const studio = await openStudio('waveform-unreadable')
     const { window } = studio
     const WAVEFORM_READ_FAILED =
-      "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+      "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as a standard PCM WAV or MP3 and try again."
     try {
       const odd = path.join(studio.root, 'source', 'unknown-format.wav')
       writeFileSync(odd, unknownFormatWav())
@@ -2363,6 +2363,69 @@ test.describe('imagii Audio Studio', () => {
       await expect
         .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
         .toContain('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-133 (9): the audio Importer's "Choose file…" says "Loading…" while a file loads and is `disabled`, and drew like a live button.
+  test('the Importer\'s Choose file is dimmed while a file is loading (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('importer-dim')
+    const { window, app } = studio
+    try {
+      const choose = window.getByRole('button', { name: /^(Choose file…|Loading…)$/ })
+      const opacity = (): Promise<number> => choose.evaluate((el) => Number(getComputedStyle(el).opacity))
+      await expect(choose).toHaveText('Choose file…')
+      expect(await opacity(), 'a live button is not dimmed').toBe(1)
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 1, ms: 4000 }])
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect(choose).toHaveText('Loading…', { timeout: 10_000 })
+      await expect(choose).toBeDisabled()
+      // (polled: the button's colors transition, so the first frame after it is disabled is not yet the settled look)
+      await expect.poll(opacity, { timeout: 5_000, message: 'a button that cannot be pressed looks it' }).toBeLessThan(0.7)
+      await expect(window.locator('[data-tutorial="audio-waveform"]')).toBeVisible({ timeout: 60_000 })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-133 (7a): the same boundary on the way OUT of the wizard. A held Enter on Apply closes the dialog with its first press; focus goes back to
+  // "Help me fix this", and the key's auto-repeats (a keyboard click on that button) opened the wizard again from question 1.
+  test('Fix Wizard: a held Enter on Apply applies once; the repeats do not reopen the wizard (T-133 (7a))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('wizardheldapply')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const dialog = window.getByRole('dialog')
+      const openWizard = window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' })
+      await openWizard.focus()
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 2 of 3')
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 3 of 3')
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Ready to apply')
+      await expect(dialog.getByRole('button', { name: 'Apply' })).toBeFocused()
+
+      // Hold Enter on Apply: the first keydown applies and closes ...
+      await window.keyboard.down('Enter')
+      await expect(dialog).toHaveCount(0)
+      // ... the repeats (after an OS repeat delay) land on "Help me fix this", where focus went back to. They are not presses.
+      await window.waitForTimeout(800)
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(300)
+      await expect(dialog, 'the repeats reopened the wizard').toHaveCount(0)
+      expect(await readToastLog(window)).toContain('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
+
+      // Not a latch: a fresh press on the button opens the wizard again.
+      await expect(openWizard).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
     } finally {
       await closeStudio(studio)
     }

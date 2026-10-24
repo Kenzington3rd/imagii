@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useVideoStore, videoDiscardMessage } from '../modules/video-studio/store/videoStore'
 import { reportFailure } from './reportFailure'
+import { mayLeaveLiveTake } from './liveTake'
 
 /**
  * The "Edit in Video Studio" toast action's one implementation: Record's saved take (Round 18 D) and Reframe's
@@ -19,6 +20,9 @@ export function useEditInVideoStudio(failed: string): (outputPath: string) => Pr
   const navigate = useNavigate()
   const loadVideoSource = useVideoStore((s) => s.loadSource)
   return async function editInVideoStudio(outputPath: string): Promise<void> {
+    // T-133 (1): a saved-file toast lasts 8 s and can be over the REC screen of the NEXT take; the navigation at the end of this would
+    // unmount Record and cut that take short. A live take is asked about first (the Home link's question), and nothing is loaded or opened.
+    if (!mayLeaveLiveTake()) return
     const message = videoDiscardMessage(useVideoStore.getState().clips.length, 'replace')
     if (message !== null && !confirm(message)) return
     try {

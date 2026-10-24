@@ -267,7 +267,9 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     switch (e.key) {
       case ' ':
         e.preventDefault()
-        togglePlay()
+        // T-133 (7b): a toggle is one decision per press - a held Space flipped play/pause at the keyboard's repeat rate (~30 Hz) and
+        // stuttered the video. The nudge and frame-step keys below repeat on purpose (holding an arrow scrubs), so only this case is guarded.
+        if (!e.repeat) togglePlay()
         break
       case 'ArrowLeft':
         e.preventDefault()

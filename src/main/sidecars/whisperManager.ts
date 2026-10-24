@@ -11,6 +11,7 @@ import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { discardPartialOutput } from '../ffmpeg/partialOutput'
+import { BURN_IN_NO_PICTURE_MESSAGE, FFMPEG_EMPTY_OUTPUT, PictureFrames, wroteNoPicture } from '../ffmpeg/noPicture'
 import {
   captionsOutputDir,
   whisperExePath,
@@ -533,8 +534,14 @@ export async function runBurnIn(
       activeBurnIn.set(req.jobId, child)
       let stderr = ''
       let lastEmitted = lengthSec === null ? -1 : 0
+      // T-133 (4): exit 0 does not say a picture was written (see ffmpeg/noPicture.ts). A range past the PICTURE exits 0 having written an
+      // audio-only mp4 (stderr silent, the last progress block says frame=0) or a stream-less stub ("Output file is empty"); the burn-in
+      // was the one ranged video writer that resolved on the exit code alone.
+      const frames = new PictureFrames()
+      let sawEmptyOutput = false
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => {
+        frames.feed(chunk)
         // `-progress`: a block of key=value lines every half second or so, the last
         // of which is `out_time=HH:MM:SS.ffffff` — the export runner's own signal.
         const marks = chunk.match(/out_time=(\d+:\d+:\d+[.,]\d+)/g)
@@ -552,6 +559,7 @@ export async function runBurnIn(
       // of MB. Matches every other ffmpeg spawn in the codebase.
       child.stderr.on('data', (c: string) => {
         stderr += c
+        sawEmptyOutput ||= FFMPEG_EMPTY_OUTPUT.test(stderr)
         if (stderr.length > 16384) stderr = stderr.slice(-16384)
       })
       child.on('error', (err) => {
@@ -560,11 +568,12 @@ export async function runBurnIn(
       })
       child.on('close', (code) => {
         activeBurnIn.delete(req.jobId)
-        if (code === 0) resolve()
+        if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) reject(new Error(BURN_IN_NO_PICTURE_MESSAGE))
+        else if (code === 0) resolve()
         else reject(cancelledOr(child, new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`)))
       })
     }).catch(async (err: unknown) => {
-      // T-100: a burn that stopped halfway is not the captioned video.
+      // T-100: a burn that stopped halfway is not the captioned video (T-133 (4): nor is an audio-only file or a stub).
       await discardPartialOutput(req.outputPath, spawnedAt)
       throw err
     })

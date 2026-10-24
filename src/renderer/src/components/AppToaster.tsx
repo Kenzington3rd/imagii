@@ -21,7 +21,11 @@ export const TOAST_STYLE = {
   // click-through; the one thing in a toast that is meant to be pressed (the
   // "Show in folder" button in `lib/savedToast.tsx`) opts back in with
   // `pointer-events-auto`, which also keeps the toast up while it is pointed at.
-  pointerEvents: 'none'
+  pointerEvents: 'none',
+  // T-133 (2): the message is `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break opportunity (an
+  // underscores-only name, a hash) ran up to 81 px outside the card in a real render. `anywhere` lets it break inside the card, and, unlike
+  // `break-word`, lowers the card's min-content too, so the flex row shrinks the message instead of widening past `max-width`.
+  overflowWrap: 'anywhere'
 } as const
 
 /**

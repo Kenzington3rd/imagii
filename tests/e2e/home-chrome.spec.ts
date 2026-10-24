@@ -1197,6 +1197,78 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-133 (9): the banner's Restore and Clear are `disabled` while one of them runs, and drew like live buttons. The clear is held 4 s here (main's
+  // handler is replaced by one that waits, then does what the real one does: removes the file), so "while it runs" is a state the test creates.
+  async function holdAutosaveClear(app: ElectronApplication, userDataDir: string): Promise<void> {
+    await app.evaluate(async ({ ipcMain }, file) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fs = getBuiltin('node:fs') as { rmSync: (path: string, opts: { force: boolean }) => void }
+      ipcMain.removeHandler('autosave:clear')
+      ipcMain.handle('autosave:clear', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+        fs.rmSync(file, { force: true })
+      })
+    }, autosaveFile(userDataDir))
+  }
+  const opacityOf = (button: ReturnType<Page['getByRole']>): Promise<number> => button.evaluate((el) => Number(getComputedStyle(el).opacity))
+
+  test('AutosaveRestore: Restore and Clear are dimmed while one of them runs; Later stays live (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('autosave-dim')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // (Restore's label becomes "Restoring…" while ANY of the banner's actions runs: it is one busy flag)
+      const restore = window.getByRole('button', { name: /^Restor(e|ing…)$/ })
+      const clear = window.getByRole('button', { name: 'Clear', exact: true })
+      const later = window.getByRole('button', { name: 'Later' })
+      expect(await opacityOf(restore), 'live').toBe(1)
+      expect(await opacityOf(clear), 'live').toBe(1)
+      await holdAutosaveClear(app, userDataDir)
+      await clear.click()
+      await expect(restore).toBeDisabled()
+      await expect(clear).toBeDisabled()
+      await expect.poll(() => opacityOf(restore), { timeout: 5_000, message: 'Restore looks off while the clear runs' }).toBeLessThan(0.7)
+      await expect.poll(() => opacityOf(clear), { timeout: 5_000, message: 'Clear looks off' }).toBeLessThan(0.7)
+      await expect(later, 'Later is not part of the busy state').toBeEnabled()
+      expect(await opacityOf(later)).toBe(1)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('AutosaveRestore: the damaged banner\'s Clear is dimmed while the clear runs (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('autosave-dim-damaged')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii found an autosave from .*, but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      const clear = window.getByRole('button', { name: 'Clear', exact: true })
+      expect(await opacityOf(clear), 'live').toBe(1)
+      await holdAutosaveClear(app, userDataDir)
+      await clear.click()
+      await expect(clear).toBeDisabled()
+      await expect.poll(() => opacityOf(clear), { timeout: 5_000, message: 'Clear looks off while it runs' }).toBeLessThan(0.7)
+      expect(await opacityOf(window.getByRole('button', { name: 'Dismiss' })), 'Dismiss is not part of the busy state').toBe(1)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('AutosaveRestore: a corrupt autosave says so — Dismiss hides it, Clear deletes the file', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('autosave-corrupt')
@@ -1618,6 +1690,84 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(counter(4)).toBeVisible()
       await window.waitForTimeout(500)
       expect(readConfig(userDataDir).tutorialSeen?.video, 'a held key did not finish the tour').not.toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-133 (7a): the other end of the held-Enter problem. A held Enter on the tour's Done (or Skip) closes the tour with its FIRST press, the trap puts
+  // focus back on the "?" that opened it, and the key's auto-repeats are keyboard clicks (detail 0) on THAT button: the tour reopened itself, and a
+  // person who only wanted it gone saw it come back. The guard is on the key: the Enter that was down when the dialog closed does nothing until it
+  // is let go. The repeats arrive 800 ms after the press here, as they do after a real OS repeat delay (a fixed-length window would have lapsed).
+  test('Video tutorial: a held Enter on Done closes the tour once; the repeats do not reopen it (T-133 (7a))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-held-done')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-held-done.mp4')
+    await makeFixtureMp4(fixture)
+    // Started from the "?" button (the tour does not open by itself): that is the control focus goes back to when the tour is gone.
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-held-done.mp4')
+      await expect(window.locator('header').getByText('tour-held-done.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const total = (await stepsWithATarget(window, videoTutorial)).length
+      await expect(window.getByText(`Video Studio · 1 of ${total}`, { exact: true })).toBeVisible({ timeout: 20_000 })
+      for (let i = 1; i < total; i++) await window.getByRole('button', { name: 'Next' }).click()
+      const done = window.getByRole('button', { name: /^Done/ })
+      await expect(done).toBeFocused()
+
+      // Hold Enter on Done: the first keydown closes the tour ...
+      await window.keyboard.down('Enter')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      // ... and the auto-repeats, arriving after the OS's repeat delay, land on the "?" button focus went back to. They are not presses.
+      await window.waitForTimeout(800)
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(300)
+      await expect(window.getByRole('dialog'), 'the repeats reopened the tour').toHaveCount(0)
+
+      // The guard is not a latch: a fresh press of Enter on the "?" button is a decision and opens the tour again.
+      await expect(window.getByRole('button', { name: 'Show tutorial' })).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('dialog')).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-133 (7b): the `?` shortcuts overlay toggled on EVERY auto-repeat of a held key (open, shut, open... at the keyboard's repeat rate). Four
+  // keydowns of one held `?` are one press: the overlay is open, and stays open.
+  test('Shortcuts overlay: a held ? opens it once and it stays open (T-133 (7b))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('overlay-held')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const overlay = window.getByRole('dialog').filter({ hasText: 'Press Esc or ? to close.' })
+      for (let i = 0; i < 4; i++) await window.keyboard.down('?')
+      await window.keyboard.up('?')
+      await window.waitForTimeout(300)
+      await expect(overlay, 'four keydowns of a held ? are one press: open (the old toggle on every repeat ended shut)').toBeVisible()
+      // A fresh press still closes it (the repeats were ignored, not the key).
+      await window.keyboard.press('?')
+      await expect(overlay).toHaveCount(0)
     } finally {
       await app.close()
       cleanup(root)

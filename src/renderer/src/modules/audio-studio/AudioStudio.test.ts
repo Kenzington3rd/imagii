@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type { ChainSpec } from '@shared/audio'
 import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
 import { audioCloseMessage, confirmAudioClose } from './AudioStudio'
+import { confirmReplaceAfterWait } from './audioClose'
 
 /**
  * T-19 regression: Video Studio has confirmed its Close since round 18;
@@ -191,5 +192,45 @@ describe('confirmAudioClose', () => {
     expect(
       confirmAudioClose(edited({ loudnorm: true, cutRegions: [{ startSec: 1, endSec: 2 }] }), ask)
     ).toBe(false)
+  })
+})
+
+// T-133 (6): Clean audio asks "Replace the audio you're editing?" ONCE, before an extraction that takes minutes on a long recording, and
+// `replacedSince` only notices a different FILE. Work tuned in Audio Studio during the wait was replaced without a word (loadSource resets
+// the chain and the undo history with it: no way back), against the guide's "asks first". After the wait the question is asked again
+// when the chain is no longer the one the person said yes about; one they already agreed to lose is not asked about twice.
+describe('confirmReplaceAfterWait - what was tuned while the extraction ran is asked about (T-133 (6))', () => {
+  const tuned = edited({ denoise: 'medium' })
+
+  it('the chain the person already agreed to lose (or the untouched one) is not asked about again', () => {
+    const ask = vi.fn(() => false)
+    expect(confirmReplaceAfterWait(tuned, tuned, ask)).toBe(true)
+    expect(confirmReplaceAfterWait(DEFAULT_CHAIN_SPEC, DEFAULT_CHAIN_SPEC, ask)).toBe(true)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('work tuned during the wait on a clean chain: asked, with the same list and lead-in as before the wait', () => {
+    const ask = vi.fn(() => true)
+    expect(confirmReplaceAfterWait(DEFAULT_CHAIN_SPEC, tuned, ask)).toBe(true)
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask).toHaveBeenCalledWith("Replace the audio you're editing? Your cleanup settings will be discarded.")
+  })
+
+  it('declined: the sound is not put in over the work (the whole point)', () => {
+    const ask = vi.fn(() => false)
+    expect(confirmReplaceAfterWait(DEFAULT_CHAIN_SPEC, edited({ cutRegions: [{ startSec: 1, endSec: 2 }] }), ask)).toBe(false)
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('more work on top of work they agreed to lose is new work: asked again, over the whole of it', () => {
+    const ask = vi.fn(() => false)
+    expect(confirmReplaceAfterWait(tuned, edited({ denoise: 'medium', cutRegions: [{ startSec: 1, endSec: 2 }] }), ask)).toBe(false)
+    expect(ask).toHaveBeenCalledWith("Replace the audio you're editing? Your cleanup settings and 1 cut will be discarded.")
+  })
+
+  it('work tuned and then undone back to nothing during the wait has nothing to lose: no question', () => {
+    const ask = vi.fn(() => false)
+    expect(confirmReplaceAfterWait(tuned, { ...DEFAULT_CHAIN_SPEC }, ask)).toBe(true)
+    expect(ask).not.toHaveBeenCalled()
   })
 })

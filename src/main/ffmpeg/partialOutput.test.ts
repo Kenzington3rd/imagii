@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { discardPartialOutput } from './partialOutput'
+import { discardPartialOutput, wroteOutput } from './partialOutput'
 
 /**
  * T-100 — what a failed or canceled job is allowed to delete: the file it was
@@ -77,5 +77,28 @@ describe('discardPartialOutput', () => {
     await discardPartialOutput(partial, spawnedAt)
     expect(existsSync(partial)).toBe(false)
     expect(existsSync(finished)).toBe(true)
+  })
+})
+
+// T-133 (5): `wroteOutput` carried the discard path's 2 s mtime slack onto the SUCCESS path. A Clip Kit thumbnail written onto a share whose
+// clock runs more than 2 s behind this machine's looked older than the spawn and was refused as "no picture", aborting the kit over a GOOD file
+// (the cost T-110 (p) documents - "a leftover file, never a lost one" - held only for the discard). `extractFrame` writes into a folder
+// `makeKitDir` has just made and refuses a target that already exists, so what is at the path afterwards is this run's: the file is judged by
+// what it is, not by when it says it was written.
+describe('wroteOutput - a real, non-empty file is the run\'s output, whatever its clock says (T-133 (5))', () => {
+  it('a non-empty file is written output, however old its timestamp reads (a clock running behind)', async () => {
+    expect(await wroteOutput(fileWithAge('behind.jpg', 0))).toBe(true)
+    expect(await wroteOutput(fileWithAge('ten-seconds-behind.jpg', 10_000))).toBe(true)
+    expect(await wroteOutput(fileWithAge('an-hour-behind.jpg', 60 * 60 * 1000))).toBe(true)
+  })
+
+  it('nothing, an empty file, and a folder are not', async () => {
+    expect(await wroteOutput(path.join(dir, 'never-created.jpg'))).toBe(false)
+    const empty = path.join(dir, 'empty.jpg')
+    writeFileSync(empty, '')
+    expect(await wroteOutput(empty)).toBe(false)
+    const folder = path.join(dir, 'looks-like-a-file.jpg')
+    mkdirSync(folder)
+    expect(await wroteOutput(folder)).toBe(false)
   })
 })

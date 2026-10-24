@@ -5,9 +5,10 @@ import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { NO_SOUND_MESSAGE, useVideoStore, videoDiscardMessage, videoHasNoSound } from './store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
-import { confirmAudioClose } from '../audio-studio/audioClose'
+import { confirmAudioClose, confirmReplaceAfterWait } from '../audio-studio/audioClose'
 import { currentRoute, replacedSince } from '../project/ProjectIO'
 import { toastWithActions } from '../../lib/savedToast'
+import { mayLeaveLiveTake } from '../../lib/liveTake'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
@@ -80,7 +81,8 @@ export function VideoStudio(): JSX.Element {
     // own Close — but nothing is being closed here, so T-113's lead-in says "Replace the audio
     // you're editing?". (Nothing loaded, or nothing changed, asks nothing: `confirmAudioClose`
     // answers yes.)
-    if (!confirmAudioClose(useAudioStore.getState().chain, (message) => confirm(message), 'replace')) return
+    const chainAsked = useAudioStore.getState().chain
+    if (!confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')) return
     setExtractingAudio(true)
     toast.loading('Extracting audio…', { id: 'extract-audio' })
     // T-125 (20): what Audio Studio holds NOW, kept to compare with what it holds when the extraction ends. The question above is
@@ -93,6 +95,17 @@ export function VideoStudio(): JSX.Element {
         // the result is not loaded over it, and nothing pulls them to a studio they are already in or have left.
         toast.dismiss('extract-audio')
         toast("Skipped this video's sound because you opened another file in Audio Studio while it was extracting", {
+          icon: <Icon name="warning" size={18} />,
+          duration: 8000
+        })
+        return
+      }
+      // T-133 (6): the same file, tuned meanwhile. `replacedSince` sees only a different source; loading resets the chain and the undo history,
+      // so work done during the wait would be replaced with no way back. The question is asked again over what is there now (not about work
+      // they already agreed to lose before the wait: `chainAsked` is the chain that question was about).
+      if (!confirmReplaceAfterWait(chainAsked, useAudioStore.getState().chain, (message) => confirm(message))) {
+        toast.dismiss('extract-audio')
+        toast("Skipped this video's sound to keep the changes you made in Audio Studio while it was extracting", {
           icon: <Icon name="warning" size={18} />,
           duration: 8000
         })
@@ -114,7 +127,18 @@ export function VideoStudio(): JSX.Element {
         // On Audio Studio itself the sound has simply appeared in front of them: the toast only says whose it is.
         toastWithActions(
           `Extracted the sound from ${source.fileName}`,
-          where === '/audio' ? [] : [{ label: 'Open Audio Studio', onClick: () => navigate('/audio') }]
+          where === '/audio'
+            ? []
+            : [
+                {
+                  label: 'Open Audio Studio',
+                  // T-133 (1): this toast can be over the REC screen (that is where T-132 (1) leaves a person whose take was running), and
+                  // the button navigates away from it: a live take is asked about first, as the Home link asks.
+                  onClick: () => {
+                    if (mayLeaveLiveTake()) navigate('/audio')
+                  }
+                }
+              ]
         )
       }
     } catch (err) {

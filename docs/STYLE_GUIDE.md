@@ -81,12 +81,17 @@ Repeated UI is a component, not copy-paste:
   whole life (react-hot-toast 2.6.0's defaults are 2 s for a success toast and 4 s for a
   plain or an error one, and `AppToaster` sets none; 8 s for an action toast) and, because
   the library pauses a hovered toast, indefinitely while the pointer rested on it. A button inside a toast
-  opts back in with `pointer-events-auto` (`lib/savedToast.tsx` does). Mounted exactly once, in
+  opts back in with `pointer-events-auto` (`lib/savedToast.tsx` does). T-133 (2): the card's `overflowWrap` is `anywhere`:
+  react-hot-toast sets the message `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break
+  opportunity (an underscores-only name, a hash; the `Saved ${basename}` sites, "Extracted the sound from", "Added ${name}")
+  ran up to 81 px OUT of the card in a real render; `anywhere` (not `break-word`) also lowers the min-content width, so the
+  flex row shrinks the message instead of widening the card (`AppToaster.test.tsx` pins the style; image.spec.ts measures the
+  rects). Mounted exactly once, in
   `App.tsx` beside `HotkeyOverlay`, so every route has it. Never mount a
   second one in a studio: react-hot-toast keeps one toast store per
   toaster id and each `<Toaster>` draws all of it, so two mounts render
   every toast twice (T-31).
-- **`reportFailure(err, { failed, canceled? })`** (`lib/reportFailure.ts`,
+- **`reportFailure(err, { failed, canceled?, id? })`** (`lib/reportFailure.ts`,
   over `userFacingError` in `@shared/userFacingError`) — what EVERY `catch`
   around a `window.api.*` call does (T-84). Electron wraps anything an
   `ipcMain.handle` handler throws in
@@ -100,7 +105,8 @@ Repeated UI is a component, not copy-paste:
   lets a finished sentence main wrote stand alone, and otherwise shows just
   `failed`; **the raw error always goes to the console**. `failed` is a full
   sentence with its period ("GIF export failed."). A failure raises
-  `toast.error` for 8 s. **Never write `toast.error(err.message)`, or read
+  `toast.error` for 8 s. `id` (T-132 (13)) is the toast's id: a failure that can repeat within one press (the four settings
+  writes of an Export) passes ONE fixed id, so the later cards replace the first instead of stacking. **Never write `toast.error(err.message)`, or read
   `.message` in a `catch` outside a `console` call** —
   `tests/unit/failurePathLanguage.test.ts` parses the renderer and fails on
   it, and lists every site that must route through the helper.
@@ -229,7 +235,11 @@ Repeated UI is a component, not copy-paste:
   is it for, and is that still what is open when it ends? T-125 (20): Video Studio's **Clean audio** is the same
   shape: it holds Audio Studio's source before the extraction, compares it with `replacedSince` when the extraction ends,
   and if the person opened something else meanwhile loads nothing, navigates nowhere and says what it skipped (the ask
-  that comes BEFORE the await used to navigate and replace regardless).
+  that comes BEFORE the await used to navigate and replace regardless). T-133 (6): `replacedSince` sees a different FILE; work tuned on the
+  file already open during the wait was replaced silently (loading resets the chain and the undo history), so the flow keeps the chain
+  the first question was about (`chainAsked`) and, when the extraction ends, `confirmReplaceAfterWait` (`audio-studio/audioClose.ts`) asks
+  again if the chain is no longer that object (every edit makes a new one): work the person already agreed to lose is not asked about
+  twice, and a decline takes the "Skipped this video's sound..." path with its own reason.
 - **A start that takes time is single-flight: the flag is claimed before the first `await` and given back in a `finally`
   (T-112, T-119).** `RecordStudio.startRecording` (`startingRef`; the button reads **Starting…** and is disabled),
   `AudioImporter.loadFile` (`busyRef` and `refuseIfBusy`, the video Importer's rule), `ExportPanel.startExport`
@@ -251,7 +261,11 @@ Repeated UI is a component, not copy-paste:
   handler that is not one, raised before `work` awaits anything, lowered in a `finally`, and a second call answers `undefined`.
   `interactionWiring.test.ts` finds EVERY renderer call of a bridge function that opens a native chooser (`video.pickFile`,
   `audio.pickFile`, `video.pickOutputDir`, `project.save`, `project.load`) and holds the set to a decided table, so a new picker fails
-  until it is decided; each entry point has a delayed-chooser (300 ms) `dblclick` E2E.
+  until it is decided; each entry point has a delayed-chooser (300 ms) `dblclick` E2E. **A guard goes in the function every entry
+  point calls, not in one of them (T-133 (8)):** Reference Search's button was `disabled={loading}` and its input's Enter was not, so a
+  second Enter (or a held one) sent a second request and the LAST answer owned the grid. `referencesStore.search` reads
+  `get().searchLoading` and returns, so the button, Enter and any future shortcut share one rule; a render's closure would not
+  do (two presses in one breath see the same render).
 - **Waiting for an event that may already have fired hangs (T-119).** `recording:abandon` waited for the temp file's
   stream to emit `close`. A `WriteStream` that failed a write has auto-destroyed and emitted its one `close` already,
   so the renderer's own failure path (the append rejects, finalize throws, abandon runs) never got an answer, and the
@@ -455,6 +469,10 @@ Repeated UI is a component, not copy-paste:
   panel the path it really wrote, and the GIF, Compile, Reframe and picture-in-picture toasts say it —
   `Saved ${basename(result.outputPath)}` — so "name (2).gif" is never a surprise in the folder (T-112); the Export
   queue's rows show the same basename.
+- **A name quoted in a sentence is cut by code point, never by UTF-16 unit (T-133 (3)).** `clipNameForSentence` (`ffmpeg/noPicture.ts`)
+  shortens a clip's name to 50 characters with an ellipsis, and `slice` on a string can end between the two halves of a glyph outside the
+  BMP (an emoji, a rare CJK character) and leave a lone surrogate before the ellipsis: a broken glyph in the refusal. It cuts
+  `Array.from(name)`, and its limit counts glyphs. A new helper that shortens text a person typed does the same.
 - **`countOf(n, singular, plural?)`** (`@shared/plural`) — the only way a number and
   its noun meet in copy. "1 clip(s)", "Found 1 candidates" and "5 msgs" were each
   a hand-written plural that read wrong at 1; `copyConventions.test.ts` fails on a
@@ -612,7 +630,15 @@ Repeated UI is a component, not copy-paste:
   (the Fix wizard's answers, the tour's Next / Done, Back and scrim), and when a `Modal` (or the tour) closes,
   `swallowRepeatClicks()` has a capture-phase listener on the window drop clicks with `detail > 1` for 500 ms, so the second press
   never reaches what the dialog covered (a checkbox under "Keep running"). One listener, installed on the first close, ahead of React's;
-  only a repeat is touched. A new control that swaps itself for another asks the same question.
+  only a repeat is touched. A new control that swaps itself for another asks the same question. **The keyboard's double-click is a HELD
+  key (T-133 (7a)):** a held Enter on the tour's Done (or a Modal's confirm, the Fix wizard's Apply) closes the dialog with its first
+  press, focus goes back to the control that opened it, and the key's auto-repeats are keyboard clicks (`detail` 0, so no click rule sees
+  them) on THAT control: the tour reopened itself. `createHeldKeyGuard` (`lib/repeatPress.ts`) remembers which of Enter and Space are down
+  and, when a dialog closes (`swallowRepeatClicks` arms it), swallows the repeats of those until they are let go (capture phase on the
+  window; a fresh press, a key-up and a window blur clear it). It is keyed on the KEY and not on a clock because the first repeat arrives
+  after the OS's repeat delay (250 ms to 1 s on Windows), later than any fixed window can promise, and it listens from the moment the module
+  loads because it has to SEE the key go down. A toggle is one decision per press (T-133 (7b)): Space on the Player and the Timeline and the
+  `?` overlay ignore `e.repeat`; the nudge and frame-step keys repeat by design and are not guarded.
 - **`DraftField`** (`components/DraftField.tsx`, T-113 for Size and Color, lifted by T-123) — a box that keeps what is typed
   to itself until typing ends. A controlled number input that judges every keystroke cannot be typed into: `Number(typed)
   || 360` snapped an emptied box to 360, so "600" typed after clearing it was 360600 (and the PiP composite failed with a bare
@@ -645,6 +671,10 @@ Repeated UI is a component, not copy-paste:
   the seconds form only, never to a clock. The outside-the-clip note puts the CLIP's range through the same function. The overlay's pair
   and the clip's pair are two pairs, each coherent in itself (an overlay window of 10-20 s inside a clip of 59:50-1:00:10 reads seconds in the
   boxes and a clock in the sentence about the clip), which is why the rule is about a pair and not about the card.
+- **A disabled button looks disabled (T-133 (9)).** `btn-primary` and `btn-ghost` carry no disabled look of their own, so every
+  `<button disabled=...>` also carries `disabled:opacity-50` in its className (the autosave banner's Restore and Clear, the two Importers'
+  "Choose file…", Play while the waveform is drawn, and the rest). `interactionWiring.test.ts` scans every `<button disabled>` in the
+  renderer with the TypeScript syntax tree and fails with its file and line, with a discrimination block over sample code.
 - **`PanelHeader`** — every panel section header. Renders the standard
   `<h3>` (`text-xs font-semibold uppercase tracking-wide text-ink-muted`,
   an `Icon`, `inline-flex items-center gap-1.5`). Pass an `actions`
@@ -808,7 +838,8 @@ If you write the same markup a third time, extract it.
   through `audio:cancel` (the job has a per-job registry and a `CancelLatch` run, so the quit sweep and the quit's drain cover it).
   `WaveformView` listens to wavesurfer's `error` (it can emit it twice for one failed load, so the toast has an id): with peaks,
   what fails there is PLAYBACK, so the sentence is `PLAYBACK_ERROR_MESSAGE` and Play goes back off (T-132 (10): it says the waveform,
-  the cuts and Export still work, and sends a WAV owner to "a standard PCM WAV", not to WAV). There is no length gate
+  the cuts and Export still work, and sends a WAV owner to "a standard PCM WAV", not to WAV; T-133 (10): `WAVEFORM_READ_FAILED` says the same, because the file it fires on, a WAV
+  whose format tag no decoder knows, is a WAV too). There is no length gate
   anywhere: `audio:extractFromVideo` probes only for "no sound" and for whether the file has a picture (T-126 (7), T-127 (10)).
   T-132 (5): `normalize: true` alone scales the waveform by the loudest sample of channel 0 (the highs) ONLY, so a take with louder
   lows drew its bottom half past the canvas edge; `WaveformView` passes `maxPeak: peaksMaxMagnitude(waveform.peaks)` (the loudest of
@@ -829,13 +860,27 @@ If you write the same markup a third time, extract it.
   tracks, and a LIVE TAKE was cut short. A job that can outlast its screen reads `currentRoute()` (`ProjectIO.ts`, the router's own hash) AFTER
   the wait, navigates only a person who is still on the screen that started it, and otherwise loads the result and raises a toast whose
   action is the way there (`toastWithActions`; on the destination itself, no action). Clean audio is the case; `ProjectIO.applyPlace`'s
-  "nothing teleports the user" is the same rule for a project open.
-- **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4)).** A range that lies past the PICTURE exits 0 having written a
+  "nothing teleports the user" is the same rule for a project open. **A toast outlives its screen, so its buttons ask where the person
+  IS before they take them anywhere (T-133 (1)):** the "Open Audio Studio" button that fix put in an 8 s toast sat over the REC screen, and
+  one press unmounted RecordStudio and cut the take. A take that is being recorded is REGISTERED (`registerLiveTake`, `lib/liveTake.ts`,
+  for as long as the phase is "recording") and every way off that screen asks `mayLeaveLiveTake()` first: the Home link, the toast's "Open
+  Audio Studio" and `useEditInVideoStudio` (Record's, Reframe's and the audio re-attach's "Edit in Video Studio"). It asks the Home link's
+  question word for word (`LIVE_TAKE_MESSAGE`); OK stops the take and its normal save runs where the person is, Cancel keeps recording, and
+  either way the caller does not navigate now. `interactionWiring.test.ts` holds the set of renderer `navigate()` calls to a decided
+  table, so a new exit fails until it is decided.
+- **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4), T-133 (4), (5)).** A range that lies past the PICTURE exits 0 having written a
   261-byte stream-less container ("Output file is empty") or an audio-only mp4 (the sound outlasts the picture; no such line). Every runner
-  that writes a video closes on `wroteNoPicture(sawEmptyOutput, frames)` (`ffmpeg/noPicture.ts`): the sticky stderr line OR the final
-  `frame=0` of `-progress pipe:1` (`PictureFrames`, which keeps an unfinished line until it is whole), rejects with a finished sentence naming
-  the clip, and lets the existing `discardPartialOutput` remove the wreckage. `extractFrame` asks `wroteOutput` (a non-empty file written by
-  THIS run) after its exit 0. A stream that never reported a count is not accused.
+  that cuts a video out of a RANGE of a source (Export, Reframe, a compilation's segments, and, since T-133 (4), the caption burn-in, which
+  was the one left out and said "Captions burned in" over an audio-only file) closes on `wroteNoPicture(sawEmptyOutput, frames)`
+  (`ffmpeg/noPicture.ts`): the sticky stderr line OR the final `frame=0` of `-progress pipe:1` (`PictureFrames`, which keeps an unfinished
+  line until it is whole), rejects with a finished sentence (`BURN_IN_NO_PICTURE_MESSAGE` for the burn-in), and lets the existing
+  `discardPartialOutput` remove the wreckage (and the burn-in's shifted SRT goes in its `finally`). Layer 5 holds each on both majors (a GIF of such
+  a range needs no guard: it already fails, exit 234 on both). A
+  stream that never reported a count is not accused. `extractFrame` is not one of these (a JPEG has no frame count): after its exit 0 it asks
+  `wroteOutput`, which asks only whether a non-empty regular file is at the path, and no clock (T-133 (5): it borrowed the discard path's
+  "newer than the spawn, 2 s of slack" and refused a GOOD thumbnail on a share whose clock ran more than 2 s behind, aborting the kit). What
+  makes that safe is that nothing is at the target when it starts: the thumbnail goes into a fresh `makeKitDir` folder and `extractFrame`
+  refuses a target that already exists, before ffmpeg runs, leaving it as it was.
 - **An `await` in a start that can outlive its screen is followed by the unmount check (T-120).** `RecordStudio.startRecording` awaits the
   capture, the microphone, the camera, the compositor and the main-process session, and the unmount cleanup runs before any of them lands.
   `unmountedRef` is cleared on mount (StrictMode runs the cleanup and the effect again in dev) and set in the cleanup;

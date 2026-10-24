@@ -2139,6 +2139,169 @@ test.describe('T-27 Record Studio', () => {
     }
   })
 
+  // T-133 (1): T-132 (1) left a person whose take was running on Record with a toast ("Extracted the sound from ..." + "Open Audio Studio") over the
+  // REC screen for 8 s, and the button was a bare `navigate('/audio')`: one click unmounted RecordStudio, whose cleanup stops the tracks, and cut
+  // the take - the failure T-132 (1) fixed, reachable through the fix's own toast. The saved-file toasts' "Edit in Video Studio" is the same
+  // family. Every way off the Record screen asks the Home link's question while a take is live; declining keeps the take, accepting stops it and
+  // saves it on Record (the person leaves once it is saved).
+  test("a toast's way off the Record screen asks first while a take is live: declining keeps the take, accepting saves it on Record (T-133 (1))", async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('toastexit')
+    const userDataDir = path.join(root, 'userData')
+    const take = path.join(root, 'take.mp4')
+    const clip = path.join(root, 'tour.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+    const made = await runBinary(ffmpegPath, [
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip
+    ])
+    if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const dialogs: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        dialogs.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
+      await waitForHome(window)
+      await installToastLog(window)
+      // A video with sound in Video Studio, and Clean audio started on it (the extraction is held 12 s).
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await window.evaluate((file) => {
+        const zone = document.querySelector('[data-tutorial="video-import"] .card')
+        if (!zone) throw new Error('Video Studio drop zone not found')
+        const f = new File([new Uint8Array([0])], 'tour.mp4', { type: '' })
+        Object.defineProperty(f, 'path', { value: file })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [f] } })
+        zone.dispatchEvent(event)
+      }, clip)
+      await expect(window.getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      // Meanwhile: Record, and a live take.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoRecordFromHome(window)
+      await stubSaveDialog(app, take)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+
+      // The extraction ends in the middle of the take; its toast carries the way to Audio Studio.
+      const open = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Open Audio Studio', exact: true })
+      await expect(open).toBeVisible({ timeout: 60_000 })
+      const clock = async (): Promise<number> => {
+        const text = (await window.getByText(/REC \d\d:\d\d/).first().textContent()) ?? ''
+        const m = /REC (\d\d):(\d\d)/.exec(text)
+        return m ? Number(m[1]) * 60 + Number(m[2]) : -1
+      }
+
+      // Declined: the question is the Home link's, and the take runs on, on Record.
+      await open.click()
+      await expect.poll(() => dialogs.length, { timeout: 10_000 }).toBe(1)
+      expect(dialogs[0]).toBe('A recording is in progress. Stop and save it before leaving? (Cancel keeps recording.)')
+      await window.waitForTimeout(800)
+      await expect(window.locator('h1', { hasText: 'Record' }), 'still on Record').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Stop' }), 'the take is still running').toBeVisible()
+      expect(await readToastLog(window), 'nothing took the person to Audio Studio').not.toContain('Opening Audio Studio')
+      const at = await clock()
+      expect(at).toBeGreaterThanOrEqual(1)
+      await expect.poll(clock, { timeout: 15_000, intervals: [250], message: 'the clock keeps counting' }).toBeGreaterThan(at)
+
+      // Accepted: the take is stopped and saved where the person is. They are not moved (they leave once it is saved).
+      answer = 'accept'
+      await open.click()
+      await expect.poll(() => dialogs.length, { timeout: 10_000 }).toBe(2)
+      await expect(window.getByRole('button', { name: 'Edit in Video Studio' }), 'the take was saved').toBeVisible({ timeout: 120_000 })
+      await expect(window.locator('h1', { hasText: 'Record' }), 'and the person is still on Record').toBeVisible()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toHaveCount(0)
+      expect(existsSync(take), 'the take is a file').toBe(true)
+      const probe = await probeFile(take)
+      expect(probe.streams?.some((st) => st.codec_type === 'video')).toBe(true)
+      expect(Number(probe.format?.duration), 'as long as the clock said').toBeGreaterThanOrEqual(at)
+
+      // With the take over, the same button is just a way to Audio Studio: no question.
+      await window.getByRole('link', { name: 'Home' }).click()
+      expect(dialogs, 'leaving once nothing is recording asks nothing').toHaveLength(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-133 (1), the older and lower-odds half: the saved take's "Edit in Video Studio" lasts 8 s and the NEXT take can be on screen under it.
+  test('"Edit in Video Studio" pressed while the next take is live asks first, and loads nothing (T-133 (1))', async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('editexit')
+    const userDataDir = path.join(root, 'userData')
+    const first = path.join(root, 'first-take.mp4')
+    const second = path.join(root, 'second-take.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const dialogs: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        dialogs.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
+      await gotoRecordFromHome(window)
+      await stubSaveDialog(app, first)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+      const edit = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
+      await expect(edit).toBeVisible({ timeout: 120_000 })
+      // The pointer rests on the toast: react-hot-toast pauses a hovered one, so the button is still there when the next take is live.
+      await edit.hover()
+
+      // The next take, started while the first one's toast is up.
+      await stubSaveDialog(app, second)
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(edit, 'the first take\'s button is still on screen over the live take').toBeVisible()
+
+      // Declined: nothing loads, nothing navigates, the second take runs on.
+      await edit.click()
+      await expect.poll(() => dialogs.length, { timeout: 10_000 }).toBe(1)
+      expect(dialogs[0]).toBe('A recording is in progress. Stop and save it before leaving? (Cancel keeps recording.)')
+      await window.waitForTimeout(800)
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Stop' }), 'the second take is still running').toBeVisible()
+      expect(dialogs, 'and the replace-the-video question was not asked either: nothing is loaded').toHaveLength(1)
+
+      // Accepted: the second take is stopped and saved on Record.
+      answer = 'accept'
+      await edit.click()
+      await expect.poll(() => existsSync(second), { timeout: 120_000, intervals: [500] }).toBe(true)
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('the convert bar draws what main reports: the percent it measured, or a sliding bar when it has none (T-115)', async () => {
     test.setTimeout(240_000)
     const root = makeRoot('convertbar')

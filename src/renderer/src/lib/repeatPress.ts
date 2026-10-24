@@ -21,6 +21,73 @@ export function isSwallowedRepeat(e: { detail: number; timeStamp: number }, unti
   return e.detail > 1 && e.timeStamp < until
 }
 
+/**
+ * T-133 (7a): the keys whose auto-repeat is a click on whatever has focus - Enter (a button's keydown clicks it, repeats included) and Space
+ * (a checkbox or a button, on release; a repeat still scrolls or toggles in some controls).
+ */
+const HELD_KEYS: ReadonlySet<string> = new Set(['Enter', ' '])
+
+/**
+ * Which of Enter / Space are down, and which of those were down when a dialog closed. Pure (the window listeners below only feed it), so the
+ * rule is a unit test.
+ *
+ * Why the key and not the clock: a held Enter on the tour's Done closes the tour with its FIRST press and focus goes back to the "?" that
+ * opened it; the key's auto-repeats are keyboard clicks (`detail` 0) on that button, which no click rule can tell from a decision, and the
+ * tour reopened. The first repeat arrives after the OS's repeat delay (250 ms to 1 s on Windows), later than a fixed window can promise, so
+ * what is guarded is "the key that was down at the close, until it is let go". A fresh press (not a repeat) is a decision and clears it.
+ */
+export function createHeldKeyGuard(): {
+  keyDown: (e: { key: string; repeat: boolean }) => boolean
+  keyUp: (e: { key: string }) => void
+  dialogClosed: () => void
+  reset: () => void
+} {
+  const down = new Set<string>()
+  let guarded = new Set<string>()
+  return {
+    /** True when this keydown must be swallowed: a repeat of a key that was held through a closing dialog. */
+    keyDown(e) {
+      if (!HELD_KEYS.has(e.key)) return false
+      if (!e.repeat) {
+        down.add(e.key)
+        guarded.delete(e.key)
+        return false
+      }
+      return guarded.has(e.key)
+    },
+    keyUp(e) {
+      down.delete(e.key)
+      guarded.delete(e.key)
+    },
+    dialogClosed() {
+      guarded = new Set(down)
+    },
+    /** The window lost focus: a key-up that happens elsewhere never arrives. */
+    reset() {
+      down.clear()
+      guarded.clear()
+    }
+  }
+}
+
+const heldKeys = createHeldKeyGuard()
+
+// Listening starts when this module loads, not at the first close: the guard has to have SEEN the Enter go down to know it is held when
+// the dialog goes away. (Node, where the unit tests run, has no window.)
+if (typeof window !== 'undefined') {
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!heldKeys.keyDown(e)) return
+      e.stopImmediatePropagation()
+      e.preventDefault()
+    },
+    true
+  )
+  window.addEventListener('keyup', (e) => heldKeys.keyUp(e), true)
+  window.addEventListener('blur', () => heldKeys.reset())
+}
+
 let swallowUntil = 0
 let listening = false
 
@@ -32,9 +99,12 @@ let listening = false
  * ignores a repeat on ITSELF (T-127 (8)); this covers everything else the card stood over. One listener, installed on the first close,
  * in the capture phase of the window, so it runs before React's: the click is stopped before any handler or default action (a checkbox's
  * toggle) sees it. Only clicks with a count above 1 are touched, so nothing else is delayed, and the window is half a second.
+ * T-133 (7a): a HELD Enter or Space is the keyboard's double-click and gets the same protection, by key (see `createHeldKeyGuard`).
  */
 export function swallowRepeatClicks(now: number = performance.now()): void {
   swallowUntil = now + REPEAT_SWALLOW_MS
+  // T-133 (7a): and the same dialog's HELD KEY (Enter or Space) stops acting until it is let go.
+  heldKeys.dialogClosed()
   if (listening) return
   listening = true
   window.addEventListener(

@@ -122,6 +122,10 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     setTab: (t) => set({ tab: t }),
 
     search: async (query: string) => {
+      // T-133 (8): one search at a time. The button is disabled while a request is out and the input's Enter was not, so a second press
+      // (or a held key) sent a second request, and whichever answered LAST owned the grid. Read from the store, not a render's closure: two
+      // presses in one breath see the same render.
+      if (get().searchLoading) return
       set({ searchLoading: true, searchError: null })
       try {
         const response = await window.api.search.images(query)

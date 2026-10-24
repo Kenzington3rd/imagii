@@ -93,8 +93,12 @@ export function isOverlayToggleKey(e: {
   openModals: number
   /** Whether this overlay is currently the one rendering a Modal. */
   overlayOpen: boolean
+  /** `KeyboardEvent.repeat`: the key is held and this is its auto-repeat (T-133 (7b)). */
+  repeat?: boolean
 }): boolean {
   if (e.key !== '?') return false
+  // T-133 (7b): a toggle is one decision per press. A held `?` opened and shut the dialog at the keyboard's repeat rate.
+  if (e.repeat) return false
   if (e.ctrlKey || e.metaKey) return false
   // T-123 (2): a text field owns `?`; a checkbox or a slider (focused after it was used) has no use for it.
   if (isTextEntryTarget(e.tagName, e.inputType)) return false
@@ -126,7 +130,8 @@ export function HotkeyOverlay(): JSX.Element | null {
           tagName: (e.target as HTMLElement | null)?.tagName ?? '',
           inputType: inputTypeOf(e.target),
           openModals: openModalCount(),
-          overlayOpen: open
+          overlayOpen: open,
+          repeat: e.repeat
         })
       ) {
         return

@@ -123,7 +123,8 @@ export function Timeline(): JSX.Element | null {
         // not the Player's column, so the Player's own handler never heard it, and an unhandled Space scrolls
         // the studio. The same toggle, through the Player's registration.
         e.preventDefault()
-        useVideoStore.getState().transport?.togglePlay()
+        // T-133 (7b): one toggle per press, as the Player's Space is; the arrows and , . below repeat on purpose.
+        if (!e.repeat) useVideoStore.getState().transport?.togglePlay()
         return
       case 'ArrowLeft':
         next = now - NUDGE_SEC

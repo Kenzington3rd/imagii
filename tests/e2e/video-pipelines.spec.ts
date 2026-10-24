@@ -2101,6 +2101,57 @@ test.describe('CaptionsPanel', () => {
     }
   })
 
+  // T-133 (4): the ranged burn-in was the one ranged video writer without T-131/T-132's no-picture guard. A project restored over a recording that
+  // got SHORTER holds a clip past the end of the picture: ffmpeg exits 0 having written a file with no picture, and the panel said "Captions burned
+  // in". It is a sentence now, no file is left, and the button is live again (Layer 5, media.spec.ts, holds this on real files on both majors).
+  test('a ranged burn over a clip that lies past the end of the video is a sentence, not "Captions burned in", and leaves no file (T-133 (4))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('captionpastend')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'past.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:05,200 --> 00:00:05,800\nwords past the end\n', 'utf8')
+      const projectPath = path.join(root, `captionpastend-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: {
+            sourcePath: clipSrc,
+            clips: [{ id: 'gone', name: 'Gone', startSec: 5, endSec: 6, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }],
+            selectedClipId: 'gone',
+            watermark: null,
+            srtPath
+          }
+        }),
+        'utf8'
+      )
+      const out = path.join(outDir, 'gone-captioned.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [out] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await card.getByRole('checkbox').check()
+      await burn.click()
+      await expectToast(window, "This part of the video has no picture (check the clip's start and end), so no captioned video was saved.")
+      const log = (await readToastLog(window)).join(' | ')
+      expect(log, 'nothing says the captions were burned in').not.toContain('Captions burned in')
+      expect(log).not.toContain('No captions in this range')
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await expect(card.getByRole('progressbar')).toHaveCount(0)
+      expect(existsSync(out), 'no audio-only file is left where the captioned video was to be').toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
   test('a canceled or failed burn-in puts the progress row back and leaves no half-written video (T-100)', async () => {
     test.setTimeout(600_000)
     // The row under the header shows a job that is running. After a burn that was
@@ -7925,6 +7976,125 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toHaveCount(0)
       expect(await readToastLog(window), 'no "Opening Audio Studio" for a result that was not opened').not.toContain('Opening Audio Studio')
       await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-133 (9): the Importer's "Choose file…" is `disabled` while a file loads and drew exactly like a live button (btn-primary has no disabled look of
+  // its own; the label does not even change). Every other disabled button in the app is dimmed; a scan in interactionWiring.test.ts holds that for the
+  // source, this reads the computed opacity on a real render, in the state the test creates (the probe is held 4 s).
+  test('the Importer\'s Choose file is dimmed while a file is loading, and live again when it is not (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchHome('t133importerdim')
+    try {
+      await gotoVideoStudio(window)
+      const choose = window.getByRole('button', { name: 'Choose file…' })
+      const opacity = (): Promise<number> => choose.evaluate((el) => Number(getComputedStyle(el).opacity))
+      await expect(choose).toBeEnabled()
+      expect(await opacity(), 'a live button is not dimmed').toBe(1)
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 1, ms: 4000 }])
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(window.getByText(/Loading…/)).toBeVisible({ timeout: 10_000 })
+      await expect(choose).toBeDisabled()
+      // (polled: the button's colors transition, so the first frame after it is disabled is not yet the settled look)
+      await expect.poll(opacity, { timeout: 5_000, message: 'a button that cannot be pressed looks it' }).toBeLessThan(0.7)
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toBeVisible({ timeout: 60_000 })
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-133 (6): the question Clean audio asks ("Replace the audio you're editing?") runs ONCE, before an extraction that takes minutes on a long
+  // recording, and `replacedSince` only notices a different FILE. Work tuned on the file already open during the wait was replaced without a word
+  // (loadSource resets the chain and the undo history: no way back), against the guide's "asks first". After the wait it asks again when the
+  // chain is no longer the one the person said yes about; work they already agreed to lose is not asked about twice.
+  test('Clean audio asks again about work tuned while it was extracting: declining keeps the tuning; work agreed to be lost is not asked about twice (T-133 (6))', async () => {
+    test.setTimeout(360_000)
+    const { app, window } = await launchWithVideo('t133cleantuned')
+    try {
+      const messages: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        messages.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
+      const ASK = "Replace the audio you're editing? Your cleanup settings will be discarded."
+      const SKIPPED = "Skipped this video's sound to keep the changes you made in Audio Studio while it was extracting"
+      const medium = window.locator('[data-tutorial="audio-cleanup"]').getByRole('button', { name: 'Medium', exact: true })
+      /** Audio Studio holds an UNTOUCHED tone.wav (so Clean audio's first question has nothing to ask about). */
+      const openTone = async (): Promise<void> => {
+        await window.getByRole('link', { name: 'Home' }).click()
+        await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+        await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+        await window.evaluate((file) => {
+          const zone = document.querySelector('[data-tutorial="audio-importer"] .card')
+          if (!zone) throw new Error('Audio Studio drop zone not found')
+          const f = new File([new Uint8Array([0])], 'tone.wav', { type: '' })
+          Object.defineProperty(f, 'path', { value: file })
+          const event = new Event('drop', { bubbles: true, cancelable: true })
+          Object.defineProperty(event, 'dataTransfer', { value: { files: [f] } })
+          zone.dispatchEvent(event)
+        }, toneSrc)
+        await expect(window.locator('[data-tutorial="audio-waveform"]')).toBeVisible({ timeout: 30_000 })
+      }
+
+      // ── run 1: nothing to lose at the press (no question), tuned during the wait, DECLINED ──
+      await openTone()
+      await expect(medium).toHaveAttribute('aria-pressed', 'false')
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 9000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expectToast(window, 'Extracting audio')
+      expect(messages, 'an untouched session has nothing to ask about before the wait').toEqual([])
+      // While it runs the person tunes the file they already have open.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await medium.click()
+      await expect(medium).toHaveAttribute('aria-pressed', 'true')
+      // The extraction ends: the question appears, in Audio Studio's own words. Declined, the tuning stays and one line says why.
+      await expect.poll(() => messages.length, { timeout: 60_000, intervals: [250] }).toBe(1)
+      expect(messages[0]).toBe(ASK)
+      await expectToast(window, SKIPPED)
+      await expect(medium, 'the tuning is kept').toHaveAttribute('aria-pressed', 'true')
+      await expect(window.locator('header').getByText('tone.wav', { exact: true })).toBeVisible()
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toHaveCount(0)
+      expect(await readToastLog(window), 'nothing says Opening Audio Studio for a result that was not opened').not.toContain('Opening Audio Studio')
+
+      // ── run 2: the work was there at the press (asked once, accepted), and nothing more changed: NOT asked again ──
+      answer = 'accept'
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 5000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(2)
+      expect(messages[1]).toBe(ASK)
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 90_000 })
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      expect(messages, 'work they already agreed to lose is not asked about a second time').toHaveLength(2)
+      await expect(medium, 'the new sound starts from a clean chain').toHaveAttribute('aria-pressed', 'false')
+
+      // ── run 3: a clean session at the press, tuned during the wait, ACCEPTED at the second question: the sound replaces it ──
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 7000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expectToast(window, 'Extracting audio')
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await medium.click()
+      await expect(medium).toHaveAttribute('aria-pressed', 'true')
+      await expect.poll(() => messages.length, { timeout: 60_000, intervals: [250] }).toBe(3)
+      expect(messages[2]).toBe(ASK)
+      await expect(medium, 'accepted: the fresh sound has a clean chain').toHaveAttribute('aria-pressed', 'false', { timeout: 30_000 })
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t.startsWith('Extracted the sound from pipeline.mp4')).length, { timeout: 60_000, intervals: [250] })
+        .toBeGreaterThanOrEqual(1)
     } finally {
       await app.close()
     }

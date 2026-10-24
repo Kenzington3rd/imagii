@@ -246,6 +246,12 @@ interface Case {
    * the job's to delete — so neither the control nor the stale-file rule applies.
    */
   outputIsScratch?: boolean
+  /**
+   * T-133 (5): true when the runner is given its exact path and REFUSES one that already exists, before it spawns anything (the frame
+   * extract: its folder is the kit's fresh one). The "left alone" row below needs a spawn to cancel, so it does not apply; the refusal
+   * (and that the old file is untouched) is noPicture.test.ts's "a file already at the path is refused before ffmpeg runs".
+   */
+  refusesExistingOutput?: boolean
 }
 
 const CLIP = {
@@ -507,7 +513,8 @@ const CASES: Case[] = [
     cancels: [{ via: 'cancelAllFrameJobs', run: () => cancelAllFrameJobs() }],
     failure: /extractFrame exit 1/,
     perJob: false,
-    output: () => path.join(scratch, 'frame.jpg')
+    output: () => path.join(scratch, 'frame.jpg'),
+    refusesExistingOutput: true
   }
 ]
 
@@ -652,7 +659,7 @@ describe.each(CASES)('$name', (c) => {
     // age rule below is a second line of defense (partialOutput.test.ts holds it
     // alone, against real files) and this row is also the proof that a job
     // which was told to write beside an old export leaves the old export alone.
-    if (c.outputIsScratch !== true) it('a file that was already there before the spawn is left alone', async () => {
+    if (c.outputIsScratch !== true && c.refusesExistingOutput !== true) it('a file that was already there before the spawn is left alone', async () => {
       // ffmpeg truncates its output when it OPENS it; a Cancel before that
       // leaves last week's export exactly as it was.
       const stale = new Date(Date.now() - 3 * 60 * 60 * 1000)

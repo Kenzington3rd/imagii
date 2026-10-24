@@ -2058,6 +2058,44 @@ async function dropPng(window: Page, base64: string, fileName: string): Promise<
   )
 }
 
+// T-133 (2): react-hot-toast styles a toast's message `white-space: pre-line` in a 350 px card with no overflow-wrap, so a file name with no break
+// opportunity (an underscores-only name, a hash) ran up to 81 px OUTSIDE the card in a real render. Six `Saved ${basename}` sites, T-132's "Extracted
+// the sound from" and this panel's `Added ${file.name}` quote a name the person chose. The card's `overflow-wrap: anywhere` breaks it inside.
+test.describe('Image Studio — a toast that quotes a long file name (T-133 (2))', () => {
+  test('a name with no break in it wraps inside the toast card instead of running out of it', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('toast-wrap')
+    const { window } = studio
+    try {
+      const png = readFileSync(studio.fixturePng).toString('base64')
+      const name = `${'_'.repeat(90)}.png`
+      await dropPng(window, png, name)
+      // Measured as soon as the card is on screen (a success toast is gone in about 2 s): the message's box against its card's.
+      const box = await window.evaluate(async () => {
+        const deadline = Date.now() + 10_000
+        while (Date.now() < deadline) {
+          const message = document.querySelector('[data-rht-toaster] [role="status"]')
+          const card = message?.parentElement
+          if (message && card && (message.textContent ?? '').startsWith('Added ')) {
+            const m = message.getBoundingClientRect()
+            const c = card.getBoundingClientRect()
+            return { text: message.textContent ?? '', mLeft: m.left, mRight: m.right, cLeft: c.left, cRight: c.right, cWidth: c.width }
+          }
+          await new Promise((r) => setTimeout(r, 20))
+        }
+        return null
+      })
+      expect(box, 'the toast was on screen').not.toBeNull()
+      expect(box?.text).toBe(`Added ${name}`)
+      expect(box?.mRight as number, `the text ends inside the card (card ${box?.cLeft}-${box?.cRight}, text ${box?.mLeft}-${box?.mRight})`).toBeLessThanOrEqual((box?.cRight as number) + 0.5)
+      expect(box?.mLeft as number).toBeGreaterThanOrEqual((box?.cLeft as number) - 0.5)
+      expect(box?.cWidth as number, 'and the card kept its 350 px ceiling').toBeLessThanOrEqual(351)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
 test.describe('Image Studio — export', () => {
   test('PNG and JPG export real bytes, and the scale select changes their size', async () => {
     test.setTimeout(150_000)

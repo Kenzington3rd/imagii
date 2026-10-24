@@ -48,7 +48,7 @@ import {
   cancelActiveHighlightScan
 } from '../../src/main/ffmpeg/highlights'
 import { extractFrame, cancelAllFrameJobs } from '../../src/main/ffmpeg/frame'
-import { PictureFrames } from '../../src/main/ffmpeg/noPicture'
+import { BURN_IN_NO_PICTURE_MESSAGE, PictureFrames } from '../../src/main/ffmpeg/noPicture'
 import { isCancelledError } from '../../src/shared/cancel'
 import { killAsCancelled } from '../../src/main/ffmpeg/cancelMark'
 import { runBurnIn, cancelBurnIn } from '../../src/main/sidecars/whisperManager'
@@ -8241,6 +8241,104 @@ describe('a clip with no picture is an error in a sentence, not a file that says
     expect(normalFrames.none, 'a normal clip reports frames').toBe(false)
     expect(normal.stderr).not.toMatch(FFMPEG_EMPTY_OUTPUT)
   }, 60_000)
+})
+
+describe('a ranged caption burn-in of a range with no picture is an error in a sentence, not "Captions burned in" (real ffmpeg, T-133 (4))', () => {
+  // The burn-in was the one ranged video writer left without T-131 (1) / T-132 (4)'s guard. Executed on both majors (7.0.2 and 6.1.1), with the
+  // subtitles stage and without it: a range past the PICTURE exits 0, prints nothing to stderr, reports `frame=0` in its last progress block and
+  // writes an audio-only mp4 (`-c:a copy` copies the sound that is there), and `code === 0` alone resolved. `short` is a 5 s picture with 5 s of
+  // sound; `longaudio` is a 5 s picture with 9 s of sound. The subtitles filter is in this binary on both majors (the bundled linux 7.0.2 has no
+  // drawtext, which the burn-in does not use), so these run wherever the rest of the burn-in cases do.
+  let short = ''
+  let longAudio = ''
+  let srt = ''
+
+  beforeAll(async () => {
+    short = path.join(workDir, 't133-4-short.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=5', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=5',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', short
+    ])
+    longAudio = path.join(workDir, 't133-4-long-audio.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=5', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=9',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', longAudio
+    ])
+    // A cue in every range the cases burn, so the `subtitles` stage is in the graph (the shape a real captioned clip has).
+    srt = path.join(workDir, 't133-4-cues.srt')
+    await writeFile(
+      srt,
+      '1\n00:00:01,200 --> 00:00:02,500\nINSIDE THE PICTURE\n\n' + '2\n00:00:04,200 --> 00:00:04,800\nNEAR THE LAST FRAME\n\n' + '3\n00:00:06,200 --> 00:00:07,800\nAFTER THE PICTURE\n\n' + '4\n00:00:08,200 --> 00:00:09,800\nPAST THE FILE\n',
+      'utf8'
+    )
+  }, 60_000)
+
+  const outDirFor = (name: string): Promise<string> => mkdtemp(path.join(workDir, `t133-4-${name}-`))
+  const burn = async (source: string, name: string, startSec: number | undefined, endSec: number | undefined, srtPath = srt): Promise<{ error: Error | null; outDir: string; outputPath: string; captioned?: boolean }> => {
+    const outDir = await outDirFor(name)
+    const outputPath = path.join(outDir, 'captioned.mp4')
+    try {
+      const res = await runBurnIn(
+        { jobId: `t133-4-${name}`, videoPath: source, srtPath, outputPath, fontSizePct: 4, ...(startSec === undefined ? {} : { startSec, endSec }) },
+        () => {}
+      )
+      return { error: null, outDir, outputPath, captioned: res.captioned }
+    } catch (e) {
+      return { error: e as Error, outDir, outputPath }
+    }
+  }
+  const streamsOf = async (file: string): Promise<string[]> => (await ffprobeJson(file)).streams.map((x) => x.codec_type)
+  /** Files beside the SRT that start with its name: a leaked shifted copy. */
+  const srtSiblings = async (): Promise<string[]> => (await readdir(path.dirname(srt))).filter((f) => f.startsWith(path.basename(srt)) && f !== path.basename(srt))
+
+  it('the control: a range inside the picture burns a file with a picture, a sound and its caption', async () => {
+    const run = await burn(short, 'control', 1, 3)
+    expect(run.error, 'a normal range is a success').toBeNull()
+    expect(run.captioned).toBe(true)
+    expect(await streamsOf(run.outputPath)).toEqual(['video', 'audio'])
+  }, 120_000)
+
+  it('the range is past the end of the file (a restored project whose recording got shorter): a sentence, and no file left', async () => {
+    const run = await burn(short, 'past-end', 8, 10)
+    expect(run.error?.message).toBe(BURN_IN_NO_PICTURE_MESSAGE)
+    expect(await readdir(run.outDir), 'the audio-only output is the job\'s wreckage and is gone').toEqual([])
+    expect(await srtSiblings(), 'and so is the shifted SRT').toEqual([])
+  }, 120_000)
+
+  it('the range is past the last frame of a file whose sound runs on (the audio-only shape): the same sentence, with the subtitles stage and without it', async () => {
+    const withCue = await burn(longAudio, 'audio-only', 6, 8)
+    expect(withCue.error?.message).toBe(BURN_IN_NO_PICTURE_MESSAGE)
+    expect(await readdir(withCue.outDir), 'an mp4 with a sound and no picture is not the captioned video').toEqual([])
+    // No cue inside the range: the burn has no subtitle stage at all (T-81), and is held to the same fact.
+    const noCueSrt = path.join(workDir, 't133-4-no-cue-here.srt')
+    await writeFile(noCueSrt, '1\n00:00:01,000 --> 00:00:02,000\nONLY INSIDE THE PICTURE\n', 'utf8')
+    const bare = await burn(longAudio, 'audio-only-bare', 6, 8, noCueSrt)
+    expect(bare.error?.message).toBe(BURN_IN_NO_PICTURE_MESSAGE)
+    expect(await readdir(bare.outDir)).toEqual([])
+    expect(await srtSiblings()).toEqual([])
+  }, 180_000)
+
+  it('a range that STRADDLES the last frame is still a burn: the picture that is there is written', async () => {
+    const run = await burn(longAudio, 'straddle', 4, 8)
+    expect(run.error, 'part of the range has a picture').toBeNull()
+    expect(await streamsOf(run.outputPath)).toContain('video')
+    const frames = Number((await ffprobeJson(run.outputPath)).streams.find((x) => x.codec_type === 'video')?.nb_frames)
+    expect(frames, 'about one second of 15 fps picture').toBeGreaterThan(10)
+  }, 120_000)
+
+  it.each([['20 ms', 1, 1.02], ['10 ms', 1, 1.01]])('discrimination: a legitimate %s range is a success with a picture in it (not mistaken for an empty file)', async (_label, a, b) => {
+    const run = await burn(short, `tiny-${a}-${b}`.replace('.', '_'), a, b)
+    expect(run.error, 'a range of one frame is a picture').toBeNull()
+    const v = (await ffprobeJson(run.outputPath)).streams.find((x) => x.codec_type === 'video')
+    expect(v, 'it has a picture').toBeDefined()
+    expect(Number(v?.nb_frames)).toBeGreaterThanOrEqual(1)
+  }, 120_000)
+
+  it('a burn of the whole video (no range) is a success, and the guard does not touch it', async () => {
+    const run = await burn(short, 'whole', undefined, undefined)
+    expect(run.error).toBeNull()
+    expect(await streamsOf(run.outputPath)).toEqual(['video', 'audio'])
+  }, 120_000)
 })
 
 describe('the highlight scans compute no true peak, and read the same series without it (real ffmpeg, T-126 (23))', () => {

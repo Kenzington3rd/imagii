@@ -275,9 +275,16 @@ describe('isWaveformPeaks: what the waveform is drawn from, checked where it lan
 describe('WAVEFORM_READ_FAILED: the refusal that remains, for a file main cannot read (T-129)', () => {
   it('is a finished sentence that says what failed and what to try', () => {
     expect(WAVEFORM_READ_FAILED).toMatch(/^imagii couldn't read the sound in this file to draw its waveform\./)
-    expect(WAVEFORM_READ_FAILED).toMatch(/Re-export it as WAV or MP3 and try again\.$/)
+    expect(WAVEFORM_READ_FAILED).toMatch(/Re-export it as a standard PCM WAV or MP3 and try again\.$/)
     expect(WAVEFORM_READ_FAILED.length).toBeLessThanOrEqual(240)
     expect(WAVEFORM_READ_FAILED).not.toContain('\n')
+  })
+
+  // T-133 (10): T-132 (10) took "Re-export it as WAV or MP3" out of the playback sentence because the file that fails there already IS a WAV,
+  // and left the same advice here - where the documented trigger (an ADPCM-style WAV whose format no decoder reads) is a WAV too.
+  it('does not send a WAV back to WAV: it names the kind that reads, as the playback sentence does (T-133 (10))', () => {
+    expect(WAVEFORM_READ_FAILED).not.toMatch(/as WAV or MP3/)
+    expect(WAVEFORM_READ_FAILED).toMatch(/standard PCM WAV or MP3/)
   })
 
   it('reaches the person as written, across the IPC envelope, through both the importer\'s words and the generic ones', () => {

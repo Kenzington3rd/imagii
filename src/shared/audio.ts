@@ -410,10 +410,12 @@ export function peaksMaxMagnitude(peaks: [number[], number[]]): number {
 /**
  * The refusal at load when main cannot read a file's sound to draw its waveform (T-129, T-84 voice): ffmpeg could not decode
  * it. The export reads the sound the same way, so a file this refuses could not be cleaned either; the studio never holds it.
- * Every route to `loadSource` (the importer, Clean audio, a restored project) shows it as written (`userFacingError`).
+ * Every route to `loadSource` (the importer, Clean audio, a restored project) shows it as written (`userFacingError`). T-133 (10): the file
+ * it fires on in practice IS a WAV (one whose format tag no decoder knows), so the advice names the kind that reads - "a standard PCM WAV" -
+ * as `PLAYBACK_ERROR_MESSAGE` does since T-132 (10); a bare "WAV or MP3" sent that file back to the format it is in.
  */
 export const WAVEFORM_READ_FAILED =
-  "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
+  "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as a standard PCM WAV or MP3 and try again."
 
 /**
  * What the person reads when the PLAYER cannot play a file that opened (T-123 (14), reworded by T-129 and T-132 (10)): the waveform

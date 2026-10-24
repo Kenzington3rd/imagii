@@ -112,6 +112,7 @@ beforeEach(() => {
     history: { past: [], future: [] },
     searchResponse: null,
     searchError: null,
+    searchLoading: false,
     tab: 'reference'
   })
 })
@@ -337,6 +338,66 @@ describe('a rejected search (T-84)', () => {
     await store().search('x')
 
     expect(store().searchError).toBe('Search failed.')
+    errorSpy.mockRestore()
+  })
+})
+
+describe('one search at a time (T-133 (8))', () => {
+  // The Search button is disabled while a request is out; the input's Enter was not, so a second press (or a held key) sent a second request and
+  // whichever answered LAST won the results grid - a slow first answer overwrote the newer search. The guard is in the store's `search`, the one
+  // function every caller goes through, so no entry point (button, Enter, a future shortcut) can skip it.
+  function stubGatedSearch(): { images: ReturnType<typeof vi.fn>; release: (query: string) => void } {
+    const waiting: Array<(query: string) => void> = []
+    const images = vi.fn(
+      (query: string) =>
+        new Promise((resolve) => {
+          waiting.push((answered) => resolve({ query: answered, provider: 'duckduckgo', results: [] }))
+          void query
+        })
+    )
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    return { images, release: (query) => waiting.shift()?.(query) }
+  }
+
+  it('a second search while one is out sends nothing, and the first answer is the one on screen', async () => {
+    const { images, release } = stubGatedSearch()
+    const first = store().search('mountains')
+    expect(store().searchLoading).toBe(true)
+
+    // Not awaited: a press that is not refused would wait on its own gate.
+    const second = store().search('mountains')
+    const third = store().search('a different query typed meanwhile')
+    expect(images, 'one request for three presses').toHaveBeenCalledTimes(1)
+
+    release('mountains')
+    await Promise.all([first, second, third])
+    expect(store().searchLoading).toBe(false)
+    expect(store().searchResponse?.query).toBe('mountains')
+  })
+
+  it('once the answer is in, the next search goes out', async () => {
+    const { images, release } = stubGatedSearch()
+    const first = store().search('mountains')
+    release('mountains')
+    await first
+
+    const second = store().search('rivers')
+    expect(images).toHaveBeenCalledTimes(2)
+    release('rivers')
+    await second
+    expect(store().searchResponse?.query).toBe('rivers')
+  })
+
+  it('a search that failed gives the slot back (the guard is not a latch)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const images = vi.fn().mockRejectedValueOnce(new Error('query must be a string')).mockResolvedValue({ query: 'again', provider: 'duckduckgo', results: [] })
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+
+    await store().search('x')
+    expect(store().searchError).toBe('Search failed.')
+    await store().search('again')
+    expect(images).toHaveBeenCalledTimes(2)
+    expect(store().searchResponse?.query).toBe('again')
     errorSpy.mockRestore()
   })
 })

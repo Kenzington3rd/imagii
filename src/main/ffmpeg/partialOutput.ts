@@ -25,7 +25,9 @@ import { stat, unlink } from 'node:fs/promises'
  *
  * Ceiling (T-111): on a network share whose clock runs more than 2 s behind
  * this machine's, a just-written partial can look older than the spawn and be
- * kept; the cost is a leftover file, never a lost one.
+ * kept; the cost is a leftover file, never a lost one. That cost holds HERE, on
+ * the discard path, where keeping is the safe error. T-133 (5): it did not hold
+ * on the success path, which borrowed the same test (`wroteOutput` below).
  */
 const MTIME_SLACK_MS = 2000
 
@@ -45,15 +47,19 @@ export async function discardPartialOutput(
 }
 
 /**
- * T-132 (4): did this run leave a real file at `outputPath`? True for a non-empty regular file whose mtime is at or after the spawn (the
- * same rule `discardPartialOutput` uses for "ours", with the same slack): a file from an earlier run of the same name is not this run's
- * picture, and neither is an empty one. `extractFrame` asks it after an exit 0, because `-ss` past the last frame exits 0 and writes
- * nothing.
+ * T-132 (4): did this run leave a real file at `outputPath`? True for a non-empty regular file. `extractFrame` asks it after an exit 0,
+ * because `-ss` past the last frame exits 0 and writes nothing.
+ *
+ * T-133 (5): it takes no clock. It borrowed `discardPartialOutput`'s "not older than the spawn, 2 s of slack" to tell this run's file from an
+ * earlier one's, and on a share whose clock runs more than 2 s behind this machine's that refused a GOOD thumbnail as "no picture" and aborted
+ * the kit: a wrong answer on the success path, where the discard's "a leftover file, never a lost one" is not available. The caller makes
+ * "an earlier file" impossible instead: `extractFrame` writes into a fresh `makeKitDir` folder and refuses a target that already exists, so
+ * whatever is at the path after the exit is this run's.
  */
-export async function wroteOutput(outputPath: string, spawnedAt: number): Promise<boolean> {
+export async function wroteOutput(outputPath: string): Promise<boolean> {
   try {
     const info = await stat(outputPath)
-    return info.isFile() && info.size > 0 && info.mtimeMs >= spawnedAt - MTIME_SLACK_MS
+    return info.isFile() && info.size > 0
   } catch {
     return false
   }

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, rmdir } from 'node:fs/promises'
+import { mkdir, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { ffmpegPath } from './paths'
 import { cropToFrame } from './filters'
@@ -9,7 +9,7 @@ import { CancelLatch } from './cancelLatch'
 import { discardPartialOutput, wroteOutput } from './partialOutput'
 import { FRAME_NO_PICTURE_MESSAGE } from './noPicture'
 import { nextFreePath } from './outputPath'
-import { assert } from '../../shared/assert'
+import { assert, assertAlways } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
 import { localDate, sanitizeFilename } from '../../shared/filename'
 
@@ -61,6 +61,11 @@ export async function extractFrame(
   let spawnedAt: number | null = null
   try {
     await run.guard(mkdir(path.dirname(outputPath), { recursive: true }))
+    // T-133 (5): the thumbnail goes into a folder `makeKitDir` has just made, so nothing is at the target. That is what lets the exit-0 check
+    // below ask only whether a real file is there (no clock: a share running slow refused a good thumbnail), so it is asserted, not
+    // trusted: a file that is already there could not be told from this run's picture. Left exactly as it was; ffmpeg never starts.
+    const taken = await run.guard(stat(outputPath).then(() => true, () => false))
+    assertAlways(!taken, `extractFrame: ${outputPath} already exists (a kit thumbnail goes into a fresh folder)`)
 
     const crop: string[] = []
     if (cropRect) {
@@ -103,8 +108,8 @@ export async function extractFrame(
         if (activeFrame === child) activeFrame = null
         if (code === 0) {
           // T-132 (4): `-ss` past the last frame exits 0 and writes no file at all; Clip Kit then said "Saved your Clip Kit" over a missing
-          // thumbnail. The file this run was to write is looked for before the job is called done.
-          void wroteOutput(outputPath, spawnedAt ?? Date.now()).then((wrote) => {
+          // thumbnail. The file this run was to write is looked for before the job is called done (T-133 (5): by what it is, not by its clock).
+          void wroteOutput(outputPath).then((wrote) => {
             if (wrote) resolve()
             else reject(new Error(FRAME_NO_PICTURE_MESSAGE))
           })

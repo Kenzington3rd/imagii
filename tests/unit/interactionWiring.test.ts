@@ -813,7 +813,8 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
 
   it('Clean audio asks Audio Studio\'s own question before it extracts, and is off for a video with no sound', () => {
     // T-113: the lead-in is "Replace the audio you're editing?", not Close's.
-    expect(videoStudio).toMatch(/if \(!confirmAudioClose\(useAudioStore\.getState\(\)\.chain, \(message\) => confirm\(message\), 'replace'\)\) return/)
+    // T-133 (6): the chain the question is about is kept (`chainAsked`) to compare with the one there when the extraction ends.
+    expect(videoStudio).toMatch(/const chainAsked = useAudioStore\.getState\(\)\.chain\s*if \(!confirmAudioClose\(chainAsked, \(message\) => confirm\(message\), 'replace'\)\) return/)
     expect(videoStudio.indexOf('confirmAudioClose(')).toBeLessThan(videoStudio.indexOf('window.api.audio.extractFromVideo'))
     expect(videoStudio).toMatch(/disabled=\{extractingAudio \|\| noSound\}/)
     expect(captions).toMatch(/disabled=\{running \|\| noSound\}/)
@@ -1247,6 +1248,28 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     expect(studio).toMatch(/import \{ currentRoute, replacedSince \} from '\.\.\/project\/ProjectIO'/)
   })
 
+  // T-133 (6): `replacedSince` is identity of the SOURCE; work tuned on the file already open during the wait was replaced with no question
+  // (loadSource resets the chain and the undo history). E2E: video-pipelines.spec.ts "Clean audio asks again about work tuned while it was
+  // extracting" (tuned during a held extraction: the question appears; declined keeps the tuning, accepted replaces it).
+  it('Clean audio asks again after the wait about work tuned meanwhile, and a decline takes the Skipped path (T-133 (6))', () => {
+    const studio = read('modules/video-studio/VideoStudio.tsx').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full'))
+    const asked = flow.indexOf('const chainAsked = useAudioStore.getState().chain')
+    const firstAsk = flow.indexOf('confirmAudioClose(chainAsked')
+    const extract = flow.indexOf('await window.api.audio.extractFromVideo')
+    const compare = flow.indexOf('replacedSince(heldBefore, useAudioStore.getState().source)')
+    const again = flow.indexOf('confirmReplaceAfterWait(chainAsked, useAudioStore.getState().chain')
+    const load = flow.indexOf('await loadAudioSource(')
+    expect(asked, 'the chain the first question is about is kept').toBeGreaterThan(-1)
+    expect(asked).toBeLessThan(firstAsk)
+    expect(firstAsk).toBeLessThan(extract)
+    expect(again, 'asked again after the wait and the different-file check, before anything loads').toBeGreaterThan(compare)
+    expect(again).toBeGreaterThan(extract)
+    expect(again).toBeLessThan(load)
+    expect(flow).toMatch(/if \(!confirmReplaceAfterWait\(chainAsked, useAudioStore\.getState\(\)\.chain, \(message\) => confirm\(message\)\)\) \{\s*toast\.dismiss\('extract-audio'\)\s*toast\("Skipped this video's sound to keep the changes you made in Audio Studio while it was extracting"[\s\S]*?return\s*\}/)
+    expect(studio).toMatch(/import \{ confirmAudioClose, confirmReplaceAfterWait \} from '\.\.\/audio-studio\/audioClose'/)
+  })
+
   // T-132 (1): the extraction takes minutes, and `navigate` still works from a studio that unmounted (react-router's activeRef never resets), so
   // Clean audio took the person to /audio wherever they were: from /record that unmounted RecordStudio, whose cleanup stops the tracks and cut a
   // live take short. E2E: record.spec.ts "Clean audio finishing during a live take does not move the person or stop the take" (the take runs on,
@@ -1260,7 +1283,8 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     expect(where, 'the route is read AFTER the wait, when the sound is loaded').toBeGreaterThan(load)
     expect(flow).toMatch(/if \(where === '\/video'\) \{\s*toast\.success\('Opening Audio Studio'\)\s*navigate\('\/audio'\)\s*\} else \{/)
     expect(flow.match(/navigate\('\/audio'\)/g) ?? [], 'two places navigate: the stay-here branch, and the toast\'s own button').toHaveLength(2)
-    expect(flow).toMatch(/where === '\/audio' \? \[\] : \[\{ label: 'Open Audio Studio', onClick: \(\) => navigate\('\/audio'\) \}\]/)
+    // T-133 (1): the button's press asks about a live take first (the toast can be over the REC screen).
+    expect(flow).toMatch(/where === '\/audio'\s*\? \[\]\s*: \[\s*\{\s*label: 'Open Audio Studio',\s*onClick: \(\) => \{\s*if \(mayLeaveLiveTake\(\)\) navigate\('\/audio'\)\s*\}\s*\}\s*\]/)
     // The route is read from the hash the router writes, by the one function Save project reads it with (not a render's stale closure).
     expect(read('modules/project/ProjectIO.ts')).toMatch(/export function currentRoute\(\): string \| undefined/)
   })
@@ -1522,7 +1546,8 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
   it('the Timeline hears Space through the Player\'s transport, stops the studio scrolling, and reads markers through playheadNow (4, 14)', () => {
     const timeline = strip(read('modules/video-studio/Timeline.tsx'))
     const handler = timeline.slice(timeline.indexOf('function onScrubKey'), timeline.indexOf('if (!source || !clip'))
-    expect(handler).toMatch(/case ' ':\s*e\.preventDefault\(\)\s*useVideoStore\.getState\(\)\.transport\?\.togglePlay\(\)\s*return/)
+    // T-133 (7b): on the press only (`if (!e.repeat)`); the guard itself is pinned in the T-133 (7) block below.
+    expect(handler).toMatch(/case ' ':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) useVideoStore\.getState\(\)\.transport\?\.togglePlay\(\)\s*return/)
     // Both markers go through the one rule, and it is the store's exported function, not a local read.
     expect(timeline).toMatch(/const at = playheadNow\(state\)\s*if \(which === 'in'\) state\.setClipStart\(id, at\)\s*else state\.setClipEnd\(id, at\)/)
     expect(timeline).not.toMatch(/state\.currentTime\)/)
@@ -2336,5 +2361,132 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
     expect(dialogSites(bare, 'x.tsx').map((x) => x.claim)).toEqual([null])
     expect(dialogSites(other, 'x.tsx').map((x) => x.claim), 'a claim on something else does not cover the call after it').toEqual([null])
     expect(dialogSites('async function f() { await window.api.video.startSomething() }', 'x.tsx')).toEqual([])
+  })
+})
+
+// T-133 (9): five buttons (the autosave banner's Restore and its two Clear, the video Importer's and the audio Importer's "Choose file…") were
+// `disabled` and drew exactly like live ones - `btn-primary` / `btn-ghost` have no disabled look of their own - while three comments, an E2E and
+// the ledger said "every other disabled button carries `disabled:opacity-50`". Importer's label does not even change while it is busy. The claim
+// is a scan now: a `<button disabled=...>` whose className has no `disabled:opacity-*` fails here, with its file and line.
+// E2E: video-pipelines.spec.ts "the video Importer's Choose file is dimmed while a file is loading" and home-chrome.spec.ts for the banner.
+describe('every disabled button looks disabled (T-133 (9))', () => {
+  /** Every `<button>` that takes a `disabled` prop: where it is, and whether its className carries a `disabled:opacity-*`. */
+  function disabledButtons(code: string, file: string): Array<{ where: string; dimmed: boolean }> {
+    const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    const found: Array<{ where: string; dimmed: boolean }> = []
+    function visit(node: ts.Node): void {
+      if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(sf) === 'button') {
+        const attrs = node.attributes.properties.filter(ts.isJsxAttribute)
+        if (attrs.some((a) => a.name.getText(sf) === 'disabled')) {
+          const className = attrs.find((a) => a.name.getText(sf) === 'className')?.initializer?.getText(sf) ?? ''
+          found.push({ where: `${file}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`, dimmed: /disabled:opacity-\d+/.test(className) })
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    return found
+  }
+  const undimmed = (code: string): string[] => disabledButtons(code, 'x.tsx').filter((b) => !b.dimmed).map((b) => b.where)
+
+  const all = sourceFilesUnder(RENDERER_ROOT)
+    .filter((f) => f.endsWith('.tsx'))
+    .flatMap((f) => disabledButtons(readFileSync(f, 'utf8'), path.relative(RENDERER_ROOT, f)))
+
+  it('finds the buttons to check (a scan that matched nothing would look like a clean tree)', () => {
+    expect(all.length).toBeGreaterThan(40)
+  })
+
+  it('no disabled button in the renderer draws like a live one', () => {
+    expect(all.filter((b) => !b.dimmed).map((b) => b.where)).toEqual([])
+  })
+
+  it('discriminates: a bare disabled button, a self-closing one and a conditional className are judged', () => {
+    expect(undimmed('const a = <button className="btn-ghost" disabled={busy}>x</button>')).toEqual(['x.tsx:1'])
+    expect(undimmed('const a = <button disabled>x</button>')).toEqual(['x.tsx:1'])
+    expect(undimmed('const a = <button className="btn-ghost disabled:opacity-50" disabled={busy}>x</button>')).toEqual([])
+    expect(undimmed('const a = <button className={`btn-ghost ${on ? "ring-2" : ""} disabled:opacity-40`} disabled={busy} />')).toEqual([])
+    expect(undimmed('const a = <button className="btn-ghost" onClick={go}>x</button>'), 'a button that cannot be disabled is not judged').toEqual([])
+    expect(undimmed('const a = <div className="btn-ghost" disabled={busy} />'), 'only a <button> is').toEqual([])
+  })
+})
+
+// T-133 (7): the repeat family's boundary, wired where the person reaches it. E2E: home-chrome.spec.ts "a held Enter on the tour's Done closes it
+// once: the repeats do not reopen it" and "a held ? toggles the shortcuts once", video-core.spec.ts "a held Space plays once".
+describe('T-133 (7) — a held key is one decision, and a key held through a closing dialog does not act under it', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(a) the close of any dialog arms the held-key guard, and the guard listens from the moment the module loads (it has to SEE the key go down)', () => {
+    const lib = strip(read('lib/repeatPress.ts'))
+    const swallow = lib.slice(lib.indexOf('export function swallowRepeatClicks'))
+    expect(swallow, 'swallowRepeatClicks arms it').toMatch(/heldKeys\.dialogClosed\(\)/)
+    // Capture phase on the window, ahead of React's listeners, and installed at load rather than inside swallowRepeatClicks.
+    const moduleLevel = lib.slice(lib.indexOf("if (typeof window !== 'undefined')"), lib.indexOf('let swallowUntil'))
+    expect(moduleLevel).toMatch(/addEventListener\(\s*'keydown',[\s\S]*?stopImmediatePropagation\(\)[\s\S]*?preventDefault\(\)[\s\S]*?true\s*\)/)
+    expect(moduleLevel).toMatch(/addEventListener\('keyup'/)
+    expect(moduleLevel).toMatch(/addEventListener\('blur'/)
+    // The two dialog closers that matter are the ones that call it: Modal (every dialog, the FixWizard included) and the tour.
+    expect(strip(read('components/Modal.tsx'))).toMatch(/swallowRepeatClicks\(\)/)
+    expect(strip(read('components/Tutorial.tsx'))).toMatch(/useEffect\(\(\) => swallowRepeatClicks, \[\]\)/)
+  })
+
+  it('(b) Space toggles play on the press only, in the Player and on the Timeline; the nudge and frame-step keys still repeat by design', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    const playerSpace = player.slice(player.indexOf("case ' ':"), player.indexOf("case 'ArrowLeft':"))
+    expect(playerSpace).toMatch(/e\.preventDefault\(\)\s*if \(!e\.repeat\) togglePlay\(\)/)
+    const playerRest = player.slice(player.indexOf("case 'ArrowLeft':"), player.indexOf('default:'))
+    expect(playerRest, 'the arrows, , . and I / O are not guarded').not.toMatch(/repeat/)
+    const timeline = strip(read('modules/video-studio/Timeline.tsx'))
+    const timelineSpace = timeline.slice(timeline.indexOf("case ' ':"), timeline.indexOf("case 'ArrowLeft':"))
+    expect(timelineSpace).toMatch(/e\.preventDefault\(\)\s*if \(!e\.repeat\) useVideoStore\.getState\(\)\.transport\?\.togglePlay\(\)\s*return/)
+    expect(timeline.slice(timeline.indexOf("case 'ArrowLeft':"), timeline.indexOf('if (!source || !clip')), 'nor the Timeline\'s').not.toMatch(/repeat/)
+  })
+
+  it('(b) the ? overlay hands the event\'s repeat flag to its predicate', () => {
+    expect(strip(read('components/HotkeyOverlay.tsx'))).toMatch(/overlayOpen: open,\s*repeat: e\.repeat/)
+  })
+})
+
+// T-133 (1): the toast's way off the Record screen cut a LIVE TAKE short (T-132 (1)'s own fix put "Open Audio Studio" in an 8 s toast over the REC
+// screen; the saved-file toasts' "Edit in Video Studio" is the same family). Every way off asks the Home link's question through ONE function.
+// E2E: record.spec.ts "a toast's way off the Record screen asks first while a take is live".
+describe('T-133 (1) — every way off the Record screen asks about a live take', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('Record registers the take while its phase is "recording", and its Home link asks through the same function (no copy of the question)', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    expect(studio).toMatch(/useEffect\(\(\) => \{\s*if \(phase !== 'recording'\) return\s*return registerLiveTake\(stopRecording\)\s*\}, \[phase\]\)/)
+    expect(studio).toMatch(/onClickCapture=\{\(e\) => \{\s*if \(mayLeaveLiveTake\(\)\) return\s*e\.preventDefault\(\)\s*e\.stopPropagation\(\)\s*\}\}/)
+    expect(studio, 'the Home link\'s own copy of the question is gone').not.toMatch(/A recording is in progress/)
+    expect(strip(read('lib/liveTake.ts'))).toMatch(/export const LIVE_TAKE_MESSAGE =\s*'A recording is in progress\. Stop and save it before leaving\? \(Cancel keeps recording\.\)'/)
+  })
+
+  it('"Edit in Video Studio" asks first, ahead of the replace-the-video question and before anything loads or navigates', () => {
+    const hook = strip(read('lib/editInVideoStudio.ts'))
+    const body = hook.slice(hook.indexOf('return async function editInVideoStudio'))
+    expect(body).toMatch(/if \(!mayLeaveLiveTake\(\)\) return/)
+    expect(body.indexOf('mayLeaveLiveTake()')).toBeLessThan(body.indexOf('videoDiscardMessage('))
+    expect(body.indexOf('mayLeaveLiveTake()')).toBeLessThan(body.indexOf('await loadVideoSource('))
+    expect(body.indexOf('mayLeaveLiveTake()')).toBeLessThan(body.indexOf("navigate('/video')"))
+  })
+
+  it('every navigate() that a toast button (or a completion that outlives its screen) can run asks about the take, or is the screen\'s own', () => {
+    // The renderer's navigate() calls, decided: a new one fails until it is decided here.
+    const calls: Record<string, number> = {}
+    for (const file of sourceFilesUnder(RENDERER_ROOT).filter((f) => f.endsWith('.tsx') || f.endsWith('.ts'))) {
+      const n = strip(readFileSync(file, 'utf8')).match(/\bnavigate\(/g)?.length ?? 0
+      if (n > 0) calls[path.relative(RENDERER_ROOT, file).split(path.sep).join('/')] = n
+    }
+    expect(calls).toEqual({
+      // Mood board / Asset Library "send to canvas": the person is on References, pressing a button on the screen; no take can be live there.
+      'modules/references/MoodBoardPanel.tsx': 1,
+      'modules/references/AssetLibraryPanel.tsx': 1,
+      // The autosave Restore is on Home.
+      'components/AutosaveRestore.tsx': 1,
+      // Clean audio: the stay-here branch (the person is on /video) and the toast's button, which asks (below).
+      'modules/video-studio/VideoStudio.tsx': 2,
+      // The "Edit in Video Studio" bridge, which asks first (above).
+      'lib/editInVideoStudio.ts': 1
+    })
   })
 })

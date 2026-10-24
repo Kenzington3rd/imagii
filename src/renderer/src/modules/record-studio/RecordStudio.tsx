@@ -11,6 +11,7 @@ import { isCancelledError } from '@shared/cancel'
 import { formatTimer } from '@shared/clockTime'
 import { localStamp } from '@shared/filename'
 import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
+import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
@@ -182,6 +183,14 @@ export function RecordStudio(): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [phase])
+
+  // T-133 (1): while a take is being recorded, every way off this screen asks about it first (`mayLeaveLiveTake`): the Home link below, and the
+  // toasts' "Open Audio Studio" / "Edit in Video Studio" buttons, which outlive the screen that raised them. The registration is the live take;
+  // it ends with the phase and with the screen.
+  useEffect(() => {
+    if (phase !== 'recording') return
+    return registerLiveTake(stopRecording)
   }, [phase])
 
   // T-120: the live preview. `startRecording` used to hand each stream to its <video> while `phase` was still
@@ -676,14 +685,11 @@ export function RecordStudio(): JSX.Element {
               other studios. */}
           <span
             onClickCapture={(e) => {
-              if (phase !== 'recording') return
+              // T-133 (1): the question is shared (`lib/liveTake`) with every other way off this screen - a toast's button outlives the
+              // screen that raised it - so it is asked by the registration below, not by this link's own copy.
+              if (mayLeaveLiveTake()) return
               e.preventDefault()
               e.stopPropagation()
-              const stopFirst = window.confirm(
-                'A recording is in progress. Stop and save it before leaving? ' +
-                  '(Cancel keeps recording.)'
-              )
-              if (stopFirst) stopRecording()
             }}
           >
             <HomeLink />

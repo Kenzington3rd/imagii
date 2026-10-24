@@ -130,7 +130,7 @@ export function Importer(): JSX.Element {
         {formatHint(VIDEO_EXTENSIONS)}. {busy ? 'Loading…' : 'Or use the file picker.'}
       </p>
       <div className="flex items-center gap-2">
-        <button className="btn-primary" onClick={onPickFile} disabled={busy}>
+        <button className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
           Choose file…
         </button>
         <RecentFilesMenu recent={recent} onPick={(p) => void handleFile(p)} onClear={() => void clear()} />

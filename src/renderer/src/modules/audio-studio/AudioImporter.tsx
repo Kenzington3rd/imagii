@@ -143,7 +143,7 @@ export function AudioImporter(): JSX.Element {
         {formatHint(AUDIO_EXTENSIONS)} — or any video to extract its audio.
       </p>
       <div className="flex items-center gap-2">
-        <button className="btn-primary" onClick={onPickFile} disabled={busy}>
+        <button className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
           {busy ? 'Loading…' : 'Choose file…'}
         </button>
         <RecentFilesMenu recent={recent} onPick={(p) => void loadFile(p)} onClear={() => void clear()} />

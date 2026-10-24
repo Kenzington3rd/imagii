@@ -181,7 +181,7 @@ export function AutosaveRestore(): JSX.Element | null {
           Clear it to get rid of it.
         </span>
         <button
-          className="btn-ghost px-3 py-1 text-xs"
+          className="btn-ghost px-3 py-1 text-xs disabled:opacity-50"
           onClick={() => void clearAutosave()}
           disabled={busy}
           title="Clear the autosave"
@@ -207,14 +207,14 @@ export function AutosaveRestore(): JSX.Element | null {
         imagii autosaved your work {ageText}. Want to pick up where you left off?
       </span>
       <button
-        className="btn-primary px-3 py-1 text-xs"
+        className="btn-primary px-3 py-1 text-xs disabled:opacity-50"
         onClick={() => void restore()}
         disabled={busy}
       >
         {busy ? 'Restoring…' : 'Restore'}
       </button>
       <button
-        className="btn-ghost px-3 py-1 text-xs"
+        className="btn-ghost px-3 py-1 text-xs disabled:opacity-50"
         onClick={() => void clearAutosave()}
         disabled={busy}
         title="Clear the autosave"

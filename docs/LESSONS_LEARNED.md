@@ -14,6 +14,38 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-24 — T-133 (round 82): the fix's own button that cut the take it protected, a tolerance borrowed from the wrong side of a failure, and a guess about how long a human holds a key
+
+The nineteenth pass (11 items, expediter-ticketed). Ledger: r82/ledger.md (every red a test run against the old product code or a content-replace mutation of the finished code with a sha256 triple, every restore byte-identical; the e2e reds were run against a build of the unchanged tree at `d90c01b`; item 4 on both ffmpeg majors). The items that taught something:
+
+### (1) [MED] - T-132's "Open Audio Studio" toast action navigated off a live take with no question
+
+- **Bug.** T-132 (1) stopped Clean audio from moving a person off a running take and put an "Open Audio Studio" button in an 8-second toast instead. That toast sits over the REC screen, and the button was a bare `navigate('/audio')`: one click unmounted RecordStudio, whose cleanup stops the tracks, and cut the take: the failure the fix existed to prevent, through the fix's own exit. The saved-file toasts' "Edit in Video Studio" had the same shape, older and less likely (the next take has to be started inside its 8 seconds).
+- **Fix.** Record REGISTERS a live take for as long as its phase is "recording" (`lib/liveTake.ts`), and every way off that screen asks `mayLeaveLiveTake()` first: the Home link (its question, word for word, now lives once), the toast's button, and the "Edit in Video Studio" bridge. OK stops the take (its normal save runs on Record) and Cancel keeps recording; either way the caller does not navigate now. A scan holds the set of renderer `navigate()` calls to a decided table.
+- **Test.** record.spec.ts "a toast's way off the Record screen asks first while a take is live ..." and "\"Edit in Video Studio\" pressed while the next take is live ..." (red on the unchanged build: no dialog); `liveTake.test.ts`; the wiring pins.
+- **Lesson.** **A fix that adds an exit has to ask what the exit does to the thing the fix was protecting; and a toast outlives the screen that raised it, so the screen's own guard on its own exits is not a guard on the exits its toasts carry.** Register the thing to protect where every exit can ask, not in the one exit you were looking at.
+
+### (5) [LOW] - the success path borrowed a tolerance that is only safe on the failure path
+
+- **Bug.** `wroteOutput` (is there a real file at the path?) reused `discardPartialOutput`'s "not older than the spawn, with 2 s of slack" to tell this run's file from an earlier one's. On the discard path an error in that test keeps a leftover file ("a leftover file, never a lost one"); on the success path the same error refuses a GOOD thumbnail as "no picture" and aborts the kit, on a share whose clock runs more than 2 s behind.
+- **Fix.** `wroteOutput` asks only for a non-empty regular file, with no clock; what made the clock necessary (an earlier file at the path) is made impossible instead: the thumbnail goes into a fresh `makeKitDir` folder and `extractFrame` refuses a target that already exists, before ffmpeg runs.
+- **Test.** `noPicture.test.ts` (a fake ffmpeg whose JPEG is stamped a minute in the past is a success; a file already at the path is refused and left alone), `partialOutput.test.ts` (`wroteOutput`).
+- **Lesson.** **A tolerance has a direction. Slack that makes a delete conservative makes a check liberal or strict depending on which side of the failure it sits, so a helper that serves both sides is wrong on one of them. Prefer removing the ambiguity (a fresh folder, a refused collision) to measuring it with a clock.**
+
+### (7a) [LOW] - a held Enter on Done reopened the tour, and a fixed window would not have helped
+
+- **Bug.** A held Enter on the tour's Done closes it with its first press; the focus trap puts focus back on the "?" that opened it, and the key's auto-repeats are keyboard clicks on that button (`detail` 0, so no click rule can tell them from a decision). The tour reopened. The Fix wizard's Apply -> "Help me fix this" is the same shape. The ticket's direction was a capture-phase keydown that cancels repeats for `REPEAT_SWALLOW_MS` (500 ms).
+- **Fix.** The first repeat arrives after the OS's repeat delay (250 ms to 1 s on Windows), so a window starting at the close can lapse before it. The guard is on the key: `createHeldKeyGuard` tracks which of Enter and Space are down (listening from the moment the module loads, because it has to see the key go down) and, when a dialog closes, swallows the repeats of those until they are let go. A fresh press, a key-up and a window blur clear it.
+- **Test.** home-chrome.spec.ts "a held Enter on Done closes the tour once ..." (the repeats arrive 800 ms after the press; a 500 ms-window variant of the guard is a mutation it kills) and audio.spec.ts for Apply; `repeatPress.test.ts`.
+- **Lesson.** **A fixed time window is a guess about a human. When the real condition is "while this key is held" or "until that finished", track the condition; and write the test with the human's delay in it, not with the fastest timing the test runner can produce.**
+
+### (4), (6), (8), and the rest
+
+- **(4)** The ranged caption burn-in was the one ranged video writer left without the no-picture guard (T-131 (1), T-132 (4) had both said "every runner"; the claim was a comment, not a scan). It resolved on `code === 0` and said "Captions burned in" over an audio-only file; Layer 5 on both majors now holds it. **A claim of the form "every X does Y" in a comment is unverified until something lists the Xs.**
+- **(6)** Clean audio asked "Replace the audio you're editing?" once, before a wait of minutes, and `replacedSince` compared only the FILE: work tuned on the open file during the wait was replaced with no way back. It asks again after the wait, but only when the chain is no longer the one the person said yes about (the ticket's "when `confirmAudioClose` would now ask" would have asked a second time about work they had just agreed to lose). **Ask again about what changed since the answer, not about everything.**
+- **(8)** Reference Search's button was `disabled={loading}` and the input's Enter was not; the guard went in the store's `search`, the function every entry point calls, so a stale render closure cannot let two presses through. **Put a single-flight guard in the shared function, not in one of its callers.**
+- Also fixed: (2) toast text escaped its card on a name with no break (`overflowWrap: anywhere`); (3) `clipNameForSentence` cut by UTF-16 unit and could leave half an emoji (code-point cut); (7b) Space and `?` toggled on every auto-repeat; (9) five disabled buttons drew like live ones (a syntax-tree scan now holds the claim "every disabled button is dimmed"); (10) the waveform refusal's advice was circular for a WAV; (11) three documentation lines.
+
 ## 2026-10-24 — T-132 (round 81): a completion that navigated from a screen the person had left, an exit code taken for a verdict (again), and a "Loaded" that landed before the work it announced
 
 The eighteenth pass (the sweep's verified findings, expediter-ticketed; 14 items). Ledger: r81/ledger.md (every red a test run against the old product code or a content-replace mutation of the finished code with a sha256 triple, every restore byte-identical; the e2e reds were run against a build of the unchanged tree). The items that taught something:

@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   FFMPEG_EMPTY_OUTPUT,
+  BURN_IN_NO_PICTURE_MESSAGE,
   FRAME_NO_PICTURE_MESSAGE,
   PictureFrames,
   REFRAME_NO_PICTURE_MESSAGE,
@@ -94,7 +95,7 @@ describe('the refusals are finished sentences that name what is wrong', () => {
   })
 
   it('every one is one line of at most 240 characters ending in a period, so userFacingError lets it stand', () => {
-    for (const message of [exportNoPictureMessage({ name: 'x'.repeat(500) }), REFRAME_NO_PICTURE_MESSAGE, FRAME_NO_PICTURE_MESSAGE]) {
+    for (const message of [exportNoPictureMessage({ name: 'x'.repeat(500) }), REFRAME_NO_PICTURE_MESSAGE, FRAME_NO_PICTURE_MESSAGE, BURN_IN_NO_PICTURE_MESSAGE]) {
       expect(message.length).toBeLessThanOrEqual(240)
       expect(message).not.toContain('\n')
       expect(message).toMatch(/\.$/)
@@ -105,6 +106,24 @@ describe('the refusals are finished sentences that name what is wrong', () => {
     expect(clipNameForSentence({ name: '  Boss   fight\n(2) ' })).toBe('Boss fight (2)')
     expect(clipNameForSentence({ name: 'x'.repeat(51) })).toBe(`${'x'.repeat(49)}…`)
     for (const bad of [undefined, {}, { name: '' }, { name: 5 }]) expect(clipNameForSentence(bad as never)).toBeNull()
+  })
+
+  // T-133 (3): the cut was by UTF-16 unit, so a name with a glyph outside the BMP (an emoji, a rare CJK character) could be cut between the
+  // two halves of one and keep a lone high surrogate before the ellipsis: a broken glyph in the refusal. The cut is by code point.
+  it('clipNameForSentence cuts by code point: an astral name is never split inside a glyph (T-133 (3))', () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    for (const name of ['\u{1F525}'.repeat(60), 'é'.repeat(48) + '\u{1F525}'.repeat(5), '\u{20BB7}'.repeat(51) + 'x']) {
+      const out = clipNameForSentence({ name }) ?? ''
+      expect(out, 'no half of a glyph is left before the ellipsis').not.toMatch(loneSurrogate)
+      expect(Array.from(out).length, '49 glyphs and the ellipsis').toBe(50)
+      expect(out.endsWith('…')).toBe(true)
+    }
+    expect(clipNameForSentence({ name: '\u{1F525}'.repeat(60) })).toBe(`${'\u{1F525}'.repeat(49)}…`)
+    // The limit counts what the person sees as characters, not units: fifty glyphs are fifty, and stay whole.
+    expect(clipNameForSentence({ name: '\u{1F525}'.repeat(50) })).toBe('\u{1F525}'.repeat(50))
+    expect(clipNameForSentence({ name: 'é'.repeat(48) + '\u{1F525}\u{1F525}' })).toBe('é'.repeat(48) + '\u{1F525}\u{1F525}')
+    // And the sentence built on it still fits the one line userFacingError lets stand.
+    expect(exportNoPictureMessage({ name: '\u{1F525}'.repeat(60) }).length).toBeLessThanOrEqual(240)
   })
 })
 
@@ -265,15 +284,36 @@ describe('extractFrame never resolves without a file (T-132 (4))', () => {
     expect(existsSync(OUT()), 'an empty file is not left behind as a thumbnail').toBe(false)
   })
 
-  it('exit 0 and an old file at the path (ffmpeg wrote nothing over it): not this run\'s picture', async () => {
+  // T-133 (5): the old rule judged the file by its mtime against the spawn (2 s slack), so ffmpeg writing nothing over an old file was caught
+  // by the file looking OLD - and a good thumbnail on a share whose clock runs behind was refused by the same test. The two cannot both be
+  // told apart by a clock. The kit's folder is fresh (`makeKitDir`), so a file already at the target is not the kit's: it is refused BEFORE
+  // ffmpeg runs, left exactly as it was, and what is there afterwards is this run's.
+  it('a file already at the path is refused before ffmpeg runs, and is left exactly as it was (T-133 (5))', async () => {
     mkdirSync(path.dirname(OUT()), { recursive: true })
     writeFileSync(OUT(), 'last time\'s thumbnail')
     const longAgo = new Date(Date.now() - 60 * 60 * 1000)
     utimesSync(OUT(), longAgo, longAgo)
-    ffmpegThat({})
+    let spawned = 0
+    onSpawn = (child) => {
+      spawned += 1
+      child.emit('close', 0)
+    }
     const err = await extractFrame('/tmp/in.mp4', 50, OUT()).then(() => null, (e: Error) => e)
-    expect(err?.message).toBe(FRAME_NO_PICTURE_MESSAGE)
-    expect(existsSync(OUT()), 'and the old file is not ours to delete').toBe(true)
+    expect(err, 'refused').not.toBeNull()
+    expect(spawned, 'ffmpeg never started').toBe(0)
+    expect(readFileSync(OUT(), 'utf8'), 'and the old file is not ours to touch').toBe('last time\'s thumbnail')
+  })
+
+  it('a good thumbnail whose timestamp is far behind this machine\'s clock (a share running slow) is a success (T-133 (5))', async () => {
+    onSpawn = (child, outputPath) => {
+      writeFileSync(outputPath, Buffer.alloc(20_000, 1))
+      const behind = new Date(Date.now() - 60_000)
+      utimesSync(outputPath, behind, behind)
+      child.emit('close', 0)
+    }
+    const result = await extractFrame('/tmp/in.mp4', 1.5, OUT())
+    expect(result.outputPath).toBe(OUT())
+    expect(existsSync(OUT()), 'and the kit keeps it').toBe(true)
   })
 
   it('exit 0 and a JPEG written now: resolves with its path', async () => {

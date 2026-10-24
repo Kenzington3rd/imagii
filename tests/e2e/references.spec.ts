@@ -1473,6 +1473,55 @@ test.describe('imagii References studio', () => {
     }
   })
 
+  // T-133 (8): the Search button is disabled while a request is out and the input's Enter was not, so a second press (or a held key) sent a second
+  // request, and whichever answered LAST owned the grid. Main's handler is held open here (and counts its calls), so "while a request is out" is a
+  // state the test creates: Enter three times and a different query typed meanwhile are ONE request; when the answer is in, the next Enter goes out.
+  test('Reference Search: Enter while a search is out sends nothing more, and the next one goes out when it is answered (T-133 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-search-once')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        const g = globalThis as unknown as { __searchCalls: string[]; __releaseSearch: () => void }
+        g.__searchCalls = []
+        const gate = new Promise<void>((resolve) => {
+          g.__releaseSearch = resolve
+        })
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async (_e, query: unknown) => {
+          g.__searchCalls.push(String(query))
+          if (g.__searchCalls.length === 1) await gate
+          return { query: String(query), provider: 'duckduckgo', results: [] }
+        })
+      })
+      const calls = (): Promise<string[]> => app.evaluate(() => (globalThis as unknown as { __searchCalls: string[] }).__searchCalls)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const searchButton = window.locator('.card', { has: input }).getByRole('button')
+
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      await expect(searchButton).toHaveText('Searching…')
+      await input.press('Enter')
+      await input.press('Enter')
+      await input.fill('a different query typed meanwhile')
+      await input.press('Enter')
+      await window.waitForTimeout(500)
+      expect(await calls(), 'one request for four presses').toEqual(['minimalist mountain photography'])
+
+      // The answer arrives: the panel is idle again, and the next Enter is a search.
+      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
+      await expect(searchButton).toHaveText('Search')
+      await expect(window.getByText('No results.')).toBeVisible()
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountain photography', 'a different query typed meanwhile'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
   /**
    * Reference Search's failure path, with the network removed by the test
    * itself rather than assumed absent.

@@ -73,3 +73,21 @@ export function confirmAudioClose(
   if (message === null) return true
   return ask(message)
 }
+
+/**
+ * T-133 (6): may Clean audio put the video's sound in Audio Studio now that the extraction is over?
+ *
+ * The first question is asked BEFORE a wait that can be minutes long, and the person is free to work in Audio Studio meanwhile. A different
+ * FILE is `replacedSince`'s business (ProjectIO); work tuned on the file already open is this: loading a sound resets the chain and drops the
+ * undo history, so what was tuned during the wait would be replaced with nothing to bring it back. `chainAsked` is the chain the person was
+ * asked about (every edit makes a new chain object): the same object means nothing new to lose, so they are not asked twice about work they
+ * already agreed to give up; a different one is asked about over its own list, with the same lead-in.
+ */
+export function confirmReplaceAfterWait(
+  chainAsked: ChainSpec,
+  chainNow: ChainSpec,
+  ask: (message: string) => boolean
+): boolean {
+  if (chainNow === chainAsked) return true
+  return confirmAudioClose(chainNow, ask, 'replace')
+}

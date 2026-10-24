@@ -4883,7 +4883,7 @@ IMG-PREC.
   with their e2e cases; `npm run verify`, `npm run test:media` and
   the FULL Playwright suite green before handback; no
   docs/TICKETS.md, package.json or lockfile edits.
-- **Status:** open (round 82)
+- **Status:** done (round 82 — see the Done entry)
 
 ---
 
@@ -5005,7 +5005,11 @@ IMG-PREC.
   recorded; (p) the partial-output mtime guard can mis-keep on an
   SMB share whose clock runs >2 s behind (ceiling noted in the file
   comment; a freshness flag for nextFreePath writers if it ever
-  matters); (q) Compile stays 30 fps (now disclosed) — following
+  matters) — T-133 (5) removed the slack from the SUCCESS path
+  (wroteOutput asks only for a non-empty regular file, and
+  extractFrame refuses a pre-existing target before the spawn), so
+  the letter now covers the DISCARD path alone, whose cost stays "a
+  leftover file, never a lost one"; (q) Compile stays 30 fps (now disclosed) — following
   the max source rate is the upgrade — and (sweep 16) the same
   ceiling holds for every built-in EXPORT preset: 60 fps
   gameplay is halved on the YouTube slot even after T-126 (21)
@@ -5305,6 +5309,54 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 82 — T-133, all 11 of the nineteenth sweep's verified
+findings, landed in the commit that carries this entry. Worked by
+one Sonnet in a fresh clone of d90c01b; 58 ledger mutations all
+killed and restored byte-identical, 29 reds (15 of them the new
+e2e cases proven red on a base build of the unchanged tree; seven
+early confounded mutation rows disclosed and re-run clean). The
+headline (item 1): a LIVE TAKE is now registered once, in
+lib/liveTake.ts, and every way off the Record screen asks the same
+question — the Home link, the "Open Audio Studio" toast action and
+both "Edit in Video Studio" toast actions; OK stops and saves the
+take where the person is, Cancel keeps recording, and the caller
+never navigates immediately; a wiring test holds the renderer's
+navigate() calls to a decided table. Toast text can no longer
+escape its card (overflowWrap: 'anywhere', measured red on base at
+228 px of overrun); clip names truncate by code point; the ranged
+caption burn-in gained the no-picture guard (PictureFrames +
+sticky stderr; 7 Layer 5 cases green on BOTH majors, replicated by
+the expediter personally; the "every runner" claims softened to
+the truth); wroteOutput asks only for a non-empty regular file and
+extractFrame refuses a pre-existing target before the spawn, so a
+slow-clocked share can no longer lose a good thumbnail (T-110 (p)
+narrowed to the discard path); Clean audio re-asks before
+replacing work tuned DURING the extraction (only when the chain
+changed since the first ask — the worker's right narrowing — and a
+decline keeps the tuning with a truthful toast); a held Enter or
+Space is guarded BY KEY until release (createHeldKeyGuard — the
+worker's improvement over the ticket's fixed window, with the
+window-mutant killed to prove the difference; covers the tour,
+the wizard and every Modal), and Space/? toggles ignore repeats
+while the nudge keys keep repeating; the reference search's
+single-flight guard lives in the store's search() so every caller
+shares it; the five undimmed disabled buttons are dimmed and the
+"every other disabled button" claims are now true; the waveform
+read's refusal names "a standard PCM WAV or MP3"; the doc
+corrections landed with three new docClaims pins. Found-not-fixed,
+ledgered: importDiagnostics.ts:142 still carries the old circular
+advice (one line + its pin — out of item 10's scope). Expedited
+personally: verify x2 (174/4738), test:media on 7.0.2 (336 passed
+| 13 skipped of 349), the whole Layer 5 file on 6.1.1 (329 passed
++ exactly the 7 known pins), build + FULL Playwright 387/387 on
+the expediter's run (the worker's one flake was the documented
+record.spec load flake, 5/5 standalone); the burn-in guard
+replicated on both real binaries; one independent mutation at a
+seam no ledger row names (mayLeaveLiveTake answering true on OK →
+the "the caller still does not navigate" case red → restored
+byte-identical, 5/5 green). Landed conflict-free onto its own
+base; the landed tree's gates are this entry's commit.
 
 Round 81 — T-132, all 14 of the eighteenth sweep's verified
 findings, landed in the commit that carries this entry. Worked by

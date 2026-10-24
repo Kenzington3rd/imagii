@@ -53,6 +53,14 @@ describe('isOverlayToggleKey', () => {
     expect(isOverlayToggleKey({ ...base, tagName: 'INPUT', inputType })).toBe(false)
   })
 
+  // T-133 (7b): the toggle ran on every auto-repeat of a held `?` (open, shut, open... at the keyboard's repeat rate: a flicker, and a dialog
+  // whose trap restores focus on every close).
+  it('toggles once for a held ?: the auto-repeat is not another press (T-133 (7b))', () => {
+    expect(isOverlayToggleKey({ ...base, repeat: false })).toBe(true)
+    expect(isOverlayToggleKey({ ...base, repeat: true })).toBe(false)
+    expect(isOverlayToggleKey({ ...base, repeat: true, overlayOpen: true, openModals: 1 }), 'nor does a repeat close it').toBe(false)
+  })
+
   it.each(['/', 'a', 'Escape', 'Enter'])('ignores %p', (key) => {
     expect(isOverlayToggleKey({ ...base, key })).toBe(false)
   })

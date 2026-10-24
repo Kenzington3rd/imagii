@@ -76,10 +76,12 @@ const NINE_SIXTEEN = { x: 0.3417, y: 0, w: 0.3167, h: 1 }
 
 describe('a thumbnail of a clip with no crop is the command it always was (T-130 (t))', () => {
   it('no crop, a null crop: the same argv, no probe, no filter', async () => {
-    for (const crop of [undefined, null]) {
+    for (const [i, crop] of [undefined, null].entries()) {
       spawned = []
-      await extractFrame('/tmp/in.mp4', 1.5, OUT(), crop)
-      expect(spawned).toEqual([['-y', '-ss', '1.500', '-i', '/tmp/in.mp4', '-frames:v', '1', '-q:v', '2', '-update', '1', OUT()]])
+      // T-133 (5): a thumbnail goes to a path nothing is at (the kit's folder is fresh), so each call has its own.
+      const out = path.join(scratch, 'thumbs', `thumb-${i}.jpg`)
+      await extractFrame('/tmp/in.mp4', 1.5, out, crop)
+      expect(spawned).toEqual([['-y', '-ss', '1.500', '-i', '/tmp/in.mp4', '-frames:v', '1', '-q:v', '2', '-update', '1', out]])
     }
     expect(probeCalls, 'the source was never probed: there is nothing to read its size for').toBe(0)
   })

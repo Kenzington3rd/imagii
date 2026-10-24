@@ -1460,6 +1460,52 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  // T-133 (7b): Space is a toggle, and a toggle is one decision per PRESS. The Player's and the Timeline's Space ran on every auto-repeat of a held
+  // key, so a held Space flipped play and pause at the keyboard's repeat rate (about 30 Hz: a stutter, and a stream of aborted play() calls). The
+  // nudge and frame-step keys repeat on purpose and are not touched. Playwright marks a keydown for a key that is already down as a repeat, which
+  // is what a held key does; an EVEN number of keydowns is what makes the old behavior visible (play, pause, play, pause: ends paused).
+  test('a held Space plays once, in the Player and on the Timeline; a held arrow still repeats (T-133 (7b))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('heldspace')
+    try {
+      expect(await videoState(window)).toMatchObject({ paused: true })
+      const hold = async (key: string, downs: number): Promise<void> => {
+        for (let i = 0; i < downs; i++) await window.keyboard.down(key)
+        await window.keyboard.up(key)
+      }
+
+      // The Player's column: four keydowns of one held Space are ONE press (the first), so the video is playing.
+      await window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+      await hold(' ', 4)
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000, message: 'a held Space started it, once' }).toBe(false)
+      await window.waitForTimeout(400)
+      expect((await videoState(window)).paused, 'and the repeats did not stop it again').toBe(false)
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+
+      // The Timeline: click the track (the slider takes the keyboard), hold Space.
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      const at20 = await trackPointAt(window, 0.2)
+      await window.mouse.click(at20.x, at20.y)
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await hold(' ', 4)
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000, message: 'a held Space on the track played it, once' }).toBe(false)
+      await window.waitForTimeout(400)
+      expect((await videoState(window)).paused).toBe(false)
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+
+      // The keys that repeat on purpose still do: a held ArrowRight on the slider keeps nudging (0.1 s each) past its first press.
+      const before = (await videoState(window)).t
+      await hold('ArrowRight', 4)
+      await expect
+        .poll(async () => (await videoState(window)).t - before, { timeout: 10_000, message: 'four keydowns of a held arrow moved the playhead four steps' })
+        .toBeGreaterThan(0.25)
+    } finally {
+      await app.close()
+    }
+  })
+
   // T-120 (14): the Timeline's I and O marked the store's `currentTime`, which is written on `timeupdate` (about every
   // 250 ms during playback), while the Player's own I and O read the element. The store's number is made stale on
   // purpose here (the element's timeupdate is stopped before React hears it), so the two readings are a second

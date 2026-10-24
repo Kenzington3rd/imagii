@@ -9,7 +9,10 @@
  *  - the range is past the last frame of a file whose SOUND runs longer than its picture: the output is an audio-only mp4, and stderr says
  *    nothing of the kind. The one fact that holds in both is ffmpeg's own progress block: `frame=0` in the last of them.
  *
- * Every runner that writes a video reads both, and a legitimate 10-20 ms segment (one frame) stays a success.
+ * Every runner that cuts a video out of a RANGE of a source reads both - Export, Reframe, a compilation's segments, and (T-133 (4)) the caption
+ * burn-in - and a legitimate 10-20 ms segment (one frame) stays a success. (The Clip Kit's thumbnails ask `wroteOutput` instead: a JPEG has no
+ * frame count; and a GIF of such a range already fails, exit 234, measured on both majors.) The burn-in was the one writer left out until T-133: it
+ * said "Captions burned in" over an audio-only file.
  */
 
 /**
@@ -59,7 +62,9 @@ export function clipNameForSentence(seg: { name?: unknown } | undefined): string
   if (typeof seg?.name !== 'string') return null
   const flat = seg.name.replace(/\s+/g, ' ').trim()
   if (flat.length === 0) return null
-  return flat.length > CLIP_NAME_MAX ? `${flat.slice(0, CLIP_NAME_MAX - 1).trimEnd()}…` : flat
+  // T-133 (3): by code point, not UTF-16 unit - a unit cut can keep the first half of a glyph outside the BMP (an emoji) before the ellipsis.
+  const glyphs = Array.from(flat)
+  return glyphs.length > CLIP_NAME_MAX ? `${glyphs.slice(0, CLIP_NAME_MAX - 1).join('').trimEnd()}…` : flat
 }
 
 /** Export's refusal (T-132 (4)): the clip the person built, by its name; the cause is the clip's range (a restored project's video may be shorter now). */
@@ -72,6 +77,10 @@ export function exportNoPictureMessage(clip: { name?: unknown } | undefined): st
 /** Reframe's refusal (T-132 (4)): the 9:16 file is made from a range, and the range has no picture. */
 export const REFRAME_NO_PICTURE_MESSAGE =
   "This part of the video has no picture (check the clip's start and end), so no 9:16 file was saved."
+
+/** The ranged caption burn-in's refusal (T-133 (4)): the captioned file is made from a range, and the range has no picture. */
+export const BURN_IN_NO_PICTURE_MESSAGE =
+  "This part of the video has no picture (check the clip's start and end), so no captioned video was saved."
 
 /** Clip Kit's thumbnail refusal (T-132 (4)): a frame is taken at a moment, and the video has no picture at that moment. */
 export const FRAME_NO_PICTURE_MESSAGE =

@@ -149,7 +149,11 @@ press **Esc** or click **Stop**. Recordings are written at up to 8 Mbps
 When the file is saved, the toast offers **Show in folder** and **Edit in Video
 Studio**. **Edit in Video Studio** loads the recording into Video Studio; if you
 are already editing a video there it asks first, because loading replaces that video
-and its clips and edits (it asks nothing when Video Studio is empty).
+and its clips and edits (it asks nothing when Video Studio is empty). The toast stays up
+for 8 seconds, and a new take can already be running under it: while a take is running,
+every way off the Record screen (the **Home** link, and the toasts' **Edit in Video Studio**
+and **Open Audio Studio**) asks "A recording is in progress. Stop and save it before
+leaving?" first. **OK** stops the take and saves it where you are; **Cancel** keeps recording.
 
 Your webcam corner and your MP4 choice are remembered for next time. If no
 screens or windows turn up, the panel says so — grant screen recording
@@ -396,7 +400,8 @@ extracted, imagii says it is still working on the last one and leaves the new on
 Audio Studio opens sound of any length, a whole stream recording included. The studio
 opens on the file at once, and while imagii reads the sound to draw its waveform, the
 box where the waveform will be says how far it has got ("Drawing the waveform… 42%").
-A long recording takes a few seconds; the cleanup and level panels work meanwhile, and
+A long recording takes from a few seconds up to a few tens of seconds (the longer the
+recording, the longer the read); the cleanup and level panels work meanwhile, and
 **Close** stops the reading. (A video's sound is pulled out to a temporary file first,
 about 0.7 GB for each hour; see "Where your data lives".) If imagii cannot read a file's
 sound at all (a damaged file, or a format it cannot read), it says so and lets go of the
@@ -441,7 +446,12 @@ never called loaded.
   meanwhile. When it is done, imagii opens Audio Studio only if you are still in Video
   Studio. If you went somewhere else, even into a recording that is running, it
   leaves you where you are, loads the sound in Audio Studio, and a message offers
-  **Open Audio Studio**.
+  **Open Audio Studio** (from a recording that is running, that button asks "Stop and
+  save it before leaving?" first, as the **Home** link does, and **Cancel** keeps
+  recording). If you opened another file in Audio Studio while the sound was being
+  pulled out, imagii leaves it alone and says so; if you tuned the file you already had
+  open, imagii asks again ("Replace the audio you're editing?") before it replaces your
+  work, and **Cancel** keeps it.
 - Drag across the waveform to mark a part to remove. It comes out when you
   export; click a mark to put it back. `Ctrl+Z` / `Ctrl+Y` step back and
   forward through the cleanup chain.
@@ -510,7 +520,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
 - **Reference Search** — search images. SafeSearch is always on (strict):
   DuckDuckGo does the filtering, and imagii doesn't scan images itself. Reference
   Search is one of the two features that go online; the other is the one-time
-  caption model download. Hover a result and click **Save** to add it to the
+  caption model download. Press **Enter** or click **Search**; while a search is
+  running another does nothing, so a second press never sends a second request. Hover a result and click **Save** to add it to the
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
 - **Mood Boards** — your saved boards. Hover an item and click **→ Canvas**
