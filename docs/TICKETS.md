@@ -4964,6 +4964,191 @@ IMG-PREC.
 
 ---
 
+## T-135 — sweep-21 fixes (round 84)
+
+- **Spec:** the twenty-first sweep's verified findings — each
+  confirmed by the expediter against source, with the measured
+  claims replicated on real binaries (both majors where the finding
+  touches ffmpeg) and the layout claims measured in the built app by
+  the reviewers. Clean lenses this sweep: privacy, electron, ffmpeg.
+  14 items. Most are pre-existing whole-tree finds the earlier
+  sweeps never reached; the wave's own delta contributed only items
+  5, 6 and 14.
+  1. **[MED] Leaving a studio mid-job loses the job's progress and
+     Cancel while main keeps working.** Job rows and busy flags are
+     component state (`ExportPanel.tsx:186-187`, and the same
+     pattern in ClipKitButton, GifPanel, CompilationPanel,
+     ReframePanel, PipPanel and audio ExportDialog), so a route
+     change unmounts them; the panel comes back idle with Export
+     enabled, a retry hits main's "An export is already running.
+     Wait for it to finish, or cancel it, then try again." with no
+     Cancel rendered anywhere — against USER_GUIDE:310-312's
+     promise. The same remount re-arms "Clean audio"
+     (`extractingAudio` useState, VideoStudio.tsx:45; `ipc/audio.ts`
+     has no single-flight — a second press runs a second concurrent
+     extraction whose completions cross-talk) and re-enables
+     "Scan VOD" (a second scan overwrites `activeScan`,
+     highlights.ts:119, orphaning the first from Cancel and the
+     quit sweep). Fix direction: move batch/job state the panels
+     render into module stores (the videoStore pattern) OR have a
+     mounting panel ask main for the live batch (a small
+     `video:exportStatus`-style query) and render rows + Cancel
+     from it; give the extraction a single-flight guard at the IPC
+     handler (refuse a second start, name the running one) and make
+     a second Scan VOD press impossible while one runs (store flag,
+     not component flag). Acceptance: an e2e that starts an export,
+     navigates Home and back, and still sees progress + Cancel; a
+     unit/e2e proving the second extraction is refused.
+  2. **[MED] A video the preview cannot decode is a silent dead
+     end.** The `<video>` element has no error listener
+     (Player.tsx:324-343) and `togglePlay` flips to Pause
+     optimistically (`void v.play()`, :203-213); conversion is
+     extension-only (mediaFormats.ts), so an HEVC/10-bit/ProRes
+     file probes fine, toasts "Video loaded", and plays black with
+     no sentence — while README.md:163 says these "should work".
+     The audio side already has PLAYBACK_ERROR_MESSAGE. Fix
+     direction: an `onError` state on the player naming the truth
+     ("imagii can't preview this video's picture format — trimming,
+     scan and export still work") with an action that makes a
+     preview copy through the existing convert path; `togglePlay`
+     follows the `play()` promise instead of assuming success;
+     narrow the README sentence to what the preview actually
+     decodes vs what export accepts. e2e: a fabricated unplayable
+     source (stub the element error in the harness if a real
+     undecodable fixture is impractical) asserts the sentence and
+     that export stays reachable.
+  3. **[MED] The chat spike finder never merges neighbouring
+     buckets.** `findPeaks` stores a PADDED `bucketStart`
+     (`max(0, k - padSec)`, ChatHighlightPanel.tsx:46) and compares
+     the next unpadded key against it (`k - last.bucketStart <
+     bucketSec * 2`, :41); with the defaults (bucket 10, pad 15)
+     adjacent hype buckets give 25 < 20 = false, so one 30 s chat
+     explosion becomes three 40 s rows overlapping by 30 s, and the
+     12-row cap fills with near-duplicates; a merged group's window
+     also ignores its extra buckets (`end = bucketStart + bucketSec
+     + 2*pad`, :104). Fix direction: track the unpadded `firstKey`
+     and `endKey`, merge on `k - endKey <= bucketSec` (bridge
+     exactly adjacent buckets), window = `firstKey - pad .. endKey
+     + bucketSec + pad`; extract the helper to `src/shared/` as a
+     pure function with unit tests (IMG-PREC), and an e2e fixture
+     with a three-bucket spike that yields ONE row.
+  4. **[LOW] Derived results die when the studio is left,**
+     including via its own Clean audio button: scan
+     candidates/progress, the pasted chat log and its spikes, and
+     the transcript preview `segments` are all useState
+     (HighlightPanel.tsx:60-68, ChatHighlightPanel.tsx:62-74,
+     CaptionsPanel.tsx:47); a scan finishing while away toasts to
+     an unmounted panel. Fix direction: hold scan candidates, chat
+     text/spikes and the transcript preview in the video store
+     keyed by (or reset with) `source.filePath` — `loadSource`
+     already resets the store, which keeps the lifetime right.
+     e2e: scan, leave, return, candidates still listed.
+  5. **[LOW] The corrected-query fix is Enter-only, and the page
+     can show a grid its input does not name.** The Search button
+     is `disabled={loading}` (ReferencePanel.tsx:87) so a pointer
+     or voice-control user cannot send a correction mid-flight
+     (the store now accepts it); and `query` is panel-local
+     (ReferencePanel.tsx:19) while `searchResponse` is store state,
+     so a tab swap to Mood Boards and back shows the grid over a
+     blank input — the exact state STYLE_GUIDE:269-272 calls a
+     defect. Fix direction: expose the in-flight/answered query
+     from the store; disable the button only when
+     `loading && typed === inFlightQuery` (the store's same-query
+     refusal still backstops a double-click); seed the input from
+     the store on mount. e2e: correct a query BY CLICK mid-flight;
+     tab away and back, the input names the grid.
+  6. **[LOW] SafeZoneWarningModal's zone lines still scroll
+     sideways** — T-134 (5) capped the clip-name span only; each
+     zone line is a plain div embedding `preset.label`
+     (= the custom preset's name, presets.ts:167), measured at
+     scrollWidth 474 (60-char name) / 977 (pre-existing 80-char
+     name) vs clientWidth 406. Fix: the same `truncate` +
+     `title` (or `[overflow-wrap:anywhere]`) on the zone line;
+     extend the existing layout case.
+  7. **[LOW] The Clear-transcripts confirm overclaims:** "…including
+     the one for the video you have open" renders unconditionally
+     (CaptionsPanel.tsx:674-675) while the count is folder-wide and
+     the open video may have none. Fix: append ", if it has one"
+     or branch on whether the open video has a transcript; update
+     the copy pin.
+  8. **[LOW] Board-name writes fail silently.** Main caps a board
+     name at 200 and throws (ipc/search.ts:29,78); neither input
+     has a maxLength (MoodBoardPanel, NameDialog) and
+     create/rename/delete have no catch; `createBoardAndSave`
+     closes the dialog (`setPendingResult(null)`) BEFORE the await,
+     so a refused first-save silently drops the picture being
+     saved; CustomPresetManager's save/delete are also catchless
+     (the audio PresetPanel has had the T-90 catch). Fix:
+     `maxLength={200}` on both inputs; wrap the writes in
+     `reportFailure`; keep `pendingResult` until the save lands.
+     Unit/e2e: a refused create reports and keeps the dialog's
+     work.
+  9. **[LOW] A project/autosave open replaces a sound opened during
+     the video's wait.** The T-113 `replacedSince(heldBefore, …)`
+     guard lives only in `extractAgain` (ProjectIO.ts:441-448); the
+     fromVideo-scratch and plain-audio load closures (:460-471)
+     call `loadSource` unguarded, against the rule's own comment
+     (:428-430) — executed in a scratch repro (deferred convert;
+     the person's sound was replaced, `skipped` stayed empty). Fix:
+     the same one-line guard at the top of both closures (counting
+     the skip in `skipped`), red-first test for the plain path
+     (existing tests cover only `extractedFromVideo`).
+  10. **[LOW] An unknown preset id slips validation and kills
+     Export silently.** `validateClipRequiredFields` checks
+     `selectedPresets` entries only as strings
+     (projectValidation.ts:166-168); ExportPanel:58 then reads
+     `PLATFORM_INFO[id]` → `findSafeZoneIssues`/`runExportQueue`
+     throw and `void startExport()` rejects unhandled (executed) —
+     a hand-edited project, or one from a newer build with a
+     preset this build lacks. Fix: drop ids not in `PLATFORM_IDS`
+     (shared already) during validation — dropping, not rejecting,
+     keeps older builds opening newer projects; unit test both.
+  11. **[LOW] A second track with no sound stream fails late and
+     blames the wrong file.** Nothing probes the second track
+     (SecondaryTrackPanel accepts any path; process.ts:147 probes
+     only the primary); measured on BOTH majors: the `[1:a]`
+     reference exits 234 with "matches no streams", which matches
+     no KNOWN_CAUSES pattern → the generic source/disk sentence,
+     after a minutes-long measure pass when Even volume is on.
+     Fix: `probeAudio(secondary.filePath)` at the top of
+     exportAudio (and ideally at add time) with its own sentence
+     ("The second track has no sound in it. Remove it or pick
+     another file."); Layer 5 case on both majors (IMG-PREC).
+  12. **[LOW] An all-cut chain exports a FALSE SUCCESS.** Measured
+     on BOTH majors: cutting everything yields exit 0 and a
+     78-byte header-only file (wav AND the aac/mp4 re-attach
+     shape) — "Cleaned audio exported" over nothing.
+     `writtenSeconds` is already computed (process.ts:158) and
+     never checked; the audio path has no empty-output guard
+     (video got T-131/T-132's). Fix: refuse before spawning when
+     `keptDurationSec` is under ~0.05 s ("Everything is cut out.
+     Click a mark to put a part back.", T-84 voice); Layer 5 case
+     pinning the exit-0-empty shape on both majors (IMG-PREC).
+  13. **[LOW] `sendToCanvas` navigates unconditionally after an
+     await** (MoodBoardPanel.tsx:34-47; the awaited image load can
+     be a network fetch when the tile fell back to the remote URL)
+     — the T-134 (1) class at one more site, blessed by the same
+     click-time premise the Restore fix refuted. Fix: navigate
+     only `if (currentRoute() === '/references')` (the toast
+     already reports the add); correct the wiring-table row; unit
+     or e2e per the Restore pattern.
+  14. **[LOW, docs] Truth corrections:** the stale comment at
+     tests/e2e/home-chrome.spec.ts:1226 still says Restore's label
+     changes "while ANY of the banner's actions runs: it is one
+     busy flag" — false since T-134 (7) (the tolerant regex hides
+     it); reword to the split-flag truth. (The T-134 Done entry's
+     matching over-claim in this file is corrected by the
+     expediter in the commit that carries this ticket.)
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 11 and 12 are ffmpeg
+  error-path changes and take both-majors Layer 5 (IMG-PREC); items
+  1, 2, 4, 5 and 6 land with their e2e cases; `npm run verify`,
+  `npm run test:media` and the FULL Playwright suite green before
+  handback; no docs/TICKETS.md, package.json or lockfile edits.
+- **Status:** open (round 84)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -5383,6 +5568,30 @@ IMG-PREC.
   only through a hostile project file plus a user-initiated burn;
   the only output is a video at a user-chosen path, no network);
   align the confinement.
+  New letters from sweep 21 (round 84 adjudication): (bd) Record
+  gives no sign the mic is live or muted — a hardware-muted or
+  wrong device records a silent take with no warning
+  (`watchMicEnd` listens only for `ended`); candidate: reuse the
+  VolumeMeter's AnalyserNode on the Audio card and REC header, and
+  treat a `mute` event like `ended`; (be) Reframe's
+  Left/Center/Right strip cannot be previewed before rendering
+  (`stripCrop` lives in main only) — candidate: move the math to
+  `src/shared/` and draw the chosen strip on the Output preview
+  (separate from (av), which is the strip's geometry); (bf) the
+  DuckDuckGo `net.fetch` has no timeout, so a hung newest request
+  keeps the search panel busy until a different query is sent —
+  noted by two sweeps; candidate: an AbortSignal.timeout with the
+  T-30 outage sentence; (bg) the autosave banner's "Later" label
+  over-promises — the offered snapshot survives only until the
+  next session's first autosave write (USER_GUIDE documents the
+  behavior; the label does not); candidate: "Not now" or a
+  USER_GUIDE-matching tooltip; (bh) ffmpeg 7.x measures `-to` per
+  stream (measured: audio ending 5.234 s on a 5 s range when the
+  stream starts at 0.256 s; 6.1.1 cuts at 5.000 s) — invisible
+  today because the shipped win32 binary is 6.1.1, but a tripwire
+  if the bundled binary ever moves majors; candidate: a Layer 5
+  pin on the range end per major, or `-t` arithmetic instead of
+  `-to`.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
@@ -5424,8 +5633,12 @@ with a title (input capped at 60; SafeZoneWarningModal's clipName
 row got the same cap); the IC native-dialog inventory is refreshed
 and a self-checking docClaims scan — the worker's second judged
 deviation, accepted — keeps its rows pointing at real lines; Clear
-and Restore no longer share a busy flag, so Clear reads "Clearing…"
-and Restore keeps its label. Expedited personally: verify x2
+and Restore no longer share a busy flag: each keeps its own static
+label and both dim while either runs. (Corrected in round 84: this
+entry first claimed a "Clearing…" label that was never built —
+three sweep-21 reviewers caught the over-claim; the behavior
+itself, split flags with Restore alone relabelling, is as the
+ticket allowed and the wiring pin holds.) Expedited personally: verify x2
 (174/4751), test:media on 7.0.2 (337 passed | 13 skipped of 350),
 the touched T-132 (4) block on 6.1.1 (10/10), build + FULL
 Playwright 392/392 with zero flakes on both the worker's and the
