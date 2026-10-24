@@ -1569,6 +1569,61 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-132 (6): focus is put on Next after every step, and Enter on a focused button is its click on keydown - which auto-repeats while the key
+  // is held. Each repeat was a click on the next step's Next, so a held Enter walked the whole tour to Done in a second, and Done persists
+  // "seen" (the tour never came back). The Fix wizard has had the guard since T-120; the tour's window keydown holds a repeat the same way.
+  // Playwright marks a keydown for a key that is already down as a repeat, which is what a held key does.
+  test('Video tutorial: a held Enter steps once, a held arrow steps once, and the tour is neither finished nor marked seen (T-132 (6))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-held')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-held.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { audio: true, image: true, ai: true } })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-held.mp4')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const total = (await stepsWithATarget(window, videoTutorial)).length
+      const counter = (n: number): ReturnType<Page['getByText']> => window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      // Focus is on Next (the tour puts it there on every step).
+      await expect(window.getByRole('button', { name: 'Next' })).toBeFocused()
+
+      // Hold Enter: the first keydown is Next's own click (step 2) ...
+      await window.keyboard.down('Enter')
+      await expect(counter(2)).toBeVisible()
+      // ... and the auto-repeats are not more decisions. Without the guard each one clicked the new step's Next.
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(counter(2), 'six repeats walked the tour on').toBeVisible()
+      expect(await currentStep(window)).toBe(2)
+
+      // The same for a held ArrowRight (the window-level binding).
+      await window.keyboard.down('ArrowRight')
+      await expect(counter(3)).toBeVisible()
+      for (let i = 0; i < 6; i++) await window.keyboard.down('ArrowRight')
+      await window.keyboard.up('ArrowRight')
+      await expect(counter(3), 'six repeats of the arrow walked the tour on').toBeVisible()
+
+      // A fresh press is still a decision, and the tour is not finished: it was never marked seen.
+      await window.keyboard.press('Enter')
+      await expect(counter(4)).toBeVisible()
+      await window.waitForTimeout(500)
+      expect(readConfig(userDataDir).tutorialSeen?.video, 'a held key did not finish the tour').not.toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('Video tutorial: the left/right coachmark stays inside a 1280x800 window and its buttons are clickable (T-34)', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()

@@ -391,6 +391,23 @@ export function isWaveformPeaks(value: unknown): value is WaveformPeaks {
 }
 
 /**
+ * T-132 (5): the loudest sample of a peaks answer, in EITHER half - the number wavesurfer is told to scale the whole waveform by.
+ * Its `normalize` option finds that number itself, but in channel 0 (the highs) alone, so a take whose lows run louder than its highs
+ * (a mic with a DC offset, an asymmetric voice) was scaled to the quieter half and its bottom bars were drawn past the canvas edge.
+ * 0 for silence or for nothing, which wavesurfer reads as "no fixed peak" and scales as it always did.
+ */
+export function peaksMaxMagnitude(peaks: [number[], number[]]): number {
+  let max = 0
+  for (const half of peaks) {
+    for (const value of half) {
+      const magnitude = Math.abs(value)
+      if (magnitude > max) max = magnitude
+    }
+  }
+  return max
+}
+
+/**
  * The refusal at load when main cannot read a file's sound to draw its waveform (T-129, T-84 voice): ffmpeg could not decode
  * it. The export reads the sound the same way, so a file this refuses could not be cleaned either; the studio never holds it.
  * Every route to `loadSource` (the importer, Clean audio, a restored project) shows it as written (`userFacingError`).
@@ -399,9 +416,10 @@ export const WAVEFORM_READ_FAILED =
   "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as WAV or MP3 and try again."
 
 /**
- * What the person reads when the PLAYER cannot play a file that opened (T-123 (14), reworded by T-129): the waveform is drawn
- * from main's peaks now, so an ADPCM WAV (ffmpeg reads it, Chromium's media element does not) shows its waveform, and what
- * fails is playback. The advice is the importer's own for a format imagii cannot read.
+ * What the person reads when the PLAYER cannot play a file that opened (T-123 (14), reworded by T-129 and T-132 (10)): the waveform
+ * is drawn from main's peaks, so an ADPCM WAV (ffmpeg reads it, Chromium's media element does not) shows its waveform, and what fails
+ * is playback alone. The sentence says what still works (the person's next worry is whether the file is lost), and the advice is not
+ * circular for the file that fails here: that file already IS a WAV, so a WAV owner is told which kind plays - "a standard PCM WAV".
  */
 export const PLAYBACK_ERROR_MESSAGE =
-  "imagii can't play this file here. It may be damaged or in a format the player can't read. Re-export it as WAV or MP3 and try again."
+  "imagii can't play this file here, but the waveform, cuts and export still work on it. To hear it, re-export it as a standard PCM WAV or MP3."

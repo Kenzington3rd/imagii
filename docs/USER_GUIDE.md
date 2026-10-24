@@ -143,8 +143,8 @@ the message that says the file is saved. Stop and start again if the voice matte
 While it records you can minimize imagii: the take, and the webcam picture in it,
 keep going. **Esc** stops the recording only while imagii is the window you are
 using, so if you are in a game, switch back to imagii first (Alt+Tab) and then
-press **Esc** or click **Stop**. Recordings use up to 8 Mbps (the top export
-preset's rate), so a take can use about 3.6 GB of disk per hour, and saving needs room for a second copy of it.
+press **Esc** or click **Stop**. Recordings are written at up to 8 Mbps
+(a ceiling of their own), so a take can use about 3.6 GB of disk per hour, and saving needs room for a second copy of it.
 
 When the file is saved, the toast offers **Show in folder** and **Edit in Video
 Studio**. **Edit in Video Studio** loads the recording into Video Studio; if you
@@ -213,7 +213,9 @@ second alone.)
   there. Each row of the queue shows the file it wrote — **name (2).mp4** when the
   name was taken. Every platform export is encoded at 30 fps, except **YouTube 1080p60**,
   which is 1920×1080 at 60 fps and 12 Mbps (YouTube's own recommendation for 1080p60) for a recording
-  made at 60 (a custom preset uses its own frame rate), and each
+  made at 60 (a custom preset uses its own frame rate; picking a platform in **Base on**
+  fills in that platform's size, frame rate and bitrates, so one based on YouTube
+  1080p60 starts at 60 fps and 12M), and each
   platform's card shows its size and rate (**1920×1080 · 30 fps**).
   Add a **watermark** by typing your handle in the **Watermark** field and
   choosing a corner. Your handle and corner are saved when you export, and they
@@ -289,7 +291,9 @@ second alone.)
   else. The bottom of the panel says how many are kept, and **Clear saved
   transcripts** deletes them all after asking (it goes back to "not
   transcribed" for the video you have open; an `.srt` you saved yourself and
-  captions already burned into a video are not touched). You can also delete
+  captions already burned into a video are not touched). If a transcript is open
+  in another program, that one stays: imagii says how many it cleared, with a
+  warning, and clearing again after you close the program takes the rest. You can also delete
   them in that folder whenever you like.
 - **Color & motion**, **Export as GIF**, **Compile clips**, and
   **Picture-in-picture composite** are the other panels. The player does not
@@ -396,8 +400,11 @@ A long recording takes a few seconds; the cleanup and level panels work meanwhil
 **Close** stops the reading. (A video's sound is pulled out to a temporary file first,
 about 0.7 GB for each hour; see "Where your data lives".) If imagii cannot read a file's
 sound at all (a damaged file, or a format it cannot read), it says so and lets go of the
-file; if it can draw the waveform but the player cannot play the file here, it says that
-instead.
+file; if it can draw the waveform but the player cannot play the file here (an ADPCM
+`.wav`, for example), it says that instead, and the waveform, your cuts and **Export** still
+work on it. To hear it, re-export it as a standard PCM WAV or MP3. imagii says **Loaded**,
+and adds the file to **Recent**, once its waveform is drawn: a file it then cannot read is
+never called loaded.
 
 - **Help me fix this** runs a short wizard that picks cleanup settings for you
   if you're not sure.
@@ -429,7 +436,12 @@ instead.
   mains)**). **Start over** goes back to its first question; **Close** leaves it.
 - **Clean audio** in Video Studio replaces whatever Audio Studio holds. If you
   have tuned it, imagii asks first ("Replace the audio you're editing?") and
-  lists what would be discarded, the same list as closing the audio gives.
+  lists what would be discarded, the same list as closing the audio gives. Pulling the
+  sound out of a long recording takes a while, and you are free to go elsewhere
+  meanwhile. When it is done, imagii opens Audio Studio only if you are still in Video
+  Studio. If you went somewhere else, even into a recording that is running, it
+  leaves you where you are, loads the sound in Audio Studio, and a message offers
+  **Open Audio Studio**.
 - Drag across the waveform to mark a part to remove. It comes out when you
   export; click a mark to put it back. `Ctrl+Z` / `Ctrl+Y` step back and
   forward through the cleanup chain.

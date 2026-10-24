@@ -318,7 +318,8 @@ export interface ClearTranscriptsResult {
 
 /**
  * The toast after "Clear saved transcripts". `error` is a clear that removed nothing because every file refused; one that removed some and not
- * all is a plain toast that says how far it got and what to do. A press that found nothing (the count was stale) says that, as a result and not
+ * all says how far it got and what to do, and the panel draws it as a WARNING (the warning icon, not a green tick - T-132 (14)): `error` stays
+ * false for it, because it is not a failure, and `failed > 0` on the result is what tells the panel it was not complete. A press that found nothing (the count was stale) says that, as a result and not
  * an error. The verb is the button's, in the past tense (BRANDING, "Destruction verbs").
  */
 export function clearedTranscriptsMessage(r: ClearTranscriptsResult): { text: string; error: boolean } {

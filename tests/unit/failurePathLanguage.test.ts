@@ -405,7 +405,8 @@ describe('a settings write is never a bare promise (T-128 (4), T-110 (x))', () =
     const helper = FILES.find((f) => f.rel === 'lib/persistSetting.ts')
     expect(helper, 'lib/persistSetting.ts exists').toBeDefined()
     expect(helper?.text).toMatch(/window\.api\.settings\.set\(/)
-    expect(helper?.text).toMatch(/reportFailure\(err, \{ failed: "Couldn't save your settings\." \}\)/)
+    // T-132 (13): with the one fixed toast id, so the writes one gesture makes show one card.
+    expect(helper?.text).toMatch(/reportFailure\(err, \{ failed: "Couldn't save your settings\.", id: SETTINGS_FAILED_TOAST_ID \}\)/)
     expect(bareSettingsWrites((helper as (typeof FILES)[number]).ast)).toEqual([])
   })
 

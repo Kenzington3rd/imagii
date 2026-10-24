@@ -56,8 +56,10 @@ interface AudioStudioState {
    *  (an AIFF, a WMA) makes it `extractedFrom` (T-125 (7)) - the one decision, `isPicture`, made here for every caller.
    *  `hasVideo` (T-126 (7)) is what the extraction's probe found in the file's STREAMS: true or false decides, and only null or
    *  undefined (the probe could not read the file, or nobody asked) leaves it to the extension.
-   *  T-129: it resolves once the file is OPEN; its waveform is drawn after that, by main's peaks job (`drawing`, then `waveform`). */
-  loadSource: (filePath: string, extractedFromPath?: string, convertedFrom?: string, hasVideo?: boolean | null) => Promise<void>
+   *  T-129: it resolves once the file is OPEN; its waveform is drawn after that, by main's peaks job (`drawing`, then `waveform`).
+   *  T-132 (11): and it resolves WITH the source it opened, so a caller can ask `waveformArrived(source)` about exactly that file even if
+   *  main has refused it (and the studio let go of it) by the time the caller looks. */
+  loadSource: (filePath: string, extractedFromPath?: string, convertedFrom?: string, hasVideo?: boolean | null) => Promise<AudioSource>
   clearSource: () => void
   setCurrentTime: (t: number) => void
 
@@ -170,6 +172,7 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
         currentTime: 0
       })
       void drawWaveform(source, jobId)
+      return source
     } finally {
       set({ loading: false })
     }
@@ -242,3 +245,24 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
   canUndo: () => get().history.past.length > 0,
   canRedo: () => get().history.future.length > 0
 }))
+
+/**
+ * T-132 (11): did `source`'s waveform come, or did the studio let go of the file first? `loadSource` resolves once the file is OPEN and
+ * its waveform is read after that (T-129), so "the file opened" no longer means "main could read it": an unknown WAV format opens, then is
+ * refused when the peaks job fails, and the importer's green "Loaded" and its Recent entry had already landed. Whoever celebrates a file
+ * (the importer, the project open) asks this first: true when this exact source's waveform is in the store, false once the studio no
+ * longer holds it (the refusal, Close, another file opened). Never rejects; resolves at once when the answer is already known.
+ */
+export function waveformArrived(source: AudioSource): Promise<boolean> {
+  const settled = (state: AudioStudioState): boolean | null => (state.source !== source ? false : state.waveform ? true : null)
+  const now = settled(useAudioStore.getState())
+  if (now !== null) return Promise.resolve(now)
+  return new Promise((resolve) => {
+    const off = useAudioStore.subscribe((state) => {
+      const verdict = settled(state)
+      if (verdict === null) return
+      off()
+      resolve(verdict)
+    })
+  })
+}

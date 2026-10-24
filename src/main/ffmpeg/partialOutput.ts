@@ -43,3 +43,18 @@ export async function discardPartialOutput(
     // and the failure being reported is the one the user needs to hear about.
   }
 }
+
+/**
+ * T-132 (4): did this run leave a real file at `outputPath`? True for a non-empty regular file whose mtime is at or after the spawn (the
+ * same rule `discardPartialOutput` uses for "ours", with the same slack): a file from an earlier run of the same name is not this run's
+ * picture, and neither is an empty one. `extractFrame` asks it after an exit 0, because `-ss` past the last frame exits 0 and writes
+ * nothing.
+ */
+export async function wroteOutput(outputPath: string, spawnedAt: number): Promise<boolean> {
+  try {
+    const info = await stat(outputPath)
+    return info.isFile() && info.size > 0 && info.mtimeMs >= spawnedAt - MTIME_SLACK_MS
+  } catch {
+    return false
+  }
+}

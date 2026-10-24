@@ -1749,6 +1749,114 @@ test.describe('CaptionsPanel', () => {
     }
   })
 
+  // T-132 (3): the "Clear saved transcripts" button was the only single-label button in the app that wrapped its words onto two lines, at every
+  // window up to 1920 px (measured in the built app): its row was a non-wrapping flex line holding the count sentence and the button, in a card
+  // 295-345 px wide. The row wraps by item now (the button drops whole to a second line) and the button's label never wraps. T-123's pattern: the
+  // geometry at the window a person gets and at the smallest one.
+  test('the Clear saved transcripts row keeps its label on one line and inside its card at the default window and the minimum (T-132 (3))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('captionsrow')
+    const { app, window, userDataDir } = studio
+    try {
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      for (const name of ['one.srt', 'two.srt', 'three.srt']) writeFileSync(path.join(captionsDir, name), '1\n00:00:00,000 --> 00:00:01,000\nhello\n', 'utf8')
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      const clear = card.getByRole('button', { name: 'Clear saved transcripts' })
+      await expect(clear, 'the row is there (three transcripts are kept)').toBeVisible()
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        await check(() => expectOneLine(clear, `the Clear saved transcripts button at ${where}`))
+        await check(() => expectOneLine(card.getByText('3 saved transcripts kept on this computer.'), `the count sentence at ${where}`))
+        await check(() => expectControlsWhole(card, clear, `the Clear saved transcripts button at ${where}`))
+        await check(() => expectNoHorizontalOverflow(card, `the Captions card at ${where}`))
+      }
+      expect(problems, 'the label stays whole at both window sizes').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-132 (14): a clear that removed some transcripts and not all (the rest are open in another program) is documented as something other than
+  // a success (`clearedTranscriptsMessage`: "how far it got and what to do"), and the panel drew it with `toast.success`: a green tick over
+  // "Cleared 2 of 3 saved transcripts. The rest are open in another program; close it and clear again." Windows is where a file can be held
+  // open; here main's handler answers the partial result a held file produces, and everything from the click to the toast is the real app's.
+  test('a clear that got part of the way is a warning, not a green tick; a whole one is still a success (T-132 (14))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('captionspartial')
+    const { app, window, userDataDir } = studio
+    try {
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      for (const name of ['one.srt', 'two.srt', 'three.srt']) writeFileSync(path.join(captionsDir, name), '1\n00:00:00,000 --> 00:00:01,000\nhello\n', 'utf8')
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await expect(card.getByText('3 saved transcripts kept on this computer.')).toBeVisible()
+      // What a toast's card is drawn with: the status disc of a success (the palette's ok-strong), and an icon svg for a toast given an icon.
+      const card_ = (text: string): Promise<{ discs: string[]; svgs: number }> =>
+        window.evaluate((needle) => {
+          const status = Array.from(document.querySelectorAll('[data-rht-toaster] [role="status"]')).find((el) => (el.textContent ?? '').includes(needle))
+          const bar = status?.parentElement
+          if (!bar) return { discs: [], svgs: -1 }
+          return {
+            discs: Array.from(bar.querySelectorAll('*')).map((el) => getComputedStyle(el).backgroundColor).filter((c) => c !== 'rgba(0, 0, 0, 0)'),
+            svgs: bar.querySelectorAll('svg').length
+          }
+        }, text)
+      const OK_STRONG = 'rgb(52, 211, 153)'
+
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('captions:clearTranscripts')
+        ipcMain.handle('captions:clearTranscripts', () => ({ removed: 2, failed: 1 }))
+      })
+      const clear = card.getByRole('button', { name: 'Clear saved transcripts' })
+      const dialog = window.getByRole('dialog', { name: 'Clear saved transcripts?' })
+      await clear.click()
+      await dialog.getByRole('button', { name: 'Clear transcripts' }).click()
+      const PARTIAL = 'Cleared 2 of 3 saved transcripts. The rest are open in another program; close it and clear again.'
+      await expectToast(window, PARTIAL)
+      const partial = await card_(PARTIAL)
+      expect(partial.svgs, 'the partial clear carries the warning icon').toBe(1)
+      expect(partial.discs, 'and no green success disc').not.toContain(OK_STRONG)
+      // It outlives a success toast (it has a sentence to read and a thing to do).
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(3_000)
+      expect((await card_(PARTIAL)).svgs, 'still on screen after the success toast\'s 2 s').toBe(1)
+
+      // A clear that got all the way is still the green tick.
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('captions:clearTranscripts')
+        ipcMain.handle('captions:clearTranscripts', () => ({ removed: 3, failed: 0 }))
+      })
+      await expect(card.getByText(/saved transcripts? kept on this computer/)).toBeVisible()
+      await clear.click()
+      await dialog.getByRole('button', { name: 'Clear transcripts' }).click()
+      await expectToast(window, 'Cleared 3 saved transcripts')
+      const whole = await card_('Cleared 3 saved transcripts')
+      expect(whole.discs, 'a whole clear is the success disc').toContain(OK_STRONG)
+      expect(whole.svgs).toBe(0)
+    } finally {
+      await app.close()
+    }
+  })
+
   // T-115, T-116: "Save .srt" on a transcript it cannot save. `captions:saveSrt` reads only from
   // <userData>/captions. A project file may name any safe absolute path as its srtPath, so the button
   // can be pressed on a transcript outside that folder (main refuses) or on one the app no longer
@@ -3600,10 +3708,21 @@ test.describe('CustomPresetManager', () => {
       await expect(modal.getByText('Saved presets (0)')).toBeVisible()
       expect(existsSync(presetsDir) ? readdirSync(presetsDir) : []).toEqual([])
 
-      // ── the base select loads that platform's geometry ──
+      // ── the base select loads that platform's whole encode: its geometry, its frame rate and its two bitrates (T-132 (7)) ──
+      // The form opens at YouTube's 30 fps / 8M / 192k; YouTube 1080p60 is the row the ledger sentence is about: it starts at 60 and 12M.
+      await expect(numbers.nth(2)).toHaveValue('30')
+      await modal.locator('select').selectOption('youtube60')
+      await expect(numbers.nth(0)).toHaveValue('1920')
+      await expect(numbers.nth(1)).toHaveValue('1080')
+      await expect(numbers.nth(2), 'a preset based on YouTube 1080p60 starts at 60 fps').toHaveValue('60')
+      await expect(modal.locator('input[type="text"]').nth(1), 'and at its 12M').toHaveValue('12M')
+      await expect(modal.locator('input[type="text"]').nth(2)).toHaveValue('192k')
       await modal.locator('select').selectOption('reels')
       await expect(numbers.nth(0)).toHaveValue('1080')
       await expect(numbers.nth(1)).toHaveValue('1920')
+      await expect(numbers.nth(2), 'Reels is back to 30 fps').toHaveValue('30')
+      await expect(modal.locator('input[type="text"]').nth(1), 'and its own 6M').toHaveValue('6M')
+      await expect(modal.locator('input[type="text"]').nth(2), 'and 128k').toHaveValue('128k')
 
       // ── negative 3 (T-50): a bitrate ffmpeg cannot parse ──
       // Presets are export targets now, so one that could never encode must
@@ -5276,6 +5395,9 @@ test.describe('single-output panels', () => {
       const toasts = await readToastLog(window)
       expect(toasts, 'it said it exported').toContain('Exported 1 file')
       expect(toasts, 'and that the preferences were not saved, in one plain sentence').toContain("Couldn't save your settings.")
+      // T-132 (13): ONE card, not one per refused write (this press makes two or more: the handle and its corner are each their own
+      // write, and the template is a third). A fixed toast id makes the repeats replace the live card instead of stacking under it.
+      expect(toasts.filter((t) => t === "Couldn't save your settings."), `the sentence was shown ${toasts.filter((t) => t === "Couldn't save your settings.").length} times: ${JSON.stringify(toasts)}`).toHaveLength(1)
       expect(mp4sIn(seeded)).toEqual(['pipeline_Clip 1_youtube.mp4'])
       // T-128 (1): and the finished row's two cut names carry their whole selves (the clip and preset, and the file the row wrote).
       await expect(card.locator('span.truncate[title="Clip 1 \u00b7 YouTube"]'), 'the row\'s name').toHaveCount(1)
@@ -7803,6 +7925,60 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toHaveCount(0)
       expect(await readToastLog(window), 'no "Opening Audio Studio" for a result that was not opened').not.toContain('Opening Audio Studio')
       await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-132 (1): the extraction ends minutes later on a long recording, and `navigate` still works from a studio that unmounted, so Clean audio took
+  // the person to /audio wherever they were (from /record that cut a live take short: record.spec.ts holds that case). Only a person still on
+  // Video Studio is taken along; anyone else keeps their screen, the sound is loaded, and a toast carries the way there. On Audio Studio itself
+  // (the sound simply appears in front of them) the toast carries no button. The stay-on-/video path is every other Clean audio case here.
+  test('Clean audio finishing while the person is elsewhere loads the sound and offers Open Audio Studio instead of taking them there (T-132 (1))', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t132cleanaway')
+    try {
+      await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 7000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expectToast(window, 'Extracting audio')
+
+      // While it runs the person goes to Stream Graphics.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+
+      // The extraction ends: they are not moved, and the toast says what happened and carries the button.
+      await expectToast(window, 'Extracted the sound from pipeline.mp4')
+      expect(await readToastLog(window), 'nothing says Opening Audio Studio: they were not taken there').not.toContain('Opening Audio Studio')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' }), 'still where they were').toBeVisible()
+      const open = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Open Audio Studio', exact: true })
+      await expect(open).toBeVisible()
+      // The toast outlives a success toast's 2 s (it is the ONLY way to the sound from here).
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(3_000)
+      await expect(open, 'still there 3 s on').toBeVisible()
+
+      // The button takes them there, to the sound that was loaded meanwhile.
+      await open.click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      // And from Audio Studio itself: the sound appears in front of them, no button and no move.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoVideoStudio(window)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 5000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expectToast(window, 'Extracting audio')
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t.startsWith('Extracted the sound from pipeline.mp4')).length, { timeout: 60_000, intervals: [250] })
+        .toBe(2)
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible()
+      expect((await readToastLog(window)).at(-1), 'on Audio Studio the toast has no button').toBe('Extracted the sound from pipeline.mp4')
+      expect(await readToastLog(window)).not.toContain('Opening Audio Studio')
     } finally {
       await app.close()
     }

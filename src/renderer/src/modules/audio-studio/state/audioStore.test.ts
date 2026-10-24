@@ -19,7 +19,7 @@ vi.mock('react-hot-toast', () => {
   }
 })
 
-const { useAudioStore, isPicture } = await import('./audioStore')
+const { useAudioStore, isPicture, waveformArrived } = await import('./audioStore')
 
 /**
  * T-126 (7): `fromVideo` is what turns Re-attach on, and it was decided by the EXTENSION of the file a sound was taken from. An `.mkv`
@@ -249,5 +249,82 @@ describe('the waveform is main\'s peaks, drawn after the file opens (T-129)', ()
   it('Close with nothing drawing cancels nothing', () => {
     useAudioStore.getState().clearSource()
     expect(canceled).toEqual([])
+  })
+})
+
+/**
+ * T-132 (11): `loadSource` resolves once the file is OPEN, and its waveform is read after that (T-129). The importer said "Loaded" and put
+ * the file in Recent the moment `loadSource` resolved, so a file main then refused (an unknown WAV format, a damaged stream) flashed a
+ * green "Loaded" and stayed in Recent beside the refusal. `waveformArrived` is the question the importer asks instead: did THIS file's
+ * waveform come, or did the studio let go of it first (the refusal, a Close, another file opened)?
+ */
+describe('waveformArrived: has this file\'s waveform come, or did the studio let go of it first (T-132 (11))', () => {
+  it('is true once main answers, and not before', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/long.wav')
+    const source = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    let verdict: boolean | null = null
+    void waveformArrived(source).then((v) => {
+      verdict = v
+    })
+    await flush()
+    expect(verdict, 'still being read: no verdict yet').toBeNull()
+    peaksCalls[0]?.resolve(peaksOf(60))
+    await flush()
+    expect(verdict).toBe(true)
+  })
+
+  it('is true at once for a file whose waveform is already drawn', async () => {
+    await useAudioStore.getState().loadSource('/a/short.wav')
+    await flush()
+    const source = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    expect(useAudioStore.getState().waveform).not.toBeNull()
+    expect(await waveformArrived(source)).toBe(true)
+  })
+
+  it('is false when main refuses the file (the studio lets go of it)', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/odd.wav')
+    const source = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    const verdict = waveformArrived(source)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      peaksCalls[0]?.reject(new Error(`Error invoking remote method 'audio:peaks': Error: ${WAVEFORM_READ_FAILED}`))
+      await flush()
+    } finally {
+      quiet.mockRestore()
+    }
+    expect(await verdict).toBe(false)
+  })
+
+  it('is false when the person closes the file while it is being read', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/long.wav')
+    const source = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    const verdict = waveformArrived(source)
+    useAudioStore.getState().clearSource()
+    expect(await verdict).toBe(false)
+  })
+
+  it('is false when another file is opened first, and true for that other file when its own waveform comes', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/first.wav')
+    const first = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    const firstVerdict = waveformArrived(first)
+    await useAudioStore.getState().loadSource('/a/second.wav')
+    const second = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    const secondVerdict = waveformArrived(second)
+    peaksCalls[1]?.resolve(peaksOf(22))
+    await flush()
+    expect(await firstVerdict).toBe(false)
+    expect(await secondVerdict).toBe(true)
+  })
+
+  it('is false at once for a file the studio does not hold', async () => {
+    await useAudioStore.getState().loadSource('/a/short.wav')
+    await flush()
+    const held = useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+    useAudioStore.getState().clearSource()
+    expect(await waveformArrived(held)).toBe(false)
   })
 })

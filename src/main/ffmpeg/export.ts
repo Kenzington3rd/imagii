@@ -7,6 +7,7 @@ import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { discardPartialOutput } from './partialOutput'
+import { FFMPEG_EMPTY_OUTPUT, PictureFrames, exportNoPictureMessage, wroteNoPicture } from './noPicture'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 import { clipSpeed } from '../../shared/clip'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
@@ -132,9 +133,14 @@ async function encodeJob(
 
     let stderrBuffer = ''
     let lastEmitted = 0
+    // T-132 (4): did ffmpeg write a picture? Its exit code does not say (a range past the picture exits 0 with a streamless stub or an
+    // audio-only mp4): the progress block's final frame count and the "Output file is empty" line do. Sticky, like the compile's guard.
+    const frames = new PictureFrames()
+    let sawEmptyOutput = false
 
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
+      frames.feed(chunk)
       const lines = chunk.split(/\r?\n/)
       let timemark: string | undefined
       let fps: number | undefined
@@ -160,6 +166,7 @@ async function encodeJob(
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       stderrBuffer += chunk
+      sawEmptyOutput ||= FFMPEG_EMPTY_OUTPUT.test(stderrBuffer)
       if (stderrBuffer.length > 16384) stderrBuffer = stderrBuffer.slice(-16384)
     })
 
@@ -170,7 +177,10 @@ async function encodeJob(
 
     child.on('close', (code) => {
       activeJobs.delete(job.jobId)
-      if (code === 0) {
+      if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) {
+        // T-132 (4): exit 0 and no picture: the catch below removes the stub, like any failed job's output.
+        reject(new Error(exportNoPictureMessage(job.clip)))
+      } else if (code === 0) {
         onProgress({ jobId: job.jobId, percent: 100 })
         resolve({
           jobId: job.jobId,

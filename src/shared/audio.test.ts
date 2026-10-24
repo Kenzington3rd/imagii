@@ -20,6 +20,7 @@ import {
   PLAYBACK_ERROR_MESSAGE,
   WAVEFORM_READ_FAILED,
   isWaveformPeaks,
+  peaksMaxMagnitude,
   type AudioOutputFormat
 } from './audio'
 import * as audioModule from './audio'
@@ -292,12 +293,44 @@ describe('WAVEFORM_READ_FAILED: the refusal that remains, for a file main cannot
   })
 })
 
-describe('PLAYBACK_ERROR_MESSAGE (T-123 (14), reworded by T-129)', () => {
-  it('names what fails now - playing the file, not drawing it - and what to try', () => {
-    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/^imagii can't play this file here\./)
-    expect(PLAYBACK_ERROR_MESSAGE).not.toMatch(/waveform/)
-    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/Re-export it as WAV or MP3 and try again\.$/)
+describe('PLAYBACK_ERROR_MESSAGE (T-123 (14), reworded by T-129 and T-132 (10))', () => {
+  it('names what fails now - playing the file, not drawing it - what still works, and what to try', () => {
+    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/^imagii can't play this file here/)
+    // T-132 (10): the waveform IS drawn (main reads the file), so the sentence says what is still usable instead of leaving the person to
+    // wonder whether the file is lost; it is said without the word "waveform" as the FAILURE.
+    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/waveform, cuts and export still work/)
     expect(PLAYBACK_ERROR_MESSAGE.length).toBeLessThanOrEqual(240)
+  })
+
+  it('does not send a WAV back to WAV: the advice for the file that fails here (an ADPCM WAV) is a STANDARD PCM WAV', () => {
+    // "Re-export it as WAV or MP3" was circular for the one file this fires on in practice - it already is a WAV.
+    expect(PLAYBACK_ERROR_MESSAGE).not.toMatch(/as WAV or MP3/)
+    expect(PLAYBACK_ERROR_MESSAGE).toMatch(/standard PCM WAV or MP3/)
+    expect(PLAYBACK_ERROR_MESSAGE).not.toContain('\n')
+  })
+})
+
+describe('peaksMaxMagnitude - the loudest sample of a waveform, in either half (T-132 (5))', () => {
+  // wavesurfer's `normalize` scales the whole waveform by 1 / the largest magnitude it finds - in channel 0 (the highs) only. A take whose
+  // lows are louder than its highs (a mic with a DC offset, an asymmetric voice) drew its bottom half past the canvas edge.
+  it('is the larger of the loudest high and the deepest low', () => {
+    expect(peaksMaxMagnitude([[0.2, 0.1, 0.05], [-0.8, -0.1, 0]])).toBe(0.8)
+    expect(peaksMaxMagnitude([[0.9, 0.1], [-0.3, -0.2]])).toBe(0.9)
+    expect(peaksMaxMagnitude([[0.5], [-0.5]])).toBe(0.5)
+  })
+
+  it('reads the whole of both arrays, not the first element or only the highs', () => {
+    const high = Array.from({ length: PEAK_BUCKETS }, () => 0.1)
+    const low = Array.from({ length: PEAK_BUCKETS }, () => -0.1)
+    low[PEAK_BUCKETS - 1] = -0.95
+    expect(peaksMaxMagnitude([high, low])).toBe(0.95)
+    high[1234] = 0.97
+    expect(peaksMaxMagnitude([high, low])).toBe(0.97)
+  })
+
+  it('is 0 for silence and for nothing at all (wavesurfer then falls back to its own scale)', () => {
+    expect(peaksMaxMagnitude([[0, 0, 0], [0, 0, 0]])).toBe(0)
+    expect(peaksMaxMagnitude([[], []])).toBe(0)
   })
 })
 

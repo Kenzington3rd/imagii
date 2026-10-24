@@ -40,6 +40,16 @@ describe('reportFailure', () => {
     expect(toastPlain).not.toHaveBeenCalled()
   })
 
+  it('a failure given an id carries it to the toast, so a repeat of the same failure replaces the first instead of stacking (T-132 (13))', () => {
+    reportFailure(new Error('config write refused'), { failed: "Couldn't save your settings.", id: 'settings-failed' })
+    expect(toastError).toHaveBeenCalledWith("Couldn't save your settings.", { duration: ERROR_TOAST_MS, id: 'settings-failed' })
+    // ...and one without an id passes none at all (an `id: undefined` would still be react-hot-toast's own random one).
+    toastError.mockReset()
+    reportFailure(new Error('config write refused'), { failed: 'x failed.' })
+    expect(toastError.mock.calls[0]?.[1]).toEqual({ duration: ERROR_TOAST_MS })
+    expect(Object.keys(toastError.mock.calls[0]?.[1] as object)).toEqual(['duration'])
+  })
+
   it('a cancel is a neutral toast in the feature\'s own words, never toast.error', () => {
     const out = reportFailure(new Error(CANCELLED_MESSAGE), { failed: 'x failed.', canceled: 'x canceled.' })
     expect(out).toEqual({ cancelled: true, message: 'x canceled.' })

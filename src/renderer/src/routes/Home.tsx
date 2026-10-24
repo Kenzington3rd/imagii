@@ -1,7 +1,7 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
 import { Icon } from '../components/Icon'
-import { captureProject, describeApplyOutcome } from '../modules/project/ProjectIO'
+import { audioSettled, captureProject, describeApplyOutcome } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
@@ -50,7 +50,8 @@ async function handleLoad(): Promise<void> {
     const note = describeApplyOutcome(outcome, 'project')
     if (note) {
       toast(note, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
-    } else {
+    } else if (await audioSettled(outcome)) {
+      // T-132 (11): a sound the project opened is drawn AFTER it opens and can still be refused; the green line waits for its waveform.
       toast.success('Project loaded')
     }
   } catch (err) {

@@ -4,7 +4,7 @@ import type { ImagiiProject, PlaceRecord } from '@shared/workspace'
 import { KNOWN_ROUTES, MAX_SCHEMA_VERSION, hasStudioState } from '@shared/projectValidation'
 import { isMissingFileError, userFacingError } from '@shared/userFacingError'
 import { useVideoStore } from '../video-studio/store/videoStore'
-import { useAudioStore, type AudioSource } from '../audio-studio/state/audioStore'
+import { useAudioStore, waveformArrived, type AudioSource } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
 import { basename } from '../../components/OutputDirLabel'
@@ -14,8 +14,12 @@ import { basename } from '../../components/OutputDirLabel'
  * plain function can capture it without being a component. Anything that is
  * not one of the app's routes is dropped rather than stored, the same rule
  * the validator applies when the snapshot comes back off disk.
+ *
+ * T-132 (1): and it is the only way to ask "where is the person NOW" from code that outlives its component. A studio that started a
+ * long job and was left (Clean audio's extraction runs for minutes) holds the router location of the render it started in, and its
+ * `navigate` still works after it unmounted; what the hash says is what is on screen at the moment of asking.
  */
-function currentRoute(): string | undefined {
+export function currentRoute(): string | undefined {
   if (typeof window === 'undefined' || !window.location) return undefined
   const hash = window.location.hash
   const route = hash.startsWith('#') ? hash.slice(1) : hash
@@ -171,6 +175,9 @@ export interface ApplyOutcome {
   /** Studios whose project source was NOT applied because the person opened a different
    *  one while it was loading (T-112) — what they opened is untouched. */
   skipped: Array<UnavailableSource['studio']>
+  /** The sound this open put in Audio Studio, when it put one there (T-132 (11)): its waveform is read AFTER it opens, and
+   *  `audioSettled` asks about exactly this source, even if main has refused it and the studio let go of it already. */
+  audioOpened?: AudioSource
 }
 
 /**
@@ -321,6 +328,17 @@ export function replacedSince<T>(before: T | null, now: T | null): boolean {
 }
 
 /**
+ * T-132 (11): is a project open's good news true? `loadSource` resolves once a file is OPEN and its waveform is read after that (T-129),
+ * so "Project loaded" and "Restored from autosave" were said while main could still refuse the sound (the studio then lets go of it and
+ * says why, in red, beside a green line). True when the open put no sound in Audio Studio, or the sound it put there has its waveform;
+ * false when that sound was refused. Asked about the source the open recorded (`outcome.audioOpened`), not about whatever the studio
+ * holds now: a refusal that landed before this looks leaves the studio empty, which is not "nothing was opened".
+ */
+export async function audioSettled(outcome: Pick<ApplyOutcome, 'audioOpened'>): Promise<boolean> {
+  return outcome.audioOpened ? waveformArrived(outcome.audioOpened) : true
+}
+
+/**
  * Put a project's studios back, each independently.
  *
  * T-84: this used to be one straight line of awaits, so the first
@@ -416,12 +434,14 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     // file that is gone (the video), exactly like any other missing source.
     // T-112: the wait is on screen, like the conversion's above — its own toast id,
     // so Clean audio's extraction (same words, its own id) can run beside it.
+    // T-132 (11): the source the load put in the studio, kept for `audioSettled` (its waveform is read after it opens).
+    let opened: AudioSource | undefined
     const extractAgain = async (videoPath: string): Promise<boolean> => {
       toast.loading('Extracting audio\u2026', { id: 'reopen-extract-audio' })
       try {
         const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(videoPath)
         if (replacedSince(heldBefore, useAudioStore.getState().source)) return false
-        await useAudioStore.getState().loadSource(wavPath, videoPath, undefined, hasVideo)
+        opened = await useAudioStore.getState().loadSource(wavPath, videoPath, undefined, hasVideo)
         return true
       } finally {
         toast.dismiss('reopen-extract-audio')
@@ -438,7 +458,7 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
       : fromVideo
         ? async (): Promise<boolean> => {
             try {
-              await useAudioStore.getState().loadSource(sourcePath, fromVideo)
+              opened = await useAudioStore.getState().loadSource(sourcePath, fromVideo)
               return true
             } catch (err) {
               console.error('[imagii] project audio scratch file is gone; extracting again:', err)
@@ -446,11 +466,14 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
             }
           }
         : async (): Promise<boolean> => {
-            await useAudioStore.getState().loadSource(sourcePath)
+            opened = await useAudioStore.getState().loadSource(sourcePath)
             return true
           }
     const loaded = await loadReporting('audio', fromVideo ?? sourcePath, load, outcome)
-    if (loaded) useAudioStore.setState({ chain: audio.chain })
+    if (loaded) {
+      useAudioStore.setState({ chain: audio.chain })
+      if (opened) outcome.audioOpened = opened
+    }
   }
   // Last: the selections and the playhead only mean anything once the
   // clips and layers they point at are in place.

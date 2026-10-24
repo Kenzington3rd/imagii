@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
-import { useAudioStore } from './state/audioStore'
+import { useAudioStore, waveformArrived, type AudioSource } from './state/audioStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
@@ -48,15 +48,19 @@ export function AudioImporter(): JSX.Element {
     setBusy(true)
     try {
       console.info('[audio-import] loading', filePath)
+      let opened: AudioSource
       if (audioNeedsExtraction(filePath)) {
         extractingRef.current = true
         toast.loading('Extracting audio…', { id: 'extract' })
         const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(filePath)
         toast.dismiss('extract')
-        await loadSource(wavPath, filePath, undefined, hasVideo)
+        opened = await loadSource(wavPath, filePath, undefined, hasVideo)
       } else {
-        await loadSource(filePath)
+        opened = await loadSource(filePath)
       }
+      // T-132 (11): the file is OPEN, but its waveform is read after that (T-129) and main can still refuse it (an unknown WAV format,
+      // a damaged stream): the studio then lets go of it and says why. "Loaded" and a Recent entry are for a file that stayed.
+      if (!(await waveformArrived(opened))) return
       await push(filePath)
       toast.success('Loaded')
     } catch (err) {

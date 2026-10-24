@@ -6,7 +6,8 @@ import { Icon } from '../../components/Icon'
 import { NO_SOUND_MESSAGE, useVideoStore, videoDiscardMessage, videoHasNoSound } from './store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
 import { confirmAudioClose } from '../audio-studio/audioClose'
-import { replacedSince } from '../project/ProjectIO'
+import { currentRoute, replacedSince } from '../project/ProjectIO'
+import { toastWithActions } from '../../lib/savedToast'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
@@ -101,8 +102,21 @@ export function VideoStudio(): JSX.Element {
       // told the original too, so a saved project can name the file the person owns.
       await loadAudioSource(wavPath, source.filePath, source.convertedFrom, hasVideo)
       toast.dismiss('extract-audio')
-      toast.success('Opening Audio Studio')
-      navigate('/audio')
+      // T-132 (1): the extraction takes minutes for a long recording, and the person is free to go anywhere meanwhile. `navigate` still
+      // works from a studio that unmounted, so this used to take them to /audio wherever they were - from /record that unmounts
+      // RecordStudio, whose cleanup stops the tracks and cut a LIVE TAKE short. Only a person still on this studio is taken along; anyone
+      // else keeps their screen, the sound is loaded, and a toast offers the way there ("nothing teleports the user", ProjectIO).
+      const where = currentRoute()
+      if (where === '/video') {
+        toast.success('Opening Audio Studio')
+        navigate('/audio')
+      } else {
+        // On Audio Studio itself the sound has simply appeared in front of them: the toast only says whose it is.
+        toastWithActions(
+          `Extracted the sound from ${source.fileName}`,
+          where === '/audio' ? [] : [{ label: 'Open Audio Studio', onClick: () => navigate('/audio') }]
+        )
+      }
     } catch (err) {
       toast.dismiss('extract-audio')
       reportFailure(err, { failed: "Couldn't extract the audio." })

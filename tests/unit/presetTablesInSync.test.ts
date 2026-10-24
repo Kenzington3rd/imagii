@@ -37,6 +37,9 @@ describe('platform preset tables stay in sync', () => {
     expect(main.height).toBe(renderer.height)
     // T-92: the grid prints the fps, so the grid and the encoder must agree.
     expect(main.fps).toBe(renderer.fps)
+    // T-132 (7): and the custom-preset form starts a preset at the platform's bitrates, so those are held together too.
+    expect(main.videoBitrate).toBe(renderer.videoBitrate)
+    expect(main.audioBitrate).toBe(renderer.audioBitrate)
     expect(main.aspectRatio).toBeCloseTo(renderer.aspectRatio, 10)
     expect(main.durationSweetSpot).toEqual(renderer.durationSweetSpot)
     expect(main.durationHardLimit).toBe(renderer.durationHardLimit)

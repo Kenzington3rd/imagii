@@ -37,6 +37,7 @@ import {
   cancelConcatJob,
   FFMPEG_EMPTY_OUTPUT,
   FFMPEG_UNREADABLE_PART,
+  unreadableSegmentIndex,
   type ConcatJobSpec
 } from '../../src/main/ffmpeg/concat'
 import {
@@ -47,6 +48,7 @@ import {
   cancelActiveHighlightScan
 } from '../../src/main/ffmpeg/highlights'
 import { extractFrame, cancelAllFrameJobs } from '../../src/main/ffmpeg/frame'
+import { PictureFrames } from '../../src/main/ffmpeg/noPicture'
 import { isCancelledError } from '../../src/shared/cancel'
 import { killAsCancelled } from '../../src/main/ffmpeg/cancelMark'
 import { runBurnIn, cancelBurnIn } from '../../src/main/sidecars/whisperManager'
@@ -140,6 +142,7 @@ function ffprobeJson(file: string): Promise<{
     channels?: number
     avg_frame_rate?: string
     r_frame_rate?: string
+    nb_frames?: string
     sample_aspect_ratio?: string
     display_aspect_ratio?: string
     duration?: string
@@ -7552,7 +7555,8 @@ describe('a compilation survives a source whose sound does not cover a segment (
       width: 640,
       height: 360
     }).then(() => null, (e: Error) => e)
-    expect(err?.message, 'it names the clip').toMatch(/^Clip 2 of the compilation .*nothing was saved\.$/)
+    // T-132 (12): by the name the person gave it ('b' on the wire), not its position in the list.
+    expect(err?.message, 'it names the clip').toBe('The clip "b" has no picture in the video (check its start and end), so nothing was saved.')
     expect(await readdir(outDir), 'no compilation was written').toEqual([])
     const scratch = path.join(os.tmpdir(), 'imagii-concat')
     expect((await readdir(scratch)).filter((f) => f.includes('t131-empty')), 'and the scratch is gone').toEqual([])
@@ -7569,6 +7573,23 @@ describe('a compilation survives a source whose sound does not cover a segment (
     await writeFile(list, [good, stub, good].map((p) => `file '${p}'`).join('\n'))
     const joined = await ff(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'copy', '-c:a', 'aac', path.join(workDir, 't131-joined.mp4')])
     expect(joined.stderr, 'the join exits 0 and this line').toMatch(FFMPEG_UNREADABLE_PART)
+  }, 60_000)
+
+  it('the join\'s "Impossible to open" line names the segment file, and the runner reads its index off the real line (T-132 (12), this binary)', async () => {
+    // The runner's segments are seg-<job>-<index>.mkv in its scratch folder; ffmpeg prints the one it cannot open. Real files, real binary.
+    const dir = await mkdtemp(path.join(workDir, 't132-lost-'))
+    const make = (a: number, b: number, out: string): Promise<{ stderr: string }> =>
+      ff(['-y', '-ss', String(a), '-to', String(b), '-i', files.short, '-vf', 'fps=30', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', out])
+    const parts = [0, 1, 2].map((i) => path.join(dir, `seg-t132lost-${i}.mkv`))
+    await make(1, 2, parts[0] as string)
+    await make(20, 22, parts[1] as string) // a range past the picture: the stub the join cannot open
+    await make(3, 4, parts[2] as string)
+    const list = path.join(dir, 'list.txt')
+    await writeFile(list, parts.map((p) => `file '${p}'`).join('\n'))
+    const joined = await ff(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'copy', '-c:a', 'aac', path.join(dir, 'joined.mp4')])
+    expect(joined.stderr, 'the join exits 0 and this line').toMatch(FFMPEG_UNREADABLE_PART)
+    expect(unreadableSegmentIndex(joined.stderr, 't132lost'), 'and the line says which segment').toBe(1)
+    expect(unreadableSegmentIndex(joined.stderr, 'someone-else'), 'only for its own job').toBeNull()
   }, 60_000)
 })
 
@@ -8088,6 +8109,139 @@ describe('a Clip Kit thumbnail is the clip\'s cropped picture (real ffmpeg, T-13
 // ---------------------------------------------------------------------------
 // T-04 — highlight discovery and clip cutting
 // ---------------------------------------------------------------------------
+
+describe('a clip with no picture is an error in a sentence, not a file that says Exported (real ffmpeg, T-132 (4))', () => {
+  // Export, Reframe and the Clip Kit's thumbnails closed on `code === 0` alone. ffmpeg exits 0 for a range that lies past the PICTURE, having written
+  // one of two things: a 261-byte container with no streams (the range is past the end of the whole file - a project restored over a recording that got
+  // shorter, OBS reusing a file name - and stderr says "Output file is empty"), or an audio-only mp4 (the range is past the last frame of a file whose
+  // SOUND runs longer than its picture, and stderr says nothing of the kind). The fact that holds in both is the last progress block's `frame=0`.
+  // The fixtures: `short` is a 5 s picture with 5 s of sound; `longaudio` is a 5 s picture with 9 s of sound (the second shape's trigger).
+  const NO_PICTURE = (name: string): string => `The clip "${name}" has no picture in the video (check its start and end), so nothing was exported.`
+  let short = ''
+  let longAudio = ''
+
+  beforeAll(async () => {
+    short = path.join(workDir, 't132-4-short.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=5', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=5',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', short
+    ])
+    longAudio = path.join(workDir, 't132-4-long-audio.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=5', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=9',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', longAudio
+    ])
+  }, 60_000)
+
+  const outDirFor = (name: string): Promise<string> => mkdtemp(path.join(workDir, `t132-4-${name}-`))
+  const exportRange = async (source: string, name: string, startSec: number, endSec: number): Promise<{ error: Error | null; outDir: string; outputPath: string | null }> => {
+    const outDir = await outDirFor(name)
+    const clip = makeClip({ name: 'Boss fight', startSec, endSec })
+    try {
+      const res = await runExportJob({ jobId: `t132-4-${name}`, sourcePath: source, outDir, clip, preset: 'youtube' }, () => {})
+      return { error: null, outDir, outputPath: res.outputPath }
+    } catch (e) {
+      return { error: e as Error, outDir, outputPath: null }
+    }
+  }
+  const streamsOf = async (file: string): Promise<string[]> => (await ffprobeJson(file)).streams.map((x) => x.codec_type)
+
+  it('the control: a clip inside the picture exports a file with a picture and a sound', async () => {
+    const run = await exportRange(short, 'control', 1, 3)
+    expect(run.error, 'a normal clip is a success').toBeNull()
+    expect(await streamsOf(run.outputPath as string)).toEqual(['video', 'audio'])
+  }, 120_000)
+
+  it('the range is past the end of the file (a restored project whose recording got shorter): a sentence, and no stub left in the folder', async () => {
+    const run = await exportRange(short, 'past-end', 8, 10)
+    expect(run.error?.message).toBe(NO_PICTURE('Boss fight'))
+    expect(await readdir(run.outDir), 'the 261-byte streamless stub is the job\'s wreckage and is gone').toEqual([])
+  }, 120_000)
+
+  it('the range is past the last frame of a file whose sound runs on (the audio-only shape): the same sentence, and no audio-only mp4 left', async () => {
+    const run = await exportRange(longAudio, 'audio-only', 6, 8)
+    expect(run.error?.message).toBe(NO_PICTURE('Boss fight'))
+    expect(await readdir(run.outDir), 'an mp4 with a sound and no picture is not an export').toEqual([])
+  }, 120_000)
+
+  it('a range that STRADDLES the last frame is still an export: the picture that is there is written', async () => {
+    const run = await exportRange(longAudio, 'straddle', 4, 8)
+    expect(run.error, 'part of the range has a picture').toBeNull()
+    expect(await streamsOf(run.outputPath as string)).toContain('video')
+    const frames = Number((await ffprobeJson(run.outputPath as string)).streams.find((x) => x.codec_type === 'video')?.nb_frames)
+    expect(frames, 'about one second of 30 fps picture').toBeGreaterThan(15)
+  }, 120_000)
+
+  it.each([['20 ms', 1, 1.02], ['10 ms', 1, 1.01]])('discrimination: a legitimate %s clip is a success with a picture in it (not mistaken for an empty file)', async (_label, a, b) => {
+    const run = await exportRange(short, `tiny-${a}-${b}`.replace('.', '_'), a, b)
+    expect(run.error, 'a clip of one or two frames is a picture').toBeNull()
+    const info = await ffprobeJson(run.outputPath as string)
+    const v = info.streams.find((x) => x.codec_type === 'video')
+    expect(v, 'it has a picture').toBeDefined()
+    expect(Number(v?.nb_frames)).toBeGreaterThanOrEqual(1)
+  }, 120_000)
+
+  it('Reframe: past the end of the file and past the last frame are the same sentence, with no file written; a clip with a picture is a vertical file', async () => {
+    const reframe = async (source: string, name: string, startSec: number, endSec: number): Promise<{ error: Error | null; outputPath: string }> => {
+      const outputPath = path.join(await outDirFor(`rf-${name}`), 'vertical.mp4')
+      try {
+        await runReframe({ jobId: `t132-4-rf-${name}`, sourcePath: source, outputPath, position: 'center', startSec, endSec, outputWidth: 1080, outputHeight: 1920 }, () => {})
+        return { error: null, outputPath }
+      } catch (e) {
+        return { error: e as Error, outputPath }
+      }
+    }
+    const NONE = 'This part of the video has no picture (check the clip\'s start and end), so no 9:16 file was saved.'
+    const past = await reframe(short, 'past', 8, 10)
+    expect(past.error?.message).toBe(NONE)
+    expect(existsSync(past.outputPath)).toBe(false)
+    const audioOnly = await reframe(longAudio, 'audio-only', 6, 8)
+    expect(audioOnly.error?.message).toBe(NONE)
+    expect(existsSync(audioOnly.outputPath)).toBe(false)
+    const tiny = await reframe(short, 'tiny', 1, 1.02)
+    expect(tiny.error, 'a 20 ms clip is a picture').toBeNull()
+    expect(await streamsOf(tiny.outputPath)).toContain('video')
+    const ok = await reframe(short, 'ok', 1, 3)
+    expect(ok.error).toBeNull()
+    expect(await streamsOf(ok.outputPath)).toEqual(['video', 'audio'])
+  }, 180_000)
+
+  it('extractFrame: a time past the last frame is a sentence (it used to resolve with no file); a time inside it is a JPEG', async () => {
+    const dir = await outDirFor('frame')
+    const past = path.join(dir, 'past.jpg')
+    for (const [source, at] of [[short, 7], [longAudio, 7]] as const) {
+      const err = await extractFrame(source, at, past).then(() => null, (e: Error) => e)
+      expect(err?.message, `${path.basename(source)} at ${at} s`).toBe('The video has no picture at that point (check the clip\'s start and end), so the thumbnail was not saved.')
+      expect(existsSync(past), 'nothing was written').toBe(false)
+    }
+    const good = path.join(dir, 'good.jpg')
+    await extractFrame(short, 2, good)
+    expect((await stat(good)).size).toBeGreaterThan(0)
+    expect(await streamsOf(good)).toEqual(['video'])
+  }, 120_000)
+
+  it('what ffmpeg prints for each shape is what the runners read (this binary): the empty-output line for the stub, a final frame=0 for both', async () => {
+    const probe = async (source: string, a: number, b: number): Promise<{ stderr: string; stdout: string }> => {
+      const out = path.join(await outDirFor('read'), 'o.mp4')
+      return ff(['-y', '-ss', String(a), '-to', String(b), '-i', source, '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-progress', 'pipe:1', '-nostats', out])
+    }
+    const stub = await probe(short, 8, 10)
+    expect(stub.stderr, 'a range past the end of the file').toMatch(FFMPEG_EMPTY_OUTPUT)
+    const stubFrames = new PictureFrames()
+    stubFrames.feed(stub.stdout)
+    expect(stubFrames.none, 'and its last progress block says no frame').toBe(true)
+    const audioOnly = await probe(longAudio, 6, 8)
+    expect(audioOnly.stderr, 'an audio-only output is NOT announced as empty: that line alone cannot catch it').not.toMatch(FFMPEG_EMPTY_OUTPUT)
+    const audioFrames = new PictureFrames()
+    audioFrames.feed(audioOnly.stdout)
+    expect(audioFrames.none, 'but the progress block still says no frame').toBe(true)
+    const normal = await probe(short, 1, 2)
+    const normalFrames = new PictureFrames()
+    normalFrames.feed(normal.stdout)
+    expect(normalFrames.none, 'a normal clip reports frames').toBe(false)
+    expect(normal.stderr).not.toMatch(FFMPEG_EMPTY_OUTPUT)
+  }, 60_000)
+})
 
 describe('the highlight scans compute no true peak, and read the same series without it (real ffmpeg, T-126 (23))', () => {
   // `ebur128=...:peak=true` oversamples every block 4x to find the true peak, and the parser reads only `t:` and `M:`: the scan paid about

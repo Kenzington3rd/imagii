@@ -231,7 +231,9 @@ describe('a compilation never says Saved for a file with clips missing (T-131 (1
     width: 1280,
     height: 720
   })
-  const FAIL_SENTENCE = /^Clip 2 of the compilation has no picture in the video \(check its start and end\), so nothing was saved\.$/
+  // T-132 (12): the clip is named by the name the person sees in the list ("s1" here; the spec names its segments s0, s1, ...), never by its
+  // position in the compilation: default names are creation-numbered, so "Clip 2" could be the clip the person calls "Clip 5".
+  const FAIL_SENTENCE = /^The clip "s1" has no picture in the video \(check its start and end\), so nothing was saved\.$/
 
   it('every segment is padded to its length in the output: the last -af stage is apad=whole_dur, with -shortest kept', async () => {
     const { segments } = await compile(0)
@@ -276,10 +278,49 @@ describe('a compilation never says Saved for a file with clips missing (T-131 (1
     joinWrites = true
     says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-loud-1.mkv'" : null)
     const err = await runConcat(spec([[1, 3], [20, 22]])).then(() => null, (e: Error) => e)
-    expect(err?.message).toBe('The compilation could not be put together because one of its clips could not be read, so nothing was saved.')
+    // T-132 (12): it names the clip (the segment file in ffmpeg's line is seg-<job>-<index>.mkv) and says what to do next.
+    expect(err?.message).toBe(
+      'The compilation could not be put together because the clip "s1" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.'
+    )
     expect(userFacingError(err, 'Compilation failed.').message).toBe(err?.message)
     const join = spawned.find((a) => a.includes('concat')) as string[]
     expect(existsSync(join[join.length - 1] as string), 'the half a compilation the join wrote is gone').toBe(false)
+  })
+
+  it('a clip the person named is named in both refusals, as they typed it (T-132 (12))', async () => {
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? 'Output file is empty, nothing was encoded' : null)
+    const named = (name: string) => ({ ...spec([[1, 3], [20, 22]]), segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 20, endSec: 22, name }] })
+    const empty = await runConcat(named('Boss fight')).then(() => null, (e: Error) => e)
+    expect(empty?.message).toBe('The clip "Boss fight" has no picture in the video (check its start and end), so nothing was saved.')
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-loud-1.mkv'" : null)
+    const lost = await runConcat(named('Boss fight')).then(() => null, (e: Error) => e)
+    expect(lost?.message).toContain('the clip "Boss fight" could not be read')
+  })
+
+  it('a clip with no usable name is called by its place, and a join line that names no segment gets the sentence that does not (T-132 (12))', async () => {
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? 'Output file is empty, nothing was encoded' : null)
+    const blank = { ...spec([[1, 3], [20, 22]]), segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 20, endSec: 22, name: '   ' }] }
+    const empty = await runConcat(blank).then(() => null, (e: Error) => e)
+    expect(empty?.message).toBe('Clip 2 of the compilation has no picture in the video (check its start and end), so nothing was saved.')
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/somewhere/else.mkv'" : null)
+    const lost = await runConcat(spec([[1, 3], [4, 6]])).then(() => null, (e: Error) => e)
+    expect(lost?.message).toBe(
+      'The compilation could not be put together because one of its clips could not be read, so nothing was saved. Try again, and if it keeps happening, compile fewer clips at a time.'
+    )
+    expect(userFacingError(lost, 'Compilation failed.').message).toBe(lost?.message)
+  })
+
+  it('a long or multi-line name is shortened and kept on one line, so the refusal stays a finished sentence', async () => {
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? 'Output file is empty, nothing was encoded' : null)
+    const name = `Best of the\nweek ${'x'.repeat(200)}`
+    const big = { ...spec([[1, 3], [20, 22]]), segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 20, endSec: 22, name }] }
+    const empty = await runConcat(big).then(() => null, (e: Error) => e)
+    expect(empty?.message).not.toContain('\n')
+    expect(empty?.message).toContain('The clip "Best of the week xxx')
+    expect(empty?.message).toContain('…" has no picture')
+    expect(userFacingError(empty, 'Compilation failed.').message, 'still reaches the person as written').toBe(empty?.message)
   })
 
   it('a join that says nothing of the kind still succeeds, and keeps its file', async () => {

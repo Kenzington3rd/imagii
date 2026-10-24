@@ -32,7 +32,7 @@ imagii is a `react-router` app; each studio is a route.
 |---|---|---|
 | **Record** | `/record` | Capture a screen or window to one video, with an optional webcam and mic. The webcam composites into the recording (picture-in-picture, user-chosen corner). Game and desktop sound are not captured. Saves MP4 or WebM locally. |
 | **Video Studio** | `/video` | Trim and clip video; export per-platform (YouTube — at 30 or, for a 60 fps game, 1080p60 —, Reels, TikTok, X, Facebook). Smart highlight finder, Chat spike finder, reframe to 9:16 (a fixed center/left/right strip — it tracks nothing), captions, color grading, GIF export, compilation, picture-in-picture, Clip Kit batch export. |
-| **Audio Studio** | `/audio` | Clean noise, level volume, denoise, sidechain-duck a secondary track, and polish raw audio to podcast quality. A "fix wizard" picks settings for non-experts. Opens sound up to 2 hours long (the waveform is drawn from the whole file in memory). |
+| **Audio Studio** | `/audio` | Clean noise, level volume, denoise, sidechain-duck a secondary track, and polish raw audio to podcast quality. A "fix wizard" picks settings for non-experts. Opens sound of any length (the waveform is computed in the main process from a stream of the sound). |
 | **Stream Graphics** | `/image` | A Konva canvas editor for thumbnails, Twitch overlays, banners, and emotes. Templates-first: pick a preset (1080p / 2K / 4K), edit, export PNG/JPG. |
 | **References** | `/references` | Search inspiration (DuckDuckGo image search, SafeSearch locked on), save mood boards, and drop a curated CC0 stream asset straight onto the Stream Graphics canvas. |
 

@@ -6,7 +6,8 @@ import { cropToFrame } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch } from './cancelLatch'
-import { discardPartialOutput } from './partialOutput'
+import { discardPartialOutput, wroteOutput } from './partialOutput'
+import { FRAME_NO_PICTURE_MESSAGE } from './noPicture'
 import { nextFreePath } from './outputPath'
 import { assert } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
@@ -100,8 +101,14 @@ export async function extractFrame(
       })
       child.on('close', (code, signal) => {
         if (activeFrame === child) activeFrame = null
-        if (code === 0) resolve()
-        else {
+        if (code === 0) {
+          // T-132 (4): `-ss` past the last frame exits 0 and writes no file at all; Clip Kit then said "Saved your Clip Kit" over a missing
+          // thumbnail. The file this run was to write is looked for before the job is called done.
+          void wroteOutput(outputPath, spawnedAt ?? Date.now()).then((wrote) => {
+            if (wrote) resolve()
+            else reject(new Error(FRAME_NO_PICTURE_MESSAGE))
+          })
+        } else {
           reject(
             cancelledOr(child, new Error(`extractFrame exit ${code ?? signal}: ${stderr.slice(-500)}`))
           )

@@ -5,6 +5,7 @@ import {
   COMPILE_TARGET,
   PLATFORM_INFO,
   customPresetInfo,
+  customPresetStartFor,
   evaluateSuccess,
   outputDurationSec,
   type JudgedClip
@@ -513,5 +514,31 @@ describe('COMPILE_TARGET — the compilation judged as an export target (T-105)'
   it('reads the crop\'s frame, not the source\'s: a 16:9 crop of a 4:3 source is "Great"', () => {
     const fourThree = clip(30, 16 / 9, undefined, 2880, 2160)
     expect(evaluateSuccess(COMPILE_TARGET, fourThree, 2880, 2160).level).toBe('green')
+  })
+})
+
+/**
+ * T-132 (7): "Base on" in the custom-preset form loaded the platform's SIZE and left the frame rate and the bitrates where they were, so a
+ * preset based on YouTube 1080p60 started at 1920x1080, 30 fps, 8M while the guide (INTERACTION_COVERAGE, T-130) said it starts at 60. The
+ * form's starting point is the platform's whole encode: what `customPresetStartFor` answers is what the five boxes are set to.
+ */
+describe('customPresetStartFor - what the form starts at when a platform is picked as the base (T-132 (7))', () => {
+  it('YouTube 1080p60 starts at 60 fps and 12M, not at the form\'s 30 fps and 8M', () => {
+    expect(customPresetStartFor('youtube60')).toEqual({ width: 1920, height: 1080, fps: 60, videoBitrate: '12M', audioBitrate: '192k' })
+  })
+
+  it('every platform starts at its own size, rate and bitrates', () => {
+    expect(customPresetStartFor('youtube')).toEqual({ width: 1920, height: 1080, fps: 30, videoBitrate: '8M', audioBitrate: '192k' })
+    expect(customPresetStartFor('reels')).toEqual({ width: 1080, height: 1920, fps: 30, videoBitrate: '6M', audioBitrate: '128k' })
+    expect(customPresetStartFor('tiktok')).toEqual({ width: 1080, height: 1920, fps: 30, videoBitrate: '6M', audioBitrate: '128k' })
+    expect(customPresetStartFor('twitter')).toEqual({ width: 1280, height: 720, fps: 30, videoBitrate: '5M', audioBitrate: '128k' })
+    expect(customPresetStartFor('facebook')).toEqual({ width: 1280, height: 720, fps: 30, videoBitrate: '5M', audioBitrate: '128k' })
+  })
+
+  it('reads the table the grid prints, so the form and the grid cannot disagree', () => {
+    for (const id of Object.keys(PLATFORM_INFO) as Array<keyof typeof PLATFORM_INFO>) {
+      const info = PLATFORM_INFO[id]
+      expect(customPresetStartFor(id)).toEqual({ width: info.width, height: info.height, fps: info.fps, videoBitrate: info.videoBitrate, audioBitrate: info.audioBitrate })
+    }
   })
 })

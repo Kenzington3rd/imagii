@@ -255,6 +255,23 @@ describe('the waveform ceiling\'s simplification is retired by its own upgrade (
       expect(code, file).not.toMatch(/longer than 2 hours|WAVEFORM_MAX_SEC|waveformCeilingRefusal/)
     }
   })
+
+  // T-132 (2): T-129 retired the sentence in PRODUCT_GUIDE's studio table, and the next checkpoint's merge resolution took the OTHER side of
+  // that table (built before T-129) and put "up to 2 hours long" back: the only line of the wave that reverted, and no test read the docs
+  // for it (this scan read source files only). The three documents a reader opens first are read now, for the limit stated as any of its
+  // shapes and for the sentence that replaced it.
+  it.each(['README.md', 'docs/PRODUCT_GUIDE.md', 'docs/USER_GUIDE.md'])('%s states no 2-hour limit on Audio Studio', (file) => {
+    const text = flat(read(file))
+    expect(text, `${file} states the retired ceiling`).not.toMatch(
+      /(?:up to|longer than|over|past|more than|within|at most) (?:2|two) hours?|(?:2|two)[- ]hours? (?:long|limit|ceiling|maximum|max)\b/i
+    )
+  })
+
+  it('PRODUCT_GUIDE says what Audio Studio opens: sound of any length, its waveform computed in the main process from a stream of it', () => {
+    expect(flat(read('docs/PRODUCT_GUIDE.md'))).toContain(
+      'Opens sound of any length (the waveform is computed in the main process from a stream of the sound).'
+    )
+  })
 })
 
 describe('"deleting that folder clears everything" is only said of what imagii keeps in that folder (T-124 (27))', () => {

@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { ffprobePath } from '../../src/main/ffmpeg/paths'
+import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
+import { installSpawnStall } from './mainSpawn'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { localDay, skewTimeZone, utcDay } from './skewedClock'
@@ -2041,6 +2042,97 @@ test.describe('T-27 Record Studio', () => {
       await expect(window.getByText('second-take.mp4').first()).toBeVisible({ timeout: 20_000 })
       await expect(window.getByText('first-take.mp4')).toHaveCount(0)
       expect(messages).toHaveLength(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-132 (1): Clean audio's extraction (minutes, on a long VOD) ended with `navigate('/audio')` wherever the person was. `navigate` still works
+  // from a studio that unmounted, and landing on /audio unmounts RecordStudio, whose cleanup stops the tracks: a LIVE TAKE was cut short and the
+  // save dialog opened over Audio Studio. The extraction here is held 14 s (the take is started meanwhile), so it ends in the middle of the take:
+  // the person stays on Record, the clock keeps running, the take is saved whole, and the sound is waiting in Audio Studio with a toast that
+  // offers the way there.
+  test('Clean audio finishing during a live take does not move the person or cut the take short (T-132 (1))', async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('cleanduring')
+    const userDataDir = path.join(root, 'userData')
+    const take = path.join(root, 'take.mp4')
+    const clip = path.join(root, 'tour.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+    const made = await runBinary(ffmpegPath, [
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip
+    ])
+    if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      // A video with sound in Video Studio.
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await window.evaluate((file) => {
+        const zone = document.querySelector('[data-tutorial="video-import"] .card')
+        if (!zone) throw new Error('Video Studio drop zone not found')
+        const f = new File([new Uint8Array([0])], 'tour.mp4', { type: '' })
+        Object.defineProperty(f, 'path', { value: file })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [f] } })
+        zone.dispatchEvent(event)
+      }, clip)
+      // The hook badge's own ffmpeg has run (it asks once the clip is on screen); the next ffmpeg is the extraction, held for 14 s.
+      await expect(window.getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 14_000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      // Meanwhile: Record, and a live take.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoRecordFromHome(window)
+      await stubSaveDialog(app, take)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+
+      // The extraction ends in the middle of the take.
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toEqual(
+        expect.arrayContaining([expect.stringContaining('Extracted the sound from tour.mp4')])
+      )
+      const log = await readToastLog(window)
+      expect(log, 'nothing took the person to Audio Studio').not.toContain('Opening Audio Studio')
+      expect(log.find((t) => t.includes('Extracted the sound from tour.mp4')), 'the toast carries the way there').toContain('Open Audio Studio')
+      await expect(window.locator('h1', { hasText: 'Record' }), 'still on Record').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Stop' }), 'the take is still running').toBeVisible()
+      const clock = async (): Promise<number> => {
+        const text = (await window.getByText(/REC \d\d:\d\d/).first().textContent()) ?? ''
+        const m = /REC (\d\d):(\d\d)/.exec(text)
+        return m ? Number(m[1]) * 60 + Number(m[2]) : -1
+      }
+      const at = await clock()
+      expect(at).toBeGreaterThanOrEqual(1)
+      await expect.poll(clock, { timeout: 15_000, intervals: [250], message: 'the clock keeps counting after the extraction ended' }).toBeGreaterThan(at)
+
+      // Stop: the save goes ahead on Record, and the take is a whole file with a picture.
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: 'Edit in Video Studio' })).toBeVisible({ timeout: 120_000 })
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
+      expect(existsSync(take), 'the take was saved').toBe(true)
+      const probe = await probeFile(take)
+      expect(probe.streams?.some((st) => st.codec_type === 'video')).toBe(true)
+      expect(Number(probe.format?.duration), 'and it is as long as the clock said (not cut at the extraction)').toBeGreaterThanOrEqual(at)
+
+      // The sound is waiting for them in Audio Studio, loaded while they were elsewhere.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('tour.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
     } finally {
       await app.close()
       cleanup(root)

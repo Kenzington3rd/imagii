@@ -9,7 +9,7 @@ vi.mock('react-hot-toast', () => ({
   default: Object.assign(vi.fn(), { error: (...a: unknown[]) => toastError(...a) })
 }))
 
-const { persistSetting } = await import('./persistSetting')
+const { persistSetting, SETTINGS_FAILED_TOAST_ID } = await import('./persistSetting')
 const { ERROR_TOAST_MS } = await import('@shared/userFacingError')
 
 let setImpl: (key: string, value: unknown) => Promise<void>
@@ -57,13 +57,13 @@ describe('persistSetting', () => {
     setImpl = () => Promise.reject(new Error("Error invoking remote method 'settings:set': Error: config write refused"))
     await expect(persistSetting('welcomeSeen', true)).resolves.toBeUndefined()
     expect(toastError).toHaveBeenCalledTimes(1)
-    expect(toastError).toHaveBeenCalledWith("Couldn't save your settings.", { duration: ERROR_TOAST_MS })
+    expect(toastError).toHaveBeenCalledWith("Couldn't save your settings.", { duration: ERROR_TOAST_MS, id: SETTINGS_FAILED_TOAST_ID })
   })
 
   it('a known cause is said too, through the same helper every failure uses', async () => {
     setImpl = () => Promise.reject(new Error("Error invoking remote method 'settings:set': Error: ENOSPC: no space left on device, write"))
     await persistSetting('record.convertToMp4', false)
-    expect(toastError).toHaveBeenCalledWith("Couldn't save your settings. Your disk is full. Free up some space and try again.", { duration: ERROR_TOAST_MS })
+    expect(toastError).toHaveBeenCalledWith("Couldn't save your settings. Your disk is full. Free up some space and try again.", { duration: ERROR_TOAST_MS, id: SETTINGS_FAILED_TOAST_ID })
   })
 
   it('a bridge that throws before it returns a promise is the same: no rejection, one sentence', async () => {
@@ -72,6 +72,19 @@ describe('persistSetting', () => {
     }
     await expect(persistSetting('welcomeSeen', true)).resolves.toBeUndefined()
     expect(toastError).toHaveBeenCalledTimes(1)
+  })
+
+  it('every refusal carries the SAME toast id, so the four writes one Export makes show one sentence, not four (T-132 (13))', async () => {
+    setImpl = () => Promise.reject(new Error('config write refused'))
+    await persistSetting('streamerHandle', '@me')
+    await persistSetting('watermarkPosition', 'top-left')
+    await persistSetting('filenameTemplate', '{name}')
+    await persistSetting('export.lastOutputDir', 'C:/clips')
+    expect(toastError).toHaveBeenCalledTimes(4)
+    const ids = toastError.mock.calls.map((c) => (c[1] as { id?: string }).id)
+    expect(ids, 'react-hot-toast 2.6.0 stacks toasts that have no id of their own; a fixed id replaces the live one').toEqual(Array(4).fill(SETTINGS_FAILED_TOAST_ID))
+    expect(typeof SETTINGS_FAILED_TOAST_ID).toBe('string')
+    expect(SETTINGS_FAILED_TOAST_ID.length).toBeGreaterThan(0)
   })
 
   it('the raw error goes to the console, never to the toast', async () => {

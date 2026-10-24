@@ -27,7 +27,6 @@ import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
 import { reportFailure } from '../../lib/reportFailure'
-import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { formatClock } from '@shared/clockTime'
 
 export function CaptionsPanel(): JSX.Element | null {
@@ -123,7 +122,10 @@ export function CaptionsPanel(): JSX.Element | null {
       const result = await window.api.captions.clearTranscripts()
       const message = clearedTranscriptsMessage(result)
       if (message.error) toast.error(message.text, { duration: ERROR_TOAST_MS })
-      else toast.success(message.text, { duration: result.failed > 0 ? ACTION_TOAST_MS : undefined })
+      // T-132 (14): a clear that got PART of the way is a warning, not a green tick - the rest are still on disk and the sentence says what
+      // to do (the pattern Home's "some of the project could not be opened" uses: the warning icon, the long error duration).
+      else if (result.failed > 0) toast(message.text, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+      else toast.success(message.text)
       if (result.removed > 0) {
         setSegments(null)
         if (startedFor) setSrtPathFor(startedFor, null)
@@ -644,14 +646,16 @@ export function CaptionsPanel(): JSX.Element | null {
       {/* T-128 (3), T-110 (s): every transcription keeps its .srt in imagii's data folder for good. This is the way to empty it from
           here: the line says how many are kept, the button is off with none (and while a job runs, which may be reading one). */}
       {transcriptCount !== null ? (
-        <div className="flex items-center gap-2 text-xs text-ink-dim border-t border-ink-dim/20 pt-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-dim border-t border-ink-dim/20 pt-2">
           <span>
             {transcriptCount === 0
               ? 'No saved transcripts.'
               : `${countOf(transcriptCount, 'saved transcript')} kept on this computer.`}
           </span>
+          {/* T-132 (3): the row wraps by ITEM and the label never wraps by word - in the 295-345 px column the button used to be squeezed
+              beside the sentence and broke "Clear saved / transcripts" onto two lines, the only single-label button in the app that did. */}
           <button
-            className="btn-ghost px-2 py-1 ml-auto inline-flex items-center gap-1.5 disabled:opacity-50"
+            className="btn-ghost px-2 py-1 ml-auto inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50"
             onClick={() => setConfirmClear(true)}
             disabled={running || transcriptCount === 0}
           >

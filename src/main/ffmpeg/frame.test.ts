@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -33,7 +33,12 @@ vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
     spawned.push(args)
-    setImmediate(() => child.emit('close', 0, null))
+    // T-132 (4): a thumbnail is not done until the file is there (`-ss` past the last frame exits 0 and writes none), so the fake ffmpeg
+    // writes its JPEG, as the real one does, before it exits.
+    setImmediate(() => {
+      writeFileSync(args[args.length - 1] as string, 'jpeg')
+      child.emit('close', 0, null)
+    })
     return child
   }
 }))

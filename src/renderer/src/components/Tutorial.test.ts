@@ -369,6 +369,34 @@ describe('tutorialKeyIntent', () => {
     expect(tutorialKeyIntent({ key, onButton: false })).toBe('none')
     expect(tutorialKeyIntent({ key, onButton: true })).toBe('none')
   })
+
+  // T-132 (6): Enter on a focused button is the button's own click on keydown, and the key auto-repeats while it is held; focus is put on
+  // Next after every step, so each repeat landed on the next step's Next and a held Enter walked the whole tour to Done (persisting "seen").
+  // A repeat is not another decision (T-120 gave the Fix wizard the same rule): it is held - its default action canceled, nothing done.
+  it('holds a REPEAT of Enter, on a button or off one: the default click is canceled and nothing advances (T-132 (6))', () => {
+    expect(tutorialKeyIntent({ key: 'Enter', onButton: true, repeat: true })).toBe('hold')
+    expect(tutorialKeyIntent({ key: 'Enter', onButton: false, repeat: true })).toBe('hold')
+  })
+
+  it('holds a repeat of the arrows too: a held ArrowRight would otherwise walk to Done the same way (T-132 (6))', () => {
+    for (const onButton of [true, false]) {
+      expect(tutorialKeyIntent({ key: 'ArrowRight', onButton, repeat: true })).toBe('hold')
+      expect(tutorialKeyIntent({ key: 'ArrowLeft', onButton, repeat: true })).toBe('hold')
+    }
+  })
+
+  it('a fresh press (repeat false, or not said) is untouched: every key above answers as before', () => {
+    expect(tutorialKeyIntent({ key: 'Enter', onButton: true, repeat: false })).toBe('none')
+    expect(tutorialKeyIntent({ key: 'Enter', onButton: false, repeat: false })).toBe('next')
+    expect(tutorialKeyIntent({ key: 'ArrowRight', onButton: false, repeat: false })).toBe('next')
+    expect(tutorialKeyIntent({ key: 'ArrowLeft', onButton: true, repeat: false })).toBe('prev')
+  })
+
+  it('a repeat of any other key is as ignored as the key is, and Escape still closes', () => {
+    expect(tutorialKeyIntent({ key: 'a', onButton: false, repeat: true })).toBe('none')
+    expect(tutorialKeyIntent({ key: 'Tab', onButton: true, repeat: true })).toBe('none')
+    expect(tutorialKeyIntent({ key: 'Escape', onButton: false, repeat: true })).toBe('close')
+  })
 })
 
 /**

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
-import { describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
+import { audioSettled, describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
@@ -112,7 +112,11 @@ export function AutosaveRestore(): JSX.Element | null {
       if (note) {
         toast(note, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
       } else {
-        toast.success('Restored from autosave')
+        // T-132 (11): a restored sound is drawn AFTER it opens and can still be refused; the green line waits for its waveform, and the
+        // navigation below does not wait for the line.
+        void audioSettled(outcome).then((settled) => {
+          if (settled) toast.success('Restored from autosave')
+        })
       }
       setDismissed(true)
       // T-47: and back to the studio they were in, with the selections and

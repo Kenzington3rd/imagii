@@ -19,6 +19,7 @@ import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
 import { clipSpeed, type ClipRecipe, type CompileSegment } from '../../shared/clip'
 import { COMPILE_FPS, compileFps } from '../../shared/compileFps'
+import { FFMPEG_EMPTY_OUTPUT, clipNameForSentence } from './noPicture'
 
 // The fallback rate lives in shared (the Compile card derives the same rate from the same probe); main keeps exporting it by this name.
 export { COMPILE_FPS }
@@ -43,13 +44,38 @@ export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
 
 type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRecipe>
 
-/**
- * What ffmpeg says (exit 0, both majors, measured) when a segment's range holds nothing to write: it wrote a ~970-byte Matroska stub.
- * Layer 5 runs the real binary against this line (T-131 (1)), so a release whose wording changed fails there, not in the field.
- */
-export const FFMPEG_EMPTY_OUTPUT = /Output file is empty/
 /** What the concat demuxer says (exit 0, both majors, measured) when it cannot open a listed segment, and stops there. */
 export const FFMPEG_UNREADABLE_PART = /Impossible to open/
+
+// FFMPEG_EMPTY_OUTPUT moved to ./noPicture with the other runners' guards (T-132 (4)); the name stays importable from here.
+export { FFMPEG_EMPTY_OUTPUT }
+
+/** The refusal for a segment ffmpeg wrote nothing for (T-131 (1), named by T-132 (12)): its place only when it has no name to give. */
+export function emptySegmentMessage(seg: { name?: unknown } | undefined, index: number): string {
+  const name = clipNameForSentence(seg)
+  const who = name ? `The clip "${name}"` : `Clip ${index + 1} of the compilation`
+  return `${who} has no picture in the video (check its start and end), so nothing was saved.`
+}
+
+/**
+ * The refusal for a join that could not open one of its segments (T-131 (1), T-132 (12)): which clip, when ffmpeg's line says which, and
+ * what to do - the segment is the runner's own scratch file, so the cause is usually something holding it (an antivirus scan, a full
+ * temp folder) for a moment, and trying again is the honest first step; a clip that fails every time is the one to leave out.
+ */
+export function lostPartMessage(seg: { name?: unknown } | undefined): string {
+  const name = clipNameForSentence(seg)
+  const lead = 'The compilation could not be put together because'
+  return name
+    ? `${lead} the clip "${name}" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.`
+    : `${lead} one of its clips could not be read, so nothing was saved. Try again, and if it keeps happening, compile fewer clips at a time.`
+}
+
+/** Which segment the concat demuxer could not open: the index in `seg-<job>-<index>.mkv` on its "Impossible to open" line, or null. */
+export function unreadableSegmentIndex(stderr: string, jobId: string): number | null {
+  const escaped = jobId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const found = new RegExp(`Impossible to open[^\\n]*?seg-${escaped}-(\\d+)\\.${SEGMENT_EXTENSION}`).exec(stderr)
+  return found?.[1] === undefined ? null : Number(found[1])
+}
 
 /**
  * The video filter that makes ONE compilation segment (T-96, T-105): the clip's
@@ -286,7 +312,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
         activeJobs.delete(childKey)
         // T-131 (1): an empty segment is an exit-0 stub the join would silently drop, with every segment after it.
         if (code === 0 && wroteNothing) {
-          reject(new Error(`Clip ${i + 1} of the compilation has no picture in the video (check its start and end), so nothing was saved.`))
+          reject(new Error(emptySegmentMessage(seg, i)))
         } else if (code === 0) resolve()
         else reject(cancelledOr(child, new Error(`segment ${i} exit ${code}: ${stderr.slice(-500)}`)))
       })
@@ -339,10 +365,13 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
     activeJobs.set(childKey, child)
     let stderr = ''
     let lostAPart = false
+    // T-132 (12): which segment, read off the same line, while it is still in the kept tail (a sticky fact, like `lostAPart`).
+    let lostIndex: number | null = null
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => {
       stderr += c
       lostAPart ||= FFMPEG_UNREADABLE_PART.test(stderr)
+      if (lostIndex === null) lostIndex = unreadableSegmentIndex(stderr, spec.jobId)
       // Round 18: cap like every other spawn site (round-16 lesson).
       if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
@@ -355,7 +384,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       // T-131 (1): a segment the join cannot open ends the join THERE and ffmpeg still exits 0: a shorter file, "Saved". The catch
       // below removes it like any failed join's output.
       if (code === 0 && lostAPart) {
-        reject(new Error('The compilation could not be put together because one of its clips could not be read, so nothing was saved.'))
+        reject(new Error(lostPartMessage(lostIndex === null ? undefined : spec.segments[lostIndex])))
       } else if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })

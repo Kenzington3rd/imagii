@@ -426,10 +426,10 @@ export function RecordStudio(): JSX.Element {
       const mimePref = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
       const mime = mimePref.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
       // T-120: say the bitrate. Without `videoBitsPerSecond` Chromium encodes at about 2.5 Mbps, which is soft
-      // for 1080p gameplay before a platform re-encodes it; 8 Mbps is the top export preset's rate (YouTube's,
-      // the others are 5-6 Mbps) and is a CEILING here, not what a take is written at: the encoder spends what the
-      // picture needs (2.56 Mbps measured on a flat synthetic canvas). The cost is disk, at most about 1 MB a
-      // second, 3.6 GB an hour, in the temp take AND the saved copy.
+      // for 1080p gameplay before a platform re-encodes it. 8 Mbps is this recording's OWN ceiling (T-132 (8): it was
+      // once "the top export preset's rate", and the 1080p60 preset's 12M is the top now), a CEILING and not what a take
+      // is written at: the encoder spends what the picture needs (2.56 Mbps measured on a flat synthetic canvas). The
+      // cost is disk, at most about 1 MB a second, 3.6 GB an hour, in the temp take AND the saved copy.
       const recorder = new MediaRecorder(combined, {
         ...(mime ? { mimeType: mime } : {}),
         videoBitsPerSecond: RECORDING_VIDEO_BITS_PER_SECOND

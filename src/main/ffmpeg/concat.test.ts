@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildSegmentFilter, buildSegmentFilters, COMPILE_FPS } from './concat'
+import { buildSegmentFilter, buildSegmentFilters, COMPILE_FPS, emptySegmentMessage, lostPartMessage, unreadableSegmentIndex } from './concat'
+import { clipNameForSentence } from './noPicture'
 import { buildAudioSpeedFilter, buildVideoFilter, cropToFrame } from './filters'
 import { PLATFORM_PRESETS } from './presets'
 import type { Clip, ColorGrade, TextOverlay } from '../../shared/clip'
@@ -312,5 +313,43 @@ describe('buildSegmentFilters — the sound is padded to the picture\'s length (
 
   it('a clip shorter than a tenth of a second is padded to the tenth the fades already use', () => {
     expect(pad(buildSegmentFilters({ startSec: 0, endSec: 0.05 }, src, 1920, 1080, 0, 0))).toBe('apad=whole_dur=0.100')
+  })
+})
+
+describe('the compilation refusals name the clip by its name, not its place (T-132 (12))', () => {
+  it('clipNameForSentence: the name as the person sees it, on one line, shortened; null when there is nothing to say', () => {
+    expect(clipNameForSentence({ name: 'Boss fight' })).toBe('Boss fight')
+    expect(clipNameForSentence({ name: '  Boss   fight\n(2) ' })).toBe('Boss fight (2)')
+    expect(clipNameForSentence({ name: 'x'.repeat(50) })).toBe('x'.repeat(50))
+    expect(clipNameForSentence({ name: 'x'.repeat(51) })).toBe(`${'x'.repeat(49)}…`)
+    for (const bad of [undefined, {}, { name: '' }, { name: '   ' }, { name: 5 }, { name: null }]) expect(clipNameForSentence(bad as never)).toBeNull()
+  })
+
+  it('an empty clip is "The clip \"<name>\"", and by its place only when it has no name', () => {
+    expect(emptySegmentMessage({ name: 'Clip 5' }, 1)).toBe('The clip "Clip 5" has no picture in the video (check its start and end), so nothing was saved.')
+    // The default name "Clip 5" is the fifth clip made, not the second in the list: the sentence must not say "Clip 2".
+    expect(emptySegmentMessage({ name: 'Clip 5' }, 1)).not.toContain('Clip 2')
+    expect(emptySegmentMessage({ name: ' ' }, 1)).toBe('Clip 2 of the compilation has no picture in the video (check its start and end), so nothing was saved.')
+  })
+
+  it('a clip the join could not read: named with a next step, or the same next step without a name', () => {
+    expect(lostPartMessage({ name: 'Intro' })).toBe(
+      'The compilation could not be put together because the clip "Intro" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.'
+    )
+    expect(lostPartMessage(undefined)).toMatch(/because one of its clips could not be read, so nothing was saved\. Try again, .*compile fewer clips at a time\.$/)
+    // Both are finished sentences that fit userFacingError's 240 characters, even with the longest name a refusal quotes.
+    expect(lostPartMessage({ name: 'x'.repeat(500) }).length).toBeLessThanOrEqual(240)
+    expect(emptySegmentMessage({ name: 'x'.repeat(500) }, 0).length).toBeLessThanOrEqual(240)
+  })
+
+  it('unreadableSegmentIndex: the index in the segment file ffmpeg could not open, for this job only', () => {
+    expect(unreadableSegmentIndex("[concat @ 0x40dea0c0] Impossible to open '/tmp/imagii-concat/seg-job.1-7.mkv'", 'job.1')).toBe(7)
+    expect(unreadableSegmentIndex("Impossible to open 'C:\\Users\\me\\AppData\\Local\\Temp\\imagii-concat\\seg-abc-12.mkv'", 'abc')).toBe(12)
+    expect(unreadableSegmentIndex("Impossible to open '/tmp/imagii-concat/seg-other-1.mkv'", 'job')).toBeNull()
+    expect(unreadableSegmentIndex("Opening '/tmp/imagii-concat/seg-job-1.mkv' for reading", 'job')).toBeNull()
+    expect(unreadableSegmentIndex('', 'job')).toBeNull()
+    // A regex metacharacter in the job id is a character, not a pattern.
+    expect(unreadableSegmentIndex("Impossible to open '/t/seg-a+b-3.mkv'", 'a+b')).toBe(3)
+    expect(unreadableSegmentIndex("Impossible to open '/t/seg-aab-3.mkv'", 'a+b')).toBeNull()
   })
 })

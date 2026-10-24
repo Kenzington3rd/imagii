@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
 import { formatBitrate, normalizeBitrate } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetStartFor } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 import { DraftField } from '../../components/DraftField'
@@ -57,9 +57,13 @@ export function CustomPresetManager({
   if (!open) return null
 
   function loadFromBase(p: PlatformId): void {
-    const info = PLATFORM_INFO[p]
-    setWidth(info.width)
-    setHeight(info.height)
+    // T-132 (7): the platform's whole encode, not its size alone - a preset based on YouTube 1080p60 starts at 60 fps and 12M.
+    const start = customPresetStartFor(p)
+    setWidth(start.width)
+    setHeight(start.height)
+    setFps(start.fps)
+    setVideoBitrate(start.videoBitrate)
+    setAudioBitrate(start.audioBitrate)
     setBase(p)
   }
 

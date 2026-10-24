@@ -12,6 +12,10 @@ export interface PlatformInfo {
    *  every export used to run at 30 fps and nothing said so (T-92). Mirrors
    *  main's table; `presetTablesInSync.test.ts` holds the two together. */
   fps: number
+  /** The encode's two bitrates, as main's table writes them ("8M", "192k"): the custom-preset form starts a preset on a platform at
+   *  these (T-132 (7)). Mirrors main's table; `presetTablesInSync.test.ts` holds the two together. */
+  videoBitrate: string
+  audioBitrate: string
   aspectRatio: number
   durationSweetSpot: { min: number; max: number }
   durationHardLimit: number
@@ -24,17 +28,21 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1920,
     height: 1080,
     fps: 30,
+    videoBitrate: '8M',
+    audioBitrate: '192k',
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
     durationHardLimit: 12 * 60 * 60
   },
-  // T-130 (q): the same platform at 60 fps (main's table has the bitrate; the grid prints the size and the rate).
+  // T-130 (q): the same platform at 60 fps; 12M is YouTube's own recommendation for 1080p60 (main's table carries the same).
   youtube60: {
     id: 'youtube60',
     label: 'YouTube 1080p60',
     width: 1920,
     height: 1080,
     fps: 60,
+    videoBitrate: '12M',
+    audioBitrate: '192k',
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
     durationHardLimit: 12 * 60 * 60
@@ -45,6 +53,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1080,
     height: 1920,
     fps: 30,
+    videoBitrate: '6M',
+    audioBitrate: '128k',
     aspectRatio: 9 / 16,
     // B4 fix (round 15): Meta extended Reels to 3 minutes in January 2025; sweet spot
     // bumped to 90 s to match the longer-form Reels norm.
@@ -62,6 +72,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1080,
     height: 1920,
     fps: 30,
+    videoBitrate: '6M',
+    audioBitrate: '128k',
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 21, max: 34 },
     // B3 fix (round 15): TikTok extended uploads to 60 minutes in late 2024.
@@ -74,6 +86,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1280,
     height: 720,
     fps: 30,
+    videoBitrate: '5M',
+    audioBitrate: '128k',
     aspectRatio: 16 / 9,
     // INIT-B (round 15): free tier caps at 2:20 (140 s); Premium subscribers
     // upload longer. Setting the hard limit at 140 s red-flagged Premium
@@ -89,6 +103,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1280,
     height: 720,
     fps: 30,
+    videoBitrate: '5M',
+    audioBitrate: '128k',
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 15, max: 240 },
     durationHardLimit: 240 * 60
@@ -157,6 +173,16 @@ export function customPresetInfo(preset: CustomPreset): PlatformInfo {
 }
 
 /**
+ * T-132 (7): what the custom-preset form's five boxes are set to when a platform is picked as its "Base on": that platform's size, its
+ * frame rate and its two bitrates (the same table the grid prints and main encodes from). The form used to load the size alone, so a
+ * preset based on YouTube 1080p60 started at 30 fps and 8M while its ledger sentence said 60.
+ */
+export function customPresetStartFor(id: PlatformId): Pick<PlatformInfo, 'width' | 'height' | 'fps' | 'videoBitrate' | 'audioBitrate'> {
+  const { width, height, fps, videoBitrate, audioBitrate } = PLATFORM_INFO[id]
+  return { width, height, fps, videoBitrate, audioBitrate }
+}
+
+/**
  * The frame a compilation is written at (T-105). The Compile panel sends this to
  * main AND judges every clip against it, so the file and the verdict cannot be
  * about two different frames. The rate is the source's up to 60, derived by
@@ -180,6 +206,10 @@ export const COMPILE_TARGET: PlatformInfo = {
   height: COMPILE_SIZE.height,
   // The fallback rate: a compilation is written at its source's (T-130 (q), `compileFps`), and the verdict this row stands for never reads it.
   fps: COMPILE_FPS,
+  // T-132 (7): required by the shape, read by nothing for a compilation (it is not a base platform; its picture is not encoded at a set
+  // bitrate and its join writes AAC at 192k): YouTube's, the figures a 1080p export would carry.
+  videoBitrate: PLATFORM_INFO.youtube.videoBitrate,
+  audioBitrate: '192k',
   aspectRatio: COMPILE_SIZE.width / COMPILE_SIZE.height,
   durationSweetSpot: { min: 0, max: Number.POSITIVE_INFINITY },
   durationHardLimit: Number.POSITIVE_INFINITY

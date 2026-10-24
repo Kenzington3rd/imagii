@@ -1244,7 +1244,25 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     expect(flow).toContain("Skipped this video's sound because you opened another file in Audio Studio while it was extracting")
     // the same rule opening a project uses, not a second copy of it
     expect(read('modules/project/ProjectIO.ts')).toMatch(/export function replacedSince</)
-    expect(studio).toMatch(/import \{ replacedSince \} from '\.\.\/project\/ProjectIO'/)
+    expect(studio).toMatch(/import \{ currentRoute, replacedSince \} from '\.\.\/project\/ProjectIO'/)
+  })
+
+  // T-132 (1): the extraction takes minutes, and `navigate` still works from a studio that unmounted (react-router's activeRef never resets), so
+  // Clean audio took the person to /audio wherever they were: from /record that unmounted RecordStudio, whose cleanup stops the tracks and cut a
+  // live take short. E2E: record.spec.ts "Clean audio finishing during a live take does not move the person or stop the take" (the take runs on,
+  // no "Opening Audio Studio") and video-pipelines.spec.ts "Clean audio finishing while the person is elsewhere loads the sound and offers Open
+  // Audio Studio"; the stay-on-/video path is every existing Clean audio case (it still navigates).
+  it('Clean audio navigates only a person who is still on Video Studio; anyone else keeps their screen and is offered the way (T-132 (1))', () => {
+    const studio = read('modules/video-studio/VideoStudio.tsx').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full'))
+    const where = flow.indexOf('const where = currentRoute()')
+    const load = flow.indexOf('await loadAudioSource(')
+    expect(where, 'the route is read AFTER the wait, when the sound is loaded').toBeGreaterThan(load)
+    expect(flow).toMatch(/if \(where === '\/video'\) \{\s*toast\.success\('Opening Audio Studio'\)\s*navigate\('\/audio'\)\s*\} else \{/)
+    expect(flow.match(/navigate\('\/audio'\)/g) ?? [], 'two places navigate: the stay-here branch, and the toast\'s own button').toHaveLength(2)
+    expect(flow).toMatch(/where === '\/audio' \? \[\] : \[\{ label: 'Open Audio Studio', onClick: \(\) => navigate\('\/audio'\) \}\]/)
+    // The route is read from the hash the router writes, by the one function Save project reads it with (not a render's stale closure).
+    expect(read('modules/project/ProjectIO.ts')).toMatch(/export function currentRoute\(\): string \| undefined/)
   })
 
   it('DraftField keeps what is typed while the box has focus, even after a live commit, and gives the box back to the store only on leaving (T-125 (8))', () => {
@@ -1722,6 +1740,88 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(proc).toMatch(/export function cancelAllAudioJobs\(\): void \{[\s\S]*?cancelAllPeaks\(\)\s*\}/)
     const audio = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/audio.ts'), 'utf8'))
     expect(audio).toMatch(/ipcMain\.handle\('audio:peaks', async \(e, filePath: string, jobId: string\) => \{\s*assertSafeAbsolutePath\(filePath, 'audio:peaks filePath'\)\s*assertNonEmptyString\(jobId, 'audio:peaks jobId'\)\s*return readPeaks\(filePath, jobId, \(p\) => sendIfAlive\(e\.sender, 'audio:peaksProgress', p\)\)/)
+  })
+
+  // T-132 (5): wavesurfer 7.12.6's `normalize` finds its scale in channel 0 (the highs) ONLY (`calculateVerticalScale`), so a take whose lows
+  // are louder drew the bottom half past the canvas edge. `maxPeak` is its own fixed-scale option: the view hands it the loudest sample of
+  // BOTH halves. E2E: audio.spec.ts "an asymmetric take draws both halves to scale" reads the painted canvas.
+  it('the waveform is scaled by the loudest sample of both halves, not wavesurfer\'s highs-only guess (T-132 (5))', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    expect(view).toMatch(/normalize: true,\s*maxPeak: peaksMaxMagnitude\(waveform\.peaks\),/)
+    expect(view).toMatch(/import \{ PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude \} from '@shared\/audio'/)
+    // ...and the option is one the installed wavesurfer honors (typed, and read by the renderer's scale), or this is a no-op.
+    const wsRoot = path.resolve(RENDERER_ROOT, '../../../node_modules/wavesurfer.js/dist')
+    expect(readFileSync(path.join(wsRoot, 'wavesurfer.d.ts'), 'utf8')).toMatch(/maxPeak\?: number/)
+    expect(readFileSync(path.join(wsRoot, 'renderer.js'), 'utf8')).toMatch(/maxPeak: options\.maxPeak/)
+  })
+
+  // T-132 (11): `loadSource` resolves when the file is OPEN, and its waveform is read after that (T-129): main can still refuse it, and the
+  // studio then lets go of it. The green "Loaded" and the Recent entry landed first (a refused file sat in Recent beside the refusal), and so
+  // did "Project loaded" / "Restored from autosave" for a project whose sound was refused. E2E: audio.spec.ts "a file main cannot read the sound
+  // of is refused while its waveform is drawn" (no "Loaded", nothing in Recent); the project lines are held by `audioSettled`'s unit cases.
+  it('"Loaded" and the Recent entry wait for the waveform; the project lines wait for the sound the open put there (T-132 (11))', () => {
+    const importer = strip(read('modules/audio-studio/AudioImporter.tsx'))
+    const arrived = importer.indexOf('if (!(await waveformArrived(opened))) return')
+    expect(arrived, 'the importer asks whether the waveform came').toBeGreaterThan(-1)
+    expect(importer.indexOf('await push(filePath)'), 'the Recent entry comes after the answer').toBeGreaterThan(arrived)
+    expect(importer.indexOf("toast.success('Loaded')"), '"Loaded" comes after it').toBeGreaterThan(arrived)
+    expect(importer.match(/opened = await loadSource\(/g) ?? [], 'both ways in keep the source they opened').toHaveLength(2)
+    expect(strip(read('routes/Home.tsx'))).toMatch(/\} else if \(await audioSettled\(outcome\)\) \{\s*toast\.success\('Project loaded'\)/)
+    const restore = strip(read('components/AutosaveRestore.tsx'))
+    expect(restore).toMatch(/void audioSettled\(outcome\)\.then\(\(settled\) => \{\s*if \(settled\) toast\.success\('Restored from autosave'\)/)
+    expect(restore, 'and the restore\'s navigation does not wait for the line').not.toMatch(/await audioSettled/)
+    const project = strip(read('modules/project/ProjectIO.ts'))
+    expect(project.match(/opened = await useAudioStore\.getState\(\)\.loadSource\(/g) ?? [], 'the three ways a project opens its sound').toHaveLength(3)
+    expect(project).toMatch(/if \(opened\) outcome\.audioOpened = opened/)
+  })
+
+  // T-132 (7): "Base on" sets all five boxes from the platform, not the size alone. E2E: video-pipelines.spec.ts "saves, lists, queues and
+  // deletes a custom preset" drives the select to YouTube 1080p60 and reads the boxes (60 fps, 12M, 192k).
+  it('"Base on" loads the platform\'s rate and bitrates into the form, not its size alone (T-132 (7))', () => {
+    const manager = strip(read('modules/video-studio/CustomPresetManager.tsx'))
+    const load = manager.slice(manager.indexOf('function loadFromBase'), manager.indexOf('async function save'))
+    expect(load).toMatch(/const start = customPresetStartFor\(p\)/)
+    for (const setter of ['setWidth(start.width)', 'setHeight(start.height)', 'setFps(start.fps)', 'setVideoBitrate(start.videoBitrate)', 'setAudioBitrate(start.audioBitrate)', 'setBase(p)']) {
+      expect(load, setter).toContain(setter)
+    }
+  })
+
+  // T-132 (6): the tour's window keydown hands the key's `repeat` to `tutorialKeyIntent`, and a 'hold' cancels the default action (the focused
+  // button's click) and does nothing else. E2E: home-chrome.spec.ts "Video tutorial: a held Enter steps once".
+  it('the tour passes e.repeat to its key intent and cancels a held key without stepping (T-132 (6))', () => {
+    const tour = strip(read('components/Tutorial.tsx'))
+    expect(tour).toMatch(/tutorialKeyIntent\(\{ key: e\.key, onButton, repeat: e\.repeat \}\)/)
+    expect(tour).toMatch(/if \(intent === 'none'\) return\s*[\s\S]*?e\.preventDefault\(\)\s*if \(intent === 'close'\) onClose\(\)\s*else if \(intent === 'next'\) next\(\)\s*else if \(intent === 'prev'\) prev\(\)/)
+  })
+
+  // T-132 (3): the "Clear saved transcripts" row wraps by item and its label never wraps by word. E2E: video-pipelines.spec.ts "the Clear
+  // saved transcripts row keeps its label on one line and inside its card at the default window and the minimum" measures the real layout.
+  it('the Clear saved transcripts row wraps by item and the button keeps its label on one line (T-132 (3))', () => {
+    const panel = read('modules/video-studio/CaptionsPanel.tsx')
+    const row = panel.slice(panel.indexOf('{transcriptCount !== null ? ('), panel.indexOf('<Modal'))
+    expect(row).toMatch(/<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-dim border-t border-ink-dim\/20 pt-2">/)
+    expect(row).toMatch(/className="btn-ghost px-2 py-1 ml-auto inline-flex items-center gap-1\.5 whitespace-nowrap disabled:opacity-50"/)
+  })
+
+  // T-132 (14): `clearedTranscriptsMessage` documents a partial clear as something other than a success, and the panel drew it with
+  // `toast.success` (a green tick over "Cleared 2 of 3 saved transcripts. The rest are open in another program"). E2E: video-pipelines.spec.ts
+  // "a clear that got part of the way is a warning" (main's handler answers 2 removed, 1 failed: the card has the warning icon, no tick).
+  it('a partial transcript clear is a warning toast, a full one a success and a total refusal an error (T-132 (14))', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    const clear = panel.slice(panel.indexOf('async function clearTranscripts'), panel.indexOf('async function transcribe'))
+    expect(clear).toMatch(/if \(message\.error\) toast\.error\(message\.text, \{ duration: ERROR_TOAST_MS \}\)\s*else if \(result\.failed > 0\) toast\(message\.text, \{ icon: <Icon name="warning" size=\{18\} \/>, duration: ERROR_TOAST_MS \}\)\s*else toast\.success\(message\.text\)/)
+    expect(clear, 'a partial clear is not drawn with the success toast').not.toMatch(/toast\.success\(message\.text, \{/)
+  })
+
+  // T-132 (9): Play is off until the waveform is drawn (T-129: seconds, up to tens of seconds for a long file) and drew like a live button
+  // all that time - `btn-ghost` has no disabled look of its own, and every other disabled button in the app carries `disabled:opacity-50`.
+  // E2E: audio.spec.ts "Play looks disabled while the waveform is being drawn" reads the computed opacity.
+  it('Play is dimmed while it is off (T-132 (9)): the disabled button carries the class every other one does', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    const play = view.slice(view.indexOf('<button\n          className="btn-ghost px-3 py-2'), view.indexOf('<Icon name={playing ?'))
+    expect(play, 'found the Play button').toMatch(/onClick=\{togglePlay\}/)
+    expect(play).toMatch(/className="btn-ghost px-3 py-2 disabled:opacity-50"/)
+    expect(play).toMatch(/disabled=\{!ready\}/)
   })
 
   it('Reframe carries the clip\'s whole recipe (crop, speed, color, text, Auto Zoom, Hype Shake: the fields Compile sends), and Reframe and GIF are named for the video the person opened (16, 17; T-125 (9))', () => {

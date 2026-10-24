@@ -427,8 +427,8 @@ export function ExportPanel(): JSX.Element | null {
     0
   )
 
-  /** Everything the user can tick for a clip: the five platforms, then the
-   *  saved custom presets in the order the manager lists them (by name). */
+  /** Everything the user can tick for a clip: the six built-in cards (five platforms, YouTube
+   *  1080p60 beside YouTube), then the saved custom presets in the order the manager lists them (by name). */
   const gridTargets: Array<{ key: string; info: PlatformInfo; custom: CustomPreset | null }> = [
     ...ALL_PLATFORM_IDS.map((id) => ({ key: id, info: PLATFORM_INFO[id], custom: null })),
     ...customPresets.map((p) => ({ key: p.id, info: customPresetInfo(p), custom: p }))
@@ -579,7 +579,7 @@ export function ExportPanel(): JSX.Element | null {
 
       {selectedClip ? (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-          {/* T-50: the five platforms, then every saved custom preset. Same
+          {/* T-50: the six built-in cards (T-130: YouTube 1080p60 joined the five), then every saved custom preset. Same
               checkbox, same geometry line, same success indicator — a saved
               preset is an export target, so it looks and behaves like one.
               The only difference is the "custom" tag that lets the eye split

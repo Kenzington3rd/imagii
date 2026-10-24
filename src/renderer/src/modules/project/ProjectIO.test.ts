@@ -16,9 +16,11 @@ import {
   captureProject,
   applyProject,
   applyPlace,
+  currentRoute,
   describeApplyOutcome,
   describeUnavailableSources,
   replacedSince,
+  audioSettled,
   sessionHoldsWork
 } from './ProjectIO'
 import { useVideoStore } from '../video-studio/store/videoStore'
@@ -2027,6 +2029,100 @@ describe('replacedSince (T-112, T-113, T-125 (20))', () => {
     const held = useAudioStore.getState().source
     await useAudioStore.getState().loadSource(AUDIO_PATH)
     expect(replacedSince(held, useAudioStore.getState().source)).toBe(true)
+  })
+})
+
+/**
+ * T-132 (11) - `audioSettled`: "Project loaded" / "Restored from autosave" were said the moment `applyProject` returned, but the sound it
+ * opened is drawn AFTER that (T-129), and a file main then refuses is let go of with an error. The green line waits for the waveform of
+ * the sound THIS open put in Audio Studio (`outcome.audioOpened`); a project that opened no sound has nothing to wait for.
+ */
+describe('audioSettled - a project open is only good news once the sound it opened has its waveform (T-132 (11))', () => {
+  let peaksAnswer: () => Promise<unknown>
+  const project = (): ImagiiProject =>
+    ({ schemaVersion: 4, savedAt: 0, appVersion: '1.0.0', audioStudio: { sourcePath: AUDIO_PATH, chain: DEFAULT_CHAIN_FOR_TEST } }) as unknown as ImagiiProject
+  beforeEach(() => {
+    peaksAnswer = () => Promise.resolve({ peaks: [[0.5], [-0.5]], duration: 120 })
+    vi.stubGlobal('window', {
+      api: {
+        audio: { ...PEAKS_BRIDGE, peaks: () => peaksAnswer(), probe: () => Promise.resolve(AUDIO_PROBE) },
+        video: { fileUrl: (p: string) => pathToImagiiFileUrl(p) }
+      }
+    })
+    useAudioStore.getState().clearSource()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('a project with no sound has nothing to wait for', async () => {
+    const outcome = await applyProject({ schemaVersion: 4, savedAt: 0, appVersion: '1.0.0' } as unknown as ImagiiProject)
+    expect(outcome.audioOpened).toBeUndefined()
+    expect(await audioSettled(outcome)).toBe(true)
+  })
+
+  it('records the sound the open put in Audio Studio, and is true when its waveform arrives', async () => {
+    let answer: (v: unknown) => void = () => undefined
+    peaksAnswer = () => new Promise((resolve) => { answer = resolve })
+    const outcome = await applyProject(project())
+    expect(outcome.audioOpened, 'the source this open loaded').toBe(useAudioStore.getState().source)
+    let verdict: boolean | null = null
+    void audioSettled(outcome).then((v) => { verdict = v })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(verdict, 'still being read').toBeNull()
+    answer({ peaks: [[0.5], [-0.5]], duration: 120 })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(verdict).toBe(true)
+  })
+
+  it('is false when the sound the open put there is refused - even when the refusal landed before anyone asked', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    peaksAnswer = () => Promise.reject(new Error('Error invoking remote method \'audio:peaks\': Error: imagii couldn\'t read the sound in this file to draw its waveform.'))
+    const outcome = await applyProject(project())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useAudioStore.getState().source, 'the studio already let go of it').toBeNull()
+    expect(outcome.audioOpened, 'but the open recorded what it opened').toBeDefined()
+    expect(await audioSettled(outcome)).toBe(false)
+  })
+
+  it('a sound that could not be opened at all is the outcome\'s own business (a file that is gone), and records nothing', async () => {
+    vi.stubGlobal('window', {
+      api: { audio: { ...PEAKS_BRIDGE, probe: () => Promise.reject(new Error('ffprobe exit 1: /home/user/Audio/mic.wav: No such file or directory')) }, video: { fileUrl: (p: string) => pathToImagiiFileUrl(p) } }
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const outcome = await applyProject(project())
+    expect(outcome.unavailable).toHaveLength(1)
+    expect(outcome.audioOpened).toBeUndefined()
+  })
+})
+
+/**
+ * T-132 (1) - `currentRoute`: where the person is RIGHT NOW, for code that outlives the component that started it. Clean audio's
+ * extraction takes minutes; what decides whether the result may take the person to Audio Studio is the screen they are on when it ends.
+ */
+describe('currentRoute - the screen on display, read off the router\'s hash (T-47, T-132 (1))', () => {
+  const at = (hash: string): string | undefined => {
+    vi.stubGlobal('window', { location: { hash } })
+    return currentRoute()
+  }
+  it.each([['#/video', '/video'], ['#/record', '/record'], ['#/audio', '/audio'], ['#/image', '/image'], ['#/references', '/references'], ['#/home', '/home']])(
+    '%s is %s',
+    (hash, route) => {
+      expect(at(hash)).toBe(route)
+    }
+  )
+
+  it('is undefined for anything that is not one of the app\'s routes, or no hash at all', () => {
+    expect(at('')).toBeUndefined()
+    expect(at('#')).toBeUndefined()
+    expect(at('#/nowhere')).toBeUndefined()
+    expect(at('#/video/extra')).toBeUndefined()
+    expect(at('#/video?x=1')).toBeUndefined()
+  })
+
+  it('is undefined with no window at all (a plain function can be called anywhere)', () => {
+    vi.stubGlobal('window', undefined)
+    expect(currentRoute()).toBeUndefined()
   })
 })
 

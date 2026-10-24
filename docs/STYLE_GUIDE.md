@@ -113,6 +113,9 @@ Repeated UI is a component, not copy-paste:
   old copy once the new one is stored) stays an `await` in a `try` with a `catch`. `failurePathLanguage.test.ts` fails on any other
   `window.api.settings.set` that is neither awaited inside a `try` with a `catch` nor `.catch`ed (a `void` call inside a `try` is not caught by
   it: the rejection arrives after the `try` is over). The pickers, cancels and reads that are also awaited bare are not this rule's.
+  T-132 (13): the refusal's toast has ONE fixed id (`SETTINGS_FAILED_TOAST_ID`, passed through `reportFailure`'s optional `id`), because Export
+  makes up to four of these writes in one press and a refusal of the settings file refuses all of them: with no id react-hot-toast 2.6.0
+  stacks four identical red cards, and with one the later calls replace the live card.
 - **Cancel is a fact, not a string.** Pressing Cancel SIGKILLs the child,
   which exits non-zero exactly like a crash. Main marks the kill —
   `killAsCancelled(child)` in a runner's cancel function,
@@ -804,14 +807,35 @@ If you write the same markup a third time, extract it.
   shows `WAVEFORM_READ_FAILED` as written (`reportFailure`) - and a file closed or replaced while it draws has its job stopped
   through `audio:cancel` (the job has a per-job registry and a `CancelLatch` run, so the quit sweep and the quit's drain cover it).
   `WaveformView` listens to wavesurfer's `error` (it can emit it twice for one failed load, so the toast has an id): with peaks,
-  what fails there is PLAYBACK, so the sentence is `PLAYBACK_ERROR_MESSAGE` and Play goes back off. There is no length gate
+  what fails there is PLAYBACK, so the sentence is `PLAYBACK_ERROR_MESSAGE` and Play goes back off (T-132 (10): it says the waveform,
+  the cuts and Export still work, and sends a WAV owner to "a standard PCM WAV", not to WAV). There is no length gate
   anywhere: `audio:extractFromVideo` probes only for "no sound" and for whether the file has a picture (T-126 (7), T-127 (10)).
+  T-132 (5): `normalize: true` alone scales the waveform by the loudest sample of channel 0 (the highs) ONLY, so a take with louder
+  lows drew its bottom half past the canvas edge; `WaveformView` passes `maxPeak: peaksMaxMagnitude(waveform.peaks)` (the loudest of
+  both halves, `shared/audio.ts`). T-132 (11): `loadSource` resolves when the file is OPEN, with the source it opened, and its waveform is
+  read after that, so "the file opened" is not "main could read it": whoever celebrates a file asks `waveformArrived(source)` first
+  (the importer's green "Loaded" and its Recent entry; the project open's "Project loaded" and "Restored from autosave" ask
+  `audioSettled(outcome)`, about the source `applyProject` recorded in `outcome.audioOpened`, because a refusal that landed before
+  anyone asked leaves the studio EMPTY, which is not "nothing was opened"). Play is `disabled:opacity-50` while the waveform is drawn.
 - **What the Player owns, the Timeline asks for through the store (T-120, T-121).** The Player registers a `PlayerTransport` (`readTime`, the
   element's exact `currentTime`; `togglePlay`, its own play / pause) with `registerTransport` while it is mounted. The Timeline's Space
   calls `togglePlay`, and its arrows, `,` / `.` and I / O read `playheadNow(state)`: the element's time, else the store's `currentTime`, which is
   written on `timeupdate` and trails playback by up to a quarter second. There is one play / pause and one reading of "where the playhead is" for
   every key that acts on it; the store's `currentTime` is read in the Timeline only to DRAW the playhead and announce the slider's value, which
   may lag a quarter second behind a playing picture.
+- **A completion that outlives its screen asks where the person IS before it moves them (T-132 (1)).** `useNavigate`'s `navigate` keeps
+  working from a component that unmounted (react-router's `activeRef` is set once and never reset), so a long job's `navigate('/audio')`
+  at its end took the person there from wherever they had gone - from `/record` that unmounted `RecordStudio`, whose cleanup stops the
+  tracks, and a LIVE TAKE was cut short. A job that can outlast its screen reads `currentRoute()` (`ProjectIO.ts`, the router's own hash) AFTER
+  the wait, navigates only a person who is still on the screen that started it, and otherwise loads the result and raises a toast whose
+  action is the way there (`toastWithActions`; on the destination itself, no action). Clean audio is the case; `ProjectIO.applyPlace`'s
+  "nothing teleports the user" is the same rule for a project open.
+- **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4)).** A range that lies past the PICTURE exits 0 having written a
+  261-byte stream-less container ("Output file is empty") or an audio-only mp4 (the sound outlasts the picture; no such line). Every runner
+  that writes a video closes on `wroteNoPicture(sawEmptyOutput, frames)` (`ffmpeg/noPicture.ts`): the sticky stderr line OR the final
+  `frame=0` of `-progress pipe:1` (`PictureFrames`, which keeps an unfinished line until it is whole), rejects with a finished sentence naming
+  the clip, and lets the existing `discardPartialOutput` remove the wreckage. `extractFrame` asks `wroteOutput` (a non-empty file written by
+  THIS run) after its exit 0. A stream that never reported a count is not accused.
 - **An `await` in a start that can outlive its screen is followed by the unmount check (T-120).** `RecordStudio.startRecording` awaits the
   capture, the microphone, the camera, the compositor and the main-process session, and the unmount cleanup runs before any of them lands.
   `unmountedRef` is cleared on mount (StrictMode runs the cleanup and the effect again in dev) and set in the cleanup;

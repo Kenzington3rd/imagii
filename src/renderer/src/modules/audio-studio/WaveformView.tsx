@@ -6,7 +6,7 @@ import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
 import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
-import { PLAYBACK_ERROR_MESSAGE } from '@shared/audio'
+import { PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { formatClock } from '@shared/clockTime'
 
@@ -65,6 +65,9 @@ export function WaveformView(): JSX.Element | null {
       barGap: 1,
       barRadius: 1,
       normalize: true,
+      // T-132 (5): `normalize` alone scales by the loudest of channel 0 (the HIGHS); a take with louder lows drew its bottom half past the
+      // canvas edge. The loudest of both halves, so the whole waveform is scaled by one number that fits it.
+      maxPeak: peaksMaxMagnitude(waveform.peaks),
       plugins: [regions]
     })
     wsRef.current = ws
@@ -192,7 +195,7 @@ export function WaveformView(): JSX.Element | null {
       )}
       <div className="flex items-center gap-3 text-sm">
         <button
-          className="btn-ghost px-3 py-2"
+          className="btn-ghost px-3 py-2 disabled:opacity-50"
           onClick={togglePlay}
           disabled={!ready}
           title={playing ? 'Pause' : 'Play'}

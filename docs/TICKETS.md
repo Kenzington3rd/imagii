@@ -4783,7 +4783,7 @@ IMG-PREC.
   11 land with their e2e cases; `npm run verify`, `npm run
   test:media` and the FULL Playwright suite green before handback;
   no docs/TICKETS.md, package.json or lockfile edits.
-- **Status:** open (round 81)
+- **Status:** done (round 81 — see the Done entry)
 
 ---
 
@@ -5205,6 +5205,51 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 81 — T-132, all 14 of the eighteenth sweep's verified
+findings, landed in the commit that carries this entry. Worked by
+one Sonnet in a fresh clone of 1304e0a; 51 ledger mutations all
+restored byte-identical, 22 reds, 11 of the new e2e cases proven
+red against a build of the unchanged base tree. The worker
+disclosed two survived mutants (each superseded by a stronger one),
+three after-the-fact TSV exit-code corrections, one documented
+redesign (the first audioSettled draft read an empty studio as "no
+sound opened"), and one measured deviation the expediter replicated
+personally on BOTH majors before accepting: the ticket's
+FFMPEG_EMPTY_OUTPUT sketch cannot catch the audio-only trigger
+(that run prints NOTHING to stderr), so the new
+src/main/ffmpeg/noPicture.ts reads ffmpeg's own progress stream and
+treats a last-block frame=0 OR the stderr line as "wrote no
+picture" — a stream that never reported is not accused, and
+legitimate one-frame clips stay successes. Headlines: Clean audio's
+completion navigates only when the person is still on /video
+(anywhere else the sound loads silently and a toast offers the way;
+a live Record take keeps recording — e2e holds the extraction 14 s
+through a take); Export/Reframe/extractFrame refuse empty and
+audio-only output with named-clip sentences through the existing
+discard path (both-majors Layer 5, 9 cases); PRODUCT_GUIDE's
+reverted ceiling sentence is restored and docClaims now scans
+README, PRODUCT_GUIDE and USER_GUIDE; the Clear-transcripts row
+wraps whole; the waveform's maxPeak covers both halves; a held
+Enter (or arrow — the worker's right scope call) steps the tour
+once; custom presets inherit fps and bitrates from their base row;
+"Loaded"/Recent wait for the waveform's arrival; compilation
+refusals name the clip the person sees; the settings-write failure
+toast coalesces under one id; a partial clear warns instead of
+ticking green. One ticket item consciously narrowed: the third
+"five platforms" comment is Clip Kit's own count, which IS five.
+Expedited personally: verify x2 (172/4686), test:media on 7.0.2
+(329 passed | 13 skipped of 342), the whole Layer 5 file on 6.1.1
+(322 passed + exactly the 7 known pins), build + FULL Playwright
+(one load flake in the suite run — the durationless-WebM import,
+green standalone in 2 s and green in the worker's own 373/373 run;
+re-adjudicated on the landed tree's full run below), the item-4
+triggers replicated on both real binaries (exit 0, empty stderr,
+frame=0, audio-only output), one independent mutation at a seam no
+ledger row names (wroteNoPicture's OR -> AND → 5 unit cases red
+across both shapes → restored byte-identical, 22/22 green). Landed
+conflict-free onto its own base; the landed tree's gates are this
+entry's commit.
 
 Round 80, checkpoint 4 (the round's last) — T-131, all 18 of the
 seventeenth sweep's verified findings, landed in the commit that

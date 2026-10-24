@@ -16,6 +16,7 @@ import { clipSpeed, type ClipRecipe } from '../../shared/clip'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { discardPartialOutput } from './partialOutput'
+import { FFMPEG_EMPTY_OUTPUT, PictureFrames, REFRAME_NO_PICTURE_MESSAGE, wroteNoPicture } from './noPicture'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 
 export type ReframePosition = StripPosition
@@ -197,9 +198,13 @@ async function reframeClip(
     activeJobs.set(spec.jobId, child)
     let stderr = ''
     let lastEmitted = 0
+    // T-132 (4): see export.ts - exit 0 does not say a picture was written.
+    const frames = new PictureFrames()
+    let sawEmptyOutput = false
 
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
+      frames.feed(chunk)
       const lines = chunk.split(/\r?\n/)
       let timemark: string | undefined
       for (const line of lines) {
@@ -219,6 +224,7 @@ async function reframeClip(
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (c: string) => {
       stderr += c
+      sawEmptyOutput ||= FFMPEG_EMPTY_OUTPUT.test(stderr)
       if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
 
@@ -228,7 +234,9 @@ async function reframeClip(
     })
     child.on('close', (code) => {
       activeJobs.delete(spec.jobId)
-      if (code === 0) {
+      if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) {
+        reject(new Error(REFRAME_NO_PICTURE_MESSAGE))
+      } else if (code === 0) {
         onProgress({ jobId: spec.jobId, phase: 'done', percent: 100 })
         resolve()
       } else {

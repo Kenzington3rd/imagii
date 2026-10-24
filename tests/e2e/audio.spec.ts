@@ -341,6 +341,71 @@ async function waveformColumns(window: Page): Promise<Array<{ x: number; h: numb
 }
 
 /**
+ * T-132 (5): how far the drawn waveform reaches ABOVE and BELOW its centre line, in CSS pixels: the tallest painted run in any column on each
+ * side of the middle row of every canvas wavesurfer drew. `waveformColumns` counts a column's painted pixels altogether; a waveform whose
+ * lows run louder than its highs is wrong in WHICH half carries the height, which the total cannot say.
+ */
+async function waveformHalves(window: Page): Promise<{ up: number; down: number; canvasHeight: number }> {
+  return window.evaluate(() => {
+    const host = document.querySelector('[data-tutorial="audio-waveform"] .card > div > div')
+    const root = host?.shadowRoot
+    if (!root) throw new Error('the waveform has no shadow root: wavesurfer drew nothing')
+    const canvases = [...root.querySelectorAll('.canvases canvas')] as HTMLCanvasElement[]
+    let up = 0
+    let down = 0
+    let canvasHeight = 0
+    for (const canvas of canvases) {
+      const ctx = canvas.getContext('2d')
+      if (!ctx || canvas.width === 0 || canvas.height === 0) continue
+      const scale = canvas.width / (parseFloat(canvas.style.width) || canvas.width)
+      canvasHeight = Math.max(canvasHeight, canvas.height / scale)
+      const centre = Math.floor(canvas.height / 2)
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      for (let x = 0; x < canvas.width; x++) {
+        let above = 0
+        let below = 0
+        for (let y = 0; y < canvas.height; y++) {
+          if ((data[(y * canvas.width + x) * 4 + 3] as number) === 0) continue
+          if (y < centre) above++
+          else below++
+        }
+        up = Math.max(up, above / scale)
+        down = Math.max(down, below / scale)
+      }
+    }
+    return { up, down, canvasHeight }
+  })
+}
+
+/** A mono 16-bit WAV at 8 kHz (the rate main reads the peaks at, so nothing is resampled): a 100 Hz square wave of `high` and `low` (fractions of full scale). */
+function squareWav(seconds: number, high: number, low: number): Buffer {
+  const rate = 8000
+  const count = rate * seconds
+  const data = Buffer.alloc(count * 2)
+  for (let i = 0; i < count; i++) data.writeInt16LE(Math.round(Math.floor(i / 40) % 2 === 0 ? high * 32767 : low * 32767), i * 2)
+  const head = Buffer.alloc(44)
+  head.write('RIFF', 0)
+  head.writeUInt32LE(36 + data.length, 4)
+  head.write('WAVEfmt ', 8)
+  head.writeUInt32LE(16, 16)
+  head.writeUInt16LE(1, 20)
+  head.writeUInt16LE(1, 22)
+  head.writeUInt32LE(rate, 24)
+  head.writeUInt32LE(rate * 2, 28)
+  head.writeUInt16LE(2, 32)
+  head.writeUInt16LE(16, 34)
+  head.write('data', 36)
+  head.writeUInt32LE(data.length, 40)
+  return Buffer.concat([head, data])
+}
+
+/** The audio paths `recentFiles.audio` holds on disk (electron-store nests the dotted key), as the app left them. */
+function recentAudioOnDisk(userDataDir: string): string[] {
+  const config = JSON.parse(readFileSync(path.join(userDataDir, 'config.json'), 'utf8')) as { recentFiles?: { audio?: string[] } }
+  return config.recentFiles?.audio ?? []
+}
+
+/**
  * The renderer's peak memory so far, readable at any moment (the long-file case watches it WHILE the waveform is drawn, so a renderer
  * that climbs past the line and then dies is caught on the line, not later on a Play that never turns on). On Linux the kernel keeps
  * the process's high-water mark (`VmHWM` in /proc/<pid>/status), which no sampling can miss, and once the process is gone its last
@@ -1598,8 +1663,10 @@ test.describe('imagii Audio Studio', () => {
     const studio = await openStudio('waveform-error')
     const { window } = studio
     // Written out, not imported: an E2E asserts the words a person reads (and a build without the constant can still run it).
+    // T-132 (10): the old advice, "Re-export it as WAV or MP3", was circular for the file that fails here (it already IS a WAV) and never said
+    // that the waveform, the cuts and Export still work.
     const PLAYBACK_ERROR_MESSAGE =
-      "imagii can't play this file here. It may be damaged or in a format the player can't read. Re-export it as WAV or MP3 and try again."
+      "imagii can't play this file here, but the waveform, cuts and export still work on it. To hear it, re-export it as a standard PCM WAV or MP3."
     try {
       const adpcm = path.join(studio.root, 'source', 'adpcm.wav')
       const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:a', 'adpcm_ms', adpcm])
@@ -1652,8 +1719,68 @@ test.describe('imagii Audio Studio', () => {
       await expect(window.getByText('Drop audio or video here')).toBeVisible()
       await expect(window.locator(WAVEFORM)).toHaveCount(0)
       await expect(window.locator(EXPORT)).toHaveCount(0)
-      // And the way on works: a readable file is taken straight after.
+      // T-132 (11): and not "celebrated" first. "Loaded" and the Recent entry landed the moment the file OPENED, before the waveform read could
+      // refuse it, so a file the studio then let go of flashed a green "Loaded" beside the refusal and stayed in Recent.
+      expect(toasts, `no green "Loaded" for a file that was refused: ${JSON.stringify(toasts)}`).not.toContain('Loaded')
+      expect(recentAudioOnDisk(studio.userDataDir), 'the refused file never lands in Recent').not.toContain(odd)
+      await expect(window.getByRole('button', { name: /^Recent \(/ }), 'and the importer offers no Recent list for it').toHaveCount(0)
+      // And the way on works: a readable file is taken straight after - and THAT one is Loaded, and is in Recent.
       await dropAndWaitReady(studio)
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Loaded')
+      await expect.poll(() => recentAudioOnDisk(studio.userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([studio.fixture])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-132 (5): wavesurfer's `normalize` scales the whole waveform by the loudest sample it finds in channel 0 - the HIGHS - alone. A take whose
+  // lows run louder than its highs (a mic with a DC offset, an asymmetric voice) was scaled to the quiet half, so the bottom bars were drawn
+  // past the canvas edge and the top ones five times too tall. `maxPeak` hands it the loudest of both. The file is a 100 Hz square wave at +0.2
+  // and -0.8 of full scale: drawn right, the bars reach a quarter as far above the centre line as below it, and the low side just fills its half.
+  test('an asymmetric take draws both halves to scale: quiet highs, loud lows (T-132 (5))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('waveform-asymmetric')
+    const { window } = studio
+    try {
+      const asymmetric = path.join(studio.root, 'source', 'asymmetric.wav')
+      writeFileSync(asymmetric, squareWav(3, 0.2, -0.8))
+      await dropOnImporter(window, asymmetric, 'asymmetric.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      const { up, down, canvasHeight } = await waveformHalves(window)
+      expect(canvasHeight, 'the waveform is 96 px tall').toBeGreaterThanOrEqual(90)
+      const half = canvasHeight / 2
+      // Scaled by the loudest sample of EITHER half (0.8): the lows fill their half, the highs are 0.2 / 0.8 of it.
+      expect(down, `the lows (the loud half) fill their half of the canvas: ${down} px of ${half}`).toBeGreaterThanOrEqual(half - 3)
+      expect(up, `the highs reach a quarter as far (0.2 of 0.8): ${up} px above the centre`).toBeGreaterThanOrEqual(half * 0.2)
+      expect(up, `and no further: scaled by the highs alone they filled their whole half (${half} px)`).toBeLessThanOrEqual(half * 0.35)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-132 (9) and (11): while main reads the sound for the waveform (seconds, up to tens of seconds for a long file) Play is off - and drew like a
+  // live button. It is dimmed now, like every other disabled button in the app. And "Loaded" and the Recent entry wait for the waveform: the
+  // peaks job's ffmpeg is held for 5 s here, so "meanwhile" is a state the test creates.
+  test('while the waveform is being drawn Play is dimmed and nothing says Loaded; when it arrives Play is live and the file is Loaded and in Recent (T-132 (9), (11))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('waveform-drawing')
+    const { window, app } = studio
+    try {
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 5_000 }])
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      const drawing = window.getByRole('progressbar', { name: 'Drawing the waveform' })
+      await expect(drawing).toBeVisible({ timeout: 30_000 })
+      const opacity = (): Promise<number> => playButton(window).evaluate((el) => Number(getComputedStyle(el).opacity))
+      await expect(playButton(window)).toBeDisabled()
+      expect(await opacity(), 'a Play that cannot play looks it').toBeLessThan(0.7)
+      // Nothing is celebrated while the file may still be refused.
+      expect(await readToastLog(window), 'no "Loaded" before the waveform').not.toContain('Loaded')
+      expect(recentAudioOnDisk(studio.userDataDir), 'and no Recent entry').toEqual([])
+
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      expect(await opacity(), 'Play is full strength once it can play').toBe(1)
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Loaded')
+      await expect.poll(() => recentAudioOnDisk(studio.userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([studio.fixture])
     } finally {
       await closeStudio(studio)
     }

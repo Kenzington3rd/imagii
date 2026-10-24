@@ -165,15 +165,16 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       // Escape that would otherwise dismiss the tour behind it.
       if (!isTopmost()) return
       const onButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON'
-      const intent = tutorialKeyIntent({ key: e.key, onButton })
+      const intent = tutorialKeyIntent({ key: e.key, onButton, repeat: e.repeat })
       if (intent === 'none') return
       // The key is ours, so the browser must not also run its default action
       // against whatever is focused once the step has changed — see
-      // tutorialKeyIntent for the double-advance that produced (T-34).
+      // tutorialKeyIntent for the double-advance that produced (T-34). A 'hold'
+      // (T-132 (6)) is the same cancel with nothing after it.
       e.preventDefault()
       if (intent === 'close') onClose()
       else if (intent === 'next') next()
-      else prev()
+      else if (intent === 'prev') prev()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -307,7 +308,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   )
 }
 
-export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'none'
+export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'hold' | 'none'
 
 /**
  * What a window-level keydown means for the coachmark.
@@ -324,9 +325,15 @@ export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'none'
  *
  * Deferring and preventing are mutually exclusive by construction: 'none' is
  * exactly the case the button handles itself.
+ *
+ * T-132 (6): a HELD key is not a series of decisions. Focus is put on Next after every step, so a held Enter's auto-repeats were each a click
+ * on the next step's Next and the tour walked to Done in a second (and Done persists "seen", so it never came back): the mechanism
+ * the Fix wizard guards with `ignoreHeldEnter` (T-120). The same holds for the arrows, which step by the same `next` and `prev`. A repeat of
+ * those keys is 'hold': the caller cancels its default action (the button's click) and does nothing else.
  */
-export function tutorialKeyIntent(e: { key: string; onButton: boolean }): TutorialKeyIntent {
+export function tutorialKeyIntent(e: { key: string; onButton: boolean; repeat?: boolean }): TutorialKeyIntent {
   if (e.key === 'Escape') return 'close'
+  if (e.repeat && (e.key === 'Enter' || e.key === 'ArrowRight' || e.key === 'ArrowLeft')) return 'hold'
   if (e.key === 'ArrowRight') return 'next'
   if (e.key === 'ArrowLeft') return 'prev'
   if (e.key === 'Enter' && !e.onButton) return 'next'

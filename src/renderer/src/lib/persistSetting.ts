@@ -19,6 +19,14 @@ export async function persistSetting(key: SettingsKey, value: unknown): Promise<
   try {
     await window.api.settings.set(key, value)
   } catch (err) {
-    reportFailure(err, { failed: "Couldn't save your settings." })
+    reportFailure(err, { failed: "Couldn't save your settings.", id: SETTINGS_FAILED_TOAST_ID })
   }
 }
+
+/**
+ * T-132 (13): the one toast every refused write shares. Export makes up to four `persistSetting` calls in one press (the handle, its
+ * corner, the file-name template, the folder), and a refusal that is not about one key but about the settings file refuses all of them:
+ * four identical red cards, one on top of another (executed). Given an id the library replaces the live card, so the person reads the
+ * sentence once.
+ */
+export const SETTINGS_FAILED_TOAST_ID = 'settings-save-failed'
