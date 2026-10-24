@@ -4887,6 +4887,83 @@ IMG-PREC.
 
 ---
 
+## T-134 — sweep-20 fixes (round 83)
+
+- **Spec:** the twentieth review sweep's verified findings — each
+  confirmed by the expediter; the MED was executed in a built app by
+  the QA reviewer, and the measured claims were replicated. The
+  clean lenses this sweep: privacy, electron, a11y. 7 items.
+  1. **[MED] Autosave Restore navigates to the snapshot's route
+     after a wait that can last minutes, wherever the person now
+     is** — the T-132 (1)/T-133 (1) class at its one remaining site
+     (found independently by four reviewers; executed: a 14 s held
+     extraction, Restore, a take started on Record → the take was
+     cut and the app landed on /video). The T-133 wiring table's
+     rationale ("The autosave Restore is on Home") is true at the
+     click and false at the navigate. Fix: after the await,
+     `if (route && currentRoute() === '/home') navigate(route)` —
+     continuity for a person still on Home, nobody else moved (the
+     "Restored from autosave" toast already reports completion);
+     correct the wiring-table comment; add the negative e2e (hold
+     the extraction, start a take, assert still on Record and
+     recording).
+  2. **[LOW] A held I or O re-sets the marker on every auto-repeat**
+     (executed against the real store: 60 repeats fill the 50-step
+     undo cap and evict real edits — three addClip edits became
+     un-undoable; the in-point drifts to the last repeat during
+     playback). Fix: `if (!e.repeat)` on the i/o cases in Player.tsx
+     and Timeline.tsx, exactly as Space got in T-133 (7b); the
+     nudge and frame-step keys keep repeating; unit/e2e per the
+     7b pattern.
+  3. **[LOW] The single-flight search silently discards a CORRECTED
+     query** typed while the first request is out — the results
+     answer a query nothing on the page names. The T-133 (8) pin
+     documents the drop as intended; the usability tiebreaker says
+     latest-wins. Fix: remember the newest query asked during a
+     flight and run it when the flight settles (one follow-up, not
+     a queue), or apply answers by sequence number; flip the pinned
+     drop-test; e2e: type, Enter, correct, Enter → the grid answers
+     the corrected query.
+  4. **[LOW] Claim corrections, thrice-measured:** noPicture.ts:12
+     and STYLE_GUIDE:873-874 say a compilation's segments close on
+     `wroteNoPicture(sawEmptyOutput, frames)` — they read the
+     stderr line alone, which IS sufficient (measured on both
+     majors by three parties: under apad + -shortest the
+     past-picture shape yields a truly streamless ~970-byte stub
+     AND the "Output file is empty" line at production verbosity).
+     Correct both sentences and the docClaims pin that enshrines
+     the over-claim; add the one-line scan test listing the
+     wroteNoPicture users; correct the "ran up to 81 px OUT"
+     wording (the ledger's own red measured 228 px — "up to" is not
+     a bound); optionally pin the 5 s/9 s compile shape at Layer 5.
+  5. **[LOW] A long unbroken custom-preset name pushes Delete out
+     of its dialog** (measured in real Chromium: an 80-character
+     spaceless name puts Delete at x=905 against a card ending at
+     848; threshold ~72 characters). Fix: `truncate` + `title` on
+     the name span per the DESIGN_GUIDE chip rule, a sensible
+     maxLength on the name input, and the same cap on
+     SafeZoneWarningModal's clipName row (it scrolls sideways
+     inside its card); layout case.
+  6. **[LOW] The IC native-dialog inventory is stale:** the Record
+     row cites RecordStudio.tsx:623 but the confirm lives in
+     lib/liveTake.ts:34 since T-133 (1); several rows' line numbers
+     drifted; the T-133 (6) second Clean-audio confirm is missing.
+     Refresh the inventory (it is what /guide-sync checks).
+  7. **[LOW] Clear relabels Restore:** both buttons share one
+     `busy` flag, so pressing Clear shows "Restoring…" on Restore
+     for the unlink's duration — the label contradicts the action.
+     Split the flags (or give Clear its own label); lands in-file
+     with item 1.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 1, 2 and 3 land with
+  their e2e cases; item 4's optional L5 pin, if added, runs on both
+  majors; `npm run verify`, `npm run test:media` and the FULL
+  Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits.
+- **Status:** open (round 83)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -5299,7 +5376,13 @@ IMG-PREC.
   whisper-cli reads RF64 before it ships; (bb)
   Clean audio's extraction has no user-facing Cancel (the quit
   sweep covers it since T-128 (5); a button does not exist) —
-  carried from T-129's found-not-fixed list.
+  carried from T-129's found-not-fixed list. From sweep 20's
+  electron review: (bc) `captions:burnIn` confines its `srtPath`
+  only to safe-absolute while `saveSrt` and `writeKitSrt` confine
+  to the captions folder — a hardening inconsistency (reachable
+  only through a hostile project file plus a user-initiated burn;
+  the only output is a video at a user-chosen path, no network);
+  align the confinement.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
