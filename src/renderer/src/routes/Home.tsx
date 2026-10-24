@@ -5,6 +5,7 @@ import { captureProject, describeApplyOutcome } from '../modules/project/Project
 import { AutosaveRestore } from '../components/AutosaveRestore'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
+import { claimFirst } from '../lib/claimFirst'
 import { reportFailure } from '../lib/reportFailure'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 
@@ -13,10 +14,17 @@ import { ERROR_TOAST_MS } from '@shared/userFacingError'
 const PROJECT_OPEN_FAILED =
   "Couldn't open that project. The file may be damaged, or it was saved by a newer version of imagii."
 
+/**
+ * T-131 (5): Open project and Save project share ONE claim, and it covers the native dialog and nothing after it. Both go straight to a
+ * dialog, and a double-click on either opened two (executed: two choosers). The apply that follows an open is not under it: opening
+ * another project meanwhile is supported (T-112's `replacedSince`), and a claim held for a long conversion would drop that press.
+ */
+const projectDialog = { current: false }
+
 async function handleSave(): Promise<void> {
   try {
-    const project = captureProject()
-    const saved = await window.api.project.save(project)
+    // `undefined` is the second press of a double-click (the first one's dialog is on screen); `null` is a canceled dialog.
+    const saved = await claimFirst(projectDialog, () => window.api.project.save(captureProject()))
     if (saved) toast.success('Project saved')
   } catch (err) {
     reportFailure(err, { failed: "Couldn't save the project." })
@@ -25,8 +33,8 @@ async function handleSave(): Promise<void> {
 
 async function handleLoad(): Promise<void> {
   try {
-    const result = await window.api.project.load()
-    if (!result) return // user canceled the dialog
+    const result = await claimFirst(projectDialog, () => window.api.project.load())
+    if (!result) return // a second press while the dialog was open, or the user canceled it
     if (!result.ok) {
       reportFailure(result.reason, { failed: PROJECT_OPEN_FAILED })
       return

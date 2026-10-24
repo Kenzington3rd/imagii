@@ -317,18 +317,28 @@ app.on('window-all-closed', () => {
 // renderer-window closing — Windows Task Manager would show orphaned
 // ffmpeg.exe instances using CPU after the app icon was long gone.
 app.on('before-quit', (event) => {
-  // T-47: the app-quit path (menu quit, an OS session end, the E2E
-  // driver). The window is still alive here, so the final snapshot is
+  // T-47: the app-quit path (`app.quit()`, a menu quit, the E2E driver).
+  // The window is still alive here, so the final snapshot is
   // taken before anything is torn down — then quit is re-entered and
   // runs straight through the reaping below. A slow disk cannot wedge
   // this: the flush is bounded and best-effort, and its failure is not the
   // user's problem at the moment they are leaving.
   //
+  // T-131 (17): NOT a Windows shutdown, restart or logoff. Electron emits
+  // no `before-quit` for those (its own typings say so, on `App`'s
+  // 'before-quit'), so on that one exit path this handler never runs: no
+  // autosave flush, no T-127 (3) drain, no kill of the children (Windows
+  // ends them with the session). The comment used to call it "an OS session
+  // end" and the quit story it tells was true of every exit but that one.
+  // Ledger (az): a win32 `session-end` handler doing a synchronous
+  // best-effort kill-and-unlink is the optional upgrade; nothing here can
+  // verify it, so it is not built.
+  //
   // The two hooks overlap on purpose. On a plain `app.quit()` either one
   // would do (whichever runs first sets the flag and the other skips), but
   // neither covers the other's own route: `close` is the only event on the
   // window's X, because by the time `before-quit` follows it the renderer
-  // is gone; and `before-quit` is the only event on a shutdown that
+  // is gone; and `before-quit` is the only event on a quit that
   // destroys windows instead of closing them.
   const win = mainWindow
   if (!quitFlushed && win && !win.isDestroyed()) {

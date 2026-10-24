@@ -4,6 +4,7 @@ import { useAudioStore } from './state/audioStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
+import { claimFirst } from '../../lib/claimFirst'
 import {
   describeImportError,
   examineDroppedFile,
@@ -26,6 +27,8 @@ export function AudioImporter(): JSX.Element {
   // sound used to land after a second file had loaded (and been tuned) and replace it.
   const busyRef = useRef(false)
   const extractingRef = useRef(false)
+  // T-131 (5): and one chooser at a time (the Importer's `pickingRef`): `busy` is set only once a file was picked.
+  const pickingRef = useRef(false)
 
   /** Refuses a second import while one runs. */
   function refuseIfBusy(): boolean {
@@ -100,18 +103,20 @@ export function AudioImporter(): JSX.Element {
   }
 
   async function onPickFile(): Promise<void> {
-    const filePath = await window.api.audio.pickFile()
-    if (!filePath) return
-    // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
-    // before the cloud-sync warning, for the reason the drop does.
-    if (refuseIfBusy()) return
-    if (pathLooksLikeCloudSync(filePath)) {
-      toast(
-        'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
-        { icon: <Icon name="warning" size={18} />, duration: 6000 }
-      )
-    }
-    await loadFile(filePath)
+    await claimFirst(pickingRef, async () => {
+      const filePath = await window.api.audio.pickFile()
+      if (!filePath) return
+      // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
+      // before the cloud-sync warning, for the reason the drop does.
+      if (refuseIfBusy()) return
+      if (pathLooksLikeCloudSync(filePath)) {
+        toast(
+          'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
+          { icon: <Icon name="warning" size={18} />, duration: 6000 }
+        )
+      }
+      await loadFile(filePath)
+    })
   }
 
   return (

@@ -158,11 +158,14 @@ export function CompilationPanel(): JSX.Element | null {
       </p>
       <div className="flex items-center gap-2">
         {/* T-126 (13): the chip side gives (`min-w-0`, its name already ends in an ellipsis); the primary's words stay on one line. */}
-        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs" onClick={pickDir}>
+        {/* T-131 (13): the folder is not changed while a job runs - it would do nothing for the running one - and the chip is the neighbor
+            a double-click's second press can land on once the busy primary has shrunk (executed: a chooser opened mid-job on a 120 ms second press). */}
+        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs disabled:opacity-50" onClick={pickDir} disabled={busy}>
           <OutputDirLabel outDir={outDir} />
         </button>
         <button
-          className="btn-primary px-3 py-1.5 text-xs ml-auto whitespace-nowrap disabled:opacity-50"
+          // T-131 (13): as Reframe's: "Stitching…" shrank the button 26 px and the chip took its strip. 7.1 rem is "Compile 2 clips".
+          className="btn-primary px-3 py-1.5 text-xs ml-auto whitespace-nowrap min-w-[7.1rem] disabled:opacity-50"
           disabled={busy || needsSecondClip}
           onClick={exportCompilation}
         >

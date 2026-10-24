@@ -6,7 +6,8 @@ and the **one-time caption model download**. Everything else works offline,
 and everything you make is saved to your own disk.
 
 Press **`?`** to see the keyboard shortcuts for the screen you are on. It
-does nothing while you are typing in a text box.
+does nothing while you are typing in a text box. Each studio's tour ends by
+naming it, and Video Studio's Player and Timeline hint lines end with it.
 
 ---
 

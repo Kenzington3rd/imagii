@@ -240,7 +240,15 @@ Repeated UI is a component, not copy-paste:
   cloud-sync warning, so a person is not told two things that disagree. `interactionWiring.test.ts` reads every start
   handler that follows this claim-first pattern with a syntax-tree finder (`singleFlight`) that fails on a late claim or a
   release outside a `finally`, with a discrimination block over sample code. Its block is the list of handlers (the guide
-  keeps no count, so a new one is added there and nowhere else); the picker leg (a native dialog) is held by that pin alone.
+  keeps no count, so a new one is added there and nowhere else). **A picker is not exempt because its first await is a native dialog
+  (T-131 (5)):** the dialog does not protect itself - the second press of a double-click lands in the few milliseconds before the OS
+  draws it, and executed in the built app it opened two choosers from every unguarded picker (the Importers' "Choose file…", the
+  second-track role buttons, Picture-in-picture's file buttons, the folder chips, Home's Open project and Save project). The shape is
+  one call, `claimFirst(flag, work)` (`lib/claimFirst.ts`): a `useRef(false)` in a component, a module-level `{ current: false }` for a
+  handler that is not one, raised before `work` awaits anything, lowered in a `finally`, and a second call answers `undefined`.
+  `interactionWiring.test.ts` finds EVERY renderer call of a bridge function that opens a native chooser (`video.pickFile`,
+  `audio.pickFile`, `video.pickOutputDir`, `project.save`, `project.load`) and holds the set to a decided table, so a new picker fails
+  until it is decided; each entry point has a delayed-chooser (300 ms) `dblclick` E2E.
 - **Waiting for an event that may already have fired hangs (T-119).** `recording:abandon` waited for the temp file's
   stream to emit `close`. A `WriteStream` that failed a write has auto-destroyed and emitted its one `close` already,
   so the renderer's own failure path (the append rejects, finalize throws, abandon runs) never got an answer, and the
@@ -413,7 +421,9 @@ Repeated UI is a component, not copy-paste:
   mounts (its button shows it, as Export's does), again when the action is pressed with nothing chosen in the panel (a folder
   another panel remembered a moment ago is used and no chooser opens), and written after a file landed there. What came off disk
   is used only if `isSafeAbsolutePath`; the chooser opens ON the current folder. A new side panel that writes a file uses the
-  hook; it never calls `pickOutputDir` itself. T-125 (10): the value is ONE module store (zustand,
+  hook; it never calls `pickOutputDir` itself. T-131 (13): the chip is disabled while the panel's job runs (the folder is
+  not changed for a running job), and the Reframe and Compile primaries keep their idle width (`min-w`) so the busy label cannot shrink
+  the button and hand its strip to the chip. T-131 (5): the four chips share ONE chooser claim. T-125 (10): the value is ONE module store (zustand,
   `useOutputDirStore`; the plain functions `seedOutputDir`, `pickOutputDir`, `resolveOutputDir` and `rememberOutputDir` are what
   `useVideoOutputDir.test.ts` drives), so a pick, a chooser's answer or a written file in any of the four updates the other three
   within the visit (each panel used to read the setting once at mount). A stored folder is validated where it is read: main's
@@ -594,7 +604,12 @@ Repeated UI is a component, not copy-paste:
   card (to select a word of a typed name) and letting go a little outside it fires a click ON the scrim, which closed
   the dialog and threw the typed name away. `Modal` records whether the press began, or ended, inside the card and
   ignores that click; a plain click on the scrim still closes (`closeOnScrimClick`). Never close on a bare scrim
-  `onClick`.
+  `onClick`. **The second press of a double-click is not a second decision (T-131 (4), (6), (8)):** `lib/repeatPress.ts`.
+  `isRepeatPress(e)` (`e.detail > 1`; a keyboard click is 0) is ignored by a button that REPLACES itself with another under the pointer
+  (the Fix wizard's answers, the tour's Next / Done, Back and scrim), and when a `Modal` (or the tour) closes,
+  `swallowRepeatClicks()` has a capture-phase listener on the window drop clicks with `detail > 1` for 500 ms, so the second press
+  never reaches what the dialog covered (a checkbox under "Keep running"). One listener, installed on the first close, ahead of React's;
+  only a repeat is touched. A new control that swaps itself for another asks the same question.
 - **`DraftField`** (`components/DraftField.tsx`, T-113 for Size and Color, lifted by T-123) — a box that keeps what is typed
   to itself until typing ends. A controlled number input that judges every keystroke cannot be typed into: `Number(typed)
   || 360` snapped an emptied box to 360, so "600" typed after clearing it was 360600 (and the PiP composite failed with a bare
@@ -620,9 +635,13 @@ Repeated UI is a component, not copy-paste:
   `interactionWiring.test.ts` fails on a panel that carries its own `Math.floor(seconds / 60)` formatter again (eight copies never went
   past 59 minutes: "167:13.0" for a three-hour VOD). `parseClock` reads seconds, `m:ss`, `h:mm:ss` and a fraction, and refuses a
   field of 60 or more beside a bigger unit; the overlay's Source time boxes are text boxes that use it (and refuse what is not a time
-  in `OVERLAY_TIME_REFUSAL`). A time shown at rest in a box is the seconds the card line says ("12.50") below an hour and the clock the
-  Timeline beside it reads from one hour up (`overlayTimeText`: "1:40:43.50", T-126 (5)), so "2:47:18" is not rewritten to "10038.00"
-  when the box is left; the outside-the-clip note speaks the same form.
+  in `OVERLAY_TIME_REFUSAL`). The two Source time boxes are ONE form, decided by the PAIR (`overlayTimePair`, T-127 (7), T-131 (16)): when
+  both values are under an hour both boxes show the seconds the card line says ("12.50"); when EITHER is one hour or more BOTH show the clock
+  the Timeline beside them reads (`overlayTimeText`: "1:40:43.50", T-126 (5)), so "2:47:18" is not rewritten to "10038.00" when the box
+  is left and a window from 59:50 to 1:00:10 does not read "3590.00 -> 1:00:10.00". The unit follows the form: the trailing "s" belongs to
+  the seconds form only, never to a clock. The outside-the-clip note puts the CLIP's range through the same function. The overlay's pair
+  and the clip's pair are two pairs, each coherent in itself (an overlay window of 10-20 s inside a clip of 59:50-1:00:10 reads seconds in the
+  boxes and a clock in the sentence about the clip), which is why the rule is about a pair and not about the card.
 - **`PanelHeader`** — every panel section header. Renders the standard
   `<h3>` (`text-xs font-semibold uppercase tracking-wide text-ink-muted`,
   an `Icon`, `inline-flex items-center gap-1.5`). Pass an `actions`

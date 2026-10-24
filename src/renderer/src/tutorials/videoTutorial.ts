@@ -100,7 +100,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'done',
       title: "You're all set",
-      body: 'The ? button in the header replays this tour any time. It only points at what is on screen, so it covers more once a video is loaded.',
+      body: 'The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on. The tour only points at what is on screen, so it covers more once a video is loaded.',
       placement: 'center'
     }
   ]

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { isSafeAbsolutePath } from '@shared/pathSafety'
 import { persistSetting } from '../lib/persistSetting'
+import { claimFirst } from '../lib/claimFirst'
 
 /**
  * Where the GIF, Compile, Reframe and picture-in-picture panels write (T-124 (21), T-125 (10)).
@@ -43,10 +44,15 @@ export async function seedOutputDir(): Promise<void> {
   if (dir && useOutputDirStore.getState().dir === null) setDir(dir)
 }
 
+/** T-131 (5): the four panels' chips are ONE button as far as a chooser goes - at most one is open, whichever chip asked. */
+const choosing = { current: false }
+
 /** The folder button: open the chooser on the current folder, and keep the answer for every panel. */
 export async function pickOutputDir(): Promise<void> {
-  const picked = await window.api.video.pickOutputDir(useOutputDirStore.getState().dir ?? undefined)
-  if (picked) setDir(picked)
+  await claimFirst(choosing, async () => {
+    const picked = await window.api.video.pickOutputDir(useOutputDirStore.getState().dir ?? undefined)
+    if (picked) setDir(picked)
+  })
 }
 
 /** The folder for the file about to be written: the chosen one, else the remembered one, else the chooser's answer (null: canceled). */

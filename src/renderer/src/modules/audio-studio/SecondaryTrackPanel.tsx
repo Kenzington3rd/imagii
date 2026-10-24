@@ -1,9 +1,11 @@
+import { useRef } from 'react'
 import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
 import { DEFAULT_DUCK_PARAMS } from '@shared/audio'
 import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { claimFirst } from '../../lib/claimFirst'
 
 const ROLE_OPTIONS: Array<{
   value: SecondaryTrackRole
@@ -44,19 +46,25 @@ export function SecondaryTrackPanel(): JSX.Element {
   const secondary = useAudioStore((s) => s.chain.secondaryTrack)
   const setSecondaryTrack = useAudioStore((s) => s.setSecondaryTrack)
 
+  // T-131 (5): one chooser at a time across the three role buttons. A double-click on one opened two, and the second answer silently
+  // REPLACED the track the first had just added (with the second role's gain and duck defaults, if it landed on another button).
+  const pickingRef = useRef(false)
+
   async function pickAndAdd(role: SecondaryTrackRole): Promise<void> {
-    const filePath = await window.api.audio.pickFile()
-    if (!filePath) return
-    const opt = ROLE_OPTIONS.find((o) => o.value === role)
-    if (!opt) return
-    setSecondaryTrack({
-      filePath,
-      fileName: fileNameFromPath(filePath),
-      role,
-      gainDb: opt.defaultGain,
-      duckUnderPrimary: opt.defaultDuck
+    await claimFirst(pickingRef, async () => {
+      const filePath = await window.api.audio.pickFile()
+      if (!filePath) return
+      const opt = ROLE_OPTIONS.find((o) => o.value === role)
+      if (!opt) return
+      setSecondaryTrack({
+        filePath,
+        fileName: fileNameFromPath(filePath),
+        role,
+        gainDb: opt.defaultGain,
+        duckUnderPrimary: opt.defaultDuck
+      })
+      toast.success(`${opt.label} added`)
     })
-    toast.success(`${opt.label} added`)
   }
 
   function update(patch: Partial<NonNullable<typeof secondary>>): void {

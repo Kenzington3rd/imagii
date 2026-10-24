@@ -4,6 +4,7 @@ import { useVideoStore } from './store/videoStore'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
+import { claimFirst } from '../../lib/claimFirst'
 import { describeImportError } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
@@ -25,6 +26,9 @@ export function Importer(): JSX.Element {
   // the import starts. `convertingRef` only chooses the words of the refusal.
   const busyRef = useRef(false)
   const convertingRef = useRef(false)
+  // T-131 (5): and one chooser at a time. `busy` is only set once a file was PICKED, so a double-click on "Choose file…" opened two
+  // choosers (the first's answer loads the file, the second's replaced it or was refused). Claimed before the dialog, given back after.
+  const pickingRef = useRef(false)
 
   /** Refuses a second import while one runs — it used to start a PARALLEL conversion
    *  (two ffmpeg transcodes fighting for the CPU, then whichever finished last won). */
@@ -100,8 +104,10 @@ export function Importer(): JSX.Element {
   }
 
   async function onPickFile(): Promise<void> {
-    const filePath = await window.api.video.pickFile()
-    if (filePath) await handleFile(filePath)
+    await claimFirst(pickingRef, async () => {
+      const filePath = await window.api.video.pickFile()
+      if (filePath) await handleFile(filePath)
+    })
   }
 
   return (

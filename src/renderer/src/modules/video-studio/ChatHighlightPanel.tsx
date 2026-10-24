@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog, type ChatMessage } from '@shared/chatLog'
 import { countOf } from '@shared/plural'
@@ -63,6 +63,15 @@ export function ChatHighlightPanel(): JSX.Element | null {
   const [bucketSec, setBucketSec] = useState(10)
   const [padSec, setPadSec] = useState(15)
   const [peaks, setPeaks] = useState<ChatPeak[] | null>(null)
+
+  // T-131 (3): the pasted log and the spikes found in it are for the video they were pasted against. The panel stays mounted when the open
+  // video is replaced in place (Reframe's "Edit in Video Studio"), and a stale "+ Clip" row made a clip past the end of the new video.
+  // The spike window and the extra seconds are settings, not results, and stay. CaptionsPanel resets on the same key.
+  const openPath = source?.filePath
+  useEffect(() => {
+    setChatText('')
+    setPeaks(null)
+  }, [openPath])
 
   if (!source) return null
 

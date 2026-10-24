@@ -35,6 +35,7 @@ import {
   expectSelectsWhole,
   setWindowSize
 } from './layout'
+import { chooserCalls, recordSlowChooser } from './chooser'
 import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { localDay, skewTimeZone, utcDay } from './skewedClock'
@@ -411,35 +412,6 @@ async function recordOpenDialogs(app: ElectronApplication, files: string[]): Pro
 /** The kinds of chooser ('folder' or 'file') opened since the last recordOpenDialogs. */
 async function openedDialogs(app: ElectronApplication): Promise<string[]> {
   return app.evaluate(() => (globalThis as unknown as { __opened?: string[] }).__opened ?? [])
-}
-
-/**
- * T-126 (6), (19): a chooser that records what it was ASKED (the folder flag and the `defaultPath` it opened on) and answers the way a
- * person does, after a moment. A FOLDER chooser answers `answer` (null: canceled); a FILE chooser takes the next of `files`.
- */
-async function recordSlowChooser(
-  app: ElectronApplication,
-  options: { answer: string | null; files?: string[]; delayMs?: number }
-): Promise<void> {
-  await app.evaluate(({ dialog }, o) => {
-    const g = globalThis as unknown as { __chooser?: Array<{ folder: boolean; defaultPath?: string }> }
-    g.__chooser = []
-    const queue = [...(o.files ?? [])]
-    ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async (...args: unknown[]) => {
-      const asked = (args.length > 1 ? args[1] : args[0]) as { properties?: string[]; defaultPath?: string } | undefined
-      const folder = (asked?.properties ?? []).includes('openDirectory')
-      g.__chooser?.push({ folder, defaultPath: asked?.defaultPath })
-      if (o.delayMs) await new Promise((resolve) => setTimeout(resolve, o.delayMs))
-      if (folder) return o.answer === null ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: [o.answer] }
-      const next = queue.shift()
-      return next ? { canceled: false, filePaths: [next] } : { canceled: true, filePaths: [] }
-    }
-  }, options)
-}
-
-/** Every chooser `recordSlowChooser` has been asked since it was installed. */
-async function chooserCalls(app: ElectronApplication): Promise<Array<{ folder: boolean; defaultPath?: string }>> {
-  return app.evaluate(() => (globalThis as unknown as { __chooser?: Array<{ folder: boolean; defaultPath?: string }> }).__chooser ?? [])
 }
 
 /** The system clipboard, read from the main process (see header). */
@@ -8647,6 +8619,475 @@ test.describe('T-113: review-gate fixes, pass 2', () => {
       await modal.getByRole('button', { name: 'Cancel' }).click()
       await expect(modal).toHaveCount(0)
       expect(readdirSync(outDir)).toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════════ T-131: review-gate fixes, sweep 17 ═══════════════════
+
+test.describe('T-131: review-gate fixes, sweep 17', () => {
+  // (3) The panels stay mounted when the open video is REPLACED in place (Reframe's "Edit in Video Studio" loads the 9:16 file into this very
+  // studio), so the highlight finder kept the previous video's candidates and the chat finder its log and its spikes, and a stale "+ Clip"
+  // row made a clip past the end of the new file with a success toast. CaptionsPanel resets on the same key (T-112's lesson).
+  test('a scan\'s candidates and a pasted chat log go with the video they were made for: Edit in Video Studio shows neither (T-131 (3))', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t131stale-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t131stale', burstSrc, { video: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      const scan = highlightCard(window)
+      const chat = chatCard(window)
+      // The highlight finder: a real scan, one candidate, and a pasted chat log in its own box.
+      await scan.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(scan.locator('li')).toHaveCount(1, { timeout: 60_000 })
+      await scan.getByRole('button', { name: 'Add chat log (optional)' }).click()
+      await scan.locator('textarea').fill(chatLogWithEarlySpike())
+      await expect(scan.locator('textarea')).toHaveValue(/hype0/)
+      // The chat spike finder: a log and the spike found in it.
+      await chat.locator('textarea').fill(chatLogWithEarlySpike())
+      await chat.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(chat.locator('li')).toHaveCount(1)
+      await expect(scan.getByRole('button', { name: 'Re-scan' })).toBeVisible()
+
+      // Reframe the open video, then open the result in this studio: the video is replaced in place.
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      const editHere = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
+      await expect(editHere, 'the saved toast carries the action').toBeVisible({ timeout: 300_000 })
+      const reframed = readdirSync(seeded).find((f) => f.endsWith('.mp4'))
+      expect(reframed, 'the reframed file is in the folder').toBeDefined()
+      window.on('dialog', (dialog) => void dialog.accept())
+      await editHere.click()
+      const header = window.locator('header')
+      await expect(header.getByText(reframed as string, { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      // Nothing of the old video is left in either finder.
+      await expect(scan.getByRole('button', { name: 'Scan VOD' }), 'the finder is back to its first state').toBeVisible()
+      await expect(scan.getByRole('button', { name: 'Re-scan' })).toHaveCount(0)
+      await expect(scan.locator('li'), 'no candidate of the old video').toHaveCount(0)
+      await expect(scan.locator('textarea'), 'and the chat log pasted for it is empty').toHaveValue('')
+      await expect(chat.locator('li'), 'no spike of the old log').toHaveCount(0)
+      await expect(chat.locator('textarea'), 'and the log is empty').toHaveValue('')
+      // The settings are not results: the spike window and the extra seconds stay as the person left them.
+      await expect(chat.getByLabel('Spike window (s)')).toHaveValue('10')
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (3) ...and the same for a scan that is still running when the video is replaced: its candidates are for the video that is gone. The scan is
+  // held in main (the handler is replaced by one that answers when the test says), so the replacement lands while it runs.
+  test('a scan that finishes after the video was replaced puts nothing on the new video (T-131 (3))', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t131late-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t131late', burstSrc, { video: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { __scanRelease: () => void }
+        let release: () => void = () => undefined
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        g.__scanRelease = release
+        ipcMain.removeHandler('video:findHighlights')
+        ipcMain.handle('video:findHighlights', async () => {
+          await gate
+          return [{ startSec: 1, endSec: 5, peakDb: -10, reason: 'loud' }]
+        })
+      })
+      const scan = highlightCard(window)
+      await scan.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(scan.getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      // Replace the open video while the scan is held.
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      const editHere = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
+      await expect(editHere).toBeVisible({ timeout: 300_000 })
+      const reframed = readdirSync(seeded).find((f) => f.endsWith('.mp4')) as string
+      window.on('dialog', (dialog) => void dialog.accept())
+      await editHere.click()
+      await expect(window.locator('header').getByText(reframed, { exact: true })).toBeVisible({ timeout: 30_000 })
+      // Now the old video's scan answers.
+      await app.evaluate(() => (globalThis as unknown as { __scanRelease: () => void }).__scanRelease())
+      await expect(scan.getByRole('button', { name: 'Scan VOD' }), 'the scan is over and the finder is in its first state').toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(500)
+      await expect(scan.locator('li'), 'no candidate of the video that is gone').toHaveCount(0)
+      expect(await readToastLog(window), 'and no "Found 1 highlight" for a video that is not open').not.toContain('Found 1 highlight')
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (8) The second press of a double-click on a closing dialog's button lands on what the dialog covered ("Keep running" double-clicked
+  // mid-batch flipped the Facebook checkbox beneath it). A listener on the document in the BUBBLE phase records every click that reaches the
+  // page; the window's capture-phase swallow stops a repeat before it gets there. Which control sits under the button depends on the
+  // window, so the geometry is not the witness - what reached the page is, and every checkbox of the page is read before and after.
+  test('a double-click on "Keep running" closes the question and goes no further: the second press reaches nothing under the dialog (T-131 (8))', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t131keep-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t131keep', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await setWindowSize(app, window, DEFAULT_WINDOW)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 6_000 }])
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      const card = exportCard(window)
+      await card.getByRole('button', { name: /^Export 2 files/ }).click()
+      await expect(card.getByRole('button', { name: /^Exporting/ })).toBeVisible()
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toContainText('Cancel 2 running jobs?')
+      const checkboxes = (): Promise<boolean[]> => window.locator('input[type="checkbox"]').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).checked))
+      const before = await checkboxes()
+      expect(before.length, 'the page has checkboxes to protect').toBeGreaterThan(3)
+      await window.evaluate(() => {
+        const w = window as unknown as { __clicks: Array<{ detail: number; what: string }> }
+        w.__clicks = []
+        document.addEventListener('click', (e) => {
+          const el = e.target as HTMLElement
+          w.__clicks.push({ detail: e.detail, what: `${el.tagName.toLowerCase()} ${(el.textContent ?? '').trim().slice(0, 30)}`.trim() })
+        })
+      })
+      await dialog.getByRole('button', { name: 'Keep running' }).dblclick()
+      await expect(dialog).toHaveCount(0)
+      await window.waitForTimeout(600)
+      const landed = await window.evaluate(() => (window as unknown as { __clicks: Array<{ detail: number; what: string }> }).__clicks)
+      // The first press stops in the dialog's own card (Modal stops its propagation); the second is the repeat the window swallows. Before
+      // the fix the second reached the page: one entry here, `detail: 2`, on whatever the dialog stood over.
+      expect(landed, 'no click reached the page: the first press stayed in the dialog and the repeat was swallowed').toEqual([])
+      expect(await checkboxes(), 'no checkbox under the dialog was flipped').toEqual(before)
+      // A press on the page afterwards is a press like any other: the swallow is for the repeat of a double-click, for half a second.
+      await expect(card.getByRole('button', { name: /^Exporting/ }), 'Keep running kept the batch running').toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (9) The >=2-jobs "Cancel running jobs?" modal outlived its batch and read "Cancel 0 running jobs?" (the same shape in Clip Kit).
+  test('the Cancel question goes when its batch ends: Export asks about 2 jobs and is gone, not "Cancel 0 running jobs?", when they finish (T-131 (9))', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t131confirm-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t131confirm', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 2_500 }])
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      const card = exportCard(window)
+      await card.getByRole('button', { name: /^Export 2 files/ }).click()
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toContainText('Cancel 2 running jobs?')
+      // Nothing is pressed: the batch runs to its end under the question.
+      await expect(dialog, 'the question is gone with the batch').toHaveCount(0, { timeout: 300_000 })
+      await expect(card.getByRole('button', { name: /^Export 2 files/ })).toBeEnabled()
+      expect(mp4sIn(seeded), 'and both jobs finished: the question did not cancel them').toHaveLength(2)
+      await expect(window.getByText('Cancel 0 running jobs?')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the Clip Kit Cancel question goes when the kit ends (T-131 (9))', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t131kitconfirm', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 1_200 }])
+      await kitButton(window).click()
+      const cancel = clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })
+      await cancel.click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toContainText('Cancel the Clip Kit batch')
+      // Not answered: the kit runs on under the question and finishes, and the question goes with it.
+      await expect(dialog, 'the question is gone with the kit').toHaveCount(0, { timeout: 540_000 })
+      await expect(kitButton(window)).toBeEnabled({ timeout: 60_000 })
+      expect(readdirSync(outDir).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (13) The busy Reframe and Compile primaries shrink (Reframe 137 -> 114 px, Compile 112 -> 86 at the default window, measured), and the live
+  // folder chip beside them grows into the room (129 -> 152 px): the strip a double-click's second press lands on was the chip's, and a chooser
+  // opened mid-job (executed on a 120 ms second press). The chip is off while the job runs - changing the folder does nothing for the running
+  // job - and the primaries keep their width.
+  test('a second press on the busy primary never opens a chooser: the folder chip is off while a job runs and the primary keeps its width, on Reframe, GIF, Compile and Picture-in-picture (T-131 (13))', async () => {
+    test.setTimeout(900_000)
+    const seeded = path.join(root, `t131chip-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t131chip', clipSrc, { video: { lastOutputDir: seeded }, export: { lastOutputDir: seeded } })
+    try {
+      await recordSlowChooser(app, { answer: null, files: [clipSrc, pipSrc], delayMs: 150 })
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 2_500 }])
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      const compile = compileCard(window)
+      await compile.getByRole('slider', { name: 'Fade between clips, in milliseconds' }).fill('0')
+      const pip = pipCard(window)
+      // One at a time: Base and Overlay share the panel's claim, so the second button is pressed once the first answer has landed (the chooser
+      // is held 150 ms, and a press inside that hold is the repeat press the claim exists to drop).
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await expect(pip.getByRole('button', { name: `Base: ${path.basename(clipSrc)}` })).toBeVisible()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await expect(pip.getByRole('button', { name: `Overlay: ${path.basename(pipSrc)}` })).toBeVisible()
+      const folderChoosers = async (): Promise<number> => (await chooserCalls(app)).filter((c) => c.folder).length
+      const problems: string[] = []
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        for (const [label, card, primaryName, busyName] of [
+          ['Reframe', reframeCard(window), 'Reframe to 9:16', /^Reframing/],
+          ['GIF', gifCard(window), 'Export GIF', /^Exporting/],
+          ['Compile', compile, 'Compile 2 clips', /^Stitching/],
+          ['Picture-in-picture', pip, 'Composite', /^Compositing/]
+        ] as const) {
+          const primary = card.getByRole('button', { name: primaryName, exact: true })
+          const chip = card.getByRole('button', { name: /^Output folder:/ })
+          const idle = await primary.boundingBox()
+          if (!idle) throw new Error(`${label}: no primary button`)
+          await primary.click()
+          const busyButton = card.getByRole('button', { name: busyName })
+          await expect(busyButton, `${label}: the job started`).toBeVisible()
+          await expect(chip, `${label} at ${where}: the folder chip is off while the job runs`).toBeDisabled()
+          // The second press of a double-click at a person's pace, on the left strip of where the primary was.
+          await window.waitForTimeout(150)
+          await window.mouse.click(idle.x + 1, idle.y + idle.height / 2)
+          await window.waitForTimeout(500)
+          const asked = await folderChoosers()
+          if (asked !== 0) problems.push(`${label} at ${where}: a second press at x ${Math.round(idle.x + 1)} opened ${asked} folder chooser(s)`)
+          // The width: a busy primary that is narrower than the idle one gives its strip to the chip.
+          const busy = await busyButton.boundingBox()
+          if (label === 'Reframe' || label === 'Compile') {
+            if (!busy || busy.width < idle.width - 1) problems.push(`${label} at ${where}: the busy primary shrank from ${Math.round(idle.width)} to ${Math.round(busy?.width ?? 0)} px`)
+          }
+          await expect(card.getByRole('button', { name: primaryName, exact: true }), `${label}: free again`).toBeEnabled({ timeout: 300_000 })
+          await expect(chip, `${label}: the chip is back once the job is over`).toBeEnabled()
+        }
+      }
+      expect(problems, 'no chooser opened mid-job, and no primary lost its strip').toEqual([])
+      expect(await folderChoosers(), 'and none at all in the whole run').toBe(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (14) The inline "Tokens:" hint took the row and the input clipped its own default value at 1024 px (168 px box, 189 px value): the only
+  // cut input app-wide. The hint is on its own line under the box.
+  test('the filename template shows its whole default value at the 1024 px minimum, and the token hint is under the box (T-131 (14))', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t131template')
+    try {
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        const box = exportCard(window).getByPlaceholder('{source}_{clip}_{preset}')
+        await expect(box).toHaveValue('{source}_{clip}_{preset}')
+        const m = await box.evaluate((el) => {
+          const input = el as HTMLInputElement
+          return { scrollWidth: input.scrollWidth, clientWidth: input.clientWidth, bottom: input.getBoundingClientRect().bottom }
+        })
+        expect(m.scrollWidth, `the box (${m.clientWidth} px) holds its whole default value at ${where}`).toBeLessThanOrEqual(m.clientWidth)
+        const hint = exportCard(window).getByText('Tokens: {source} {clip} {preset} {date} {time} {handle}')
+        const hintBox = await hint.boundingBox()
+        expect(hintBox, 'the hint is on screen').not.toBeNull()
+        expect(hintBox?.y ?? 0, `the hint sits under the box at ${where}`).toBeGreaterThanOrEqual(m.bottom - 1)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (5) Video Studio's entry points: the Importer's "Choose file…", the Picture-in-picture file buttons, and the two kinds of folder chip. Each
+  // goes straight to a native chooser; the stand-in answers after 300 ms, as a real one does, and the second press of the double-click lands in it.
+  test('a double-click on "Choose file…" opens ONE chooser and loads the file once (T-131 (5))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('t131importer')
+    const { app, window } = studio
+    try {
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await recordSlowChooser(app, { files: [clipSrc, burstSrc], delayMs: 300 })
+      await window.getByRole('button', { name: 'Choose file…' }).dblclick()
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(800)
+      expect(await chooserCalls(app), 'one chooser, not two').toHaveLength(1)
+      await expect(window.locator('header').getByText(path.basename(clipSrc), { exact: true }), 'the first answer is the video that is open').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === 'Video loaded'), 'loaded once').toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a double-click on the Picture-in-picture file buttons opens ONE chooser each, and the first answer stands (T-131 (5))', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t131pippick')
+    try {
+      await recordSlowChooser(app, { files: [clipSrc, pipSrc, burstSrc], delayMs: 300 })
+      const pip = pipCard(window)
+      await pip.getByRole('button', { name: 'Base: none' }).dblclick()
+      await expect(pip.getByRole('button', { name: `Base: ${path.basename(clipSrc)}` })).toBeVisible()
+      await window.waitForTimeout(800)
+      expect(await chooserCalls(app), 'one chooser for the Base button').toHaveLength(1)
+      await pip.getByRole('button', { name: 'Overlay: none' }).dblclick()
+      await expect(pip.getByRole('button', { name: `Overlay: ${path.basename(pipSrc)}` })).toBeVisible()
+      await window.waitForTimeout(800)
+      expect(await chooserCalls(app), 'and one more for the Overlay button').toHaveLength(2)
+      await expect(pip.getByRole('button', { name: `Base: ${path.basename(clipSrc)}` }), 'the second answer did not replace the first').toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a double-click on a folder chip opens ONE chooser: Export\'s own, and the one the GIF, Compile, Reframe and Picture-in-picture panels share (T-131 (5))', async () => {
+    test.setTimeout(240_000)
+    const first = path.join(root, `t131chip-a-${Date.now().toString(36)}`)
+    const second = path.join(root, `t131chip-b-${Date.now().toString(36)}`)
+    mkdirSync(first, { recursive: true })
+    mkdirSync(second, { recursive: true })
+    const { app, window } = await launchWithVideo('t131folderchip')
+    try {
+      await recordSlowChooser(app, { answer: first, delayMs: 300 })
+      const exportChip = exportCard(window).getByRole('button', { name: 'Choose folder…' })
+      await exportChip.dblclick()
+      await expect(exportCard(window).getByRole('button', { name: `Output folder: ${path.basename(first)}` })).toBeVisible()
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.folder), 'Export: one folder chooser').toHaveLength(1)
+
+      await recordSlowChooser(app, { answer: second, delayMs: 300 })
+      await gifCard(window).getByRole('button', { name: 'Choose folder…' }).dblclick()
+      // The four panels hold one folder, so every one of them shows it afterwards.
+      for (const card of [gifCard(window), compileCard(window), reframeCard(window), pipCard(window)]) {
+        await expect(card.getByRole('button', { name: `Output folder: ${path.basename(second)}` })).toBeVisible()
+      }
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.folder), 'the four panels: one folder chooser').toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (1) The lead item through the panel: Compile of a source whose SOUND ends before its picture (the shape of Record's mic-drop takes). The
+  // clips are set in a project file; the folder is remembered, so the only press is the Compile button. Before the pad, the clip whose range
+  // lay past the sound ended the join there ("Saved", 1.5 s of 5.0 s).
+  test('Compile keeps every clip of a source whose sound ends before its picture, and the file is as long as its clips (T-131 (1))', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t131mic-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const micSrc = path.join(root, 'source', 't131-mic-drop.mp4')
+    await ffmpeg([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=15:duration=8',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k',
+      micSrc
+    ])
+    const studio = await launchHome('t131mic', { video: { lastOutputDir: seeded } })
+    const { app, window } = studio
+    try {
+      await stubShellReveal(app)
+      const clip = (id: string, name: string, startSec: number, endSec: number) => ({
+        id, name, startSec, endSec, cropRect: null, textOverlays: [], selectedPresets: ['youtube']
+      })
+      const projectPath = path.join(root, `t131mic-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          // 1.5 s inside the sound, 2 s wholly PAST it (the sound ends at 3 s), 1.5 s inside it again: 5.0 s of compilation.
+          videoStudio: {
+            sourcePath: micSrc,
+            clips: [clip('a', 'Early', 0.5, 2), clip('b', 'After the drop', 5, 7), clip('c', 'Early again', 1, 2.5)],
+            selectedClipId: 'a',
+            watermark: null,
+            srtPath: null
+          }
+        }),
+        'utf8'
+      )
+      await stubDialogs(app, { open: [projectPath] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const card = compileCard(window)
+      await expect(card.getByRole('button', { name: 'Compile 3 clips', exact: true })).toBeEnabled({ timeout: 30_000 })
+      await card.getByRole('slider', { name: 'Fade between clips, in milliseconds' }).fill('0')
+      await card.getByRole('button', { name: 'Compile 3 clips', exact: true }).click()
+      await expect.poll(() => mp4sIn(seeded).length, { timeout: 540_000, intervals: [500] }).toBe(1)
+      await expectToast(window, 'Saved ')
+      const probe = await ffprobeJson(path.join(seeded, mp4sIn(seeded)[0] as string))
+      const secs = Number(probe.format?.duration)
+      expect(secs, `all three clips are in the file (5.0 s), not the 1.5 s the first clip alone makes: ${secs}`).toBeGreaterThan(4.8)
+      expect(secs).toBeLessThan(5.3)
+      // It carries sound for its whole length (silence after the drop is silence, not an end).
+      expect(probe.streams?.some((s) => s.codec_type === 'audio'), 'an audio stream').toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // (5) The two start handlers that were pin-only: Clip Kit (a folder chooser first) and the burn-in (a Save dialog first).
+  test('a double-click on Clip Kit opens ONE folder chooser and makes ONE kit (T-131 (5))', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t131kitdbl', clipSrc)
+    try {
+      await recordSlowChooser(app, { answer: outDir, delayMs: 300 })
+      await stubShellReveal(app)
+      await kitButton(window).dblclick()
+      await expectToast(window, 'Saved your Clip Kit')
+      await expect(kitButton(window)).toBeEnabled({ timeout: 60_000 })
+      expect((await chooserCalls(app)).filter((c) => c.folder), 'one folder chooser').toHaveLength(1)
+      const kits = readdirSync(outDir).filter((f) => f.includes('-kit-'))
+      expect(kits, 'one kit folder, not two').toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a double-click on Burn into video opens ONE save dialog and writes ONE file (T-131 (5))', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('t131burndbl')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'burndbl.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:01,000\nfirst line\n', 'utf8')
+      const projectPath = path.join(root, `t131burndbl-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath }
+        }),
+        'utf8'
+      )
+      const burned = path.join(outDir, 'burned-once.mp4')
+      await recordSlowChooser(app, { files: [projectPath], saveAs: burned, delayMs: 300 })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const burn = captionsCard(window).getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await burn.dblclick()
+      await expectToast(window, 'Captions burned in')
+      await expect.poll(() => existsSync(burned), { timeout: 60_000 }).toBe(true)
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'one save dialog, not two').toHaveLength(1)
+      expect(mp4sIn(outDir), 'one file').toEqual(['burned-once.mp4'])
+      expect((await readToastLog(window)).filter((t) => t === 'Captions burned in'), 'said once').toHaveLength(1)
+      await expect(burn, 'and the claim is given back').toBeEnabled({ timeout: 30_000 })
     } finally {
       await app.close()
     }

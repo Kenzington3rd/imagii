@@ -21,6 +21,7 @@ import { CustomPresetManager } from './CustomPresetManager'
 import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
+import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 import { persistSetting } from '../../lib/persistSetting'
@@ -190,6 +191,8 @@ export function ExportPanel(): JSX.Element | null {
   // guard (the video Importer's `busyRef`, the audio importer's, Record's `startingRef`), and a `finally` gives it back. Declared with
   // the other hooks, ahead of the `if (!source) return null` below.
   const startingRef = useRef(false)
+  // T-131 (5): the same claim for the folder chip's chooser, which goes straight to a native dialog.
+  const pickingDirRef = useRef(false)
   const [watermarkText, setWatermarkText] = useState<string>('')
   const [watermarkPosition, setWatermarkPosition] = useState<WatermarkSpec['position']>(
     'bottom-right'
@@ -200,6 +203,11 @@ export function ExportPanel(): JSX.Element | null {
   // INIT-I (round 16): show a confirm before canceling when >=2 jobs are
   // running. The 20-clip mistake-click scenario is the motivator.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // T-131 (9): the question is about the batch that is running. When the batch ends (the last job finished, or failed) with the question
+  // still up, it read "Cancel 0 running jobs?" and "Cancel jobs" had nothing to cancel. The question goes with the batch.
+  useEffect(() => {
+    if (!running) setShowCancelConfirm(false)
+  }, [running])
 
   useEffect(() => {
     let cancelled = false
@@ -269,10 +277,13 @@ export function ExportPanel(): JSX.Element | null {
   const selectedClip = clips.find((c) => c.id === selectedClipId)
 
   async function pickOutDir(): Promise<void> {
-    // T-126 (6): the chooser opens ON the folder the button shows (the four side panels' hook and Clip Kit do), not wherever the OS
-    // last was. `outDir` is null until a folder is chosen or remembered, and the chooser opens where it always did.
-    const picked = await window.api.video.pickOutputDir(outDir ?? undefined)
-    if (picked) setOutDir(picked)
+    // T-131 (5): one chooser at a time: a double-click on the folder chip opened two.
+    await claimFirst(pickingDirRef, async () => {
+      // T-126 (6): the chooser opens ON the folder the button shows (the four side panels' hook and Clip Kit do), not wherever the OS
+      // last was. `outDir` is null until a folder is chosen or remembered, and the chooser opens where it always did.
+      const picked = await window.api.video.pickOutputDir(outDir ?? undefined)
+      if (picked) setOutDir(picked)
+    })
   }
 
   async function startExport(): Promise<void> {
@@ -548,15 +559,19 @@ export function ExportPanel(): JSX.Element | null {
         </select>
       </div>
 
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-ink-muted">Filename:</span>
-        <input
-          type="text"
-          value={filenameTemplate}
-          onChange={(e) => setFilenameTemplate(e.target.value)}
-          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
-          placeholder="{source}_{clip}_{preset}"
-        />
+      <div className="flex flex-col gap-1 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-ink-muted">Filename:</span>
+          <input
+            type="text"
+            value={filenameTemplate}
+            onChange={(e) => setFilenameTemplate(e.target.value)}
+            className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
+            placeholder="{source}_{clip}_{preset}"
+          />
+        </div>
+        {/* T-131 (14): the token list is its own line under the box. Beside it, at the 1024 px window, it took the row and left the box 168 px
+            for a 189 px default template: the one input in the app that cut its own value. */}
         <span className="text-ink-dim font-mono">
           Tokens: {'{source} {clip} {preset} {date} {time} {handle}'}
         </span>

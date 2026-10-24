@@ -238,6 +238,9 @@ export function videoHasNoSound(source: Pick<VideoSource, 'probe'> | null): bool
   return source !== null && source.probe.audioCodec === null
 }
 
+/** The shortest clip a scanner's add makes (s): a range with less than this left in the video is refused (T-131 (3)). */
+const MIN_SCANNED_CLIP_SEC = 0.1
+
 /** What `addScannedClip` did (T-94). */
 export type ScannedClipResult = 'refused' | 'added' | 'added-dropped-whole-video'
 
@@ -348,8 +351,12 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return 'refused'
     if (endSec <= startSec) return 'refused'
     const duration = source.probe.duration
+    // T-131 (3): a range that begins at the end of the video, or past it, has no picture to hold. Clamping it made a clip that
+    // STARTED at the duration and ended 0.1 s after it (a stale scanner row, a chat log longer than the video), and the panel said
+    // "Clip added". The 0.1 s is the shortest clip this function makes, so a start with less than that left is the same refusal.
+    if (duration - startSec < MIN_SCANNED_CLIP_SEC) return 'refused'
     const safeStart = Math.max(0, Math.min(startSec, duration))
-    const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
+    const safeEnd = Math.max(safeStart + MIN_SCANNED_CLIP_SEC, Math.min(endSec, duration))
     const base = makeDefaultClip(duration, clips.length + 1)
     const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
     const kept = clips.filter((c) => !isPristineWholeVideoClip(c, duration))

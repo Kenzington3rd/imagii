@@ -403,7 +403,7 @@ describe('outputPixels', () => {
 })
 
 describe('thumbnailSizeNote', () => {
-  const NOTE = "Bigger than YouTube's thumbnail size (1280x720)."
+  const NOTE = "Bigger than YouTube's thumbnail size (1280×720)."
 
   it('stays quiet at YouTube\'s own size and below', () => {
     expect(thumbnailSizeNote(1280, 720, false)).toBeNull()

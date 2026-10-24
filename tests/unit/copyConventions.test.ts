@@ -72,6 +72,8 @@ const RULES: Rule[] = [
   { name: 'a "(s)" / "(es)" plural — use countOf', test: /\w\((s|es)\)/ },
   { name: 'a unit glued to its number ("30fps", "480px") — units are spaced', test: new RegExp(`[0-9${HOLE}](fps|px|kbps|Mbps|ms|ch)\\b`) },
   { name: '"sec" as a unit — seconds are "s" after a number', test: /\d\s?sec\b/ },
+  // T-131 (15): the image ExportDialog spelled "1280x720" and "28x28" with the letter x beside the canvas readout's "1920 × 1080".
+  { name: 'the letter x as a multiplication sign between numbers — sizes are spelled with ×', test: new RegExp(`[0-9${HOLE}]x[0-9${HOLE}]`) },
   // ── cut-short words ──────────────────────────────────────────────────
   { name: '"Rect" — spell it Rectangle', test: /\bRect\b/ },
   { name: '"Top L" / "Bot R" — spell the corner out', test: /\b(Top|Bot|Bottom) [LR]\b|\bBot\b/ },
@@ -411,7 +413,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
         <p>Tick the box. I'll set it. Great!</p>
         <label>Bucket sec</label><label>V bitrate</label>
         <option>Top L</option><option>Bot R</option><option>Rect</option>
-        <span>{a} msgs</span><span>First 3 sec</span>
+        <span>{a} msgs</span><span>First 3 sec</span><span title="Output: 1280x720" />
         <span>{busy ? 'Image Canvas' : 'Found 3 hype moments'}</span>
         <i title="30 clip(s)" aria-label="Safe zones" />
       </div>
@@ -423,6 +425,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
     confirm('Delete "x" and all 3 item(s)?')
     const p = { label: 'sustained-loud', hint: 'Found 1 candidates', description: 'A colour grade' }
     const t = { fps: \`\${p.fps}fps · \${p.w}px\` }
+    const size = { hint: \`Output: \${out.width}x\${out.height}\` }
   `
 
   it('names every rule it was given a violation of', () => {
@@ -437,6 +440,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
       '(s)',
       'glued to its number',
       '"sec" as a unit',
+      'the letter x as a multiplication sign',
       '"Rect"',
       '"Top L"',
       '"Bucket sec"',

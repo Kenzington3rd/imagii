@@ -133,7 +133,8 @@ export function overlayOutsideClipMessage(
   if (from < to) return null
   // T-126 (5): the clip's range reads the way the Timeline beside it does once the video is an hour long ("1:40:43.50 to 1:41:43.50
   // of the video"), both ends in the same form (the clock has no unit to append; the seconds form says "s"). T-127 (7): the boxes
-  // above it decide per PAIR now, by the same function, so the card never speaks two forms at once.
+  // above it decide per PAIR now, by the same function, so each pair speaks one form. (T-131 (16): the boxes' pair and this clip's pair are
+  // two pairs, each coherent in itself; an overlay window inside an hour in a clip past it reads seconds in the boxes and a clock here.)
   const pair = overlayTimePair(clip.startSec, clip.endSec)
   const range = pair.clock ? `${pair.start} to ${pair.end}` : `${pair.start} to ${pair.end} s`
   return `This text won't show in the export: its times fall outside the clip, which runs from ${range} of the video.`

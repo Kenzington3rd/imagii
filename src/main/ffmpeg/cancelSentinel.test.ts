@@ -211,7 +211,7 @@ const { extractFrame, cancelAllFrameJobs } = await import('./frame')
 const { convertToMp4, remuxWebm, cancelConverts, cancelAllConverts, ConvertCancelledError } = await import(
   './convert'
 )
-const { runAudioExport, runAudioReattach, cancelAudioJob, cancelAllAudioJobs } = await import(
+const { runAudioExport, runAudioMux, runAudioReattach, cancelAudioJob, cancelAllAudioJobs } = await import(
   '../audio/process'
 )
 const {
@@ -872,9 +872,21 @@ const PRE_SPAWN: PreSpawnCase[] = [
       { via: 'cancelConcatJob', run: (id) => void cancelConcatJob(id) },
       { via: 'cancelAllConcatJobs', run: () => cancelAllConcatJobs() }
     ],
-    probe: false,
+    // T-131 (2): it also probes the base for the length its sound is padded to, inside `run.guard` like every other wait before a spawn.
+    probe: true,
     perJob: true,
     choosesName: true
+  },
+  {
+    // T-131 (2): the re-attach's second pass probes the PICTURE (its codec decides the copy, its length decides the pad) before its child.
+    name: 'audio re-attach, the mux pass (probes the picture first)',
+    start: (jobId) => runAudioMux(jobId, '/tmp/in.mp4', '/tmp/cleaned.wav', path.join(scratch, 'mux.mp4'), () => undefined),
+    cancels: [
+      { via: 'cancelAudioJob', run: (id) => void cancelAudioJob(id) },
+      { via: 'cancelAllAudioJobs', run: () => cancelAllAudioJobs() }
+    ],
+    probe: true,
+    perJob: true
   },
   {
     name: 'highlight scan',

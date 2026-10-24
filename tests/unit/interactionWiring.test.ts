@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT, ROUTE_ENTRY, collectRouteSources } from './routeSources'
+import { parseSource, sourceFilesUnder } from './renderedStrings'
 
 /**
  * Round 23 (T-13, T-14, T-15, T-17, T-18, T-19, T-20): the unit layer runs in
@@ -2036,5 +2037,204 @@ describe('T-128 (2) — Inter ships as woff2 alone, from inline @font-face rules
     expect(fontFaceProblems(set.replace("font-family: 'Inter'", "font-family: 'Roboto'"), () => true).join('|')).toMatch(/is not the Inter family/)
     // A commented-out rule is not a rule.
     expect(fontFaceProblems(`${set}\n/* ${face(700, "url('x.woff')")} */`, () => true)).toEqual([])
+  })
+})
+
+// T-131 (round 79): wiring for the seventeenth pass's renderer fixes. Behavior is pinned where it lives (repeatPress.test.ts, claimFirst.test.ts,
+// videoStore.test.ts) and proven on the built app by the E2E specs named per test; what no DOM-less test can see is that the control a person
+// reaches is the one that carries the fix, and these read the source to say so.
+describe('T-131 — the sweep-17 fixes are wired where the person reaches them', () => {
+  const MAIN_INDEX_FOR_T131 = path.resolve(RENDERER_ROOT, '../../main/index.ts')
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('(3) the highlight finder and the chat spike finder clear their results with the open video, on the key CaptionsPanel uses', () => {
+    const captions = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(captions).toMatch(/useEffect\(\(\) => \{\s*setSegments\(null\)\s*setProgress\(null\)\s*\}, \[source\?\.filePath\]\)/)
+    const highlight = strip(read('modules/video-studio/HighlightPanel.tsx'))
+    expect(highlight).toMatch(/const openPath = source\?\.filePath/)
+    expect(highlight).toMatch(
+      /useEffect\(\(\) => \{\s*setAudioCandidates\(null\)\s*setProgress\(0\)\s*setChatText\(''\)\s*setDebouncedChat\(''\)\s*\}, \[openPath\]\)/
+    )
+    // A scan that finishes after the video was replaced is for a video that is gone.
+    const scan = highlight.slice(highlight.indexOf('async function scan()'), highlight.indexOf('function addAsClip'))
+    expect(scan).toMatch(/const startedFor = source\.filePath/)
+    expect(scan).toMatch(/await window\.api\.video\.findHighlights\(startedFor\)\s*if \(openPathRef\.current !== startedFor\) return/)
+    const chat = strip(read('modules/video-studio/ChatHighlightPanel.tsx'))
+    expect(chat).toMatch(/const openPath = source\?\.filePath/)
+    expect(chat).toMatch(/useEffect\(\(\) => \{\s*setChatText\(''\)\s*setPeaks\(null\)\s*\}, \[openPath\]\)/)
+    // ...and the store refuses what neither panel can any longer hand it.
+    expect(strip(read('modules/video-studio/store/videoStore.ts'))).toMatch(
+      /if \(duration - startSec < MIN_SCANNED_CLIP_SEC\) return 'refused'/
+    )
+  })
+
+  it('(4) every Fix wizard answer ignores the second press of a double-click', () => {
+    const wizard = strip(read('modules/audio-studio/FixWizard.tsx'))
+    expect(wizard).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    const answers = wizard.slice(wizard.indexOf('{q.options.map'), wizard.indexOf('{opt.label}'))
+    expect(answers).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*if \(q\.id === 'noise'\)/)
+  })
+
+  it('(6) the tour\'s Next / Done, Back and scrim step once per discrete press', () => {
+    const tour = strip(read('components/Tutorial.tsx'))
+    expect(tour).toMatch(/const stepOnce = \(go: \(\) => void\) => \(e: \{ detail: number \}\): void => \{\s*if \(isRepeatPress\(e\)\) return\s*go\(\)\s*\}/)
+    expect(tour).toMatch(/mask="url\(#tutorial-mask\)"\s*onClick=\{stepOnce\(next\)\}/)
+    expect(tour).toMatch(/onClick=\{stepOnce\(prev\)\}/)
+    // Next and Done are ONE button: the label changes on the last step.
+    expect(tour).toMatch(/ref=\{nextBtnRef\}[\s\S]*?onClick=\{stepOnce\(next\)\}/)
+    // The keys are the window handler's (detail 0) and are not routed through the click rule.
+    expect(tour).toMatch(/else if \(intent === 'next'\) next\(\)/)
+  })
+
+  it('(7) the Player\'s and the Timeline\'s hint lines name the ? key', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/set in\/out ·\{' '\}\s*<kbd className="px-1 bg-bg-hover rounded">\?<\/kbd> all shortcuts\s*<\/p>/)
+    const timeline = strip(read('modules/video-studio/Timeline.tsx'))
+    expect(timeline).toMatch(/at the playhead ·\{' '\}\s*<kbd className="px-1 bg-bg-hover rounded">\?<\/kbd> all shortcuts\s*<\/p>/)
+  })
+
+  it('(8) a dialog that closes arms the swallow of a double-click\'s second press, in the Modal and in the tour', () => {
+    expect(strip(read('components/Modal.tsx'))).toMatch(
+      /useEffect\(\(\) => \{\s*if \(!open\) return\s*openModals\+\+\s*return \(\) => \{\s*openModals--\s*swallowRepeatClicks\(\)\s*\}\s*\}, \[open\]\)/
+    )
+    expect(strip(read('components/Tutorial.tsx'))).toMatch(/useEffect\(\(\) => swallowRepeatClicks, \[\]\)/)
+    // One capture-phase listener on the window, ahead of React's, stopping the click before any handler or default action.
+    const lib = strip(read('lib/repeatPress.ts'))
+    expect(lib).toMatch(/window\.addEventListener\(\s*'click',[\s\S]*?e\.stopImmediatePropagation\(\)\s*e\.preventDefault\(\)[\s\S]*?true\s*\)/)
+  })
+
+  it('(9) the Cancel question goes with its batch: Export and Clip Kit close it the moment `running` is false', () => {
+    for (const rel of ['modules/video-studio/ExportPanel.tsx', 'modules/video-studio/ClipKitButton.tsx']) {
+      expect(strip(read(rel)), rel).toMatch(/useEffect\(\(\) => \{\s*if \(!running\) setShowCancelConfirm\(false\)\s*\}, \[running\]\)/)
+    }
+  })
+
+  it('(13) the four folder chips are off while their job runs', () => {
+    for (const [rel, flag] of [
+      ['modules/video-studio/ReframePanel.tsx', 'running'],
+      ['modules/video-studio/CompilationPanel.tsx', 'busy'],
+      ['modules/video-studio/GifPanel.tsx', 'busy'],
+      ['modules/video-studio/PipPanel.tsx', 'busy']
+    ] as const) {
+      expect(strip(read(rel)), rel).toMatch(new RegExp(`<button className="btn-ghost min-w-0 px-3 py-1\\.5 text-xs disabled:opacity-50" onClick=\\{pickDir\\} disabled=\\{${flag}\\}>\\s*<OutputDirLabel`))
+    }
+  })
+
+  it('(13) the Reframe and Compile primaries keep their idle width, so the busy label cannot shrink them', () => {
+    expect(strip(read('modules/video-studio/ReframePanel.tsx'))).toMatch(/className="btn-primary px-4 py-1\.5 ml-auto whitespace-nowrap min-w-\[8\.6rem\] disabled:opacity-50"/)
+    expect(strip(read('modules/video-studio/CompilationPanel.tsx'))).toMatch(/className="btn-primary px-3 py-1\.5 text-xs ml-auto whitespace-nowrap min-w-\[7\.1rem\] disabled:opacity-50"/)
+  })
+
+  it('(16), (17) the guide speaks the pair rule, the overlay comment no longer says the card never speaks two forms, and the quit comment tells the Windows truth', () => {
+    const guide = readFileSync(path.resolve(RENDERER_ROOT, '../../../docs/STYLE_GUIDE.md'), 'utf8')
+    expect(guide).toMatch(/The two Source time boxes are ONE form, decided by the PAIR \(`overlayTimePair`/)
+    expect(guide).toMatch(/when\s+EITHER is one hour or more BOTH show the clock/)
+    expect(guide).not.toMatch(/A time shown at rest in a box is the seconds the card line says/)
+    const overlay = readFileSync(path.resolve(RENDERER_ROOT, '../../shared/textOverlay.ts'), 'utf8')
+    expect(overlay).not.toMatch(/never speaks two forms/)
+    expect(overlay).toMatch(/are\s+\/\/ two pairs, each coherent in itself/)
+    const main = readFileSync(MAIN_INDEX_FOR_T131, 'utf8')
+    expect(main).toMatch(/NOT a Windows shutdown, restart or logoff/)
+    expect(main).toMatch(/Electron emits\s+\/\/ no `before-quit` for those/)
+    expect(main, 'the old claim is gone').not.toMatch(/an OS session\s+end/)
+  })
+
+  // ── (5) every picker whose first await is a native dialog is claim-first ──────────────────────────────────────────────────────────
+  // T-126 (19) and T-127 (11) fixed the start handlers and left the pickers "pin-only: the first await is a native dialog". That rationale was
+  // disproven by execution (two choosers from one double-click on Importer, AudioImporter, a role button, PipPanel, Home, the folder chip).
+  // The scan finds every renderer call of a bridge function that opens a native chooser, names its enclosing function, and holds the set to a
+  // table: a new picker fails here until it is decided, and one under `claimFirst` is checked to be under the claim it names.
+  const DIALOG_CALL = /^window\.api\.(?:video\.pickFile|audio\.pickFile|video\.pickOutputDir|project\.save|project\.load)$/
+
+  interface Site {
+    file: string
+    fn: string
+    call: string
+    /** The flag of the `claimFirst(flag, ...)` call this call sits under, or null. */
+    claim: string | null
+  }
+
+  function enclosingFunction(n: ts.Node): string {
+    for (let p = n.parent; p; p = p.parent) {
+      if (ts.isFunctionDeclaration(p) && p.name) return p.name.text
+      if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) return p.parent.name.text
+    }
+    return '<module>'
+  }
+
+  /** Every call of a dialog-opening bridge function in `text`, with the function it is in and the `claimFirst` flag above it. */
+  function dialogSites(text: string, file: string): Site[] {
+    const sf = parseSource(file, text)
+    const out: Site[] = []
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && DIALOG_CALL.test(n.expression.getText(sf))) {
+        let claim: string | null = null
+        for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
+          if (ts.isCallExpression(p) && p.expression.getText(sf) === 'claimFirst') {
+            claim = p.arguments[0]?.getText(sf) ?? null
+            break
+          }
+        }
+        out.push({ file, fn: enclosingFunction(n), call: n.expression.getText(sf).replace('window.api.', ''), claim })
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    return out
+  }
+
+  /** What is decided for every site: under `claimFirst(<flag>)`, or protected by the start handler's own claim (pinned by the singleFlight tests above). */
+  const DECIDED: Array<[string, string, string, string]> = [
+    ['modules/video-studio/Importer.tsx', 'onPickFile', 'video.pickFile', 'pickingRef'],
+    ['modules/video-studio/PipPanel.tsx', 'pick', 'video.pickFile', 'pickingRef'],
+    ['modules/audio-studio/AudioImporter.tsx', 'onPickFile', 'audio.pickFile', 'pickingRef'],
+    ['modules/audio-studio/SecondaryTrackPanel.tsx', 'pickAndAdd', 'audio.pickFile', 'pickingRef'],
+    ['modules/video-studio/ExportPanel.tsx', 'pickOutDir', 'video.pickOutputDir', 'pickingDirRef'],
+    ['hooks/useVideoOutputDir.ts', 'pickOutputDir', 'video.pickOutputDir', 'choosing'],
+    ['routes/Home.tsx', 'handleSave', 'project.save', 'projectDialog'],
+    ['routes/Home.tsx', 'handleLoad', 'project.load', 'projectDialog'],
+    // The start handlers that ask for the folder when none is chosen: claim-first themselves (T-125 (18), T-126 (19)); the Clip Kit and
+    // Export starts are in the two singleFlight tables above, and `resolveOutputDir` is called only from the four panels' start handlers.
+    ['modules/video-studio/ExportPanel.tsx', 'startExport', 'video.pickOutputDir', ''],
+    ['modules/video-studio/ClipKitButton.tsx', 'runKit', 'video.pickOutputDir', ''],
+    ['hooks/useVideoOutputDir.ts', 'resolveOutputDir', 'video.pickOutputDir', '']
+  ]
+
+  it('(5) every native-chooser call in the renderer is decided, and each picker is under its claim', () => {
+    const found = sourceFilesUnder(RENDERER_ROOT).flatMap((f) => dialogSites(readFileSync(f, 'utf8'), f).map((site) => ({ ...site, file: path.relative(RENDERER_ROOT, f).split(path.sep).join('/') })))
+    const key = (file: string, fn: string, call: string): string => `${file} ${fn} ${call}`
+    expect(found.map((x) => key(x.file, x.fn, x.call)).sort(), 'a new picker is decided here, in the commit that adds it').toEqual(
+      DECIDED.map(([file, fn, call]) => key(file, fn, call)).sort()
+    )
+    for (const [file, fn, call, flag] of DECIDED) {
+      const site = found.find((x) => x.file === file && x.fn === fn && x.call === call)
+      if (flag === '') expect(site?.claim, `${file}: ${fn} holds its own start claim, not claimFirst`).toBeNull()
+      else expect(site?.claim, `${file}: ${fn} opens ${call} under claimFirst(${flag}, ...)`).toBe(flag)
+    }
+  })
+
+  it('(5) each flag is a hook or a module object declared once, and the shape is discriminated: a bare call and a late claim are not under the claim', () => {
+    for (const [rel, decl] of [
+      ['modules/video-studio/Importer.tsx', 'const pickingRef = useRef(false)'],
+      ['modules/video-studio/PipPanel.tsx', 'const pickingRef = useRef(false)'],
+      ['modules/audio-studio/AudioImporter.tsx', 'const pickingRef = useRef(false)'],
+      ['modules/audio-studio/SecondaryTrackPanel.tsx', 'const pickingRef = useRef(false)'],
+      ['modules/video-studio/ExportPanel.tsx', 'const pickingDirRef = useRef(false)'],
+      ['hooks/useVideoOutputDir.ts', 'const choosing = { current: false }'],
+      ['routes/Home.tsx', 'const projectDialog = { current: false }']
+    ] as const) {
+      const code = strip(read(rel))
+      expect(code.split(decl).length - 1, `${rel}: ${decl}`).toBe(1)
+      // A component's ref is a hook: declared ahead of any early `return null`.
+      const early = code.indexOf('if (!source) return null')
+      if (decl.includes('useRef') && early !== -1) expect(code.indexOf(decl), `${rel}: declared before the early return`).toBeLessThan(early)
+    }
+    const good = 'async function f() { await claimFirst(r, async () => { const p = await window.api.video.pickFile() }) }'
+    const bare = 'async function f() { const p = await window.api.video.pickFile() }'
+    const other = 'async function f() { await claimFirst(a, async () => 1); const p = await window.api.audio.pickFile() }'
+    expect(dialogSites(good, 'x.tsx').map((x) => x.claim)).toEqual(['r'])
+    expect(dialogSites(bare, 'x.tsx').map((x) => x.claim)).toEqual([null])
+    expect(dialogSites(other, 'x.tsx').map((x) => x.claim), 'a claim on something else does not cover the call after it').toEqual([null])
+    expect(dialogSites('async function f() { await window.api.video.startSomething() }', 'x.tsx')).toEqual([])
   })
 })

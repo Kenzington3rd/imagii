@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { swallowRepeatClicks } from '../lib/repeatPress'
 
 interface ModalProps {
   open: boolean
@@ -96,6 +97,8 @@ export function Modal({
     openModals++
     return () => {
       openModals--
+      // T-131 (8): the dialog is gone; the second press of a double-click on its button is about to land on what it covered.
+      swallowRepeatClicks()
     }
   }, [open])
 

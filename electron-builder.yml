@@ -13,6 +13,14 @@ files:
   - "!node_modules/ffprobe-static/bin/darwin/**"
   - "!node_modules/ffprobe-static/bin/linux/**"
   - "!node_modules/ffprobe-static/bin/win32/ia32/**"
+# T-131 (18): Inter's license ships beside the app. @fontsource/inter moved to devDependencies in T-127 (2) (Vite inlines the woff2 files into the
+# renderer bundle, so the asar stopped carrying 4.38 MB nothing reads), and that took the package's LICENSE - the only copy of the SIL Open Font
+# License in the packaged tree - out of the asar while the font files still ship. The OFL asks that its text travel with the font. This copies it
+# out of node_modules (devDependencies are installed at build time and the lockfile pins the version) to resources/licenses/Inter-OFL.txt, next to
+# app.asar. The release run confirms it in the packaged tree (docs/TESTING.md, hand-checks).
+extraResources:
+  - from: node_modules/@fontsource/inter/LICENSE
+    to: licenses/Inter-OFL.txt
 asar: true
 asarUnpack:
   - "node_modules/ffmpeg-static/**"

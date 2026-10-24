@@ -35,6 +35,8 @@ import {
   runConcat,
   runPipComposite,
   cancelConcatJob,
+  FFMPEG_EMPTY_OUTPUT,
+  FFMPEG_UNREADABLE_PART,
   type ConcatJobSpec
 } from '../../src/main/ffmpeg/concat'
 import {
@@ -514,6 +516,18 @@ async function momentaryLoudness(
 /** `actual` is within `tolerance` of `expected`, saying what was measured when it is not. */
 function near(actual: number, expected: number, tolerance: number, what: string): void {
   expect(Math.abs(actual - expected), `${what}: ${actual} s, expected ${expected} s`).toBeLessThanOrEqual(tolerance)
+}
+
+/** Where the last packet of the file's `select` stream ends, in seconds (T-131): what a player reaches, whatever the container's header says. */
+async function packetsEnd(file: string, select: string): Promise<number> {
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = spawn(ffprobePath, ['-v', 'error', '-select_streams', select, '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0', file])
+    let text = ''
+    child.stdout.on('data', (b) => (text += String(b)))
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolve(text) : reject(new Error(`ffprobe exit ${code} for ${file}`))))
+  })
+  return Math.max(...out.split('\n').filter((l) => l.trim() !== '').map((l) => { const [t, d] = l.split(','); return Number(t) + Number(d) }))
 }
 
 /**
@@ -7391,6 +7405,350 @@ describe('fractional segments do not walk the picture off its sound across the j
     // a few ms after its flash).
     expect(Math.max(...lags.map(Math.abs)), `every flash ${lags.join(' ')}`).toBeLessThanOrEqual(30)
   }, 180_000)
+})
+
+describe('a compilation survives a source whose sound does not cover a segment (real ffmpeg, T-131 (1))', () => {
+  // T-127 (4) put `-shortest` on the segment command so a segment ends where its SHORTER stream does. A source whose sound is shorter than
+  // its picture (Record's own mic-drop takes, T-125 (25); a clip captured with the sound starting late) made that a hazard: a range that
+  // lies past the sound's end, or straddles it, ended where the sound did. Entirely past: no packets at all, ffmpeg's "Output file is empty,
+  // nothing was encoded" and exit 0, a ~970-byte Matroska stub. The join then opened that stub, logged "Impossible to open", stopped there
+  // and exited 0 too: every segment from the stub on was missing and the panel said "Saved" (a [1,3] [7,9] [2,4] compilation of a 10 s
+  // picture with 6 s of sound came out 2.0 s long, not 6.0; the straddling one 5.014 s of 7). The segment's last `-af` stage is now
+  // `apad=whole_dur=<its length in the output>`: the sound is padded with silence up to the picture's length and `-shortest` then ends the
+  // segment at the PICTURE (finite: a bare `apad` hangs with `-c:v copy` and brought the join drift back on 6.1.1). And a segment ffmpeg
+  // wrote nothing for, or a join that cannot open one, is an error in a sentence, not a partial file.
+  // Each source flashes the whole frame white and beeps at 1 kHz in the first 0.1 s of every second, so what is in an output is counted
+  // and where the sound sits against the picture is read.
+  const COVER = {
+    short: [0, 6], // the sound ends at 6 s of a 12 s picture
+    late: [3, 12], // the sound starts at 3 s
+    mic: [0, 5] // a WebM whose microphone dropped at 5 s of a 12 s take
+  } as const
+  const files = { short: '', late: '', mic: '' }
+
+  beforeAll(async () => {
+    const picture = (secs: number): string[] => [
+      '-f', 'lavfi', '-i', `color=c=black:s=640x360:r=30:d=${secs},drawbox=x=0:y=0:w=640:h=360:color=white:t=fill:enable='lt(mod(t,1),0.1)'`
+    ]
+    const sound = (secs: number): string[] => [
+      '-f', 'lavfi', '-i', `aevalsrc='if(lt(mod(t,1),0.1),0.8*sin(2*PI*1000*t),0)':s=48000:d=${secs}`
+    ]
+    const h264 = ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '1']
+    // No `-shortest` anywhere here: the file keeps the longer stream's length, the picture's 12 s.
+    files.short = path.join(workDir, 't131-sound-ends-at-6.mp4')
+    await ff(['-y', ...picture(12), ...sound(6), ...h264, files.short])
+    files.late = path.join(workDir, 't131-sound-starts-at-3.mp4')
+    await ff(['-y', ...picture(12), '-itsoffset', '3', ...sound(9), '-map', '0:v', '-map', '1:a', ...h264, files.late])
+    files.mic = path.join(workDir, 't131-mic-drop.webm')
+    await ff([
+      '-y', ...picture(12), ...sound(5),
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '1M', '-c:a', 'libopus', '-ac', '1', files.mic
+    ])
+  }, 120_000)
+
+  /** The flashes a range holds: one per whole second inside it (the boundaries below all fall in the dark part of their second). */
+  const flashesIn = ([a, b]: readonly [number, number]): number => Math.floor(b) - Math.ceil(a) + 1
+  /** The beeps a range holds that the source's sound covers: a beep is whole from its second to 0.1 s after it. */
+  const beepsIn = ([a, b]: readonly [number, number], [from, to]: readonly [number, number]): number => {
+    let n = 0
+    for (let s = Math.ceil(a); s <= Math.floor(b); s++) if (s >= from && s + 0.1 <= to) n++
+    return n
+  }
+
+  /** Where the last packet of the file's sound ends, in seconds (ffprobe's stream `duration` of a sound that starts late differs by major). */
+  async function soundEnd(file: string): Promise<number> {
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = spawn(ffprobePath, ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0', file])
+      let text = ''
+      child.stdout.on('data', (b) => (text += String(b)))
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve(text) : reject(new Error(`ffprobe exit ${code} for ${file}`))))
+    })
+    return Math.max(...out.split('\n').filter((l) => l.trim() !== '').map((l) => { const [t, d] = l.split(','); return Number(t) + Number(d) }))
+  }
+
+  async function compile(
+    source: keyof typeof files,
+    segments: Array<[number, number]>,
+    jobId: string,
+    fadeMs = 0,
+    /** Beep minus flash is held to 40 ms for the first N beeps only (default: every one). See the late-start case. */
+    lagChecked = Infinity
+  ): Promise<number[]> {
+    const { outputPath } = await runConcat({
+      jobId,
+      sourcePath: files[source],
+      outDir: workDir,
+      segments: segments.map(([startSec, endSec], i) => ({ startSec, endSec, name: `s${i}` })),
+      fadeMs,
+      width: 640,
+      height: 360
+    })
+    const want = segments.reduce((n, [a, b]) => n + (b - a), 0)
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    near(Number(v?.duration), want, 0.15, `${jobId}: the picture of ${segments.length} segment(s)`)
+    near(await soundEnd(outputPath), want, 0.15, `${jobId}: the sound of ${segments.length} segment(s) ends with the picture, padded with silence where the source had none`)
+    const flashes = await flashStarts(outputPath)
+    const beeps = await soundBurstStarts(outputPath, 0.3, 0.5)
+    expect(flashes, `${jobId}: a flash for every whole second inside a segment`).toHaveLength(segments.reduce((n, seg) => n + flashesIn(seg), 0))
+    expect(beeps, `${jobId}: a beep for every one the source's sound covers, and none where it does not`).toHaveLength(
+      segments.reduce((n, seg) => n + beepsIn(seg, COVER[source]), 0)
+    )
+    // Wherever there is a beep it is on its flash: silence in front of the sound (a late start) is silence, not a sound moved earlier.
+    const lags = beeps.map((b) => Math.round(1000 * (b - flashes.reduce((best, f) => (Math.abs(f - b) < Math.abs(best - b) ? f : best), Infinity))))
+    expect(Math.max(0, ...lags.slice(0, lagChecked).map(Math.abs)), `${jobId}: beep minus flash at each beep, in ms: ${lags.join(' ')}`).toBeLessThanOrEqual(40)
+    return lags
+  }
+
+  it('the sources are what they say: the sound ends at 6 s, starts at 3 s, and a WebM microphone drops at 5 s of 12', async () => {
+    for (const [key, ext] of [['short', 6], ['late', 12], ['mic', 5]] as const) {
+      const info = await ffprobeJson(files[key])
+      const a = info.streams.find((s) => s.codec_type === 'audio')
+      const flashes = await flashStarts(files[key])
+      expect(flashes, `${key}: the picture is all 12 s`).toHaveLength(12)
+      const beeps = await soundBurstStarts(files[key], 0.3, 0.5)
+      expect(beeps.at(-1) ?? -1, `${key}: the last beep`).toBeLessThan(ext)
+      expect(beeps.length, `${key}: one beep for each second the sound covers`).toBe(beepsIn([-0.5, 11.9], COVER[key]))
+      expect(a, `${key} has a sound stream`).toBeDefined()
+    }
+  }, 60_000)
+
+  it('the sound ends in the middle of a segment: the segment is as long as its picture, silent after the sound', async () => {
+    await compile('short', [[4.37, 8.91]], 't131-mid')
+  }, 120_000)
+
+  it('a segment entirely past the end of the sound is kept, in the middle of the list and alone (it used to end the compilation there)', async () => {
+    await compile('short', [[1.37, 3.91], [7.37, 9.91], [2.37, 4.91]], 't131-past')
+    await compile('short', [[7.37, 9.91]], 't131-past-alone')
+  }, 180_000)
+
+  it('the straddle in a list, with fades: the segments after it are still there', async () => {
+    await compile('short', [[1.37, 3.91], [4.37, 8.91], [2.37, 4.91]], 't131-straddle', 500)
+  }, 120_000)
+
+  it('the sound starts late: a segment entirely before it is kept, and one that straddles its start has the sound where it was', async () => {
+    await compile('late', [[0.37, 2.91], [4.37, 7.91]], 't131-late-before')
+    // The first segment holds 1.6 s of picture before the sound begins. Its sound is placed right (checked: its three beeps are on their
+    // flashes), but it is that much SHORTER than its picture (the pad is at the end, not the start), and the join then pulls the next
+    // segment's sound earlier by the picture's 60 ms excess: measured -64 ms for the second segment's beeps on both majors. Held to
+    // the ticket's mechanism (see the `simplification:` note in concat.ts), so the later beeps are not asserted: everything else is.
+    const lags = await compile('late', [[1.37, 5.91], [6.37, 9.91]], 't131-late-straddle', 500, 3)
+    expect(lags, 'six beeps: three in each segment').toHaveLength(6)
+  }, 180_000)
+
+  it('a Record take whose microphone dropped (WebM): every clip after the drop is kept', async () => {
+    await compile('mic', [[1.37, 3.91], [7.37, 9.91], [10.37, 11.91]], 't131-mic')
+  }, 120_000)
+
+  it('a segment of a range the PICTURE does not reach is an error in a sentence, not a shorter file that says Saved', async () => {
+    const outDir = await mkdtemp(path.join(workDir, 't131-empty-'))
+    const err = await runConcat({
+      jobId: 't131-empty',
+      sourcePath: files.short,
+      outDir,
+      segments: [{ startSec: 1.37, endSec: 3.91, name: 'a' }, { startSec: 13.37, endSec: 15.91, name: 'b' }],
+      fadeMs: 0,
+      width: 640,
+      height: 360
+    }).then(() => null, (e: Error) => e)
+    expect(err?.message, 'it names the clip').toMatch(/^Clip 2 of the compilation .*nothing was saved\.$/)
+    expect(await readdir(outDir), 'no compilation was written').toEqual([])
+    const scratch = path.join(os.tmpdir(), 'imagii-concat')
+    expect((await readdir(scratch)).filter((f) => f.includes('t131-empty')), 'and the scratch is gone').toEqual([])
+  }, 120_000)
+
+  it('what ffmpeg says of an empty segment and of a join it cannot finish is what the runner listens for (this binary)', async () => {
+    const stub = path.join(workDir, 't131-stub.mkv')
+    const good = path.join(workDir, 't131-good.mkv')
+    const cut = (a: number, b: number, out: string): Promise<{ stderr: string }> =>
+      ff(['-y', '-ss', String(a), '-to', String(b), '-i', files.short, '-vf', 'fps=30', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', out])
+    expect((await cut(20, 22, stub)).stderr, 'a range past the picture: exit 0 and this line').toMatch(FFMPEG_EMPTY_OUTPUT)
+    expect((await cut(1, 2, good)).stderr).not.toMatch(FFMPEG_EMPTY_OUTPUT)
+    const list = path.join(workDir, 't131-list.txt')
+    await writeFile(list, [good, stub, good].map((p) => `file '${p}'`).join('\n'))
+    const joined = await ff(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'copy', '-c:a', 'aac', path.join(workDir, 't131-joined.mp4')])
+    expect(joined.stderr, 'the join exits 0 and this line').toMatch(FFMPEG_UNREADABLE_PART)
+  }, 60_000)
+})
+
+describe('the sweep-17 replication: a 10 s picture with 6 s of sound, through production runConcat (real ffmpeg, T-131 (1))', () => {
+  // The expediter's own harness, as the ticket quotes it: a 10 s testsrc2 video with 6 s of sine AAC (the file keeps the longer stream's
+  // length), and the two compilations that were wrong. Before the pad: [1,3],[7,9],[2,4] came out 2.0 s (the stub at [7,9] ended the
+  // join) and [1,3],[5,8],[2,4] 5.014 s. Whole seconds on a 15 fps grid, so every length here is exact to a frame.
+  let source = ''
+
+  beforeAll(async () => {
+    source = path.join(workDir, 't131-testsrc2-10s-sine-6s.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=10',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '150k', '-c:a', 'aac', '-b:a', '48k', source
+    ])
+  }, 60_000)
+
+  async function compileLength(segments: Array<[number, number]>, jobId: string): Promise<{ video: number; sound: number }> {
+    const { outputPath } = await runConcat({
+      jobId,
+      sourcePath: source,
+      outDir: workDir,
+      segments: segments.map(([startSec, endSec], i) => ({ startSec, endSec, name: `s${i}` })),
+      fadeMs: 0,
+      width: 320,
+      height: 180
+    })
+    const info = await ffprobeJson(outputPath)
+    const v = info.streams.find((s) => s.codec_type === 'video')
+    return { video: Number(v?.duration), sound: await packetsEnd(outputPath, 'a:0') }
+  }
+
+  it('[1,3] [7,9] [2,4]: all three clips, 6.0 s of picture and 6.0 s of sound (it was 2.0 s)', async () => {
+    const out = await compileLength([[1, 3], [7, 9], [2, 4]], 't131-rep-a')
+    near(out.video, 6, 0.15, 'the picture of the three clips')
+    near(out.sound, 6, 0.15, 'the sound of the three clips')
+  }, 120_000)
+
+  it('[1,3] [5,8] [2,4]: the clip that straddles the end of the sound, and the one after it: 7.0 s (it was 5.014 s)', async () => {
+    const out = await compileLength([[1, 3], [5, 8], [2, 4]], 't131-rep-b')
+    near(out.video, 7, 0.15, 'the picture of the three clips')
+    near(out.sound, 7, 0.15, 'the sound of the three clips')
+  }, 120_000)
+})
+
+describe('a sound shorter than the picture does not shorten the file: re-attach and picture-in-picture (real ffmpeg, T-131 (2))', () => {
+  // `-shortest` at attachAudio and compositePip ended the output where the SHORTER stream ended. Record's mic-drop takes (T-125 (25)) are that
+  // shape: a 12 s picture whose microphone dropped at 5 s re-attached to a 5.0 s file (a PiP base the same; the stream-copy branch 6.0 s of a
+  // 6 s sound). The sound is now padded to the picture's length, finite (`apad=whole_dur`: a bare `apad` hangs `-c:v copy`), and `-shortest`
+  // stays, so the output ends at the PICTURE whichever stream is shorter. Same flash-and-beep fixtures as T-131 (1): a beep in the first 0.1 s
+  // of every second, the picture white at the same instants, so what is in the output is counted. Small and low-bitrate on purpose.
+  const PICTURE_SEC = 12
+  const SOUND_SEC = 5
+  const files = { copyBase: '', micWebm: '', cleaned: '', longCleaned: '', silentBase: '', overlay: '', longOverlay: '', streamedMic: '' }
+
+  const picture = (secs: number): string[] => [
+    '-f', 'lavfi', '-i', `color=c=black:s=320x180:r=10:d=${secs},drawbox=x=0:y=0:w=320:h=180:color=white:t=fill:enable='lt(mod(t,1),0.1)'`
+  ]
+  const sound = (secs: number): string[] => [
+    '-f', 'lavfi', '-i', `aevalsrc='if(lt(mod(t,1),0.1),0.8*sin(2*PI*1000*t),0)':s=48000:d=${secs}`
+  ]
+
+  beforeAll(async () => {
+    // An mp4 (H.264: the stream-copy branch) whose sound is 5 s of a 12 s picture. No -shortest: the file keeps the picture's 12 s.
+    files.copyBase = path.join(workDir, 't131-2-base-sound-5of12.mp4')
+    await ff(['-y', ...picture(PICTURE_SEC), ...sound(SOUND_SEC), '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '1', files.copyBase])
+    // The take as Record writes it with Convert off: a WebM (VP8 cannot be copied into an mp4: the re-encode branch), microphone dropped at 5 s.
+    files.micWebm = path.join(workDir, 't131-2-mic-drop.webm')
+    await ff(['-y', ...picture(PICTURE_SEC), ...sound(SOUND_SEC), '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '300k', '-c:a', 'libopus', '-ac', '1', files.micWebm])
+    // What Audio Studio hands the mux: the cleaned sound, 5 s of the same beeps (and one LONGER than the picture, the control).
+    files.cleaned = path.join(workDir, 't131-2-cleaned-5s.wav')
+    await ff(['-y', ...sound(SOUND_SEC), '-ac', '2', '-c:a', 'pcm_s16le', files.cleaned])
+    files.longCleaned = path.join(workDir, 't131-2-cleaned-15s.wav')
+    await ff(['-y', ...sound(15), '-ac', '2', '-c:a', 'pcm_s16le', files.longCleaned])
+    files.silentBase = path.join(workDir, 't131-2-silent-base.mp4')
+    await ff(['-y', ...picture(PICTURE_SEC), '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', files.silentBase])
+    // PiP overlays: as long as the base, and longer than it.
+    files.overlay = path.join(workDir, 't131-2-overlay-12s.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', `color=c=0x1edf4a:s=160x90:r=10:d=${PICTURE_SEC}`, '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', files.overlay])
+    files.longOverlay = path.join(workDir, 't131-2-overlay-20s.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', 'color=c=0x1edf4a:s=160x90:r=10:d=20', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', files.longOverlay])
+  }, 120_000)
+
+  /** The beeps a 5 s sound holds when it is laid on a picture second for second (a beep is whole from its second to 0.1 s after it). */
+  const BEEPS_IN_SOUND = 5
+
+  /** What an output must be: the picture's length, the sound reaching it (silent after the drop), the beeps that existed and no others. */
+  async function expectWhole(file: string, secs: number, what: string, beeps = BEEPS_IN_SOUND): Promise<void> {
+    const info = await ffprobeJson(file)
+    expect(Number((info as { format?: { duration?: string } }).format?.duration), `${what}: the container's length`).toBeGreaterThan(secs - 0.2)
+    expect(Number((info as { format?: { duration?: string } }).format?.duration), `${what}: the container's length`).toBeLessThan(secs + 0.2)
+    const v = info.streams.find((x) => x.codec_type === 'video')
+    near(Number(v?.duration) || (await packetsEnd(file, 'v:0')), secs, 0.2, `${what}: the picture`)
+    near(await packetsEnd(file, 'a:0'), secs, 0.2, `${what}: the sound reaches the end of the picture`)
+    const heard = await soundBurstStarts(file, 0.3, 0.5)
+    expect(heard, `${what}: a beep for every one the sound held, none after it`).toHaveLength(beeps)
+    expect(Math.max(...heard), `${what}: the last beep`).toBeLessThan(SOUND_SEC)
+  }
+
+  it('the sources are what they say: a 12 s picture, a sound that ends at 5 s, and a cleaned sound of 5 s and of 15 s', async () => {
+    for (const key of ['copyBase', 'micWebm'] as const) {
+      const info = await ffprobeJson(files[key])
+      expect((await flashStarts(files[key])).length, `${key}: the picture is all 12 s`).toBe(PICTURE_SEC)
+      expect(await packetsEnd(files[key], 'a:0'), `${key}: the sound ends at 5 s`).toBeLessThan(SOUND_SEC + 0.3)
+      expect(info.streams.some((x) => x.codec_type === 'audio')).toBe(true)
+    }
+    near(await packetsEnd(files.cleaned, 'a:0'), SOUND_SEC, 0.05, 'the cleaned sound')
+    near(await packetsEnd(files.longCleaned, 'a:0'), 15, 0.05, 'the long cleaned sound')
+  }, 60_000)
+
+  it('Re-attach, the picture stream-copied (H.264): 12 s of picture, the sound padded with silence after its 5 s (it was 5.0 s)', async () => {
+    const out = path.join(workDir, 't131-2-mux-copy.mp4')
+    await runAudioMux('t131-2-mux-copy', files.copyBase, files.cleaned, out, () => {})
+    expect((await ffprobeJson(out)).streams.find((x) => x.codec_type === 'video')?.codec_name, 'the picture was copied').toBe('h264')
+    await expectWhole(out, PICTURE_SEC, 'copy')
+  }, 120_000)
+
+  it('Re-attach, the picture re-encoded (a VP8 WebM, the take as Record saves it): 12 s, not the 5.0 s the sound had', async () => {
+    const out = path.join(workDir, 't131-2-mux-webm.mp4')
+    await runAudioMux('t131-2-mux-webm', files.micWebm, files.cleaned, out, () => {})
+    expect((await ffprobeJson(out)).streams.find((x) => x.codec_type === 'video')?.codec_name, 'the picture was re-encoded').toBe('h264')
+    await expectWhole(out, PICTURE_SEC, 'webm')
+  }, 120_000)
+
+  it('Re-attach through the whole flow (extract the sound of the mic-drop take, clean it, put it back): 12 s again', async () => {
+    const extracted = await extractAudioFromVideo(files.micWebm)
+    try {
+      const out = path.join(workDir, 't131-2-reattach.mp4')
+      await runAudioReattach(
+        { jobId: 't131-2-reattach', videoPath: files.micWebm, sourcePath: extracted.wavPath, outputPath: out, chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] } },
+        () => {}
+      )
+      await expectWhole(out, PICTURE_SEC, 'the whole flow')
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('Re-attach with a cut: the output is the picture less the cut (10 s), the short sound padded to it', async () => {
+    const out = path.join(workDir, 't131-2-mux-cut.mp4')
+    await runAudioMux('t131-2-mux-cut', files.copyBase, files.cleaned, out, () => {}, [{ startSec: 7, endSec: 9 }])
+    // The cut is in the silent part of the sound, so every beep of the 5 s it held is still there.
+    await expectWhole(out, PICTURE_SEC - 2, 'cut')
+  }, 120_000)
+
+  it('the control: a sound LONGER than the picture is still cut at the picture (-shortest stays)', async () => {
+    const out = path.join(workDir, 't131-2-mux-long.mp4')
+    await runAudioMux('t131-2-mux-long', files.copyBase, files.longCleaned, out, () => {})
+    const info = await ffprobeJson(out)
+    near(await packetsEnd(out, 'a:0'), PICTURE_SEC, 0.2, 'the sound is cut at the picture')
+    near(Number(info.streams.find((x) => x.codec_type === 'video')?.duration), PICTURE_SEC, 0.2, 'and the picture is whole')
+    expect(await soundBurstStarts(out, 0.3, 0.5), 'twelve beeps: one per second of the picture').toHaveLength(PICTURE_SEC)
+  }, 120_000)
+
+  it('Picture-in-picture, a base whose sound ends at 5 s of 12: 12 s, the overlay and the base whole (it was 5.0 s)', async () => {
+    const out = path.join(workDir, 't131-2-pip.mp4')
+    await runPipComposite('t131-2-pip', files.copyBase, files.overlay, out, { overlayWidth: 80, position: 'top-left', margin: 8 })
+    await expectWhole(out, PICTURE_SEC, 'pip')
+  }, 120_000)
+
+  it('Picture-in-picture over the mic-drop WebM (the re-encode of a take as Record saves it): 12 s', async () => {
+    const out = path.join(workDir, 't131-2-pip-webm.mp4')
+    await runPipComposite('t131-2-pip-webm', files.micWebm, files.overlay, out, { overlayWidth: 80, position: 'bottom-right', margin: 8 })
+    await expectWhole(out, PICTURE_SEC, 'pip webm')
+  }, 120_000)
+
+  it('Picture-in-picture, an overlay LONGER than the base: still ends with the base (-shortest stays)', async () => {
+    const out = path.join(workDir, 't131-2-pip-long-overlay.mp4')
+    await runPipComposite('t131-2-pip-long-overlay', files.copyBase, files.longOverlay, out, { overlayWidth: 80, position: 'top-right', margin: 8 })
+    await expectWhole(out, PICTURE_SEC, 'pip with a 20 s overlay')
+  }, 120_000)
+
+  it('Picture-in-picture over a base with no sound at all: no audio stream appears, the length is the picture\'s', async () => {
+    const out = path.join(workDir, 't131-2-pip-silent.mp4')
+    await runPipComposite('t131-2-pip-silent', files.silentBase, files.overlay, out, { overlayWidth: 80, position: 'top-left', margin: 8 })
+    const info = await ffprobeJson(out)
+    expect(info.streams.filter((x) => x.codec_type === 'audio'), 'a silent base stays silent').toHaveLength(0)
+    near(await packetsEnd(out, 'v:0'), PICTURE_SEC, 0.2, 'the picture')
+  }, 120_000)
 })
 
 describe('the picture lands on its sound at every frame rate (real ffmpeg, T-126 (21))', () => {

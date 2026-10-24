@@ -10,6 +10,7 @@ import { audioTutorial } from '../../src/renderer/src/tutorials/audioTutorial'
 import { imageTutorial } from '../../src/renderer/src/tutorials/imageTutorial'
 import { aiTutorial } from '../../src/renderer/src/tutorials/aiTutorial'
 import type { TutorialDef } from '../../src/renderer/src/tutorials/types'
+import { chooserCalls, recordSlowChooser } from './chooser'
 import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -2622,6 +2623,158 @@ test.describe('T-86 tours wait for something to point at', () => {
       await expect
         .poll(() => readConfig(userDataDir).tutorialSeen?.image, { timeout: 15_000 })
         .toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+test.describe('T-131: review-gate fixes, sweep 17 (Home and the tours)', () => {
+  /** Launch with the video tour unseen, import a video (that opens the tour) and stop at its first step. */
+  async function openVideoTour(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-source.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { audio: true, image: true, ai: true } })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+    await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-source.mp4')
+    await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+    return { app, window, root, userDataDir }
+  }
+
+  /** Click Next (one press each) until the card's title is `title`. */
+  async function advanceTo(window: Page, title: string): Promise<void> {
+    const dialog = window.getByRole('dialog')
+    for (let i = 0; i < 30; i++) {
+      if ((await dialog.locator('h3').innerText()) === title) return
+      await dialog.getByRole('button', { name: 'Next' }).click()
+      await window.waitForTimeout(60)
+    }
+    throw new Error(`the tour never reached "${title}"`)
+  }
+
+  // (6) next() advanced once per discrete click, so a double-click skipped a step, and where two steps share a target and a placement ("Pick
+  // your platforms", "Add a watermark" and "Export" all point at the Export card) Next stays where it was, so the second press lands on it.
+  test('a double-click on Next, Back or the scrim moves the tour ONE step (T-131 (6))', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openVideoTour('tour-dblclick')
+    try {
+      const dialog = window.getByRole('dialog')
+      const title = (): Promise<string> => dialog.locator('h3').innerText()
+      await advanceTo(window, 'Pick your platforms')
+
+      // Next: one step, to the very next title ("Add a watermark"), not the one after it.
+      await dialog.getByRole('button', { name: 'Next' }).dblclick()
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+      await window.waitForTimeout(400)
+      expect(await title(), 'the second press of the double-click did not skip a step').toBe('Add a watermark')
+
+      // Back: one step, to "Pick your platforms" again, not two.
+      await dialog.getByRole('button', { name: 'Back' }).dblclick()
+      await expect(dialog.locator('h3')).toHaveText('Pick your platforms')
+      await window.waitForTimeout(400)
+      expect(await title(), 'nor did it go back two').toBe('Pick your platforms')
+
+      // The scrim (a press anywhere outside the card) is Next too, and it is one step per double-click as well.
+      const card = (await dialog.boundingBox()) as { x: number; y: number; width: number; height: number }
+      const outside = { x: card.x > 60 ? 10 : card.x + card.width + 10, y: 10 }
+      await window.mouse.dblclick(outside.x, outside.y)
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+      await window.waitForTimeout(400)
+      expect(await title(), 'the scrim moves one step per double-click').toBe('Add a watermark')
+
+      // A person who presses once at their own pace still moves one step each time: the rule is the repeat, not the speed.
+      await dialog.getByRole('button', { name: 'Next' }).click()
+      await expect(dialog.locator('h3')).toHaveText('Export')
+      await dialog.getByRole('button', { name: 'Back' }).click()
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // (6)+(8)+(7) The last step: it names the ? key beside the round ? button, a double-click on Done closes the tour and goes no further (the
+  // second press lands on what the centered card stood over, which was a studio control), and the studio's hint lines name the key too.
+  test('the last step names the ? key; a double-click on Done ends the tour and its second press reaches nothing; the Player and Timeline hints name the key (T-131 (6), (7), (8))', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root, userDataDir } = await openVideoTour('tour-done')
+    try {
+      const dialog = window.getByRole('dialog')
+      await advanceTo(window, "You're all set")
+      await expect(dialog).toContainText('The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on.')
+      await window.evaluate(() => {
+        const w = window as unknown as { __clicks: Array<{ detail: number; what: string }> }
+        w.__clicks = []
+        document.addEventListener('click', (e) => {
+          const el = e.target as HTMLElement
+          w.__clicks.push({ detail: e.detail, what: `${el.tagName.toLowerCase()} ${(el.textContent ?? '').trim().slice(0, 30)}`.trim() })
+        })
+      })
+      await dialog.getByRole('button', { name: 'Done' }).dblclick()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await window.waitForTimeout(600)
+      const landed = await window.evaluate(() => (window as unknown as { __clicks: Array<{ detail: number; what: string }> }).__clicks)
+      // The first press is the tour's own (it is gone with the card); the repeat must not have reached the page under it.
+      expect(landed.filter((c) => c.detail > 1), 'the second press of the double-click reached the page under the card').toEqual([])
+      await expect.poll(() => readConfig(userDataDir).tutorialSeen?.video, { timeout: 15_000 }).toBe(true)
+
+      // (7): the key is named where a person looks for it, in the Player's hint line and the Timeline's.
+      const hints = window.locator('p.text-xs.text-ink-dim').filter({ hasText: 'all shortcuts' })
+      await expect(hints, 'the Player\'s line and the Timeline\'s').toHaveCount(2)
+      await expect(hints.first()).toContainText('set in/out')
+      await expect(hints.first().locator('kbd', { hasText: /^\?$/ })).toHaveCount(1)
+      await expect(hints.nth(1)).toContainText('at the playhead')
+      await expect(hints.nth(1).locator('kbd', { hasText: /^\?$/ })).toHaveCount(1)
+      // ...and the key does what the line says.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toContainText('Keyboard shortcuts')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // (5) Home's two project buttons go straight to a native dialog. The stand-in answers after 300 ms; the second press lands in that window.
+  test('a double-click on Open project opens ONE chooser and opens the project once; a double-click on Save project opens ONE dialog and writes ONE file (T-131 (5))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('home-dblclick')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { video: true, audio: true, image: true, ai: true } })
+    const projectFile = path.join(root, 'canvas.imagii.json')
+    writeFileSync(projectFile, JSON.stringify(canvasProject('Layer from the opened project')), 'utf8')
+    const saved = path.join(root, 'saved-once.imagii.json')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+
+      await recordSlowChooser(app, { files: [projectFile, projectFile], delayMs: 300 })
+      await window.getByRole('button', { name: 'Open project' }).dblclick()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Project loaded')
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => !c.save), 'Open project: one chooser').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Project loaded'), 'opened once').toHaveLength(1)
+
+      await recordSlowChooser(app, { saveAs: saved, delayMs: 300 })
+      await window.getByRole('button', { name: 'Save project' }).dblclick()
+      await expect.poll(() => existsSync(saved), { timeout: 30_000, intervals: [200] }).toBe(true)
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'Save project: one Save dialog').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Project saved'), 'saved once').toHaveLength(1)
+      const written = JSON.parse(readFileSync(saved, 'utf8')) as { imageCanvas?: { doc?: { layers?: Array<{ name: string }> } } }
+      expect(written.imageCanvas?.doc?.layers?.[0]?.name, 'and the file holds the project that was opened').toBe('Layer from the opened project')
+      expect(readdirSync(root).filter((f) => f.endsWith('.imagii.json')).sort(), 'one new file, not two').toEqual(['canvas.imagii.json', 'saved-once.imagii.json'])
     } finally {
       await app.close()
       cleanup(root)

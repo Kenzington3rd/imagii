@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
@@ -49,6 +49,11 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   // INIT-I (round 16): confirm before canceling. Clip Kit always has at
   // least 5 platform exports + 3 thumbs queued, so we always confirm here.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // T-131 (9): the question is about the kit that is running; when it ends with the question still up, "Cancel jobs" had nothing to cancel
+  // (ExportPanel's Cancel confirm had the same shape and reads "Cancel 0 running jobs?"). The question goes with the run.
+  useEffect(() => {
+    if (!running) setShowCancelConfirm(false)
+  }, [running])
   // T-85: the kit's one question. It used to raise the safe-zone modal on
   // every run — picking "all five platforms" IS the answer to that question,
   // and each platform's centered cut is made on purpose (T-83) — so what a

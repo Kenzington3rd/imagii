@@ -134,6 +134,9 @@ shared and preload for the two rules about words alone (US spelling, never "tick
 - **Units are spaced and spelled the same way everywhere**: "30 fps" (not
   "30fps"), "8 Mbps", "192 kbps", "480 px", "3 s". A bare number is not a
   value: "30" beside a "Width" label is ambiguous, "480 px" is not.
+- **A size is written with ×, not the letter x** (T-131 (15)): "1280×720",
+  "28×28", "2× scale", "1920 × 1080" (spacing per label is the label's own).
+  `copyConventions.test.ts` fails on a digit-x-digit in anything rendered.
 - **A label names the thing, not its internal id.** "Long loud stretch", not
   `sustained-loud`; "Video h264 · audio aac", not "h264 · aac"; the first 3
   seconds' loudness, not "LUFS". Where a number genuinely needs the unit

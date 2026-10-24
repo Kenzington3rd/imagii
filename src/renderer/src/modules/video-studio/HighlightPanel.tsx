@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
 import { countOf } from '@shared/plural'
@@ -80,6 +80,21 @@ export function HighlightPanel(): JSX.Element | null {
     return () => clearTimeout(t)
   }, [chatText])
 
+  // T-131 (3): the scan's results, its progress and the pasted chat log belong to the video they were made for. The panel stays mounted
+  // when the open video is REPLACED in place (Reframe's "Edit in Video Studio" loads the new file into this very studio), so the previous
+  // video's candidates stayed on screen beside the new one, and a stale "+ Clip" row made a clip past the end of the new video and
+  // said so as a success. CaptionsPanel resets on the same key (T-112's lesson). `openPathRef` is the video that is open NOW, for a scan
+  // that finishes after the swap: its result is for a video that is gone and is dropped.
+  const openPath = source?.filePath
+  const openPathRef = useRef(openPath)
+  openPathRef.current = openPath
+  useEffect(() => {
+    setAudioCandidates(null)
+    setProgress(0)
+    setChatText('')
+    setDebouncedChat('')
+  }, [openPath])
+
   // Phase 4B: combine audio candidates with chat data into a unified
   // ranked list. Chat input is optional — when empty, scoring degrades to
   // audio-only and behaves identically to the previous panel.
@@ -96,10 +111,13 @@ export function HighlightPanel(): JSX.Element | null {
 
   async function scan(): Promise<void> {
     if (!source || noSound) return
+    const startedFor = source.filePath
     setScanning(true)
     setProgress(0)
     try {
-      const candidates = await window.api.video.findHighlights(source.filePath)
+      const candidates = await window.api.video.findHighlights(startedFor)
+      // T-131 (3): the video was replaced while the scan ran - its candidates are for the one that is gone.
+      if (openPathRef.current !== startedFor) return
       // The IPC layer's signature returns reason as `string` but in
       // practice it's our union type — narrow defensively.
       const narrowed: AudioCandidate[] = candidates.map((c) => ({

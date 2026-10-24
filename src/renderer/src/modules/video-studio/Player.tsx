@@ -391,7 +391,8 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         <kbd className="px-1 bg-bg-hover rounded">←</kbd>/<kbd className="px-1 bg-bg-hover rounded">→</kbd>{' '}
         nudge 0.1 s · <kbd className="px-1 bg-bg-hover rounded">,</kbd>/<kbd className="px-1 bg-bg-hover rounded">.</kbd>{' '}
         frame step · <kbd className="px-1 bg-bg-hover rounded">I</kbd>/
-        <kbd className="px-1 bg-bg-hover rounded">O</kbd> set in/out
+        <kbd className="px-1 bg-bg-hover rounded">O</kbd> set in/out ·{' '}
+        <kbd className="px-1 bg-bg-hover rounded">?</kbd> all shortcuts
       </p>
     </div>
   )

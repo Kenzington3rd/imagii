@@ -134,6 +134,41 @@ describe('addScannedClip — return value reports what actually happened (T-48)'
   })
 })
 
+// T-131 (3): a scanner row from another video (HighlightPanel and ChatHighlightPanel kept the previous video's results when the open
+// video was replaced in place) asked for a range that starts past the END of this one. The clamp turned it into a clip that begins at the
+// duration and ends 0.1 s after it, and the panel said "Clip added". The panels now clear their results with the video (the e2e through
+// Reframe's Edit in Video Studio proves it); this is the store's own refusal, whoever the caller is.
+describe('addScannedClip — a range that starts at or past the end of the video is refused (T-131 (3))', () => {
+  const { duration } = FAKE_SOURCE.probe
+  beforeEach(() => {
+    useVideoStore.setState({ source: FAKE_SOURCE, clips: [], selectedClipId: null })
+  })
+
+  it.each([
+    ['exactly at the end', duration, duration + 10],
+    ['well past the end', 900, 960],
+    ['a start with less than the shortest clip left', duration - 0.05, duration + 5]
+  ])('%s: refused, and no clip joins the list', (_what, start, end) => {
+    expect(useVideoStore.getState().addScannedClip('stale', start, end)).toBe('refused')
+    expect(useVideoStore.getState().clips).toHaveLength(0)
+  })
+
+  it('no clip ever ends past the video: a start with exactly the shortest clip left is added, ending AT the duration', () => {
+    expect(useVideoStore.getState().addScannedClip('last tenth', duration - 0.1, duration + 5)).toBe('added')
+    const clip = useVideoStore.getState().clips[0]
+    expect(clip?.startSec).toBeCloseTo(duration - 0.1, 9)
+    expect(clip?.endSec).toBeLessThanOrEqual(duration)
+  })
+
+  it('a refusal retires nothing: the untouched whole-video clip is still there and the history has no new step', () => {
+    useVideoStore.setState({ clips: [pristine()] })
+    const before = useVideoStore.getState().history.past.length
+    expect(useVideoStore.getState().addScannedClip('stale', duration + 1, duration + 20)).toBe('refused')
+    expect(useVideoStore.getState().clips).toHaveLength(1)
+    expect(useVideoStore.getState().history.past.length).toBe(before)
+  })
+})
+
 describe('srtPath state — Phase 4 tech-debt', () => {
   beforeEach(() => {
     useVideoStore.setState({

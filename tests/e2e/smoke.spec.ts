@@ -317,4 +317,83 @@ test.describe('imagii Electron smoke', () => {
       }
     }
   })
+
+  // T-131 (12) rider, ledger (m): the production CSP carries `connect-src 'self' ws: imagii-file:` (a dev-server leftover). Does `ws:` let the
+  // BUILT renderer reach an https or http address? CSP3 lets a `ws:` source match wss: and, by the spec's scheme rule, it was a real question for
+  // fetch. Probed on the built app (Electron 31 / Chromium 126) with NON-ROUTABLE targets only (the discard port of this machine's loopback,
+  // 127.0.0.1:9, where nothing listens): fetch and XHR of http(s) are REFUSED by the policy before routing is asked ("Refused to connect ...
+  // connect-src"), as ftp and rtmp are; a WebSocket is NOT refused by the policy (the attempt then fails at the network stage, ERR_UNSAFE_PORT
+  // on port 9). That is the exposure `ws:` leaves, and the reason (m) stays open; this holds the half that is clean so a CSP edit cannot lose it.
+  test('the built page\'s CSP refuses fetch and XHR of http(s), ftp and rtmp addresses, and does not refuse a WebSocket (T-131 (12), ledger (m))', async () => {
+    const userDataDir = path.join(os.tmpdir(), `imagii-e2e-csp-${Date.now().toString(36)}`)
+    mkdirSync(userDataDir, { recursive: true })
+    writeFileSync(
+      path.join(userDataDir, 'config.json'),
+      JSON.stringify({ welcomeSeen: true, tutorialSeen: { video: true, audio: true, image: true, ai: true } }, null, 2),
+      'utf8'
+    )
+    const mainEntry = path.resolve(__dirname, '../../out/main/index.js')
+    if (!existsSync(mainEntry)) throw new Error(`out/main/index.js missing. Run \`npm run build\` first. Checked: ${mainEntry}`)
+    const app = await electron.launch({
+      args: [mainEntry, `--user-data-dir=${userDataDir}`],
+      env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
+    })
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      const csp = await window.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') ?? '')
+      expect(csp, 'the policy under test is the shipped one').toContain("connect-src 'self' ws: imagii-file:")
+      const refusals: string[] = []
+      window.on('console', (m) => {
+        if (/Refused to connect|Content Security Policy/i.test(m.text())) refusals.push(m.text())
+      })
+      for (const url of ['https://127.0.0.1:9/', 'http://127.0.0.1:9/', 'ftp://127.0.0.1:9/', 'rtmp://127.0.0.1:9/']) {
+        refusals.length = 0
+        const outcome = await window.evaluate(async (u) => {
+          const viaFetch = await fetch(u, { mode: 'no-cors' }).then(() => 'resolved', (e: Error) => e.name)
+          const viaXhr = await new Promise<string>((resolve) => {
+            const x = new XMLHttpRequest()
+            x.onerror = () => resolve('error')
+            x.onload = () => resolve('load')
+            try {
+              x.open('GET', u)
+              x.send()
+            } catch (e) {
+              resolve(String(e))
+            }
+          })
+          return { viaFetch, viaXhr }
+        }, url)
+        await window.waitForTimeout(300)
+        expect(outcome.viaFetch, `fetch of ${url} fails`).toBe('TypeError')
+        expect(outcome.viaXhr, `XHR of ${url} fails`).toBe('error')
+        expect(refusals.some((r) => /Refused to connect to '/.test(r) && r.includes("connect-src 'self' ws: imagii-file:")), `${url} is refused by the POLICY (not by the network): ${refusals.join(' | ')}`).toBe(true)
+      }
+      // The other half, stated and held so the day `ws:` is removed this fails and the exposure is recorded closed: a socket is not refused.
+      refusals.length = 0
+      const socket = await window.evaluate(
+        () =>
+          new Promise<string>((resolve) => {
+            try {
+              const sock = new WebSocket('ws://127.0.0.1:9/')
+              sock.onerror = () => resolve('attempted')
+              sock.onopen = () => resolve('open')
+            } catch (e) {
+              resolve(String(e))
+            }
+          })
+      )
+      await window.waitForTimeout(300)
+      expect(socket, 'a WebSocket to ws:// is attempted (the policy allows it; the port is unreachable)').toBe('attempted')
+      expect(refusals.filter((r) => r.includes('ws://127.0.0.1:9')), 'and the policy did not refuse it').toEqual([])
+    } finally {
+      await app.close()
+      try {
+        rmSync(userDataDir, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  })
 })

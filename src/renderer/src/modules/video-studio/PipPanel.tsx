@@ -5,6 +5,7 @@ import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
+import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { useVideoOutputDir } from '../../hooks/useVideoOutputDir'
@@ -32,9 +33,15 @@ export function PipPanel(): JSX.Element {
   // one's chooser is on screen). Declared with the other hooks, ahead of any early return.
   const startingRef = useRef(false)
 
+  // T-131 (5): one chooser at a time across the two file buttons (Base and Overlay). A double-click opened two, and the second answer
+  // replaced the first. Declared with the other hooks, ahead of any early return.
+  const pickingRef = useRef(false)
+
   async function pick(setter: (path: string | null) => void): Promise<void> {
-    const f = await window.api.video.pickFile()
-    if (f) setter(f)
+    await claimFirst(pickingRef, async () => {
+      const f = await window.api.video.pickFile()
+      if (f) setter(f)
+    })
   }
 
   async function run(): Promise<void> {
@@ -162,7 +169,9 @@ export function PipPanel(): JSX.Element {
         </label>
       </div>
       <div className="flex items-center gap-2">
-        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs" onClick={pickDir}>
+        {/* T-131 (13): the folder is not changed while a job runs - it would do nothing for the running one - and the chip is the neighbor
+            a double-click's second press can land on once the busy primary has shrunk (executed: a chooser opened mid-job on a 120 ms second press). */}
+        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs disabled:opacity-50" onClick={pickDir} disabled={busy}>
           <OutputDirLabel outDir={outDir} />
         </button>
         <button

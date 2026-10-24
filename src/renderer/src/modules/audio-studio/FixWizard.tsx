@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { Modal } from '../../components/Modal'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { EMPTY_ANSWERS, fixPatch, fixSummary, type FixAnswers } from './fixWizard'
 
 const QUESTIONS = [
@@ -181,7 +182,10 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           <button
             key={String(opt.value)}
             ref={i === 0 ? focusRef : undefined}
-            onClick={() => {
+            onClick={(e) => {
+              // T-131 (4): the second press of a double-click lands on the NEXT question's button (it draws where this one was) and
+              // answered that too - "Quick fix 3 of 3" from one double-click. A repeat is not a new answer (T-120's held Enter, for clicks).
+              if (isRepeatPress(e)) return
               if (q.id === 'noise') answer('backgroundNoise', opt.value as FixAnswers['backgroundNoise'])
               else if (q.id === 'echoy') answer('echoy', opt.value as FixAnswers['echoy'])
               else if (q.id === 'use') answer('primaryUse', opt.value as FixAnswers['primaryUse'])

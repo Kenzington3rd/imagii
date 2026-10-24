@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -31,33 +31,49 @@ class FakeChild extends EventEmitter {
 let spawned: string[][] = []
 /** What the join's list file held at the moment the join was spawned (the runner removes it afterwards). */
 let listText = ''
+/** What the fake ffmpeg prints on its stderr before it exits 0, by command: null is silence. T-131 (1): ffmpeg says things and still exits 0. */
+let says: ((args: string[]) => string | null) | null = null
+/** The join writes its output file (as ffmpeg does) so a test can see whether the runner took it away again. */
+let joinWrites = false
+/** What the probe answers: the picture's length in seconds, or an Error (a recording whose header has no duration). T-131 (2). */
+let probedSec: number | Error = 60
 
 vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
     spawned.push(args)
-    if (args.includes('concat')) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
-    setImmediate(() => child.emit('close', 0, null))
+    const isJoin = args.includes('concat')
+    if (isJoin) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
+    if (isJoin && joinWrites) writeFileSync(args[args.length - 1] as string, 'half a compilation')
+    setImmediate(() => {
+      const text = says?.(args) ?? null
+      if (text !== null) child.stderr.emit('data', text)
+      child.emit('close', 0, null)
+    })
     return child
   }
 }))
 /** The frame rate the faked probe reports (T-130 (q)): 0 is "the file does not say". */
 let probedFps = 30
 vi.mock('./probe', () => ({
-  probeVideo: async () => ({
-    duration: 60,
-    width: 1920,
-    height: 1080,
-    fps: probedFps,
-    videoCodec: 'h264',
-    audioCodec: 'aac',
-    bitrate: 0,
-    sizeBytes: 0
-  })
+  probeVideo: async () => {
+    if (probedSec instanceof Error) throw probedSec
+    return {
+      duration: probedSec,
+      width: 1920,
+      height: 1080,
+      fps: probedFps,
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      bitrate: 0,
+      sizeBytes: 0
+    }
+  }
 }))
 
-const { runConcat, SEGMENT_EXTENSION, SEGMENT_AUDIO_CODEC } = await import('./concat')
+const { runConcat, runPipComposite, SEGMENT_EXTENSION, SEGMENT_AUDIO_CODEC, FFMPEG_EMPTY_OUTPUT, FFMPEG_UNREADABLE_PART } = await import('./concat')
 const { outputFolderRefusal } = await import('./outputPath')
+const { userFacingError } = await import('../../shared/userFacingError')
 
 let scratch = ''
 beforeEach(() => {
@@ -65,6 +81,9 @@ beforeEach(() => {
   spawned = []
   listText = ''
   probedFps = 30
+  says = null
+  joinWrites = false
+  probedSec = 60
 })
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
@@ -196,6 +215,109 @@ describe('a compilation segment is written at the source\'s rate, up to 60 (T-13
     probedFps = 50
     const { segments } = await compile(300)
     expect(new Set(segments.map((a) => after(a, '-r'))).size).toBe(1)
+  })
+})
+
+describe('a compilation never says Saved for a file with clips missing (T-131 (1))', () => {
+  // Layer 5 ("a compilation survives a source whose sound does not cover a segment") is the proof on real files, on both majors, and
+  // runs the real binary against the two patterns below. This is the half no decode can see: the commands, and what the runner does with
+  // an ffmpeg that exits 0 and says it wrote nothing.
+  const spec = (segments: Array<[number, number]>, extra = {}): Parameters<typeof runConcat>[0] => ({
+    jobId: 'cr-loud',
+    sourcePath: '/tmp/in.mp4',
+    outDir: scratch,
+    segments: segments.map(([startSec, endSec], i) => ({ startSec, endSec, name: `s${i}`, ...extra })),
+    fadeMs: 0,
+    width: 1280,
+    height: 720
+  })
+  const FAIL_SENTENCE = /^Clip 2 of the compilation has no picture in the video \(check its start and end\), so nothing was saved\.$/
+
+  it('every segment is padded to its length in the output: the last -af stage is apad=whole_dur, with -shortest kept', async () => {
+    const { segments } = await compile(0)
+    const lengths = ['2.000', '3.000', '2.000']
+    segments.forEach((args, i) => {
+      const af = (after(args, '-af') ?? '').split(',')
+      expect(af.at(-1), `segment ${i}: the pad is last`).toBe(`apad=whole_dur=${lengths[i]}`)
+      expect(args, `segment ${i} still ends at its shorter stream`).toContain('-shortest')
+    })
+  })
+
+  it('a clip at 2x is padded to HALF its range, the length it has in the output', async () => {
+    await runConcat(spec([[10, 14]], { speedMultiplier: 2 }))
+    expect(after(spawned[0] as string[], '-af')).toBe('atempo=2.0000,apad=whole_dur=2.000')
+  })
+
+  it('the two patterns are the lines ffmpeg prints (the wording Layer 5 reads off the real binary)', () => {
+    expect(FFMPEG_EMPTY_OUTPUT.test('[out#0/matroska @ 0x2b90c7c0] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)')).toBe(true)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x40dea0c0] Impossible to open '/tmp/imagii-concat/seg-x-1.mkv'")).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test('frame=  108 fps=0.0 q=-1.0 Lsize=     195kB')).toBe(false)
+    expect(FFMPEG_UNREADABLE_PART.test("Opening '/tmp/imagii-concat/seg-x-1.mkv' for reading")).toBe(false)
+  })
+
+  it('a segment ffmpeg wrote nothing for (exit 0, the stub) fails the job there, in a sentence, with no join', async () => {
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? '[out#0/matroska @ 0x1] Output file is empty, nothing was encoded' : null)
+    const err = await runConcat(spec([[1, 3], [20, 22], [2, 4]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(FAIL_SENTENCE)
+    expect(spawned, 'the empty segment is the last thing that ran: no third segment, no join').toHaveLength(2)
+    expect(spawned.some((a) => a.includes('concat'))).toBe(false)
+    // It reaches the person as it is written (a finished sentence), not as the generic fallback.
+    expect(userFacingError(err, 'Compilation failed.').message).toBe(err?.message)
+  })
+
+  it('the empty-segment line is found even when later output pushes it out of the kept tail', async () => {
+    const flood = 'frame=  108 fps=0.0 q=-1.0 size=    1kB time=00:00:04.00 bitrate= 2.0kbits/s speed=1x\n'.repeat(400)
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? `Output file is empty, nothing was encoded\n${flood}` : null)
+    const err = await runConcat(spec([[1, 3], [20, 22]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(FAIL_SENTENCE)
+  })
+
+  it('a join that cannot open a segment (exit 0, "Impossible to open") fails, in a sentence, and its short file is removed', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-loud-1.mkv'" : null)
+    const err = await runConcat(spec([[1, 3], [20, 22]])).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe('The compilation could not be put together because one of its clips could not be read, so nothing was saved.')
+    expect(userFacingError(err, 'Compilation failed.').message).toBe(err?.message)
+    const join = spawned.find((a) => a.includes('concat')) as string[]
+    expect(existsSync(join[join.length - 1] as string), 'the half a compilation the join wrote is gone').toBe(false)
+  })
+
+  it('a join that says nothing of the kind still succeeds, and keeps its file', async () => {
+    joinWrites = true
+    const { outputPath } = await runConcat(spec([[1, 3], [4, 6]]))
+    expect(existsSync(outputPath)).toBe(true)
+  })
+})
+
+describe('picture-in-picture pads the base\'s sound to the base\'s length, and -shortest stays (T-131 (2))', () => {
+  // `-shortest` ended the composite where a SHORTER base sound did: a Record take whose microphone dropped at 5 s of 12 came out 5.0 s long
+  // (measured; the overlay follows the base's frames, so the picture went with it). Layer 5 (T-131 (2)) proves what comes out on real files,
+  // on both majors; this is the argument, and what the runner does when the base's length is not known.
+  const pip = (): Promise<{ outputPath: string }> =>
+    runPipComposite('pip-job', '/tmp/base.mp4', '/tmp/overlay.mp4', path.join(scratch, 'pip.mp4'), {
+      overlayWidth: 360,
+      position: 'bottom-right',
+      margin: 32
+    })
+
+  it('the sound is padded to the base\'s whole length (finite), just ahead of -shortest, which stays', async () => {
+    probedSec = 12.04
+    await pip()
+    expect(spawned).toHaveLength(1)
+    const args = spawned[0] as string[]
+    expect(after(args, '-af')).toBe('apad=whole_dur=12.040')
+    expect(args.indexOf('-af'), 'an output option, ahead of -shortest').toBeLessThan(args.indexOf('-shortest'))
+    expect(args.filter((a) => a === '-shortest'), 'it is also what ends the output when the overlay outlasts the base').toHaveLength(1)
+    expect(args.join(' ')).not.toMatch(/apad(?!=whole_dur=\d)/)
+    expect(after(args, '-map'), 'the picture still comes from the graph').toBe('[v]')
+  })
+
+  it('a base whose length cannot be read is not padded: the output ends where its sound does, as it always did', async () => {
+    probedSec = new Error('ffprobe returned no usable duration for the video')
+    await pip()
+    const args = spawned[0] as string[]
+    expect(args).not.toContain('-af')
+    expect(args).toContain('-shortest')
   })
 })
 

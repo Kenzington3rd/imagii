@@ -12,6 +12,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
+import { chooserCalls, recordSlowChooser } from './chooser'
 import { dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
@@ -3347,6 +3348,87 @@ test.describe('imagii Audio Studio', () => {
       await expect
         .poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] })
         .toContain(GONE)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+test.describe('T-131: review-gate fixes, sweep 17 (Audio Studio)', () => {
+  // (4) The wizard replaces its answer buttons with the next question's, in the same place, so the second press of a double-click answered
+  // the next question too ("Quick fix 3 of 3" from one double-click, executed). A repeat is not a new answer (T-120's held Enter, for clicks).
+  test('a double-click on a Fix wizard answer answers ONE question, at every step (T-131 (4))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('wizard-dblclick')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toContainText('Quick fix · 1 of 3')
+
+      await dialog.getByRole('button', { name: 'A little' }).dblclick()
+      await expect(dialog).toContainText('Quick fix · 2 of 3')
+      await window.waitForTimeout(400)
+      await expect(dialog, 'the second press did not answer question 2').toContainText('Quick fix · 2 of 3')
+      await expect(dialog).toContainText('Does the room sound echoy or hollow?')
+
+      await dialog.getByRole('button', { name: 'Sounds dry' }).dblclick()
+      await expect(dialog).toContainText('Quick fix · 3 of 3')
+      await window.waitForTimeout(400)
+      await expect(dialog, 'nor question 3').toContainText('Quick fix · 3 of 3')
+      await expect(dialog).toContainText('What is this clip mostly?')
+
+      await dialog.getByRole('button', { name: 'Talking / voice' }).dblclick()
+      await expect(dialog).toContainText('Ready to apply')
+      await window.waitForTimeout(400)
+      // The summary is still up and nothing was applied by the second press.
+      await expect(dialog, 'the summary waits for Apply').toContainText('Ready to apply')
+      expect(await readToastLog(window), 'nothing was applied').not.toContain(
+        'Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.'
+      )
+      // A person who presses once, at their own pace, still gets every answer: the rule is about the repeat, not the speed.
+      await dialog.getByRole('button', { name: 'Start over' }).click()
+      await dialog.getByRole('button', { name: 'None to speak of' }).click()
+      await expect(dialog).toContainText('Quick fix · 2 of 3')
+      await dialog.getByRole('button', { name: 'Sounds dry' }).click()
+      await expect(dialog).toContainText('Quick fix · 3 of 3')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // (5) Audio Studio's two pickers: the importer's "Choose file…" and the second-track role buttons. Each goes straight to a native chooser,
+  // which the stand-in answers after 300 ms, as a real one does; the second press of the double-click lands in that window.
+  test('a double-click on "Choose file…" opens ONE chooser and loads the file once (T-131 (5))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('importer-dblclick')
+    const { app, window } = studio
+    try {
+      await recordSlowChooser(app, { files: [studio.fixture, studio.fixture], delayMs: 300 })
+      await window.getByRole('button', { name: 'Choose file…' }).dblclick()
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await window.waitForTimeout(800)
+      expect(await chooserCalls(app), 'one chooser, not two').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Loaded'), 'loaded once').toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a double-click on a second-track role button opens ONE chooser and adds the track once (T-131 (5))', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('role-dblclick')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await recordSlowChooser(app, { files: [studio.fixture, studio.fixture], delayMs: 300 })
+      await panel.getByRole('button', { name: /Background music/ }).dblclick()
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      await window.waitForTimeout(800)
+      expect(await chooserCalls(app), 'one chooser, not two').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Background music added'), 'added once, not replaced by a second answer').toHaveLength(1)
     } finally {
       await closeStudio(studio)
     }

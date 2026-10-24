@@ -34,6 +34,9 @@ interface Spawned {
 let spawned: Spawned[] = []
 let videoProbes: string[] = []
 let codec: string | Error = 'h264'
+/** T-131 (2): the lengths the two probes answer, in seconds (the picture's, then the cleaned sound's). */
+let pictureSec = 10
+let soundSec = 10
 let onSpawn: (s: Spawned) => void = () => undefined
 
 vi.mock('node:child_process', () => ({
@@ -48,11 +51,11 @@ vi.mock('../ffmpeg/probe', () => ({
   probeVideo: async (file: string) => {
     videoProbes.push(file)
     if (codec instanceof Error) throw codec
-    return { duration: 10, width: 640, height: 360, fps: 30, videoCodec: codec, audioCodec: 'aac', bitrate: 0, sizeBytes: 0 }
+    return { duration: pictureSec, width: 640, height: 360, fps: 30, videoCodec: codec, audioCodec: 'aac', bitrate: 0, sizeBytes: 0 }
   }
 }))
 vi.mock('./probe', () => ({
-  probeAudio: async () => ({ duration: 10, sampleRate: 48000, channels: 2, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 })
+  probeAudio: async () => ({ duration: soundSec, sampleRate: 48000, channels: 2, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 })
 }))
 
 const { runAudioMux, cancelAudioJob } = await import('./process')
@@ -69,6 +72,8 @@ beforeEach(() => {
   spawned = []
   videoProbes = []
   codec = 'h264'
+  pictureSec = 10
+  soundSec = 10
   onSpawn = finish
 })
 
@@ -178,7 +183,7 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
     expect(flag(spawned[0] as Spawned, '-c:v')).toBe('libx264')
   })
 
-  it('a cut re-encodes whatever the codec, with the cut, and does not probe the picture at all', async () => {
+  it('a cut re-encodes whatever the codec, with the cut, and probes the picture once, for its length (T-131 (2))', async () => {
     codec = 'h264'
     await mux([{ startSec: 2, endSec: 4 }])
     const s = spawned[0] as Spawned
@@ -186,7 +191,8 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
     // T-113: the even-size crop runs AHEAD of the cut, so `select` and `setpts` see the
     // size the encoder will get.
     expect(flag(s, '-vf')).toMatch(new RegExp(`^${EVEN.replace(/[()*/]/g, '\\$&')},select=`))
-    expect(videoProbes).toEqual([])
+    // T-131 (2): the probe is no longer the copy decision alone - the pad is the picture's length, whichever branch runs - so a cut asks it too.
+    expect(videoProbes).toEqual(['/in/original.wmv'])
   })
 
   it('a re-encoded picture has a bar that measures (against the length of the cleaned audio); a copy has none', async () => {
@@ -232,5 +238,69 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
     } finally {
       vi.restoreAllMocks()
     }
+  })
+})
+
+// T-131 (2): `-shortest` ended the re-attach where a SHORTER sound ended. A Record take whose microphone dropped at 5 s of 12 came out
+// 5.0 s long, the picture cut off with it (measured; the stream-copy branch too: 6.0 s). The sound is padded with silence to the picture's
+// length - FINITE (`whole_dur`), because a bare `apad` hangs `-c:v copy` - and `-shortest` stays, so the output ends at the PICTURE whichever
+// stream is shorter and a music bed longer than the picture is still trimmed. Layer 5 (media.spec.ts, T-131 (2)) proves ffmpeg accepts it and
+// what comes out, on both majors; this is the argument it depends on, and what the runner does when the picture's length is not known.
+describe('runAudioMux — the sound reaches the picture\'s length, and -shortest stays (T-131 (2))', () => {
+  const afOf = (s: Spawned): string | undefined => (s.args.includes('-af') ? flag(s, '-af') : undefined)
+
+  it.each(['h264', 'wmv2'])('a %s picture (copied, re-encoded) pads the sound to its whole length, finite, just ahead of -shortest', async (c) => {
+    codec = c
+    pictureSec = 12
+    soundSec = 5
+    await mux()
+    const s = spawned[0] as Spawned
+    expect(afOf(s)).toBe('apad=whole_dur=12.000')
+    expect(s.args.indexOf('-af'), 'the pad sits beside the audio options, ahead of -shortest').toBeLessThan(s.args.indexOf('-shortest'))
+    expect(s.args.filter((a) => a === '-shortest')).toHaveLength(1)
+    // Never a bare apad: it is endless, and hangs a stream-copied picture.
+    expect(s.args.join(' ')).not.toMatch(/apad(?!=whole_dur=\d)/)
+  })
+
+  it('the length is the picture\'s AFTER the cuts (merged, so an overlap is counted once)', async () => {
+    pictureSec = 12
+    soundSec = 5
+    await mux([{ startSec: 2, endSec: 4 }])
+    expect(afOf(spawned[0] as Spawned)).toBe('apad=whole_dur=10.000')
+    spawned = []
+    await mux([{ startSec: 1, endSec: 3 }, { startSec: 2, endSec: 4 }])
+    expect(afOf(spawned[0] as Spawned)).toBe('apad=whole_dur=9.000')
+  })
+
+  it('a picture whose length cannot be read is re-encoded and NOT padded: it ends where the sound does, as it always did', async () => {
+    codec = new Error('ffprobe returned no usable duration for the video')
+    await mux()
+    const s = spawned[0] as Spawned
+    expect(flag(s, '-c:v')).toBe('libx264')
+    expect(s.args).not.toContain('-af')
+    expect(s.args).toContain('-shortest')
+  })
+
+  it('the bar measures against the picture\'s length (the output is that long), and falls back to the cleaned sound when the picture\'s is unknown', async () => {
+    codec = 'wmv2'
+    pictureSec = 12
+    soundSec = 5
+    const half = (p: AudioJobProgress): boolean => p.percent === 50
+    onSpawn = (s) => {
+      s.child.stdout.emit('data', 'out_time=00:00:06.000000\nprogress=continue\n')
+      finish(s)
+    }
+    const seen: AudioJobProgress[] = []
+    await mux([], (p) => seen.push(p))
+    expect(seen.filter(half), '6 s of 12 s').toHaveLength(1)
+    spawned = []
+    codec = new Error('no usable duration')
+    onSpawn = (s) => {
+      s.child.stdout.emit('data', 'out_time=00:00:02.500000\nprogress=continue\n')
+      finish(s)
+    }
+    const fallback: AudioJobProgress[] = []
+    await mux([], (p) => fallback.push(p))
+    expect(fallback.filter(half), '2.5 s of the 5 s cleaned sound').toHaveLength(1)
   })
 })

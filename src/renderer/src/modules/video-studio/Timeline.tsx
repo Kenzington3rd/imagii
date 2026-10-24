@@ -239,7 +239,8 @@ export function Timeline(): JSX.Element | null {
       <p className="text-xs text-ink-dim">
         Click or drag the track to scrub. Drag the handles, or press{' '}
         <kbd className="px-1 bg-bg-hover rounded">I</kbd> /{' '}
-        <kbd className="px-1 bg-bg-hover rounded">O</kbd> to set in/out at the playhead.
+        <kbd className="px-1 bg-bg-hover rounded">O</kbd> to set in/out at the playhead ·{' '}
+        <kbd className="px-1 bg-bg-hover rounded">?</kbd> all shortcuts
       </p>
     </div>
   )

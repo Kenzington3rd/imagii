@@ -181,3 +181,52 @@ describe('the packaged tree carries one ffprobe and no unused dependency (T-121)
     expect(excluded(`files:\n  # ${line.trim()}\n`, EXCLUDES[1] as string)).toBe(false)
   })
 })
+
+/**
+ * T-131 (18) - Inter's license travels with the font.
+ *
+ * T-127 (2) moved `@fontsource/inter` to devDependencies (Vite inlines the woff2 files into the renderer bundle, so the asar stopped carrying
+ * 4.38 MB nothing reads at run time). The package's `LICENSE` was the packaged tree's ONLY copy of the SIL Open Font License, and it left the asar
+ * with the rest of the package while the font files kept shipping. `extraResources` copies it out of `node_modules` at package time, to
+ * `resources/licenses/Inter-OFL.txt` beside `app.asar`. Whether the file lands in the packaged tree is the release run's hand-check
+ * (TESTING.md); what a unit test can hold is that the configuration asks for it, that the source it copies exists and is the license, and that the
+ * font it belongs to is still the one the page ships.
+ */
+describe('the packaged tree carries Inter\'s license (T-131 (18))', () => {
+  const root = path.resolve(__dirname, '../..')
+  const builder = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')
+  const FROM = 'node_modules/@fontsource/inter/LICENSE'
+  const TO = 'licenses/Inter-OFL.txt'
+
+  /** An `extraResources` entry that copies `from` to `to`, as electron-builder reads it (comment lines do not count). */
+  const copies = (yml: string, from: string, to: string): boolean => {
+    const code = yml.replace(/^\s*#.*$/gm, '')
+    const block = /^extraResources:\s*\n((?:[ \t]+.*\n?)+)/m.exec(code)?.[1] ?? ''
+    return new RegExp(`^\\s*-\\s*from:\\s*${from.replace(/[*.]/g, '\\$&')}\\s*\\n\\s*to:\\s*${to.replace(/[*.]/g, '\\$&')}\\s*$`, 'm').test(block)
+  }
+
+  it('extraResources copies the package LICENSE to resources/licenses/Inter-OFL.txt', () => {
+    expect(copies(builder, FROM, TO)).toBe(true)
+  })
+
+  it('the file it copies is installed (devDependencies are installed at build time) and is the SIL Open Font License', () => {
+    const license = readFileSync(path.join(root, FROM), 'utf8')
+    expect(license).toContain('SIL OPEN FONT LICENSE Version 1.1')
+    expect(license).toContain('The Inter Project Authors')
+  })
+
+  it('the font it belongs to still ships: the stylesheet names the package\'s woff2 files (T-128 (2)), and the package is pinned in devDependencies', () => {
+    const css = readFileSync(path.join(root, 'src/renderer/src/styles/index.css'), 'utf8')
+    expect(css).toMatch(/@fontsource\/inter\/files\/inter-latin-\d+-normal\.woff2/)
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { devDependencies: Record<string, string> }
+    expect(Object.keys(pkg.devDependencies)).toContain('@fontsource/inter')
+  })
+
+  it('the check can tell: no entry, a commented-out entry, another destination and another source are each found', () => {
+    expect(copies(`appId: x\nextraResources:\n  - from: ${FROM}\n    to: ${TO}\nasar: true\n`, FROM, TO)).toBe(true)
+    expect(copies('appId: x\nasar: true\n', FROM, TO)).toBe(false)
+    expect(copies(`appId: x\n# extraResources:\n#   - from: ${FROM}\n#     to: ${TO}\nasar: true\n`, FROM, TO)).toBe(false)
+    expect(copies(`extraResources:\n  - from: ${FROM}\n    to: licenses/Other.txt\n`, FROM, TO)).toBe(false)
+    expect(copies(`extraResources:\n  - from: node_modules/other/LICENSE\n    to: ${TO}\n`, FROM, TO)).toBe(false)
+  })
+})

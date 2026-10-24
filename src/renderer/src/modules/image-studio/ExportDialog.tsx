@@ -71,7 +71,7 @@ export function thumbnailSizeNote(
   const sixteenNine = Math.abs(width / height - 16 / 9) < 0.01
   const bigger = width > YOUTUBE_THUMB.width || height > YOUTUBE_THUMB.height
   return sixteenNine && bigger
-    ? `Bigger than YouTube's thumbnail size (${YOUTUBE_THUMB.width}x${YOUTUBE_THUMB.height}).`
+    ? `Bigger than YouTube's thumbnail size (${YOUTUBE_THUMB.width}×${YOUTUBE_THUMB.height}).`
     : null
 }
 
@@ -309,8 +309,8 @@ export function ExportDialog(): JSX.Element {
           a surprise 2560x1440 thumbnail. */}
       <span className="text-xs text-ink-muted font-mono" data-testid="export-output-size">
         {emotePack
-          ? 'Output: 3 PNGs — 28x28, 56x56, 112x112'
-          : `Output: ${out.width}x${out.height}`}
+          ? 'Output: 3 PNGs — 28×28, 56×56, 112×112'
+          : `Output: ${out.width}×${out.height}`}
       </span>
       <button
         className="btn-ghost px-3 py-1 text-xs inline-flex items-center gap-1.5"

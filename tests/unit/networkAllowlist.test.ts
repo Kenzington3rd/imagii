@@ -6,8 +6,10 @@ import ts from 'typescript'
 import { allLiterals, parseSource, sourceFilesUnder } from './renderedStrings'
 
 /**
- * T-124 (28), hardened by T-125 (26), rebuilt where it overclaimed by T-126 (1), closed at its last gaps by T-127 (5), (6), (12), (13),
- * (14): every place the app's own code can reach the network, held against a list a person wrote down.
+ * T-124 (28), hardened by T-125 (26), rebuilt where it overclaimed by T-126 (1), widened by T-127 (5), (6), (12), (13), (14) and, from lists of
+ * what someone thought of to questions asked the other way round, by T-131 (10), (11), (12): every place the app's own code can reach the
+ * network, held against a list a person wrote down. It has no "last gap" - four rounds called their gaps the last, and each next sweep found
+ * another spelling - so WHAT IT CANNOT SEE below is the whole of the residue, declared, and a claim of completeness is not made.
  *
  * CLAUDE.md says "no network calls, no telemetry, no analytics, no phone-home. A single one is a bug". Until this file that was
  * held by reviewers noticing, and a sweep is a person reading a diff. This reads the syntax tree of every non-test file under
@@ -24,7 +26,16 @@ import { allLiterals, parseSource, sourceFilesUnder } from './renderedStrings'
  *     `location` or to its `href` / `host` / `hostname` / `protocol`, through any chain of `window.` `document.` `self.` `top.`
  *     `parent.` `globalThis.` (`window.top.location.href = u`). A write to `.hash`, `.pathname` or `.search` stays in the app's own
  *     page (ErrorBoundary's `window.location.hash = '#/home'`) and is not one;
- *   - `setAttribute('src' | 'href', ...)`, the way a page points an element it already has at an address;
+ *   - T-131 (10): `open(u)` in every spelling - bare, qualified by `window` `globalThis` `self` `top` `parent` (a chain of them too), parenthesized
+ *     `(window.open)(u)`, indirect `(0, window.open)(u)`, by element access `window['open'](u)` - and `eval(` / `Function(` (a call with no `new`) in
+ *     the same spellings. All three are judged by their LAST segment unless the file binds the head of the chain itself (an import, a function,
+ *     a variable, a parameter): autosave.ts's `open` from `node:fs/promises` is the mandatory negative. `x['name'](...)` reads as `x.name(...)`
+ *     for every call named here (`navigator['sendBeacon']`, `net['request']`, `electron['net']['request']`);
+ *   - T-131 (10): a named network constructor used as a VALUE - `const WS = WebSocket`, `class Sock extends WebSocket`, `(WebSocket as any)`,
+ *     `use(XMLHttpRequest)`, `window.WebSocket` read off a global, `globalThis['WebSocket']`, `{ WebSocket }` - because the `new` that makes it a
+ *     connection is then somewhere the scan does not look. A declaration, a property name, a type, a JSX tag and the file's own binding are not;
+ *   - `setAttribute('src' | 'href', ...)`, the way a page points an element it already has at an address; and (T-131 (11)) a `createElement(` or
+ *     `setAttribute(` whose first argument is NOT a literal, which can be any of them at run time: `createElement(dynamic)`, `setAttribute(dynamic)`;
  *   - a library handed a URL to load: `useImage(` (use-image, the image layer's `src`), `WaveSurfer.create(` (wavesurfer fetches its
  *     `url`), `Image.fromURL(`. These surfaces are ALIASABLE (`import useImg from 'use-image'`), so the IMPORT of `use-image` and
  *     `wavesurfer.js` is a site as well, and the call is judged through the alias;
@@ -47,14 +58,20 @@ import { allLiterals, parseSource, sourceFilesUnder } from './renderedStrings'
  *     write is one this scan cannot see);
  *   - a CSS `url(` or `image-set(` whose address is computed in a template (`` `url(${src})` ``, `` `image-set("${src}" 1x)` ``): a
  *     style set from JS is not in any `.css` file, so the style-sheet scan below cannot see it;
- *   - every `http(s)://`, `ws(s)://`, `ftp(s)://host` literal, in code or JSX text, a bracketed IPv6 host (`http://[::1]:8080/`) too.
+ *   - every `scheme://host` literal, in code or JSX text, a bracketed IPv6 host (`http://[::1]:8080/`) too, in any letter case (T-131 (12)): the
+ *     web schemes are listed by the bare host (`host:duckduckgo.com`), every other scheme with its name (`host:rtmp://live.test`: rtmp, rtsp, srt,
+ *     udp, tcp, sftp, smb, ssh, about...), and only the schemes whose content is on this machine - `imagii-file`, `file`, `data`, `blob` - are not
+ *     sites. (The first scanner listed the schemes that leave, six of them, and every other one returned `[]`.)
  * The page's CSP, its HTML and its style sheets are checked separately (the last tests of the first block). The CSP is judged by what
  * is LOCAL: a source passes only if it is a quoted keyword (`'self'`, `'none'`, `'unsafe-inline'`, a nonce, a hash) or one of the
  * schemes `data:` `blob:` `imagii-file:` `filesystem:`; a scheme-led address, a bare host, `host:port`, an IP, `localhost:*` or a
  * wildcard is remote, in any letter case, in EVERY directive. The style sheets may load no remote `url(` or `image-set(` and no
  * `@import`. `package.json` `dependencies` AND `devDependencies` (Vite bundles from either) are asserted to hold no updater,
- * telemetry or crash SDK, and `electron-builder.yml` no `publish`. The scan itself reads `.ts` and `.tsx` to a depth of eight
- * (`sourceFilesUnder`), so a test fails if a `.js`, `.jsx`, `.mjs` or `.cjs` file, or anything deeper, ever appears under `src/`.
+ * telemetry or crash SDK, and `electron-builder.yml` no `publish`. T-131 (12): and every dependency and devDependency NAME is on a list written in
+ * this file (`KNOWN_DEPENDENCIES`, `KNOWN_DEV_DEPENDENCIES`, exact both ways): the name regex knows the SDKs somebody thought of, and an HTTP client
+ * spelled any other way slipped past it. The scan itself reads `.ts` and `.tsx` to a depth of eight (`sourceFilesUnder`), the style sheets and the
+ * page are read by the tests below, and under `src/` ONLY a `.ts` (`.d.ts` too), a `.tsx`, a `.css` and `renderer/index.html` may exist (T-131 (12)):
+ * a `.mts`, `.cts`, `.js`, `.json`, a second page, an upper-case spelling or anything deeper than the eight levels fails a test.
  *
  * WHAT IT CANNOT SEE (so it does not claim it):
  *   - the PLATFORM'S OWN traffic: Chromium and Electron make requests the app's code never writes. The first one found was Electron's
@@ -64,9 +81,13 @@ import { allLiterals, parseSource, sourceFilesUnder } from './renderedStrings'
  *     host the resolver was asked for beyond this machine, with a loopback request as the control that the log can see at all;
  *   - a URL assembled at run time from parts that are not a literal (it sees the call, not the address, and every call it sees is on
  *     the list with a reason), a CSS `url(` assembled by concatenation (`'url(' + src + ')'`, only a template is read);
- *   - `fetch` used as a VALUE and not called where it is named: `const f = fetch`, `urls.map(fetch)`, `window['fetch'](u)`,
- *     `fetch.bind(window)(u)`. Following a value is beyond an AST scan; the day such a use is written, the `fetch` in the file that
- *     aliases it is the only thing on this list to look for;
+ *   - `fetch` used as a VALUE and not called where it is named: `const f = fetch`, `urls.map(fetch)`, `fetch.bind(window)(u)`. Following a
+ *     value is beyond an AST scan; the day such a use is written, the `fetch` in the file that aliases it is the only thing on this list to
+ *     look for. (The constructors are the exception: they have a fixed small set of names, so a reference to one IS a site, T-131 (10).) The same
+ *     goes for a global reached through an alias of `window` (`const g = window; new g.WebSocket(u)`), and for a call by a COMPUTED member name
+ *     (`navigator[name](u)`: only a string literal in the brackets is read, `x['name']` as `x.name`);
+ *   - a call the file hides from itself: `open`, `eval` and `Function` are judged unless the file binds the head of the chain (flow-insensitive: bound
+ *     anywhere is bound everywhere), so a file that declares its own `open` and ALSO calls the global one is read as having only its own;
  *   - a property write that points an element at an address (`img.src = u`): the element is a site where it is made (`<img>`,
  *     `new Image(`, `createElement`), `createElementNS` is not read, and `setAttribute` is read only for `src` and `href`;
  *   - an alias made by DESTRUCTURING a `require` (`const { spawn: run } = require('child_process')`): the require is the site;
@@ -141,7 +162,25 @@ const NAMESPACE_HOSTS = new Set(['www.w3.org'])
 
 // T-126 (1): in any letter case (`HTTPS://X.test` is the same address), and the host is recorded in lower case.
 // T-127 (13): and a bracketed IPv6 literal is a host (`http://[::1]:8080/x`), recorded with its brackets.
-const URL_LITERAL = /\b(?:https?|wss?|ftps?):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)/gi
+// T-131 (12): and the question is inverted. The list of schemes that LEAVE (http, https, ws, wss, ftp, ftps) was a list of what someone thought
+// of: rtmp, rtsp, srt, udp, tcp, sftp and smb each returned []. Any `scheme://host` literal is a site unless its scheme is on this machine.
+const URL_LITERAL = /\b([a-z][a-z0-9+.-]*):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)/gi
+/** T-131 (12): the schemes whose content is on this machine: the app's own file protocol, `file`, and the two in-memory ones. */
+const LOCAL_SCHEMES = new Set(['imagii-file', 'file', 'data', 'blob'])
+/** The schemes the first scanner knew; their site is the bare host, as it has always been listed. */
+const WEB_SCHEMES = new Set(['http', 'https', 'ws', 'wss', 'ftp', 'ftps'])
+
+/**
+ * The site a `scheme://host` literal names, or '' when it is local (or an XML namespace, which is an identifier and is never fetched).
+ * A web scheme is `host:<host>`; every other scheme keeps its name (`host:rtmp://live.test`), so the list says what kind of address it is.
+ */
+export function urlLiteralSite(scheme: string, host: string): string {
+  const s = scheme.toLowerCase()
+  const h = host.toLowerCase()
+  if (LOCAL_SCHEMES.has(s)) return ''
+  if (WEB_SCHEMES.has(s)) return NAMESPACE_HOSTS.has(h) ? '' : `host:${h}`
+  return `host:${s}://${h}`
+}
 
 const moduleName = (spec: string): string => spec.replace(/^node:/, '').split('/')[0] as string
 
@@ -179,12 +218,52 @@ function constructorName(expr: ts.Expression, sf: ts.SourceFile): string {
   return ''
 }
 
+/**
+ * T-131 (10): the callee as the call is MADE, with the wrappers that do not change what is called taken off: parentheses (`(window.open)(u)`),
+ * a cast or a non-null mark, and the comma that makes an indirect call (`(0, eval)(code)`, `(0, window.open)(u)`, whose value is its last operand).
+ */
+function unwrapCallee(expr: ts.Expression): ts.Expression {
+  let e = expr
+  for (;;) {
+    if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isTypeAssertionExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression
+    else if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.CommaToken) e = e.right
+    else return e
+  }
+}
+
+/**
+ * T-131 (10): every name this file binds itself - an import (default, named, namespace, `import x = require()`), a function, class or enum, a
+ * variable (destructured ones too) and a parameter. A call whose head is one of them is the file's own function and not the global it shares
+ * a name with: autosave.ts's `open` from `node:fs/promises` is the mandatory negative for `open(`. Flow-insensitive on purpose: bound anywhere
+ * in the file is bound everywhere, which can only ever hide a call that shadows a global on purpose, and that file can say so in ALLOWED.
+ */
+export function boundNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>()
+  const addPattern = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) names.add(name.text)
+    else for (const el of name.elements) if (ts.isBindingElement(el)) addPattern(el.name)
+  }
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportClause(n) && n.name) names.add(n.name.text)
+    else if (ts.isNamespaceImport(n) || ts.isImportSpecifier(n) || ts.isImportEqualsDeclaration(n)) names.add(n.name.text)
+    else if ((ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n) || ts.isEnumDeclaration(n)) && n.name) names.add(n.name.text)
+    else if (ts.isVariableDeclaration(n) || ts.isParameter(n)) addPattern(n.name)
+    ts.forEachChild(n, visit)
+  }
+  visit(sf)
+  return names
+}
+
+/** The globals a qualified call or constructor can be reached through; the first segment of the chain decides (T-131 (10)). */
+const GLOBAL_HEADS = new Set(['window', 'globalThis', 'self', 'top', 'parent'])
+
 /** Every outbound site in `sf`, in source order, as short stable names ("fetch(", "host:duckduckgo.com"). */
 export function outboundSites(sf: ts.SourceFile): string[] {
   const sites: string[] = []
   const note = (name: string): void => {
     sites.push(name)
   }
+  const bound = boundNames(sf)
   const noteModule = (spec: string): void => {
     if (NETWORK_MODULES.has(moduleName(spec))) note(`import:${moduleName(spec)}`)
   }
@@ -211,6 +290,26 @@ export function outboundSites(sf: ts.SourceFile): string[] {
       for (const e of named.elements) if (e.propertyName) aliases.set(e.name.text, e.propertyName.text)
     }
   }
+  /** `window`, `window.top`, `self`...: a chain of the globals, whose head the file has not bound itself (T-131 (10)). */
+  const globalChain = (expr: ts.Expression): boolean => {
+    const segments = expr.getText(sf).split('.')
+    return segments.every((seg) => GLOBAL_HEADS.has(seg)) && !bound.has(segments[0] as string)
+  }
+  /** Is `n` the thing a `new` constructs, which the constructor branch already notes as `new X(`? */
+  const isNewTarget = (n: ts.Expression): boolean => ts.isNewExpression(n.parent) && n.parent.expression === n && constructorName(n, sf) !== ''
+  /**
+   * Is this identifier a VALUE reference to the global (T-131 (10))? Not a declaration or a property name, a JSX tag, a type, or the `new X(`
+   * the constructor branch reads; a class's `extends` is a value and its `implements` is not; a shorthand property `{ WebSocket }` is one.
+   */
+  const isValueReference = (id: ts.Identifier): boolean => {
+    const p = id.parent
+    if (ts.isExpressionWithTypeArguments(p)) return ts.isHeritageClause(p.parent) && p.parent.token === ts.SyntaxKind.ExtendsKeyword && ts.isClassLike(p.parent.parent)
+    if (ts.isTypeNode(p) || ts.isQualifiedName(p)) return false
+    if (ts.isShorthandPropertyAssignment(p)) return true
+    if (ts.isNewExpression(p) && p.expression === id) return false
+    const holder = p as ts.Node & { name?: ts.Node; propertyName?: ts.Node; tagName?: ts.Node }
+    return holder.name !== id && holder.propertyName !== id && holder.tagName !== id
+  }
   /** `a.b.c` with its first segment replaced by what the file imported it as. */
   const resolve = (dotted: string): string => {
     const [head, ...rest] = dotted.split('.')
@@ -234,15 +333,25 @@ export function outboundSites(sf: ts.SourceFile): string[] {
   }
   const visit = (n: ts.Node): void => {
     if (ts.isCallExpression(n)) {
-      const callee = n.expression
+      const callee = unwrapCallee(n.expression)
+      // T-131 (10): `x['name']` is `x.name` (`navigator['sendBeacon'](u)`, `net['request'](u)`, `window['open'](u)`). A computed name
+      // (`x[name](u)`) is not a spelling the scan can resolve, and is declared in WHAT IT CANNOT SEE.
+      const objectOf = ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) ? callee.expression : null
       const name = resolve(
-        ts.isIdentifier(callee)
+        (ts.isIdentifier(callee)
           ? callee.text
           : ts.isPropertyAccessExpression(callee)
             ? `${callee.expression.getText(sf)}.${callee.name.text}`
-            : ''
+            : ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)
+              ? `${callee.expression.getText(sf)}.${callee.argumentExpression.text}`
+              : ''
+        ).replace(/\[\s*(['"])([A-Za-z_$][\w$]*)\1\s*\]/g, '.$2')
       )
       const last = name.split('.').pop()
+      // T-131 (10): `open`, `eval` and `Function` are judged by their LAST segment, bare or qualified, unless the file binds the head of the
+      // chain itself (a local `open`, a `fs.open`, a parameter called `window`). `this.open` is the object's own method and never a global.
+      const head = name.split('.')[0] as string
+      const globalHead = !bound.has(head) && head !== 'this'
       // T-126 (1): the LAST TWO segments, so `electron.net.request(` and the alias `enet.request(` are the same site as `net.request(`.
       const lastTwo = name.split('.').slice(-2).join('.')
       const owner = name.split('.').slice(0, -1).join('.')
@@ -261,16 +370,20 @@ export function outboundSites(sf: ts.SourceFile): string[] {
       else if (last === 'downloadURL') note('downloadURL(')
       else if (last === 'setFeedURL' || last === 'checkForUpdates' || last === 'checkForUpdatesAndNotify') note('updater(')
       else if (lastTwo === 'crashReporter.start') note('crashReporter.start(')
-      else if (name === 'window.open') note('window.open(')
+      else if (last === 'open' && globalHead) note('window.open(')
       else if (last === 'loadURL') note('loadURL(')
       else if ((last === 'assign' || last === 'replace') && LOCATION_TEXT.test(owner)) note(`location.${last}(`)
       else if (last === 'setAttribute') {
         const attr = n.arguments[0]
         if (attr && ts.isStringLiteralLike(attr) && ADDRESS_ATTRIBUTES.has(attr.text.toLowerCase())) note(`setAttribute(${attr.text.toLowerCase()})`)
+        // T-131 (11): a name that is computed can be `src` or `href` at run time: a site of its own, like import(expr) and require(expr).
+        else if (attr && !ts.isStringLiteralLike(attr)) note('setAttribute(dynamic)')
       } else if (last === 'useImage') note('useImage(')
       else if (name === 'WaveSurfer.create') note('WaveSurfer.create(')
       else if (name.endsWith('Image.fromURL')) note('Image.fromURL(')
-      else if (/^(?:(?:window|globalThis|self)\.)?eval$/.test(name)) note('eval(')
+      else if (last === 'eval' && globalHead) note('eval(')
+      // T-131 (10): `Function('return fetch')()` builds code the same way `new Function(` does, and has no `new` to read.
+      else if (last === 'Function' && globalHead) note('Function(')
       // T-127 (6): a module reached without an import or a `require(`: Node's `process.getBuiltinModule('node:https')` and a `require` made by
       // `createRequire(import.meta.url)`. Like `eval(` they are sites whatever their arguments, because the module they load is not a literal
       // the scan can judge.
@@ -280,11 +393,13 @@ export function outboundSites(sf: ts.SourceFile): string[] {
         const arg = n.arguments[0]
         if (arg && ts.isStringLiteralLike(arg)) noteModule(arg.text)
         else note('require(dynamic)')
-      } else if (SPAWN_CALLS.has(bare) || (ts.isPropertyAccessExpression(callee) && childProcessObjects.has(resolve(callee.expression.getText(sf))) && SPAWN_CALLS.has(last as string))) {
+      } else if (SPAWN_CALLS.has(bare) || (objectOf !== null && childProcessObjects.has(resolve(objectOf.getText(sf))) && SPAWN_CALLS.has(last as string))) {
         noteSpawn(n, last === 'exec' || last === 'execSync')
       } else if (last === 'createElement') {
         const arg = n.arguments[0]
         if (arg && ts.isStringLiteralLike(arg) && CREATED_ELEMENTS.has(arg.text.toLowerCase())) note(`createElement(${arg.text.toLowerCase()})`)
+        // T-131 (11): and a tag that is computed can be any of them.
+        else if (arg && !ts.isStringLiteralLike(arg)) note('createElement(dynamic)')
       }
     } else if (ts.isNewExpression(n) && constructorName(n.expression, sf) !== '') {
       const ctor = constructorName(n.expression, sf)
@@ -333,6 +448,23 @@ export function outboundSites(sf: ts.SourceFile): string[] {
       note(`electron:${n.name.text}`)
     } else if (ts.isPropertyAccessExpression(n) && n.name.text === ELECTRON_NET && isElectron(n.expression, sf)) {
       note('electron:net')
+    } else if (ts.isPropertyAccessExpression(n) && NETWORK_CONSTRUCTORS.has(n.name.text) && globalChain(n.expression) && !isNewTarget(n)) {
+      // T-131 (10): `window.WebSocket` as a VALUE (`const W = window.WebSocket`), not the `new window.WebSocket(u)` the constructor branch reads.
+      note(`value:${n.name.text}`)
+    } else if (
+      ts.isElementAccessExpression(n) &&
+      ts.isStringLiteralLike(n.argumentExpression) &&
+      NETWORK_CONSTRUCTORS.has(n.argumentExpression.text) &&
+      globalChain(n.expression) &&
+      !isNewTarget(n)
+    ) {
+      // ...and `globalThis['WebSocket']`, which `new` cannot read either (it is not an identifier or a property access).
+      note(`value:${n.argumentExpression.text}`)
+    } else if (ts.isIdentifier(n) && NETWORK_CONSTRUCTORS.has(n.text) && !bound.has(n.text) && isValueReference(n)) {
+      // T-131 (10): the constructor NAMED as a value - `const WS = WebSocket`, `class Sock extends WebSocket`, `(WebSocket as any)`, `use(WebSocket)` - is
+      // a connection waiting for its `new`, and the `new` is not in sight. The file's own `Image` or `Audio` (a route component, a Konva import)
+      // is bound and is not the global.
+      note(`value:${n.text}`)
     } else if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
       const tag = n.tagName.getText(sf)
       if (LOADING_TAGS.has(tag)) note(`<${tag}>`)
@@ -344,14 +476,20 @@ export function outboundSites(sf: ts.SourceFile): string[] {
         if (text.toLowerCase() === 'image') note('<input type=image>')
       }
     } else if (ts.isJsxText(n)) {
-      for (const m of n.text.matchAll(URL_LITERAL)) if (!NAMESPACE_HOSTS.has((m[1] as string).toLowerCase())) note(`host:${(m[1] as string).toLowerCase()}`)
+      for (const m of n.text.matchAll(URL_LITERAL)) {
+        const site = urlLiteralSite(m[1] as string, m[2] as string)
+        if (site) note(site)
+      }
     }
     ts.forEachChild(n, visit)
   }
   visit(sf)
   // A literal anywhere (a constant, a template, a JSX attribute): the host it names. Comments are not in the tree.
   for (const lit of allLiterals(sf)) {
-    for (const m of lit.text.matchAll(URL_LITERAL)) if (!NAMESPACE_HOSTS.has((m[1] as string).toLowerCase())) note(`host:${(m[1] as string).toLowerCase()}`)
+    for (const m of lit.text.matchAll(URL_LITERAL)) {
+      const site = urlLiteralSite(m[1] as string, m[2] as string)
+      if (site) note(site)
+    }
   }
   return sites
 }
@@ -443,6 +581,10 @@ const NON_SOURCE_DIRECTIVES = new Set([
  * fact about the product that is not clean, not an approval: remove the token from `index.html` and the test that holds this list
  * fails until the line is deleted from it, so the list cannot outlive the exposure.
  *   - (m) `connect-src ws:`: a dev-server (HMR) leftover in the production policy; "verify dev still works before removing".
+ *     T-131 (12) rider, PROBED in the built app (Electron 31 / Chromium 126, a non-routable target, `127.0.0.1:9`): this source does NOT let the
+ *     renderer `fetch` or XHR an `https://` or `http://` address ("Refused to connect ... violates the following Content Security Policy directive:
+ *     connect-src 'self' ws: imagii-file:"), as it does not for `ftp://` or `rtmp://`; what it leaves open is `new WebSocket('ws://' | 'wss://')`
+ *     to ANY host (the CSP does not refuse it; the attempt then fails at the network stage). smoke.spec.ts holds both halves.
  */
 export const KNOWN_CSP_EXCEPTIONS: Readonly<Record<string, readonly string[]>> = { 'connect-src': ['ws:'] }
 
@@ -498,6 +640,30 @@ export const phoneHomePackages = (names: readonly string[]): string[] => names.f
 export const phoneHomeInPackage = (pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string[] =>
   phoneHomePackages([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})])
 
+/**
+ * T-131 (12): the package.json names, pinned. The regex above knows the names of the SDKs somebody thought of; an HTTP client (`axios`,
+ * `got`, `ky`, a tracker nobody has heard of) does not match it, and the name race is lost the first time a new one is spelled differently.
+ * So the sections are held to a list written out HERE: a dependency or a devDependency that is not on it fails this test until its name is
+ * added below, in the commit that adds it, which is where somebody has to ask what it does. Exact, both ways: a name that left package.json
+ * must leave this list, so the list cannot hold a place for a package that is no longer reviewed. `dependencies` are bundled or shipped;
+ * `devDependencies` are the build and test tools (Vite bundles from either section).
+ */
+export const KNOWN_DEPENDENCIES: readonly string[] = [
+  'electron-store', 'ffmpeg-static', 'ffprobe-static', 'konva', 'nanoid', 'path-browserify', 'react', 'react-dom', 'react-hot-toast',
+  'react-konva', 'react-rnd', 'react-router-dom', 'use-image', 'wavesurfer.js', 'zustand'
+]
+export const KNOWN_DEV_DEPENDENCIES: readonly string[] = [
+  '@fontsource/inter', '@playwright/test', '@types/fluent-ffmpeg', '@types/node', '@types/path-browserify', '@types/react', '@types/react-dom',
+  '@vitejs/plugin-react', 'autoprefixer', 'electron', 'electron-builder', 'electron-vite', 'playwright', 'png-to-ico', 'postcss', 'sharp',
+  'tailwindcss', 'typescript', 'vite', 'vitest'
+]
+
+/** Names in a package.json section that are not on the list, then names on the list that the section no longer has. */
+export function packageNameDrift(section: Record<string, string> | undefined, known: readonly string[]): { unlisted: string[]; stale: string[] } {
+  const names = Object.keys(section ?? {})
+  return { unlisted: names.filter((n) => !known.includes(n)).sort(), stale: known.filter((n) => !names.includes(n)).sort() }
+}
+
 /** A `publish` key anywhere in an electron-builder config (that is the update feed: `provider`, `url`, a release channel). */
 export const hasPublishKey = (yml: string): boolean => /^\s*publish\s*:/m.test(yml.replace(/^\s*#.*$/gm, ''))
 
@@ -509,17 +675,22 @@ export const remoteCssLoad = (css: string): string | null =>
   /(?:url|image-set)\(\s*['"]?\s*(?:https?:|wss?:|ftps?:)?\/\/[^\s)'"]*/i.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''))?.[0] ?? null
 
 /**
- * T-127 (13): what the scan below CANNOT read. It parses `.ts` and `.tsx` to a depth of 8 (`sourceFilesUnder`): a `.js`, `.jsx`, `.mjs`
- * or `.cjs` file anywhere under `dir`, or any file below that depth, would hold a call nobody is looking at. Empty = the scan reads
- * everything that is code.
+ * T-127 (13), inverted by T-131 (12): what the scan below CANNOT read. It parses `.ts` and `.tsx` to a depth of 8 (`sourceFilesUnder`), and
+ * the style sheets and the page's HTML are read by the tests that follow. T-127 named the file types that were NOT readable (.js, .jsx, .mjs,
+ * .cjs) and `.mts`, `.cts` and `.d.mts` walked through: unread and unflagged. So the question is asked the other way: under `src/` ONLY a
+ * `.ts` (a `.d.ts` is one), a `.tsx`, a `.css` and the page itself (`renderer/index.html`) may exist, all within eight levels, and anything
+ * else - another extension, another page, a deeper file, an upper-case spelling - is named. Empty = the scan reads everything that is there.
  */
+export const READABLE_SOURCE = /\.(?:tsx?|css)$/
+export const PAGE = 'renderer/index.html'
 export function unreadableSourceIn(dir: string): string[] {
   const out: string[] = []
   const walk = (d: string, depth: number): void => {
     for (const name of readdirSync(d)) {
       const full = path.join(d, name)
+      const relative = path.relative(dir, full).split(path.sep).join('/')
       if (statSync(full).isDirectory()) walk(full, depth + 1)
-      else if (/\.(?:jsx?|mjs|cjs)$/i.test(name) || (depth > 8 && /\.(?:tsx?|css|html)$/i.test(name))) out.push(path.relative(dir, full).split(path.sep).join('/'))
+      else if (!(READABLE_SOURCE.test(name) || relative === PAGE) || depth > 8) out.push(relative)
     }
   }
   walk(dir, 0)
@@ -622,6 +793,9 @@ describe('the product reaches the network only where ALLOWED says it does (T-124
     expect(dependencies.length, 'the scan reads the real dependency list').toBeGreaterThan(10)
     expect(Object.keys(pkg.devDependencies ?? {}).length, 'and the real devDependencies (T-127 (14): vite bundles from either)').toBeGreaterThan(10)
     expect(phoneHomeInPackage(pkg), 'an updater / telemetry / crash SDK is a dependency, or a devDependency the build bundles').toEqual([])
+    // T-131 (12): and every name is one a person listed, in both sections: the regex above cannot know the name of a package nobody has heard of.
+    expect(packageNameDrift(pkg.dependencies, KNOWN_DEPENDENCIES), 'dependencies: a name is not on KNOWN_DEPENDENCIES (or has left package.json)').toEqual({ unlisted: [], stale: [] })
+    expect(packageNameDrift(pkg.devDependencies, KNOWN_DEV_DEPENDENCIES), 'devDependencies: a name is not on KNOWN_DEV_DEPENDENCIES (or has left package.json)').toEqual({ unlisted: [], stale: [] })
     // The check can SEE a devDependency: the same package.json with one added.
     expect(phoneHomeInPackage({ ...pkg, devDependencies: { ...pkg.devDependencies, '@sentry/electron': '1.0.0' } })).toEqual(['@sentry/electron'])
     const builder = readFileSync(path.resolve(__dirname, '../../electron-builder.yml'), 'utf8')
@@ -923,7 +1097,8 @@ describe('the scan finds what it is meant to find, and nothing it is not (T-124 
     expect(parse('const node = new Konva.Image()')).toEqual([])
     expect(parse('new this.Image()')).toEqual([])
     expect(parse('new a.b.WebSocket(u)')).toEqual([])
-    expect(parse('new window.top.WebSocket(u)'), 'a longer chain is another qualifier on purpose').toEqual([])
+    // T-131 (10): a longer chain of globals is no longer a gap (it was `[]` "on purpose" in round 77): it is a VALUE reference to the constructor.
+    expect(parse('new window.top.WebSocket(u)'), 'a longer chain of globals').toEqual(['value:WebSocket'])
     expect(parse('new window.Map()')).toEqual([])
     expect(parse('new globalThis.Date()')).toEqual([])
     expect(parse('new Map()')).toEqual([])
@@ -933,7 +1108,10 @@ describe('the scan finds what it is meant to find, and nothing it is not (T-124 
     expect(parse("window.eval('1')")).toEqual(['eval('])
     expect(parse("globalThis.eval('require')('https')")).toEqual(['eval('])
     expect(parse("self.eval('1')")).toEqual(['eval('])
-    expect(parse('model.eval(x)')).toEqual([])
+    // T-131 (10): judged by the last segment, so a method called eval on a head the file has not bound is a site; one the file binds is its own.
+    expect(parse('function run(model) { return model.eval(x) }')).toEqual([])
+    expect(parse('const model = makeModel()\nmodel.eval(x)')).toEqual([])
+    expect(parse('model.eval(x)')).toEqual(['eval('])
     expect(parse('new Konva.Function()')).toEqual([])
   })
 
@@ -1064,22 +1242,195 @@ describe('the scan finds what it is meant to find, and nothing it is not (T-124 
     expect(remoteCssLoad('/* url(https://x.test/a.png) image-set("//x.test/a" 1x) */ a{color:red}')).toBeNull()
   })
 
-  it('the source reader\'s own limit is checked: a .js / .jsx / .mjs / .cjs file anywhere, or any code below the eighth level, is named (T-127 (13))', () => {
+  it('the source reader\'s own limit is checked: only .ts, .tsx, .css and the page may exist under src/, within eight levels (T-127 (13), inverted by T-131 (12))', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'imagii-netscan-'))
     const put = (relative: string): void => {
       mkdirSync(path.dirname(path.join(root, relative)), { recursive: true })
       writeFileSync(path.join(root, relative), '')
     }
     try {
-      for (const f of ['a.ts', 'b.tsx', 'c.css', 'index.html', 'a.test.ts', 'sub/d.ts', 'd1/d2/d3/d4/d5/d6/d7/d8/ok-at-eight.ts']) put(f)
+      for (const f of ['a.ts', 'b.tsx', 'c.css', 'renderer/index.html', 'a.test.ts', 'types.d.ts', 'sub/d.ts', 'd1/d2/d3/d4/d5/d6/d7/d8/ok-at-eight.ts']) put(f)
       expect(unreadableSourceIn(root), 'only code the scan reads').toEqual([])
-      for (const f of ['x.js', 'w.jsx', 'sub/y.mjs', 'sub/deeper/z.cjs', 'UP.JS', 'd1/d2/d3/d4/d5/d6/d7/d8/d9/too-deep.ts']) put(f)
-      expect(unreadableSourceIn(root).sort()).toEqual([
-        'UP.JS', 'd1/d2/d3/d4/d5/d6/d7/d8/d9/too-deep.ts', 'sub/deeper/z.cjs', 'sub/y.mjs', 'w.jsx', 'x.js'
-      ])
+      // T-127's four, the two it missed (.mts, .cts), their declaration spellings, a second page, data a bundler would inline, and the
+      // upper-case spellings a case-insensitive disk resolves.
+      const bad = [
+        'x.js', 'w.jsx', 'sub/y.mjs', 'sub/deeper/z.cjs', 'UP.JS',
+        'm.mts', 'sub/c.cts', 'types.d.mts', 'types.d.cts', 'UP.TS', 'UP.TSX', 'STYLE.CSS',
+        'other.html', 'sub/index.html', 'data.json', 'logo.svg', 'worker.wasm', 'native.node', 'noextension',
+        'd1/d2/d3/d4/d5/d6/d7/d8/d9/too-deep.ts', 'd1/d2/d3/d4/d5/d6/d7/d8/d9/too-deep.css'
+      ]
+      for (const f of bad) put(f)
+      expect(unreadableSourceIn(root).sort()).toEqual([...bad].sort())
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('the real src/ holds the page where the check expects it, so the inversion is not vacuously green (T-131 (12))', () => {
+    expect(readFileSync(path.join(SRC, PAGE), 'utf8')).toContain('Content-Security-Policy')
+    expect(sourceFilesUnder(SRC).length).toBeGreaterThan(150)
+  })
+
+  // ── T-131 (10): qualifier and value spellings. Each positive returned [] from the T-127 scanner. ──────────────────────────────────────
+  it('sees open( in every spelling: bare, qualified by a global, parenthesized, indirect, or by element access (T-131 (10))', () => {
+    for (const call of [
+      'open(u)', 'window.open(u)', 'globalThis.open(u)', 'self.open(u)', 'top.open(u)', 'parent.open(u)', 'window.top.open(u)', 'window.parent.open(u)',
+      '(window.open)(u)', '(open)(u)', '(0, window.open)(u)', '(0, open)(u)', "window['open'](u)", "globalThis['open'](u)", 'window.open?.(u)',
+      '(window.open as any)(u)'
+    ]) {
+      expect(parse(call), call).toEqual(['window.open('])
+    }
+  })
+
+  it('does NOT see open( where the file binds the head itself: autosave.ts\'s fs open is the mandatory negative (T-131 (10))', () => {
+    // The real call in src/main/autosave.ts, as it is spelled there: a named import of node:fs/promises.
+    expect(parse("import { open } from 'node:fs/promises'\nconst fh = await open(tmp, 'r+')")).toEqual([])
+    expect(parse("import { open as o } from 'node:fs/promises'\nawait o(tmp)")).toEqual([])
+    expect(parse("import fs from 'node:fs/promises'\nawait fs.open(tmp)")).toEqual([])
+    expect(parse("import * as fs from 'node:fs'\nfs.open(tmp, cb)")).toEqual([])
+    expect(parse("const { open } = require('node:fs/promises')\nawait open(tmp)")).toEqual([])
+    expect(parse('function open(url) {}\nopen(u)')).toEqual([])
+    expect(parse('const open = makeOpener()\nopen(u)')).toEqual([])
+    expect(parse('function f(open) { open(u) }')).toEqual([])
+    expect(parse('function f(window) { window.open(u) }'), 'a parameter called window is not the global').toEqual([])
+    expect(parse('class Door { open() {} close() { this.open() } }')).toEqual([])
+    expect(parse('socket.close(); modal.opened(u); file.openExternalThing(u)')).toEqual([])
+    // ...and the same call with nothing binding it is the site, so the negatives above are the binding and not a blind spot.
+    expect(parse('await open(tmp, "r+")')).toEqual(['window.open('])
+    // The real file, so a rewrite of its import cannot start flagging it unnoticed.
+    expect(parse(readFileSync(path.join(SRC, 'main', 'autosave.ts'), 'utf8'))).toEqual([])
+  })
+
+  it('sees eval and Function in the indirect and element-access spellings, and `Function(` without a `new` (T-131 (10))', () => {
+    for (const call of ["eval(code)", '(0, eval)(code)', '(1, window.eval)(code)', "window['eval'](code)", "(eval)(code)", "globalThis['eval'](code)", 'self.eval(code)']) {
+      expect(parse(call), call).toEqual(['eval('])
+    }
+    for (const call of ["Function('return fetch')()", "(0, Function)('return fetch')()", "window.Function('return 1')", "globalThis['Function']('return 1')", '(Function)("x")']) {
+      expect(parse(call), call).toEqual(['Function('])
+    }
+    expect(parse("new Function('return fetch')")).toEqual(['new Function('])
+    // A local Function or eval (a parameter, a function of the file's own) is the file's own.
+    expect(parse('function run(Function) { return Function("x") }')).toEqual([])
+    expect(parse('function eval2() {}\neval2(x)')).toEqual([])
+    expect(parse("const evaluate = (x) => x\n(0, evaluate)(1)")).toEqual([])
+  })
+
+  it('reads x[\'name\'](...) as x.name for every surface the scan names: sendBeacon, net.request, shell.openExternal, fetch, window.open, child_process (T-131 (10))', () => {
+    expect(parse("navigator['sendBeacon'](u, d)")).toEqual(['sendBeacon('])
+    expect(parse("net['request'](u)")).toEqual(['net.request('])
+    expect(parse("electron['net']['request'](u)")).toEqual(['net.request('])
+    expect(parse("electron.net['request'](u)")).toEqual(['net.request(', 'electron:net'])
+    expect(parse("shell['openExternal'](u)")).toEqual(['shell.openExternal('])
+    expect(parse("window['fetch'](u)")).toEqual(['fetch('])
+    expect(parse("https['get'](u)")).toEqual(['http(s).request('])
+    expect(parse("win['loadURL'](u)")).toEqual(['loadURL('])
+    expect(parse("import * as cp from 'node:child_process'\ncp['spawn']('curl', [u])")).toEqual(['import:child_process', 'spawn:curl'])
+    expect(parse('location["assign"](u)')).toEqual(['location.assign('])
+    // A template with no hole is a string; a computed name is not a spelling the scan can resolve (WHAT IT CANNOT SEE).
+    expect(parse('navigator[`sendBeacon`](u)')).toEqual(['sendBeacon('])
+    expect(parse('navigator[name](u)')).toEqual([])
+    expect(parse("cache['get'](key)")).toEqual([])
+  })
+
+  it('sees a named network constructor used as a VALUE: aliased, subclassed, cast, passed, read off a global, destructured shorthand (T-131 (10))', () => {
+    for (const ctor of ['XMLHttpRequest', 'WebSocket', 'EventSource', 'Image', 'Audio', 'RTCPeerConnection']) {
+      const site = [`value:${ctor}`]
+      expect(parse(`const C = ${ctor}`), `const C = ${ctor}`).toEqual(site)
+      expect(parse(`class Sock extends ${ctor} {}`), `class extends ${ctor}`).toEqual(site)
+      expect(parse(`const C = (${ctor} as any)\nnew C(u)`), `(${ctor} as any)`).toEqual(site)
+      expect(parse(`const c = new (${ctor} as any)(u)`), `new (${ctor} as any)`).toEqual(site)
+      expect(parse(`use(${ctor})`), `use(${ctor})`).toEqual(site)
+      expect(parse(`const C = window.${ctor}`), `window.${ctor} as a value`).toEqual(site)
+      expect(parse(`const C = globalThis['${ctor}']`), `globalThis['${ctor}']`).toEqual(site)
+      expect(parse(`const c = new window['${ctor}'](u)`), `new window['${ctor}']`).toEqual(site)
+      expect(parse(`const o = { ${ctor} }`), `{ ${ctor} }`).toEqual(site)
+    }
+    expect(parse("const WS = WebSocket\nconst s = new WS('wss://live.test/x')")).toEqual(['value:WebSocket', 'host:live.test'])
+    expect(parse('new window.top.WebSocket(u)')).toEqual(['value:WebSocket'])
+  })
+
+  it('does NOT see those names where they are a declaration, a property, a type, a JSX tag or the file\'s own binding, and a `new X(` is one site and not two (T-131 (10))', () => {
+    for (const ctor of ['XMLHttpRequest', 'WebSocket', 'EventSource', 'Image', 'Audio', 'RTCPeerConnection']) {
+      expect(parse(`new ${ctor}(u)`), `new ${ctor}`).toEqual([`new ${ctor}(`])
+      expect(parse(`new window.${ctor}(u)`), `new window.${ctor}`).toEqual([`new ${ctor}(`])
+      expect(parse(`let x: ${ctor} | null = null`), 'a type annotation').toEqual([])
+      expect(parse(`type T = typeof ${ctor}`), 'a type query').toEqual([])
+      expect(parse(`interface Wrap extends ${ctor} {}`), 'an interface extends is a type').toEqual([])
+      expect(parse(`class Fake implements ${ctor} {}`), 'a class implements is a type').toEqual([])
+      expect(parse(`const x = y as ${ctor}`), 'a cast TO the type').toEqual([])
+      expect(parse(`obj.${ctor}(x)`), 'a property of something else').toEqual([])
+      expect(parse(`const o = { ${ctor}: 1 }`), 'a property name').toEqual([])
+      expect(parse(`import { ${ctor} } from './mine'\nuse(${ctor})`), 'imported by the file').toEqual([])
+      expect(parse(`import { Thing as ${ctor} } from 'konva'\nuse(${ctor})`), 'imported under that name').toEqual([])
+      expect(parse(`function ${ctor}() {}\nuse(${ctor})`), 'declared by the file').toEqual([])
+      expect(parse(`function f(${ctor}) { return ${ctor} }`), 'a parameter').toEqual([])
+      expect(parse(`const x = <${ctor} src="a" />`), 'a JSX tag is a component, not the constructor').toEqual([])
+    }
+    // The routes' own components are named Audio and Image (App.tsx imports them, routes/Audio.tsx declares one): they are bound.
+    expect(parse("import { Audio } from './routes/Audio'\nimport { Image } from './routes/Image'\nconst a = <Route element={<Audio />} />\nuse(Image)")).toEqual([])
+    expect(parse('export function Audio(): JSX.Element { return <div /> }')).toEqual([])
+    expect(parse('class Mine extends Konva.Image {}')).toEqual([])
+    expect(parse('const ws = window.Websocketish')).toEqual([])
+  })
+
+  // ── T-131 (11): the dynamic element vocabulary, the rule import() / require() / spawn() already have ──────────────────────────────────
+  it('a createElement or setAttribute whose name is computed is a site of its own: it can be script, img or src at run time (T-131 (11))', () => {
+    expect(parse('document.createElement(tag)')).toEqual(['createElement(dynamic)'])
+    expect(parse('document.createElement(`${kind}`)')).toEqual(['createElement(dynamic)'])
+    expect(parse("document.createElement(isImage ? 'img' : 'div')")).toEqual(['createElement(dynamic)'])
+    expect(parse('el.setAttribute(name, value)')).toEqual(['setAttribute(dynamic)'])
+    expect(parse('el.setAttribute(`data-${key}`, value)')).toEqual(['setAttribute(dynamic)'])
+    expect(parse("el.setAttribute(isLink ? 'href' : 'title', value)")).toEqual(['setAttribute(dynamic)'])
+    // The literal forms are as they were: a loading tag and an address attribute are sites, anything else is not.
+    expect(parse("document.createElement('img')")).toEqual(['createElement(img)'])
+    expect(parse('document.createElement(`img`)'), 'a template with no hole is a string').toEqual(['createElement(img)'])
+    expect(parse("document.createElement('canvas')")).toEqual([])
+    expect(parse("el.setAttribute('src', u)")).toEqual(['setAttribute(src)'])
+    expect(parse("el.setAttribute('class', 'x')")).toEqual([])
+    expect(parse('el.setAttribute(`class`, x)')).toEqual([])
+  })
+
+  // ── T-131 (12): the three inversions ───────────────────────────────────────────────────────────────────────────────────────────────
+  it('(ii) ANY scheme://host literal is a site unless its scheme is on this machine: rtmp, rtsp, srt, udp, tcp, sftp, smb, git+ssh, about (T-131 (12))', () => {
+    for (const scheme of ['rtmp', 'rtmps', 'rtsp', 'srt', 'udp', 'tcp', 'sftp', 'smb', 'ssh', 'git+ssh', 'irc', 'ldap', 'chrome', 'devtools', 'about', 'ms-settings']) {
+      expect(parse(`const u = '${scheme}://live.test/stream'`), scheme).toEqual([`host:${scheme}://live.test`])
+      expect(parse(`const u = '${scheme.toUpperCase()}://Live.TEST/stream'`), `${scheme} in capitals`).toEqual([`host:${scheme}://live.test`])
+    }
+    expect(parse("const u = `rtmp://live.test/${key}`")).toEqual(['host:rtmp://live.test'])
+    expect(parse('const x = <p>see srt://[::1]:9000</p>')).toEqual(['host:srt://[::1]'])
+    expect(parse("const u = 'udp://239.255.0.1:1234'")).toEqual(['host:udp://239.255.0.1'])
+    // The schemes that leave are listed as before, by the bare host.
+    expect(parse("const u = 'wss://live.test/x'")).toEqual(['host:live.test'])
+    // Local: the app's own file protocol, file, data, blob.
+    expect(parse("const u = 'imagii-file://local/x'")).toEqual([])
+    expect(parse("const u = 'file://local/x'")).toEqual([])
+    expect(parse("const u = 'FILE://local/x'")).toEqual([])
+    expect(parse("const u = 'data://x'")).toEqual([])
+    expect(parse("const u = 'blob://x'")).toEqual([])
+    // An XML namespace is an identifier only for the web schemes; and a scheme without a host is not an address.
+    expect(parse("const ns = 'http://www.w3.org/2000/svg'")).toEqual([])
+    expect(parse("const u = 'rtmp://www.w3.org/x'")).toEqual(['host:rtmp://www.w3.org'])
+    expect(parse("const u = 'rtmp://'")).toEqual([])
+    expect(parse("const label = 'tcp: 3 connections'")).toEqual([])
+  })
+
+  it('(iii) every package.json name is one a person listed, in both sections, in both directions (T-131 (12))', () => {
+    expect(packageNameDrift({ react: '1', axios: '1' }, ['react'])).toEqual({ unlisted: ['axios'], stale: [] })
+    expect(packageNameDrift({ react: '1' }, ['react', 'konva'])).toEqual({ unlisted: [], stale: ['konva'] })
+    expect(packageNameDrift({ react: '1', got: '1', ky: '1', 'a-tracker-nobody-heard-of': '1' }, ['react'])).toEqual({
+      unlisted: ['a-tracker-nobody-heard-of', 'got', 'ky'],
+      stale: []
+    })
+    expect(packageNameDrift(undefined, [])).toEqual({ unlisted: [], stale: [] })
+    // The regex above cannot name any of these; the list does.
+    for (const client of ['axios', 'got', 'ky', 'node-fetch', 'undici', 'superagent', 'needle', 'cross-fetch', 'ws']) {
+      expect(phoneHomePackages([client]), `${client} slips past the name regex`).toEqual([])
+      expect(packageNameDrift({ [client]: '1' }, KNOWN_DEPENDENCIES).unlisted, `${client} is caught by the list`).toEqual([client])
+    }
+    // The lists do not overlap, and both are in the order package.json keeps them in, so a diff of one is a diff of the other.
+    expect(KNOWN_DEPENDENCIES.filter((n) => KNOWN_DEV_DEPENDENCIES.includes(n))).toEqual([])
+    expect([...KNOWN_DEPENDENCIES].sort(), 'alphabetical').toEqual([...KNOWN_DEPENDENCIES])
+    expect([...KNOWN_DEV_DEPENDENCIES].sort(), 'alphabetical').toEqual([...KNOWN_DEV_DEPENDENCIES])
   })
 
   it('the package check names an updater, telemetry or crash SDK, and a `publish` key; not the real dependencies, a comment, or a word inside a name', () => {

@@ -3,6 +3,7 @@ import { assert } from '@shared/assert'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { Icon } from './Icon'
+import { isRepeatPress, swallowRepeatClicks } from '../lib/repeatPress'
 import { ACCENT } from '../styles/tokens'
 
 /** A box in viewport coordinates — the thing a step points at. */
@@ -188,6 +189,17 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
     if (stepIndex > 0) setStepIndex(stepIndex - 1)
   }
 
+  // T-131 (6): the buttons and the scrim step once per DISCRETE press. A double-click on Next advanced twice and skipped a step (steps that
+  // share a target and a placement keep Next where it was, so the second press lands on it), and from the penultimate step the second press
+  // was Done and closed the tour. A repeat is not another decision; the keys (detail 0) are not touched.
+  const stepOnce = (go: () => void) => (e: { detail: number }): void => {
+    if (isRepeatPress(e)) return
+    go()
+  }
+
+  // T-131 (8): and when the tour ends on a double-click of Skip or Done, the second press must not land on the page the card stood over.
+  useEffect(() => swallowRepeatClicks, [])
+
   // Defensive: stepIndex should always be in range, but a malformed
   // tutorial def or stale state could land us out of bounds. Return null
   // rather than crashing.
@@ -225,7 +237,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           height="100%"
           fill="rgba(12, 8, 8, 0.78)"
           mask="url(#tutorial-mask)"
-          onClick={() => next()}
+          onClick={stepOnce(next)}
         />
         {targetRect ? (
           <rect
@@ -268,7 +280,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           {stepIndex > 0 ? (
             <button
               className="btn-ghost px-3 py-1.5 text-sm inline-flex items-center gap-1.5"
-              onClick={prev}
+              onClick={stepOnce(prev)}
             >
               <Icon name="arrow-left" size={14} /> Back
             </button>
@@ -277,7 +289,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           <button
             ref={nextBtnRef}
             className="btn-primary px-4 py-1.5 text-sm inline-flex items-center gap-1.5"
-            onClick={next}
+            onClick={stepOnce(next)}
           >
             {stepIndex === def.steps.length - 1 ? (
               <>

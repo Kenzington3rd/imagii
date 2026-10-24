@@ -4665,7 +4665,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green
   before handback; no docs/TICKETS.md, package.json or lockfile
   edits (electron-builder.yml IS yours for item 18).
-- **Status:** open (dispatched round 79)
+- **Status:** done (round 80, checkpoint 4 — see the Done entry)
 
 ---
 
@@ -5084,6 +5084,58 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 80, checkpoint 4 (the round's last) — T-131, all 18 of the
+seventeenth sweep's verified findings, landed in the commit that
+carries this entry; docs/SESSION-HANDOFF.md is deleted with it, the
+four-ticket wave being complete. Worked by Sonnet (paused
+2026-10-16 as wip/t131-partial-20261016), resumed by a second
+Sonnet, killed by a container restart near its final gate, and
+finished by a third under the death protocol (all 124 ledger rows'
+current shas matched their before state — zero mid-mutation
+residue; the item-1 red re-proven on BOTH majors: removing
+apad=whole_dur fails 11 unit cases and 8 Layer 5 cases including
+both replication-harness cases, restored byte-identical). The
+headline (item 1, the T-127 (4) regression): a compilation segment
+is written with -shortest, so a source whose sound did not cover a
+segment made the SOUND the shorter stream — an empty stub the join
+silently dropped with every segment after it, and the file still
+said "Saved". The fix is the banked apad=whole_dur=<outSec> as the
+last -af stage (bare apad regresses drift on 6.1.1 and hangs with
+-c:v copy on 7.0.2 — never deviate), -shortest kept, PLUS two
+fail-loudly guards: an exit-0 segment that wrote nothing and an
+exit-0 join that lost a part each reject with a user sentence
+instead of saving a shorter file. Item 2 gives Re-attach and
+Picture-in-picture the same pad. Items 3-9: scan results no longer
+outlive their video (a late scan is dropped, appendRange refuses),
+isRepeatPress/claimFirst/swallowRepeatClicks retire the
+double-click family (the next question answered, a tour step
+skipped, a second chooser, a checkbox under a closing dialog), the
+Cancel question no longer reads "Cancel 0 running jobs?", and the
+`?` key is named in the UI. Items 10-12: the networkAllowlist scan
+grew to 42 cases and stopped claiming to be finished. Items 13-15:
+the folder chip sleeps under a busy primary, the filename hint has
+its own line, one × glyph app-wide. Items 16-18: STYLE_GUIDE
+corrections, the honest win32 quit comment (T-110 (az)), and
+Inter's OFL ships via extraResources (releaseWorkflowShape pins
+it). Expedited personally on the worker's tree: verify x2
+(162/4467), test:media on 7.0.2 (299 passed | 11 skipped of 310),
+the touched 6.1.1 blocks 22/22 (including the 10 s/6 s replication
+harness: segments [1,3][7,9][2,4] deliver 6.0 s and
+[1,3][5,8][2,4] deliver 7.0 s, on the distro binary), build + FULL
+Playwright 354/354 (the two load flakes its worker saw against a
+pristine base did not recur); one independent mutation at a seam no
+ledger row names (isRepeatPress's boundary, detail > 1 → > 2 → the
+"click number 2 of a run is a repeat" case red → restored
+byte-identical, 8/8 green). Landed as the fourth serial checkpoint
+with seven hand-resolved merges; three real union collisions were
+found and fixed at the landing: T-130's new fade assertion now
+expects T-131's apad tail, the shared concatRunner probe mock
+carries both trees' knobs (probedFps + probedSec/throw), and the
+T-131 (18) license pin now reads the package's woff2 urls from
+index.css (T-128 (2) moved the consumption out of main.tsx). The
+union tree re-gated: verify 171/4614 plus the full media and
+Playwright suites (results in this entry's commit).
 
 Round 80, checkpoint 3 — T-130, the platform-rate and kit-art debt
 ((q), (t), (an)), landed in the commit that carries this entry.

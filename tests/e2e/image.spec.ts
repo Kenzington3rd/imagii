@@ -2079,7 +2079,7 @@ test.describe('Image Studio — export', () => {
       // click — from the document and the scale, the same arithmetic the
       // capture uses. 1x of a 1280x720 thumbnail is YouTube's own size, so
       // there is nothing to add.
-      await expect(output).toHaveText('Output: 1280x720')
+      await expect(output).toHaveText('Output: 1280×720')
       await expect(exportPanel).not.toContainText("Bigger than YouTube's thumbnail size")
       await exportButton.click()
       const [png1] = await waitForDownloads(studio, 1)
@@ -2107,8 +2107,8 @@ test.describe('Image Studio — export', () => {
       // The default scale on a HiDPI screen is 2x, which makes a thumbnail
       // YouTube will not take at face value — the readout and the soft note
       // say so before the file exists, and the file then matches the readout.
-      await expect(output).toHaveText('Output: 2560x1440')
-      await expect(exportPanel).toContainText("Bigger than YouTube's thumbnail size (1280x720).")
+      await expect(output).toHaveText('Output: 2560×1440')
+      await expect(exportPanel).toContainText("Bigger than YouTube's thumbnail size (1280×720).")
       await exportButton.click()
       const [png2] = await waitForDownloads(studio, 1)
       const size2 = pngSize(png2 as Buffer)
@@ -2117,7 +2117,7 @@ test.describe('Image Studio — export', () => {
       // ── scale 0.5x, the other end of the picker ──
       await clearDownloads(studio)
       await exportPanel.getByLabel('Scale').selectOption('0.5')
-      await expect(output).toHaveText('Output: 640x360')
+      await expect(output).toHaveText('Output: 640×360')
       await expect(exportPanel).not.toContainText("Bigger than YouTube's thumbnail size")
       await exportButton.click()
       const [pngHalf] = await waitForDownloads(studio, 1)
@@ -2182,7 +2182,7 @@ test.describe('Image Studio — export', () => {
       // T-91: the readout tells the truth for the pack — three sizes, not
       // whatever Scale says — and Scale steps aside with the reason on it.
       await expect(exportPanel.getByTestId('export-output-size')).toHaveText(
-        'Output: 3 PNGs — 28x28, 56x56, 112x112'
+        'Output: 3 PNGs — 28×28, 56×56, 112×112'
       )
       await expect(exportPanel.getByLabel('Scale')).toBeDisabled()
 
@@ -2238,7 +2238,7 @@ test.describe('Image Studio — export', () => {
       await exportPanel.getByRole('combobox', { name: 'Export format' }).selectOption('jpg')
       await expect(exportPanel.getByLabel('Scale')).toBeEnabled()
       await exportPanel.getByLabel('Scale').selectOption('2')
-      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 224x224')
+      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 224×224')
       await exportButton.click()
       const single = await waitForDownloads(studio, 1)
       expect(single).toHaveLength(1)
@@ -2864,7 +2864,7 @@ test.describe('Image Studio — hint layers stay on the canvas and out of the fi
       const exportPanel = window.locator(EXPORT)
       await exportPanel.getByLabel('Scale').selectOption('1')
       // Not a thumbnail: no YouTube note on a transparent overlay.
-      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 1920x1080')
+      await expect(exportPanel.getByTestId('export-output-size')).toHaveText('Output: 1920×1080')
       await expect(exportPanel).not.toContainText("Bigger than YouTube's")
 
       // Layers panel: the hole, its label and both placeholders are tagged;

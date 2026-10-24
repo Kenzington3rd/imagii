@@ -188,7 +188,7 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
   it('a 1x segment fades out 0.4 s before the end of its range, exactly as before', () => {
     const f = buildSegmentFilters({ startSec: 2, endSec: 6 }, src, 1920, 1080, 0.4, FADE)
     expect(f.video).toBe(`${CFR},${SCALE},fade=t=in:st=0:d=0.4,fade=t=out:st=3.600:d=0.4`)
-    expect(f.audio).toBe('afade=t=in:st=0:d=0.4,afade=t=out:st=3.600:d=0.4')
+    expect(f.audio).toBe('afade=t=in:st=0:d=0.4,afade=t=out:st=3.600:d=0.4,apad=whole_dur=4.000')
   })
 
   it('a 2x segment is half as long, so its fade-out starts at half the time', () => {
@@ -202,7 +202,7 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
       FADE
     )
     expect(f.video).toBe(`setpts=PTS/2.0000,${CFR},${SCALE},fade=t=out:st=1.600:d=0.4`)
-    expect(f.audio).toBe('atempo=2.0000,afade=t=out:st=1.600:d=0.4')
+    expect(f.audio).toBe('atempo=2.0000,afade=t=out:st=1.600:d=0.4,apad=whole_dur=2.000')
   })
 
   it('a slowed segment is longer, so its fade-out starts later', () => {
@@ -215,7 +215,7 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
       FADE
     )
     expect(f.video).toContain('fade=t=out:st=3.600:d=0.4')
-    expect(f.audio).toBe('atempo=0.5000,afade=t=out:st=3.600:d=0.4')
+    expect(f.audio).toBe('atempo=0.5000,afade=t=out:st=3.600:d=0.4,apad=whole_dur=4.000')
   })
 
   it('the tempo comes BEFORE the fades, so the fades are in output time', () => {
@@ -227,7 +227,7 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
       FADE,
       FADE
     )
-    expect(f.audio).toBe('atempo=2,atempo=2.0000,afade=t=in:st=0:d=0.4,afade=t=out:st=1.600:d=0.4')
+    expect(f.audio).toBe('atempo=2,atempo=2.0000,afade=t=in:st=0:d=0.4,afade=t=out:st=1.600:d=0.4,apad=whole_dur=2.000')
   })
 
   it('a clip shorter than its fade never asks for a negative start', () => {
@@ -243,17 +243,17 @@ describe('buildSegmentFilters — the fades follow the clip\'s length in the out
     expect(f.audio).toContain('afade=t=out:st=0.000:d=0.5')
   })
 
-  it('no fades and 1x: no audio filter at all, so the caller leaves -af off', () => {
+  it('no fades and 1x: the sound is still padded to the clip\'s length, so -af is always there (T-131 (1))', () => {
     expect(buildSegmentFilters({ startSec: 0, endSec: 2 }, src, 1920, 1080, 0, 0)).toEqual({
       video: `${CFR},${SCALE}`,
-      audio: ''
+      audio: 'apad=whole_dur=2.000'
     })
   })
 
-  it('the audio chain is the export\'s own', () => {
+  it('the audio chain is the export\'s own, then the pad', () => {
     for (const speedMultiplier of [0.25, 0.5, 1.5, 2, 3, 4]) {
       const f = buildSegmentFilters({ startSec: 0, endSec: 4, speedMultiplier }, src, 1920, 1080, 0, 0)
-      expect(f.audio).toBe(buildAudioSpeedFilter(speedMultiplier))
+      expect(f.audio).toBe(`${buildAudioSpeedFilter(speedMultiplier)},apad=whole_dur=${(4 / speedMultiplier).toFixed(3)}`)
     }
   })
 })
@@ -280,6 +280,37 @@ describe('the compilation\'s rate follows the source (T-130 (q))', () => {
   it('buildSegmentFilters hands the rate on to the picture and leaves the fades and the sound alone', () => {
     const f = buildSegmentFilters({ startSec: 2, endSec: 6 }, src, 1920, 1080, 0.4, 0.4, 60)
     expect(f.video).toBe(`fps=60,${SCALE},fade=t=in:st=0:d=0.4,fade=t=out:st=3.600:d=0.4`)
-    expect(f.audio).toBe('afade=t=in:st=0:d=0.4,afade=t=out:st=3.600:d=0.4')
+    // The T-131 (1) pad rides at the end of every segment's sound, whatever the rate.
+    expect(f.audio).toBe('afade=t=in:st=0:d=0.4,afade=t=out:st=3.600:d=0.4,apad=whole_dur=4.000')
+  })
+})
+
+describe('buildSegmentFilters — the sound is padded to the picture\'s length (T-131 (1))', () => {
+  // A segment is written with `-shortest`, so it ends where its shorter stream does. A source whose sound does not cover the range
+  // (a microphone that dropped, a sound that starts late) made the SOUND that stream: a range past its end came out as an empty stub
+  // and the join silently dropped it and every segment after it. The pad makes the picture the shorter stream. Layer 5 (T-131 (1))
+  // proves it on real files, on both majors; this is the shape of the argument it depends on.
+  const pad = (f: { audio: string }): string => f.audio.split(',').at(-1) ?? ''
+
+  it('the pad is the LAST stage, after the tempo and the fades', () => {
+    const f = buildSegmentFilters({ startSec: 2, endSec: 6, speedMultiplier: 2 }, src, 1920, 1080, 0.4, 0.4)
+    expect(f.audio.split(',').slice(-2)).toEqual(['afade=t=out:st=1.600:d=0.4', 'apad=whole_dur=2.000'])
+  })
+
+  it('it is finite: whole_dur, the clip\'s length IN THE OUTPUT (range over speed, three decimals), never a bare apad', () => {
+    for (const [startSec, endSec, speedMultiplier, want] of [
+      [1.37, 4.91, undefined, '3.540'],
+      [0, 10, 2, '5.000'],
+      [0, 2, 0.5, '4.000'],
+      [3.333, 9.001, 3, '1.889']
+    ] as const) {
+      const f = buildSegmentFilters({ startSec, endSec, ...(speedMultiplier ? { speedMultiplier } : {}) }, src, 1920, 1080, 0.3, 0.3)
+      expect(pad(f), `${startSec}-${endSec} at ${speedMultiplier ?? 1}x`).toBe(`apad=whole_dur=${want}`)
+      expect(f.audio).not.toMatch(/apad(?!=whole_dur=\d)/)
+    }
+  })
+
+  it('a clip shorter than a tenth of a second is padded to the tenth the fades already use', () => {
+    expect(pad(buildSegmentFilters({ startSec: 0, endSec: 0.05 }, src, 1920, 1080, 0, 0))).toBe('apad=whole_dur=0.100')
   })
 })

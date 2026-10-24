@@ -233,3 +233,25 @@ describe('the Video tour introduces Clip Kit (T-125 (24))', () => {
     expect(button).toContain('data-tutorial="video-clipkit"')
   })
 })
+
+// T-131 (7): nothing in the app named the `?` key (T-13's promise regressed: the Player's hint line lost it and the tours only named the
+// header's round ? BUTTON, which replays the tour). README and FOR_MIKE still claim it. The last step of every tour says both, and says which
+// is which, because the two share a glyph.
+describe('every tour ends by naming the ? key as well as the ? button (T-131 (7))', () => {
+  for (const { def } of TUTORIALS) {
+    const last = def.steps[def.steps.length - 1]
+
+    it(`${def.id}: the last step names the key on the keyboard and what it opens`, () => {
+      expect(last?.body).toMatch(/the \? key on your keyboard lists every shortcut on the screen you are on/)
+    })
+
+    it(`${def.id}: and still says what the round button in the header does, in the same sentence`, () => {
+      expect(last?.body).toMatch(/^The \? button in the header replays this tour any time, and the \? key/)
+    })
+  }
+
+  it('the claim is true of the app: the overlay opens on the ? key, in the studios the tours are for', () => {
+    const overlay = readAll([path.resolve(__dirname, '../../src/renderer/src/components/HotkeyOverlay.tsx')])
+    expect(overlay).toMatch(/if \(e\.key !== '\?'\) return false/)
+  })
+})
