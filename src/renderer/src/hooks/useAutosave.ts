@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { ImagiiProject } from '@shared/workspace'
+import { projectSizeProblem, serializeProject } from '@shared/projectValidation'
+import { reportFailure } from '../lib/reportFailure'
 import { useVideoStore } from '../modules/video-studio/store/videoStore'
 import { useAudioStore } from '../modules/audio-studio/state/audioStore'
 import { useCanvasStore } from '../modules/image-studio/state/canvasStore'
@@ -9,6 +11,15 @@ const AUTOSAVE_DEBOUNCE_MS = 5000
 const AUTOSAVE_MIN_INTERVAL_MS = 5000
 /** A pending change is written no later than this long after it was first scheduled, however many changes keep re-arming the debounce (T-136 (3)). */
 export const AUTOSAVE_MAX_WAIT_MS = 30_000
+
+/** The toast id of "autosave is paused" (T-137 (6)): one card, whatever raises it. */
+export const AUTOSAVE_TOO_LARGE_TOAST_ID = 'autosave-too-large'
+
+/**
+ * The stamp a capture is compared under (T-137 (7)): a fixed 13-digit number, the length of a real `Date.now()` until the year 2286, so the compared text is
+ * exactly as long as the text main measures and writes.
+ */
+const UNSTAMPED = 1_000_000_000_000
 
 /**
  * The fields of the video store that are the PLAYHEAD, not the work (T-136 (3)): the position the Player writes on every `timeupdate` (about four
@@ -149,14 +160,21 @@ interface AutosaveOptions {
 /** What autosave remembers across an enable and a disable: when it last wrote, and what (the hook keeps it in a ref). */
 export interface AutosaveMemory {
   lastWriteTime: number
+  /** The content last written: the project with its stamp neutralised (T-137 (7)). */
   lastHash: string
+  /** True while the person has been told the project is over the size limit and it still is (T-137 (6)): one toast per episode, not one per attempt. */
+  toldTooLarge?: boolean
 }
 
 /**
  * Subscribes to all three studio stores. When any store changes (other than
  * by its playhead alone, T-136 (3)), schedules a debounced autosave. Each save
  * is gated by:
- *   - serialization round-trip (skip if state is identical to last save)
+ *   - content dedupe (skip if the captured project, its `savedAt` stamp set
+ *     aside, is the one last written: a store change that is not in the project
+ *     - a grid toggle, a scan's results - writes nothing, T-137 (7))
+ *   - the size rule (T-137 (6)): a project over the limit is not sent, and the
+ *     person is told once that autosave is paused
  *   - main-process safety guards (size cap, schema validation, "no studio" check)
  *   - debounce (5 s, and never more than 30 s after the first change of a
  *     burst) and minimum interval between writes (5 s)
@@ -201,12 +219,26 @@ export function startAutosave(memory: AutosaveMemory): () => void {
     }
     let serialized: string
     try {
-      serialized = JSON.stringify(project)
+      // T-137 (7): the key is the project's CONTENT. `savedAt` is `Date.now()` at the capture, so two captures of the same work never matched and
+      // any store change that is not in the project (Find chat spikes, Scan VOD, a grid toggle) re-wrote an identical autosave.json and rotated
+      // autosave.prev (executed: 28.4 MiB for a ticked Grid). It is the same text the size rule below measures, and that main writes.
+      serialized = serializeProject({ ...project, savedAt: UNSTAMPED })
     } catch (err) {
       console.warn('[autosave] serialize failed', err)
       return
     }
     if (serialized === memory.lastHash) return
+    // T-137 (6): over the size limit, the project is not sent (a 50 MiB structured clone every few seconds to be refused) and the person is told, once.
+    // The refusal used to be a console line, so autosave stopped for good with nothing on screen. It starts again by itself when the project fits.
+    const tooLarge = projectSizeProblem(serialized.length, 'autosave')
+    if (tooLarge !== null) {
+      if (!memory.toldTooLarge) {
+        memory.toldTooLarge = true
+        reportFailure(tooLarge, { failed: 'Autosave is paused.', id: AUTOSAVE_TOO_LARGE_TOAST_ID })
+      }
+      return
+    }
+    memory.toldTooLarge = false
     try {
       const result = await window.api.autosave.write(project)
       if (result.ok) {

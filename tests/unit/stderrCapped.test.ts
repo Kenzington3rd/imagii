@@ -16,6 +16,13 @@ import { parseSource, sourceFilesUnder } from './renderedStrings'
  *
  * What the scan cannot see: a handler passed by name (it is reported, so the handler is written inline where the cap can be read), a cap that
  * sits in another function, and a `slice` whose operand is not a literal. A rule that cannot be read is reported, not assumed.
+ *
+ * T-137 (8): PRESENCE of a `slice(-N)` is not a cap if the handler can skip it. The loudness measure pass of the audio export read
+ * `if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)`: a tail was assigned, so this scan counted the handler as capped, and
+ * the one pass that always ran with `collectStderr` true kept every line of an hour-long log. A cap now counts only when nothing between it and the
+ * top of the handler can skip it: every `if` / `?:` / `&&` / `||` guarding it may mention the accumulator and nothing else (`stderr.length > 16384`
+ * is the idiom; `!collectStderr && ...` is a switch somebody can turn off). A guard on another variable is reported, and a handler that really
+ * needs one is a row in the exceptions table with its reason.
  */
 const MAIN_ROOT = path.resolve(__dirname, '../../src/main')
 /** The tail the idiom keeps. A bigger literal is not the idiom (the point is a bound the rest of the file can rely on). */
@@ -41,15 +48,46 @@ function isTailCap(n: ts.Node): boolean {
   return size >= 1 && size <= CAP_BYTES
 }
 
-function containsTailCap(n: ts.Node): boolean {
-  let found = false
+/** Every tail-cap call inside `n`. */
+function tailCapsIn(n: ts.Node): ts.Node[] {
+  const found: ts.Node[] = []
   const visit = (c: ts.Node): void => {
-    if (found) return
-    if (isTailCap(c)) found = true
+    if (isTailCap(c)) found.push(c)
     else ts.forEachChild(c, visit)
   }
   visit(n)
   return found
+}
+
+/** True when `condition` names no variable but the accumulator itself (`stderr.length > 16384`); a property name (`.length`) is not a variable. */
+function mentionsOnly(condition: ts.Node, name: string): boolean {
+  let only = true
+  const visit = (c: ts.Node): void => {
+    if (ts.isIdentifier(c) && c.text !== name && !(ts.isPropertyAccessExpression(c.parent) && c.parent.name === c)) only = false
+    ts.forEachChild(c, visit)
+  }
+  visit(condition)
+  return only
+}
+
+/**
+ * Can the handler get past `cap` without running it? Walks from the cap up to the handler and asks every guard on the way (an `if`'s test when the cap
+ * is in a branch, a `?:` test, the left side of `&&` / `||` / `??` when the cap is on the right) whether it depends on anything but the accumulator.
+ */
+function canBeSkipped(cap: ts.Node, handler: ts.Node, name: string): boolean {
+  for (let child: ts.Node = cap, parent = cap.parent; parent && child !== handler; child = parent, parent = parent.parent) {
+    if (ts.isIfStatement(parent) && child !== parent.expression && !mentionsOnly(parent.expression, name)) return true
+    if (ts.isConditionalExpression(parent) && child !== parent.condition && !mentionsOnly(parent.condition, name)) return true
+    if (
+      ts.isBinaryExpression(parent) &&
+      child === parent.right &&
+      [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(parent.operatorToken.kind) &&
+      !mentionsOnly(parent.left, name)
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 function accumulatorsOf(handler: ts.Node, sf: ts.SourceFile): Accumulator[] {
@@ -60,7 +98,7 @@ function accumulatorsOf(handler: ts.Node, sf: ts.SourceFile): Accumulator[] {
       const name = n.left.getText(sf)
       const accumulates = n.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken || n.right.getText(sf).includes(name)
       if (accumulates) accumulated.add(name)
-      if (containsTailCap(n.right)) capped.add(name)
+      if (tailCapsIn(n.right).some((cap) => !canBeSkipped(cap, handler, name))) capped.add(name)
     }
     // A list that grows has no tail to slice: it is reported (and the exceptions table is where it would be defended).
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'push') {
@@ -220,5 +258,49 @@ describe('every stderr accumulator in main keeps a 16 KB tail (T-136 (13))', () 
     it('a handler that only reads the chunk (progress parsing) accumulates nothing', () => {
       expect(scan("child.stderr.on('data', (chunk) => { const m = chunk.match(/t:\\s*(\\d+)/); if (m) onProgress(Number(m[1])) })")).toEqual([])
     })
+  })
+})
+
+// T-137 (8): the shape that shipped. `runFfmpegJob`'s handler (audio/process.ts) was
+//   if (collectStderr || stderr.length < 32768) stderr += chunk
+//   if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)
+// and passed the scan above because a tail WAS assigned; the measure pass ran with collectStderr true and kept everything.
+describe('a cap the handler can skip is not a cap (T-137 (8))', () => {
+  const scan = (code: string): StderrHandler[] => uncappedHandlers(parseSource('x.ts', code))
+
+  it('flags exactly the shape that shipped in the audio export', () => {
+    expect(
+      scan(
+        "child.stderr.on('data', (chunk: string) => {\n  if (collectStderr || stderr.length < 32768) stderr += chunk\n  if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)\n})"
+      )
+    ).toHaveLength(1)
+  })
+
+  it('flags the other ways a cap can be switched off: another variable in the `if`, in a `?:`, on the left of `&&` / `||`, in an `else`', () => {
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (!keepAll) stderr = stderr.slice(-16384) })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (!keepAll && stderr.length > 16384) { stderr = stderr.slice(-16384) } })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { stderr = keepAll ? stderr + c : (stderr + c).slice(-16384) })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; verbose || (stderr = stderr.slice(-16384)) })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (keepAll) { /* all of it */ } else stderr = stderr.slice(-16384) })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (stderr.length > 16384 && !collect) stderr = stderr.slice(-16384) })")).toHaveLength(1)
+  })
+
+  it('passes every guard that asks only about the accumulator, however it is spelled', () => {
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (stderr.length > 16384) stderr = stderr.slice(-16384) })")).toEqual([])
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (stderr.length > 16384) { stderr = stderr.slice(-16384) } })")).toEqual([])
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; stderr.length > 16384 && (stderr = stderr.slice(-16384)) })")).toEqual([])
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; stderr = stderr.length > 16384 ? stderr.slice(-16384) : stderr })")).toEqual([])
+    expect(scan("child.stderr.on('data', (c) => { stderr += c; if (stderr.length > 16384 || stderr.length < 0) stderr = stderr.slice(-16384) })")).toEqual([])
+  })
+
+  it('a guard on a DIFFERENT accumulator in the same handler still needs its own unconditional tail', () => {
+    expect(scan("child.stderr.on('data', (c) => { a += c; b += c; a = a.slice(-16384); if (a.length > 1) b = b.slice(-16384) })")).toHaveLength(1)
+    expect(scan("child.stderr.on('data', (c) => { a += c; b += c; if (a.length > 1) a = a.slice(-16384); if (b.length > 1) b = b.slice(-16384) })")).toEqual([])
+  })
+
+  it('a condition NEXT to the cap (not guarding it) does not matter: the idiom with a sticky read before it is still the idiom', () => {
+    expect(
+      scan("child.stderr.on('data', (c) => {\n stderr += c\n if (!seen) seen = RE.test(stderr)\n if (stderr.length > 16384) stderr = stderr.slice(-16384)\n})")
+    ).toEqual([])
   })
 })

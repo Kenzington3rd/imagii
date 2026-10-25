@@ -2587,9 +2587,9 @@ describe('T-135 — the twenty-first sweep', () => {
   it('(13) → Canvas navigates only if the person is STILL on References when the picture has loaded - the route is read after the await', () => {
     const src = strip(read('modules/references/MoodBoardPanel.tsx'))
     const fn = src.slice(src.indexOf('async function sendToCanvas'), src.indexOf('useEffect(() => {'))
-    expect(fn, 'found the function').toContain('await loadImageDimensions(src)')
+    expect(fn, 'found the function').toContain("await loadImage(src, 'anonymous')")
     expect(fn).toMatch(/if \(currentRoute\(\) === '\/references'\) navigate\('\/image'\)/)
-    expect(fn.indexOf('await loadImageDimensions('), 'asked AFTER the wait, not before it').toBeLessThan(fn.indexOf('currentRoute()'))
+    expect(fn.indexOf('await loadImage('), 'asked AFTER the wait, not before it').toBeLessThan(fn.indexOf('currentRoute()'))
     expect(src).toMatch(/import \{ currentRoute \} from '\.\.\/project\/ProjectIO'/)
     // The layer and the toast are not behind the guard: the add is reported wherever the person is.
     expect(fn.indexOf('addCanvasLayer('), 'the layer is added before the route is asked').toBeLessThan(fn.indexOf('currentRoute()'))

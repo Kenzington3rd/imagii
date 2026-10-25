@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSegmentFilter, buildSegmentFilters, COMPILE_FPS, emptySegmentMessage, lostPartMessage, unreadableSegmentIndex } from './concat'
+import { buildSegmentFilter, buildSegmentFilters, COMPILE_FPS, emptySegmentMessage, FFMPEG_UNREADABLE_PART, lostPartMessage, unreadableSegmentIndex } from './concat'
 import { clipNameForSentence } from './noPicture'
 import { buildAudioSpeedFilter, buildVideoFilter, cropToFrame } from './filters'
 import { PLATFORM_PRESETS } from './presets'
@@ -351,5 +351,46 @@ describe('the compilation refusals name the clip by its name, not its place (T-1
     // A regex metacharacter in the job id is a character, not a pattern.
     expect(unreadableSegmentIndex("Impossible to open '/t/seg-a+b-3.mkv'", 'a+b')).toBe(3)
     expect(unreadableSegmentIndex("Impossible to open '/t/seg-aab-3.mkv'", 'a+b')).toBeNull()
+  })
+})
+
+// T-137 (12): ffmpeg echoes the person's paths at the default log level ("Output #0, mp4, to '<dir>/<name>.mp4':"), so a pattern tested against all of stderr
+// matched a FOLDER named with its words. The line is the evidence: ffmpeg's own, at the start of a line, about a segment file of the runner's.
+describe('FFMPEG_UNREADABLE_PART is the concat demuxer\'s own line about a segment, and nothing a path can spell (T-137 (12))', () => {
+  const REAL = "[concat @ 0x40dea0c0] Impossible to open '/tmp/imagii-concat/seg-job.1-7.mkv'"
+
+  it('matches the line as both majors print it, bare, on Windows paths, and after other lines (CRLF too)', () => {
+    expect(FFMPEG_UNREADABLE_PART.test(REAL)).toBe(true)
+    expect(FFMPEG_UNREADABLE_PART.test("Impossible to open '/tmp/imagii-concat/seg-x-1.mkv'")).toBe(true)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x1] Impossible to open 'C:\\Users\\me\\AppData\\Local\\Temp\\imagii-concat\\seg-abc-12.mkv'")).toBe(true)
+    expect(FFMPEG_UNREADABLE_PART.test(`Input #0, concat, from '/tmp/l.txt':\r\n${REAL}\r\nframe=  1 fps=0.0\r\n`)).toBe(true)
+  })
+
+  it('does not match the echo of an output or source path that contains the phrase', () => {
+    for (const echo of [
+      "Output #0, mp4, to '/home/me/Impossible to open/compilation.mp4':",
+      "Output #0, mp4, to 'C:\\Users\\me\\Impossible to open\\seg-job-1.mkv':",
+      "Input #0, concat, from '/home/me/Impossible to open/list.txt':",
+      "Output #0, mp4, to '/home/me/[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-job-1.mkv'/x.mp4':",
+      "    title           : Impossible to open '/tmp/imagii-concat/seg-job-1.mkv'",
+      "/home/me/Impossible to open/compilation.mp4: Permission denied"
+    ]) {
+      expect(FFMPEG_UNREADABLE_PART.test(echo), echo).toBe(false)
+    }
+  })
+
+  it('needs the runner\'s own segment name: a line about any other file is not a lost part', () => {
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x1] Impossible to open '/somewhere/else.mkv'")).toBe(false)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x1] Impossible to open '/tmp/imagii-concat/list-job.txt'")).toBe(false)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-job-x.mkv'"), 'the index is digits').toBe(false)
+  })
+
+  it('unreadableSegmentIndex reads the same line and no other: an echoed path naming the job\'s segment is not it', () => {
+    expect(unreadableSegmentIndex(REAL, 'job.1')).toBe(7)
+    expect(unreadableSegmentIndex("Output #0, mp4, to '/x/Impossible to open/seg-job-1.mkv':", 'job')).toBeNull()
+    expect(unreadableSegmentIndex("Input #0, concat, from '/x/Impossible to open seg-job-2.mkv':", 'job')).toBeNull()
+    // A folder whose name carries the quote ffmpeg's own line has after the phrase, and a segment-shaped file in it: still an echo, not the line.
+    expect(unreadableSegmentIndex("Output #0, matroska, to '/x/Impossible to open 'draft'/seg-job-3.mkv':", 'job')).toBeNull()
+    expect(unreadableSegmentIndex("[concat @ 0x1] Impossible to open '/x/Impossible to open 'draft'/seg-job-3.mkv'", 'job'), 'the line itself, whatever the folder is called').toBe(3)
   })
 })

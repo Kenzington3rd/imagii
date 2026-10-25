@@ -7,7 +7,7 @@ import {
   clearAutosave,
   getAutosaveInfo
 } from '../autosave'
-import { validateProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { assertAlways, assertDefined } from '../../shared/assert'
 
 export interface ProjectLoadResult {
@@ -35,6 +35,12 @@ export function registerProjectIpc(): void {
       const valid = validateProject(enriched)
       assertAlways(valid.ok, valid.ok ? 'unreachable' : `project:save invalid project — ${valid.reason}`)
 
+      // T-137 (6): the SAME size rule Open and autosave hold, on the one serialization they hold it on, asked before the person is asked where to save
+      // (a finished sentence, which the Save button's toast shows as written). The file is exactly the text that was measured, so it always opens.
+      const raw = serializeProject(enriched)
+      const tooLarge = projectSizeProblem(raw.length, 'save')
+      if (tooLarge !== null) throw new Error(tooLarge)
+
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (!win) return null
       const result = await dialog.showSaveDialog(win, {
@@ -43,7 +49,7 @@ export function registerProjectIpc(): void {
         filters: [{ name: 'imagii project', extensions: ['imagii.json', 'json'] }]
       })
       if (result.canceled || !result.filePath) return null
-      await writeFile(result.filePath, JSON.stringify(enriched, null, 2), 'utf8')
+      await writeFile(result.filePath, raw, 'utf8')
       return result.filePath
     }
   )

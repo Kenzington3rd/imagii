@@ -14,6 +14,62 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-25 — T-137 Track B (round 86): a file Save wrote that Open refused, an autosave that rewrote itself, and two phrases a folder name could say
+
+The twenty-third pass, Track B (items 6 to 12 of T-137; Track A's items 1 to 5 land beside it). Ledger: r86b/ledger.md (27 red rows and 59 mutation rows over 51 mutations, 59 of 59 restores byte-identical; 4 mutants survived and each is listed in the ledger's notes: one is equivalent (a redundant `typeof`, deleted) and three sent a test back to be strengthened and were killed on the rerun). Every red was a test run against the old product code, a build of the unchanged tree `7690cf5` for the Playwright cases, or the real binary for Layer 5 on both majors.
+
+### (6) [MED] - a project over 50 MiB saved, would not reopen, and stopped autosaving without a word
+
+- **Bug.** Four 11 MB PNGs put a project over `MAX_BYTES`: autosave refused it with a console line (and kept refusing), Save wrote 56.9 MiB of pretty-printed JSON and said "Project saved", and Open refused the file with "may be damaged, or saved by a newer version" (executed).
+- **Root cause.** Three writers and readers each had their own idea of the limit: Open measured the file's text, autosave measured `JSON.stringify(project)`, `project:save` measured nothing and wrote `JSON.stringify(project, null, 2)`, which is longer than either. And the document held what it was handed: ImportPanel kept every picture's full-size data URL though the layer is first drawn at most 800 px wide.
+- **Fix.** One number, one serialization, one function: `projectSizeProblem(size, doing)` over `serializeProject` (compact JSON). `project:save` serializes once, measures that string, throws a finished sentence BEFORE the dialog, and writes exactly the string it measured, so a file it writes always opens. An autosave over the limit is not sent to main (a 50 MiB clone every few seconds to be refused); `startAutosave` raises one toast with a fixed id per episode ("Autosave is paused: ...") and resumes by itself when the project fits. Open names the size instead of "damaged". The document keeps a copy of an imported picture bounded to 1600 px (twice the drawn size: the default 2x export of a placed picture keeps its pixels), PNG unless it came as an opaque JPEG; a picture already within the bound is kept as it came.
+- **Test.** `projectValidation.test.ts` ("one size rule": one under, at and one over the limit agree across Save, Open and autosave), `projectSave.test.ts` (the real handler), `useAutosave.test.ts` (not sent, one toast, told again after a fit), `imageBounds.test.ts`; home-chrome.spec.ts "T-137 (6): a project over the size limit" (four cases on a seeded project 150 characters under the limit; the first goes red on the unchanged build because the file Save wrote was 52,428,980 bytes, 180 over what Open accepts, for a project the app itself had just opened) and image.spec.ts "an imported picture is stored as a bounded copy".
+- **Lesson.** **A limit that two paths enforce is one function with one input. Measure the text you will write, with the function the reader will use, and write exactly that text. And a rule that only refuses is half a rule: the person who is refused needs the size, the limit and the thing to do, in the place they are looking.**
+
+### (7) [LOW] - the autosave dedupe never matched
+
+- **Bug.** Ticking Grid rewrote a 28.4 MiB `autosave.json` and rotated `autosave.prev`; so did every Find chat spikes and Scan VOD.
+- **Root cause.** The key was `JSON.stringify(captureProject())`, and `captureProject` stamps `savedAt: Date.now()`: two captures of the same work were never equal. The hook's comment called it a "serialization round-trip".
+- **Fix.** The key is the capture with `savedAt` set aside (a fixed 13-digit stamp, so it is also the length of what main measures); the comment says what it is.
+- **Test.** `useAutosave.test.ts` "a change that is not in the project writes nothing" (on the fake clock with the real stores; a real edit and an undo are the controls).
+- **Lesson.** **A "did it change?" key is built from the fields that mean change. A timestamp taken at the moment of asking makes the answer always yes.**
+
+### (8) [LOW] - a scan that counted a cap the handler could skip
+
+- **Bug.** The loudness measure pass kept all of its stderr, against T-136 (13)'s "every accumulator is capped".
+- **Root cause.** `if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)`: a tail WAS assigned, so the scan, which looked for the assignment, passed it; the one pass that always ran with `collectStderr` skipped it.
+- **Fix.** Every pass keeps the 16 KB tail (loudnorm's block is under a kilobyte and near the end of the log, `parseLoudnormJson` reads the tail), the flag is gone, and the scan walks from the `slice` up to the handler: a guard may mention the accumulator and nothing else.
+- **Test.** The scan's real-tree case (red on the unchanged `audio/process.ts`), a discrimination block that includes exactly the old shape and each other way a guard can hide, `silentLoudnorm.test.ts` (a block after 600 KB of warnings reaches the second pass), and Layer 5 on both majors (a damaged mp3 whose decoder floods stderr: the last 16 KB parse to the same measurement as the whole log; and the runner's two-pass file is sample-identical to a hand-built linear render, which a measurement lost to the cap would not be: the case's first version checked only the level, and a 16-character tail passed it).
+- **Lesson.** **A scan that checks for the PRESENCE of a guard instead of the PATH to it is satisfied by dead code. Ask what can stop the line from running.**
+
+### (9) [LOW] - a chat row near the end of a VOD showed an end past the video
+
+- **Bug.** The row printed the spike's raw ends while "+ Clip" clamped them to the video, so a 20:00 video showed "19:35 to 20:25" and the clip came out 19:35 to 20:00, against the guide's "adds exactly that range".
+- **Fix.** `peakRange` is the one clamp; the row and the add both call it.
+- **Test.** `ChatHighlightPanel.test.ts`; video-pipelines.spec.ts "the range a row shows is the range + Clip adds" (a spike in the last bucket; the clip is the row's text). Three existing cases had depended on the raw range (a 2 s video with a log ten hours in drew the widest row; two compared raw text) and were adapted: the layout case now loads a 10-hour 1 fps fixture, so its widest row is real.
+- **Lesson.** **When a panel promises "exactly this", the display and the action call the same function.**
+
+### (10) [LOW] - a reference layer died with the thumbnail cache
+
+- **Bug.** "→ Canvas" set the layer's `src` to the address of the tile's cached thumbnail. Clear thumbnail cache (and the launch sweep after a board item is deleted) removed the file; the layer drew nothing, with no marker, and saved projects carried the dead address.
+- **Fix.** The layer carries a copy of the picture (800 px; JPEG when every pixel is opaque, PNG otherwise), drawn through an offscreen canvas by the same `lib/boundedImage.ts` the importer uses.
+- **Test.** references.spec.ts "→ Canvas embeds the picture" (send, clear the cache, visit the canvas fresh: the layer still draws; a half-transparent thumbnail keeps its alpha, which is what the opaque-only JPEG rule is for).
+- **Lesson.** **A document that points at a file the app is allowed to delete will one day point at nothing. Anything the person's work depends on is copied into the work, or is not disposable.**
+
+### (11) [LOW] - a clip field that was not a list crashed Export
+
+- **Bug.** `customPresetIds: 5` (or `{ a: 1 }`, or `true`) validated and threw in the Export panel's render, on every Restore until Clear.
+- **Fix.** The validator drops a field that is not a list and the entries that are not strings (dropped, not refused, like the unknown platform ids); `pruneCustomPresets` reads the field as `unknown`.
+- **Test.** `projectValidation.test.ts` and `videoStore.test.ts`, both over 5, `{ a: 1 }`, `true`, a string, `null` and a mixed list.
+- **Lesson.** **T-119's rule stands: a field a studio iterates without a guard is checked at the gate. The sweep that adds a field to the clip adds its line to the gate.**
+
+### (12) [LOW] - two stderr patterns a folder's name could satisfy
+
+- **Bug.** ffmpeg echoes the person's paths at the default log level ("Output #0, mp4, to '<dir>/<name>.mp4':"), and `/Impossible to open/` and `/Output file is empty/` were tested against all of stderr, so a good compilation, export, reframe or burn-in into (or from) a folder named with either phrase failed.
+- **Fix.** Each is ffmpeg's own line at the start of a line (`[concat @ 0x...] Impossible to open '...seg-<job>-<n>.mkv'`, `[out#0/mp4 @ 0x...] Output file is empty, nothing was encoded`).
+- **Test.** The unit pins over the echoed lines; Layer 5 on both majors: the premise (the phrase is in a successful run's stderr on this binary), a real join into "Impossible to open", a real export into and from "Output file is empty", a reframe, and the control that the real lines still refuse there. One existing Layer 5 case now names its files like the runner's segments.
+- **Lesson.** **A guard on a tool's output matches the tool's line, not a phrase in a stream that also carries the user's strings. If the person can type it, anchoring is the difference between reading ffmpeg and reading them.**
+
 ## 2026-10-25 — T-137 Track A (round 86): a job that was the screen's, a Discard aimed at every take, and a live region that arrived with its text
 
 The twenty-third pass, Track A (items 1 to 5 of T-137; Track B's items 6 to 12 land beside it). Ledger: r86a/ledger.tsv (11 red rows and 40 mutation rows, 40 of 40 restores byte-identical; 2 mutants survive, each listed in the ledger's notes (one equivalent today, one a guard class no supported window can see), 3 more survived their first run and were killed after their wiring pins were strengthened, and 1 mutant was invalid (its edit broke the build) and was redone; every red a test run against the old product code or a build of the unchanged tree `7690cf5` for the Playwright cases; item 2 at Layer 5 on both ffmpeg majors).

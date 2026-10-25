@@ -109,7 +109,9 @@ describe('the Stream Graphics preview is not "downsampled" (T-123 (28))', () => 
     const readme = flat(read('README.md'))
     expect(readme).not.toMatch(/downsamples to 2048/)
     expect(readme).toContain('places an imported image at most 800 px on its long side')
-    expect(read('src/renderer/src/modules/image-studio/ImportPanel.tsx')).toMatch(/const maxDim = 800\n/)
+    // T-137 (6): the 800 px is the shared constant now (the stored copy is a second one, twice as big), and ImportPanel places the layer with it.
+    expect(read('src/shared/imageBounds.ts')).toMatch(/export const LAYER_DRAWN_MAX_DIM = 800\n/)
+    expect(read('src/renderer/src/modules/image-studio/ImportPanel.tsx')).toMatch(/scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/)
   })
 
   it('and nothing in the renderer resamples to 2048', () => {
@@ -216,7 +218,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:47', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 47, 47, /<PositionBox value=\{layer\.x\}/],
-    ['ImportPanel.tsx:71', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 71, 71, /const maxDim = 800/],
+    ['ImportPanel.tsx:65', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 65, 65, /scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]
 

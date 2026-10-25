@@ -2080,3 +2080,158 @@ test.describe('T-136 (12): the mood board\'s cache clear and tile remove report 
     }
   })
 })
+
+// T-137 (10): "→ Canvas" set the layer's `src` to the address of the tile's cached thumbnail (an imagii-file: URL). Clear thumbnail cache, and the launch sweep
+// after a board item is deleted, remove that file; the tile falls back to the URL it came from, but a layer has no fallback: it drew nothing (no shape, no marker)
+// and saved projects carried the dead address. The layer now carries the picture itself, a copy drawn at the size the layer is drawn. The decoded node is what
+// the canvas shows, read from the Konva stage the Stream Graphics studio publishes.
+test.describe('References - → Canvas embeds the picture (T-137 (10))', () => {
+  /** The pictures on the canvas, as the stage draws them: the src each node decoded, and its decoded size. */
+  function drawnPictures(window: Page): Promise<Array<{ prefix: string; naturalWidth: number; naturalHeight: number; cornerAlpha: number }>> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; getClassName(): string; image?: () => HTMLImageElement }> }> }
+        | undefined
+      if (!stage) return []
+      return (stage.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image' && n.image)
+        .map((n) => {
+          const img = (n.image as () => HTMLImageElement)()
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          const ctx = canvas.getContext('2d')
+          ctx?.drawImage(img, 0, 0)
+          return {
+            prefix: img.src.slice(0, img.src.indexOf(';') > 0 && img.src.indexOf(';') < 30 ? img.src.indexOf(';') : 12),
+            naturalWidth: img.naturalWidth,
+            naturalHeight: img.naturalHeight,
+            cornerAlpha: ctx?.getImageData(2, 2, 1, 1).data[3] ?? -1
+          }
+        })
+    })
+  }
+
+  test('a reference sent to the canvas still draws after Clear thumbnail cache and a fresh visit to the canvas', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t137-embed')
+    const thumbPath = path.join(fx.thumbsDir, 'embed-thumb.png')
+    writeFileSync(thumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, 'embedboard.json'),
+      JSON.stringify({
+        id: 'embedboard',
+        name: 'Embed board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'embeditem',
+            collectionId: 'embedboard',
+            thumbnail: 'https://example.invalid/embed-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Embedded reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      // The tile is the cached file, decoded from disk (the control: the picture IS there when it is sent).
+      await expect
+        .poll(() => window.locator('img[alt="Embedded reference"]').evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 })
+        .toBe(8)
+
+      // ── send it: the canvas draws it from a copy it carries, not from the cache file ──
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect.poll(async () => (await drawnPictures(window)).length, { timeout: 15_000 }).toBe(1)
+      const [sent] = await drawnPictures(window)
+      expect.soft(sent?.prefix, 'the layer carries the picture, not the address of the cache file').toMatch(/^data:image\//)
+      expect.soft(sent?.prefix, 'an opaque thumbnail is kept as a JPEG: a tenth of the PNG\'s bytes').toBe('data:image/jpeg')
+      expect(sent?.naturalWidth).toBe(8)
+      expect(sent?.naturalHeight).toBe(6)
+
+      // ── the cache is cleared (the file is gone) ──
+      await backToReferences(window)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+
+      // ── the canvas, mounted fresh, still draws the reference ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect
+        .poll(async () => (await drawnPictures(window)).length, { timeout: 15_000, message: 'the reference layer draws after the cache it came from is gone' })
+        .toBe(1)
+      expect((await drawnPictures(window))[0]?.naturalWidth).toBe(8)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a transparent reference keeps its transparency: a PNG copy, not a JPEG that paints it black', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t137-embed-alpha')
+    const thumbPath = path.join(fx.thumbsDir, 'ghost-thumb.png')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'color=c=0xFF0000@0.5:size=16x12:rate=1,format=rgba', '-frames:v', '1', thumbPath])
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fixture ffmpeg exit ${code}`))))
+    })
+    writeFileSync(
+      path.join(fx.boardsDir, 'ghostboard.json'),
+      JSON.stringify({
+        id: 'ghostboard',
+        name: 'Ghost board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'ghostitem',
+            collectionId: 'ghostboard',
+            thumbnail: 'https://example.invalid/ghost-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Ghost reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect.poll(async () => (await drawnPictures(window)).length, { timeout: 15_000 }).toBe(1)
+      const [ghost] = await drawnPictures(window)
+      expect(ghost?.prefix).toBe('data:image/png')
+      expect(ghost?.cornerAlpha, 'half transparent, as it was').toBeGreaterThan(100)
+      expect(ghost?.cornerAlpha).toBeLessThan(155)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

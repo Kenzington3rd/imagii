@@ -21,8 +21,13 @@
 /**
  * What ffmpeg says (exit 0, both majors, measured) when a segment's range holds nothing to write: it wrote a ~970-byte Matroska stub.
  * Layer 5 runs the real binary against this line (T-131 (1)), so a release whose wording changed fails there, not in the field.
+ *
+ * T-137 (12): ffmpeg's OWN line, at the start of a line (`[out#0/mp4 @ 0x...] Output file is empty, nothing was encoded(check -ss ...)`, both majors).
+ * It was /Output file is empty/ tested against all of stderr, and ffmpeg echoes the person's paths there at the default log level ("Output #0, mp4, to
+ * '<dir>/<name>.mp4':", "Input #0, ..., from '<source>':"), so an output folder or a source named with the phrase turned a good run into "has no picture".
+ * A path can spell the words, but not start a line with them. The bracketed context is optional: the bare form is what the fakes in the unit tests print.
  */
-export const FFMPEG_EMPTY_OUTPUT = /Output file is empty/
+export const FFMPEG_EMPTY_OUTPUT = /^(?:\[out#\d+\/[^\]\n]*\] )?Output file is empty, nothing was encoded/m
 
 /**
  * Reads the picture frames ffmpeg's `-progress pipe:1` reports: `frame=<n>` once per block, the last block (`progress=end`) holding the

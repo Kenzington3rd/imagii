@@ -1090,8 +1090,9 @@ test.describe('ChatHighlightPanel', () => {
       await card.locator('textarea').fill(chatLogWithOneSpike())
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
-      // The peak itself is real: 0:15, past the end of this 2 s source.
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:15 → 0:55')
+      // The peak itself is real: 0:15, past the end of this 2 s source. T-137 (9): the row shows the range "+ Clip" would add, both ends held to the video
+      // (it read '0:15 → 0:55', a range that is not in the 2 s file), so a spike entirely past the end is an empty range at the end.
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:02 → 0:02')
       await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       const REFUSAL =
         'That spike is past the end of this video — check the log matches this source.'
@@ -1110,7 +1111,8 @@ test.describe('ChatHighlightPanel', () => {
       await card.locator('textarea').fill(chatLogWithEarlySpike())
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00 → 0:25')
+      // T-137 (9): and the row says what the clip will be, the end held to the 2 s video (it read '0:00 → 0:25').
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00 → 0:02')
       await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(window, 'Clip added')
       // T-94: it replaced the untouched whole-video clip (also 0:00 → 0:02 on
@@ -2821,6 +2823,8 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await chat().locator('textarea').fill(chatLogWithOneSpike())
       await chat().getByRole('button', { name: 'Find chat spikes' }).click()
       await expect(chat().locator('li')).toHaveCount(1)
+      // T-137 (9): the row shows the range held to the video (this log's spike is past the end of the 14 s source), so the row is compared with itself, not with the raw range.
+      const spikeRange = (await chat().locator('li').first().locator('span.font-mono').innerText()).trim()
 
       await leaveAndReturn(window)
       await expect(scan().locator('li'), 'the scan\'s candidates are still listed').toHaveCount(1)
@@ -2828,7 +2832,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await expect(scan().locator('textarea'), 'the chat log is where it was left').toHaveValue(chatLogOverBurst())
       await expect(chat().locator('textarea')).toHaveValue(chatLogWithOneSpike())
       await expect(chat().locator('li'), 'the spikes are still listed').toHaveCount(1)
-      await expect(chat().locator('li').first().locator('span.font-mono')).toHaveText('0:15 → 0:55')
+      await expect(chat().locator('li').first().locator('span.font-mono')).toHaveText(spikeRange)
 
       // Clean audio navigates to Audio Studio: the same trip.
       await window.getByRole('button', { name: 'Clean audio' }).click()
@@ -10714,11 +10718,14 @@ test.describe('ChatHighlightPanel - range, extra seconds, empty result, alignmen
 
   test('the two number boxes share one line at the minimum window, the default one and 1920 px, and a row keeps its range and count on one line', async () => {
     test.setTimeout(120_000)
-    const { app, window } = await launchWithVideo('t136chat-layout', clipSrc)
+    // T-137 (9): the row shows the range held to the video, so the widest row needs a video that long: a ten-hour-and-six-minute picture at 1 fps, 64x48, black
+    // (half a megabyte, two seconds to make). The test used a 2 s video and a log ten hours in, which only drew the raw range.
+    const marathon = path.join(root, 'source', 'marathon.mp4')
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=black:s=64x48:r=1:d=36400', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '600', '-pix_fmt', 'yuv420p', marathon])
+    const { app, window } = await launchWithVideo('t136chat-layout', marathon)
     try {
       const card = chatCard(window)
-      // The widest row the panel draws: a spike ten hours into a marathon stream ("10:01:25 → 10:05:15") with a four-digit count ("1200 messages"); the clip is
-      // refused on a 2 s video, but the row is what is measured. At the 1024 px minimum the card leaves the row 258 px: 122 for a 17-character range and 33 for
+      // The widest row the panel draws: a spike ten hours into a marathon stream ("10:01:25 → 10:05:15") with a four-digit count ("1200 messages"). At the 1024 px minimum the card leaves the row 258 px: 122 for a 17-character range and 33 for
       // "+ Clip" left 87 for a count, and "120 messages" is 86 of them, so a longer range or a fourth digit pushed the row past its edge.
       await card.locator('textarea').fill(chatLogWithLongRun(36000, 60))
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
@@ -10903,6 +10910,50 @@ test.describe('T-137 (5): a preview copy that finishes for a video that was clos
         'Skipped the preview copy for undecodable-prores.mov because the video was closed or replaced while the copy was being made'
       )
       expect(toasts.join(' | '), 'nobody opened another video').not.toMatch(/you opened another video/)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+
+// ══════════════ ChatHighlightPanel - the row is the range "+ Clip" adds (T-137 (9)) ══════════════
+//
+// The row printed the spike's raw ends while "+ Clip" clamped both to the video (T-48), so a spike near a VOD's end read "19:35 -> 20:15" for a 20:00 video and
+// the clip that came out was 19:35 -> 20:00: not "exactly that range" (USER_GUIDE). The row now shows the clamped range, and the clip is the row.
+
+/** A quiet bed of one message per 10 s bucket for the last two minutes of a `duration`-second video, and 9 messages inside its LAST bucket (a spike at the tail). */
+function chatLogWithTailSpike(duration: number): { log: string; lastBucket: number } {
+  const lastBucket = Math.floor((duration - 1) / 10) * 10
+  const lines: string[] = []
+  for (let t = lastBucket - 120 + 1; t < lastBucket; t += 10) lines.push(`[${mmss(t)}] viewer${t}: quiet chatter ${t}`)
+  for (let i = 0; i < 9; i++) lines.push(`[${mmss(lastBucket + i)}] hype${i}: POG that was insane`)
+  return { log: lines.join('\n'), lastBucket }
+}
+
+test.describe('ChatHighlightPanel - the range a row shows is the range + Clip adds (T-137 (9))', () => {
+  test('a spike at the end of the video shows its end held to the video, and + Clip adds exactly that range', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t137chat', longSrc)
+    try {
+      const card = chatCard(window)
+      const { log, lastBucket } = chatLogWithTailSpike(longSeconds)
+      await card.locator('textarea').fill(log)
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li')).toHaveCount(1)
+      const row = card.locator('li').first()
+      // The padded window is [lastBucket - 15, lastBucket + 10 + 15]: its end is past the video (lastBucket + 25 > duration), its start is not.
+      expect(lastBucket + 25, 'the spike really ends past the video').toBeGreaterThan(longSeconds)
+      const shown = (await row.locator('span.font-mono').innerText()).trim()
+      const [from, to] = shown.split(' → ') as [string, string]
+      const seconds = (clock: string): number => clock.split(':').reduce((total, part) => total * 60 + Number(part), 0)
+      expect(seconds(from), 'the start is the padded start').toBe(lastBucket - 15)
+      expect.soft(seconds(to), 'the end is the video\'s, not the padded 25 s past the last bucket').toBeLessThanOrEqual(Math.ceil(longSeconds))
+      expect(seconds(to)).toBeGreaterThan(seconds(from))
+      // And the clip is the row, to the second.
+      await row.getByRole('button', { name: '+ Clip' }).click()
+      await expectToast(window, 'Clip added')
+      expect(await clipRows(window), 'the clip lands with the range the row showed').toEqual([{ name: 'Chat spike 1', range: shown }])
     } finally {
       await app.close()
     }

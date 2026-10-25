@@ -9,8 +9,10 @@ import { currentRoute } from '../project/ProjectIO'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
+import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
+import { LAYER_DRAWN_MAX_DIM, scaleToFit } from '@shared/imageBounds'
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -24,22 +26,15 @@ export function MoodBoardPanel(): JSX.Element {
   const addCanvasLayer = useCanvasStore((s) => s.addLayer)
   const navigate = useNavigate()
 
-  function loadImageDimensions(src: string): Promise<{ width: number; height: number }> {
-    return new Promise((resolve, reject) => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
-      img.onerror = () => reject(new Error('Could not decode reference image'))
-      img.src = src
-    })
-  }
-
   async function sendToCanvas(src: string, title: string): Promise<void> {
     try {
-      const dims = await loadImageDimensions(src)
-      const maxDim = 800
-      const scale = Math.min(1, maxDim / Math.max(dims.width, dims.height))
-      addCanvasLayer(makeReferenceLayer(src, dims.width * scale, dims.height * scale, title))
+      const img = await loadImage(src, 'anonymous')
+      const scale = scaleToFit(img.naturalWidth, img.naturalHeight, LAYER_DRAWN_MAX_DIM)
+      // T-137 (10): the layer carries the picture itself (a copy drawn at the size the layer is drawn, a few tens of KB), not the address of the tile it
+      // came from. `src` is the cached thumbnail's file, which Clear thumbnail cache and the launch sweep after a board item is deleted remove (the tile
+      // then falls back to its source URL, but a layer has no fallback): the layer drew nothing, with no marker, and saved projects carried the dead address.
+      // JPEG when the thumbnail is opaque (a photo), PNG when it is not, so a logo keeps its transparency.
+      addCanvasLayer(makeReferenceLayer(boundedDataUrl(img, LAYER_DRAWN_MAX_DIM, true), img.naturalWidth * scale, img.naturalHeight * scale, title))
       // T-125 (19): "it won't be in your export" is the fact the person needs before they build on it, and the studio changes
       // under the toast as it appears (`navigate`), so it is held as long as an action toast.
       toast.success("Added to canvas as a reference — it won't be in your export", { duration: ACTION_TOAST_MS })

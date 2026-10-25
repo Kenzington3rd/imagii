@@ -97,3 +97,24 @@ describe('runAudioExport - the two-pass loudness render of silence (T-114)', () 
     expect(pass2).not.toMatch(/measured_/)
   })
 })
+
+// T-137 (8): the measure pass kept ALL of its stderr (`collectStderr`), the one pass that runs for the whole file at a log level that can be verbose.
+// loudnorm prints its JSON LAST, so the pass keeps the same 16 KB tail every other spawn does and the parse reads the tail. This pins that the
+// measurement survives a log far bigger than the tail (a damaged source warns on every packet) and one with lines after the block.
+describe('runAudioExport - the measure pass keeps a tail, and the measurement is in it (T-137 (8))', () => {
+  const WARNING = '[aac @ 0x55d0c0a1] Number of bands (23) exceeds limit (22).\n'
+  const FLOOD = WARNING.repeat(Math.ceil((600 * 1024) / WARNING.length))
+
+  it('a block printed after 600 KB of warnings is still found, and handed to the second pass exactly', async () => {
+    const { pass2 } = await exportWith(FLOOD + BLOCK({ input_i: '-21.30', input_tp: '-2.10', target_offset: '0.40' }))
+    expect(pass2).toContain('measured_I=-21.30')
+    expect(pass2).toContain('measured_TP=-2.10')
+    expect(pass2).toContain('offset=0.40')
+    expect(pass2).toContain('linear=true')
+  })
+
+  it('and when ffmpeg prints a few lines after the block (the muxer closing) the block is still the one used', async () => {
+    const { pass2 } = await exportWith(FLOOD + BLOCK({ input_i: '-19.80' }) + '[out#0/null @ 0x1] video:0kB audio:1234kB subtitle:0kB other streams:0kB\n')
+    expect(pass2).toContain('measured_I=-19.80')
+  })
+})

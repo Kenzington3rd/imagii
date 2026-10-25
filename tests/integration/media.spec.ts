@@ -15,7 +15,7 @@ import {
   runAudioReattach,
   cancelAudioJob
 } from '../../src/main/audio/process'
-import { buildChain } from '../../src/main/audio/chain'
+import { buildChain, parseLoudnormJson } from '../../src/main/audio/chain'
 import { outputFolderRefusal } from '../../src/main/ffmpeg/outputPath'
 import { probeVideo } from '../../src/main/ffmpeg/probe'
 import { probeAudio } from '../../src/main/audio/probe'
@@ -7567,8 +7567,9 @@ describe('a compilation survives a source whose sound does not cover a segment (
   }, 120_000)
 
   it('what ffmpeg says of an empty segment and of a join it cannot finish is what the runner listens for (this binary)', async () => {
-    const stub = path.join(workDir, 't131-stub.mkv')
-    const good = path.join(workDir, 't131-good.mkv')
+    // T-137 (12): named like the runner's segments (`seg-<job>-<index>.mkv`): the pattern is the demuxer's line about one of THOSE.
+    const stub = path.join(workDir, 'seg-t131stub-1.mkv')
+    const good = path.join(workDir, 'seg-t131good-0.mkv')
     const cut = (a: number, b: number, out: string): Promise<{ stderr: string }> =>
       ff(['-y', '-ss', String(a), '-to', String(b), '-i', files.short, '-vf', 'fps=30', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', out])
     expect((await cut(20, 22, stub)).stderr, 'a range past the picture: exit 0 and this line').toMatch(FFMPEG_EMPTY_OUTPUT)
@@ -10081,4 +10082,210 @@ describe('a Discard on one take leaves another take\'s save running (real ffmpeg
     },
     240_000
   )
+})
+
+
+describe('a path that contains a phrase ffmpeg uses is not ffmpeg saying it (real ffmpeg, T-137 (12))', () => {
+  // ffmpeg echoes the person's paths at the default log level ("Output #0, mp4, to '<dir>/<name>.mp4':", "Input #0, ..., from '<source>':"), and two guards read
+  // all of stderr for a phrase: /Impossible to open/ (the join that lost a segment) and /Output file is empty/ (a range with no picture). A folder or a source
+  // named with the phrase made a GOOD run fail. Each pattern is now ffmpeg's own line. Run on both majors; the first case is the premise (the phrase IS in a
+  // successful run's stderr on this binary), the rest are the runners on the real thing and the control (the real lines still refuse, in the same folders).
+  let source = ''
+  const run = (args: string[]): Promise<{ code: number | null; stderr: string }> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(ffmpegPath, args)
+      let stderr = ''
+      child.stderr.on('data', (b) => (stderr += String(b)))
+      child.on('error', reject)
+      child.on('close', (code) => resolve({ code, stderr }))
+    })
+  const folder = async (name: string): Promise<string> => {
+    const dir = path.join(await mkdtemp(path.join(workDir, 't137-')), name)
+    await mkdir(dir, { recursive: true })
+    return dir
+  }
+  const streamsOf = async (file: string): Promise<string[]> => (await ffprobeJson(file)).streams.map((x) => x.codec_type)
+
+  beforeAll(async () => {
+    source = path.join(workDir, 't137-source.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=6', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', source])
+  }, 60_000)
+
+  it('the premise: a successful run into such a folder has the phrase in its stderr (the echo), and the anchored patterns do not take it for ffmpeg\'s line', async () => {
+    const empty = await folder('Output file is empty')
+    const encode = await run(['-y', '-i', source, '-t', '1', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', path.join(empty, 'o.mp4')])
+    expect(encode.code).toBe(0)
+    expect(encode.stderr, 'the output path is echoed').toMatch(/Output file is empty/)
+    expect(encode.stderr, 'but that is not the line').not.toMatch(FFMPEG_EMPTY_OUTPUT)
+
+    const dir = await folder('Impossible to open')
+    const parts = [0, 1].map((i) => path.join(dir, `seg-t137premise-${i}.mkv`))
+    for (const [i, part] of parts.entries()) {
+      await ff(['-y', '-ss', String(i), '-to', String(i + 1), '-i', source, '-vf', 'fps=15', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', part])
+    }
+    const list = path.join(dir, 'list.txt')
+    await writeFile(list, parts.map((p) => `file '${p}'`).join('\n'))
+    const join = await run(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'copy', '-c:a', 'aac', path.join(dir, 'joined.mp4')])
+    expect(join.code).toBe(0)
+    expect(join.stderr, 'the output path (and the segments\' folder) is echoed').toMatch(/Impossible to open/)
+    expect(join.stderr, 'but nothing was impossible to open').not.toMatch(FFMPEG_UNREADABLE_PART)
+    expect(unreadableSegmentIndex(join.stderr, 't137premise')).toBeNull()
+  }, 120_000)
+
+  it('a compilation saved into a folder named "Impossible to open" is written whole', async () => {
+    const outDir = await folder('Impossible to open')
+    const { outputPath } = await runConcat({
+      jobId: 't137join',
+      sourcePath: source,
+      outDir,
+      segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 4, endSec: 5.5, name: 'Boss fight' }],
+      fadeMs: 0,
+      width: 320,
+      height: 180
+    })
+    expect(path.dirname(outputPath)).toBe(outDir)
+    expect(await streamsOf(outputPath)).toEqual(['video', 'audio'])
+    near(Number((await ffprobeJson(outputPath)).format.duration), 3.5, 0.3, 'both clips are in it')
+  }, 120_000)
+
+  it('an export into a folder named "Output file is empty" is Exported, and so is one from a source in such a folder', async () => {
+    const outDir = await folder('Output file is empty')
+    const clip = makeClip({ name: 'Echo', startSec: 1, endSec: 3 })
+    const exported = await runExportJob({ jobId: 't137export', sourcePath: source, outDir, clip, preset: 'youtube' }, () => {})
+    expect(path.dirname(exported.outputPath)).toBe(outDir)
+    expect(await streamsOf(exported.outputPath)).toEqual(['video', 'audio'])
+
+    const home = await folder('Output file is empty')
+    const inFolder = path.join(home, 'in.mp4')
+    await copyFile(source, inFolder)
+    const elsewhere = await mkdtemp(path.join(workDir, 't137-out-'))
+    const fromThere = await runExportJob({ jobId: 't137source', sourcePath: inFolder, outDir: elsewhere, clip, preset: 'youtube' }, () => {})
+    expect(await streamsOf(fromThere.outputPath)).toEqual(['video', 'audio'])
+  }, 120_000)
+
+  it('and a reframe into that folder is Saved', async () => {
+    const outDir = await folder('Output file is empty')
+    const outputPath = path.join(outDir, 'vertical.mp4')
+    await runReframe({ jobId: 't137reframe', sourcePath: source, outputPath, position: 'center', startSec: 1, endSec: 3, outputWidth: 180, outputHeight: 320 }, () => {})
+    expect(await streamsOf(outputPath)).toEqual(['video', 'audio'])
+  }, 120_000)
+
+  it('control: the real lines still refuse in those same folders (a range past the picture; a segment that cannot be opened)', async () => {
+    const outDir = await folder('Output file is empty')
+    const past = await runExportJob({ jobId: 't137past', sourcePath: source, outDir, clip: makeClip({ name: 'Echo', startSec: 20, endSec: 22 }), preset: 'youtube' }, () => {}).then(() => null, (e: Error) => e)
+    expect(past?.message).toBe('The clip "Echo" has no picture in the video (check its start and end), so nothing was exported.')
+    expect(await readdir(outDir), 'no stub is left').toEqual([])
+
+    const joinDir = await folder('Impossible to open')
+    const err = await runConcat({
+      jobId: 't137lost',
+      sourcePath: source,
+      outDir: joinDir,
+      segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 20, endSec: 22, name: 'Past the end' }],
+      fadeMs: 0,
+      width: 320,
+      height: 180
+    }).then(() => null, (e: Error) => e)
+    expect(err?.message, 'a segment ffmpeg wrote nothing for is named').toBe('The clip "Past the end" has no picture in the video (check its start and end), so nothing was saved.')
+    expect(await readdir(joinDir)).toEqual([])
+  }, 120_000)
+
+  it('control: a join that really loses a segment still names its clip when its folder is called "Impossible to open"', async () => {
+    // The T-136 (15) shape (segment 0 taken away between the list and the join, by a watcher on the runner's scratch folder), with the output in the folder that
+    // used to make EVERY join look lost: here the line is real, and the answer is the clip's name.
+    const jobId = 't137lost0'
+    const outDir = await folder('Impossible to open')
+    const scratch = path.join(os.tmpdir(), 'imagii-concat')
+    await mkdir(scratch, { recursive: true })
+    const seg0 = path.join(scratch, `seg-${jobId}-0.${SEGMENT_EXTENSION}`)
+    let removed = false
+    const watcher = watch(scratch, (_event, name) => {
+      if (name === `list-${jobId}.txt` && !removed) {
+        try {
+          unlinkSync(seg0)
+          removed = true
+        } catch {
+          /* the event fired twice, or the file was already gone */
+        }
+      }
+    })
+    let err: Error | null = null
+    try {
+      err = await runConcat({
+        jobId,
+        sourcePath: source,
+        outDir,
+        segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 4, endSec: 5.5, name: 'Boss fight' }],
+        fadeMs: 0,
+        width: 320,
+        height: 180
+      }).then(() => null, (e: Error) => e)
+    } finally {
+      watcher.close()
+    }
+    expect(removed, 'the case really took segment 0 away between the list and the join').toBe(true)
+    expect(err?.message).toBe(
+      'The compilation could not be put together because the clip "Intro" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.'
+    )
+    expect(await readdir(outDir), 'no short file is left').toEqual([])
+  }, 120_000)
+})
+
+describe('the loudness measure pass keeps a 16 KB tail and the measurement is in it (real ffmpeg, T-137 (8))', () => {
+  // The measure pass of a two-pass loudness export read every line of stderr (`collectStderr`); it keeps the tail every other spawn keeps now. That is only the same
+  // answer if loudnorm prints its JSON block at the END (7.0.2 prints a summary line or two after it, 6.1.1 nothing), so the first case measures a damaged mp3 whose decoder
+  // warns about every bad frame, which floods stderr well past 16 KB, and parses what the last 16 KB hold. The second runs the whole export through the real runner: both
+  // passes, on a child that is real. Run on both majors.
+  let input = ''
+  let damaged = ''
+  beforeAll(async () => {
+    const dir = await mkdtemp(path.join(workDir, 't137-loud-'))
+    input = path.join(dir, 'quiet.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=12', '-af', 'volume=-30dB', '-ar', '48000', '-ac', '2', input])
+    // 150 s of quiet tone as an mp3, then three bytes zeroed every 200: each damaged frame is a "Header missing" / "Error submitting packet" warning.
+    const mp3 = path.join(dir, 'whole.mp3')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=150', '-af', 'volume=-30dB', '-ar', '48000', '-ac', '2', '-c:a', 'libmp3lame', mp3])
+    const bytes = await readFile(mp3)
+    for (let i = 2048; i + 2 < bytes.length; i += 200) bytes.fill(0, i, i + 3)
+    damaged = path.join(dir, 'damaged.mp3')
+    await writeFile(damaged, bytes)
+  }, 120_000)
+
+  it('loudnorm\'s block is at the end of the log: for a damaged file whose decoder floods stderr, the last 16 KB still parse, to the same measurement as all of it (this binary)', async () => {
+    const chain = buildChain({ ...DEFAULT_CHAIN_SPEC, loudnorm: true, loudnormTargetLufs: -16 }, undefined, false)
+    expect(chain.filterPass1, 'the measure pass of a two-pass chain').toBeTruthy()
+    const out = await ff(['-y', '-i', damaged, '-af', chain.filterPass1 as string, '-f', 'null', '-'])
+    expect(out.stderr.length, 'the premise: this log is far bigger than the tail the runner keeps').toBeGreaterThan(16384 * 2)
+    const whole = parseLoudnormJson(out.stderr)
+    expect(whole, 'the measurement is in the log').not.toBeNull()
+    const tail = parseLoudnormJson(out.stderr.slice(-16384))
+    expect(tail, 'and in its last 16 KB').toEqual(whole)
+  }, 120_000)
+
+  it('the second pass is built from what the measure pass printed: the runner\'s file is the same samples as a hand-built two-pass render, and not the single-pass fallback\'s', async () => {
+    // The discriminator is the samples: a measurement that did not survive the tail (parseLoudnormJson finds nothing) makes the runner fall back to the dynamic
+    // single-pass loudnorm, which writes different samples than the linear second pass. Both are built here with the same chain and compared by the MD5 of the decoded audio.
+    const dir = await mkdtemp(path.join(workDir, 't137-loud-run-'))
+    const outputPath = path.join(dir, 'normalized.wav')
+    const chainSpec = { ...DEFAULT_CHAIN_SPEC, loudnorm: true, loudnormTargetLufs: -16 }
+    const decodedMd5 = async (file: string): Promise<string> => /MD5=([0-9a-f]+)/.exec((await ff(['-v', 'error', '-i', file, '-map', '0:a', '-f', 'md5', '-'])).stdout)?.[1] ?? ''
+    const render = async (filter: string, out: string): Promise<void> => {
+      await ff(['-y', '-i', input, '-vn', '-af', filter, '-c:a', 'pcm_s16le', '-ar', '48000', out])
+    }
+
+    const first = buildChain(chainSpec, undefined, false)
+    const measure = await ff(['-y', '-i', input, '-af', first.filterPass1 as string, '-f', 'null', '-'])
+    const measurement = parseLoudnormJson(measure.stderr)
+    expect(measurement, 'the first pass measured').not.toBeNull()
+    const linear = path.join(dir, 'linear.wav')
+    await render(buildChain(chainSpec, measurement ?? undefined, false).filterPass2, linear)
+    const dynamic = path.join(dir, 'dynamic.wav')
+    await render(buildChain(chainSpec, undefined, false).filterPass2, dynamic)
+    expect(await decodedMd5(linear), 'the premise: the two renders are different samples, so the comparison can tell them apart').not.toBe(await decodedMd5(dynamic))
+
+    const passes = new Set<string>()
+    await runAudioExport({ jobId: 't137loud', sourcePath: input, outputPath, chain: chainSpec, format: 'wav' }, (p) => passes.add(p.pass))
+    expect([...passes].sort(), 'measure, then render').toEqual(['measure', 'render'])
+    expect(await decodedMd5(outputPath), 'the runner\'s file is the linear two-pass render').toBe(await decodedMd5(linear))
+  }, 180_000)
 })

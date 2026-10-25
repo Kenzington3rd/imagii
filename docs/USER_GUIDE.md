@@ -371,7 +371,9 @@ least 3 different windows to compare. A spike that runs over several windows in 
 row is one moment, not several, and it is ranked by its busiest window (a long,
 moderately busy stretch does not outrank a short explosion); at most 12 moments are
 listed, in time order. Each row shows where its clip would run, start → end, with
-the extra seconds included, so a long moment is not a surprise. **+ Clip** on a
+the extra seconds included and held to the video (a moment near the end of the
+video stops at its end, and one at the very start begins at 0:00), so a long moment
+is not a surprise. **+ Clip** on a
 moment adds exactly that range as a clip named **Chat spike N**, with **Extra
 seconds around each clip** (0 to 60; a number outside that is brought into it when you
 leave the box) on either side. Like the Smart highlight finder, the first one you
@@ -548,7 +550,12 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
 2. Edit with the toolbar: **Select**, **Rectangle**, **Ellipse**, and (under
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
-   and remove them. The **Properties** panel edits the selected layer.
+   and remove them. The **Properties** panel edits the selected layer. A picture
+   you import is placed at most 800 px on its long side, and the project keeps a
+   copy of it up to 1600 px on the long side (PNG, so transparency stays; a JPEG
+   stays a JPEG), not the full-size file: a few 4000 px screenshots would otherwise
+   make a project too large to save (see **Saving your work**). A picture already
+   smaller than that is kept as it came.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
    design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
    of the file in pixels (it adds a note when a 16:9 export is bigger than
@@ -581,7 +588,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
 - **Mood Boards** — your saved boards (a board's name can be up to 200 characters). Hover an item and click **→ Canvas**
-  to add it to the Stream Graphics canvas as a 40%-opacity reference layer; if the picture takes a
+  to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
+  carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail
+  cache**, and in a saved project); if the picture takes a
   moment to load and you have gone elsewhere, the layer is still added and imagii leaves you where you are. A
   reference is a guide only: it is tagged **reference — won't export** and is
   left out of exports.
@@ -611,7 +620,11 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   when you open the project — that can take a while for a long recording, and
   a note says what it is doing while you wait. The same goes for the sound of a
   video in Audio Studio: it is taken from the video again on open, with the
-  same kind of note.
+  same kind of note. A project can be up to 50 MB (almost all of that is pictures on
+  the Stream Graphics canvas). Over that, **Save project** says how big it is and
+  to remove or shrink large images, and does not ask where to save; **Open
+  project** names the size of a file that is over it (one saved by an earlier
+  version of imagii that did not check) instead of calling it damaged.
 - **Autosave** runs in the background — every few seconds after you change something, and
   never more than 30 seconds after a change however busy you are, a video playing included
   (moving the playhead is not a change; it is saved with the next one) — and imagii takes one final snapshot as
@@ -631,6 +644,10 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   video and its clips do not come back from it. If you go to another screen while Restore is
   loading (a long recording's sound is extracted again first), you stay there when it finishes:
   the restored work is in its studio, and "Restored from autosave" says it is done.
+  A project over 50 MB is not autosaved: imagii says autosave is paused and why, once,
+  and starts again by itself when the project is under the limit. Changes that are not
+  part of the project (a grid you switch on, the results of a scan) do not write the file
+  again.
 - **The window remembers its size and position** between launches, and
   re-centers itself if the display it was on is no longer connected. That
   happens whatever you choose in the restore banner.

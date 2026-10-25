@@ -614,11 +614,16 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     pruneCustomPresets: (existingIds) => {
       const alive = new Set(existingIds)
       const { clips } = get()
-      const next = clips.map((c) =>
-        c.customPresetIds && c.customPresetIds.some((id) => !alive.has(id))
-          ? { ...c, customPresetIds: c.customPresetIds.filter((id) => alive.has(id)) }
-          : c
-      )
+      // T-137 (11): the field is read as `unknown`: the validator drops a non-list, but the prune runs on every visit to Export with whatever the clips
+      // hold, and `.some` on a number threw there. A non-list is removed, and an entry that is not a live string id goes with the ids whose preset is gone.
+      const next = clips.map((c) => {
+        const ids: unknown = c.customPresetIds
+        if (ids === undefined) return c
+        if (!Array.isArray(ids)) return { ...c, customPresetIds: undefined }
+        // `alive` holds strings, so a number, an object or null in the list is not alive and goes with the ids whose preset is gone.
+        const keep = (id: unknown): boolean => alive.has(id as string)
+        return ids.every(keep) ? c : { ...c, customPresetIds: ids.filter(keep) as string[] }
+      })
       // Nothing to drop: return without touching state so the panel's
       // refresh-on-mount cannot churn every subscriber.
       if (next.every((c, i) => c === clips[i])) return

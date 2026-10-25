@@ -1468,3 +1468,57 @@ describe('noPicture - the Player\'s verdict, shared with the Output preview (T-1
     expect(useVideoStore.getState().noPicture).toBe(false)
   })
 })
+
+// ── T-137 (11): pruneCustomPresets tolerates a field that is not a list ─────────────────────────────────────────────────────────────────
+//
+// The validator now drops a non-list `customPresetIds` before a project reaches the store, but the prune is the other half of "the Export panel
+// cannot throw": it runs on every visit to Export with whatever the clips hold (`c.customPresetIds.some(...)` threw on a number, an object, true).
+
+describe('pruneCustomPresets - a clip whose customPresetIds is not a list (T-137 (11))', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+  })
+  const clipWith = (id: string, customPresetIds: unknown): Clip =>
+    ({ id, name: id, startSec: 0, endSec: 5, cropRect: null, textOverlays: [], selectedPresets: ['youtube'], customPresetIds }) as unknown as Clip
+
+  it.each([
+    ['a number', 5],
+    ['an object', { a: 1 }],
+    ['true', true],
+    ['a string', 'cp-a'],
+    ['null', null]
+  ])('%s: the prune does not throw, and the clip comes out with no custom presets queued', (_what, bad) => {
+    useVideoStore.setState({ clips: [clipWith('bad', bad), clipWith('good', ['cp-a', 'cp-b'])] })
+    expect(() => useVideoStore.getState().pruneCustomPresets(['cp-a'])).not.toThrow()
+    const [badClip, goodClip] = useVideoStore.getState().clips
+    expect(badClip?.customPresetIds ?? []).toEqual([])
+    expect(Array.isArray(badClip?.customPresetIds) || badClip?.customPresetIds === undefined).toBe(true)
+    expect(goodClip?.customPresetIds, 'the next clip is pruned as usual').toEqual(['cp-a'])
+  })
+
+  it('entries that are not strings are dropped with the ids whose preset is gone', () => {
+    useVideoStore.setState({ clips: [clipWith('mixed', ['cp-a', 3, null, 'cp-gone'])] })
+    useVideoStore.getState().pruneCustomPresets(['cp-a'])
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toEqual(['cp-a'])
+  })
+
+  it('a list that needs nothing is still left alone, identity included (the control: the no-op path does not churn subscribers)', () => {
+    useVideoStore.setState({ clips: [clipWith('fine', ['cp-a'])] })
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().pruneCustomPresets(['cp-a', 'cp-b'])
+    expect(useVideoStore.getState().clips).toBe(before)
+  })
+
+  it('still not an undo step', () => {
+    useVideoStore.setState({ clips: [clipWith('bad', 5)] })
+    const depth = useVideoStore.getState().history.past.length
+    useVideoStore.getState().pruneCustomPresets([])
+    expect(useVideoStore.getState().history.past.length).toBe(depth)
+  })
+})

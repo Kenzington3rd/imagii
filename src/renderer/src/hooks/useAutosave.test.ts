@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import toast from 'react-hot-toast'
 import type { CanvasLayer } from '@shared/canvas'
 import type { ImagiiProject } from '@shared/workspace'
-import { MAX_SCHEMA_VERSION } from '@shared/projectValidation'
+import { MAX_PROJECT_BYTES, MAX_SCHEMA_VERSION } from '@shared/projectValidation'
 import { pathToImagiiFileUrl } from '@shared/fileUrl'
 import {
   AUDIO_PLAYHEAD_KEYS,
@@ -422,5 +423,181 @@ describe('startAutosave - the stores, the playhead rule and the ceiling together
     useCanvasStore.getState().addLayer(textLayer('after', 'nobody is listening'))
     await vi.advanceTimersByTimeAsync(60_000)
     expect(writes).toEqual([])
+  })
+})
+
+// ── T-137 (7): the dedupe compares CONTENT, not the capture's clock ───────────────────────────────────────────────────────────────────
+//
+// `doSave` compared JSON.stringify(captureProject()), whose `savedAt` is Date.now() at the capture, so the "identical to the last save" check
+// never matched: any store change that is not in the project (Find chat spikes, Scan VOD, a grid toggle - each subscribed through the whole-store
+// subscription) re-wrote an identical autosave.json and rotated autosave.prev (executed: 28.4 MiB rewritten for a ticked Grid). The key is the
+// project with its stamp neutralised.
+
+describe('startAutosave - a change that is not in the project writes nothing (T-137 (7))', () => {
+  let writes: number[]
+  let stop: () => void
+  let t0 = 0
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    t0 = Date.now()
+    writes = []
+    vi.stubGlobal('window', {
+      api: {
+        autosave: {
+          write: vi.fn(async () => {
+            writes.push(Date.now() - t0)
+            return { ok: true as const }
+          })
+        }
+      }
+    })
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    useCanvasStore.getState().resetDocument()
+    useCanvasStore.getState().setShowGrid(false)
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+  })
+  afterEach(() => {
+    stop()
+    vi.useRealTimers()
+  })
+
+  it('a grid toggle, a grid size and a snap toggle after a write change the canvas store and not the project: nothing is written again', async () => {
+    useCanvasStore.getState().addLayer(textLayer('kept', 'one edit'))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(writes, 'the edit is written').toEqual([5000])
+    useCanvasStore.getState().setShowGrid(true)
+    await vi.advanceTimersByTimeAsync(20_000)
+    useCanvasStore.getState().setSnapToGrid(true)
+    useCanvasStore.getState().setGridSize(40)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(writes, 'a ticked Grid used to rewrite the whole file, and rotate autosave.prev').toEqual([5000])
+  })
+
+  it('the video store\'s derived results (Find chat spikes, Scan VOD) are not in the project either', async () => {
+    useCanvasStore.getState().addLayer(textLayer('kept', 'one edit'))
+    await vi.advanceTimersByTimeAsync(5000)
+    useVideoStore.getState().setDerived({ spikeChat: '[0:42] viewer1: POG', spikes: [] })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(writes).toEqual([5000])
+  })
+
+  it('control: a change that IS in the project still writes (the dedupe is not a mute)', async () => {
+    useCanvasStore.getState().addLayer(textLayer('kept', 'one edit'))
+    await vi.advanceTimersByTimeAsync(5000)
+    useCanvasStore.getState().setShowGrid(true)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(writes).toEqual([5000])
+    useCanvasStore.getState().addLayer(textLayer('second', 'another edit'))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(writes.length, 'the second layer is written').toBe(2)
+  })
+
+  it('control: an edit and its undo are two different projects, so both are written (the key is the content, not "something changed")', async () => {
+    useCanvasStore.getState().addLayer(textLayer('a', 'first'))
+    await vi.advanceTimersByTimeAsync(5000)
+    useCanvasStore.getState().undo()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(writes.length).toBe(2)
+  })
+
+  it('the quit-time stamp does not make a project different from itself: the same content a second time is not a new write even when the clock moved', async () => {
+    useCanvasStore.getState().addLayer(textLayer('kept', 'one edit'))
+    await vi.advanceTimersByTimeAsync(5000)
+    // A re-render of the same document (a no-op set) 10 minutes later: the capture's savedAt is 10 minutes newer, the project is the same.
+    await vi.advanceTimersByTimeAsync(600_000)
+    useCanvasStore.setState({ doc: { ...useCanvasStore.getState().doc } })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(writes).toEqual([5000])
+  })
+})
+
+// ── T-137 (6): a project over the size rule is not sent, and the person is told ONCE ────────────────────────────────────────────────────
+
+describe('startAutosave - a project over the size limit pauses autosave and says so once (T-137 (6))', () => {
+  const imageLayer = (id: string, srcChars: number): CanvasLayer => ({
+    id,
+    type: 'image',
+    name: id,
+    visible: true,
+    locked: false,
+    x: 0,
+    y: 0,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: 1,
+    src: `data:image/png;base64,${'A'.repeat(srcChars)}`,
+    width: 100,
+    height: 100
+  })
+  /** Enough characters to put the whole project over the limit on its own. */
+  const OVER = MAX_PROJECT_BYTES + 1000
+  let write: ReturnType<typeof vi.fn>
+  let stop: () => void
+  const spyOnToastError = () => vi.spyOn(toast, 'error').mockReturnValue('x')
+  let errors: ReturnType<typeof spyOnToastError>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    write = vi.fn(async () => ({ ok: true as const }))
+    vi.stubGlobal('window', { api: { autosave: { write } } })
+    errors = spyOnToastError()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    useCanvasStore.getState().resetDocument()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+  })
+  afterEach(() => {
+    stop()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('nothing is sent to main (a 50 MiB structured clone every few seconds to be refused), and ONE toast says autosave is paused, why, and what to do', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(write, 'the over-limit project never crosses the bridge').not.toHaveBeenCalled()
+    expect(errors).toHaveBeenCalledTimes(1)
+    const [message, options] = errors.mock.calls[0] as [string, { id?: string; duration?: number }]
+    expect(message).toMatch(/^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/)
+    expect(options.id, 'a fixed toast id, so a repeat replaces the card').toBe('autosave-too-large')
+    expect(options.duration, 'long enough to read').toBeGreaterThanOrEqual(8000)
+  })
+
+  it('further changes while it stays over the limit do not raise the toast again (one per episode, not one per attempt)', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(5000)
+    for (let i = 0; i < 4; i++) {
+      useCanvasStore.getState().addLayer(textLayer(`t${i}`, `still too big ${i}`))
+      await vi.advanceTimersByTimeAsync(10_000)
+    }
+    expect(write).not.toHaveBeenCalled()
+    expect(errors, 'one coalesced toast').toHaveBeenCalledTimes(1)
+  })
+
+  it('autosave resumes by itself once the project fits, and a later overflow is told again', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(errors).toHaveBeenCalledTimes(1)
+    useCanvasStore.getState().removeLayer('huge')
+    useCanvasStore.getState().addLayer(textLayer('small', 'fits again'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(write, 'written once the project fits').toHaveBeenCalledTimes(1)
+    useCanvasStore.getState().addLayer(imageLayer('huge2', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(errors, 'a NEW episode is told').toHaveBeenCalledTimes(2)
+    expect(write, 'and still not sent').toHaveBeenCalledTimes(1)
+  })
+
+  it('control: a project under the limit raises no toast and is written', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('fine', 1000))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(errors).not.toHaveBeenCalled()
   })
 })

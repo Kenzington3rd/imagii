@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -3097,3 +3097,176 @@ test.describe('T-136 (11): the status line goes with the file', () => {
     }
   })
 })
+
+// T-137 (6): ONE size rule for Save, Open and autosave. A project over 50 MiB used to save ("Project saved", 56.9 MiB of pretty-printed JSON), refuse to
+// open again with the damaged-file sentence, and stop autosaving with a console line. Save now refuses before it asks where to save, in a sentence that
+// names the size; Open says the project is too large (not damaged); autosave stops and says so, once, in a toast. The project here is a seeded file one
+// text layer short of the limit (a picture layer whose src is padded: it need not decode, the document just carries it), so a real "+ Add text" in Stream
+// Graphics is the edit that crosses the line, and nothing is faked in the app: the files on disk are the evidence.
+test.describe('T-137 (6): a project over the size limit', () => {
+  const LIMIT = 50 * 1024 * 1024
+
+  /** A project file whose text is exactly `size` characters: one picture layer, its src padded to fit. */
+  function projectFileOfSize(size: number): string {
+    const make = (src: string): string =>
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        imageCanvas: {
+          doc: {
+            width: 1200,
+            height: 800,
+            background: '#ffffff',
+            layers: [
+              { id: 'bigpic', type: 'image', name: 'Huge picture', visible: true, locked: false, x: 60, y: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src, width: 100, height: 100 }
+            ]
+          }
+        }
+      })
+    return make('A'.repeat(size - make('').length))
+  }
+
+  const SAVE_REFUSAL = /^This project is too large to save \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas, then save again\.$/
+  const AUTOSAVE_PAUSED = /^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/
+  const OPEN_REFUSAL = /^That project is too large to open \(\d+\.\d MB; the limit is 50 MB\)\./
+
+  /** A launched app that has opened the seeded project one text layer short of the limit (so it is a project that fits), on Home. */
+  async function openNearlyFull(label: string, answers: { saveAs?: string; files?: string[] } = {}): Promise<{
+    app: ElectronApplication
+    window: Page
+    root: string
+    userDataDir: string
+    nearly: string
+  }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // Under the limit by 150 characters: the captured project adds a `place` record (about 55), so it opens, saves and autosaves; one text layer (216
+    // characters, and its comma) is what takes it over.
+    const nearly = path.join(root, 'nearly.imagii.json')
+    writeFileSync(nearly, projectFileOfSize(LIMIT - 150), 'utf8')
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: [nearly, ...(answers.files ?? [])], ...(answers.saveAs ? { saveAs: answers.saveAs } : {}) })
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain('Project loaded')
+    return { app, window, root, userDataDir, nearly }
+  }
+
+  /** One real "+ Add text" in Stream Graphics: the edit that takes the seeded project over the limit. */
+  async function addTextInStreamGraphics(window: Page, layers: number): Promise<void> {
+    if (layers === 2) {
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+    }
+    await window.locator('[data-tutorial="image-import"]').getByRole('button', { name: '+ Add text' }).click()
+    await expect(window.getByRole('heading', { name: `Layers (${layers})` })).toBeVisible()
+  }
+
+  test('a project that fits is saved as the compact text that was measured, within the limit, and the file opens again', async () => {
+    test.setTimeout(240_000)
+    const savedOnce = path.join(os.tmpdir(), `imagii-e2e-t137-saved-${Date.now().toString(36)}.imagii.json`)
+    const { app, window, root } = await openNearlyFull('t137-fits', { saveAs: savedOnce, files: [savedOnce] })
+    try {
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain('Project saved')
+      expect(statSync(savedOnce).size, 'a file Save writes is within the limit it was measured against').toBeLessThanOrEqual(LIMIT)
+      expect(readFileSync(savedOnce, 'utf8').startsWith('{"schemaVersion"'), 'compact JSON: the text that was measured').toBe(true)
+      // ...and it is a file Open accepts (the point of one rule): opened again, in the same app.
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t === 'Project loaded').length, { timeout: 120_000, intervals: [250] })
+        .toBe(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+      rmSync(savedOnce, { force: true })
+    }
+  })
+
+  test('autosave of a project over the limit stops and says so, once, in a toast; the file on disk stays the last project that fit', async () => {
+    test.setTimeout(300_000)
+    const { app, window, root, userDataDir } = await openNearlyFull('t137-autosave')
+    try {
+      // The control for "stops": the fitting project is autosaved.
+      await expect.poll(() => readAutosaveLayers(userDataDir) ?? 0, { timeout: 60_000, intervals: [500] }).toBe(1)
+      await addTextInStreamGraphics(window, 2)
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => AUTOSAVE_PAUSED.test(t)).length, { timeout: 60_000, intervals: [500] })
+        .toBe(1)
+      // More edits while it stays over: the one toast is not raised again, and the file on disk is still the fitting project.
+      await addTextInStreamGraphics(window, 3)
+      await window.waitForTimeout(13_000)
+      expect((await readToastLog(window)).filter((t) => AUTOSAVE_PAUSED.test(t)), 'told once').toHaveLength(1)
+      expect(readAutosaveLayers(userDataDir), 'and nothing over the limit was written').toBe(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Save refuses a project over the limit in a sentence, BEFORE the dialog, and writes nothing', async () => {
+    test.setTimeout(300_000)
+    const never = path.join(os.tmpdir(), `imagii-e2e-t137-never-${Date.now().toString(36)}.imagii.json`)
+    const { app, window, root } = await openNearlyFull('t137-save', { saveAs: never })
+    try {
+      await addTextInStreamGraphics(window, 2)
+      await window.evaluate(() => {
+        window.location.hash = '#/home'
+      })
+      await waitForHome(window)
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => SAVE_REFUSAL.test(t)).length, { timeout: 60_000, intervals: [250] })
+        .toBe(1)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'the person was never asked where to save a file that would not be written').toHaveLength(0)
+      expect(existsSync(never)).toBe(false)
+      expect((await readToastLog(window)).filter((t) => t === 'Project saved'), 'and it never said it saved').toHaveLength(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Open of a file past the limit names the size, not "damaged or saved by a newer version"', async () => {
+    test.setTimeout(240_000)
+    const tooBig = path.join(os.tmpdir(), `imagii-e2e-t137-too-big-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(tooBig, projectFileOfSize(LIMIT + 5000), 'utf8')
+    const root = makeRoot('t137-open')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await recordSlowChooser(app, { files: [tooBig] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => OPEN_REFUSAL.test(t)).length, { timeout: 120_000, intervals: [250] })
+        .toBe(1)
+      expect((await readToastLog(window)).some((t) => /damaged|newer version/.test(t))).toBe(false)
+    } finally {
+      await app.close()
+      cleanup(root)
+      rmSync(tooBig, { force: true })
+    }
+  })
+})
+
+/** The number of layers in the canvas the autosave file holds, or null when there is no readable autosave. */
+function readAutosaveLayers(userDataDir: string): number | null {
+  const file = autosaveFile(userDataDir)
+  if (!existsSync(file)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { imageCanvas?: { doc?: { layers?: unknown[] } } }
+    return parsed.imageCanvas?.doc?.layers?.length ?? null
+  } catch {
+    return null
+  }
+}

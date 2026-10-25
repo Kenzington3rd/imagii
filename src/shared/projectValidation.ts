@@ -37,7 +37,45 @@ export type ValidationResult =
   | { ok: true; project: ImagiiProject }
   | { ok: false; reason: string }
 
-const MAX_BYTES = 50 * 1024 * 1024 // 50 MB sanity cap on a project file
+/**
+ * The largest a project may be, in characters of its JSON text (bytes, for everything but a path with an accented letter in it): 50 MiB.
+ *
+ * T-137 (6): ONE rule for every way a project is written or read. Open measured the file's text, autosave measured `JSON.stringify(project)`, and
+ * `project:save` measured nothing and wrote PRETTY-printed JSON, so a project Save accepted (56.9 MiB, from four 11 MB pictures) was one Open
+ * refused with the damaged-file sentence. Now every writer serializes with `serializeProject` and every gate asks `projectSizeProblem` of the
+ * length of the text it holds, so a file Save writes is exactly the text it measured and always opens.
+ */
+export const MAX_PROJECT_BYTES = 50 * 1024 * 1024
+
+/** The ONE serialization a project is measured on and written in (T-137 (6)): compact JSON, the form autosave always wrote. */
+export function serializeProject(project: ImagiiProject): string {
+  return JSON.stringify(project)
+}
+
+const MEBIBYTE = 1024 * 1024
+
+/** "55.4 MB": a size as the sentences say it, rounded UP to a tenth so a project one character over the limit never reads as "50.0 MB; the limit is 50 MB". */
+function megabytes(size: number): string {
+  return (Math.ceil((size / MEBIBYTE) * 10) / 10).toFixed(1)
+}
+
+/**
+ * T-137 (6): null when a project of `size` characters is within the limit, else the finished sentence for what was being done with it - one line a toast
+ * shows as written (`userFacingError` lets it stand): the size, the limit, and what to do. A project this big is pictures (a text, a clip or a layer is a
+ * few hundred bytes), and the canvas is the only studio that holds any.
+ */
+export function projectSizeProblem(size: number, doing: 'save' | 'open' | 'autosave'): string | null {
+  if (size <= MAX_PROJECT_BYTES) return null
+  const sized = `(${megabytes(size)} MB; the limit is ${MAX_PROJECT_BYTES / MEBIBYTE} MB)`
+  switch (doing) {
+    case 'save':
+      return `This project is too large to save ${sized}. Remove or shrink large images on the canvas, then save again.`
+    case 'autosave':
+      return `Autosave is paused: this project is too large to keep ${sized}. Remove or shrink large images on the canvas and it will start again.`
+    case 'open':
+      return `That project is too large to open ${sized}. An earlier version of imagii let one be saved this big; its images are the likely cause.`
+  }
+}
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -175,12 +213,28 @@ function validateClipRequiredFields(clip: unknown, idx: number): string | null {
  * reads `PLATFORM_INFO[id]` for every id a clip holds, so one it has no row for (a hand-edited project, or a newer build's preset) made
  * `findSafeZoneIssues` and the queue builder throw, and Export did nothing. DROPPED, not refused: an older build still opens a newer build's
  * project, and what is left is the clip's own list. Only the string entries `validateClipRequiredFields` has already passed are judged;
- * the custom preset ids are not touched (the panel prunes them against the folder it reads).
+ * the custom preset ids are shaped by `dropMalformedCustomPresetIds` and otherwise not touched (the panel prunes them against the folder it reads).
  */
 function dropUnknownPresetIds(clip: unknown): void {
   if (!isPlainObject(clip) || !Array.isArray(clip.selectedPresets)) return
   const known: readonly string[] = PLATFORM_IDS
   clip.selectedPresets = clip.selectedPresets.filter((id: unknown) => typeof id === 'string' && known.includes(id))
+}
+
+/**
+ * T-137 (11): a clip's `customPresetIds` is a list of strings or it is absent. The gate never looked at it, so `5`, `{ a: 1 }` and `true` validated, and
+ * the Export panel's `for (const id of clip.customPresetIds ?? [])` threw in render: autosave and Restore re-crashed /video until Clear. Dropped, not
+ * refused, like the unknown platform ids above (an older build opens a newer build's project): a field that is not a list is removed, and the entries of a
+ * list that are not strings are filtered out. The ids themselves are still not judged here (the panel prunes them against the folder it reads).
+ */
+function dropMalformedCustomPresetIds(clip: unknown): void {
+  if (!isPlainObject(clip) || !('customPresetIds' in clip) || clip.customPresetIds === undefined) return
+  const ids = clip.customPresetIds
+  if (!Array.isArray(ids)) {
+    delete clip.customPresetIds
+    return
+  }
+  if (ids.some((id: unknown) => typeof id !== 'string')) clip.customPresetIds = ids.filter((id: unknown) => typeof id === 'string')
 }
 
 /**
@@ -346,6 +400,7 @@ export function validateProject(input: unknown): ValidationResult {
       if (reason !== null) return { ok: false, reason }
       // T-135 (10): after the shape is known to be sound (every entry a string), before the studio reads the ids.
       dropUnknownPresetIds(v.clips[i])
+      dropMalformedCustomPresetIds(v.clips[i])
     }
     // v5: the marker says `sourcePath` is the original of a file converted on import.
     if (v.convertedForImport !== undefined && typeof v.convertedForImport !== 'boolean')
@@ -407,9 +462,8 @@ export function validateProject(input: unknown): ValidationResult {
 
 export function validateProjectJsonString(raw: string): ValidationResult {
   if (raw.length === 0) return { ok: false, reason: 'empty file' }
-  if (raw.length > MAX_BYTES) {
-    return { ok: false, reason: `project too large (${raw.length} > ${MAX_BYTES} bytes)` }
-  }
+  const tooLarge = projectSizeProblem(raw.length, 'open')
+  if (tooLarge !== null) return { ok: false, reason: tooLarge }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -434,19 +488,15 @@ export function hasStudioState(project: ImagiiProject): boolean {
 export function isSafeToAutosave(project: ImagiiProject): { ok: true } | { ok: false; reason: string } {
   let raw: string
   try {
-    raw = JSON.stringify(project)
+    raw = serializeProject(project)
   } catch (err) {
     return {
       ok: false,
       reason: `serialization failed: ${err instanceof Error ? err.message : 'unknown'}`
     }
   }
-  if (raw.length > MAX_BYTES) {
-    return {
-      ok: false,
-      reason: `project would be ${raw.length} bytes, exceeds ${MAX_BYTES}`
-    }
-  }
+  const tooLarge = projectSizeProblem(raw.length, 'autosave')
+  if (tooLarge !== null) return { ok: false, reason: tooLarge }
   // Only autosave if there is actual user state. Empty project (default) shouldn't overwrite.
   if (!hasStudioState(project)) {
     return { ok: false, reason: 'no studio state to save' }

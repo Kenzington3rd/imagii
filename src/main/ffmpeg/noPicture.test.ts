@@ -322,3 +322,88 @@ describe('extractFrame never resolves without a file (T-132 (4))', () => {
     expect(result.outputPath).toBe(OUT())
   })
 })
+
+// ── T-137 (12): FFMPEG_EMPTY_OUTPUT is ffmpeg's line, not any text that contains the phrase ───────────────────────────────────────────────
+//
+// It was /Output file is empty/ tested against all of stderr, and ffmpeg echoes the person's paths there ("Output #0, mp4, to '<dir>/<name>.mp4':",
+// "Input #0, ..., from '<source>':"), so an output folder or a source named with the phrase turned a good export, reframe, burn-in or compilation
+// segment into "has no picture". Layer 5 runs the real binary for both shapes on both majors; these are the lines and what the runners do with them.
+
+describe('FFMPEG_EMPTY_OUTPUT is the line ffmpeg prints, and nothing a path can spell (T-137 (12))', () => {
+  const REAL_702 = '[out#0/mp4 @ 0x12299100] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)'
+  const REAL_611 = '[out#0/matroska @ 0x556cb75864c0] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)'
+
+  it('matches the line as both majors print it, the bare form older tests feed, and the line among others (CRLF too)', () => {
+    expect(FFMPEG_EMPTY_OUTPUT.test(REAL_702)).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test(REAL_611)).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test('Output file is empty, nothing was encoded')).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test(`Output #0, mp4, to '/x/o.mp4':\n  Stream #0:0: Video\n${REAL_702}\n`)).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test(`frame=0 fps=0.0\r\n${REAL_702}\r\n`)).toBe(true)
+    expect(FFMPEG_EMPTY_OUTPUT.test(`frame=  1 fps=0.0 q=0.0 size=0kB\r${REAL_702}\n`), 'after a progress line that ends in a carriage return').toBe(true)
+  })
+
+  it('does not match the echo of an output or source path, or a metadata value, that contains the phrase', () => {
+    for (const echo of [
+      "Output #0, mp4, to '/home/me/Output file is empty/clip.mp4':",
+      "Output #0, mp4, to 'C:\\Users\\me\\Output file is empty, nothing was encoded\\clip.mp4':",
+      "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/videos/Output file is empty/in.mp4':",
+      "    title           : Output file is empty, nothing was encoded",
+      '/home/me/Output file is empty/clip.mp4: Permission denied',
+      "[mp4 @ 0x1] Could not open '/home/me/[out#0/mp4 @ 0x1] Output file is empty, nothing was encoded/x.mp4'",
+      'frame=  108 fps=0.0 q=-1.0 Lsize=     195kB'
+    ]) {
+      expect(FFMPEG_EMPTY_OUTPUT.test(echo), echo).toBe(false)
+    }
+  })
+
+  it('needs the whole message, not the three words', () => {
+    expect(FFMPEG_EMPTY_OUTPUT.test('[out#0/mp4 @ 0x1] Output file is empty')).toBe(false)
+  })
+})
+
+describe('the runners do not accuse a good run whose paths contain the phrase (T-137 (12))', () => {
+  const FOLDER = 'Output file is empty'
+  const echoOf = (outputPath: string): string =>
+    `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/videos/${FOLDER}/in.mp4':\nOutput #0, mp4, to '${outputPath}':\n`
+
+  it('an export into a folder named "Output file is empty" is Exported', async () => {
+    const outDir = path.join(scratch, FOLDER)
+    mkdirSync(outDir)
+    onSpawn = (child, outputPath) => {
+      writeFileSync(outputPath, Buffer.alloc(62_000, 1))
+      child.stdout.emit('data', 'frame=0\nprogress=continue\n')
+      child.stdout.emit('data', 'frame=30\nout_time_us=2000000\nprogress=end\n')
+      child.stderr.emit('data', echoOf(outputPath))
+      child.emit('close', 0)
+    }
+    const result = await runExportJob({ ...exportJob(), outDir, sourcePath: `/videos/${FOLDER}/in.mp4` }, () => undefined)
+    expect(path.dirname(result.outputPath)).toBe(outDir)
+    expect(existsSync(result.outputPath)).toBe(true)
+  })
+
+  it('a reframe into that folder is Saved', async () => {
+    const outDir = path.join(scratch, FOLDER)
+    mkdirSync(outDir)
+    const outputPath = path.join(outDir, 'vertical.mp4')
+    onSpawn = (child) => {
+      writeFileSync(outputPath, Buffer.alloc(62_000, 1))
+      child.stdout.emit('data', 'frame=60\nout_time_us=2000000\nprogress=end\n')
+      child.stderr.emit('data', echoOf(outputPath))
+      child.emit('close', 0)
+    }
+    await expect(runReframe({ ...reframeJob(), outputPath }, () => undefined)).resolves.toBeDefined()
+    expect(existsSync(outputPath)).toBe(true)
+  })
+
+  it('control: the real line from that same run still refuses, with the folder named the same', async () => {
+    const outDir = path.join(scratch, FOLDER)
+    mkdirSync(outDir)
+    onSpawn = (child, outputPath) => {
+      writeFileSync(outputPath, Buffer.alloc(261, 1))
+      child.stderr.emit('data', `${echoOf(outputPath)}[out#0/mp4 @ 0x1] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)\n`)
+      child.emit('close', 0)
+    }
+    const err = await runExportJob({ ...exportJob(), outDir }, () => undefined).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/^The clip "Boss fight" has no picture/)
+  })
+})

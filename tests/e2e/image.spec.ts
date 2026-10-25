@@ -1965,7 +1965,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap the fixture keeps its natural size (ImportPanel.tsx:71).
+      // Under the 800px cap the fixture keeps its natural size (ImportPanel.tsx:65).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -3503,6 +3503,135 @@ test.describe('Image Studio — history', () => {
       expect(await layerNames(window)).toEqual(
         expect.arrayContaining(['Rectangle', 'Text'])
       )
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-137 (6): a picture is stored as a bounded copy ─────────────────────────────────────────────────────────────────────────────────────
+//
+// ImportPanel kept every picture's full-size data URL in the document though the layer is drawn at most 800 px wide, so four 11 MB PNGs put a project
+// over the 50 MiB size limit (executed: autosave stopped, Save wrote 56.9 MiB, Open refused it). The document keeps a copy bounded to 1600 px on the longer
+// side (twice the drawn size, so the default 2x export of a placed picture keeps its pixels): PNG, which keeps transparency, unless the picture came as a
+// JPEG, which stays one. A picture already within the bound is kept as it came. The Konva node's own `<img>` is the stored src, decoded.
+test.describe('Image Studio — an imported picture is stored as a bounded copy (T-137 (6))', () => {
+  /** A still made by the repo's own ffmpeg: `args` are the lavfi input and the codec options; `out` the file. */
+  async function makeStill(out: string, lavfi: string, extra: string[] = []): Promise<void> {
+    const result = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', lavfi, '-frames:v', '1', ...extra, out])
+    if (result.code !== 0) throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+
+  /** A `drop` carrying a File of `type` with REAL bytes (dropPng's shape, for a type other than PNG). */
+  async function dropImage(window: Page, base64: string, fileName: string, type: string): Promise<void> {
+    await window.evaluate(
+      ({ base64, fileName, type }) => {
+        const host = document.querySelector('[data-tutorial="image-import"]')
+        if (!host) throw new Error('image import zone not found')
+        const zone = host.classList.contains('card') ? host : host.querySelector('div.card')
+        if (!zone) throw new Error('image drop zone not found')
+        const bin = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+        const file = new File([bin], fileName, { type })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+        zone.dispatchEvent(event)
+      },
+      { base64, fileName, type }
+    )
+  }
+
+  interface Stored {
+    prefix: string
+    naturalWidth: number
+    naturalHeight: number
+    drawnWidth: number
+    drawnHeight: number
+    /** The alpha of a pixel near the picture's top-left corner, read back from the stored copy. */
+    cornerAlpha: number
+    srcLength: number
+  }
+
+  /** The last picture on the canvas as the document stores it: the node's decoded `<img>` is the layer's `src`. */
+  function lastStored(window: Page): Promise<Stored> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; width(): number; height(): number; image(): HTMLImageElement }> }> }
+        | undefined
+      if (!stage) throw new Error('__imagiiStage is not set')
+      const nodes = (stage.children[0]?.children ?? []).filter((n) => n.attrs.name !== 'background')
+      const node = nodes[nodes.length - 1]
+      if (!node) throw new Error('no picture on the canvas')
+      const img = node.image()
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('no canvas')
+      ctx.drawImage(img, 0, 0)
+      return {
+        prefix: img.src.slice(0, img.src.indexOf(',')),
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        drawnWidth: node.width(),
+        drawnHeight: node.height(),
+        cornerAlpha: ctx.getImageData(3, 3, 1, 1).data[3] ?? -1,
+        srcLength: img.src.length
+      }
+    })
+  }
+
+  test('a 4000x3000 PNG is kept at 1600x1200 and drawn at 800x600; a JPEG stays a JPEG; a transparent PNG keeps its transparency; a small PNG is kept exactly as it came', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t137-bounded')
+    const { window } = studio
+    try {
+      const big = path.join(studio.root, 'huge.png')
+      const photo = path.join(studio.root, 'photo.jpg')
+      const ghost = path.join(studio.root, 'ghost.png')
+      await makeStill(big, 'testsrc2=size=4000x3000:rate=1')
+      await makeStill(photo, 'testsrc2=size=3000x2000:rate=1', ['-q:v', '3'])
+      await makeStill(ghost, 'color=c=0xFF0000@0.5:size=2400x1600:rate=1,format=rgba')
+
+      // ── a 4000x3000 PNG ──
+      await dropPng(window, readFileSync(big).toString('base64'), 'huge.png')
+      await expectLayerCount(window, 1)
+      await expectShapeCount(window, 1)
+      const huge = await lastStored(window)
+      expect(huge.prefix).toBe('data:image/png;base64')
+      expect.soft({ w: huge.naturalWidth, h: huge.naturalHeight }, 'the stored copy, not the 4000 px file').toEqual({ w: 1600, h: 1200 })
+      expect({ w: huge.drawnWidth, h: huge.drawnHeight }, 'the layer is still placed at 800 px').toEqual({ w: 800, h: 600 })
+      expect.soft(huge.srcLength, 'and its bytes are the copy\'s (a 4000x3000 PNG\'s data URL is several times this)').toBeLessThan(readFileSync(big).length * 1.33)
+
+      // ── a JPEG stays a JPEG (opaque, a tenth of the PNG's bytes) ──
+      await dropImage(window, readFileSync(photo).toString('base64'), 'photo.jpg', 'image/jpeg')
+      await expectLayerCount(window, 2)
+      await expectShapeCount(window, 2)
+      const jpeg = await lastStored(window)
+      expect(jpeg.prefix).toBe('data:image/jpeg;base64')
+      expect.soft({ w: jpeg.naturalWidth, h: jpeg.naturalHeight }, 'a JPEG is bounded too').toEqual({ w: 1600, h: 1067 })
+      expect(jpeg.drawnWidth).toBe(800)
+      expect(jpeg.cornerAlpha, 'a JPEG has no transparency to lose').toBe(255)
+
+      // ── a PNG with a transparent picture keeps it: a JPEG copy would paint it black ──
+      await dropPng(window, readFileSync(ghost).toString('base64'), 'ghost.png')
+      await expectLayerCount(window, 3)
+      await expectShapeCount(window, 3)
+      const alpha = await lastStored(window)
+      expect.soft(alpha.naturalWidth, 'and so is a transparent PNG').toBe(1600)
+      expect(alpha.prefix, 'PNG, not JPEG').toBe('data:image/png;base64')
+      expect.soft(alpha.naturalHeight).toBe(1067)
+      expect(alpha.cornerAlpha, 'half transparent, as it was dropped').toBeGreaterThan(100)
+      expect(alpha.cornerAlpha).toBeLessThan(155)
+
+      // ── control: a picture already within the bound is kept exactly as it came ──
+      const small = readFileSync(studio.fixturePng).toString('base64')
+      await dropPng(window, small, 'small.png')
+      await expectLayerCount(window, 4)
+      await expectShapeCount(window, 4)
+      const kept = await lastStored(window)
+      expect(kept.naturalWidth).toBe(FIXTURE_PNG_W)
+      expect(kept.srcLength).toBe(`data:image/png;base64,${small}`.length)
+      expect({ w: kept.drawnWidth, h: kept.drawnHeight }).toEqual({ w: FIXTURE_PNG_W, h: FIXTURE_PNG_H })
     } finally {
       await closeStudio(studio)
     }

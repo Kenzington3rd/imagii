@@ -12,9 +12,11 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
+import { LAYER_DRAWN_MAX_DIM, STORED_IMAGE_MAX_DIM, scaleToFit } from '@shared/imageBounds'
 import { isImageFilename } from '@shared/mediaFormats'
 
 function cloneDoc<T>(obj: T): T {
@@ -31,15 +33,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onload = () => resolve(String(reader.result))
     reader.onerror = () => reject(reader.error ?? new Error('Read failed'))
     reader.readAsDataURL(file)
-  })
-}
-
-function loadImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
-    img.onerror = () => reject(new Error('Decode failed'))
-    img.src = dataUrl
   })
 }
 
@@ -67,12 +60,21 @@ export function ImportPanel(): JSX.Element {
     }
     try {
       const dataUrl = await readFileAsDataUrl(file)
-      const dims = await loadImageDimensions(dataUrl)
-      const maxDim = 800
-      const scale = Math.min(1, maxDim / Math.max(dims.width, dims.height))
+      const img = await loadImage(dataUrl)
+      const dims = { width: img.naturalWidth, height: img.naturalHeight }
+      const scale = scaleToFit(dims.width, dims.height, LAYER_DRAWN_MAX_DIM)
       const w = dims.width * scale
       const h = dims.height * scale
-      addLayer({ ...makeImageLayer(dataUrl, w, h), name: file.name })
+      // T-137 (6): the document keeps a copy bounded to twice the size the layer is drawn at, not the file: a project that holds a few 4000 px PNGs
+      // is over the size limit (autosave stops, Save writes a file Open refuses). PNG unless the picture came as a JPEG and is opaque, so transparency
+      // is never lost.
+      // simplification: a picture already within the bound is kept as it came, so its bytes are not bounded (a small animated GIF can be many MB); the size
+      // rule at Save and autosave catches the sum. Upgrade: re-encode anything over a byte threshold.
+      const stored =
+        scaleToFit(dims.width, dims.height, STORED_IMAGE_MAX_DIM) < 1
+          ? boundedDataUrl(img, STORED_IMAGE_MAX_DIM, file.type === 'image/jpeg')
+          : dataUrl
+      addLayer({ ...makeImageLayer(stored, w, h), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't import that image." })

@@ -5464,7 +5464,7 @@ IMG-PREC.
   shared files; `npm run verify`, `npm run test:media` and the FULL
   Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits.
-- **Status:** Track A done (round 86, see the Done entry); Track B in expedite
+- **Status:** done (round 86, both tracks — see the two Done entries)
 
 ---
 
@@ -5934,6 +5934,61 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 86, Track B — T-137 items 6-12, landed in the commit that
+carries this entry, merged onto Track A's (6ac4768). Worked by one
+Sonnet in a fresh clone of 7690cf5. The data-loss fix (item 6): one
+size rule and one serialization for Save, Open and autosave
+(`projectSizeProblem` over `serializeProject`, compact JSON);
+`project:save` measures the string it will write and refuses a
+project over the limit in a finished sentence BEFORE the dialog, so
+a file it writes always opens; an autosave over the limit is not
+sent to main, one toast says autosave is paused and why, and it
+resumes by itself when the project fits; Open names the size instead
+of "damaged". Imported pictures and "→ Canvas" references are stored
+as bounded copies drawn through one offscreen-canvas helper
+(`lib/boundedImage.ts`), so a reference layer no longer points at the
+thumbnail cache and dies with it. The autosave dedupe key sets
+`savedAt` aside, so a grid toggle or a scan writes nothing. The
+loudness measure pass keeps a 16 KB stderr tail and the source scan
+now counts a cap only when no guard can skip it. A chat row shows the
+range "+ Clip" adds (`peakRange`, one clamp for both). A
+`customPresetIds` that is not a list of strings is dropped at the
+gate instead of crashing Export. The lost-segment and empty-output
+patterns are ffmpeg's own lines, anchored, so a folder named with
+either phrase no longer fails a good job. 59 ledger mutations all
+restored byte-identical (four survived a first run: one equivalent,
+whose redundant check was deleted from the product code, and three
+that led to stronger tests - an echo with the quote the pattern
+needs, a 6.1.1 control with a real lost segment, and a two-pass
+export compared by decoded samples against a hand-built render -
+each killing its mutant on rerun), 27 reds incl. both majors at
+Layer 5. Expedited personally: verify x2 (188/5092), test:media on
+7.0.2 (363 passed | 13 skipped of 376), the WHOLE Layer 5 file on
+6.1.1 (356 passed + exactly the 7 documented platform pins), build +
+FULL Playwright 443/443 with zero flakes, and the image.spec case the
+worker reported flaky once under shared load 5/5 standalone;
+integrity and ledger audit clean (no forbidden files, no Track A
+file touched, key-file shas unchanged across the gates). The
+expediter's first independent mutation (the chat row's "+ Clip"
+adding the raw ends) was equivalent - the store's `appendRange`
+clamps identically and the toast carries no range - so it was
+restored and a second, non-equivalent seam was taken: the autosave
+branch of `projectSizeProblem` returning no problem → three named
+cases red ("each refusal names the size and the limit", "autosave
+refuses an oversize project in the autosave sentence", and
+startAutosave's "pauses autosave and says so once") → restored
+byte-identical, sha256 verified, `out/` rebuilt. Merged by
+structure, as round 85's: both tracks appended whole blocks to the
+same shared docs and test files, so each block was lifted out by a
+unique window of the base's last lines, the middle edits merged
+cleanly, and the blocks were re-appended (B's LESSONS entry above
+A's, newest first; A's TESTING paragraph above B's); a line-level
+proof over all eight files both tracks touched showed neither side
+lost a line beyond what the other deliberately changed and every
+line either side added is present, and all 28 Track-B-only files
+are byte-identical to the expedited clone. The merged tree's gates
+are this entry's commit.
 
 Round 86, Track A — T-137 items 1-5, landed in the commit that
 carries this entry (Track B, items 6-12, lands next). Worked by one

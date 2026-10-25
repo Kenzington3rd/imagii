@@ -531,13 +531,15 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   'main/index.ts': ['shell.openExternal(', 'loadURL('],
   // Reference Search results and the mood board: thumbnails, drawn by the page from the host the search named (CSP img-src https:).
   'renderer/src/modules/references/ReferencePanel.tsx': ['<img>'],
-  'renderer/src/modules/references/MoodBoardPanel.tsx': ['new Image(', '<img>'],
+  'renderer/src/modules/references/MoodBoardPanel.tsx': ['<img>'],
   // Local pictures (a capture's thumbnail as a data URL, an imported file as a data URL): `<img>` draws them, nothing is requested.
   // T-125 (26): and the two live-preview `<video>`s, which play the capture's own MediaStream (`srcObject`), never an address.
   'renderer/src/modules/record-studio/RecordStudio.tsx': ['<img>', '<video>', '<video>'],
   'renderer/src/modules/record-studio/compositor.ts': ['createElement(video)', 'createElement(video)'],
   'renderer/src/modules/image-studio/ThumbnailVariants.tsx': ['new Image(', '<img>'],
-  'renderer/src/modules/image-studio/ImportPanel.tsx': ['new Image('],
+  // T-137 (6), (10): the one place a picture is decoded to be copied onto the canvas (an imported file's data URL, or the mood-board tile the person is looking at, loaded
+  // `crossOrigin: 'anonymous'` so its copy can be read back): `loadImage` was `new Image(` in ImportPanel and in MoodBoardPanel, now here. It requests exactly what those did.
+  'renderer/src/lib/boundedImage.ts': ['new Image('],
   // T-125 (26): the Player's `<video src>` is the person's own file (an `imagii-file:` or `blob:` address; CSP `media-src` allows no
   // remote one), and the waveform's `WaveSurfer.create({ url })` is handed the same kind of address. T-129: with `peaks` it fetches
   // nothing and only gives the address to its media element (CSP `media-src`; `connect-src` allows `imagii-file:` and the `ws:` named

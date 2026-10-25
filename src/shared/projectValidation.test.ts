@@ -1,15 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import {
+  MAX_PROJECT_BYTES,
   MAX_SCHEMA_VERSION,
   SUPPORTED_SCHEMA_VERSIONS,
   KNOWN_ROUTES,
   hasStudioState,
   isSafeToAutosave,
   isValidTextOverlay,
+  projectSizeProblem,
   sanitizePlace,
+  serializeProject,
   validateProject,
   validateProjectJsonString
 } from './projectValidation'
+import { userFacingError } from './userFacingError'
 import { DEFAULT_CHAIN_SPEC } from './audio'
 import type { ImagiiProject } from './workspace'
 
@@ -1278,5 +1282,169 @@ describe('a preset id this build does not have is dropped when a project opens (
     const result = validateProject(withClips([goodClip({ customPresetIds: ['gone-from-disk'] })]))
     if (!result.ok) throw new Error(result.reason)
     expect(result.project.videoStudio?.clips[0]?.customPresetIds).toEqual(['gone-from-disk'])
+  })
+})
+
+// ── T-137 (6): ONE size rule for Save, Open and autosave ─────────────────────────────────────────────────────────────────────────────
+//
+// MAX_BYTES gated Open (the file's text) and autosave (the project's compact JSON) but `project:save` wrote PRETTY-printed JSON with no gate at
+// all: four 11 MB pictures autosaved nothing, Save wrote 56.9 MiB and said "Project saved", and Open refused it with the damaged-file sentence.
+// The rule is now one number applied to one serialization (`serializeProject`, compact), by `projectSizeProblem`, which also words the refusal.
+
+describe('one size rule for Save, Open and autosave (T-137 (6))', () => {
+  /** A valid project whose compact JSON is exactly `size` characters: a canvas holding one picture, its src padded to fit. */
+  function projectOfSize(size: number): ImagiiProject {
+    const withSrc = (src: string): ImagiiProject => ({
+      ...baseProject,
+      imageCanvas: {
+        doc: {
+          width: 1280,
+          height: 720,
+          background: '#ffffff',
+          layers: [
+            { id: 'img1', type: 'image', name: 'big.png', visible: true, locked: false, x: 60, y: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src, width: 100, height: 100 }
+          ]
+        }
+      }
+    })
+    const pad = size - serializeProject(withSrc('')).length
+    if (pad < 0) throw new Error('the fixture is bigger than the size asked for')
+    return withSrc('A'.repeat(pad))
+  }
+  const sentenceFor = (doing: 'save' | 'open' | 'autosave', size = 58_000_000): string => projectSizeProblem(size, doing) ?? ''
+
+  it('the limit is 50 MiB, and the serialization it is measured on is the compact JSON every writer uses', () => {
+    expect(MAX_PROJECT_BYTES).toBe(50 * 1024 * 1024)
+    const p = projectOfSize(1000)
+    expect(serializeProject(p)).toBe(JSON.stringify(p))
+    expect(serializeProject(p)).toHaveLength(1000)
+    expect(serializeProject(p), 'no pretty-printing: a file Save writes is measured as it is written').not.toContain('\n')
+  })
+
+  it.each([
+    ['one under the limit', MAX_PROJECT_BYTES - 1, true],
+    ['exactly the limit', MAX_PROJECT_BYTES, true],
+    ['one over the limit', MAX_PROJECT_BYTES + 1, false]
+  ])('%s: Save, Open and autosave all agree (a project Save lets through always opens)', (_label, size, allowed) => {
+    const p = projectOfSize(size)
+    const raw = serializeProject(p)
+    expect(raw).toHaveLength(size)
+    expect(projectSizeProblem(raw.length, 'save') === null, 'Save writes it').toBe(allowed)
+    expect(validateProjectJsonString(raw).ok, 'and Open opens exactly that text').toBe(allowed)
+    expect(isSafeToAutosave(p).ok, 'and autosave keeps it').toBe(allowed)
+  })
+
+  it('Open reads the size of the text it is given, not of a re-serialization: the same figure Save checked', () => {
+    const text = serializeProject(projectOfSize(MAX_PROJECT_BYTES))
+    expect(text.length).toBe(MAX_PROJECT_BYTES)
+    const result = validateProjectJsonString(text)
+    if (!result.ok) throw new Error(result.reason)
+  })
+
+  it('each refusal names the size and the limit, and what to do when there is something to do', () => {
+    expect(sentenceFor('save')).toMatch(/too large to save \(55\.4 MB; the limit is 50 MB\)/)
+    expect(sentenceFor('save')).toMatch(/Remove or shrink large images on the canvas, then save again\.$/)
+    expect(sentenceFor('autosave')).toMatch(/^Autosave is paused: this project is too large to keep \(55\.4 MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/)
+    expect(sentenceFor('open')).toMatch(/too large to open \(55\.4 MB; the limit is 50 MB\)/)
+    expect(sentenceFor('open'), 'not the damaged-file guess').not.toMatch(/damaged|newer version/i)
+  })
+
+  it('the size is rounded UP to a tenth, so a project one character over never reads as "50.0 MB; the limit is 50 MB"', () => {
+    expect(sentenceFor('save', MAX_PROJECT_BYTES + 1)).toContain('(50.1 MB; the limit is 50 MB)')
+    expect(sentenceFor('save', 60 * 1024 * 1024)).toContain('(60.0 MB;')
+  })
+
+  it('nothing at or under the limit is a problem, for any of the three', () => {
+    for (const doing of ['save', 'open', 'autosave'] as const) {
+      expect(projectSizeProblem(0, doing)).toBeNull()
+      expect(projectSizeProblem(MAX_PROJECT_BYTES, doing)).toBeNull()
+      expect(projectSizeProblem(MAX_PROJECT_BYTES + 1, doing)).not.toBeNull()
+    }
+  })
+
+  it('every sentence is one finished line a toast shows as written (userFacingError lets it stand through the IPC envelope)', () => {
+    for (const doing of ['save', 'open', 'autosave'] as const) {
+      const sentence = sentenceFor(doing)
+      expect(sentence.length).toBeLessThanOrEqual(240)
+      expect(sentence).not.toContain('\n')
+      expect(sentence).toMatch(/\.$/)
+      const wrapped = new Error(`Error invoking remote method 'project:${doing}': Error: ${sentence}`)
+      expect(userFacingError(wrapped, 'Fallback.').message).toBe(sentence)
+    }
+  })
+
+  it('Open refuses an oversize file in that sentence (it said "project too large (N > M bytes)", which Home turned into "damaged")', () => {
+    const result = validateProjectJsonString('x'.repeat(60 * 1024 * 1024))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toMatch(/too large/)
+      expect(result.reason).toContain('60.0 MB')
+      expect(userFacingError(result.reason, "Couldn't open that project. The file may be damaged.").message).toBe(result.reason)
+    }
+  })
+
+  it('autosave refuses an oversize project in the autosave sentence, before the studio-state check', () => {
+    const result = isSafeToAutosave(projectOfSize(MAX_PROJECT_BYTES + 1))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/^Autosave is paused: this project is too large to keep/)
+  })
+})
+
+// ── T-137 (11): a clip's customPresetIds is a list of strings, or absent ──────────────────────────────────────────────────────────────
+//
+// The gate never looked at it, so `customPresetIds: 5` (or {a:1}, or true) validated, and the Export panel's `for (const id of clip.customPresetIds ?? [])`
+// threw in render: autosave and Restore re-crashed /video until Clear. Dropped, not refused, like the unknown platform ids beside it.
+
+describe('a clip\'s customPresetIds is required to be a list of strings, or absent (T-137 (11))', () => {
+  const clipsOf = (ids: unknown): Array<Record<string, unknown>> => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/path/to/video.mp4', clips: [goodClip(ids === undefined ? {} : { customPresetIds: ids })], selectedClipId: null, watermark: null }
+    })
+    if (!result.ok) throw new Error(result.reason)
+    return (result.project.videoStudio?.clips ?? []) as unknown as Array<Record<string, unknown>>
+  }
+
+  it.each([
+    ['a number', 5],
+    ['an object', { a: 1 }],
+    ['true', true],
+    ['a string (it would iterate as characters)', 'abc'],
+    ['null', null],
+    ['zero', 0]
+  ])('%s is not a list: the project still opens, the field is gone, and the Export panel\'s loop cannot throw', (_what, bad) => {
+    const [clip] = clipsOf(bad)
+    expect(clip?.customPresetIds).toBeUndefined()
+    expect('customPresetIds' in (clip ?? {}), 'dropped, not left as undefined-valued noise').toBe(false)
+    expect(() => {
+      for (const id of (clip?.customPresetIds as string[] | undefined) ?? []) void id
+    }).not.toThrow()
+  })
+
+  it('entries that are not strings are dropped and the strings stay, in order', () => {
+    expect(clipsOf(['a', 3, null, {}, 'b', ['c'], undefined])[0]?.customPresetIds).toEqual(['a', 'b'])
+    expect(clipsOf([1, 2])[0]?.customPresetIds).toEqual([])
+  })
+
+  it('controls: a clean list, an empty list and an absent field load exactly as written', () => {
+    expect(clipsOf(['p1', 'p2'])[0]?.customPresetIds).toEqual(['p1', 'p2'])
+    expect(clipsOf([])[0]?.customPresetIds).toEqual([])
+    expect('customPresetIds' in (clipsOf(undefined)[0] ?? {})).toBe(false)
+  })
+
+  it('every clip is checked, not just the first, and the rest of each clip is untouched', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/path/to/video.mp4',
+        clips: [goodClip({ customPresetIds: 5 }), goodClip({ id: 'c2', name: 'Second', customPresetIds: ['p1', 7] }), goodClip({ id: 'c3', customPresetIds: ['p2'] })],
+        selectedClipId: null,
+        watermark: null
+      }
+    })
+    if (!result.ok) throw new Error(result.reason)
+    const clips = result.project.videoStudio?.clips ?? []
+    expect(clips.map((c) => c.customPresetIds)).toEqual([undefined, ['p1'], ['p2']])
+    expect(clips[1]).toMatchObject({ id: 'c2', name: 'Second', startSec: 0, endSec: 5, selectedPresets: ['youtube'] })
   })
 })

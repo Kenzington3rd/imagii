@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -307,13 +307,13 @@ describe('a compilation never says Saved for a file with clips missing (T-131 (1
     expect(lost?.message).toContain('the clip "Boss fight" could not be read')
   })
 
-  it('a clip with no usable name is called by its place, and a join line that names no segment gets the sentence that does not (T-132 (12))', async () => {
+  it('a clip with no usable name is called by its place, and a join line that names no segment of THIS job gets the sentence that does not (T-132 (12), T-137 (12))', async () => {
     says = (args) => (args.at(-1)?.endsWith('seg-cr-loud-1.mkv') ? 'Output file is empty, nothing was encoded' : null)
     const blank = { ...spec([[1, 3], [20, 22]]), segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 20, endSec: 22, name: '   ' }] }
     const empty = await runConcat(blank).then(() => null, (e: Error) => e)
     expect(empty?.message).toBe('Clip 2 of the compilation has no picture in the video (check its start and end), so nothing was saved.')
     joinWrites = true
-    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/somewhere/else.mkv'" : null)
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-someone-else-1.mkv'" : null)
     const lost = await runConcat(spec([[1, 3], [4, 6]])).then(() => null, (e: Error) => e)
     expect(lost?.message).toBe(
       'The compilation could not be put together because one of its clips could not be read, so nothing was saved. Try again, and if it keeps happening, compile fewer clips at a time.'
@@ -454,5 +454,62 @@ describe('a join that cannot open a segment names its clip whatever its exit cod
     }
     const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
     expect(userFacingError(err, 'Compilation failed.').cancelled).toBe(true)
+  })
+})
+
+// T-137 (12): FFMPEG_UNREADABLE_PART was /Impossible to open/ and FFMPEG_EMPTY_OUTPUT /Output file is empty/, tested against ALL of stderr, and ffmpeg
+// echoes the person's paths there at the default log level ("Output #0, mp4, to '<dir>/<name>.mp4':", "Input #0, ..., from '<source>':"). A folder or a
+// source named with either phrase failed a good compilation (any exit, since T-136 (15) made the line the evidence). Each is now ffmpeg's own line.
+describe('a path that contains a phrase ffmpeg uses is not ffmpeg saying it (T-137 (12))', () => {
+  const spec = (outDir: string, sourcePath = '/tmp/in.mp4'): Parameters<typeof runConcat>[0] => ({
+    jobId: 'cr-echo',
+    sourcePath,
+    outDir,
+    segments: [{ startSec: 0, endSec: 2, name: 'a' }, { startSec: 5, endSec: 8, name: 'b' }],
+    fadeMs: 0,
+    width: 1280,
+    height: 720
+  })
+
+  it('a compilation saved into a folder named "Impossible to open" succeeds: the join echoes its output path and says nothing is wrong', async () => {
+    const outDir = path.join(scratch, 'Impossible to open')
+    mkdirSync(outDir)
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? `Input #0, concat, from '/tmp/imagii-concat/list-cr-echo.txt':\nOutput #0, mp4, to '${args[args.length - 1] as string}':\n` : null)
+    const { outputPath } = await runConcat(spec(outDir))
+    expect(path.dirname(outputPath)).toBe(outDir)
+    expect(existsSync(outputPath), 'the join\'s file is the result, not wreckage').toBe(true)
+  })
+
+  it('so does a folder whose name is the whole line, and a Windows path with the phrase in it', async () => {
+    const outDir = path.join(scratch, "Impossible to open 'x/seg-cr-echo-0.mkv'")
+    mkdirSync(outDir, { recursive: true })
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? `Output #0, mp4, to '${args[args.length - 1] as string}':\nOutput #0, mp4, to 'C:\\Users\\me\\Impossible to open\\seg-cr-echo-0.mkv':\n` : null)
+    await expect(runConcat(spec(outDir))).resolves.toBeDefined()
+  })
+
+  it('a source in a folder named "Output file is empty" is not an empty segment: every segment echoes the source it reads', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? null : "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/videos/Output file is empty/in.mp4':\nOutput #0, matroska, to '/tmp/imagii-concat/seg-cr-echo-0.mkv':\n")
+    await expect(runConcat(spec(scratch, '/videos/Output file is empty/in.mp4'))).resolves.toBeDefined()
+  })
+
+  it('control: ffmpeg\'s own lines still fail the job, with the folder named the same', async () => {
+    const outDir = path.join(scratch, 'Impossible to open')
+    mkdirSync(outDir)
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-echo-1.mkv'" : null)
+    const lost = await runConcat(spec(outDir)).then(() => null, (e: Error) => e)
+    expect(lost?.message).toContain('the clip "b" could not be read')
+    says = (args) => (args.at(-1)?.endsWith('seg-cr-echo-1.mkv') ? '[out#0/matroska @ 0x1] Output file is empty, nothing was encoded' : null)
+    const empty = await runConcat(spec(path.join(scratch, 'Output file is empty'))).then(() => null, (e: Error) => e)
+    expect(empty?.message).toMatch(/^The clip "b" has no picture/)
+  })
+
+  it('an "Impossible to open" line about a file that is not one of the runner\'s segments is not a lost part', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 0x1] Impossible to open '/somewhere/else.mkv'" : null)
+    await expect(runConcat(spec(scratch))).resolves.toBeDefined()
   })
 })

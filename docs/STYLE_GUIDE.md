@@ -327,6 +327,19 @@ Repeated UI is a component, not copy-paste:
   (`AUTOSAVE_MAX_WAIT_MS`) after its first, so the next field that changes faster than the debounce cannot starve the save again. Ceiling: a write the
   min-interval rule defers starts a fresh window. The effect is `startAutosave` (the hook is two lines around it), so a unit test can drive the real
   stores on a fake clock; a field added to either store that changes with the playhead is added to the key list.
+- **A project has ONE size rule, and the autosave compares content (T-137 (6), (7)).** `MAX_PROJECT_BYTES` (50 MiB, in `@shared/projectValidation`) is applied by
+  `projectSizeProblem(size, doing)` to the length of the compact JSON (`serializeProject`, the one serialization) by every way a project is written or read:
+  Open measures the file's text, autosave the capture, and `project:save` the text it is about to write, THEN throws a finished sentence before it asks where to
+  save (so a file Save writes is exactly the text it measured and always opens; it used to write pretty-printed JSON with no gate, 56.9 MiB from four 11 MB
+  pictures, and Open called the result damaged). The sentence names the size (rounded UP to a tenth, so "50.1 MB; the limit is 50 MB" is never "50.0 MB; the limit is
+  50 MB") and what to do, one line a toast shows as written. An autosave over the limit is not sent to main (a 50 MiB structured clone every few seconds to be refused):
+  `startAutosave` raises ONE toast per episode (`AUTOSAVE_TOO_LARGE_TOAST_ID`; "Autosave is paused: ..."), and autosave starts again by itself when the project fits,
+  after which a new overflow is told again. The dedupe key (`AutosaveMemory.lastHash`) is the capture with its `savedAt` set aside (a fixed 13-digit stamp, the length of
+  a real one): `savedAt` is `Date.now()` at the capture, so the key never matched, and a store change that is not in the project (Find chat spikes, Scan VOD, a grid
+  toggle) rewrote an identical file and rotated `autosave.prev`. What makes a project big is pictures, so a picture on the canvas is a COPY bounded to the size it can
+  show (`@shared/imageBounds`, `lib/boundedImage.ts`): ImportPanel keeps 1600 px on the longer side (twice the 800 px a layer is first drawn at, because a HiDPI screen
+  defaults to a 2x export), PNG unless the picture came as a JPEG and is opaque, and a picture already within the bound is kept as it came; "-> Canvas" embeds the
+  tile's picture (800 px; JPEG only when every pixel is opaque) instead of the address of the cached thumbnail, a file Clear thumbnail cache and the launch sweep remove.
 - **A result belongs to the video it was made for (T-135 (4)).** A scan's candidates, the pasted chat logs, the spikes found in them and the
   transcript preview were panels' `useState`, so every visit to Home emptied them. They are `derived` in the video store: applied with
   `setDerivedFor(sourcePath, patch)` (a result that arrives after the video was replaced is dropped, the `setSrtPathFor` rule), emptied by
@@ -355,6 +368,11 @@ Repeated UI is a component, not copy-paste:
   `tests/unit/stderrCapped.test.ts` reads every `<x>.stderr.on('data', handler)` under `src/main` with the syntax tree and fails on a handler that
   accumulates without assigning a tail of at most 16384 to the accumulator. A handler whose stderr IS the product (the ebur128 scans parse every
   line) or that cannot grow (`-version`) is a row in its table of audited exceptions, with the reason, never a silent skip.
+  T-137 (8): a tail that the handler can SKIP is not a cap. The audio export's `runFfmpegJob` read `if (!collectStderr && stderr.length > 16384) stderr =
+  stderr.slice(-16384)`, so the scan counted it as capped (a `slice(-16384)` was there) while the loudness measure pass, the one that always ran with
+  `collectStderr`, kept every line of an hour-long log. Every pass keeps the 16 KB tail now (loudnorm prints its JSON block at the end, under a kilobyte, and
+  `parseLoudnormJson` reads the tail), and the scan walks from the cap up to the handler: an `if`, `?:`, `&&` or `||` that guards it may mention the accumulator and nothing
+  else (`stderr.length > 16384` is the idiom; `!collectStderr && ...` is a switch).
 - **`recording:begin` takes its slot before its first await (T-123).** The cap on open sessions was read, then `mkdir` and
   the stream's `open` were awaited, then the session was inserted: twelve concurrent begins all read the same size and all
   passed a cap that four sequential ones enforce. `beginsInFlight` is counted in the same synchronous step as the check
@@ -980,6 +998,12 @@ If you write the same markup a third time, extract it.
   "newer than the spawn, 2 s of slack" and refused a GOOD thumbnail on a share whose clock ran more than 2 s behind, aborting the kit). What
   makes that safe is that nothing is at the target when it starts: the thumbnail goes into a fresh `makeKitDir` folder and `extractFrame`
   refuses a target that already exists, before ffmpeg runs, leaving it as it was.
+- **A guard on ffmpeg's output reads ffmpeg's LINE, never a phrase in stderr (T-137 (12)).** ffmpeg echoes the person's paths at the default log level
+  ("Output #0, mp4, to '<dir>/<name>.mp4':", "Input #0, ..., from '<source>':"), so `FFMPEG_UNREADABLE_PART` (`/Impossible to open/`) and `FFMPEG_EMPTY_OUTPUT`
+  (`/Output file is empty/`), tested against all of stderr, failed a GOOD compilation, export, reframe or burn-in whose folder or source was named with the phrase.
+  Each is anchored to the start of a line, with ffmpeg's own bracketed context (`[concat @ 0x...]`, `[out#0/mp4 @ 0x...]`), and the join's also needs a segment file of the
+  runner's (`seg-<job>-<index>.mkv`, the name `unreadableSegmentIndex` parses). A path can spell the words but not start a line with them. Layer 5 runs a real join
+  into a folder named "Impossible to open" and a real export into one named "Output file is empty" on both majors, with a control that the real lines still refuse there.
 - **An `await` in a start that can outlive its screen is followed by the unmount check (T-120).** `RecordStudio.startRecording` awaits the
   capture, the microphone, the camera, the compositor and the main-process session, and the unmount cleanup runs before any of them lands.
   `unmountedRef` is cleared on mount (StrictMode runs the cleanup and the effect again in dev) and set in the cleanup;
@@ -1019,6 +1043,9 @@ If you write the same markup a third time, extract it.
   capture (`doc.layers.length`). What a studio reads with a default stays optional exactly as an older build left it
   (`cropRect`, the speed, the grade, the flags, `humHz`, `denoiseParams`, `secondaryTrack`), and the
   refusals with a security reason - the second track's path and numbers, an overlay's color - are still named first.
+  T-137 (11): a clip's `customPresetIds` is a list of strings or it is absent; anything else is DROPPED (not refused, like the unknown platform ids): the gate never
+  looked at it, so `5`, `{ a: 1 }` and `true` validated and the Export panel's `for (const id of clip.customPresetIds ?? [])` threw in render, on every restore until Clear.
+  `pruneCustomPresets` reads the field as `unknown` for the same reason: it runs on every visit to Export with whatever the clips hold.
 
 ## Power of Ten
 

@@ -44,8 +44,15 @@ export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
 
 type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRecipe>
 
-/** What the concat demuxer says (exit 0, both majors, measured) when it cannot open a listed segment, and stops there. */
-export const FFMPEG_UNREADABLE_PART = /Impossible to open/
+/**
+ * What the concat demuxer says (exit 0, both majors, measured) when it cannot open a listed segment, and stops there: its own line, at the start of a
+ * line, naming one of the runner's segment files (`seg-<job>-<index>.mkv`).
+ *
+ * T-137 (12): it was /Impossible to open/ tested against ALL of stderr, and ffmpeg echoes the person's paths there at the default log level
+ * ("Output #0, mp4, to '<dir>/<name>.mp4':"), so a good join into a folder named with the phrase failed as a lost clip (any exit, since T-136 (15) made
+ * the line the evidence). A path can spell the words but not start a line with them, and not be a segment file of the runner's scratch folder.
+ */
+export const FFMPEG_UNREADABLE_PART = new RegExp(`^(?:\\[concat @ 0x[0-9a-f]+\\] )?Impossible to open '[^\\n]*seg-[^\\n]*-\\d+\\.${SEGMENT_EXTENSION}`, 'm')
 
 // FFMPEG_EMPTY_OUTPUT moved to ./noPicture with the other runners' guards (T-132 (4)); the name stays importable from here.
 export { FFMPEG_EMPTY_OUTPUT }
@@ -70,10 +77,13 @@ export function lostPartMessage(seg: { name?: unknown } | undefined): string {
     : `${lead} one of its clips could not be read, so nothing was saved. Try again, and if it keeps happening, compile fewer clips at a time.`
 }
 
-/** Which segment the concat demuxer could not open: the index in `seg-<job>-<index>.mkv` on its "Impossible to open" line, or null. */
+/**
+ * Which segment the concat demuxer could not open: the index in `seg-<job>-<index>.mkv` on its "Impossible to open" line (the line `FFMPEG_UNREADABLE_PART`
+ * reads, for this job's segments), or null.
+ */
 export function unreadableSegmentIndex(stderr: string, jobId: string): number | null {
   const escaped = jobId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const found = new RegExp(`Impossible to open[^\\n]*?seg-${escaped}-(\\d+)\\.${SEGMENT_EXTENSION}`).exec(stderr)
+  const found = new RegExp(`^(?:\\[concat @ 0x[0-9a-f]+\\] )?Impossible to open '[^\\n]*?seg-${escaped}-(\\d+)\\.${SEGMENT_EXTENSION}`, 'm').exec(stderr)
   return found?.[1] === undefined ? null : Number(found[1])
 }
 

@@ -80,8 +80,7 @@ async function runFfmpegJob(
   onProgress: AudioProgressListener,
   run: LatchRun,
   /** The file this pass writes (the measure pass writes none): removed if the pass fails. */
-  outputPath?: string,
-  collectStderr = false
+  outputPath?: string
 ): Promise<{ stderr: string }> {
   let spawnedAt: number | null = null
   return new Promise<{ stderr: string }>((resolve, reject) => {
@@ -112,9 +111,12 @@ async function runFfmpegJob(
     })
 
     child.stderr.setEncoding('utf8')
+    // T-137 (8): the same 16 KB tail every other spawn keeps, for EVERY pass. The measure pass used to keep all of it (`collectStderr`, and the cap was
+    // skipped when it was set): an hour of a damaged source's per-packet warnings in memory for a block loudnorm prints LAST and parseLoudnormJson finds
+    // in the tail (the block is under a kilobyte).
     child.stderr.on('data', (chunk: string) => {
-      if (collectStderr || stderr.length < 32768) stderr += chunk
-      if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)
+      stderr += chunk
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
 
     child.on('error', (err) => {
@@ -205,9 +207,7 @@ async function exportAudio(
       writtenSeconds,
       'measure',
       onProgress,
-      run,
-      undefined,
-      true
+      run
     )
     const parsed = parseLoudnormJson(stderr)
     if (parsed) measurement = parsed
