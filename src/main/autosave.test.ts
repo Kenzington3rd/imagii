@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, mkdir, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { EventEmitter } from 'node:events'
+import { MAX_SCHEMA_VERSION, isSafeToAutosave, validateProjectJsonString } from '../shared/projectValidation'
 import { userFacingError } from '../shared/userFacingError'
+import type { ImagiiProject } from '../shared/workspace'
 
 let tempDir: string
 
@@ -382,5 +385,208 @@ describe('autosave info', () => {
     expect(info.exists).toBe(true)
     expect(info.savedAt).toBeGreaterThan(0)
     expect(info.ageMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+/**
+ * T-139 (3) - overlapping autosave writes cannot corrupt both slots.
+ *
+ * `writeAutosave` wrote through ONE fixed `autosave.tmp` with no exclusion. The renderer's doSave sets `lastWriteTime` AFTER its await (so a second write can
+ * start while one is in flight) and the quit flush writes beside it; overlapping calls truncated each other's tmp, a mixed file was renamed into
+ * `autosave.json` and then copied over `autosave.prev.json` (executed: both slots corrupt in 6 of 6 overlapping trials). The writes now run one after
+ * another (the later content wins, every caller still gets its own result) and each has its own tmp name.
+ *
+ * These drive the REAL module on REAL files; only electron's `userData` is pointed at a temp folder, and the failures a disk makes are injected where they are named.
+ */
+describe('autosave writes are serialized (T-139 (3))', () => {
+  /** A valid project that is `bytes` of picture data long and says which write it is in `videoStudio.sourcePath`. */
+  function tagged(tag: string, bytes: number): ImagiiProject {
+    return {
+      schemaVersion: MAX_SCHEMA_VERSION,
+      savedAt: 1,
+      appVersion: '1.0.0',
+      videoStudio: { sourcePath: `C:/${tag}.mp4`, clips: [], selectedClipId: null, watermark: null },
+      imageCanvas: {
+        doc: {
+          width: 1280,
+          height: 720,
+          background: '#ffffff',
+          layers: [
+            { id: 'img1', type: 'image', name: 'big.png', visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src: 'A'.repeat(bytes), width: 100, height: 100 }
+          ]
+        }
+      }
+    }
+  }
+  const dir = (): string => path.join(tempDir, 'autosave')
+  const slot = async (name: string): Promise<{ parses: boolean; tag: string | null }> => {
+    const raw = await readFile(path.join(dir(), name), 'utf8')
+    const v = validateProjectJsonString(raw)
+    return { parses: v.ok, tag: v.ok ? (v.project.videoStudio?.sourcePath ?? null) : null }
+  }
+  const BIG = 6_000_000
+
+  /** The module over a `node:fs/promises` whose `writeFile` is `stand`, when given (everything else real). */
+  function build(stand?: (real: typeof import('node:fs/promises'), file: string, data: string, rest: unknown[]) => Promise<void>): Promise<typeof import('./autosave')> {
+    vi.resetModules()
+    vi.doMock('electron', () => ({ app: { getPath: () => tempDir } }))
+    vi.doMock('node:fs/promises', async () => {
+      const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      return {
+        ...real,
+        writeFile: (file: string, data: string, ...rest: unknown[]) =>
+          stand ? stand(real, file, data, rest) : (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+      }
+    })
+    return import('./autosave')
+  }
+
+  it('two overlapping writes of very different sizes leave a parseable current AND prev, the current is the later one, and both callers are told ok', async () => {
+    for (let trial = 1; trial <= 4; trial += 1) {
+      const m = await build()
+      await m.writeAutosave(tagged('seed', 100))
+      // The big write first, the small one right behind it: the old fixed tmp was truncated under the big one's feet.
+      const [first, second] = await Promise.all([m.writeAutosave(tagged('first-big', BIG)), m.writeAutosave(tagged('second-small', 100))])
+      expect(first.ok, `trial ${trial}: ${JSON.stringify(first)}`).toBe(true)
+      expect(second.ok, `trial ${trial}: ${JSON.stringify(second)}`).toBe(true)
+      expect(await slot('autosave.json'), `trial ${trial}: current`).toEqual({ parses: true, tag: 'C:/second-small.mp4' })
+      expect(await slot('autosave.prev.json'), `trial ${trial}: prev is the write before the last, whole`).toEqual({ parses: true, tag: 'C:/first-big.mp4' })
+      expect((await readdir(dir())).sort(), `trial ${trial}: no tmp left`).toEqual(['autosave.json', 'autosave.prev.json'])
+      await rm(dir(), { recursive: true, force: true })
+    }
+  })
+
+  it('and the other way round (small first, big behind it)', async () => {
+    const m = await build()
+    await m.writeAutosave(tagged('seed', 100))
+    const [first, second] = await Promise.all([m.writeAutosave(tagged('first-small', 100)), m.writeAutosave(tagged('second-big', BIG))])
+    expect([first.ok, second.ok]).toEqual([true, true])
+    expect(await slot('autosave.json')).toEqual({ parses: true, tag: 'C:/second-big.mp4' })
+    expect(await slot('autosave.prev.json')).toEqual({ parses: true, tag: 'C:/first-small.mp4' })
+  })
+
+  it('a burst of six leaves the LAST call\'s content in current and the fifth\'s in prev, and each caller got its own size', async () => {
+    const m = await build()
+    const sizes = [900_000, 50, 2_000_000, 300, 1_200_000, 70]
+    const results = await Promise.all(sizes.map((bytes, i) => m.writeAutosave(tagged(`burst-${i}`, bytes))))
+    expect(results.map((r) => r.ok)).toEqual(sizes.map(() => true))
+    const written = results.map((r) => (r.ok ? r.sizeBytes : -1))
+    expect(new Set(written).size, 'each result is the size of its own write').toBe(6)
+    expect(await slot('autosave.json')).toEqual({ parses: true, tag: 'C:/burst-5.mp4' })
+    expect(await slot('autosave.prev.json')).toEqual({ parses: true, tag: 'C:/burst-4.mp4' })
+  })
+
+  it('the quit flush beside a periodic write: both slots stay whole and the flush (the later call) is the current one', async () => {
+    const ipcMain = new EventEmitter()
+    vi.resetModules()
+    vi.doMock('electron', () => ({ app: { getPath: () => tempDir }, ipcMain }))
+    vi.doMock('node:fs/promises', async () => vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'))
+    const m = await import('./autosave')
+    const q = await import('./quitFlush')
+    await m.writeAutosave(tagged('seed', 100))
+    const window = {
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        // The renderer answers the request at once, with the small final snapshot.
+        send: () => setTimeout(() => ipcMain.emit(q.QUIT_SNAPSHOT_REPLY, {}, tagged('quit-flush', 100)), 0)
+      }
+    }
+    const periodic = m.writeAutosave(tagged('periodic-big', BIG))
+    const outcome = await q.flushAutosaveOnQuit(window as unknown as Parameters<typeof q.flushAutosaveOnQuit>[0])
+    expect(outcome).toBe('written')
+    expect((await periodic).ok).toBe(true)
+    expect(await slot('autosave.json')).toEqual({ parses: true, tag: 'C:/quit-flush.mp4' })
+    expect(await slot('autosave.prev.json')).toEqual({ parses: true, tag: 'C:/periodic-big.mp4' })
+  })
+
+  it('each write has its own tmp name, in the autosave folder, and none is the old fixed autosave.tmp', async () => {
+    const targets: string[] = []
+    const m = await build(async (real, file, data, rest) => {
+      targets.push(file)
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    })
+    await Promise.all([m.writeAutosave(tagged('a', 100)), m.writeAutosave(tagged('b', 100)), m.writeAutosave(tagged('c', 100))])
+    expect(targets).toHaveLength(3)
+    expect(new Set(targets).size).toBe(3)
+    for (const t of targets) {
+      expect(path.dirname(t)).toBe(dir())
+      expect(path.basename(t)).toMatch(/\.tmp$/)
+      expect(path.basename(t)).not.toBe('autosave.tmp')
+    }
+  })
+
+  /** The module over a `writeFile` that fails part-way for a project tagged FAIL-ME (the first bytes reach the tmp, then ENOSPC), as a full disk does. */
+  const buildFailingOnMarker = (): Promise<typeof import('./autosave')> =>
+    build(async (real, file, data, rest) => {
+      if (data.includes('FAIL-ME')) {
+        await real.writeFile(file, data.slice(0, 40))
+        throw Object.assign(new Error('ENOSPC: simulated, write'), { code: 'ENOSPC' })
+      }
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    })
+
+  it('a write that fails answers ok:false with the disk\'s words, removes its own half-written tmp at once, and leaves the current autosave untouched', async () => {
+    const m = await buildFailingOnMarker()
+    await m.writeAutosave(tagged('good-1', 100))
+    const before = await readFile(path.join(dir(), 'autosave.json'), 'utf8')
+    const failed = await m.writeAutosave(tagged('FAIL-ME', 100))
+    expect(failed.ok).toBe(false)
+    if (!failed.ok) expect(failed.reason).toContain('ENOSPC')
+    // Checked BEFORE any later write: the next write would sweep a leftover, which is not what removes it here.
+    expect(await readdir(dir()), 'its half-written tmp is gone the moment it fails').toEqual(['autosave.json'])
+    expect(await readFile(path.join(dir(), 'autosave.json'), 'utf8')).toBe(before)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(userFacingError(new Error(failed.ok ? '' : failed.reason), 'Autosave failed.').message).toBe('Autosave failed. Your disk is full. Free up some space and try again.')
+    quiet.mockRestore()
+  })
+
+  it('a write that fails does not wedge the ones behind it: the next one runs, and prev is the last good write, not the failed one', async () => {
+    const m = await buildFailingOnMarker()
+    await m.writeAutosave(tagged('good-1', 100))
+    const [failed, after] = await Promise.all([m.writeAutosave(tagged('FAIL-ME', 100)), m.writeAutosave(tagged('good-2', 100))])
+    expect(failed.ok).toBe(false)
+    expect(after.ok).toBe(true)
+    expect(await slot('autosave.json')).toEqual({ parses: true, tag: 'C:/good-2.mp4' })
+    expect(await slot('autosave.prev.json')).toEqual({ parses: true, tag: 'C:/good-1.mp4' })
+    expect((await readdir(dir())).sort()).toEqual(['autosave.json', 'autosave.prev.json'])
+  })
+
+  it('a call that THROWS before it writes anything (a project whose safety check blows up) does not wedge the chain either', async () => {
+    const m = await build()
+    // The first read of `videoStudio` is serializeProject's (inside the try); the second is hasStudioState's, which isSafeToAutosave makes outside it.
+    const poison = (): ImagiiProject => {
+      let reads = 0
+      return new Proxy(tagged('poisoned', 100), {
+        get(target, key, receiver) {
+          if (key === 'videoStudio' && (reads += 1) > 1) throw new Error('boom: unreadable project')
+          return Reflect.get(target, key, receiver) as unknown
+        }
+      })
+    }
+    expect(() => isSafeToAutosave(poison()), 'the poison throws where writeAutosave asks the question').toThrow('boom')
+    await m.writeAutosave(poison()).catch(() => 'threw')
+    const next = await m.writeAutosave(tagged('after-the-poison', 100))
+    expect(next.ok).toBe(true)
+    expect(await slot('autosave.json')).toEqual({ parses: true, tag: 'C:/after-the-poison.mp4' })
+  })
+
+  it('a tmp left by a write that was cut off (the process killed mid-write) is swept by the next write, and so is the old fixed name', async () => {
+    const m = await build()
+    await mkdir(dir(), { recursive: true })
+    await writeFile(path.join(dir(), 'autosave.0badc0de.tmp'), '{"half":', 'utf8')
+    await writeFile(path.join(dir(), 'autosave.tmp'), '{"older build', 'utf8')
+    await writeFile(path.join(dir(), 'notes.tmp'), 'not ours', 'utf8')
+    expect((await m.writeAutosave(tagged('fresh', 100))).ok).toBe(true)
+    expect((await readdir(dir())).sort(), 'only our own tmp names are swept').toEqual(['autosave.json', 'notes.tmp'])
+  })
+
+  it('Clear removes a cut-off tmp as well (it listed one fixed name, which is no longer the only one)', async () => {
+    const m = await build()
+    await m.writeAutosave(tagged('one', 100))
+    await m.writeAutosave(tagged('two', 100))
+    await writeFile(path.join(dir(), 'autosave.0badc0de.tmp'), '{"half":', 'utf8')
+    await m.clearAutosave()
+    expect(await readdir(dir())).toEqual([])
   })
 })

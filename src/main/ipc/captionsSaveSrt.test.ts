@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { userFacingError } from '../../shared/userFacingError'
@@ -46,6 +46,41 @@ vi.mock('../sidecars/paths', () => ({
   captionsOutputDir: () => captionsDir
 }))
 
+// T-139 (1): the failures a disk makes, injected into the real `node:fs/promises` (everything else in it stays real). Off unless a test turns one on.
+const faults = vi.hoisted(() => ({
+  /** The next write puts the first half of its bytes on disk, then fails with ENOSPC. */
+  writeThenFail: false,
+  /** The next rename fails with EPERM. */
+  renameFails: false
+}))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    writeFile: async (file: string, data: string | Buffer, ...rest: unknown[]) => {
+      if (faults.writeThenFail) {
+        const bytes = Buffer.from(data)
+        await real.writeFile(file, bytes.subarray(0, Math.ceil(bytes.length / 2)))
+        throw Object.assign(new Error('ENOSPC: simulated, write'), { code: 'ENOSPC' })
+      }
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    },
+    // The old handler copied with `copyFile`, which truncates the target and then fills it: the same half-way failure, at the call it made.
+    copyFile: async (from: string, to: string, ...rest: unknown[]) => {
+      if (faults.writeThenFail) {
+        const bytes = await real.readFile(from)
+        await real.writeFile(to, bytes.subarray(0, Math.ceil(bytes.length / 2)))
+        throw Object.assign(new Error('ENOSPC: simulated, copyfile'), { code: 'ENOSPC' })
+      }
+      return (real.copyFile as (...a: unknown[]) => Promise<void>)(from, to, ...rest)
+    },
+    rename: async (from: string, to: string) => {
+      if (faults.renameFails) throw Object.assign(new Error('EPERM: simulated, rename'), { code: 'EPERM' })
+      return real.rename(from, to)
+    }
+  }
+})
+
 const { registerCaptionsIpc } = await import('./captions')
 
 const GONE = "That transcript isn't on this computer anymore — transcribe the video again."
@@ -75,6 +110,8 @@ let picked = ''
 let consoleError: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  faults.writeThenFail = false
+  faults.renameFails = false
   consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-savesrt-'))
   captionsDir = path.join(scratch, 'captions')
@@ -198,5 +235,53 @@ describe('captions:saveSrt still saves (T-116)', () => {
     showSaveDialog.mockResolvedValue({ canceled: true })
     await expect(saveSrt(srt)).resolves.toBeNull()
     expect(existsSync(picked)).toBe(false)
+  })
+})
+
+/**
+ * T-139 (1) - "Save .srt" over a subtitle file the person already has: it is that file until the copy is whole.
+ *
+ * `copyFile(transcript, chosen)` opens the chosen file for writing and truncates it, so a copy that failed part-way (a full drive) left a stub where the
+ * person's subtitles had been. The handler reads the transcript and writes it through `writeFileAtomic` (a copy to a tmp beside the target, then a rename).
+ */
+describe('captions:saveSrt over an existing file (T-139 (1))', () => {
+  const OLD = '1\n00:00:00,000 --> 00:00:01,000\nthe old subtitles, whole\n'
+  const wasUntouched = (): void => {
+    expect(readFileSync(picked, 'utf8')).toBe(OLD)
+    expect(readdirSync(scratch).sort(), 'no tmp is left beside the file the person chose').toEqual(['captions', 'chosen.srt'])
+    expect(readFileSync(srt, 'utf8'), 'the transcript itself is untouched').toContain('first line')
+  }
+
+  it('a disk that fills part-way leaves the old subtitles byte-identical, and the person is told why', async () => {
+    writeFileSync(picked, OLD)
+    faults.writeThenFail = true
+    const err = await saveSrt(srt).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    wasUntouched()
+    expect(await shownFor(saveSrt(srt))).toBe(`${FALLBACK} Your disk is full. Free up some space and try again.`)
+    wasUntouched()
+  })
+
+  it('a rename the OS refuses (the subtitle file open in an editor) leaves the old subtitles whole', async () => {
+    writeFileSync(picked, OLD)
+    faults.renameFails = true
+    expect(await shownFor(saveSrt(srt))).toBe(`${FALLBACK} Windows blocked access to a file. Close any app using it, or check your antivirus.`)
+    wasUntouched()
+  })
+
+  it('a copy that succeeds is the transcript byte for byte (a byte order mark, CRLF line ends and a byte that is not UTF-8 are not re-encoded) and leaves no tmp', async () => {
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('1\r\n00:00:00,000 --> 00:00:01,000\r\ncaf', 'utf8'), Buffer.from([0xe9]), Buffer.from('\r\n')])
+    writeFileSync(srt, bytes)
+    writeFileSync(picked, OLD)
+    await expect(saveSrt(srt)).resolves.toBe(picked)
+    expect(readFileSync(picked).equals(bytes)).toBe(true)
+    expect(readdirSync(scratch).sort()).toEqual(['captions', 'chosen.srt'])
+  })
+
+  it('a FIRST save that fails leaves no file at all', async () => {
+    faults.writeThenFail = true
+    await expect(saveSrt(srt)).rejects.toThrow('ENOSPC')
+    expect(existsSync(picked)).toBe(false)
+    expect(readdirSync(scratch)).toEqual(['captions'])
   })
 })

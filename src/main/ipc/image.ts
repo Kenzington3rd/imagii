@@ -1,9 +1,9 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ImageSaveManyRequest, ImageSaveRequest } from '../../shared/canvas'
 import { assertAlways } from '../../shared/assert'
 import { assertNonEmptyString, assertPlainObject } from '../../shared/validators'
+import { writeFileAtomic } from '../fsAtomic'
 import {
   decodeImageDataUrl,
   formatOfFileName,
@@ -44,7 +44,8 @@ export function registerImageIpc(): void {
       ]
     })
     if (result.canceled || !result.filePath) return null
-    await writeFile(result.filePath, bytes)
+    // T-139 (1): over a picture the person already has, it is that picture until the new one is whole.
+    await writeFileAtomic(result.filePath, bytes)
     return result.filePath
   })
 
@@ -80,7 +81,7 @@ export function registerImageIpc(): void {
     const dir = result.filePaths[0]
     if (result.canceled || dir === undefined) return null
     for (const file of prepared) {
-      await writeFile(path.join(dir, file.name), file.bytes)
+      await writeFileAtomic(path.join(dir, file.name), file.bytes)
     }
     return { dir, count: prepared.length }
   })

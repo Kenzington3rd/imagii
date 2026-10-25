@@ -59,6 +59,23 @@ const CANCELED_DEFAULT = 'Canceled.'
 const RUNNER_EXIT = /^[\w-]+(?: [\w-]+)? exit [\w-]+/
 
 /**
+ * T-139 (10): ffmpeg's "Permission denied" as the CAUSE of a runner or probe exit. The shipped Windows ffmpeg says it when it may not open a file it was
+ * handed (the Microsoft C runtime maps a sharing violation or an ACL block to EACCES, and strerror(EACCES) is that phrase): a recording another app
+ * holds open, an export aimed at a file an editor has. The runner's message carries ffmpeg's stderr, so the lines look like
+ *
+ *   FFmpeg exit 1: [out#0/mp4 @ 00007fffff46bfc0] Error opening output C:\x\clip.mp4: Permission denied\r\nError opening output files: Permission denied
+ *   ffprobe exit 1: C:\x\rec.mp4: Permission denied
+ *
+ * and were told "check that the source file still plays and the folder has room" about a file that was LOCKED. Only that shape counts: a runner exit
+ * (`RUNNER_EXIT`'s prefix) with a line that ENDS in `: Permission denied`, the way strerror's text is printed after a path or a tool's name. The phrase
+ * on its own is not a cause here: "Screen recording permission denied" (main's own words for a capture the OS refused, `record.spec.ts`), the browser's
+ * "Permission denied", and a runner line that merely mentions the words are not a locked file. Exported for `describeImportError`, which reads the same line.
+ */
+export const RUNNER_PERMISSION_DENIED = /^[\w-]+(?: [\w-]+)? exit [\w-]+[\s\S]*:[ \t]*permission denied[ \t]*(?:\r?\n|$)/i
+
+const WINDOWS_BLOCKED = 'Windows blocked access to a file. Close any app using it, or check your antivirus.'
+
+/**
  * Failure shapes recognised ANYWHERE in the message, most specific first —
  * an ffmpeg run that died on a missing file is "a file is missing", not
  * "ffmpeg exited", so these are tried before the generic runner-exit rule.
@@ -79,10 +96,8 @@ export function isMissingFileError(err: unknown): boolean {
 const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bENOSPC\b|no space left on device/i, 'Your disk is full. Free up some space and try again.'],
   [MISSING_FILE, "A file imagii needs isn't there. It may have been moved or deleted."],
-  [
-    /\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i,
-    'Windows blocked access to a file. Close any app using it, or check your antivirus.'
-  ],
+  [/\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i, WINDOWS_BLOCKED],
+  [RUNNER_PERMISSION_DENIED, WINDOWS_BLOCKED],
   [
     /net::ERR_|\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\b/,
     "imagii couldn't reach the internet. Check your connection and try again."

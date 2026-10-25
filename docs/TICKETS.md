@@ -5793,7 +5793,7 @@ IMG-PREC.
   the FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** Track B done (round 88, see the Done entry); Track A sent back once, in expedite
+- **Status:** done (round 88, three tracks — see the three Done entries)
 
 ---
 
@@ -6296,6 +6296,55 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 88, Track A — T-139 items 1, 3 and 10, landed in the commit that
+carries this entry, merged onto Track B (f60e617) and Track C
+(8d34de0). Worked by one Sonnet in a fresh clone of d7e1738. The
+fixes: every write of a file the person chose or owns is atomic -
+one `writeFileAtomic` (src/main/fsAtomic.ts: a tmp beside the target,
+a best-effort flush, a rename over it, the tmp removed and the disk's
+own error rethrown on any failure) at ten sites (project save, image
+save and save-many, both .srt writes, five mood-board writes), held by
+fault-injection units over the real handlers and an AST scan; the
+autosave writes run one after another (a promise chain in main, a
+unique tmp per write, cut-off tmps swept) so overlapping calls can no
+longer corrupt both slots; ffmpeg's "Permission denied" at a runner or
+probe exit maps to the Windows-blocked sentence (the screen-recording
+refusal stays unmapped). It also fixed a defect the fault tests
+exposed: every failed board write raised an unhandled rejection
+(moodboard.ts's lock clean-up). SENT BACK ONCE by the expediter: my
+FULL Playwright run of the handed-back tree went 457/458 - image.spec
+"the document background lands in the bytes" - and the cause was the
+change itself: the e2e helpers that list a save folder counted the
+atomic writer's `<target>.<8 hex>.tmp` mid-write. The fix is in the
+tests (the product is right): one shared predicate (`ATOMIC_TMP`,
+exported beside the name it matches, and `withoutAtomicTmp` for the
+specs), a deterministic red that holds the rename at a gate in main so
+the tmp is guaranteed visible (red on the old helper, green after),
+and a scan that fails any listing of a download or export folder
+outside the filter. 71 ledger mutations all restored byte-identical
+(one survived a first pass and was killed after the test was split),
+11 reds. Expedited personally: verify x2 (192/5301 after the
+send-back), test:media on 7.0.2 (370 passed | 13 skipped of 383),
+FULL Playwright 457/458 before the send-back (the race above), and
+after it image.spec and references.spec whole 70/70 in the clone and
+the FULL suite on the merged tree below; integrity and ledger audit
+clean (no forbidden files, no Track B or C file touched, no file at a
+mutant's sha); two independent mutations at seams no ledger row names
+(the atomic writer copying into place instead of renaming → 5 named
+cases red; the shared tmp filter made a no-op → both "a save in
+flight" cases red), each restored byte-identical, sha256 verified.
+Merged by structure onto 8d34de0 (rehearsed in a scratch clone):
+four shared files conflicted - the coverage ledger and image.spec
+(each track's appended block re-appended, B's first), LESSONS (A's
+entry on top, newest first) and tests/e2e/slowWrites.ts, which both
+tracks had created with different helpers (combined into one file
+with both sets of exports) - and a line-level proof over all eight
+files both tracks touched showed neither side lost a line beyond what
+the other deliberately changed; all 20 Track-A-only files are
+byte-identical to the expedited clone, and the rehearsed tree verified
+at 193 files / 5361 tests, the three tracks' counts summed exactly.
+The merged tree's gates are this entry's commit.
 
 Round 88, Track C — T-139 docs follow-up, landed in the commit that
 carries this entry, onto Track B (f60e617). Worked by one Haiku in a

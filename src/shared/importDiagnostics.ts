@@ -1,5 +1,5 @@
 import { ipcErrorMessage } from './ipcError'
-import { userFacingError } from './userFacingError'
+import { RUNNER_PERMISSION_DENIED, userFacingError } from './userFacingError'
 
 export interface DropDiagnostic {
   hadFile: boolean
@@ -122,7 +122,9 @@ export function describeImportError(
   }
   if (
     (lowered.includes('access') && lowered.includes('denied')) ||
-    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered)
+    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered) ||
+    // T-139 (10): ffmpeg's / ffprobe's own word for a file it may not open, when a runner reports it (never the bare phrase: userFacingError.ts).
+    RUNNER_PERMISSION_DENIED.test(lowered)
   ) {
     return known('Windows blocked access. Close any app using the file, or check your antivirus.')
   }

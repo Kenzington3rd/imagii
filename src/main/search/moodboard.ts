@@ -8,6 +8,7 @@ import { isOutsideFolder } from '../pathConfine'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '../../shared/search'
 import { parseCollection } from '../../shared/moodboardParse'
 import { SAFE_ID_RE } from '../../shared/pathSafety'
+import { writeFileAtomic } from '../fsAtomic'
 
 async function ensureDirs(): Promise<void> {
   await mkdir(moodboardsDir(), { recursive: true })
@@ -28,10 +29,12 @@ function withCollectionLock<T>(collectionId: string, fn: () => Promise<T>): Prom
   const prev = collectionLocks.get(collectionId) ?? Promise.resolve()
   const next = prev.then(fn, fn)
   collectionLocks.set(collectionId, next)
-  // Drop the map entry once the chain drains so the map can't grow forever.
-  void next.finally(() => {
+  // Drop the map entry once the chain drains so the map can't grow forever. T-139 (1): settled on EITHER outcome with `then(release, release)`: a
+  // `finally` on a rejected promise is a new promise that rejects too, with nobody listening - every failed board write was also an unhandled rejection.
+  const release = (): void => {
     if (collectionLocks.get(collectionId) === next) collectionLocks.delete(collectionId)
-  })
+  }
+  void next.then(release, release)
   return next
 }
 
@@ -107,11 +110,9 @@ export async function createCollection(name: string): Promise<MoodBoardCollectio
     items: [],
     createdAt: Date.now()
   }
-  await writeFile(
-    path.join(moodboardsDir(), `${collection.id}.json`),
-    JSON.stringify(collection, null, 2),
-    'utf8'
-  )
+  // T-139 (1): every board write in this file is `writeFileAtomic` (create, rename, add, remove, restore). A board file truncated by a write that failed
+  // part-way does not parse, and `readCollection` drops what does not parse: the board vanished from the list with all its items.
+  await writeFileAtomic(path.join(moodboardsDir(), `${collection.id}.json`), JSON.stringify(collection, null, 2))
   return collection
 }
 
@@ -162,11 +163,7 @@ export async function restoreCollections(
     }
     keep.add(collection.id)
     await withCollectionLock(collection.id, () =>
-      writeFile(
-        path.join(dir, `${collection.id}.json`),
-        JSON.stringify(collection, null, 2),
-        'utf8'
-      )
+      writeFileAtomic(path.join(dir, `${collection.id}.json`), JSON.stringify(collection, null, 2))
     )
   }
 
@@ -192,7 +189,7 @@ export async function renameCollection(id: string, name: string): Promise<MoodBo
     const collection = await readCollection(file)
     if (!collection) return null
     collection.name = name.trim() || collection.name
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
     return collection
   })
 }
@@ -234,7 +231,7 @@ export async function addToCollection(
       addedAt: Date.now()
     }
     collection.items.push(item)
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
     return collection
   })
 }
@@ -255,7 +252,7 @@ export async function removeFromCollection(
     // remove that comes back without its picture is not an undo.
     // `sweepOrphanThumbs()` reclaims it on the next launch.
     collection.items = collection.items.filter((i) => i.id !== itemId)
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
     return collection
   })
 }

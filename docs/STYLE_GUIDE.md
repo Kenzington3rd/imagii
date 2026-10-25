@@ -1069,6 +1069,29 @@ If you write the same markup a third time, extract it.
   T-137 (11): a clip's `customPresetIds` is a list of strings or it is absent; anything else is DROPPED (not refused, like the unknown platform ids): the gate never
   looked at it, so `5`, `{ a: 1 }` and `true` validated and the Export panel's `for (const id of clip.customPresetIds ?? [])` threw in render, on every restore until Clear.
   `pruneCustomPresets` reads the field as `unknown` for the same reason: it runs on every visit to Export with whatever the clips hold.
+- **A file the person chose or owns is written with `writeFileAtomic`, and autosave writes one at a time (T-139 (1), (3)).** `writeFile(chosen, bytes)` and
+  `copyFile(source, chosen)` truncate the target at open, so a write that fails after it began (a full or removed drive, a crash) leaves neither the old file nor the
+  new one: executed, ENOSPC left a 2,097,152-byte stub where a project had been, and a truncated mood board does not parse, so the list dropped it with its items.
+  `main/fsAtomic.ts` writes a tmp of its own beside the target (same folder: a rename across volumes is not atomic), flushes it (best effort), and renames it over;
+  on any failure it removes the tmp and rethrows the ORIGINAL error, which `userFacingError` then words ("Your disk is full", "Windows blocked access" for a target another
+  app holds open). It is used at `project:save`, the image exports, the `.srt` copy (read the bytes, then the same write), the Clip Kit's `.srt` and every mood-board write.
+  A new write to a path the person chose or owns uses it; `tests/unit/atomicWrites.test.ts` is the grep that holds this: every `writeFile` / `copyFile` / `appendFile` /
+  `createWriteStream` under `src/main` is in its table, with the reason it needs none (a regenerable cache, a temp file, a `.partial` that is renamed after its check) or
+  the mark NOT CONVERTED. A test that LISTS a folder a converted site writes into goes through `withoutAtomicTmp` (`tests/e2e/atomicTmp.ts`, on the helper's exported
+  `ATOMIC_TMP`): the tmp is in the folder for the length of a write, and a wait on a count read it as a saved file (the first landing's full run, once); `image.spec.ts`
+  holds the rename at a gate (`slowWrites.ts`) so the case does not depend on load, and `atomicWrites.test.ts` fails on a bare listing of `downloadDir` / `exportsDir`.
+  The ceiling is in the helper's `// simplification:` comment (the new file takes the folder's default attributes, and a symlink at the target is
+  replaced, not written through). `autosave.ts` keeps its own tmp-and-rename because it also keeps the previous snapshot, and `writeAutosave` is a promise chain
+  (each call starts after the previous one settles, the later content wins, a failed call does not stop the next) with a tmp name of its own per write: the renderer's
+  `doSave` stamps its `lastWriteTime` after its await and the quit flush writes beside it, so the callers are three and only main can order them. A name of its own
+  no longer self-cleans by being overwritten, so a failed write removes its tmp and the next write (and Clear) sweeps any `autosave.*.tmp` a killed process left.
+- **ffmpeg's "Permission denied" is a locked file when a runner or probe reports it, and not otherwise (T-139 (10)).** The shipped Windows ffmpeg prints strerror's text
+  for what the Microsoft C runtime maps to EACCES (a sharing violation, an ACL block): `... Error opening output C:\x\clip.mp4: Permission denied` and `Error opening
+  output files: Permission denied`; ffprobe prints `C:\x\rec.mp4: Permission denied`. `RUNNER_PERMISSION_DENIED` (`userFacingError.ts`, read by `describeImportError` too) is a
+  runner exit's prefix with a line that ENDS in `: Permission denied`, and it maps to the same Windows-blocked sentence as EBUSY / EPERM / EACCES, so a file held by an
+  antivirus or an editor is no longer told to "check that the source still plays and the folder has room". The bare phrase is not a cause: main's "Screen recording
+  permission denied" (`record.spec.ts` pins it as written), the browser's own `NotAllowedError` (mapped by NAME) and a runner line that only mentions the words stay as
+  they were. Match the words the shipped binary prints, anchored to the shape they come in.
 
 ## Power of Ten
 

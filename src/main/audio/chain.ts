@@ -163,7 +163,10 @@ export function cutsLeaveNothing(durationSec: number, cuts: ChainSpec['cutRegion
  * sound lost: at each cut, picture and sound agree to within one 256-sample block of sound (5.3 ms at 48 kHz: `aselectForCuts`
  * re-chunks the sound to 256 samples, so `aselect` keeps or drops whole blocks of THAT size - before T-124 (32) it was the
  * decoder's block, up to 96 ms), and the errors add up over several cuts (T-110(i)). It does
- * not drift with a frame rate the container may not state.
+ * not drift with a frame rate the container may not state. That agreement is the CUTS' only: it holds for a chain without
+ * `afftdn` or the export limiter. `afftdn` delays the sound by two hops (about 25 ms at any rate) and `alimiter` (latency off)
+ * by 5 ms, with the input's last hops not emitted (measured on both majors; length unchanged), so a denoised or limited export's
+ * sound sits that much behind the picture whatever the cuts do (T-110 (bl)).
  *
  * T-123 (12): `settb=AVTB` sits between `select` and `setpts`. `setpts` writes the retimed stamp in the time
  * base of the frames it was handed, and an AVI's video stream has 1/fps, so `setpts` ITSELF rounded 3.3083 s

@@ -47,6 +47,23 @@ vi.mock('../sidecars/paths', () => ({
   captionsOutputDir: () => captionsDir
 }))
 
+// T-139 (1): a disk that fills part-way, injected into the real `node:fs/promises` (everything else in it stays real). Off unless a test turns it on.
+const faults = vi.hoisted(() => ({ writeThenFail: false }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    writeFile: async (file: string, data: string | Buffer, ...rest: unknown[]) => {
+      if (faults.writeThenFail) {
+        const bytes = Buffer.from(data)
+        await real.writeFile(file, bytes.subarray(0, Math.ceil(bytes.length / 2)))
+        throw Object.assign(new Error('ENOSPC: simulated, write'), { code: 'ENOSPC' })
+      }
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    }
+  }
+})
+
 const { registerCaptionsIpc } = await import('./captions')
 
 /** A transcript of a 60-minute stream: one cue a minute for the first ten, at 0:30 of each. */
@@ -75,6 +92,7 @@ let srt = ''
 let dest = ''
 
 beforeEach(() => {
+  faults.writeThenFail = false
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-copysrt-'))
   captionsDir = path.join(scratch, 'captions')
   mkdirSync(captionsDir, { recursive: true })
@@ -267,5 +285,38 @@ describe('captions:writeKitSrt keeps its gates (T-113)', () => {
   ])('refuses a speed that is %s', async (_label, speed) => {
     await expect(copy({ srtPath: srt, dest, startSec: 0, endSec: 60, speed })).rejects.toThrow(/speed/)
     expect(existsSync(dest)).toBe(false)
+  })
+})
+
+/**
+ * T-139 (1) - the kit's subtitle file is written the way every file the person owns is: whole, or not at all.
+ *
+ * The kit writes into a fresh folder each run, so there is normally no earlier `.srt` to lose; what a `writeFile` that failed part-way left there was a
+ * truncated one, which looks like captions and is not (and the kit's toast said only that captions were not included). Through `writeFileAtomic` the folder
+ * holds the whole file or none, and a file that WAS at that path (a destination reused) is as it was.
+ */
+describe('captions:writeKitSrt writes the whole file or none (T-139 (1))', () => {
+  const range = { startSec: 30, endSec: 200, speed: 1 }
+
+  it('a disk that fills part-way answers ok:false, leaves no stub .srt in the kit folder, and names the cause in the reason', async () => {
+    faults.writeThenFail = true
+    const answer = (await copy({ srtPath: srt, dest, ...range })) as { ok: boolean; reason?: string }
+    expect(answer.ok).toBe(false)
+    expect(answer.reason).toContain('ENOSPC')
+    expect(readdirSync(path.dirname(dest)), 'no half-written captions file, and no tmp').toEqual([])
+  })
+
+  it('a file already at that path is left as it was when the write fails', async () => {
+    writeFileSync(dest, 'the earlier file, whole', 'utf8')
+    faults.writeThenFail = true
+    expect(((await copy({ srtPath: srt, dest, ...range })) as { ok: boolean }).ok).toBe(false)
+    expect(readFileSync(dest, 'utf8')).toBe('the earlier file, whole')
+    expect(readdirSync(path.dirname(dest))).toEqual([path.basename(dest)])
+  })
+
+  it('a write that succeeds is the shifted cues and leaves no tmp', async () => {
+    expect(await copy({ srtPath: srt, dest, ...range })).toEqual({ ok: true, written: true })
+    expect(readFileSync(dest, 'utf8')).toContain('minute 1 line')
+    expect(readdirSync(path.dirname(dest))).toEqual([path.basename(dest)])
   })
 })

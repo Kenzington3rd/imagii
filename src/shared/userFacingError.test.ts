@@ -328,3 +328,87 @@ describe("the Autosave banner's Clear failure (T-118)", () => {
     expect(userFacingError(wrapClear(text), FAILED).message).toBe(FAILED)
   })
 })
+
+// T-139 (10): the shipped Windows ffmpeg says "Permission denied" when it may not open a file it was handed (the Microsoft C runtime maps a sharing violation or an
+// ACL block to EACCES, and strerror(EACCES) is that phrase) - a recording held open by an editor or a scanner, an export aimed at a file another app has. The runner's
+// message carries ffmpeg's stderr, so the person was told "check that the source still plays and the folder has room" about a file that was LOCKED. These are the
+// lines the shipped win32 ffmpeg and ffprobe print, as the runners wrap them and Electron wraps those: the sweep captured the export and probe lines, and the
+// "all three lines" rows were captured again under Wine from the shipped ffmpeg.exe (a folder where the output / the input should be gives EACCES).
+describe('ffmpeg\'s "Permission denied" is the Windows-blocked cause when it is a runner\'s (T-139 (10))', () => {
+  const CTX = 'Export failed.'
+  const BLOCKED = `${CTX} Windows blocked access to a file. Close any app using it, or check your antivirus.`
+  const GENERIC =
+    `${CTX} imagii's video tool stopped before it finished. ` +
+    'Check that the source file still plays and the folder has room, then try again.'
+  /** `export.ts`: `FFmpeg exit ${code}: ${stderr tail}`, the tail in CRLF as the Windows exe prints it. */
+  const EXPORT_LINE =
+    'FFmpeg exit 1: [out#0/mp4 @ 00007fffff46bfc0] Error opening output C:\\x\\clip.mp4: Permission denied\r\nError opening output files: Permission denied'
+  /** The shipped win32 ffmpeg.exe under Wine, given a FOLDER where the output file should be: all of its stderr, CRLF, with the line between the two causes. */
+  const WINE_OUTPUT =
+    'FFmpeg exit 243: [out#0/mp4 @ 00007fffff466e00] Error opening output Z:\\tmp\\clip.mp4: Permission denied\r\nError opening output file Z:\\tmp\\clip.mp4.\r\nError opening output files: Permission denied'
+  /** The same exe given a folder as its INPUT; the cause has no path in front of it, and the runner (audio extract) does not trim the stderr's last CRLF. */
+  const WINE_INPUT =
+    'audio extract exit 243: [in#0 @ 00007fffff45e500] Error opening input: Permission denied\r\nError opening input file Z:\\tmp\\rec.mp4.\r\nError opening input files: Permission denied\r\n'
+  /** `ffmpeg/probe.ts`: `ffprobe exit ${code}: ${stderr}`. */
+  const PROBE_LINE = 'ffprobe exit 1: C:\\x\\rec.mp4: Permission denied'
+
+  it.each([
+    ['the export (ffmpeg could not open its output), wrapped', wrap('video:exportBatch', EXPORT_LINE)],
+    ['the export, as the runner threw it', new Error(EXPORT_LINE)],
+    ['the export, all three lines the win32 exe prints when the output is a folder (captured under Wine)', new Error(WINE_OUTPUT)],
+    ['an input the win32 exe could not open (captured under Wine)', new Error(WINE_INPUT)],
+    ['the probe (ffprobe could not open the recording), wrapped', wrap('video:probe', PROBE_LINE)],
+    ['the probe, as the runner threw it', new Error(PROBE_LINE)],
+    ['the same with Unix line ends', new Error(EXPORT_LINE.replace(/\r\n/g, '\n'))],
+    ['a cause that is not the last line', new Error('ffprobe exit 1: C:\\x\\rec.mp4: Permission denied\nsome later line')],
+    ['an audio extract', new Error('audio extract exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['a GIF', new Error('gif exit 1: [out#0/gif @ 000001] Error opening output C:\\x\\a.gif: Permission denied')],
+    ['a join segment', new Error('segment 2 exit 1: C:\\x\\part.mp4: Permission denied')],
+    ['the join', new Error('concat exit 1: [out#0/mp4 @ 000001] Error opening output C:\\x\\all.mp4: Permission denied')],
+    ['the conversion on import', new Error('convert-to-mp4 exit 1: C:\\x\\rec.mkv: Permission denied')],
+    ['strerror in lower case (a port that prints it so)', new Error('FFmpeg exit 1: C:\\x\\a.mp4: permission denied')]
+  ])('%s is the sentence plus Windows\' cause, and no path, tool name or errno reaches the person', (_label, input) => {
+    const shown = userFacingError(input, CTX).message
+    expect(shown).toBe(BLOCKED)
+    expect(shown).not.toMatch(/ffmpeg|ffprobe|exit \d|C:|Permission denied|out#0/i)
+  })
+
+  it('it is the same sentence a locked file already got (EBUSY, EPERM, EACCES, "Access is denied") - one cause, one set of words', () => {
+    for (const text of ['EBUSY: resource busy or locked, open', 'EPERM: operation not permitted, open', 'EACCES: permission denied, open', 'Access is denied.']) {
+      expect(userFacingError(new Error(text), CTX).message, text).toBe(BLOCKED)
+    }
+  })
+
+  describe('and only when it is the cause of a runner or probe exit', () => {
+    it.each([
+      // The control the ticket names (record.spec.ts "Screen recording permission denied"): main's own string for a capture the OS refused.
+      ['screen recording refused', new Error('Screen recording permission denied')],
+      ['the same through the bridge', wrap('record:listSources', 'Screen recording permission denied')],
+      ['a bare errno-less message', new Error('Permission denied')],
+      ['ffmpeg\'s line with no runner around it', new Error('Error opening output files: Permission denied')],
+      ['a sentence of ours that is not an exit', new Error("Couldn't list the sources: Permission denied")]
+    ])('%s is NOT mapped: it falls to the caller\'s own sentence', (_label, input) => {
+      expect(userFacingError(input, CTX).message).toBe(CTX)
+    })
+
+    it('a runner exit that only MENTIONS the words keeps the generic exit sentence (the words must END a line, as strerror\'s do)', () => {
+      expect(userFacingError(new Error('FFmpeg exit 1: Permission denied for the codec; try again'), CTX).message).toBe(GENERIC)
+      expect(userFacingError(new Error('FFmpeg exit 1: the Permission denied filter is not a thing'), CTX).message).toBe(GENERIC)
+      // and at the end of a line, but not strerror's: it is printed after a colon (a path's, a tool's), never inside a sentence.
+      expect(userFacingError(new Error('FFmpeg exit 1: the encoder reported Permission denied'), CTX).message).toBe(GENERIC)
+    })
+
+    it('a runner exit with another cause keeps its own sentence (the other causes are not shadowed)', () => {
+      expect(userFacingError(new Error('FFmpeg exit 1: Conversion failed!'), CTX).message).toBe(GENERIC)
+      expect(userFacingError(new Error('FFmpeg exit 1: av_interleaved_write_frame(): No space left on device'), CTX).message).toBe(`${CTX} Your disk is full. Free up some space and try again.`)
+      expect(userFacingError(new Error('ffprobe exit 1: C:\\x\\a.mp4: No such file or directory'), CTX).message).toBe(`${CTX} A file imagii needs isn't there. It may have been moved or deleted.`)
+    })
+
+    it('the browser\'s own NotAllowedError (a device refused) still reads as a device, not as a locked file', () => {
+      const denied = new Error('Permission denied')
+      denied.name = 'NotAllowedError'
+      expect(userFacingError(denied, 'Recording failed.').message).toContain('Check Windows Settings > Privacy')
+    })
+  })
+})
+

@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron'
-import { writeFile, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import type { ImagiiProject } from '../../shared/workspace'
 import {
   writeAutosave,
@@ -9,6 +9,7 @@ import {
 } from '../autosave'
 import { projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { assertAlways, assertDefined } from '../../shared/assert'
+import { writeFileAtomic } from '../fsAtomic'
 
 export interface ProjectLoadResult {
   ok: true
@@ -49,7 +50,8 @@ export function registerProjectIpc(): void {
         filters: [{ name: 'imagii project', extensions: ['imagii.json', 'json'] }]
       })
       if (result.canceled || !result.filePath) return null
-      await writeFile(result.filePath, raw, 'utf8')
+      // T-139 (1): the chosen file stays the old project until the new one is whole (a full drive used to leave a stub Open refuses).
+      await writeFileAtomic(result.filePath, raw)
       return result.filePath
     }
   )

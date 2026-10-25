@@ -3,6 +3,7 @@ import {
   mkdir,
   writeFile,
   readFile,
+  readdir,
   rename,
   unlink,
   stat,
@@ -10,6 +11,7 @@ import {
   open
 } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { isSafeToAutosave, validateProjectJsonString } from '../shared/projectValidation'
 import type { ImagiiProject } from '../shared/workspace'
@@ -52,7 +54,12 @@ export interface AutosaveLoadResult {
 
 const FILENAME = 'autosave.json'
 const PREV_FILENAME = 'autosave.prev.json'
-const TMP_FILENAME = 'autosave.tmp'
+/**
+ * A write's tmp is `autosave.<8 hex>.tmp`, its own (T-139 (3)); `autosave.tmp` is the one fixed name earlier builds used. Found at rest, either is the
+ * leftover of a write that was cut off (the process killed mid-write: a quit flush that hit its deadline), because a live write's tmp exists only
+ * between its first byte and its rename, and the writes run one at a time.
+ */
+const TMP_NAME = /^autosave(?:\.[0-9a-f]{8})?\.tmp$/
 
 function autosaveDir(): string {
   return path.join(app.getPath('userData'), 'autosave')
@@ -66,8 +73,13 @@ function prevAutosavePath(): string {
   return path.join(autosaveDir(), PREV_FILENAME)
 }
 
-function tmpAutosavePath(): string {
-  return path.join(autosaveDir(), TMP_FILENAME)
+/** Every tmp the autosave folder holds, as full paths (none when the folder is not there). */
+async function tmpLeftovers(): Promise<string[]> {
+  try {
+    return (await readdir(autosaveDir())).filter((name) => TMP_NAME.test(name)).sort().map((name) => path.join(autosaveDir(), name))
+  } catch {
+    return []
+  }
 }
 
 async function ensureDir(): Promise<void> {
@@ -87,8 +99,24 @@ async function ensureDir(): Promise<void> {
  *   - The .prev file always represents the previous successfully-saved state
  *
  * The function never throws upstream — it returns a result object instead.
+ *
+ * T-139 (3): the writes run ONE AT A TIME, in the order they were asked for. The renderer's doSave sets its `lastWriteTime` after its await (so a second
+ * write can start while one is in flight) and the quit flush writes beside it; with one fixed tmp, overlapping calls truncated each other's file, a
+ * mixed file was renamed into autosave.json and then copied over autosave.prev.json (executed: both slots corrupt in 6 of 6 overlapping trials).
+ * Each call starts after the previous one has settled, so the later content wins and every caller still gets the result of its own write; each write
+ * also has its own tmp name, so a mistake elsewhere could not make two of them share one. A call that fails (or throws) does not stop the ones behind it.
  */
-export async function writeAutosave(
+let writeChain: Promise<unknown> = Promise.resolve()
+
+export function writeAutosave(
+  project: ImagiiProject
+): Promise<{ ok: true; sizeBytes: number } | { ok: false; reason: string }> {
+  const run = writeChain.then(() => writeAutosaveNow(project))
+  writeChain = run.catch(() => undefined)
+  return run
+}
+
+async function writeAutosaveNow(
   project: ImagiiProject
 ): Promise<{ ok: true; sizeBytes: number } | { ok: false; reason: string }> {
   const safety = isSafeToAutosave(project)
@@ -104,9 +132,13 @@ export async function writeAutosave(
     }
   }
 
+  let tmp: string | null = null
   try {
     await ensureDir()
-    const tmp = tmpAutosavePath()
+    // Nothing of ours is in flight (the chain), so a tmp found now was left by a write that was cut off; it can be up to the size limit, and
+    // each write has a new name, so nothing else would ever replace it.
+    for (const leftover of await tmpLeftovers()) await unlink(leftover).catch(() => undefined)
+    tmp = path.join(autosaveDir(), `autosave.${randomBytes(4).toString('hex')}.tmp`)
     await writeFile(tmp, raw, 'utf8')
 
     // fsync to ensure data hits disk before the rename
@@ -131,6 +163,8 @@ export async function writeAutosave(
     await rename(tmp, current)
     return { ok: true, sizeBytes: raw.length }
   } catch (err) {
+    // A write that failed part-way must not leave its half file behind (it has a name of its own now, so nothing would overwrite it).
+    if (tmp !== null) await unlink(tmp).catch(() => undefined)
     return {
       ok: false,
       reason: err instanceof Error ? err.message : 'write failed'
@@ -226,7 +260,7 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
 }
 
 /**
- * Delete the autosave, its backup, and any leftover temp file.
+ * Delete the autosave, its backup, and any leftover temp file (T-139 (3): every tmp name a write has used, not one).
  *
  * T-57: this used to swallow every unlink failure, so "Autosave discarded."
  * was printed over a file that was still on disk — the banner vanished, the
@@ -248,7 +282,7 @@ export async function getAutosaveInfo(): Promise<AutosaveInfo> {
 export async function clearAutosave(): Promise<void> {
   const survivors: string[] = []
   let code: string | undefined
-  for (const p of [autosavePath(), prevAutosavePath(), tmpAutosavePath()]) {
+  for (const p of [autosavePath(), prevAutosavePath(), ...(await tmpLeftovers())]) {
     if (!existsSync(p)) continue
     let failedWith: string | undefined
     try {

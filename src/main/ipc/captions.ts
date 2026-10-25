@@ -1,6 +1,6 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import path from 'node:path'
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import {
   cancelBurnIn,
@@ -24,6 +24,7 @@ import {
 } from '../../shared/validators'
 import { assertSafeAbsolutePath } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
+import { writeFileAtomic } from '../fsAtomic'
 
 /**
  * What a streamer is told when a caption color cannot be used (T-114). The two style colors
@@ -121,7 +122,9 @@ export function registerCaptionsIpc(): void {
         filters: [{ name: 'SubRip subtitle', extensions: ['srt'] }]
       })
       if (result.canceled || !result.filePath) return null
-      await copyFile(resolvedSrc, result.filePath)
+      // T-139 (1): a copy is a read and an atomic write (a transcript is kilobytes), so the file the person chose is the old one until the copy is whole.
+      // Bytes, not text: the copy is exactly the transcript (a byte order mark and CRLF line ends are not re-encoded).
+      await writeFileAtomic(result.filePath, await readFile(resolvedSrc))
       return result.filePath
     }
   )
@@ -235,7 +238,7 @@ export function registerCaptionsIpc(): void {
           params.speed
         )
         if (shifted === '') return { ok: true, written: false }
-        await writeFile(params.dest, shifted, 'utf8')
+        await writeFileAtomic(params.dest, shifted)
         return { ok: true, written: true }
       } catch (err) {
         return {

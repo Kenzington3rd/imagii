@@ -29,6 +29,8 @@ import {
 } from './layout'
 import { leave, retype } from './typing'
 import { installToastLog, readToastLog } from './toastLog'
+import { ATOMIC_TMP, withoutAtomicTmp } from './atomicTmp'
+import { heldRenameCount, holdAtomicRenames, releaseAtomicRenames } from './slowWrites'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -337,15 +339,27 @@ async function setWindowSize(
   }, { width, height })
 }
 
-/** File names currently in the save folder, sorted (a folder has no order to promise). */
+/**
+ * File names currently in the save folder, sorted (a folder has no order to promise). T-139 (1): the FINISHED files - a save writes `<name>.<8 hex>.tmp` and
+ * renames it over, so the folder holds the tmp for the length of the write, and a wait on a count (`waitForDownloads`) must not count it (`atomicTmp.ts`).
+ */
 function savedNames(studio: Studio): string[] {
-  return readdirSync(studio.downloadDir).sort()
+  return withoutAtomicTmp(readdirSync(studio.downloadDir)).sort()
 }
 
 function clearDownloads(studio: Studio): void {
-  for (const name of readdirSync(studio.downloadDir)) {
+  // A write in flight is not ours to remove (its rename would then fail): only the finished files go.
+  for (const name of withoutAtomicTmp(readdirSync(studio.downloadDir))) {
     rmSync(path.join(studio.downloadDir, name), { force: true })
   }
+}
+
+/**
+ * The save folder as the OS lists it, tmp and all. Only for a test ABOUT the tmp (`atomicWrites.test.ts` lets this one name read the folder raw and nothing else):
+ * a test that asks "which files are saved?" uses `savedNames`.
+ */
+function rawNames(studio: Studio): string[] {
+  return readdirSync(studio.downloadDir)
 }
 
 /** Wait until exactly `n` files have been saved, then read their bytes (name order). */
@@ -4023,3 +4037,91 @@ test.describe('Image Studio — an incompressible picture is stored within the b
     }
   })
 })
+// T-139 (1): the save is a tmp and a rename now, so the folder a test lists can hold the tmp. The full run of Track A's first landing failed once on exactly this
+// ("the document background lands in the bytes": `waitForDownloads` polls a COUNT of names, saw 1 while that one was the tmp, then read the name it had counted
+// and the rename had taken it). This holds the rename so the tmp is in the folder for as long as the test wants, and asks the helpers the questions that race asks.
+test.describe('Image Studio — a save in flight leaves a tmp in the folder (T-139 (1))', () => {
+  test('Export PNG: while the rename is held the folder holds the tmp and the helpers see NO saved file; once it lands they see exactly one, whole', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t139-tmp-png')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+
+      await holdAtomicRenames(studio.app)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+
+      // The window is really open: the writer's tmp is in the folder, and the rename is parked at the gate.
+      await expect
+        .poll(() => rawNames(studio).filter((n) => ATOMIC_TMP.test(n)), { timeout: 30_000, intervals: [100] })
+        .toHaveLength(1)
+      expect(await heldRenameCount(studio.app)).toBe(1)
+      const raw = rawNames(studio)
+      expect(raw).toHaveLength(1)
+      expect(raw[0]).toMatch(/^imagii-\d+\.png\.[0-9a-f]{8}\.tmp$/)
+
+      // What a test is asking when it lists the folder is "which files has the save finished?": none yet.
+      expect(savedNames(studio), 'the tmp is not a saved file').toEqual([])
+      // …and the wait for the first file does not come back on the tmp's account (it used to: the count was 1).
+      let returned = false
+      const waiting = waitForDownloads(studio, 1).then((files) => {
+        returned = true
+        return files
+      })
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      expect(returned, 'waitForDownloads(1) did not count the tmp').toBe(false)
+      expect(await readToastLog(window), 'and the app has not said "saved": the write is not done').toEqual([])
+
+      await releaseAtomicRenames(studio.app)
+      const [png] = await waiting
+      expect(pngSize(png as Buffer)).toEqual({ w: 1280, h: 720 })
+      expect(savedNames(studio)).toHaveLength(1)
+      expect(savedNames(studio)[0]).toMatch(/^imagii-\d+\.png$/)
+      expect(rawNames(studio), 'the folder holds the file and nothing else: no tmp is left').toEqual(savedNames(studio))
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('PNG saved')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Emote pack: the tmp of the file being written is not one of the three, and the three are whole when the wait returns', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t139-tmp-pack')
+    const { window } = studio
+    try {
+      const t = templateById('emote-blank-112')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const exportPanel = window.locator(EXPORT)
+
+      await holdAtomicRenames(studio.app)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect
+        .poll(() => rawNames(studio).filter((n) => ATOMIC_TMP.test(n)), { timeout: 30_000, intervals: [100] })
+        .toHaveLength(1)
+      // The pack writes its files one after another, so only the FIRST is in flight; none is finished.
+      expect(savedNames(studio)).toEqual([])
+      expect(rawNames(studio)).toHaveLength(1)
+
+      await releaseAtomicRenames(studio.app)
+      const files = await waitForDownloads(studio, 3)
+      expect(files).toHaveLength(3)
+      for (const bytes of files) expect(bytes.subarray(0, 8).toString('hex'), 'each is a whole PNG, starting with the signature').toBe('89504e470d0a1a0a')
+      expect(rawNames(studio).filter((n) => ATOMIC_TMP.test(n)), 'no tmp is left').toEqual([])
+      expect(savedNames(studio).map((n) => n.replace(/\d{10,}/, 'STAMP')).sort()).toEqual([
+        'imagii-emote-112-STAMP.png',
+        'imagii-emote-28-STAMP.png',
+        'imagii-emote-56-STAMP.png'
+      ])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+

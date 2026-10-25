@@ -30,6 +30,7 @@ import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
 import { installToastLog, readToastLog } from './toastLog'
+import { withoutAtomicTmp } from './atomicTmp'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -1113,8 +1114,9 @@ test.describe('imagii References studio', () => {
       }, exportsDir)
       await window.getByLabel('Scale').selectOption('1')
       await window.getByRole('button', { name: 'Export', exact: true }).click()
-      await expect.poll(() => readdirSync(exportsDir).length, { timeout: 30_000 }).toBe(1)
-      const exported = path.join(exportsDir, readdirSync(exportsDir)[0] as string)
+      // T-139 (1): the finished files - Export writes a tmp and renames it over (atomicTmp.ts), and a count that includes the tmp is a name that is gone by the read.
+      await expect.poll(() => withoutAtomicTmp(readdirSync(exportsDir)).length, { timeout: 30_000 }).toBe(1)
+      const exported = path.join(exportsDir, withoutAtomicTmp(readdirSync(exportsDir))[0] as string)
       expect(await pngPixel(exported, 62, 62), 'the reference is not in the export').toEqual({
         r: 255,
         g: 255,

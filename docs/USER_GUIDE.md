@@ -665,6 +665,10 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   and starts again by itself when the project is under the limit. Changes that are not
   part of the project (a grid you switch on, the results of a scan) do not write the file
   again.
+- **A save that fails keeps the file you had.** Save project, Save image, the emote pack and variants, Save .srt and
+  your mood boards write the new file beside the old one and swap it in only when it is whole. If the drive is full, or
+  another app has the file open, imagii says so and the file you chose is exactly as it was (the emote pack writes its
+  files one at a time, so one that fails leaves the files before it whole and the one it stopped on as it was).
 - **The window remembers its size and position** between launches, and
   re-centers itself if the display it was on is no longer connected. That
   happens whatever you choose in the restore banner.
