@@ -10,6 +10,7 @@ import {
   kitEffectivePresets,
   kitExportLabel,
   kitLimitTargets,
+  kitRunCaption,
   kitSrtFilename,
   kitThumbFilename,
   kitThumbLabel,
@@ -526,5 +527,25 @@ describe('every file a kit writes passes the path gate, whatever the clip is cal
       'Clip_1_thumb_3.jpg'
     ])
     expect(kitFileNames('Clip_1')).toContain('Clip_1_captions.srt')
+  })
+})
+
+/**
+ * T-136 (1) - a running kit names the clip it was started on. The kit button is drawn once, for the selected clip; the kit keeps running when
+ * another clip is selected, when its clip is removed, and when the video is closed, so the line comes from the NAME the run carries.
+ */
+describe('kitRunCaption - whose kit is running (T-136 (1))', () => {
+  it('quotes the clip\'s name', () => {
+    expect(kitRunCaption('Clip 1')).toBe('Clip Kit for "Clip 1"')
+    expect(kitRunCaption('The clutch (final round)')).toBe('Clip Kit for "The clutch (final round)"')
+  })
+
+  it('trims the name, as the rename box lets a person leave spaces around it', () => {
+    expect(kitRunCaption('  Cold open  ')).toBe('Clip Kit for "Cold open"')
+  })
+
+  it('a clip whose name was emptied is an unnamed clip, never Clip Kit for ""', () => {
+    expect(kitRunCaption('')).toBe('Clip Kit for an unnamed clip')
+    expect(kitRunCaption('   ')).toBe('Clip Kit for an unnamed clip')
   })
 })

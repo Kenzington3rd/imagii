@@ -5,6 +5,7 @@ import { useGifRun } from './store/runs'
 import { outputDurationSec } from './presets'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { useVideoOutputDir } from '../../hooks/useVideoOutputDir'
@@ -169,13 +170,7 @@ export function GifPanel(): JSX.Element | null {
       {/* Round 17 B2 */}
       {busy ? (
         <div className="flex justify-end">
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-            onClick={cancel}
-            title="Cancel GIF export"
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel GIF export" onClick={cancel} />
         </div>
       ) : null}
     </div>

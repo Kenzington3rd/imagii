@@ -518,6 +518,25 @@ whose end state is Explorer):
 - **A load held by the page, not the network (T-135 (13)).** The renderer's content policy allows images from https only, so a held fetch cannot
   be served from a test. The case parks the page's `HTMLImageElement.src` setter for a file named "slow" and releases it when the test says, which is
   exactly the wait the click-time premise missed.
+- **Hold a conversion, then count its working copies (T-136 (2)).** The Importer's transcode and the Player's preview copy are the first `ffmpeg` the
+  page starts, so `installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 20_000 }])` holds it while the case leaves and comes back; a SECOND conversion
+  would not be held (the rule is for the first spawn only) and would write its file in `imagii-import` at once, so "one conversion" is a listing of
+  that folder (`before` is taken ahead of the press), not a count of spawns - a remounted Clip Kit badge asks `ffmpeg` for its hook, and the spawn log
+  counts that too. Main's own refusal is read through the real bridge (`window.api.video.convertForImport(...)` from `window.evaluate`), which is the
+  sentence a second caller of any kind would get. A conversion that is finished while the person is away is waited for by the working copy's size
+  holding still for two polls (ffmpeg writes the file as it goes and finishes the index last).
+- **Stand in for the network, not for the handler (T-136 (4)).** `captions:installModel` is the product's own handler running `installWhisperModel`;
+  the case replaces `net.request` in MAIN (`app.evaluate(({ net }) => { net.request = ... })`) with an `EventEmitter` that answers `response`, sends
+  progress up to 40% and never ends, and whose `abort()` emits `abort` as Electron's does. The real partial file is written and removed, the real
+  Cancel reaches `cancelWhisperModelInstall`, and the real "Download canceled." toast is read; only the 141 MB from Hugging Face is not fetched.
+  The other half (a download that ENDS while the panel is on screen) uses the T-113 stand-in handlers, because a real end is a SHA-256 check of the
+  real file.
+- **Observe the beat a final state hides (T-136 (6)).** When a condition has a clause that only matters between two events (the Output preview's note
+  must go the instant the preview copy is in the store, but the Player clears its own verdict a moment later when the copy loads), the final state is
+  the same with and without the clause, and a case that only waits for the end passes on the mutant. Arm a `MutationObserver` from `window.evaluate`
+  BEFORE the press, record every DOM state that violates the rule (the `<video>` is on the copy and the note is still on screen), and assert the
+  record is empty AND that the observer saw the event it watches (`sawCopy`), so a mis-aimed observer cannot pass vacuously. A React commit is one
+  DOM batch, so the observer's callback reads the page between that commit and the next task.
 - **Wait past the default to prove a duration.** `expectRevealToast` (video-pipelines.spec.ts)
   finds "Show in folder" on a success toast, waits 3.5 s (react-hot-toast's success toast lasts 2 s)
   and asserts the button is still there — the one place a fixed wait IS the assertion. It was

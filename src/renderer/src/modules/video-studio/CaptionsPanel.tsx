@@ -2,13 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
-import type {
-  CaptionsInstallStatus,
-  CaptionsProgress,
-  CaptionStyle,
-  CaptionPosition,
-  ModelInstallProgress
-} from '@shared/captions'
+import type { CaptionsProgress, CaptionStyle, CaptionPosition } from '@shared/captions'
 import {
   DEFAULT_CAPTION_STYLE,
   CAPTION_STYLE_PRESETS,
@@ -23,10 +17,12 @@ import {
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
-import { useCaptionsProgress, useCaptionsRun } from './store/runs'
+import { useCaptionsProgress, useCaptionsRun, useCaptionsStatus, useModelInstallRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { formatClock } from '@shared/clockTime'
 
@@ -39,7 +35,9 @@ export function CaptionsPanel(): JSX.Element | null {
   // panels (like Clip Kit) that want to bundle the SRT.
   const srtPath = useVideoStore((s) => s.srtPath)
   const setSrtPathFor = useVideoStore((s) => s.setSrtPathFor)
-  const [status, setStatus] = useState<CaptionsInstallStatus | null>(null)
+  // T-136 (4): what `captions:status` last answered is a module store, written by whoever asked - the model download that ends while this panel is on
+  // another screen refreshes it for the panel that comes back.
+  const status = useCaptionsStatus((s) => s.status)
   // T-112: WHICH job is running, not just that one is. The header button said
   // "Transcribing…" for a burn-in too, because both shared one boolean.
   // T-135 (1), (4): which job is running and the progress line main last sent are a module store, and the transcript preview is the open video's own
@@ -51,7 +49,9 @@ export function CaptionsPanel(): JSX.Element | null {
   const progress: CaptionsProgress | null = useCaptionsProgress((s) => s.progress)
   const segments = useVideoStore((s) => s.derived.transcript)
   const setDerived = useVideoStore((s) => s.setDerived)
-  const [showSetup, setShowSetup] = useState(false)
+  // T-136 (4): the download is started from inside the setup card, so a panel that mounts over a download that is running opens the card - the bar and
+  // its Cancel are in it, and "back to the download" must not need a click to find them.
+  const [showSetup, setShowSetup] = useState(() => useModelInstallRun.getState().run !== null)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
@@ -67,12 +67,15 @@ export function CaptionsPanel(): JSX.Element | null {
   const [transcriptCount, setTranscriptCount] = useState<number | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const clearStartingRef = useRef(false)
-  // Phase 4E: Whisper model auto-install state
-  const [installing, setInstalling] = useState(false)
-  const [installProgress, setInstallProgress] = useState<ModelInstallProgress | null>(null)
+  // Phase 4E: Whisper model auto-install. T-136 (4): the download and its progress are a module store, like the jobs above - the bar and its Cancel were
+  // this panel's state, so a trip to Home left Download enabled over a download main was still running (its second press was refused by main) and the
+  // finished download refreshed the status of a panel that was gone.
+  const installRun = useModelInstallRun((s) => s.run)
+  const installing = installRun !== null
+  const installProgress = installRun?.progress ?? null
 
   useEffect(() => {
-    void window.api.captions.status().then(setStatus)
+    void refreshStatus()
     void refreshTranscriptCount()
   }, [])
 
@@ -83,17 +86,11 @@ export function CaptionsPanel(): JSX.Element | null {
     return off
   }, [])
 
-  useEffect(() => {
-    const off = window.api.captions.onModelProgress((p) => setInstallProgress(p))
-    return off
-  }, [])
-
   if (!source) return null
   const noSound = videoHasNoSound(source)
 
   async function refreshStatus(): Promise<void> {
-    const s = await window.api.captions.status()
-    setStatus(s)
+    useCaptionsStatus.setState({ status: await window.api.captions.status() })
   }
 
   /** How many transcripts are saved, for the line under the panel and the Clear button. A count main could not read leaves the line out. */
@@ -257,8 +254,10 @@ export function CaptionsPanel(): JSX.Element | null {
   }
 
   async function installModel(): Promise<void> {
-    setInstalling(true)
-    setInstallProgress({ phase: 'starting', percent: 0 })
+    // The claim, before the first await: a second press (or a second panel, after a round trip) starts nothing.
+    if (!useModelInstallRun.getState().begin({ progress: { phase: 'starting', percent: 0 } })) return
+    // The listener lasts exactly this download and writes to the store, so the bar moves while the panel is on another screen.
+    const offProgress = window.api.captions.onModelProgress((p) => useModelInstallRun.getState().patch({ progress: p }))
     try {
       const result = await window.api.captions.installModel()
       if (result.ok) {
@@ -278,11 +277,9 @@ export function CaptionsPanel(): JSX.Element | null {
         canceled: 'Download canceled.'
       })
     } finally {
-      setInstalling(false)
-      // Tech-debt fix: clear stale progress so a re-attempted install
-      // doesn't briefly show the prior run's state before the first
-      // event of the new run lands.
-      setInstallProgress(null)
+      // The run ends, so a re-attempted install starts from "starting" and never shows the prior run's state.
+      useModelInstallRun.getState().end()
+      offProgress()
     }
   }
 
@@ -409,32 +406,11 @@ export function CaptionsPanel(): JSX.Element | null {
                   </button>
                   {installing && installProgress ? (
                     <div className="flex items-center gap-2 text-xs">
-                      <div
-                        className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-                        role="progressbar"
-                        aria-label="Downloading the caption model"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={Math.round(installProgress.percent ?? 0)}
-                      >
-                        <div
-                          className="h-full bg-accent"
-                          style={{
-                            width: `${Math.round(installProgress.percent ?? 0)}%`
-                          }}
-                        />
-                      </div>
+                      <ProgressTrack label="Downloading the caption model" percent={installProgress.percent ?? 0} />
                       <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">
                         {Math.round(installProgress.percent ?? 0)}%
                       </span>
-                      <button
-                        className="text-ink-dim hover:text-danger px-1"
-                        onClick={() => void window.api.captions.cancelInstall()}
-                        title="Cancel download"
-                        aria-label="Cancel download"
-                      >
-                        ✕
-                      </button>
+                      <RunningCancel title="Cancel download" onClick={() => void window.api.captions.cancelInstall()} />
                     </div>
                   ) : null}
                 </div>
@@ -453,20 +429,7 @@ export function CaptionsPanel(): JSX.Element | null {
       {progress ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
           <span>{captionPhaseLabel(progress.phase)}</span>
-          <div
-            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-            role="progressbar"
-            aria-label={captionPhaseLabel(progress.phase)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={determinate ? Math.round(percent) : undefined}
-          >
-            {determinate ? (
-              <div className="h-full bg-accent" style={{ width: `${Math.round(percent)}%` }} />
-            ) : (
-              <div className="h-full bg-accent progress-indeterminate" />
-            )}
-          </div>
+          <ProgressTrack label={captionPhaseLabel(progress.phase)} percent={determinate ? percent : null} />
           {determinate ? (
             <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(percent)}%</span>
           ) : null}
@@ -475,21 +438,9 @@ export function CaptionsPanel(): JSX.Element | null {
               the engine run for minutes — so those two phases carry one too (the
               SRT write after them is instant, and ends the job either way). */}
           {progress.phase === 'burning-in' ? (
-            <button
-              className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-              onClick={() => void window.api.captions.cancelBurnIn()}
-              title="Cancel burn-in"
-            >
-              Cancel
-            </button>
+            <RunningCancel title="Cancel burn-in" onClick={() => void window.api.captions.cancelBurnIn()} />
           ) : progress.phase === 'extracting' || progress.phase === 'transcribing' ? (
-            <button
-              className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-              onClick={() => void window.api.captions.cancelTranscribe()}
-              title="Cancel transcription"
-            >
-              Cancel
-            </button>
+            <RunningCancel title="Cancel transcription" onClick={() => void window.api.captions.cancelTranscribe()} />
           ) : null}
         </div>
       ) : null}

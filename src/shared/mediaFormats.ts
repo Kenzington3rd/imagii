@@ -119,6 +119,15 @@ export function audioNeedsExtraction(name: string): boolean {
 export const PREVIEW_UNAVAILABLE_MESSAGE =
   "imagii can't preview this video's picture format — trimming, scanning and export still work."
 
+/**
+ * What the Output preview says in place of "Live snapshot at the playhead position..." while the Player cannot draw the video's picture (T-136 (6)).
+ * The preview mirrors the Player's element onto a canvas, so the same video that leaves the Player black leaves this box black; a caption promising a
+ * live snapshot under a black box is the silent dead end T-135 (2) fixed in the Player. One line: what the box shows, why, and that the export is not
+ * affected. The Player's note beside the picture is the one that offers the preview copy.
+ */
+export const OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE =
+  "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
+
 /** "MP4, MOV, AVI" — uppercase hint copy for drop zones, from one list. */
 export function formatHint(extensions: readonly string[]): string {
   return extensions.map((e) => e.toUpperCase()).join(', ')

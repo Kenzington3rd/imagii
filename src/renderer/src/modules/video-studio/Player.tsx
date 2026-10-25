@@ -4,7 +4,8 @@ import toast from 'react-hot-toast'
 import { computeCropBox, type CropBox } from '@shared/safeZone'
 import { formatFps } from '@shared/units'
 import { PREVIEW_UNAVAILABLE_MESSAGE } from '@shared/mediaFormats'
-import { playableDuration, useVideoStore } from './store/videoStore'
+import { playableDuration, playheadNow, useVideoStore } from './store/videoStore'
+import { usePreviewCopyRun } from './store/runs'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
@@ -97,12 +98,14 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   const [playing, setPlaying] = useState(false)
   // T-135 (2): the preview cannot draw this video's picture (ProRes, 10-bit HEVC: the element plays the sound, draws nothing, raises nothing), or
   // refuses to play it at all. `previewUrl` is a playable copy the person asked for; the element plays it instead of the source.
-  const [noPicture, setNoPicture] = useState(false)
-  const [makingCopy, setMakingCopy] = useState(false)
+  // T-136 (6): the verdict is the video store's, not this component's - the Output preview mirrors this element onto a canvas and has to say why
+  // the canvas is black. T-136 (2): and the copy's run is a module store (the button came back enabled over a running convert after a round trip), with
+  // the playhead it resumes at beside `previewUrl` in the video store, not in a ref of this instance.
+  const noPicture = useVideoStore((s) => s.noPicture)
+  const setNoPicture = useVideoStore((s) => s.setNoPicture)
+  const makingCopy = usePreviewCopyRun((s) => s.run !== null)
   const copyingRef = useRef(false)
   const previewUrl = useVideoStore((s) => s.previewUrl)
-  // Where the playhead was when the copy was swapped in: the new element starts at 0 and is put back when its metadata arrives.
-  const resumeAtRef = useRef<number | null>(null)
   const [time, setTime] = useState(0)
   const [showSafeZones, setShowSafeZones] = useState(false)
   // T-109: the crop is on whenever the person turned it on OR the selected clip already
@@ -153,7 +156,6 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   // one can never reach this branch.
   useEffect(() => {
     setNoPicture(false)
-    resumeAtRef.current = null
     setPlaying(false)
     const parked = useVideoStore.getState().seekRequest
     if (parked) {
@@ -167,7 +169,7 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     }
     setTime(0)
     setCurrentTime(0)
-  }, [source?.filePath, setCurrentTime])
+  }, [source?.filePath, setCurrentTime, setNoPicture])
 
   // The Timeline scrubs by asking the store; the Player owns the <video>, so
   // it is the one that applies the request. Subscribed imperatively rather
@@ -243,10 +245,10 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     // decode and kept the sound. No `error` is raised for it.
     if (source && source.probe.width > 0 && v.videoWidth === 0) setNoPicture(true)
     else setNoPicture(false)
-    if (resumeAtRef.current !== null) {
-      v.currentTime = resumeAtRef.current
-      resumeAtRef.current = null
-    }
+    // A preview copy was swapped in: the new element starts at 0, and the playhead the copy was made at (T-136 (2): kept in the store, so it is the
+    // same whichever Player instance is mounted when this arrives) is put back.
+    const resumeAt = useVideoStore.getState().takePreviewResume()
+    if (resumeAt !== null) v.currentTime = resumeAt
   }
 
   /** T-135 (2): convert a copy imagii can draw, through the importer's own convert, and play it in the preview. Everything else keeps the original. */
@@ -254,22 +256,24 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     await claimFirst(copyingRef, async () => {
       if (!source) return
       const startedFor = source.filePath
-      setMakingCopy(true)
+      // T-136 (2): the run is claimed here and given back in the finally, in a module store: the closure outlives this component.
+      if (!usePreviewCopyRun.getState().begin({ sourcePath: startedFor })) return
       toast.loading('Making a preview copy…', { id: 'preview-copy' })
       try {
         const copyPath = await window.api.video.convertForImport(startedFor)
         toast.dismiss('preview-copy')
-        resumeAtRef.current = videoRef.current?.currentTime ?? null
-        if (!useVideoStore.getState().setPreviewCopyFor(startedFor, copyPath)) {
+        // Where the picture is NOW (it may have played on, or the person may have been away): the mounted Player's element when there is one, else
+        // the store's last reading.
+        const resumeAt = playheadNow(useVideoStore.getState())
+        if (!useVideoStore.getState().setPreviewCopyFor(startedFor, copyPath, resumeAt)) {
           // The video was closed or replaced while the copy was made: it is for a video that is gone.
-          resumeAtRef.current = null
           toast('Skipped the preview copy because you opened another video while it was being made', { icon: <Icon name="warning" size={18} />, duration: 8000 })
         }
       } catch (err) {
         toast.dismiss('preview-copy')
         reportFailure(err, { failed: "Couldn't make a preview copy.", canceled: 'Preview copy canceled.' })
       } finally {
-        setMakingCopy(false)
+        usePreviewCopyRun.getState().end()
       }
     })
   }
@@ -413,24 +417,29 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         />
       </div>
 
-      {noPicture ? (
-        // T-135 (2): the notice sits under the picture it is about. A status, not an alert: it is a fact about the preview that stays until the picture can
-        // be drawn, and it names what still works. ink-base on the ember wash, warn for the mark (the colors DESIGN_GUIDE pairs).
-        <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-ember/40 bg-ember/10 px-3 py-2 text-sm">
-          <span className="text-warn shrink-0">
-            <Icon name="warning" size={16} />
-          </span>
-          <p className="min-w-[12rem] flex-1 text-ink-base">{PREVIEW_UNAVAILABLE_MESSAGE}</p>
-          <button
-            className="btn-ghost shrink-0 whitespace-nowrap px-3 py-1.5 text-xs disabled:opacity-50"
-            onClick={() => void makePreviewCopy()}
-            disabled={makingCopy}
-            title="Convert a copy imagii can show, just for watching here. Your video and your exports are not touched."
-          >
-            {makingCopy ? 'Making a preview copy…' : 'Make a preview copy'}
-          </button>
-        </div>
-      ) : null}
+      {/* T-136 (5): the status wrapper is always mounted, so the notice is ANNOUNCED when it appears - a live region that arrives together with its
+          content is not reliably read (GifPanel's wrapper, T-112, T-114). Empty while the picture draws it is still a flex item with a 12 px gap on each
+          side, so `-mb-3` takes the second gap back and nothing is hidden (no display:none: either would drop it from the accessibility tree). */}
+      <div role="status" className={noPicture ? undefined : '-mb-3'}>
+        {noPicture ? (
+          // T-135 (2): the notice sits under the picture it is about. It is a fact about the preview that stays until the picture can be drawn, and it
+          // names what still works. ink-base on the ember wash, warn for the mark (the colors DESIGN_GUIDE pairs).
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-ember/40 bg-ember/10 px-3 py-2 text-sm">
+            <span className="text-warn shrink-0">
+              <Icon name="warning" size={16} />
+            </span>
+            <p className="min-w-[12rem] flex-1 text-ink-base">{PREVIEW_UNAVAILABLE_MESSAGE}</p>
+            <button
+              className="btn-ghost shrink-0 whitespace-nowrap px-3 py-1.5 text-xs disabled:opacity-50"
+              onClick={() => void makePreviewCopy()}
+              disabled={makingCopy}
+              title="Convert a copy imagii can show, just for watching here. Your video and your exports are not touched."
+            >
+              {makingCopy ? 'Making a preview copy…' : 'Make a preview copy'}
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex items-center gap-3 text-sm">
         <button

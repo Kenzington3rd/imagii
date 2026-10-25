@@ -7,6 +7,8 @@ import { assertDefined } from '@shared/assert'
 import { useAudioStore } from './state/audioStore'
 import { useAudioExport } from './state/audioExport'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
@@ -191,13 +193,7 @@ export function ExportDialog(): JSX.Element | null {
           {running ? 'Exporting…' : 'Export'}
         </button>
         {running && job ? (
-          <button
-            type="button"
-            className="px-3 py-1.5 text-sm rounded bg-bg-hover hover:bg-bg-elevated text-ink-base"
-            onClick={cancelExport}
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel export" onClick={cancelExport} />
         ) : null}
       </div>
 
@@ -208,21 +204,11 @@ export function ExportDialog(): JSX.Element | null {
           </span>
           {/* T-112: a bar is a progressbar to a screen reader, named by the pass it is in
               ("Step 2 of 2 — rendering") like the Captions and Reframe rows. */}
-          <div
-            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-            role="progressbar"
-            aria-label={audioPassLabel(job.pass, job.plan)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(job.percent)}
-          >
-            <div
-              className={`h-full ${
-                job.error ? (job.canceled ? 'bg-ink-muted' : 'bg-danger-strong') : 'bg-accent'
-              }`}
-              style={{ width: `${Math.round(job.percent)}%` }}
-            />
-          </div>
+          <ProgressTrack
+            label={audioPassLabel(job.pass, job.plan)}
+            percent={job.percent}
+            tone={job.error ? (job.canceled ? 'canceled' : 'failed') : 'active'}
+          />
           <span className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right">
             {Math.round(job.percent)}%
           </span>

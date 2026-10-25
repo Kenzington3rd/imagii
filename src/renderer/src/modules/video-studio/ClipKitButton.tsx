@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
@@ -16,6 +16,7 @@ import {
   kitCanceledMessage,
   kitExportLabel,
   kitLimitTargets,
+  kitRunCaption,
   kitSrtFilename,
   kitThumbFilename,
   kitThumbLabel,
@@ -25,11 +26,71 @@ import { useVideoStore } from './store/videoStore'
 import { useKitRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
+import { RunningCancel } from '../../components/RunningCancel'
 import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 
 interface ClipKitButtonProps {
   clip: Clip
+}
+
+/**
+ * The running kit's Cancel and the question in front of it (INIT-I, round 16: Clip Kit always has at least 5 platform exports + 3 thumbs queued, so we
+ * always confirm). It exists only while a kit runs (T-136 (1): drawn wherever the kit is - the clip list's button for WHICHEVER clip is selected, and
+ * beside the importer once the video is closed), so the question goes with the run by construction (T-131 (9): "Cancel jobs" had nothing to cancel).
+ */
+function KitCancel(): JSX.Element {
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  return (
+    <>
+      {/* B8 fix (round 15) + INIT-I (round 16): the Clip Kit batch can run several minutes; users who pick the wrong source need an abort, and the
+          multi-job confirm prevents a misclick from torching the batch silently. */}
+      <RunningCancel title="Cancel Clip Kit" onClick={() => setShowCancelConfirm(true)} />
+      <Modal open={showCancelConfirm} onClose={() => setShowCancelConfirm(false)} title="Cancel Clip Kit" className="max-w-sm w-full p-5">
+        <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
+        <p className="text-sm text-ink-base mb-4">Cancel the Clip Kit batch ({KIT_PLATFORM_IDS.length} exports + thumbnails)?</p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setShowCancelConfirm(false)}>
+            Keep running
+          </button>
+          <button
+            className="btn-primary px-3 py-1.5 text-sm"
+            onClick={() => {
+              setShowCancelConfirm(false)
+              useKitRun.getState().patch({ canceled: true })
+              void window.api.video.cancelAll()
+            }}
+          >
+            Cancel jobs
+          </button>
+        </div>
+      </Modal>
+    </>
+  )
+}
+
+/**
+ * A kit that is still running after the video it was started on was closed (T-136 (1)). The kit's files are written by main from the paths the run
+ * captured, so Close does not stop it - and with the clip list gone, no kit button was left to cancel it (only quitting stopped it, minutes later). Drawn
+ * beside the importer by `VideoStudio`; nothing when no kit runs.
+ */
+export function ClipKitRunning(): JSX.Element | null {
+  const kitRun = useKitRun((s) => s.run)
+  if (kitRun === null) return null
+  return (
+    <div className="card p-3 flex flex-col gap-1 text-sm">
+      <div className="flex items-center gap-2">
+        <Icon name="package" size={14} />
+        <span className="min-w-0 flex-1 truncate" title={kitRunCaption(kitRun.clipName)}>
+          {kitRunCaption(kitRun.clipName)}
+        </span>
+        <KitCancel />
+      </div>
+      <p className="text-xs text-ink-muted" aria-live="polite">
+        {kitRun.phase || 'Working…'} The video is closed; the kit keeps writing its files until it finishes or you cancel it.
+      </p>
+    </div>
+  )
 }
 
 /**
@@ -45,21 +106,12 @@ interface ClipKitButtonProps {
 export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const srtPath = useVideoStore((s) => s.srtPath)
-  // T-135 (1): the kit's run is a module store, not this button's state - it is one of up to a dozen buttons in the clip list, and the list
-  // unmounts with the studio. The run belongs to ONE clip's row: that row's button shows the label and the Cancel, and the others are off
-  // while it works (main runs one batch at a time; a second press used to be refused with a sentence after a chooser had been answered).
+  // T-135 (1): the kit's run is a module store, not this button's state - and the list unmounts with the studio. T-136 (1): the clip list draws ONE
+  // kit button, for the selected clip (not one per row), so the run is not "this clip's": WHILE a kit runs, the button shows it (the clip it was
+  // started on is named above the label, from the run) with its Cancel, whichever clip is selected, and starts nothing (main runs one batch at a time;
+  // a second press used to be refused with a sentence after a chooser had been answered). Tied to the clip's row, the Cancel was lost when another
+  // clip was selected, and for good when the clip was removed or the video closed (`ClipKitRunning` is the closed video's).
   const kitRun = useKitRun((s) => s.run)
-  const running = kitRun !== null && kitRun.clipId === clip.id
-  const otherKitRunning = kitRun !== null && kitRun.clipId !== clip.id
-  const phase = running ? kitRun.phase : ''
-  // INIT-I (round 16): confirm before canceling. Clip Kit always has at
-  // least 5 platform exports + 3 thumbs queued, so we always confirm here.
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
-  // T-131 (9): the question is about the kit that is running; when it ends with the question still up, "Cancel jobs" had nothing to cancel
-  // (ExportPanel's Cancel confirm had the same shape and reads "Cancel 0 running jobs?"). The question goes with the run.
-  useEffect(() => {
-    if (!running) setShowCancelConfirm(false)
-  }, [running])
   // T-85: the kit's one question. It used to raise the safe-zone modal on
   // every run — picking "all five platforms" IS the answer to that question,
   // and each platform's centered cut is made on purpose (T-83) — so what a
@@ -128,7 +180,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         typeof lastDir === 'string' && lastDir.length > 0 ? lastDir : undefined
       )
       if (!parentDir) return
-      if (!useKitRun.getState().begin({ clipId: clip.id, phase: '', canceled: false })) return
+      if (!useKitRun.getState().begin({ clipId: clip.id, clipName: clip.name, phase: '', canceled: false })) return
       // T-112: the folder is made before the first job, so a kit that is canceled or fails
       // before ANY file lands in it would leave an empty `<name>-kit-<date>` behind. `landed`
       // counts the files the kit has finished writing (a platform export, a thumbnail); the
@@ -273,37 +325,33 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   }
 
   return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        onClick={startKit}
-        disabled={running || otherKitRunning}
-        // T-125 (24): the Video tour's Clip Kit step points here.
-        data-tutorial="video-clipkit"
-        // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
-        // it is announced as it changes (GifPanel's pattern; role="status" would clobber the
-        // button role).
-        aria-live="polite"
-        title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
-        // T-112: ink on the wash, the accent border carries the identity. accent text on
-        // an accent wash over the row's bg-hover measured 4.10:1 at rest and about 3.6:1
-        // on hover (under the 4.5:1 AA floor); ink-base clears it with room.
-        className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-ink-base disabled:opacity-50 inline-flex items-center gap-1.5"
-      >
-        <Icon name="package" size={13} />
-        {running ? phase || 'Working…' : `Clip Kit (${KIT_PLATFORM_IDS.length} + thumbs)`}
-      </button>
-      {running ? (
-        // B8 fix (round 15) + INIT-I (round 16): the Clip Kit batch can run
-        // several minutes; users who pick the wrong source need an abort,
-        // and the multi-job confirm prevents a misclick from torching the
-        // batch silently.
-        <button
-          onClick={() => setShowCancelConfirm(true)}
-          className="text-xs px-2 py-1 rounded border border-ink-dim/40 hover:bg-bg-hover"
-        >
-          Cancel
-        </button>
+    <span className="inline-flex max-w-full flex-col items-end gap-1">
+      {kitRun !== null ? (
+        <span className="max-w-full truncate text-xs text-ink-muted" title={kitRunCaption(kitRun.clipName)}>
+          {kitRunCaption(kitRun.clipName)}
+        </span>
       ) : null}
+      <span className="inline-flex items-center gap-1">
+        <button
+          onClick={startKit}
+          disabled={kitRun !== null}
+          // T-125 (24): the Video tour's Clip Kit step points here.
+          data-tutorial="video-clipkit"
+          // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
+          // it is announced as it changes (GifPanel's pattern; role="status" would clobber the
+          // button role).
+          aria-live="polite"
+          title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
+          // T-112: ink on the wash, the accent border carries the identity. accent text on
+          // an accent wash over the row's bg-hover measured 4.10:1 at rest and about 3.6:1
+          // on hover (under the 4.5:1 AA floor); ink-base clears it with room.
+          className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-ink-base disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          <Icon name="package" size={13} />
+          {kitRun !== null ? kitRun.phase || 'Working…' : `Clip Kit (${KIT_PLATFORM_IDS.length} + thumbs)`}
+        </button>
+        {kitRun !== null ? <KitCancel /> : null}
+      </span>
       <Modal
         open={pendingOver !== null}
         onClose={() => setPendingOver(null)}
@@ -336,35 +384,6 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
             }}
           >
             Export anyway
-          </button>
-        </div>
-      </Modal>
-      <Modal
-        open={showCancelConfirm}
-        onClose={() => setShowCancelConfirm(false)}
-        title="Cancel Clip Kit"
-        className="max-w-sm w-full p-5"
-      >
-        <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
-        <p className="text-sm text-ink-base mb-4">
-          Cancel the Clip Kit batch ({KIT_PLATFORM_IDS.length} exports + thumbnails)?
-        </p>
-        <div className="flex justify-end gap-2">
-          <button
-            className="btn-ghost px-3 py-1.5 text-sm"
-            onClick={() => setShowCancelConfirm(false)}
-          >
-            Keep running
-          </button>
-          <button
-            className="btn-primary px-3 py-1.5 text-sm"
-            onClick={() => {
-              setShowCancelConfirm(false)
-              useKitRun.getState().patch({ canceled: true })
-              void window.api.video.cancelAll()
-            }}
-          >
-            Cancel jobs
           </button>
         </div>
       </Modal>

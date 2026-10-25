@@ -172,7 +172,13 @@ Drop a video in (or click **Choose file…**), then:
 
 (One video loads at a time. If you drop a second while the first is still loading
 or converting, imagii says it is still working on the last one and leaves the
-second alone.)
+second alone — and it keeps saying so if you leave Video Studio and come back
+while the conversion runs. If you open a different video while a conversion is
+still running, the video you opened stays: when the conversion ends imagii says it
+skipped that file and loads nothing over yours. imagii converts one video at a
+time, whoever asks: the importer, **Make a preview copy** and opening a project
+all wait for the one before them, and a second start is refused in a sentence
+that names the file being converted.)
 
 - **Trim** with the timeline. Drag the two handles, or click the track to put the
   playhead where you want it and press `I` and `O` to set the in and out points
@@ -185,7 +191,10 @@ second alone.)
   player says "imagii can't preview this video's picture format — trimming, scanning and export still
   work", and the **Play** button stays on **Play** instead of turning into **Pause** over a black
   rectangle. Everything else works on the file as it is; **Make a preview copy** converts a copy just for
-  watching in the player. Your video, your clips and every export are untouched.
+  watching in the player (the button reads **Making a preview copy…** while it works, also when you
+  come back to the studio, and the picture resumes where you were). Your video, your clips and every export
+  are untouched. Until a copy can be drawn, the **Output preview** card says it has no snapshot to show
+  instead of calling a black box a live one.
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
   **+ Add clip** adds another clip that spans the whole video; trim it with the
   handles. Each clip has its own name, crop, platforms and text.
@@ -329,8 +338,12 @@ second alone.)
   when you go to Home or another studio. When you come back the panel shows it as running — its button
   reads "Exporting…", "Scanning…" or the like and is off, the progress bar is there, and so is **Cancel**
   — and a batch that finished while you were away shows its finished rows with **Show in folder**. Clip Kit
-  belongs to the clip it was started on: that clip's button shows where it is and offers **Cancel**, and the
-  other clips' kit buttons wait. The scan's candidates, the chat log you pasted, the spikes found in it and
+  is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
+  names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel**, and no second kit starts
+  until it ends. If you remove that clip the kit keeps running and stays cancelable; if you close the video,
+  a card beside the importer keeps the kit's name and its **Cancel** until it ends. The caption model's download is the
+  same: its bar and its **Cancel** are there when you come back to **Auto-captions**, and the panel is ready the moment it ends.
+  The scan's candidates, the chat log you pasted, the spikes found in it and
   the transcript preview stay with the open video until you open or close another.
 - **When something fails,** the message says what happened and what to try, in
   plain words — and the Export row that failed is marked **Failed** with the reason
@@ -580,7 +593,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   a note says what it is doing while you wait. The same goes for the sound of a
   video in Audio Studio: it is taken from the video again on open, with the
   same kind of note.
-- **Autosave** runs in the background, and imagii takes one final snapshot as
+- **Autosave** runs in the background — every few seconds after you change something, and
+  never more than 30 seconds after a change however busy you are, a video playing included
+  (moving the playhead is not a change; it is saved with the next one) — and imagii takes one final snapshot as
   it closes, so the last few seconds of work are in it too. On the next launch
   it offers to restore that session — route, selections and playhead included.
   If the window's rendering process ever dies, imagii reloads the window to Home,

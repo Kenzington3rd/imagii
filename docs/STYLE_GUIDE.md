@@ -294,10 +294,29 @@ Repeated UI is a component, not copy-paste:
   (rows that outlive the run, listeners that last exactly one batch, the file names taken from the batch's own results, rows drawn for the
   video they were made from) and `useAudioExport` for the audio export. The job's own closure writes to the store after its panel is gone;
   the panel only reads it, and `begin()` is claimed before the first `await` and given back in a `finally` (the component-level
-  `startingRef` still covers the moments before a run, such as an open chooser). A job with one button per row (Clip Kit) records WHICH row owns
-  the run, so only that row shows the label and the Cancel and the others are off. A single slot in main (the audio extraction) refuses a second
-  start itself, in a sentence that names the video that is running. `interactionWiring.test.ts` pins each panel to its store; the stores have
-  unit tests; one Playwright case per panel leaves the studio and comes back with the job still running.
+  `startingRef` still covers the moments before a run, such as an open chooser). The Clip Kit's run records the clip it was STARTED ON (`clipId`
+  and `clipName`) and is shown by whoever holds it (T-136 (1)): the clip list draws ONE kit button, for the selected clip - not one per row, which is
+  what T-135 premised - so a run shown only on its own clip's button lost its progress and its Cancel behind a disabled idle label the moment another
+  clip was selected, and for good when its clip was removed or the video closed. Now the button shows the running kit whichever clip is selected, names the
+  clip from the run, and starts nothing; `ClipKitRunning` draws the same Cancel beside the importer once the video is closed. A single slot in main (the
+  audio extraction, and since T-136 (2) the conversion `video:convertForImport`) refuses a second start itself, in a sentence that names the file that is
+  running. `interactionWiring.test.ts` pins each panel to its store; the stores have
+  unit tests; one Playwright case per panel leaves the studio and comes back with the job still running. T-136 (2), (4): the same for the three that
+  T-135 did not reach - the Importer's load (`useImportRun`: a trip to Home re-armed it over a conversion main was still running, and its second landing
+  replaced the video being edited, so a landing asks `replacedSince` first and says what it skipped), the Player's "Make a preview copy"
+  (`usePreviewCopyRun`; the playhead it resumes at is `previewResumeAt` in the video store, set in the same update as `previewUrl`, because the
+  Player that hears the new element's metadata is not always the one that asked) and the caption model's download (`useModelInstallRun`, whose
+  progress listener lasts exactly the download, and `useCaptionsStatus`, which the finishing download writes: refreshing a panel that is gone left the
+  one that came back asking for setup over an installed model). A panel that mounts over a running job opens whatever holds its bar (the setup card).
+- **A change to the playhead is not an edit, and a pending change has a ceiling (T-136 (3)).** `useAutosave` subscribed a 5 s debounce to whole stores,
+  and the Player writes `currentTime` on every `timeupdate` (about four a second) and the waveform on every `audioprocess`, so while anything played the
+  timer never elapsed: clips marked during a long review were not on disk until playback stopped for 5 s, against the guide's "every few seconds". The
+  video subscription skips a change to nothing but `currentTime`, `transport` and `seekRequest` (`VIDEO_PLAYHEAD_KEYS`), the audio one a change to
+  `currentTime` (`playheadOnlyChange`, comparing the store's state with its previous one); the playhead is saved with the next real change and by the quit
+  flush. And the debounce is `createSaveScheduler`: a burst is one write 5 s after its last change, but never later than 30 s
+  (`AUTOSAVE_MAX_WAIT_MS`) after its first, so the next field that changes faster than the debounce cannot starve the save again. Ceiling: a write the
+  min-interval rule defers starts a fresh window. The effect is `startAutosave` (the hook is two lines around it), so a unit test can drive the real
+  stores on a fake clock; a field added to either store that changes with the playhead is added to the key list.
 - **A result belongs to the video it was made for (T-135 (4)).** A scan's candidates, the pasted chat logs, the spikes found in them and the
   transcript preview were panels' `useState`, so every visit to Home emptied them. They are `derived` in the video store: applied with
   `setDerivedFor(sourcePath, patch)` (a result that arrives after the video was replaced is dropped, the `setSrtPathFor` rule), emptied by
@@ -727,6 +746,18 @@ Repeated UI is a component, not copy-paste:
   Smart highlight finder
 </PanelHeader>
 ```
+
+- **`RunningCancel` and `ProgressTrack`** (`components/RunningCancel.tsx`, `components/ProgressTrack.tsx`, T-136 (7)) - the Cancel of a job that is
+  running and the bar of one that reports how far along it is. The Cancel was hand-written eleven times (GIF, Compile, Picture-in-picture, Reframe, the
+  highlight scan, both Captions jobs, the model download, the Export batch, the audio export, the Clip Kit) and two copies had drifted off the pattern:
+  the audio export's was a plain gray box with no danger ink and no title, the Clip Kit's a hand-rolled bordered one, the model download's a bare cross.
+  `<RunningCancel title="Cancel GIF export" onClick={...} />` is a `btn-ghost` with the danger ink, the word "Cancel" (what a screen reader and a
+  voice-control user say) and the job it stops as its `title`; a dialog's "Cancel" is an answer, stays `btn-ghost px-3 py-1.5 text-sm` and lives in a
+  `Modal`. `<ProgressTrack label percent tone? className? />` is the `role="progressbar"` named for its job: `percent` a number draws the fill and
+  `aria-valuenow`, `null` draws the sliding `.progress-indeterminate` segment with no value (a bar is a measurement or it is absent, T-89), and `tone`
+  keeps a row the person canceled gray and a failed one red (T-100); the percent beside it stays with the panel. `tests/unit/runningJobControls.test.ts`
+  fails on a hand-written Cancel button outside a `Modal`, and on a `role="progressbar"` outside the track and its two decided exceptions (the waveform's
+  "Drawing the waveform" box and the recording convert's bar, which has a 2% floor). The next job's panel writes `RunningCancel`, not a twelfth copy.
 
 If you write the same markup a third time, extract it.
 

@@ -14,6 +14,7 @@ import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
 import { ClipList } from './ClipList'
+import { ClipKitRunning } from './ClipKitButton'
 import { ExportPanel } from './ExportPanel'
 import { TextOverlayEditor } from './TextOverlayEditor'
 import { ReframePanel } from './ReframePanel'
@@ -226,7 +227,12 @@ export function VideoStudio(): JSX.Element {
           </div>
         </div>
       ) : (
-        <div data-tutorial="video-import"><Importer /></div>
+        <>
+          {/* T-136 (1): a Clip Kit that was running when the video was closed is still running (main writes its files from the paths the run
+              captured), and the clip list that held its Cancel is gone: it is cancelable here. Nothing when no kit runs. */}
+          <ClipKitRunning />
+          <div data-tutorial="video-import"><Importer /></div>
+        </>
       )}
 
       {tutorial.active ? (

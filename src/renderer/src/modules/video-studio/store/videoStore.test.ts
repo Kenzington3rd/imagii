@@ -1381,3 +1381,90 @@ describe('derived results - kept with the open video, gone with it (T-135 (4))',
     expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
   })
 })
+
+/**
+ * T-136 (2), (6) - what travels with the preview copy and what the Output preview is told.
+ *
+ * The playhead a preview copy resumes at was a ref of the Player instance that asked for the copy: when the copy finished after a trip to Home that
+ * instance was gone, and the picture restarted at 0:00. It is the store's now (`previewResumeAt`, set in the same update as `previewUrl`, taken once by
+ * whichever element reads it). And the Player's "I cannot draw this picture" is the store's too (`noPicture`), so the Output preview, which mirrors the
+ * Player's element onto a canvas, can say why its canvas is black.
+ */
+describe('previewResumeAt - the playhead a preview copy resumes at (T-136 (2))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mov', fileName: 'a.mov', url: 'imagii-file://v/a.mov' }
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null, previewUrl: null, previewResumeAt: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('is set together with the copy and taken once: the first element to ask gets it, the next gets nothing', () => {
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 41.5)).toBe(true)
+    expect(useVideoStore.getState().previewResumeAt).toBe(41.5)
+    expect(useVideoStore.getState().takePreviewResume()).toBe(41.5)
+    expect(useVideoStore.getState().takePreviewResume(), 'taken: a later remount starts at 0, as any remount does').toBeNull()
+    expect(useVideoStore.getState().previewUrl, 'the copy itself stays').toBe('imagii-file:///tmp/imagii-import/a-xyz.mp4')
+  })
+
+  it('a playhead at the start (or no playhead, or one that is not a time) is nothing to resume to', () => {
+    for (const at of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+      useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', at)
+      expect(useVideoStore.getState().previewResumeAt, String(at)).toBeNull()
+    }
+  })
+
+  it('a copy for a video that is no longer open stores no position either', () => {
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)).toBe(false)
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+  })
+
+  it('closing the video or loading another drops a position nobody took', async () => {
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+    useVideoStore.setState({ source: VIDEO_A })
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+  })
+})
+
+describe('noPicture - the Player\'s verdict, shared with the Output preview (T-136 (6))', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: FAKE_SOURCE, noPicture: false })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts false and is set and cleared by the Player', () => {
+    expect(useVideoStore.getState().noPicture).toBe(false)
+    useVideoStore.getState().setNoPicture(true)
+    expect(useVideoStore.getState().noPicture).toBe(true)
+    useVideoStore.getState().setNoPicture(false)
+    expect(useVideoStore.getState().noPicture).toBe(false)
+  })
+
+  it('saying the same thing again changes nothing (no store event, so no re-render of what listens)', () => {
+    useVideoStore.getState().setNoPicture(true)
+    let events = 0
+    const off = useVideoStore.subscribe(() => events++)
+    useVideoStore.getState().setNoPicture(true)
+    off()
+    expect(events).toBe(0)
+  })
+
+  it('closing the video and loading another both clear it: a new file is judged on its own', async () => {
+    useVideoStore.getState().setNoPicture(true)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().noPicture).toBe(false)
+    useVideoStore.getState().setNoPicture(true)
+    await useVideoStore.getState().loadSource('/v/other.mp4')
+    expect(useVideoStore.getState().noPicture).toBe(false)
+  })
+})

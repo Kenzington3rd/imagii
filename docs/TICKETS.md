@@ -5326,7 +5326,7 @@ IMG-PREC.
   `npm run verify`, `npm run test:media` and the FULL Playwright
   suite green before handback; no docs/TICKETS.md, package.json or
   lockfile edits.
-- **Status:** open (round 85, two tracks)
+- **Status:** Track A done (round 85, see the Done entry); Track B in expedite
 
 ---
 
@@ -5795,6 +5795,50 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 85, Track A — T-136 items 1-8, landed in the commit that
+carries this entry (Track B, items 9-15, lands next). Worked by one
+Sonnet in a fresh clone of 47ef529 and, after a container restart
+killed it mid-run, resumed in the same clone by a second Sonnet:
+the expediter's death-protocol audit found every one of its
+recorded mutations restored byte-identical and its orphaned e2e
+mutation batch still running and restoring itself, so the batch
+was left to finish (13 rows, 12 killed) before the resume. 71
+ledger mutations all restored byte-identical (two survived a first
+run - M-i3b and M-i6b - and both are killed on rerun after the
+tests were strengthened: the playhead cases now run past the 30 s
+ceiling, and the Output-preview e2e watches the DOM through the
+moment the copy lands), 20 reds, the new e2e cases red on a build
+of the unchanged base. The fixes: a running Clip Kit carries the
+clip it was started for, so whichever clip is selected - and after
+that clip is removed or the video closed - the kit button shows
+the running kit, names its clip and offers its Cancel; main's
+`video:convertForImport` is single-flight with a refusal that names
+the file, and the Importer's and the preview copy's conversions
+hold their busy state in run slots, so a trip away cannot re-arm
+them, while the Importer's landing keeps a video opened meanwhile
+and says so (the preview copy keeps its playhead in its run);
+autosave ignores playhead-only store changes and never waits more
+than 30 s for a pending change, so a playing video can no longer
+starve it; the caption-model download keeps its bar and Cancel in
+a run slot; the Player's notice is an always-mounted live region;
+the Output preview says the picture cannot be shown instead of
+drawing a black box under "Live snapshot"; every running-job
+Cancel and progress track is one shared component
+(RunningCancel, ProgressTrack), held by a scan test; "Cancel
+picture-in-picture composite". Expedited personally: verify x2
+(184/4953), test:media on 7.0.2 (352 passed | 13 skipped of 365;
+no Layer 5 block touched), build + FULL Playwright 424 passed + the
+documented record.spec load flake (T-124 (1), hit while Track B's
+gates loaded the machine) 5/5 green standalone; integrity and
+ledger audit clean (no forbidden files, no Track B file touched, no
+file at a mutant's sha); one independent mutation at a seam no
+ledger row names (ProgressTrack's accessible name dropped → "is a
+progressbar named for its job" red → restored byte-identical,
+sha256 verified, 6/6 green). Landed conflict-free onto its own
+base, every patched path byte-identical to the expedited clone;
+the worker's LESSONS entry moved from the file's end to its
+newest-first position.
 
 Round 84 — T-135, all 14 of the twenty-first sweep's verified
 findings, landed in the commit that carries this entry. Worked by

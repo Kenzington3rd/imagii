@@ -902,7 +902,8 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
   })
 
   it('the importer refuses a second import while one runs, from the drop and from the picker alike', () => {
-    expect(importer).toMatch(/busyRef\.current = true/)
+    // T-136 (2): the claim is the import run's `begin()` in the module store (it was a component ref), taken before the first await.
+    expect(importer).toMatch(/useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)/)
     expect(importer.match(/refuseIfBusy\(\)/g)?.length).toBeGreaterThanOrEqual(3) // definition + drop + handleFile
     expect(importer).toMatch(/Still converting the last video\. Wait for it to finish\./)
   })
@@ -1649,7 +1650,7 @@ describe('T-122 — the round-72 fixes are wired where the person reaches them',
     expect(kit).toMatch(
       /const safeName = sanitizeFilename\(clip\.name\)\s*useKitRun\.getState\(\)\.patch\(\{ phase: 'Creating folder…' \}\)\s*kitDir = await window\.api\.video\.makeKitDir\(\{\s*parentDir,\s*clipName: safeName\s*\}\)/
     )
-    expect(kit).not.toMatch(/clipName: clip\.name/)
+    expect(kit, 'the folder is asked for with the sanitized name').not.toMatch(/makeKitDir\(\{[^}]*clipName: clip\.name/)
     expect((kit.match(/sanitizeFilename\(/g) ?? []).length).toBe(1)
     // Main keeps its gates: they are trust-boundary validation, and the renderer now satisfies them.
     const video = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/video.ts'), 'utf8'))
@@ -2016,7 +2017,7 @@ describe('T-125 (round 75): the layout, copy and listener fixes are wired where 
   })
 
   it('the Video tour\'s Clip Kit step points at a button that carries its anchor (24)', () => {
-    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{running \|\| otherKitRunning\}\s*data-tutorial="video-clipkit"/)
+    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{kitRun !== null\}\s*data-tutorial="video-clipkit"/)
   })
 
   it('every overlay field\'s name begins with the text drawn beside it (27)', () => {
@@ -2238,10 +2239,13 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
     expect(lib).toMatch(/window\.addEventListener\(\s*'click',[\s\S]*?e\.stopImmediatePropagation\(\)\s*e\.preventDefault\(\)[\s\S]*?true\s*\)/)
   })
 
-  it('(9) the Cancel question goes with its batch: Export and Clip Kit close it the moment `running` is false', () => {
-    for (const rel of ['modules/video-studio/ExportPanel.tsx', 'modules/video-studio/ClipKitButton.tsx']) {
-      expect(strip(read(rel)), rel).toMatch(/useEffect\(\(\) => \{\s*if \(!running\) setShowCancelConfirm\(false\)\s*\}, \[running\]\)/)
-    }
+  it('(9) the Cancel question goes with its batch: Export closes it the moment `running` is false, and Clip Kit\'s lives in a component that exists only while a kit runs (T-136 (1))', () => {
+    expect(strip(read('modules/video-studio/ExportPanel.tsx'))).toMatch(/useEffect\(\(\) => \{\s*if \(!running\) setShowCancelConfirm\(false\)\s*\}, \[running\]\)/)
+    // The kit's question is KitCancel's state, and KitCancel is drawn only for a run that exists - so it cannot outlive the run.
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toMatch(/function KitCancel\(\): JSX\.Element \{\s*const \[showCancelConfirm, setShowCancelConfirm\] = useState\(false\)/)
+    expect(kit.match(/\{kitRun !== null \? <KitCancel \/> : null\}/g) ?? [], 'the button draws it only while a kit runs').toHaveLength(1)
+    expect(kit.match(/<KitCancel \/>/g) ?? [], 'and ClipKitRunning (the closed video) is the only other place').toHaveLength(2)
   })
 
   it('(13) the four folder chips are off while their job runs', () => {
@@ -2647,7 +2651,8 @@ describe('T-135 — the twenty-first sweep', () => {
     const copy = player.slice(player.indexOf('async function makePreviewCopy()'), player.indexOf('function nudge('))
     expect(copy).toMatch(/await claimFirst\(copyingRef,/)
     expect(copy).toMatch(/await window\.api\.video\.convertForImport\(startedFor\)/)
-    expect(copy).toMatch(/useVideoStore\.getState\(\)\.setPreviewCopyFor\(startedFor, copyPath\)/)
+    // T-136 (2): the playhead travels with the copy into the store (it was the unmounted instance's ref), read AFTER the wait.
+    expect(copy).toMatch(/useVideoStore\.getState\(\)\.setPreviewCopyFor\(startedFor, copyPath, resumeAt\)/)
     expect(copy).toMatch(/reportFailure\(err, \{ failed: "Couldn't make a preview copy\.", canceled: 'Preview copy canceled\.' \}\)/)
     expect(player).toMatch(/\{PREVIEW_UNAVAILABLE_MESSAGE\}/)
     // The README promises only what the preview decodes.
@@ -2709,12 +2714,12 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(dialog).toMatch(/finally \{\s*offProgress\(\)\s*useAudioExport\.getState\(\)\.finish\(\)/)
   })
 
-  it('(1) Clip Kit\'s run belongs to ONE clip\'s row: that row shows the label and the Cancel, the others are off while it works', () => {
+  it('(1) Clip Kit\'s run is shown wherever the kit button is, whichever clip is selected, with its Cancel (T-136 (1) replaced "one clip\'s row": the list draws ONE button)', () => {
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
-    expect(kit).toMatch(/const running = kitRun !== null && kitRun\.clipId === clip\.id/)
-    expect(kit).toMatch(/const otherKitRunning = kitRun !== null && kitRun\.clipId !== clip\.id/)
-    expect(kit, 'and the button is off for both').toMatch(/disabled=\{running \|\| otherKitRunning\}/)
-    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, phase: '', canceled: false \}\)/)
+    expect(kit, 'the clip-keyed reading is gone').not.toMatch(/kitRun\.clipId === clip\.id|kitRun\.clipId !== clip\.id|otherKitRunning/)
+    expect(kit, 'the button is off, and shows the running label, for ANY run').toMatch(/disabled=\{kitRun !== null\}/)
+    expect(kit).toMatch(/\{kitRun !== null \? kitRun\.phase \|\| 'Working…' : `Clip Kit/)
+    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, phase: '', canceled: false \}\)/)
     // The cancel latch is the run's field, set by the confirm and read by every step.
     expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)/)
     expect(kit).toMatch(/if \(useKitRun\.getState\(\)\.run\?\.canceled\) throw new CancelledError\(\)/)
@@ -2737,5 +2742,118 @@ describe('T-135 — the twenty-first sweep', () => {
       expect(src, `${rel} keeps no copy of them`).not.toMatch(/useState<(AudioCandidate|ChatPeak|CaptionSegment)\[\]/)
       expect(src, `${rel} resets nothing on mount`).not.toMatch(/useEffect\(\(\) => \{\s*set(AudioCandidates|ChatText|Peaks|Segments)\(/)
     }
+  })
+})
+
+// T-136 Track A: the twenty-second sweep's wiring, where the person reaches it. E2E per item (video-pipelines.spec.ts, "T-136 (n): ..."): (1) three
+// cases (another clip selected, the owning clip removed, the video closed); (2) the importer after a trip to Home, a video opened during a conversion,
+// the preview copy after a trip to Home and the preview copy finished while away; (4) the model download across a trip to Home and its end;
+// (6) the Output preview. (3) is unit-tested with a fake clock (useAutosave.test.ts). Item (7)'s scan is runningJobControls.test.ts.
+describe('T-136 Track A — the twenty-second sweep', () => {
+  // JSX comments first (`{/* ... */}`), then block and line comments: in the other order a JSX comment leaves an empty `{}` behind.
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const readMain = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../main', rel), 'utf8')
+
+  it('(1) the kit is drawn by whoever holds the run: any clip\'s button, and beside the importer once the video is closed', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    // The run names the clip it was started on, so the line survives a rename, a removal and a Close.
+    expect(kit).toMatch(/\{kitRunCaption\(kitRun\.clipName\)\}/)
+    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/useKitRun = createRunStore<\{ clipId: string; clipName: string; phase: string; canceled: boolean \}>\(\)/)
+    // The closed video's kit: a component reading the same run, mounted where the importer is, and nowhere the clip list is.
+    expect(kit).toMatch(/export function ClipKitRunning\(\): JSX\.Element \| null \{\s*const kitRun = useKitRun\(\(s\) => s\.run\)\s*if \(kitRun === null\) return null/)
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    expect(studio).toMatch(/<>\s*<ClipKitRunning \/>\s*<div data-tutorial="video-import"><Importer \/><\/div>\s*<\/>/)
+    // Cancel is the shared component, behind the same question, and the question is the kit's.
+    expect(kit).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setShowCancelConfirm\(true\)\} \/>/)
+    expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)\s*void window\.api\.video\.cancelAll\(\)/)
+  })
+
+  it('(2) the importer\'s run is a module store, claimed before the first await; a video that arrived during the conversion is not replaced', () => {
+    const importer = strip(read('modules/video-studio/Importer.tsx'))
+    expect(importer).toMatch(/const busy = useImportRun\(\(s\) => s\.run !== null\)/)
+    expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|convertingRef|setBusy\(/)
+    const handle = importer.slice(importer.indexOf('async function handleFile('), importer.indexOf('function onDrop('))
+    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*if \(!useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)\) return\s*const heldBefore = useVideoStore\.getState\(\)\.source/)
+    expect(handle).toMatch(/finally \{\s*useImportRun\.getState\(\)\.end\(\)\s*\}/)
+    // After the wait, before the load: the same rule as a project open's.
+    expect(handle.indexOf('convertForImport(')).toBeLessThan(handle.indexOf('replacedSince(heldBefore, useVideoStore.getState().source)'))
+    expect(handle.indexOf('replacedSince(')).toBeLessThan(handle.indexOf('await loadSource('))
+    expect(handle).toMatch(/Skipped \$\{basename\(filePath\)\} because you opened another video while it was converting/)
+    expect(handle, 'the skip returns before the load, the Recent entry and "Video loaded"').toMatch(/duration: 8000\s*\}\)\s*return\s*\}/)
+  })
+
+  it('(2) the preview copy\'s run is a module store; the playhead it resumes at travels with the copy, read after the wait', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/const makingCopy = usePreviewCopyRun\(\(s\) => s\.run !== null\)/)
+    expect(player, 'no component-state copies of the busy flag or the position').not.toMatch(/setMakingCopy|resumeAtRef/)
+    const copy = player.slice(player.indexOf('async function makePreviewCopy()'), player.indexOf('function nudge('))
+    expect(copy.indexOf('usePreviewCopyRun.getState().begin({ sourcePath: startedFor })')).toBeGreaterThan(-1)
+    expect(copy.indexOf('begin('), 'claimed before the convert').toBeLessThan(copy.indexOf('convertForImport('))
+    expect(copy.indexOf('convertForImport('), 'the playhead is read after the wait').toBeLessThan(copy.indexOf('playheadNow(useVideoStore.getState())'))
+    expect(copy).toMatch(/finally \{\s*usePreviewCopyRun\.getState\(\)\.end\(\)\s*\}/)
+    // The element that hears the metadata takes the position from the store, whichever instance it is.
+    expect(player).toMatch(/const resumeAt = useVideoStore\.getState\(\)\.takePreviewResume\(\)\s*if \(resumeAt !== null\) v\.currentTime = resumeAt/)
+  })
+
+  it('(2) main refuses a second conversion, claimed before the handler\'s first await and given back in a finally; the Importer and the project open both reach it', () => {
+    const video = strip(readMain('ipc/video.ts'))
+    const handler = video.slice(video.indexOf("ipcMain.handle('video:convertForImport'"), video.indexOf("ipcMain.handle('video:pickFile'"))
+    expect(handler).toMatch(/assertSafeAbsolutePath\(filePath, 'video:convertForImport filePath'\)\s*if \(convertingFor !== null\) throw new Error\(convertBusyMessage\(convertingFor\)\)\s*convertingFor = filePath\s*try \{\s*return await convertForImport\(filePath\)\s*\} finally \{\s*convertingFor = null\s*\}/)
+    // The three callers of the channel all go through it (a fourth would too: the guard is the handler's).
+    expect(read('modules/video-studio/Importer.tsx')).toMatch(/window\.api\.video\.convertForImport\(filePath\)/)
+    expect(read('modules/video-studio/Player.tsx')).toMatch(/window\.api\.video\.convertForImport\(startedFor\)/)
+    expect(read('modules/project/ProjectIO.ts')).toMatch(/window\.api\.video\.convertForImport\(sourcePath\)/)
+    // ...and the false comment is gone from the open path.
+    expect(read('modules/project/ProjectIO.ts')).not.toMatch(/can run beside/)
+  })
+
+  it('(3) autosave subscribes through the playhead rule and the ceiling: no whole-store subscription, no bare timer of its own', () => {
+    const hook = strip(read('hooks/useAutosave.ts'))
+    expect(hook).toMatch(/useVideoStore\.subscribe\(\(state, prev\) => \{\s*if \(!playheadOnlyChange\(state, prev, VIDEO_PLAYHEAD_KEYS\)\) scheduleSave\(\)\s*\}\)/)
+    expect(hook).toMatch(/useAudioStore\.subscribe\(\(state, prev\) => \{\s*if \(!playheadOnlyChange\(state, prev, AUDIO_PLAYHEAD_KEYS\)\) scheduleSave\(\)\s*\}\)/)
+    expect(hook, 'the video and audio stores are not handed to the scheduler whole').not.toMatch(/use(Video|Audio)Store\.subscribe\(scheduleSave\)/)
+    expect(hook).toMatch(/const scheduler = createSaveScheduler\(/)
+    expect(hook, 'the debounce is the scheduler\'s: no timer of the hook\'s own').not.toMatch(/window\.setTimeout|debounceTimer/)
+  })
+
+  it('(4) the caption model download is a run in the store, claimed first; its listener lasts the download; the status is the store\'s', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/const installRun = useModelInstallRun\(\(s\) => s\.run\)/)
+    expect(panel).toMatch(/const status = useCaptionsStatus\(\(s\) => s\.status\)/)
+    expect(panel, 'none of the component state this replaced').not.toMatch(/setInstalling|setInstallProgress|setStatus\(|useState<CaptionsInstallStatus/)
+    const install = panel.slice(panel.indexOf('async function installModel()'), panel.indexOf('// T-112: the header button names'))
+    expect(install).toMatch(/if \(!useModelInstallRun\.getState\(\)\.begin\(\{ progress: \{ phase: 'starting', percent: 0 \} \}\)\) return\s*const offProgress = window\.api\.captions\.onModelProgress\(\(p\) => useModelInstallRun\.getState\(\)\.patch\(\{ progress: p \}\)\)/)
+    expect(install).toMatch(/finally \{\s*useModelInstallRun\.getState\(\)\.end\(\)\s*offProgress\(\)\s*\}/)
+    expect(install, 'the status is refreshed through the store when the download ends').toMatch(/await refreshStatus\(\)/)
+    expect(panel).toMatch(/useCaptionsStatus\.setState\(\{ status: await window\.api\.captions\.status\(\) \}\)/)
+    // The setup card (the download's bar and Cancel are inside it) opens over a download that is running.
+    expect(panel).toMatch(/useState\(\(\) => useModelInstallRun\.getState\(\)\.run !== null\)/)
+    expect(panel, 'no effect-scoped progress listener for the model').not.toMatch(/useEffect\(\(\) => \{\s*const off = window\.api\.captions\.onModelProgress/)
+  })
+
+  it('(5) the Player\'s notice sits inside a status wrapper that is always mounted, empty while the picture draws', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/<div role="status" className=\{noPicture \? undefined : '-mb-3'\}>\s*\{noPicture \? \(/)
+    // The role is on the wrapper, not on the notice that mounts with its content (the pattern GifPanel documents as not reliably read).
+    expect(player.match(/role="status"/g) ?? []).toHaveLength(1)
+    expect(player).toMatch(/\) : null\}\s*<\/div>\s*<div className="flex items-center gap-3 text-sm">/)
+  })
+
+  it('(6) the Player shares its no-picture verdict through the video store, and the Output preview says so until a copy exists', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/const noPicture = useVideoStore\(\(s\) => s\.noPicture\)\s*const setNoPicture = useVideoStore\(\(s\) => s\.setNoPicture\)/)
+    expect(player, 'the verdict is not component state any more').not.toMatch(/useState\(false\)\s*\n?\s*const \[makingCopy/)
+    const preview = strip(read('modules/video-studio/OutputPreview.tsx'))
+    expect(preview).toMatch(/const pictureUnavailable = useVideoStore\(\(s\) => s\.noPicture && s\.previewUrl === null\)/)
+    expect(preview).toMatch(/\{pictureUnavailable \? \(\s*<p className="text-xs text-ink-dim">\{OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE\}<\/p>\s*\) : \(\s*<p className="text-xs text-ink-dim">\s*Live snapshot at the playhead position/)
+  })
+
+  it('(1) the guides say the same as the code: no "other clips\' kit buttons wait", no "one button per row"', () => {
+    const userGuide = readFileSync(path.resolve(RENDERER_ROOT, '../../../docs/USER_GUIDE.md'), 'utf8')
+    expect(userGuide).not.toMatch(/other clips' kit buttons wait/)
+    expect(userGuide).toMatch(/Clip Kit[\s\S]{0,400}whichever clip is selected/)
+    const styleGuide = readFileSync(path.resolve(RENDERER_ROOT, '../../../docs/STYLE_GUIDE.md'), 'utf8')
+    expect(styleGuide).not.toMatch(/A job with one button per row \(Clip Kit\)/)
+    expect(read('modules/video-studio/ClipKitButton.tsx')).not.toMatch(/one button per row/)
   })
 })

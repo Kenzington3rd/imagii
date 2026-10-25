@@ -216,6 +216,15 @@ do not re-derive their styling inline.
 Buttons that pair an icon with a label use
 `inline-flex items-center gap-1.5` (or `gap-2` at larger sizes).
 
+**The Cancel of a job that is running is one button, `RunningCancel` (T-136 (7)).** A `btn-ghost px-2 py-1.5 text-xs` with the danger ink
+(`text-danger`, brightening to `danger-soft` on hover), the word "Cancel" and the job it stops as its `title` ("Cancel GIF export", "Cancel
+picture-in-picture composite"): a ghost, not a filled button, because the person's next move is usually to wait; danger ink, because it ends work that
+cost minutes. Where it sits: on the progress row when the job reports one (Reframe, the highlight scan, Captions, the model download), and on a row of
+its own under the primary when the primary is wider than its busy label (GIF, Compile, Picture-in-picture, Export; T-126 (20): beside the primary it
+took the strip the primary's right edge had a moment ago, and a double-click's second press canceled the job it had just started). A dialog's "Cancel" is
+a different button: an answer, in the `Modal`, `btn-ghost px-3 py-1.5 text-sm`. The bar beside it is `ProgressTrack`: `bg-hover` track, `accent` fill,
+gray (`ink-muted`) for a row the person canceled and `danger-strong` only for a fault.
+
 **A chip that shows a name the person chose is capped, and ends in an ellipsis (T-125 (11)).** The
 output-folder button (`OutputDirLabel`, in five cards) drew the whole name of the remembered
 folder, so a long one ("Stream Highlights 2026 - Season Finale - ...") pushed the card's primary

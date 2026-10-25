@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CaptionsProgress } from '@shared/captions'
+import type { CaptionsInstallStatus, CaptionsProgress, ModelInstallProgress } from '@shared/captions'
 import type { ReframePhase } from '@shared/reframe'
 import { createRunStore } from '../../../lib/runStore'
 
@@ -26,10 +26,13 @@ export const useScanRun = createRunStore<{ percent: number }>()
 /** "Clean audio": the video whose sound is being extracted. */
 export const useCleanAudioRun = createRunStore<{ videoPath: string }>()
 /**
- * The Clip Kit: it belongs to ONE clip's row (`clipId`), its `phase` is the label that row's button shows, and `canceled` is the latch every step of
- * the kit asks (Cancel between two of its calls would otherwise find nothing to stop, T-98). Every other row's button is off while it runs.
+ * The Clip Kit: it was started on ONE clip (`clipId`, and its `clipName`, so the kit can be named after the clip is renamed, removed or the video
+ * closed), its `phase` is the label the kit button shows, and `canceled` is the latch every step of the kit asks (Cancel between two of its calls
+ * would otherwise find nothing to stop, T-98). Whichever clip is selected, the kit button shows the RUNNING kit, with its Cancel, and starts nothing
+ * (T-136 (1): the list draws one kit button, for the selected clip, so a kit that showed itself only on its own clip's button lost its Cancel when
+ * another clip was selected, and for good when its clip was removed or the video closed).
  */
-export const useKitRun = createRunStore<{ clipId: string; phase: string; canceled: boolean }>()
+export const useKitRun = createRunStore<{ clipId: string; clipName: string; phase: string; canceled: boolean }>()
 /** A transcription or a caption burn-in: which one is running. */
 export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in' }>()
 /**
@@ -37,3 +40,24 @@ export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in' }>(
  * itself, with no engine behind them), and the job's closure clears it when the job ends so a finished job leaves no "Done 100%" behind.
  */
 export const useCaptionsProgress = create<{ progress: CaptionsProgress | null }>(() => ({ progress: null }))
+
+/**
+ * The importer's file (T-136 (2)): the video whose load (and, for flv / ts / wmv / mpg, whose transcode) is under way. It was the Importer's
+ * `useState` / `useRef`, so a trip to Home re-armed it over a conversion main was still running; a second drop then ran a SECOND libx264 convert and
+ * its landing replaced the video being edited. `converting` chooses the words of the refusal ("Still converting..." / "Still loading...").
+ */
+export const useImportRun = createRunStore<{ filePath: string; converting: boolean }>()
+/**
+ * The Player's "Make a preview copy" (T-136 (2)): the video whose copy is being converted. The same state-in-the-panel bug as the importer's: the
+ * button came back enabled over a running convert, and the finished copy's playhead was restored from the unmounted Player's refs (the video restarted
+ * at 0:00; the position now travels with the copy in the video store, `previewResumeAt`).
+ */
+export const usePreviewCopyRun = createRunStore<{ sourcePath: string }>()
+/** The caption model's download (T-136 (4)): the progress line main last sent. The bar and its Cancel were the panel's `useState`. */
+export const useModelInstallRun = createRunStore<{ progress: ModelInstallProgress }>()
+/**
+ * What `captions:status` last answered (T-136 (4)): is the engine there, is the model. It was the panel's `useState`, so a download that finished
+ * while the person was in another studio refreshed it on the unmounted panel, and the panel that came back asked for the status while the download was
+ * still going - "Transcribe" then reopened the setup for a model that was installed.
+ */
+export const useCaptionsStatus = create<{ status: CaptionsInstallStatus | null }>(() => ({ status: null }))

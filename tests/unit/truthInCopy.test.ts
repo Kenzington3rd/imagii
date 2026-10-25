@@ -231,7 +231,9 @@ describe('Captions say what they do (T-89)', () => {
   it('progress prints a plain label, never the phase id, and has an indeterminate branch', () => {
     expect(panel).toMatch(/captionPhaseLabel\(progress\.phase\)/)
     expect(panel).not.toMatch(/\{progress\.phase\}/)
-    expect(panel).toMatch(/progress-indeterminate/)
+    // T-136 (7): the sliding segment is the shared track's, drawn when the panel hands it no number (main sent none for this phase).
+    expect(panel).toMatch(/<ProgressTrack label=\{captionPhaseLabel\(progress\.phase\)\} percent=\{determinate \? percent : null\} \/>/)
+    expect(read('src/renderer/src/components/ProgressTrack.tsx')).toMatch(/progress-indeterminate/)
   })
 
   it('main sends no invented progress number', () => {

@@ -43,6 +43,7 @@ import { assertSafeAbsolutePath, assertSafeId, isSafeAbsolutePath, SAFE_ID_RE } 
 import { sendIfAlive } from '../sendIfAlive'
 import { isExistingFolder } from '../ffmpeg/outputPath'
 import { safeNamePart } from '../../shared/filename'
+import { clipNameForSentence } from '../ffmpeg/noPicture'
 
 const REFRAME_POSITIONS = ['left', 'center', 'right'] as const
 const PIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
@@ -176,10 +177,26 @@ function assertCustomPreset(preset: unknown, name: string): asserts preset is Cu
 const EXPORT_ALREADY_RUNNING =
   'An export is already running. Wait for it to finish, or cancel it, then try again.'
 
+/**
+ * What a streamer is told when they start a conversion while another is still going (T-136 (2)). `video:convertForImport` is one function with three
+ * callers - the Importer's flv / ts / wmv / mpg transcode, the Player's "Make a preview copy" and the project open's re-convert - and each kept its
+ * own busy flag in the renderer, where a trip to Home re-armed it over a transcode main was still running: a second press ran a SECOND libx264 (two
+ * encodes fighting for the CPU, two working copies of up to gigabytes) and the Importer's second landing replaced the video being edited. The guard
+ * goes where every caller goes through, as `audio:extractFromVideo`'s does (T-135 (1)). A finished sentence naming the file that is being converted,
+ * so it reaches the person as written; the name is cut by code point and the sentence stays on one line.
+ */
+function convertBusyMessage(runningFor: string): string {
+  const name = clipNameForSentence({ name: path.basename(runningFor) })
+  return `Still converting ${name ? `"${name}"` : 'another video'}. Wait for it to finish, then try again.`
+}
+
 export function registerVideoIpc(): void {
   // Per registration, not per module: the app registers once, and a test that
   // registers again starts with the gate open.
   let exportBatchRunning = false
+  // T-136 (2): the file `video:convertForImport` is transcoding right now, or null. One conversion at a time, whoever asks. Claimed before the
+  // handler's first await, given back in a `finally`.
+  let convertingFor: string | null = null
 
   ipcMain.handle('video:probe', async (_e, filePath: string) => {
     assertNonEmptyString(filePath, 'video:probe filePath')
@@ -191,7 +208,13 @@ export function registerVideoIpc(): void {
   ipcMain.handle('video:convertForImport', async (_e, filePath: string) => {
     assertNonEmptyString(filePath, 'video:convertForImport filePath')
     assertSafeAbsolutePath(filePath, 'video:convertForImport filePath')
-    return convertForImport(filePath)
+    if (convertingFor !== null) throw new Error(convertBusyMessage(convertingFor))
+    convertingFor = filePath
+    try {
+      return await convertForImport(filePath)
+    } finally {
+      convertingFor = null
+    }
   })
 
   ipcMain.handle('video:pickFile', async () => {

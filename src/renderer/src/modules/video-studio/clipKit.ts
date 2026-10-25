@@ -187,6 +187,16 @@ export function kitExportLabel(done: number, total: number): string {
 }
 
 /**
+ * The line that names the clip a running kit was started on (T-136 (1)). The kit button is drawn once, for the SELECTED clip, and a kit keeps running
+ * when another clip is selected, its clip is removed or the video is closed - so the running kit says whose it is, from the name the run carries.
+ * A clip whose name was emptied (the rename field accepts one) is "an unnamed clip", not `Clip Kit for ""`.
+ */
+export function kitRunCaption(clipName: string): string {
+  const name = clipName.trim()
+  return name === '' ? 'Clip Kit for an unnamed clip' : `Clip Kit for "${name}"`
+}
+
+/**
  * What a canceled kit says (T-113). With files finished it points at the folder that holds
  * them; with none (`landed` is 0) the folder was removed with nothing in it, and
  * "files already finished are in your folder" would send the person looking for a folder

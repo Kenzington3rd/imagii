@@ -369,9 +369,10 @@ const WIRED: ReadonlyArray<readonly [string, string, RegExp]> = [
   ['modules/image-studio/Toolbar.tsx', 'drawing tools', /aria-pressed=\{tool === t\.id\}/],
   ['modules/references/ReferencesStudio.tsx', 'studio tabs', /aria-current=\{active \? 'true' : undefined\}/],
   ['modules/video-studio/HighlightPanel.tsx', 'chat-log disclosure', /aria-expanded=\{showChatInput\}/],
-  ['modules/video-studio/HighlightPanel.tsx', 'scan bar', /role="progressbar"[\s\S]{0,160}aria-label="Scanning the video for highlights"[\s\S]{0,120}aria-valuenow=\{Math\.round\(progress\)\}/],
+  // T-136 (7): the track is the shared `ProgressTrack` (its role, bounds and value are pinned in ProgressTrack.test.tsx); the panel names it and gives it the number.
+  ['modules/video-studio/HighlightPanel.tsx', 'scan bar', /<ProgressTrack label="Scanning the video for highlights" percent=\{progress\} \/>/],
   ['modules/video-studio/HighlightPanel.tsx', 'signal bars', /role="meter"[\s\S]{0,80}aria-label=\{`\$\{label\} signal`\}[\s\S]{0,120}aria-valuenow=\{Math\.round\(value \* 100\)\}/],
-  ['modules/video-studio/CaptionsPanel.tsx', 'model download bar', /role="progressbar"[\s\S]{0,160}aria-label="Downloading the caption model"[\s\S]{0,120}aria-valuenow=\{Math\.round\(installProgress\.percent \?\? 0\)\}/],
+  ['modules/video-studio/CaptionsPanel.tsx', 'model download bar', /<ProgressTrack label="Downloading the caption model" percent=\{installProgress\.percent \?\? 0\} \/>/],
   ['modules/video-studio/CaptionsPanel.tsx', 'transcript preview', /role="region"\s+tabIndex=\{0\}\s+aria-label="Transcript preview"/],
   ['modules/record-studio/RecordStudio.tsx', 'convert bar', /role="progressbar"[\s\S]{0,160}aria-label="Converting the recording to MP4"[\s\S]{0,120}aria-valuenow=\{savePercent === null \? undefined : Math\.round\(savePercent\)\}[\s\S]{0,160}progress-indeterminate/],
   ['modules/video-studio/SafeZoneWarningModal.tsx', 'cropped-clips list', /tabIndex=\{0\}\s+aria-label="Clips that will be cropped"/],
@@ -386,7 +387,7 @@ const WIRED: ReadonlyArray<readonly [string, string, RegExp]> = [
   ['modules/references/MoodBoardPanel.tsx', 'board select button', /<button\s+onClick=\{\(\) => selectCollection\(c\.id\)\}\s+aria-current=\{isSelected \? 'true' : undefined\}/],
   ['modules/video-studio/SafeZoneWarningModal.tsx', 'opens on Cancel', /data-initial-focus[\s\S]{0,120}onClick=\{onCancel\}/],
   ['hooks/useFocusTrap.ts', 'initial focus honored', /\[data-initial-focus\]/],
-  ['modules/video-studio/ExportPanel.tsx', 'queue bar', /role="progressbar"[\s\S]{0,160}aria-label=\{`\$\{j\.clipName\} \u00b7 \$\{j\.presetLabel\}`\}[\s\S]{0,160}aria-valuenow=\{Math\.round\(j\.percent\)\}/],
+  ['modules/video-studio/ExportPanel.tsx', 'queue bar', /<ProgressTrack\s+className="w-40"\s+label=\{`\$\{j\.clipName\} · \$\{j\.presetLabel\}`\}\s+percent=\{j\.percent\}/],
   ['modules/video-studio/TextOverlayEditor.tsx', 'x and y names', /aria-label="x \/ y, horizontal position \(0 to 1\)"[\s\S]{0,700}aria-label="x \/ y, vertical position \(0 to 1\)"/],
   ['modules/image-studio/ExportDialog.tsx', 'format select name', /aria-label="Export format"[\s\S]{0,120}setFormat\(/],
   // T-123 (4): `DraftField` moved out of TextOverlayEditor into components/ (nine boxes use it now), so the T-114 claim

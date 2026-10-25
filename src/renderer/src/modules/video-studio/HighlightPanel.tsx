@@ -16,6 +16,8 @@ import {
 import { useScanRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { ACCENT, EMBER, SIGNAL_PINK } from '../../styles/tokens'
 import { formatClock } from '@shared/clockTime'
@@ -199,25 +201,10 @@ export function HighlightPanel(): JSX.Element | null {
 
       {scanning ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <div
-            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-            role="progressbar"
-            aria-label="Scanning the video for highlights"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(progress)}
-          >
-            <div className="h-full bg-accent" style={{ width: `${Math.round(progress)}%` }} />
-          </div>
+          <ProgressTrack label="Scanning the video for highlights" percent={progress} />
           <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-            onClick={() => void window.api.video.cancelHighlight()}
-            title="Cancel scan"
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel scan" onClick={() => void window.api.video.cancelHighlight()} />
         </div>
       ) : null}
 

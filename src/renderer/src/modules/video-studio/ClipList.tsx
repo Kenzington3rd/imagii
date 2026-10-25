@@ -101,7 +101,7 @@ export function ClipList(): JSX.Element {
               />
             </div>
           ) : null}
-          {/* Phase 4D: one-click clip kit (5 platforms + 3 thumbnails). */}
+          {/* Phase 4D: one-click clip kit (5 platforms + 3 thumbnails). T-136 (1): ONE button, for the selected clip; a running kit shows on it. */}
           <div className="flex items-center justify-end">
             <ClipKitButton clip={selected} />
           </div>

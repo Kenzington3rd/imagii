@@ -432,8 +432,12 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     // held it last session was scratch — and its path is not in the project.
     // A video that moved fails inside `extractFromVideo` and is reported as the
     // file that is gone (the video), exactly like any other missing source.
-    // T-112: the wait is on screen, like the conversion's above — its own toast id,
-    // so Clean audio's extraction (same words, its own id) can run beside it.
+    // T-112: the wait is on screen, like the conversion's above — its own toast id, so
+    // one's `finally` never takes down the other's toast. T-135 (1) / T-136 (2): they do NOT
+    // run beside each other any more - main has ONE extraction slot (`audio:extractFromVideo`)
+    // and ONE conversion slot (`video:convertForImport`), and the second start is refused in a
+    // finished sentence naming the file that is running, which `loadReporting` reports for
+    // this studio ("failed") while the rest of the project opens.
     // T-132 (11): the source the load put in the studio, kept for `audioSettled` (its waveform is read after it opens).
     let opened: AudioSource | undefined
     const extractAgain = async (videoPath: string): Promise<boolean> => {

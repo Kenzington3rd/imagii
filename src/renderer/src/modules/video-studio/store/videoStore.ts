@@ -91,6 +91,14 @@ interface VideoStudioState {
    *  asked for one; null while the element plays the source itself. It replaces only what the `<video>` plays: `source` (the object, the path every
    *  export reads, the probe) is untouched, so the saved project and the exports stay on the original. Cleared with the source. */
   previewUrl: string | null
+  /** T-136 (6): the Player's verdict that the preview cannot draw the open video's picture (ProRes, 10-bit HEVC: see `PREVIEW_UNAVAILABLE_MESSAGE`).
+   *  The Player owns the `<video>` and hears the element; the Output preview, which mirrors that element onto a canvas, needs the same fact to say why
+   *  its canvas is black instead of captioning a black box "Live snapshot". Reset by `loadSource` / `clearSource`; the Player sets it as the element speaks. */
+  noPicture: boolean
+  /** T-136 (2): where the playhead was when `previewUrl` was swapped in. The new element starts at 0 and its `loadedmetadata` puts it back - and the
+   *  Player that hears that event can be a different instance from the one that was mounted when the copy was asked for, so the position cannot be a
+   *  ref in the component. Taken (and emptied) by the first element that reads it. */
+  previewResumeAt: number | null
   /** T-135 (4): scan results, pasted chat logs and spikes, and the transcript preview - kept with the open video (see `DerivedResults`). */
   derived: DerivedResults
   /** The media element's OWN duration, published by the Player on
@@ -143,7 +151,11 @@ interface VideoStudioState {
   setSrtPathFor: (sourcePath: string, srtPath: string | null) => boolean
   /** T-135 (2) - play a converted copy of the open video in the preview. Like `setSrtPathFor`, the copy belongs to the video it was made for: if
    *  that file is no longer the open one nothing is stored and the answer is false. `source` is not replaced (see `previewUrl`). */
-  setPreviewCopyFor: (sourcePath: string, copyPath: string) => boolean
+  setPreviewCopyFor: (sourcePath: string, copyPath: string, resumeAt?: number) => boolean
+  /** T-136 (6): the Player reports whether the element can draw the picture. */
+  setNoPicture: (noPicture: boolean) => void
+  /** T-136 (2): the playhead to put the new preview element back at - once. Null when nothing is waiting. */
+  takePreviewResume: () => number | null
   /** T-135 (4) - patch the derived results of the open video (typing in a chat box). */
   setDerived: (patch: Partial<DerivedResults>) => void
   /** T-135 (4) - patch them with a RESULT, for the video the job started on and only that one (T-112's rule): false, and nothing stored, when it is no
@@ -420,6 +432,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     history: EMPTY_HISTORY,
     historyKey: null,
     previewUrl: null,
+    noPicture: false,
+    previewResumeAt: null,
     derived: EMPTY_DERIVED,
 
     loadSource: async (filePath: string, convertedFrom?: string) => {
@@ -449,6 +463,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         selectedClipId: initial.id,
         srtPath: null,
         previewUrl: null,
+        noPicture: false,
+        previewResumeAt: null,
         derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
@@ -464,6 +480,8 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         selectedClipId: null,
         srtPath: null,
         previewUrl: null,
+        noPicture: false,
+        previewResumeAt: null,
         derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
@@ -503,10 +521,21 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({ derived: { ...get().derived, ...patch } })
       return true
     },
-    setPreviewCopyFor: (sourcePath, copyPath) => {
+    setPreviewCopyFor: (sourcePath, copyPath, resumeAt) => {
       if (get().source?.filePath !== sourcePath) return false
-      set({ previewUrl: window.api.video.fileUrl(copyPath) })
+      set({
+        previewUrl: window.api.video.fileUrl(copyPath),
+        previewResumeAt: resumeAt !== undefined && Number.isFinite(resumeAt) && resumeAt > 0 ? resumeAt : null
+      })
       return true
+    },
+    setNoPicture: (noPicture) => {
+      if (get().noPicture !== noPicture) set({ noPicture })
+    },
+    takePreviewResume: () => {
+      const at = get().previewResumeAt
+      if (at !== null) set({ previewResumeAt: null })
+      return at
     },
 
     addClip: () => {

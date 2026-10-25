@@ -22,6 +22,8 @@ import { Icon } from '../../components/Icon'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { Modal } from '../../components/Modal'
 import { persistSetting } from '../../lib/persistSetting'
 
@@ -436,8 +438,7 @@ export function ExportPanel(): JSX.Element | null {
         // so the second press of a double-click landed on Cancel, and with ONE job there is no confirm: "Export canceled." and no file.
         // Where the second press lands now is the disabled primary.
         <div className="flex justify-end">
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
+          <RunningCancel
             title="Cancel export"
             onClick={() => {
               const remaining = jobs.filter((j) => j.percent < 100 && !j.error).length
@@ -447,9 +448,7 @@ export function ExportPanel(): JSX.Element | null {
                 void window.api.video.cancelAll()
               }
             }}
-          >
-            Cancel
-          </button>
+          />
         </div>
       ) : null}
 
@@ -590,23 +589,14 @@ export function ExportPanel(): JSX.Element | null {
                 </span>
                 {/* T-114: a progressbar named for its job and valued - four identical bars were four
                     unnamed divs. The percent beside it stays the live region that speaks. */}
-                <div
-                  className="w-40 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-                  role="progressbar"
-                  aria-label={`${j.clipName} · ${j.presetLabel}`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(j.percent)}
-                >
-                  {/* T-100: red is for a fault. A row the user canceled keeps its
-                      label and loses the color that said "something broke". */}
-                  <div
-                    className={`h-full ${
-                      j.error ? (j.canceled ? 'bg-ink-muted' : 'bg-danger-strong') : 'bg-accent'
-                    }`}
-                    style={{ width: `${Math.round(j.percent)}%` }}
-                  />
-                </div>
+                {/* T-100: red is for a fault. A row the user canceled keeps its label and loses the color that said "something broke"
+                    (the track's `tone`). */}
+                <ProgressTrack
+                  className="w-40"
+                  label={`${j.clipName} · ${j.presetLabel}`}
+                  percent={j.percent}
+                  tone={j.error ? (j.canceled ? 'canceled' : 'failed') : 'active'}
+                />
                 <span
                   className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right"
                   role="status"

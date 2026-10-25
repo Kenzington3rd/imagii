@@ -7,6 +7,62 @@ import { applyProject, captureProject, type ApplyOutcome } from '../modules/proj
 
 const AUTOSAVE_DEBOUNCE_MS = 5000
 const AUTOSAVE_MIN_INTERVAL_MS = 5000
+/** A pending change is written no later than this long after it was first scheduled, however many changes keep re-arming the debounce (T-136 (3)). */
+export const AUTOSAVE_MAX_WAIT_MS = 30_000
+
+/**
+ * The fields of the video store that are the PLAYHEAD, not the work (T-136 (3)): the position the Player writes on every `timeupdate` (about four
+ * times a second while a video plays), the Player's registered transport (a new object on every mount), and a seek request (set together with the
+ * position by every click on the timeline, and emptied by the Player). A change to nothing but these is not an edit, and re-arming the debounce on
+ * each one meant autosave never fired while a video played: clips marked during a long review were not on disk until the playback stopped for 5 s.
+ * The playhead is saved with the next real change and by the quit flush.
+ */
+export const VIDEO_PLAYHEAD_KEYS: readonly string[] = ['currentTime', 'transport', 'seekRequest']
+/** Audio Studio's playhead: the waveform writes the position on every `audioprocess`. */
+export const AUDIO_PLAYHEAD_KEYS: readonly string[] = ['currentTime']
+
+/** True when `state` differs from `prev` in nothing but `playheadKeys` (a change that touched no field at all is "only the playhead" too: nothing to save). */
+export function playheadOnlyChange(state: object, prev: object, playheadKeys: readonly string[]): boolean {
+  const now = state as Record<string, unknown>
+  const before = prev as Record<string, unknown>
+  return Object.keys(now).every((key) => playheadKeys.includes(key) || Object.is(now[key], before[key]))
+}
+
+/**
+ * A debounce with a ceiling (T-136 (3)). `schedule()` (re)starts the quiet period, so a burst of changes is one write after the burst; but the first
+ * change of a burst also starts a clock, and the write is never later than `maxWaitMs` after it however long the burst goes on. The debounce alone
+ * was starvable by ANY field that changes faster than its period - the playhead was the one that did (see `VIDEO_PLAYHEAD_KEYS`), and the next
+ * high-frequency field would be too. `cancel()` drops what is pending. Ceiling: a write the caller defers by re-arming (the min-interval rule)
+ * starts a fresh window, so such a write can be a debounce later than `maxWaitMs`.
+ */
+export interface SaveScheduler {
+  schedule: () => void
+  cancel: () => void
+}
+
+export function createSaveScheduler(run: () => void, debounceMs = AUTOSAVE_DEBOUNCE_MS, maxWaitMs = AUTOSAVE_MAX_WAIT_MS): SaveScheduler {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  // When the pending burst's first change was scheduled; null when nothing is pending.
+  let firstAt: number | null = null
+  return {
+    schedule() {
+      const now = Date.now()
+      if (firstAt === null) firstAt = now
+      if (timer !== null) clearTimeout(timer)
+      const wait = Math.max(0, Math.min(debounceMs, firstAt + maxWaitMs - now))
+      timer = setTimeout(() => {
+        timer = null
+        firstAt = null
+        run()
+      }, wait)
+    },
+    cancel() {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+      firstAt = null
+    }
+  }
+}
 
 /**
  * How many things are holding autosave off right now (T-113: a count, not a flag, so one
@@ -90,21 +146,106 @@ interface AutosaveOptions {
   enabled?: boolean
 }
 
+/** What autosave remembers across an enable and a disable: when it last wrote, and what (the hook keeps it in a ref). */
+export interface AutosaveMemory {
+  lastWriteTime: number
+  lastHash: string
+}
+
 /**
- * Subscribes to all three studio stores. When any store changes, schedules a
- * debounced autosave. Each save is gated by:
+ * Subscribes to all three studio stores. When any store changes (other than
+ * by its playhead alone, T-136 (3)), schedules a debounced autosave. Each save
+ * is gated by:
  *   - serialization round-trip (skip if state is identical to last save)
  *   - main-process safety guards (size cap, schema validation, "no studio" check)
- *   - debounce (5 s) and minimum interval between writes (5 s)
+ *   - debounce (5 s, and never more than 30 s after the first change of a
+ *     burst) and minimum interval between writes (5 s)
  *   - global hold (active while a project is being applied; see `applyProjectHeld`)
  *
  * Failures are silent — they're surfaced to the console but never thrown.
+ *
+ * This is the hook's whole effect as a plain function (T-136 (3)), returning the unsubscribe: the schedule and the playhead rule are
+ * behavior that needs a clock and the real stores, and the vitest environment has no DOM to mount a hook in.
  */
+export function startAutosave(memory: AutosaveMemory): () => void {
+  const scheduler = createSaveScheduler(() => {
+    void doSave()
+  })
+
+  function scheduleSave(): void {
+    if (autosaveSuppressed()) {
+      noteSuppressedChange()
+      return
+    }
+    scheduler.schedule()
+  }
+
+  async function doSave(): Promise<void> {
+    if (autosaveSuppressed()) {
+      // The hold began after this write was scheduled; the release saves it.
+      noteSuppressedChange()
+      return
+    }
+    const now = Date.now()
+    if (now - memory.lastWriteTime < AUTOSAVE_MIN_INTERVAL_MS) {
+      // Re-arm in case more changes are coming
+      scheduleSave()
+      return
+    }
+    let project
+    try {
+      project = captureProject()
+    } catch (err) {
+      console.warn('[autosave] capture failed', err)
+      return
+    }
+    let serialized: string
+    try {
+      serialized = JSON.stringify(project)
+    } catch (err) {
+      console.warn('[autosave] serialize failed', err)
+      return
+    }
+    if (serialized === memory.lastHash) return
+    try {
+      const result = await window.api.autosave.write(project)
+      if (result.ok) {
+        memory.lastHash = serialized
+        memory.lastWriteTime = now
+      } else {
+        // "no studio state" is an expected condition early in the session — don't spam console
+        if (!/no studio state/.test(result.reason)) {
+          console.warn('[autosave] write rejected:', result.reason)
+        }
+      }
+    } catch (err) {
+      console.warn('[autosave] write threw', err)
+    }
+  }
+
+  // T-136 (3): a change to nothing but the playhead is not an edit (the Player writes it ~4 times a second while a video plays).
+  const unsubVideo = useVideoStore.subscribe((state, prev) => {
+    if (!playheadOnlyChange(state, prev, VIDEO_PLAYHEAD_KEYS)) scheduleSave()
+  })
+  const unsubAudio = useAudioStore.subscribe((state, prev) => {
+    if (!playheadOnlyChange(state, prev, AUDIO_PLAYHEAD_KEYS)) scheduleSave()
+  })
+  const unsubCanvas = useCanvasStore.subscribe(scheduleSave)
+  // T-113: a hold with changes in it ends with a save, not with silence until the next edit.
+  const offResume = onAutosaveResume(scheduleSave)
+
+  return () => {
+    offResume()
+    unsubVideo()
+    unsubAudio()
+    unsubCanvas()
+    scheduler.cancel()
+  }
+}
+
 export function useAutosave(options: AutosaveOptions = {}): void {
   const enabled = options.enabled ?? true
-  const debounceTimer = useRef<number | null>(null)
-  const lastWriteTime = useRef<number>(0)
-  const lastHash = useRef<string>('')
+  const memory = useRef<AutosaveMemory>({ lastWriteTime: 0, lastHash: '' })
 
   // T-47: the quit flush. Registered independently of `enabled` so a quit
   // from the welcome screen still gets an immediate answer — main is
@@ -121,75 +262,6 @@ export function useAutosave(options: AutosaveOptions = {}): void {
   useEffect(() => {
     if (!enabled) return
     if (typeof window === 'undefined' || !window.api?.autosave) return
-
-    function scheduleSave(): void {
-      if (autosaveSuppressed()) {
-        noteSuppressedChange()
-        return
-      }
-      if (debounceTimer.current !== null) {
-        window.clearTimeout(debounceTimer.current)
-      }
-      debounceTimer.current = window.setTimeout(() => {
-        void doSave()
-      }, AUTOSAVE_DEBOUNCE_MS)
-    }
-
-    async function doSave(): Promise<void> {
-      if (autosaveSuppressed()) {
-        // The hold began after this write was scheduled; the release saves it.
-        noteSuppressedChange()
-        return
-      }
-      const now = Date.now()
-      if (now - lastWriteTime.current < AUTOSAVE_MIN_INTERVAL_MS) {
-        // Re-arm in case more changes are coming
-        scheduleSave()
-        return
-      }
-      let project
-      try {
-        project = captureProject()
-      } catch (err) {
-        console.warn('[autosave] capture failed', err)
-        return
-      }
-      let serialized: string
-      try {
-        serialized = JSON.stringify(project)
-      } catch (err) {
-        console.warn('[autosave] serialize failed', err)
-        return
-      }
-      if (serialized === lastHash.current) return
-      try {
-        const result = await window.api.autosave.write(project)
-        if (result.ok) {
-          lastHash.current = serialized
-          lastWriteTime.current = now
-        } else {
-          // "no studio state" is an expected condition early in the session — don't spam console
-          if (!/no studio state/.test(result.reason)) {
-            console.warn('[autosave] write rejected:', result.reason)
-          }
-        }
-      } catch (err) {
-        console.warn('[autosave] write threw', err)
-      }
-    }
-
-    const unsubVideo = useVideoStore.subscribe(scheduleSave)
-    const unsubAudio = useAudioStore.subscribe(scheduleSave)
-    const unsubCanvas = useCanvasStore.subscribe(scheduleSave)
-    // T-113: a hold with changes in it ends with a save, not with silence until the next edit.
-    const offResume = onAutosaveResume(scheduleSave)
-
-    return () => {
-      offResume()
-      unsubVideo()
-      unsubAudio()
-      unsubCanvas()
-      if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current)
-    }
+    return startAutosave(memory.current)
   }, [enabled])
 }

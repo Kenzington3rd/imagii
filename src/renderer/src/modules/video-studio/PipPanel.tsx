@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { usePipRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { RunningCancel } from '../../components/RunningCancel'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 import { claimFirst } from '../../lib/claimFirst'
@@ -186,13 +187,7 @@ export function PipPanel(): JSX.Element {
       {/* Round 17 B5 */}
       {busy ? (
         <div className="flex justify-end">
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-            onClick={cancel}
-            title="Cancel PiP composite"
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel picture-in-picture composite" onClick={cancel} />
         </div>
       ) : null}
     </div>

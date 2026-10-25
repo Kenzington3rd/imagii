@@ -2741,7 +2741,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
     }
   })
 
-  test('Clip Kit: a kit that is running when the person leaves is still running, with its Cancel, when they come back - and only on its own clip\'s row', async () => {
+  test('Clip Kit: a kit that is running when the person leaves is still running, with its Cancel, when they come back - and the same on whichever clip is selected (T-136 (1))', async () => {
     test.setTimeout(600_000)
     const studio = await launchWithVideo('leave-kit')
     const { app, window, outDir } = studio
@@ -2761,12 +2761,13 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await expect(kits.first()).toBeDisabled()
       const cancel = clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })
       await expect(cancel, 'and its Cancel is there').toHaveCount(1)
-      // The kit belongs to the first clip. The other clip's button (the list shows one kit button, for the selected clip) is off while it
-      // works, does not borrow its label, and has no Cancel of its own.
+      // T-136 (1): the list shows ONE kit button, for the selected clip, so "the other clip's button" is the same button. It is off while the kit
+      // works (a second press starts nothing), and it shows the RUNNING kit with its Cancel - the T-135 pin here said the opposite (an idle label,
+      // no Cancel), which was the bug: selecting another clip hid the way to stop a kit that runs for minutes.
       await clipListCard(window).locator('li').nth(1).getByRole('button', { name: /^Select clip/ }).click()
       await expect(kits.first()).toBeDisabled()
-      await expect(kits.first()).toHaveText('Clip Kit (5 + thumbs)')
-      await expect(clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+      await expect(kits.first()).toHaveText(EXPORTING_N_OF_5)
+      await expect(clipListCard(window).getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(1)
       await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
       await expect(kits.first()).toHaveText(EXPORTING_N_OF_5)
       await cancel.click()
@@ -10121,6 +10122,454 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await expect(burn, 'and the claim is given back').toBeEnabled({ timeout: 30_000 })
     } finally {
       await app.close()
+    }
+  })
+})
+
+// ═══════ T-136 Track A (round 85): a kit that can always be canceled, one conversion at a time, the model download, the Output preview ═══════
+
+test.describe('T-136 (1): a running Clip Kit shows itself, with its Cancel, whichever clip is selected - and after its clip is gone or the video is closed', () => {
+  // The clip list draws ONE kit button, for the selected clip. T-135 (1) tied the run to the clip's row, so selecting another clip put the kit's
+  // progress and Cancel behind a disabled button with an idle label, and removing the clip or closing the video left no Cancel anywhere until the
+  // kit ended minutes later. The kit is a run in a module store; the button shows it whatever is selected, the run names the clip it was started on,
+  // and a closed video's kit is cancelable beside the importer.
+  /** Start a kit on the first of two clips and hold it in its export phase (job 2's probe is held), so it is still running when the test acts. */
+  async function startHeldKit(label: string): Promise<Studio> {
+    const studio = await launchWithVideo(label)
+    const { app, window, outDir } = studio
+    await stubDialogs(app, { open: [outDir] })
+    await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+    await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+    await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+    await kitButton(window).click()
+    // "2 of 5": job 1 has landed (so a Cancel finds a folder worth keeping and says so), and job 2's probe is the held one.
+    await expect(kitButton(window)).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+    return studio
+  }
+  const CANCELED = 'Clip Kit canceled. Files already finished are in your folder.'
+
+  test('selecting another clip keeps the running kit on the button, names the clip it is for, and keeps its Cancel', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t136kit-select')
+    try {
+      const list = clipListCard(window)
+      await list.locator('li').nth(1).getByRole('button', { name: /^Select clip/ }).click()
+      await expect(kitButton(window), 'the other clip shows the RUNNING kit, not a dead idle label').toHaveText(EXPORTING_N_OF_5)
+      await expect(kitButton(window)).toBeDisabled()
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true }), 'and says whose kit it is').toBeVisible()
+      const cancel = list.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel, 'its Cancel is reachable from the other clip').toHaveCount(1)
+      await cancel.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, CANCELED)
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      await expect(kitButton(window)).toBeEnabled()
+      await expect(list.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+      await expect(list.getByText('Clip Kit for "Clip 1"')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('removing the clip the kit was started on leaves the kit running, named, and cancelable', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t136kit-remove')
+    try {
+      const list = clipListCard(window)
+      window.once('dialog', (dialog) => void dialog.accept())
+      await list.locator('li').first().getByRole('button', { name: 'Remove clip' }).click()
+      await expect(list.locator('li'), 'the owning clip is gone').toHaveCount(1)
+      await expect(kitButton(window), 'the kit is still on the button').toHaveText(EXPORTING_N_OF_5)
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true }), 'named from the run, not from the clip that was removed').toBeVisible()
+      const cancel = list.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toHaveCount(1)
+      await cancel.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, CANCELED)
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      await expect(kitButton(window)).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('closing the video leaves the kit running beside the importer, with its Cancel', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t136kit-close')
+    try {
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByText('Clip Kit for "Clip 1"', { exact: true }), 'the running kit is still shown, by name').toBeVisible()
+      await expect(window.getByText(/The video is closed; the kit keeps writing its files/)).toBeVisible()
+      const cancel = window.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel, 'and cancelable').toHaveCount(1)
+      await cancel.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, CANCELED)
+      await expect(window.getByRole('button', { name: 'Cancel', exact: true }), 'the card goes with the kit').toHaveCount(0, { timeout: 60_000 })
+      await expect(window.getByText('Clip Kit for "Clip 1"')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('T-136 (2): one conversion at a time, and a late one never replaces the video being edited', () => {
+  const SENTENCE = "imagii can't preview this video's picture format — trimming, scanning and export still work."
+  const importDir = path.join(os.tmpdir(), 'imagii-import')
+  const clockOf = (window: Page, text: RegExp): Locator => window.locator('div.font-mono').filter({ hasText: text })
+
+  test('the importer is still busy after a trip to Home: Choose file is off, a second drop is refused, and main refuses a second conversion by name', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchHome('t136importer')
+    const { app, window } = studio
+    try {
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      // The flv's conversion (the only ffmpeg this page starts) is held, so it is still running when the person is back.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 20_000 }])
+      await dropOnVideoImporter(window, flvSrc, 'stream.flv')
+      await expectToast(window, 'Converting for editing')
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await gotoVideoStudio(window)
+      // Back: this is the same import, not an idle importer.
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'off while the conversion runs').toBeDisabled()
+      await expect(window.getByText(/Loading…/)).toBeVisible()
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expectToast(window, 'Still converting the last video. Wait for it to finish.')
+      await expect(window.locator('video')).toHaveCount(0)
+      expect((await readSpawnLog(app)).filter((k) => k === 'ffmpeg'), 'one conversion, not two').toHaveLength(1)
+
+      // Main's own guard, for whoever asks: the same file again is refused in a sentence that names the one that runs.
+      const refusal = await window.evaluate(
+        (p) => window.api.video.convertForImport(p).then(() => 'started', (e: unknown) => String(e)),
+        flvSrc
+      )
+      expect(refusal).toContain('Still converting "stream.flv". Wait for it to finish, then try again.')
+      expect((await readSpawnLog(app)).filter((k) => k === 'ffmpeg'), 'and it started nothing').toHaveLength(1)
+
+      // The conversion ends and the video that opens is the FIRST drop.
+      await expect(window.locator('header').getByText('stream.flv', { exact: true })).toBeVisible({ timeout: 120_000 })
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(window.getByRole('button', { name: 'Choose file…' })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a video opened while a conversion runs is kept: the late conversion is skipped in a sentence, and the clips are untouched', async () => {
+    test.setTimeout(300_000)
+    const clip = (id: string, name: string, endSec: number): object => ({
+      id,
+      name,
+      startSec: 0,
+      endSec,
+      cropRect: null,
+      textOverlays: [],
+      selectedPresets: ['youtube']
+    })
+    const projectPath = path.join(root, `t136keep-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(
+      projectPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        videoStudio: {
+          sourcePath: clipSrc,
+          clips: [clip('keep-a', 'Keep A', 1), clip('keep-b', 'Keep B', 2)],
+          selectedClipId: 'keep-a',
+          watermark: null
+        }
+      }),
+      'utf8'
+    )
+    const studio = await launchHome('t136keep')
+    const { app, window } = studio
+    try {
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 14_000 }])
+      await dropOnVideoImporter(window, flvSrc, 'stream.flv')
+      await expectToast(window, 'Converting for editing')
+
+      // While it converts, a project with an mp4 is opened from Home (a video that needs no conversion).
+      await stubDialogs(app, { open: [projectPath] })
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expectToast(window, 'Project loaded')
+      await gotoVideoStudio(window)
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Keep A', 'Keep B'])
+
+      // The conversion ends. It used to load the copy over the video being edited (and reset its clips to one, with no confirm).
+      await expectToast(window, 'Skipped stream.flv because you opened another video while it was converting')
+      await window.waitForTimeout(500)
+      await expect(window.locator('header').getByText('pipeline.mp4', { exact: true }), 'the video the person opened is still the one open').toBeVisible()
+      await expect(window.locator('header').getByText('stream.flv', { exact: true })).toHaveCount(0)
+      expect((await clipRows(window)).map((r) => r.name), 'and its clips are untouched').toEqual(['Keep A', 'Keep B'])
+      expect(await readToastLog(window), 'no "Video loaded" for a file that was not loaded').not.toContain('Video loaded')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the preview copy is still being made after a trip to Home: its button is the busy one, one conversion runs, and main refuses another by name', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('t136pcopy', proresSrc)
+    try {
+      await expect(window.getByText(SENTENCE)).toBeVisible({ timeout: 30_000 })
+      // The first ffmpeg after this is the conversion: it is held 20 s, so its working copy does not exist yet while the person is back. A SECOND
+      // conversion would not be held (the rule is for the first spawn only) and would write its file at once.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 20_000 }])
+      const before = new Set(existsSync(importDir) ? readdirSync(importDir) : [])
+      const copies = (): string[] => (existsSync(importDir) ? readdirSync(importDir) : []).filter((f) => !before.has(f) && /^undecodable-prores-.*\.mp4$/.test(f))
+      await window.getByRole('button', { name: 'Make a preview copy' }).click()
+      await expect(window.getByRole('button', { name: 'Making a preview copy…' })).toBeDisabled()
+
+      await leaveAndReturn(window)
+      await expect(window.getByText(SENTENCE)).toBeVisible({ timeout: 30_000 })
+      await expect(
+        window.getByRole('button', { name: 'Making a preview copy…' }),
+        'not "Make a preview copy" again: a copy is being made, and a second press would start a second conversion'
+      ).toBeDisabled()
+      // Main's own guard, for whoever asks: another conversion is refused in a sentence naming the one that runs, and starts nothing.
+      const refusal = await window.evaluate(
+        (p) => window.api.video.convertForImport(p).then(() => 'started', (e: unknown) => String(e)),
+        proresSrc
+      )
+      expect(refusal).toContain('Still converting "undecodable-prores.mov". Wait for it to finish, then try again.')
+      await window.waitForTimeout(2_500)
+      expect(copies(), 'no second conversion wrote a working copy while the first was held').toEqual([])
+
+      // It ends and the copy is swapped in, as it always was: one working copy.
+      await expect(window.getByText(SENTENCE)).toBeHidden({ timeout: 120_000 })
+      expect(copies()).toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a preview copy that is finished while the person is away comes back at the playhead it was asked at, not at 0:00', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('t136pcopypos', proresSrc)
+    try {
+      await expect(window.getByText(SENTENCE)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 2_000 }])
+      const before = new Set(existsSync(importDir) ? readdirSync(importDir) : [])
+      // The playhead at 1.0 s of a 2 s picture.
+      await window.evaluate(() => {
+        const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl
+        v.currentTime = 1
+      })
+      await expect(clockOf(window, /^0:01\.\d\d \/ 0:02\.\d\d$/)).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('button', { name: 'Make a preview copy' }).click()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+
+      // The copy is made while nobody is looking at the Player: the working copy appears and stops growing.
+      const copies = (): string[] => (existsSync(importDir) ? readdirSync(importDir) : []).filter((f) => !before.has(f) && /^undecodable-prores-.*\.mp4$/.test(f))
+      await expect.poll(() => copies().length, { timeout: 60_000, intervals: [250] }).toBe(1)
+      const copy = path.join(importDir, copies()[0] as string)
+      let last = -1
+      await expect
+        .poll(
+          async () => {
+            const size = statSync(copy).size
+            const settled = size > 1000 && size === last
+            last = size
+            return settled
+          },
+          { timeout: 60_000, intervals: [1_500] }
+        )
+        .toBe(true)
+
+      await gotoVideoStudio(window)
+      await expect(window.getByText(SENTENCE), 'the copy is the one playing').toBeHidden({ timeout: 60_000 })
+      await expect(clockOf(window, /^0:01\.\d\d \/ 0:02\.\d\d$/), 'at the playhead it was made at').toBeVisible({ timeout: 30_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('T-136 (4): the caption model download keeps its bar and its Cancel across a trip to Home', () => {
+  // The panel kept `installing` / `installProgress` in useState, so a trip to Home came back with no bar, no Cancel and Download re-enabled (main
+  // refused its second press), and the download that ended meanwhile refreshed the status of a panel that was gone, so Transcribe reopened the setup.
+  /** main's `net.request` replaced by a download that starts, reports progress up to 40%, and never ends (the real one is 141 MB from Hugging Face). */
+  async function stubNeverEndingDownload(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ net }) => {
+      const events = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule('node:events') as typeof import('node:events')
+      net.request = (() => {
+        const request = new events.EventEmitter() as import('node:events').EventEmitter & { end: () => void; abort: () => void }
+        let timer: ReturnType<typeof setInterval> | null = null
+        request.end = () => {
+          setTimeout(() => {
+            const response = new events.EventEmitter() as import('node:events').EventEmitter & { statusCode: number; headers: Record<string, string> }
+            response.statusCode = 200
+            response.headers = { 'content-length': '1000000' }
+            request.emit('response', response)
+            let sent = 0
+            timer = setInterval(() => {
+              if (sent >= 400_000) return
+              sent += 20_000
+              response.emit('data', Buffer.alloc(20_000))
+            }, 150)
+          }, 50)
+        }
+        request.abort = () => {
+          if (timer) clearInterval(timer)
+          request.emit('abort')
+        }
+        return request
+      }) as unknown as typeof net.request
+    })
+  }
+
+  test('leave mid-download and come back: the bar and the Cancel are there, Download is off, and Cancel stops it', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchWithVideo('t136model', clipSrc)
+    const { app, window, userDataDir } = studio
+    try {
+      await stubNeverEndingDownload(app)
+      const card = captionsCard(window)
+      const bar = card.getByRole('progressbar', { name: 'Downloading the caption model' })
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await card.getByRole('button', { name: /Download model/ }).click()
+      await expect(bar).toBeVisible({ timeout: 20_000 })
+      await expect.poll(async () => Number(await bar.getAttribute('aria-valuenow')), { timeout: 20_000 }).toBeGreaterThanOrEqual(10)
+
+      await leaveAndReturn(window)
+      await expect(bar, 'the bar is drawn for the download that is still running').toBeVisible({ timeout: 20_000 })
+      await expect(card.getByRole('button', { name: 'Downloading model…' }), 'Download is off: a second press would be refused by main').toBeDisabled()
+      await expect.poll(async () => Number(await bar.getAttribute('aria-valuenow')), { timeout: 20_000 }).toBeGreaterThanOrEqual(10)
+      const cancel = card.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toHaveCount(1)
+      await cancel.click()
+      await expectCanceledNotFailed(window, 'Download canceled.')
+      await expect(bar).toHaveCount(0)
+      await expect(card.getByRole('button', { name: /Download model/ }), 'ready for another try').toBeEnabled()
+      const partials = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.partial')) : [])
+      expect(partials(path.join(userDataDir, 'models')), 'the partial file is gone').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a download that ends after the person came back leaves the panel ready: no setup card, and Transcribe transcribes', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('t136modeldone')
+    const { app, window } = studio
+    try {
+      // The engine and the model are not installed in any test environment, so main is told they are, as the T-113 case does.
+      await app.evaluate(({ ipcMain, BrowserWindow }) => {
+        const g = globalThis as unknown as { __modelDone?: () => void }
+        let modelInstalled = false
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => ({
+          exeInstalled: true,
+          exePath: 'whisper-cli.exe',
+          modelInstalled,
+          modelPath: 'model.bin',
+          modelsDir: 'models',
+          ready: modelInstalled
+        }))
+        ipcMain.removeHandler('captions:installModel')
+        ipcMain.handle(
+          'captions:installModel',
+          () =>
+            new Promise((resolve) => {
+              BrowserWindow.getAllWindows()[0]?.webContents.send('captions:modelProgress', { phase: 'downloading', percent: 42 })
+              g.__modelDone = () => {
+                modelInstalled = true
+                resolve({ ok: true, path: 'model.bin' })
+              }
+            })
+        )
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', (_e, req: { jobId: string }) => ({
+          jobId: req.jobId,
+          srtPath: 'stand-in.srt',
+          segments: [{ startSec: 0, endSec: 1.5, text: 'a stand-in line' }],
+          durationMs: 5
+        }))
+      })
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, 'model-done.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await card.getByRole('button', { name: /Download model/ }).click()
+      const bar = card.getByRole('progressbar', { name: 'Downloading the caption model' })
+      await expect(bar).toHaveAttribute('aria-valuenow', '42', { timeout: 20_000 })
+
+      await leaveAndReturn(window)
+      await expect(bar).toBeVisible({ timeout: 20_000 })
+      await expect(card.getByText('Captions need setup')).toBeVisible()
+      // The download ends now, with this panel on screen (the one that STARTED it is gone).
+      await app.evaluate(() => (globalThis as unknown as { __modelDone: () => void }).__modelDone())
+      await expectToast(window, 'Caption model downloaded')
+      await expect(bar).toHaveCount(0)
+      await expect(card.getByText('Captions need setup'), 'the setup card goes: the engine and the model are there').toHaveCount(0)
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(card.getByLabel('Transcript preview'), 'Transcribe transcribes; it does not reopen the setup').toBeVisible({ timeout: 30_000 })
+      await expect(card.getByText('Captions need setup')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('T-136 (6): the Output preview says why it is black, until a preview copy can be drawn', () => {
+  const NOTE = "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
+  const LIVE = /Live snapshot at the playhead position/
+  const previewCard = (window: Page): Locator => window.locator('.card').filter({ has: window.getByRole('heading', { name: 'Output preview' }) })
+
+  test('a ProRes file replaces "Live snapshot..." with a one-line note; the copy brings the caption back; a decodable video never shows the note', async () => {
+    test.setTimeout(300_000)
+    const proRes = await launchWithVideo('t136preview', proresSrc)
+    try {
+      const card = previewCard(proRes.window)
+      await expect(card.getByText(NOTE), 'the note, in the card').toBeVisible({ timeout: 30_000 })
+      await expect(card.getByText(LIVE), 'and not a caption promising what is not there').toHaveCount(0)
+      // The moment that matters is the one the final state hides: the copy is in the store and the <video> has its source, but the element has not
+      // reported yet, so the Player's verdict is still "cannot draw" for a beat. The note is about a picture that cannot be drawn WITHOUT a copy; the
+      // instant a copy exists it is untrue. A DOM observer, armed before the press, reads the page after every change from here on: no change may leave
+      // the <video> on the copy while the card still says there is no snapshot (the final state alone cannot tell the two apart - the verdict clears
+      // itself once the copy loads).
+      await proRes.window.evaluate((note) => {
+        const seen = { sawCopy: false, noteOverCopy: 0 }
+        ;(window as unknown as { __copySeen: typeof seen }).__copySeen = seen
+        const original = document.querySelector('video')?.getAttribute('src')
+        new MutationObserver(() => {
+          const src = document.querySelector('video')?.getAttribute('src')
+          if (!src || src === original) return
+          seen.sawCopy = true
+          if (document.body.textContent?.includes(note)) seen.noteOverCopy += 1
+        }).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
+      }, NOTE)
+      await proRes.window.getByRole('button', { name: 'Make a preview copy' }).click()
+      await expect(card.getByText(LIVE), 'the copy can be drawn: the caption is true again').toBeVisible({ timeout: 120_000 })
+      await expect(card.getByText(NOTE)).toHaveCount(0)
+      const seen = await proRes.window.evaluate(() => (window as unknown as { __copySeen: { sawCopy: boolean; noteOverCopy: number } }).__copySeen)
+      expect(seen.sawCopy, 'the observer saw the <video> move to the copy (it watched the right thing)').toBe(true)
+      expect(seen.noteOverCopy, 'and the note was never on screen once the <video> was on the copy').toBe(0)
+    } finally {
+      await proRes.app.close()
+    }
+    const plain = await launchWithVideo('t136previewok', clipSrc)
+    try {
+      const card = previewCard(plain.window)
+      await expect(card.getByText(LIVE)).toBeVisible({ timeout: 30_000 })
+      await plain.window.waitForTimeout(500)
+      await expect(card.getByText(NOTE)).toHaveCount(0)
+    } finally {
+      await plain.app.close()
     }
   })
 })

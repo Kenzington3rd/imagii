@@ -2199,3 +2199,76 @@ const DEFAULT_CHAIN_FOR_TEST: ChainSpec = {
   cutRegions: [],
   secondaryTrack: null
 }
+
+/**
+ * T-136 (2) - the project open's re-convert goes through the same `video:convertForImport` as the importer's and the preview copy's, so main's
+ * one-conversion-at-a-time refusal can reach it: a project whose video is a converted import, opened while another conversion runs. The refusal is a
+ * finished sentence naming the file that is being converted (`videoConvertSingleFlight.test.ts`), and `loadReporting` is where a failed studio is
+ * reported: it must stand as written, name no missing file ("moved or deleted" would be false), leave the video studio as it was, and let the rest of
+ * the project open. The comment in `applyProject` that said the conversion and Clean audio's extraction "can run beside" each other was true only
+ * until T-135 (1) gave each a single slot in main.
+ */
+describe('applyProject when main refuses a second conversion (T-136 (2))', () => {
+  const ORIGINAL = '/home/user/Videos/stream.flv'
+  const BUSY = 'Still converting "other-stream.flv". Wait for it to finish, then try again.'
+
+  let consoleError: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleError.mockRestore()
+  })
+
+  function projectWithConvertedVideo(): ImagiiProject {
+    return {
+      schemaVersion: MAX_SCHEMA_VERSION,
+      savedAt: 1_700_000_000_000,
+      appVersion: '1.0.0',
+      videoStudio: { sourcePath: ORIGINAL, convertedForImport: true, clips: [CLIP_A], selectedClipId: CLIP_A.id, watermark: null, srtPath: null },
+      imageCanvas: { doc: DOC }
+    }
+  }
+
+  function refusingBridge(message: string): void {
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: (_p: string) => Promise.resolve(VIDEO_PROBE),
+          fileUrl: (p: string) => pathToImagiiFileUrl(p),
+          // Electron wraps what a handler throws, as it does for every channel.
+          convertForImport: () => Promise.reject(new Error(`Error invoking remote method 'video:convertForImport': Error: ${message}`))
+        },
+        audio: { ...PEAKS_BRIDGE, probe: (_p: string) => Promise.resolve(AUDIO_PROBE) }
+      }
+    })
+  }
+
+  it('reports the refusal as a failure in main\'s own words, not as a file that is gone, and opens the rest', async () => {
+    refusingBridge(BUSY)
+    const outcome = await applyProject(projectWithConvertedVideo())
+    expect(outcome.unavailable, 'the file is not missing').toEqual([])
+    expect(outcome.skipped).toEqual([])
+    expect(outcome.failed).toHaveLength(1)
+    expect(outcome.failed[0]?.studio).toBe('video')
+    expect(outcome.failed[0]?.message, 'the finished sentence stands as written: no envelope, no "Couldn\'t open" in front of it').toBe(BUSY)
+    expect(useVideoStore.getState().source, 'the video studio is left as it was').toBeNull()
+    expect(useCanvasStore.getState().doc.layers.length, 'and the rest of the project opened').toBe(DOC.layers.length)
+  })
+
+  it('the person reads that sentence, then that the rest is open - and is not told the file moved', async () => {
+    refusingBridge(BUSY)
+    const message = describeApplyOutcome(await applyProject(projectWithConvertedVideo()), 'project')
+    expect(message).toContain(BUSY)
+    expect(message).toContain('The rest of your project is open')
+    expect(message).not.toMatch(/moved or deleted|Couldn't find/)
+  })
+
+  it('a refusal from main does not touch a video the person already has open', async () => {
+    refusingBridge(BUSY)
+    await useVideoStore.getState().loadSource('/home/user/Videos/open.mp4')
+    const held = useVideoStore.getState().source
+    await applyProject(projectWithConvertedVideo())
+    expect(useVideoStore.getState().source).toBe(held)
+  })
+})

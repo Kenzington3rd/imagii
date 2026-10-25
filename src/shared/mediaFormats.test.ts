@@ -16,7 +16,8 @@ import {
   formatHint,
   canStreamCopyIntoMp4,
   MP4_COPYABLE_VIDEO_CODECS,
-  PREVIEW_UNAVAILABLE_MESSAGE
+  PREVIEW_UNAVAILABLE_MESSAGE,
+  OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE
 } from './mediaFormats'
 
 describe('mediaFormats lists', () => {
@@ -143,5 +144,25 @@ describe('PREVIEW_UNAVAILABLE_MESSAGE - what the Player says when it cannot draw
 
   it('does not blame the file or promise a fix the app does not make (no "corrupt", no "unsupported file")', () => {
     expect(PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/corrupt|damaged|unsupported|invalid/i)
+  })
+})
+
+describe('OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE - what the Output preview says in place of "Live snapshot..." (T-136 (6))', () => {
+  it('is one finished line that says what the box does not show, why, and that exports are not affected', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).toBe(
+      "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
+    )
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE.endsWith('.')).toBe(true)
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toContain('\n')
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE.length).toBeLessThanOrEqual(240)
+  })
+
+  it('says the same thing about the format as the Player\'s note, and does not blame the file', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).toContain("imagii can't preview this video's picture format")
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/corrupt|damaged|unsupported|invalid/i)
+  })
+
+  it('does not promise a live picture (it replaces the caption that does)', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/live snapshot/i)
   })
 })

@@ -6,6 +6,8 @@ import { useVideoStore } from './store/videoStore'
 import { useReframeRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
 import { useVideoOutputDir } from '../../hooks/useVideoOutputDir'
 import { reportFailure } from '../../lib/reportFailure'
@@ -176,31 +178,12 @@ export function ReframePanel(): JSX.Element | null {
         <div className="flex items-center gap-2 text-xs text-ink-muted">
           {/* T-100: the phase id, upper-cased, was the label ("ANALYZING"). */}
           <span>{reframePhaseLabel(phase)}</span>
-          <div
-            className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden"
-            role="progressbar"
-            aria-label={reframePhaseLabel(phase)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={progress === null ? undefined : Math.round(progress)}
-          >
-            {progress === null ? (
-              <div className="h-full bg-accent progress-indeterminate" />
-            ) : (
-              <div className="h-full bg-accent" style={{ width: `${Math.round(progress)}%` }} />
-            )}
-          </div>
+          <ProgressTrack label={reframePhaseLabel(phase)} percent={progress} />
           {progress === null ? null : (
             <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           )}
           {/* Round 17 B1 */}
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-            onClick={cancel}
-            title="Cancel reframe"
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel reframe" onClick={cancel} />
         </div>
       ) : null}
     </div>
