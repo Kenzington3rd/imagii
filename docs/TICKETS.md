@@ -5631,6 +5631,164 @@ IMG-PREC.
 
 ---
 
+## T-139 — sweep-25 fixes (round 88)
+
+- **Spec:** the twenty-fifth sweep's verified findings — each
+  confirmed by the expediter against source; the save overwrite, the
+  autosave overlap, the oversize stored copy and the banner after
+  Open project were EXECUTED in the built app by reviewers; the
+  "Permission denied" line was captured from the shipped win32 exe
+  under Wine; the whisper.cpp releases page was fetched by the
+  expediter. Zero-finding lenses: privacy, a11y. 10 findings, written
+  as two tracks with DISJOINT source files.
+  **Track A (main process and error mapping):**
+  1. **[MED] Saving over a file destroys it when the write fails.**
+     ipc/project.ts:52 `writeFile(result.filePath, raw)` truncates the
+     chosen file first: a save over an existing project on a full or
+     removed drive (or a crash mid-write) leaves neither the old
+     project nor the new one (executed: ENOSPC on a tmpfs left a
+     2,097,152-byte unparseable file). Same shape at ipc/image.ts:47
+     and :83, ipc/captions.ts:124 (copyFile onto the chosen path) and
+     search/moodboard.ts:195, :237, :258 (a truncated board silently
+     drops out of the list). Fix direction: ONE helper in src/main
+     (`writeFileAtomic(path, data)`: a unique tmp name in the SAME
+     directory, then `rename` over the target, the tmp unlinked on any
+     failure, the error rethrown), used at every write of a file the
+     person chose or owns (project, image export, the .srt copy as
+     copy-to-tmp then rename, the board writes); autosave.ts keeps its
+     own tmp + rename. Unit (fault injection over the real handler or
+     the helper): a write that fails after it began leaves the old
+     file byte-identical and no tmp behind; the success path writes
+     exactly the bytes.
+  3. **[LOW] Overlapping autosave writes corrupt both autosave
+     slots.** autosave.ts writes through ONE fixed `autosave.tmp`
+     (:55) with no exclusion; the renderer's doSave can start a second
+     write while one is in flight (lastWriteTime is set after the
+     await, useAutosave.ts:243-247) and quitFlush.ts:90 writes beside
+     it; overlapping calls truncate each other's tmp, a mixed file is
+     renamed into autosave.json and copied over autosave.prev.json
+     (executed: both slots corrupt in 6 of 6 overlapping trials).
+     Fix direction: serialize `writeAutosave` in main (one promise
+     chain: each call runs after the previous one settles; the last
+     content wins) and give each write its own tmp name; unit: two
+     concurrent writes of different sizes leave a parseable current
+     AND prev, and current is the later content.
+  10. **[LOW] ffmpeg's "Permission denied" gets the generic
+     sentence.** userFacingError.ts:81-84 and importDiagnostics.ts:
+     122-127 map EBUSY/EPERM/EACCES/"access is denied" to "Windows
+     blocked access…", but the shipped win32 ffmpeg says "Error
+     opening output files: Permission denied" (MSVCRT maps a sharing
+     violation / ACL block to EACCES), so a file held by antivirus or
+     an editor is told to check disk room and the source. Fix
+     direction: map "permission denied" when it is a runner or probe
+     exit's cause (the `… exit N: …: Permission denied` shape), and
+     keep "Screen recording permission denied" unmapped
+     (record.spec.ts:1099-1108 pins it); unit rows built from the
+     captured win32 lines (export, probe), plus the screen-recording
+     control.
+  Non-counted, rides with Track A: chain.ts:161-166's "picture and
+  sound agree to within one 256-sample block" holds only for a chain
+  without afftdn or the limiter (T-110 (bl)) — say so.
+  **Track B (renderer, copy and guides):**
+  2. **[MED] An imported picture lands mostly off a small canvas.**
+     ImportPanel.tsx:65-66 places a picture at min(its size, 800 px)
+     whatever the document and canvasStore.ts makeImageLayer starts it
+     at (60, 60); on the 112x112 emote template a 512x512 art file
+     shows a 52 px corner, the other handles are off the stage, and
+     there is no size field or fit control. Fix direction: the FIRST
+     placement fits the document — the drawn size also bounded by the
+     document (scale = min(1, 800 / longer side, docW / w, docH / h))
+     and the position kept inside it (x = min(60, docW - w), likewise
+     y, never negative) — for a drop, the file chooser, a paste and
+     "→ Canvas"; templates' own layers untouched. E2E: a 512x512 PNG
+     on the emote template lands wholly on the canvas; a tall picture
+     on the 1200x480 banner likewise; the 1920 overlay keeps today's
+     placement; docClaims pins and USER_GUIDE follow.
+  4. **[LOW] One picture's stored copy can exceed the project size
+     limit.** T-138 (2)'s `storedImageMaxDim` bounds pixels, not bytes,
+     and only an image/jpeg source is re-encoded as JPEG: a 9000x6000
+     PNG on the 4K overlay became a 54 MB data URL and paused autosave
+     at once (executed). Fix direction: a byte budget per stored copy
+     (`STORED_IMAGE_MAX_BYTES` in imageBounds.ts, about 16 MiB of data
+     URL): over it, an opaque picture is re-encoded as JPEG at the same
+     bound; still over (or transparent), the dimension steps down until
+     it fits; the budget applies to a picture within the pixel bound
+     too (it is then re-encoded rather than kept as it came). Unit for
+     the step rule; e2e with a large incompressible PNG on the 4K
+     template (stored under the budget, autosave not paused).
+  5. **[LOW] The autosave banner stays after Open project, and its
+     Restore replaces what was opened.** AutosaveRestore.tsx:44 reads
+     `holdsWork` once per mount; Home.tsx:34-62's Open project applies
+     the project and stays on Home, so the same banner offers Restore
+     and pressing it applies the snapshot over the opened project
+     (executed). Fix direction: the banner goes when Home's Open
+     project lands (a shared signal beside `useRestoreRun`, as
+     `applied` does), and `restore()` re-asks `sessionHoldsWork()` at
+     press time as a backstop (the banner goes, nothing is applied).
+     E2E: QA's probe — autosave seeded, a project opened from Home,
+     the banner gone; and the backstop's unit/wiring pin.
+  6. **[LOW] The captions setup names a file the releases page does
+     not offer.** CaptionsPanel.tsx:343-352 and USER_GUIDE.md:392-396
+     say "Download whisper-cli.exe from the whisper.cpp releases (the
+     Windows build)", but the release marked Latest (v1.9.5) carries
+     only source archives, the Windows builds are zips
+     (whisper-bin-x64.zip) under the b-series pre-releases, and no
+     asset is named whisper-cli.exe. Fix direction: name the zip, say
+     it may be listed under a pre-release, and say to extract it and
+     put whisper-cli.exe AND the .dll files beside it into the folder
+     the panel opens (true whatever the owner's DLL hand-check
+     decides); check the zip's real layout (a top-level folder or not)
+     before wording it; link to github.com/ggml-org/whisper.cpp/
+     releases (the pins on the two caption links follow).
+  7. **[LOW] DESIGN_GUIDE's decision order contradicts its own
+     placements.** DESIGN_GUIDE.md:232-235 sends the Clip Kit (it
+     always answers pickOutputDir) beside the primary, Audio Studio's
+     export (it draws a ProgressTrack) to the progress row, and the
+     Export panel (ProgressTrack rows) to the progress row — the
+     guide's own list and the code place them under the primary,
+     beside it, and under it. Fix: an order that reproduces the listed
+     classification (the sentence-label case; what "reports a percent"
+     means for a queue row and for the audio row; a dialog ALWAYS
+     answered between press and job), the docClaims pin following.
+  8. **[LOW] DESIGN_GUIDE's GIF widths do not reproduce.** :225 "GIF
+     112 px idle and 120 busy" measures 102 / 109 in the built app
+     (Inter loaded); LESSONS repeats them as "re-measured". Fix:
+     re-measure in the built app and correct, or drop the pixel
+     figures and keep the criterion; correct LESSONS likewise.
+  9. **[LOW] A double-press on three record-creating buttons.**
+     PostChecklist.tsx:139-156 ("+ Log post") clears the name
+     synchronously, so the second press of a double-click raises red
+     "Add a clip name first" after "Added to your posting log";
+     PresetPanel.tsx:41-58 and CustomPresetManager.tsx:74-122 clear
+     after the awaited write, so the second press gets the red "name
+     first" or, on a slow write, saves a DUPLICATE. Fix direction:
+     `isRepeatPress` on the posting log's add; `claimFirst` and the
+     button disabled while the write is out on both preset saves (the
+     T-131 family's tools). E2E: a double-click adds one entry / one
+     preset and raises no error toast. MEASURE FIRST (report either
+     way): whether a double-click on Welcome's "Let's go" lands its
+     second press on a Home NavCard at 1366x768 and 1536x864; if it
+     does, the same family's fix and an e2e.
+  Non-counted, rides with Track B: boundedImage.ts's "third place an
+  Image fetches one" comment undercounts (Canvas.tsx's useImage is
+  another; ledger (g)).
+  **Docs (ride with the owning track):** LESSONS_LEARNED entries
+  (item 1: a write over the person's file is the old file until the
+  new one is whole; item 2: a placement is sized to where it lands),
+  IC rows, TESTING paragraphs, USER_GUIDE lines.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 2, 4, 5 and 9 land with
+  their e2e cases; items 1, 3 and 10 with unit cases over the real
+  module (fault injection where the failure is a disk's); items 6, 7
+  and 8 with their pins; new cases in NEW describe blocks appended at
+  the end of shared files; `npm run verify`, `npm run test:media` and
+  the FULL Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID
+  only.
+- **Status:** open (round 88, two tracks)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -5843,7 +6001,12 @@ IMG-PREC.
   accelerators (Ctrl+R reload, which drops every studio's
   in-memory state mid-take) look live under `autoHideMenuBar` —
   `Menu.setApplicationMenu(null)` is the candidate fix, decided
-  together; (ai) the portable exe unpacks itself on EVERY launch
+  together (sweep 25, executed: a reload mid-take also leaves the
+  recording session open in main - four takes each followed by a
+  reload kept four partial webms and the fifth `recording:begin`
+  was refused "too many open sessions"; only the
+  render-process-gone path abandons sessions, so the same decision
+  covers abandoning them on a main-frame navigation); (ai) the portable exe unpacks itself on EVERY launch
   (electron-builder's portable template deletes and re-extracts
   its install dir each start; nothing sets `unpackDirName`), a
   10-15 s no-window wait on every start — T-120 rewords the five
@@ -6101,6 +6264,21 @@ IMG-PREC.
   (`backgroundThrottling: false`; measured about 3% renderer CPU on
   software GL, 0.7% with the loop stubbed); candidate: run the loop
   only between the media element's play and pause/ended.
+  From sweep 25 (verified, not gate-holding): (bl) afftdn delays the
+  sound by two hops (~25 ms at any rate) and the export limiter
+  (`alimiter`, latency off) by 5 ms, and neither emits the input's
+  last hops (measured on both majors: a 1 kHz burst at 1.000 s comes
+  out at 1024.67 ms through afftdn=nf=-30:nr=18, 1005.04 through the
+  limiter, 1029.65 through both; length unchanged) - far inside
+  lip-sync detectability, no guide promises sample-exact sync;
+  candidates: `latency=1` on the limiter, and a pre-pad + atrim of
+  two hops around afftdn, with a Layer 5 onset/tail check per
+  denoise mode; (bm) with a large autosave on disk every visit to
+  Home costs 0.5-0.7 s of main-loop lag (measured with 46 MB:
+  `AutosaveRestore` reads and parses the file twice, `info` and
+  `read`, even when `holdsWork` hides the banner) and every autosave
+  write stringifies the project twice in main; candidate: read the
+  file once and only when the banner can show.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
