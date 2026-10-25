@@ -3270,3 +3270,108 @@ function readAutosaveLayers(userDataDir: string): number | null {
     return null
   }
 }
+
+// ── T-139 (5): the autosave banner goes when Home's Open project lands ─────────────────────────────────────────────────────────────────────
+//
+// `AutosaveRestore` reads "does the session hold work" once per mount, and Open project applies the project and STAYS on Home, so the banner that was drawn over an
+// empty session went on offering "pick up where you left off" - and its Restore applied the snapshot over the project that had just been opened (executed by QA).
+// Home says the offer is withdrawn once the open has applied, and every mounted banner drops it; `restore()` also asks again at the press (a wiring pin, in
+// interactionWiring.test.ts: no way in the UI puts work into the session behind a banner that did not hear Home).
+test.describe('T-139 (5): the autosave banner goes when Open project lands', () => {
+  test('an autosave is offered; a project opened from Home takes the offer away, and the project is what Stream Graphics shows', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t139-offer')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Autosaved layer'))
+    const opened = path.join(root, 'opened.imagii.json')
+    writeFileSync(opened, JSON.stringify(canvasProject('Opened layer')), 'utf8')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      // The premise: the session holds nothing, so the autosave is offered.
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Restore', exact: true })).toBeEnabled()
+
+      await recordSlowChooser(app, { files: [opened] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+
+      // The offer is gone with the open: no banner, no Restore to press over the opened project.
+      await expect(window.getByText(/imagii autosaved your work/), 'the banner goes when the project is opened').toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(0)
+      expect((await readToastLog(window)).filter((t) => /Restored from autosave/.test(t)), 'and nothing was restored').toEqual([])
+
+      // What the opened project holds is what Stream Graphics shows - and only that.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(window.locator('[data-tutorial="image-layers"]').getByText('Opened layer', { exact: true })).toBeVisible()
+      await expect(window.locator('[data-tutorial="image-layers"]').getByText('Autosaved layer', { exact: true })).toHaveCount(0)
+
+      // And back on Home the banner stays away: the session holds the opened project.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-139 (9): a double-click on Welcome's "Let's go" does not open a studio ───────────────────────────────────────────────────────────────
+//
+// "Let's go" is replaced by Home under the pointer, and the second press of a double-click lands where the button was. Measured in the built app (a fresh userData so
+// Welcome shows): at 1366x768 (the window) it lands on Stream Graphics' card and opens that studio; the same at the 1306x734 window a 1536x864 display gives the
+// app, 1161x653 (a 1366x768 display's) and the 1024x640 minimum; at 1536x864 and 1632x918 it lands in the gap between the cards and opens nothing. The family's
+// tool is `swallowRepeatClicks()` after the dismiss (a repeat press does not reach what is under it for half a second).
+test.describe('T-139 (9): a double-click on Welcome\'s "Let\'s go"', () => {
+  for (const [width, height] of [
+    [1366, 768],
+    [1306, 734]
+  ] as const) {
+    test(`at ${width}x${height} the second press does not land on a Home card: the app stays on Home`, async () => {
+      test.setTimeout(120_000)
+      const root = makeRoot(`t139-welcome-${width}`)
+      const userDataDir = path.join(root, 'userData')
+      seedUserData(userDataDir, {})
+      const app = await launchApp(userDataDir)
+      try {
+        const window = await app.firstWindow()
+        await window.waitForLoadState('domcontentloaded')
+        const go = window.getByRole('button', { name: "Let's go" })
+        await expect(go).toBeVisible({ timeout: 30_000 })
+        await setContentSize(app, window, width, height)
+        const box = await go.boundingBox()
+        if (!box) throw new Error('"Let\'s go" has no box')
+        const x = box.x + box.width / 2
+        const y = box.y + box.height / 2
+        // A real double-click: the second press ~100 ms after the first, with the browser's own click count (detail 2).
+        await window.mouse.move(x, y)
+        await window.mouse.down({ clickCount: 1 })
+        await window.mouse.up({ clickCount: 1 })
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+        // The premise: what the second press lands on is a studio's card (a link) at these sizes.
+        const under = await window.evaluate(([px, py]) => document.elementFromPoint(px as number, py as number)?.closest('a')?.getAttribute('href') ?? null, [x, y])
+        expect(under, 'the point the button was at is now a Home card').not.toBeNull()
+        await window.waitForTimeout(100)
+        await window.mouse.down({ clickCount: 2 })
+        await window.mouse.up({ clickCount: 2 })
+        await window.waitForTimeout(1000)
+        expect(await window.evaluate(() => window.location.hash), 'the second press opened no studio').toBe('#/home')
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+        // The swallow is for half a second: a press after that is a decision, and it works.
+        await window.waitForTimeout(600)
+        await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+        await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+  }
+})

@@ -339,17 +339,21 @@ export function CaptionsPanel(): JSX.Element | null {
                 downloads the English model (~141 MB) for you — that download goes online,
                 once.
               </p>
+              {/* T-139 (6): the releases page offers no file called whisper-cli.exe. The Windows build is a zip, listed under the newest release that has one (some are
+                  marked Pre-release), and whisper.cpp's release workflow zips the folder build/bin/Release as it is, so the program and the .dll files it needs
+                  beside it are inside a Release folder in the zip. */}
               <div>
-                1. Download <code>whisper-cli.exe</code> from the{' '}
+                1. Download <code>whisper-bin-x64.zip</code> from the{' '}
                 <a
-                  href="https://github.com/ggerganov/whisper.cpp/releases"
+                  href="https://github.com/ggml-org/whisper.cpp/releases"
                   className="text-warn underline"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
                   whisper.cpp releases
                 </a>{' '}
-                (the Windows build) and save it exactly here:
+                (the newest release that lists it; some are marked Pre-release). Open the zip and copy <code>whisper-cli.exe</code> and every{' '}
+                <code>.dll</code> next to it (they are in its Release folder) into the folder below, so the engine sits exactly here:
                 <button
                   className="ml-1 text-warn underline"
                   onClick={() => window.api.captions.openBinFolder()}

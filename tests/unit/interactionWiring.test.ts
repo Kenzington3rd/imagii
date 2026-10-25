@@ -3014,10 +3014,12 @@ describe('T-138 Track B - the twenty-fourth sweep', () => {
     expect(ingest.length, 'found ingestFile').toBeGreaterThan(300)
     expect(ingest).toMatch(/const \{ width: docWidth, height: docHeight \} = useCanvasStore\.getState\(\)\.doc\s*const storedMax = storedImageMaxDim\(docWidth, docHeight\)/)
     expect(ingest.indexOf('useCanvasStore.getState().doc'), 'the document is read at import time, after the load').toBeGreaterThan(ingest.indexOf('await loadImage('))
-    expect(ingest).toMatch(/scaleToFit\(dims\.width, dims\.height, storedMax\) < 1\s*\? boundedDataUrl\(img, storedMax, file\.type === 'image\/jpeg'\)\s*: dataUrl/)
+    // T-139 (4): the choice between the file as it came and a bounded copy moved into `chooseStoredCopy` (with the byte budget), which `storedDataUrl` runs: the bound
+    // handed to it is still the document's (re-pointed from the ternary that was here, not loosened).
+    expect(ingest).toMatch(/const stored = storedDataUrl\(img, dataUrl, storedMax, file\.type === 'image\/jpeg'\)/)
     expect(panel, 'the fixed 1600 is not the bound any more').not.toMatch(/STORED_IMAGE_MAX_DIM/)
-    // The drawn size is unchanged (the layer is first placed at most 800 px), and so is "to Canvas" (an 800 px reference copy).
-    expect(ingest).toMatch(/scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/)
+    // The drawn size is unchanged on a document it fits (the layer is first placed at most 800 px: `placementFor` applies the 800 px bound), and so is "to Canvas" (an 800 px reference copy).
+    expect(ingest).toMatch(/placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/)
     expect(strip(read('modules/references/MoodBoardPanel.tsx'))).toMatch(/boundedDataUrl\(img, LAYER_DRAWN_MAX_DIM, true\)/)
   })
 
@@ -3046,7 +3048,8 @@ describe('T-138 Track B - the twenty-fourth sweep', () => {
     expect(run).toMatch(/import \{ createRunStore \} from '\.\.\/lib\/runStore'/)
     expect(run).toMatch(/export const useRestoreRun = createRunStore<\{ applied: boolean \}>\(\)/)
     const banner = strip(read('components/AutosaveRestore.tsx'))
-    expect(banner).toMatch(/import \{ useRestoreRun \} from '\.\/restoreRun'/)
+    // T-139 (5): the same module now also exports the withdrawal signal, so the import names both (re-pointed, not loosened: `useRestoreRun` is still what is imported from it).
+    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun \} from '\.\/restoreRun'/)
     expect(banner).toMatch(/const restoring = useRestoreRun\(\(s\) => s\.run !== null\)/)
     const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
     expect(body.length, 'found restore()').toBeGreaterThan(300)
@@ -3065,3 +3068,82 @@ describe('T-138 Track B - the twenty-fourth sweep', () => {
   })
 })
 
+
+
+// T-139 Track B: the twenty-fifth sweep's wiring, where the person reaches it. E2E per item: (2) image.spec.ts "T-139 (2)" (the emote, the banner, the overlay) and
+// references.spec.ts "T-139 (2)" (-> Canvas on the emote), (4) image.spec.ts "T-139 (4)" (noise on the 4K overlay), (5) home-chrome.spec.ts "T-139 (5)", (9) home-chrome.spec.ts
+// "T-139 (9)" (Welcome), video-pipelines.spec.ts and audio.spec.ts "T-139 (9)". Unit: imageBounds.test.ts, boundedImage.test.ts, canvasStore.test.ts, docClaims.test.ts.
+describe('T-139 Track B - the twenty-fifth sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(2) a first placement is sized to the document that is open when the picture lands: read after the load, by every way a picture arrives', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    const ingest = panel.slice(panel.indexOf('async function ingestFile('), panel.indexOf('useEffect(() => {'))
+    expect(ingest).toMatch(/const place = placementFor\(dims\.width, dims\.height, docWidth, docHeight\)\s*addLayer\(\{ \.\.\.makeImageLayer\(stored, place\.width, place\.height, place\.x, place\.y\), name: file\.name \}\)/)
+    expect(ingest.indexOf('placementFor('), 'after the document is read, which is after the load').toBeGreaterThan(ingest.indexOf('useCanvasStore.getState().doc'))
+    // The drop, the file chooser and the paste all go through ingestFile: there is no second place that makes an image layer from a file.
+    expect(panel.match(/makeImageLayer\(/g) ?? [], 'one site').toHaveLength(1)
+    expect(panel.match(/void ingestFile\(/g) ?? [], 'the paste, the drop and the chooser').toHaveLength(3)
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    const send = board.slice(board.indexOf('async function sendToCanvas('), board.indexOf('useEffect(() => {'))
+    expect(send).toMatch(/const \{ width: docWidth, height: docHeight \} = useCanvasStore\.getState\(\)\.doc\s*const place = placementFor\(img\.naturalWidth, img\.naturalHeight, docWidth, docHeight\)/)
+    expect(send.indexOf('useCanvasStore.getState().doc'), 'read after the picture has loaded').toBeGreaterThan(send.indexOf('await loadImage('))
+    expect(send).toMatch(/makeReferenceLayer\(boundedDataUrl\(img, LAYER_DRAWN_MAX_DIM, true\), place\.width, place\.height, title, place\.x, place\.y\)/)
+    // The layer makers take the position and default to the corner they always had.
+    const store = strip(read('modules/image-studio/state/canvasStore.ts'))
+    expect(store).toMatch(/export function makeImageLayer\(src: string, width: number, height: number, x = 60, y = 60\): ImageLayer \{/)
+    expect(store).toMatch(/\.\.\.makeImageLayer\(src, width, height, x, y\)/)
+  })
+
+  it('(4) the stored copy is chosen by the byte-budget ladder, and the canvas under it reads opacity once', () => {
+    const lib = strip(read('lib/boundedImage.ts'))
+    expect(lib).toMatch(/export function storedDataUrl\(img: HTMLImageElement, asCame: string, startDim: number, cameAsJpeg: boolean, maxBytes: number = STORED_IMAGE_MAX_BYTES\): string \{\s*const longest = Math\.max\(img\.naturalWidth, img\.naturalHeight\)\s*return chooseStoredCopy\(\{/)
+    expect(lib, 'opacity is read on a canvas made to be read, once per question').toMatch(/opaque: \(\) => \{\s*const \{ ctx, width, height \} = drawBounded\(img, startDim, true\)/)
+    expect(lib, 'the encode canvas is not made to be read').toMatch(/encode: \(maxDim, jpeg\) => \{\s*const \{ canvas \} = drawBounded\(img, maxDim, false\)/)
+    const shared = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../shared/imageBounds.ts'), 'utf8'))
+    expect(shared).toMatch(/const opaque = \(\): boolean => \(asked \?\?= source\.opaque\(\)\)/)
+    expect(shared, 'the step is a quarter off the bound').toMatch(/const STORED_IMAGE_STEP = 0\.75/)
+  })
+
+  it('(5) the autosave offer is withdrawn by a project opened from Home, after it applied; and Restore asks again at the press, inside its claim, before the apply', () => {
+    const run = strip(read('components/restoreRun.ts'))
+    expect(run).toMatch(/export const useAutosaveOffer = create<\{ withdrawn: number; withdraw: \(\) => void \}>\(\(set\) => \(\{\s*withdrawn: 0,\s*withdraw: \(\) => set\(\(s\) => \(\{ withdrawn: s\.withdrawn \+ 1 \}\)\)\s*\}\)\)/)
+    const home = strip(read('routes/Home.tsx'))
+    const load = home.slice(home.indexOf('async function handleLoad()'), home.indexOf('export function Home()'))
+    expect(load).toMatch(/const outcome = await applyProjectHeld\(result\.project\)\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*const note = describeApplyOutcome\(outcome, 'project'\)/)
+    expect(load.indexOf('withdraw()'), 'not on the refusal path: a project that did not open withdraws nothing').toBeGreaterThan(load.indexOf('if (!result.ok)'))
+    expect(home.match(/withdraw\(\)/g) ?? [], 'once').toHaveLength(1)
+    const banner = strip(read('components/AutosaveRestore.tsx'))
+    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun \} from '\.\/restoreRun'/)
+    expect(banner).toMatch(/useEffect\(\(\) => useAutosaveOffer\.subscribe\(\(\) => setDismissed\(true\)\), \[\]\)/)
+    // The backstop: the claim is still the second statement (T-138 (5)), the question is asked inside it, before the first await, and a "yes" gives the run back (the finally) without applying.
+    const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
+    expect(body).toMatch(/if \(!useRestoreRun\.getState\(\)\.begin\(\{ applied: false \}\)\) return\s*try \{\s*if \(sessionHoldsWork\(\)\) \{\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*return\s*\}\s*const outcome = await applyProjectHeld\(snapshot\.project\)/)
+    expect(body.indexOf('sessionHoldsWork()'), 'before the first await').toBeLessThan(body.indexOf('await '))
+    expect(body, 'and the run is still given back in a finally').toMatch(/finally \{\s*useRestoreRun\.getState\(\)\.end\(\)\s*\}/)
+  })
+
+  it('(9) the posting log ignores a repeat press; both preset saves ignore one, are claimed before their first await, and are off while the write is out', () => {
+    const log = strip(read('modules/video-studio/PostChecklist.tsx'))
+    expect(log).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(log).toMatch(/function add\(e: \{ detail: number \}\): void \{\s*if \(isRepeatPress\(e\)\) return\s*if \(!outputName\.trim\(\)\) \{/)
+    expect(log).toMatch(/<button className="btn-primary px-3 py-1 text-xs self-start" onClick=\{add\}>\s*\+ Log post/)
+    for (const [rel, label, btn] of [
+      ['modules/audio-studio/PresetPanel.tsx', 'Save current', 'btn-primary px-3 py-1 text-xs disabled:opacity-50'],
+      ['modules/video-studio/CustomPresetManager.tsx', '\\+ Save preset', 'btn-primary px-4 py-1\\.5 text-sm self-start disabled:opacity-50']
+    ] as const) {
+      const code = strip(read(rel))
+      expect(code, rel).toMatch(/const savingRef = useRef\(false\)\s*const \[saving, setSaving\] = useState\(false\)/)
+      // The whole save is under the claim, raised before the first await and lowered in a finally, and the body that does the work is the one that was already there.
+      expect(code, `${rel}: the whole save is under the claim, the busy flag lowered in a finally`).toMatch(/async function save\(\): Promise<void> \{\s*await claimFirst\(savingRef, async \(\) => \{\s*setSaving\(true\)\s*try \{\s*await saveOnce\(\)\s*\} finally \{\s*setSaving\(false\)\s*\}\s*\}\)\s*\}\s*async function saveOnce\(\): Promise<void> \{/)
+      expect(code, `${rel}: the button`).toMatch(new RegExp(`className="${btn}"\\s*onClick=\\{\\(e\\) => \\{\\s*if \\(isRepeatPress\\(e\\)\\) return\\s*void save\\(\\)\\s*\\}\\}\\s*disabled=\\{saving\\}\\s*>\\s*${label}`))
+    }
+    expect(strip(read('modules/audio-studio/PresetPanel.tsx')), 'the Enter key reaches the same claim').toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && save\(\)\}/)
+  })
+
+  it('(9) Welcome\'s "Let\'s go" swallows the repeat of its double-click once Home has replaced it', () => {
+    const app = strip(read('App.tsx'))
+    expect(app).toMatch(/import \{ swallowRepeatClicks \} from '\.\/lib\/repeatPress'/)
+    expect(app).toMatch(/void persistSetting\('welcomeSeen', true\)\s*setStatus\(\{ phase: 'ready' \}\)\s*swallowRepeatClicks\(\)/)
+  })
+})

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
 import { formatBitrate, normalizeBitrate } from '@shared/customPresets'
@@ -7,7 +7,9 @@ import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetStartFor } from './presets
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
 import { DraftField } from '../../components/DraftField'
+import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface CustomPresetManagerProps {
@@ -49,6 +51,9 @@ export function CustomPresetManager({
   const [videoBitrate, setVideoBitrate] = useState('8M')
   const [audioBitrate, setAudioBitrate] = useState('192k')
   const [base, setBase] = useState<PlatformId>(DEFAULT_BASE)
+  // T-139 (9): one save at a time. `savingRef` is the claim, raised before the first await; `saving` is what the button draws while the write is out.
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
 
   // Re-read on open, so a preset folder edited outside the app still shows
   // up. Keyed on `open` alone deliberately: `onChanged` is a stable
@@ -72,6 +77,17 @@ export function CustomPresetManager({
   }
 
   async function save(): Promise<void> {
+    await claimFirst(savingRef, async () => {
+      setSaving(true)
+      try {
+        await saveOnce()
+      } finally {
+        setSaving(false)
+      }
+    })
+  }
+
+  async function saveOnce(): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) {
       toast.error('Give it a name')
@@ -264,7 +280,15 @@ export function CustomPresetManager({
                   kilobits.
                 </p>
               </div>
-              <button className="btn-primary px-4 py-1.5 text-sm self-start" onClick={save}>
+              {/* T-139 (9): the second press of a double-click is not a second preset, nor a "Give it a name" after the first cleared the box. */}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm self-start disabled:opacity-50"
+                onClick={(e) => {
+                  if (isRepeatPress(e)) return
+                  void save()
+                }}
+                disabled={saving}
+              >
                 + Save preset
               </button>
             </div>

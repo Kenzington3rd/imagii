@@ -1965,7 +1965,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap the fixture keeps its natural size (ImportPanel.tsx:65).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:76).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -3767,3 +3767,259 @@ test.describe('Image Studio — a stored picture is sized to the document it is 
   })
 })
 
+
+// ── T-139 (2): the first placement of a picture is wholly on the canvas it lands on ──────────────────────────────────────────────────────────
+//
+// A picture was placed at min(its size, 800 px) at (60, 60) whatever the document: a 512x512 file on the 112x112 emote showed a 52 px corner of itself, every other
+// handle was off the stage, and there is no size field to bring it back (executed). The drawn size is now also bounded by the document and the position kept inside
+// it (`placementFor`), for a drop, the file chooser, a paste and "-> Canvas" (references.spec.ts); a template's own layers are untouched. The Konva node's own
+// attributes are the placed layer: `x`, `y`, `width`, `height` (a first placement has scale 1).
+test.describe('Image Studio — a picture is first placed wholly on the canvas it lands on (T-139 (2))', () => {
+  async function makeStillPng(out: string, size: string): Promise<void> {
+    const result = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=1`, '-frames:v', '1', out])
+    if (result.code !== 0) throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+
+  interface Box {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+
+  /** Every picture on the stage, bottom to top, as the node is drawn (position, and size times scale). */
+  async function pictureBoxes(window: Page): Promise<Box[]> {
+    return (await stageShapes(window))
+      .filter((s) => s.cls === 'Image')
+      .map((s) => ({ x: s.x, y: s.y, width: (s.width ?? 0) * s.scaleX, height: (s.height ?? 0) * s.scaleY }))
+  }
+
+  /** The Nth picture's box once the stage has drawn `count` of them. */
+  async function boxAfter(window: Page, count: number): Promise<Box> {
+    await expect.poll(async () => (await pictureBoxes(window)).length, { timeout: 30_000, intervals: [100] }).toBe(count)
+    const boxes = await pictureBoxes(window)
+    return boxes[count - 1] as Box
+  }
+
+  function expectWhollyOn(box: Box, doc: { width: number; height: number }, what: string): void {
+    expect.soft(box.x, `${what}: left edge on the canvas`).toBeGreaterThanOrEqual(0)
+    expect.soft(box.y, `${what}: top edge on the canvas`).toBeGreaterThanOrEqual(0)
+    expect.soft(box.x + box.width, `${what}: right edge on the canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(doc.width + 0.01)
+    expect.soft(box.y + box.height, `${what}: bottom edge on the canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(doc.height + 0.01)
+  }
+
+  function expectBox(box: Box, want: Box, what: string): void {
+    expect.soft(box.x, `${what}: x`).toBeCloseTo(want.x, 1)
+    expect.soft(box.y, `${what}: y`).toBeCloseTo(want.y, 1)
+    expect.soft(box.width, `${what}: width`).toBeCloseTo(want.width, 1)
+    expect.soft(box.height, `${what}: height`).toBeCloseTo(want.height, 1)
+  }
+
+  test('on the 112x112 emote a dropped 512x512 picture, a chosen 300x900 one and a pasted 512x256 one each land wholly on the canvas', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t139-emote')
+    const { window } = studio
+    try {
+      const square = path.join(studio.root, 'square.png')
+      const tall = path.join(studio.root, 'tall.png')
+      const wide = path.join(studio.root, 'wide.png')
+      await makeStillPng(square, '512x512')
+      await makeStillPng(tall, '300x900')
+      await makeStillPng(wide, '512x256')
+      const emote = templateById('emote-blank-112')
+      await templateCard(window, emote).click()
+      await expectTemplateApplied(window, emote)
+      expect(emote.doc.width, 'the document these numbers are for').toBe(112)
+      const doc = emote.doc
+
+      // ── a drop: the whole emote, not a 52 px corner of a 512 px square ──
+      await dropPng(window, readFileSync(square).toString('base64'), 'square.png')
+      expectBox(await boxAfter(window, 1), { x: 0, y: 0, width: 112, height: 112 }, 'a dropped 512x512')
+      expectWhollyOn((await pictureBoxes(window))[0] as Box, doc, 'a dropped 512x512')
+
+      // ── + Import image: the real <input type=file> click path; a tall picture is as tall as the emote and still 60 px in ──
+      const chooserPromise = window.waitForEvent('filechooser', { timeout: 15_000 })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await (await chooserPromise).setFiles(tall)
+      const chosen = await boxAfter(window, 2)
+      expectBox(chosen, { x: 60, y: 0, width: 112 / 3, height: 112 }, 'a chosen 300x900')
+      expectWhollyOn(chosen, doc, 'a chosen 300x900')
+
+      // ── paste: a REAL image on Electron's clipboard + a real Ctrl+V; a wide picture is as wide as the emote and sits as low as it can ──
+      await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+        clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+      }, `data:image/png;base64,${readFileSync(wide).toString('base64')}`)
+      await window.keyboard.press('Control+v')
+      const pasted = await boxAfter(window, 3)
+      expectBox(pasted, { x: 0, y: 56, width: 112, height: 56 }, 'a pasted 512x256')
+      expectWhollyOn(pasted, doc, 'a pasted 512x256')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('on the 1200x480 banner a tall 400x1600 picture is as tall as the banner (120x480) and wholly inside it', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t139-banner')
+    const { window } = studio
+    try {
+      const tall = path.join(studio.root, 'tall.png')
+      await makeStillPng(tall, '400x1600')
+      const banner = templateById('tw-banner-videoplayer')
+      await templateCard(window, banner).click()
+      await expectTemplateApplied(window, banner)
+      expect({ w: banner.doc.width, h: banner.doc.height }, 'the document these numbers are for').toEqual({ w: 1200, h: 480 })
+
+      await dropPng(window, readFileSync(tall).toString('base64'), 'tall.png')
+      const box = await boxAfter(window, 1)
+      expectBox(box, { x: 60, y: 0, width: 120, height: 480 }, 'a dropped 400x1600')
+      expectWhollyOn(box, banner.doc, 'a dropped 400x1600')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('on the 1920x1080 overlay the placement is what it was: 800 px on the long side, 60 px in from the corner', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t139-overlay')
+    const { window } = studio
+    try {
+      const frame = path.join(studio.root, 'frame.png')
+      const huge = path.join(studio.root, 'huge.png')
+      const exact = path.join(studio.root, 'exact.png')
+      await makeStillPng(frame, '1920x1080')
+      await makeStillPng(huge, '4000x3000')
+      await makeStillPng(exact, '800x600')
+      const overlay = templateById('tw-overlay-streamer')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+      expect(overlay.doc.width, 'the document these numbers are for').toBe(1920)
+
+      await dropPng(window, readFileSync(exact).toString('base64'), 'exact.png')
+      expectBox(await boxAfter(window, 1), { x: 60, y: 60, width: 800, height: 600 }, 'an 800x600 picture')
+      await dropPng(window, readFileSync(frame).toString('base64'), 'frame.png')
+      expectBox(await boxAfter(window, 2), { x: 60, y: 60, width: 800, height: 450 }, 'a 1920x1080 picture')
+      await dropPng(window, readFileSync(huge).toString('base64'), 'huge.png')
+      expectBox(await boxAfter(window, 3), { x: 60, y: 60, width: 800, height: 600 }, 'a 4000x3000 picture')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-139 (4): a byte budget for the copy the document keeps ────────────────────────────────────────────────────────────────────────────────
+//
+// T-138 (2) bounded the stored copy's PIXELS, not its bytes, and re-encoded only a JPEG source as a JPEG: a 9000x6000 PNG on the 4K overlay became a 54 MB data URL and
+// paused autosave at once, on a project of one picture (executed). The copy now has a budget (`STORED_IMAGE_MAX_BYTES`, 16 MiB of data URL): over it, an opaque picture
+// is a JPEG at the same bound, and a copy still over (or a transparent one) steps the bound down by a quarter until it fits; a picture within the pixel bound is
+// re-encoded too when its FILE is over the budget. The pictures here are noise (a 4000x3000 PNG of it is 35 MB, 47 MB as a data URL), which no encoder shrinks by
+// much; two of them are 101 MB of project on the unchanged build, which is over the 50 MiB limit.
+test.describe('Image Studio — an incompressible picture is stored within the byte budget (T-139 (4))', () => {
+  /** `STORED_IMAGE_MAX_BYTES` in src/shared/imageBounds.ts (docClaims.test.ts holds the two together: a spec that imports it cannot load on the build it is proven red against). */
+  const STORED_IMAGE_MAX_BYTES = 16 * 1024 * 1024
+
+  /** A 4000x3000 PNG of uniform noise (compression level 1: it does not shrink anyway). `transparentCorner` makes a 100x100 corner fully transparent. */
+  async function makeNoisePng(out: string, transparentCorner: boolean): Promise<void> {
+    const noise = 'color=c=gray:s=4000x3000:r=1,noise=alls=100:allf=u'
+    const graph = transparentCorner
+      ? `${noise},format=rgba[n];color=c=white:s=4000x3000:r=1,drawbox=x=0:y=0:w=100:h=100:color=black:t=fill,format=gray[m];[n][m]alphamerge`
+      : `${noise},format=rgb24`
+    const result = await runBinary(ffmpegPath, ['-y', '-v', 'error', '-f', 'lavfi', '-i', graph, '-frames:v', '1', '-compression_level', '1', out])
+    if (result.code !== 0) throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+
+  interface Kept {
+    prefix: string
+    naturalWidth: number
+    srcLength: number
+    /** The alpha of a pixel near the picture's top-left corner, read back from the stored copy. */
+    cornerAlpha: number
+  }
+
+  /** The pictures on the canvas as the document stores them: the node's decoded `<img>` is the layer's `src`. */
+  function keptPictures(window: Page): Promise<Kept[]> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; getClassName(): string; image?: () => HTMLImageElement }> }> }
+        | undefined
+      if (!stage) return []
+      return (stage.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image' && n.image)
+        .map((n) => {
+          const img = (n.image as () => HTMLImageElement)()
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          const ctx = canvas.getContext('2d')
+          ctx?.drawImage(img, 0, 0)
+          return {
+            prefix: img.src.slice(0, img.src.indexOf(',')),
+            naturalWidth: img.naturalWidth,
+            srcLength: img.src.length,
+            cornerAlpha: ctx?.getImageData(3, 3, 1, 1).data[3] ?? -1
+          }
+        })
+    })
+  }
+
+  /** The image layers in the autosave file on disk, or null while there is none (main writes it whole: a temp file, then a rename). */
+  function autosavedPictures(userDataDir: string): number | null {
+    const file = path.join(userDataDir, 'autosave', 'autosave.json')
+    if (!existsSync(file)) return null
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { imageCanvas?: { doc?: { layers?: Array<{ type?: string }> } } }
+      return (parsed.imageCanvas?.doc?.layers ?? []).filter((l) => l.type === 'image').length
+    } catch {
+      return null
+    }
+  }
+
+  test('a 4000x3000 noise PNG on the 4K overlay is stored as a JPEG under the budget, a transparent one stays a PNG stepped down under it, and autosave is never paused', async () => {
+    test.setTimeout(480_000)
+    const studio = await openStudio('t139-budget')
+    const { window } = studio
+    try {
+      const noise = path.join(studio.root, 'noise.png')
+      const ghost = path.join(studio.root, 'ghost.png')
+      await makeNoisePng(noise, false)
+      await makeNoisePng(ghost, true)
+      expect(readFileSync(noise).length * (4 / 3), 'the fixture really is over the budget as a data URL (the premise)').toBeGreaterThan(STORED_IMAGE_MAX_BYTES)
+      const overlay = templateById('tw-overlay-streamer-4k')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+      expect(overlay.doc.width, 'the document these numbers are for').toBe(3840)
+
+      // ── the opaque picture, through the real chooser ──
+      let chooserPromise = window.waitForEvent('filechooser', { timeout: 15_000 })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await (await chooserPromise).setFiles(noise)
+      await expect.poll(async () => (await keptPictures(window)).length, { timeout: 120_000, intervals: [250] }).toBe(1)
+      const [opaque] = await keptPictures(window)
+      expect.soft(opaque?.srcLength, 'the stored copy fits the budget').toBeLessThanOrEqual(STORED_IMAGE_MAX_BYTES)
+      expect.soft(opaque?.prefix, 'an opaque picture over the budget is a JPEG').toBe('data:image/jpeg;base64')
+      // (A JPEG of this noise at the file's own size fits: the step-down is the transparent picture's below, and chooseStoredCopy's unit cases.)
+      expect.soft(opaque?.naturalWidth, 'never larger than the file').toBeLessThanOrEqual(4000)
+
+      // ── the transparent one: PNG, because a JPEG would paint the transparent corner black ──
+      chooserPromise = window.waitForEvent('filechooser', { timeout: 15_000 })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await (await chooserPromise).setFiles(ghost)
+      await expect.poll(async () => (await keptPictures(window)).length, { timeout: 180_000, intervals: [250] }).toBe(2)
+      const [, transparent] = await keptPictures(window)
+      expect.soft(transparent?.srcLength, 'the stored copy fits the budget').toBeLessThanOrEqual(STORED_IMAGE_MAX_BYTES)
+      expect.soft(transparent?.prefix, 'a transparent picture stays a PNG').toBe('data:image/png;base64')
+      expect.soft(transparent?.naturalWidth, 'and the bound stepped down until it fitted').toBeLessThan(4000)
+      test.info().annotations.push({ type: 'stored copies', description: `opaque ${opaque?.naturalWidth}px ${opaque?.srcLength} chars; transparent ${transparent?.naturalWidth}px ${transparent?.srcLength} chars` })
+      expect(transparent?.cornerAlpha, 'its transparent corner is still transparent').toBe(0)
+
+      // ── autosave runs: the project (two copies under the budget, 32 MiB at the most) is written; on the unchanged build it is 101 MB and is never ──
+      await expect
+        .poll(() => autosavedPictures(path.join(studio.root, 'userData')), { timeout: 90_000, intervals: [500], message: 'autosave wrote the project with both pictures' })
+        .toBe(2)
+      await window.waitForTimeout(3000)
+      expect((await readToastLog(window)).filter((t) => /^Autosave is paused/.test(t)), 'and it never said it was paused').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

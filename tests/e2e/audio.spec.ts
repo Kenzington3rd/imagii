@@ -24,6 +24,7 @@ import {
   setWindowSize
 } from './layout'
 import { installSpawnStall, readSpawnLog } from './mainSpawn'
+import { slowPresetWrites } from './slowWrites'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 
@@ -3932,6 +3933,57 @@ test.describe('T-137 (1): the audio importer keeps its extraction across a trip 
       await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toHaveCount(0)
       await expectSelected(window.locator(CLEANUP).getByRole('button', { name: 'Medium', exact: true }))
       expect(await readToastLog(window), 'no "Loaded" for a file that was not loaded').not.toContain('Loaded')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-139 (9): a double-click on "Save current" makes one preset ───────────────────────────────────────────────────────────────────────────
+//
+// The Cleanup presets' save cleared the name after the awaited write, so the second press of a double-click got the red "Name your preset first" or, on a slow
+// write, saved a DUPLICATE (and Enter in the box had no guard at all). A repeat press is ignored, the save is claimed before its first await and the button is off
+// while the write is out. The same two fixes are on the Custom export presets (video-pipelines.spec.ts) and the posting log.
+test.describe('T-139 (9): a double-click on "Save current" makes one preset and raises no error', () => {
+  test('the second press of a double-click is ignored; while a slow write is out the button is off and a second Enter saves nothing more', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t139-preset')
+    const { window, app } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      const nameInput = presets.getByPlaceholder('My mic preset')
+      const save = presets.getByRole('button', { name: 'Save current' })
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+      const saved = (): number => (existsSync(presetDir) ? readdirSync(presetDir).filter((f) => f.endsWith('.json')).length : 0)
+
+      // ── the write finishes between the two presses: the second finds an empty box, and is a repeat, so it is ignored ──
+      await nameInput.fill('Mic once')
+      await save.scrollIntoViewIfNeeded()
+      const box = await save.boundingBox()
+      if (!box) throw new Error('Save current has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Mic once"')
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await window.waitForTimeout(1200)
+      expect(await readToastLog(window), 'no error after the save').not.toContain('Name your preset first')
+      expect(saved(), 'one preset on disk').toBe(1)
+
+      // ── the write is still out: the button is off, a double-click and a second Enter write nothing more ──
+      await slowPresetWrites(app, 1500)
+      await nameInput.fill('Mic slowly')
+      await save.dblclick()
+      await expect(save, 'off while the write is out').toBeDisabled()
+      await nameInput.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Mic slowly"')
+      await window.waitForTimeout(1200)
+      expect(saved(), 'a second preset, not a third or a fourth').toBe(2)
+      expect(await readToastLog(window), 'still no error').not.toContain('Name your preset first')
+      await expect(save, 'and back when it is done').toBeEnabled()
     } finally {
       await closeStudio(studio)
     }

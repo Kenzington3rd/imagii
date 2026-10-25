@@ -237,15 +237,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   canRedo: () => get().history.future.length > 0
 }))
 
-export function makeImageLayer(src: string, width: number, height: number): ImageLayer {
+export function makeImageLayer(src: string, width: number, height: number, x = 60, y = 60): ImageLayer {
   return {
     id: nanoid(8),
     type: 'image',
     name: 'Image',
     visible: true,
     locked: false,
-    x: 60,
-    y: 60,
+    x,
+    y,
     rotation: 0,
     scaleX: 1,
     scaleY: 1,
@@ -265,10 +265,10 @@ export function makeReferenceLayer(
   src: string,
   width: number,
   height: number,
-  title: string
+  title: string, x?: number, y?: number
 ): ImageLayer {
   return {
-    ...makeImageLayer(src, width, height),
+    ...makeImageLayer(src, width, height, x, y),
     name: title.slice(0, 40),
     opacity: 0.4,
     hint: true

@@ -2235,3 +2235,86 @@ test.describe('References - → Canvas embeds the picture (T-137 (10))', () => {
     }
   })
 })
+
+// T-139 (2): "→ Canvas" placed a reference at min(its size, 800 px) at (60, 60) whatever the canvas that is open, like an imported file: on the 112x112 emote a 512 px
+// thumbnail's layer was 400 px of canvas it did not have. It is placed wholly on the canvas that is open when the picture lands (`placementFor`). The node's own
+// attributes on the Konva stage are the placed layer.
+test.describe('References - → Canvas places the picture wholly on a small canvas (T-139 (2))', () => {
+  /** The pictures on the stage, bottom to top, as the nodes are drawn (position, and size times scale). */
+  function drawnBoxes(window: Page): Promise<Array<{ x: number; y: number; width: number; height: number }>> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string; x: number; y: number; width?: number; height?: number; scaleX: number; scaleY: number }; getClassName(): string }> }> }
+        | undefined
+      return (stage?.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image')
+        .map((n) => ({ x: n.attrs.x, y: n.attrs.y, width: (n.attrs.width ?? 0) * n.attrs.scaleX, height: (n.attrs.height ?? 0) * n.attrs.scaleY }))
+    })
+  }
+
+  test('on the 112x112 emote a 512x512 reference lands as the whole emote, not a corner of it', async () => {
+    test.setTimeout(180_000)
+    const fx = makeFixture('t139-emote')
+    const thumbPath = path.join(fx.thumbsDir, 'big-thumb.png')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=512x512:rate=1', '-frames:v', '1', thumbPath])
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fixture ffmpeg exit ${code}`))))
+    })
+    writeFileSync(
+      path.join(fx.boardsDir, 'emoteboard.json'),
+      JSON.stringify({
+        id: 'emoteboard',
+        name: 'Emote board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'bigitem',
+            collectionId: 'emoteboard',
+            thumbnail: 'https://example.invalid/big-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Big reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      // The canvas that is open when the reference lands: the emote template (112x112).
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await window.locator('button.card').filter({ has: window.getByText('Emote · auto-exports 28/56/112 trio', { exact: true }) }).click()
+      await expect(window.getByText('112 × 112')).toBeVisible()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+
+      await backToReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect
+        .poll(() => window.locator('img[alt="Big reference"]').evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 })
+        .toBe(512)
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+
+      await expect.poll(async () => (await drawnBoxes(window)).length, { timeout: 15_000, message: 'the reference layer draws' }).toBe(1)
+      const [box] = await drawnBoxes(window)
+      expect.soft(box?.x, 'the left edge is on the canvas').toBeGreaterThanOrEqual(0)
+      expect.soft(box?.y, 'the top edge is on the canvas').toBeGreaterThanOrEqual(0)
+      expect.soft((box?.x ?? 0) + (box?.width ?? 0), `the right edge is on the 112 px canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(112.01)
+      expect.soft((box?.y ?? 0) + (box?.height ?? 0), `the bottom edge is on the 112 px canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(112.01)
+      expect({ x: box?.x, y: box?.y, w: Math.round(box?.width ?? 0), h: Math.round(box?.height ?? 0) }, 'and it is the whole emote').toEqual({ x: 0, y: 0, w: 112, h: 112 })
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

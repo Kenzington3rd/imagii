@@ -389,11 +389,15 @@ Until the caption engine and model are in place, **Auto-captions** says
 downloads the English model for you, and that download goes online, once. Both
 steps are one-time:
 
-1. Get `whisper-cli.exe` from the whisper.cpp releases page, and put it at the
-   path the panel shows — a `bin` folder inside imagii's own data folder. The
-   panel's **Open folder** button opens that folder, which imagii makes for you.
-   It stays put when imagii updates, so you only do this once. (The older name,
-   `whisper.exe`, also works.) imagii does not download this file for you.
+1. Get the engine from the whisper.cpp releases page: download
+   `whisper-bin-x64.zip` (the newest release that lists it; some are marked
+   Pre-release), open the zip, and copy `whisper-cli.exe` and every `.dll` next
+   to it (they are in the zip's `Release` folder) into the folder the panel
+   shows — a `bin` folder inside imagii's own data folder, so that
+   `whisper-cli.exe` sits at the path the panel shows. The panel's **Open
+   folder** button opens that folder, which imagii makes for you. It stays put
+   when imagii updates, so you only do this once. (The older name,
+   `whisper.exe`, also works.) imagii does not download these files for you.
 2. Click **Download model (~141 MB)**. imagii downloads the English model and
    keeps it. You can also fetch the model file yourself and put it at the model
    path the panel shows. The **Show models folder** button opens that folder, and
@@ -552,13 +556,19 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and remove them. The **Properties** panel edits the selected layer. A picture
-   you import is placed at most 800 px on its long side, and the project keeps a
+   you import is placed at most 800 px on its long side, and always inside the canvas
+   (a small canvas such as the 112×112 emote makes it smaller to fit, and it starts
+   60 px in from the corner when there is room for that), whether you drop it, pick
+   it, paste it or send it from a mood board with **→ Canvas**. The project keeps a
    copy of it up to twice the long side of your design (3840 px on a 1920×1080
    overlay, 2560 px on a 1280×720 thumbnail; 1600 px at the least), so a picture you
    enlarge to fill the design still exports sharp. The copy is a PNG, so
    transparency stays (a JPEG stays a JPEG), and it is not the full-size file: a few
    4000 px screenshots would otherwise make a project too large to save (see
-   **Saving your work**). A picture already smaller than that is kept as it came.
+   **Saving your work**). Each copy is also held to about 16 MB: a picture with no
+   transparency that would be bigger than that is kept as a JPEG, and one that is
+   still bigger (or has transparency) is kept at a smaller size until it fits. A
+   picture already smaller than that is kept as it came.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
    design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
    of the file in pixels (it adds a note when a 16:9 export is bigger than

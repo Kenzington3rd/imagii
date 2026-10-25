@@ -1093,3 +1093,33 @@ loops bounded, no recursion, check every return value.
 A convention change updates this file in the **same commit** as the
 code. The `/guide-sync` command and the `design-reviewer` agent treat
 this document as authoritative.
+
+---
+
+## Round 88 additions (T-139 Track B)
+
+- **A first placement is sized to where it lands (T-139 (2)).** `placementFor(picW, picH, docW, docH)` (`@shared/imageBounds`) is the one place a picture's first box is
+  worked out: the drawn size is the 800 px bound (`LAYER_DRAWN_MAX_DIM`) and the document's (the aspect kept, never enlarged), and the position is 60 px in from the
+  corner (`PLACEMENT_MARGIN`) when the document has the room, less (down to the edge) when it does not, so a 512x512 file on the 112x112 emote is the emote, and a 400x1600
+  picture on the 1200x480 banner is 120x480 at the top. `ImportPanel.ingestFile` (the drop, the file chooser and the paste all go through it) and `MoodBoardPanel.sendToCanvas`
+  both read the open document from the canvas store AFTER the picture has loaded, as the stored copy's bound does, and pass the box to `makeImageLayer` /
+  `makeReferenceLayer` (`x`, `y`: they default to 60, 60, the corner they always started at). A document that is not a size places a picture as it was before. A template's
+  own layers are untouched.
+- **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy's pixels; `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) bounds its bytes, and
+  `chooseStoredCopy` (the order) with `storedDataUrl` (`lib/boundedImage.ts`, the canvas under it) take the first copy that fits: the file as it came when it is within the
+  pixel bound; else a copy at the bound (a PNG, or a JPEG when the file is one and is opaque); then an opaque picture as a JPEG at that same bound; then the bound stepped
+  down by a quarter (`nextStoredDim`, whole pixels, never under 1 px) as a JPEG if the picture is opaque and a PNG if it is not, so transparency is never lost. A picture
+  within the pixel bound whose FILE is over the budget is re-encoded, not kept as it came. Whether the picture is opaque is read from its pixels once, and only when a copy
+  is over the budget (or a JPEG source's has to be made).
+- **The autosave offer is withdrawn by a project opened from Home (T-139 (5)).** `AutosaveRestore` reads `sessionHoldsWork()` once per mount and Open project applies
+  the project and stays on Home, so the banner went on offering Restore over what had just been opened. `useAutosaveOffer` (`components/restoreRun.ts`, beside
+  `useRestoreRun`) is the signal: `Home.handleLoad` calls `withdraw()` once the project has applied (not on a refusal), and every mounted banner drops its offer (a
+  `subscribe` listener, as for `applied`). `restore()` asks `sessionHoldsWork()` again at the press, inside its claim and before the apply, as the backstop: if the session
+  now holds work it withdraws the offer the same way and applies nothing.
+- **A button that makes a record ignores the repeat of its double-click, claims before it writes, and is off while the write is out (T-139 (9)).** "+ Log post" (the
+  posting log), "Save current" (Cleanup presets) and "+ Save preset" (Custom export presets) clear their form after the first press, so the second press of a double-click
+  found no name and raised a red "Add a clip name first" / "Name your preset first" / "Give it a name", and on a slow write the presets saved a duplicate. `isRepeatPress(e)`
+  is the first line of each click; the two preset saves run under `claimFirst(savingRef, ...)` (raised before the first await, so an Enter held in the name box is covered
+  too) and the button is `disabled={saving}` with `disabled:opacity-50` while the write is out. Welcome's "Let's go" is replaced by Home under the pointer, so the second
+  press of its double-click landed on whatever Home draws there (Stream Graphics' card at 1366x768, 1306x734, 1161x653 and 1024x640, measured; the gap between the cards at
+  1536x864 and 1632x918): the dismiss calls `swallowRepeatClicks()`, as a closing dialog does.

@@ -37,6 +37,7 @@ import {
 } from './layout'
 import { chooserCalls, recordSlowChooser } from './chooser'
 import { installSpawnStall, readSpawnLog } from './mainSpawn'
+import { slowPresetWrites } from './slowWrites'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { localDay, skewTimeZone, utcDay } from './skewedClock'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
@@ -1478,8 +1479,14 @@ test.describe('CaptionsPanel', () => {
           'You download the captions engine once (whisper-cli.exe); imagii downloads the English model (~141 MB) for you — that download goes online, once.'
         )
       ).toBeVisible()
-      await expect(card.locator('code')).toHaveText(['whisper-cli.exe', 'whisper-cli.exe'])
+      // T-139 (6): the file the releases page really offers is a zip, and its engine needs the .dll files beside it.
+      await expect(card.locator('code')).toHaveText(['whisper-cli.exe', 'whisper-bin-x64.zip', 'whisper-cli.exe', '.dll'])
       await expect(card.getByText(/whisper\.exe/)).toHaveCount(0)
+      await expect(card.getByText(/Download whisper-bin-x64\.zip from the whisper\.cpp releases \(the newest release that lists it; some are marked Pre-release\)/)).toBeVisible()
+      await expect(card.getByText(/copy whisper-cli\.exe and every \.dll next to it \(they are in its Release folder\)/)).toBeVisible()
+      await expect(card.getByText('(the Windows build)')).toHaveCount(0)
+      await expect(card.getByRole('link', { name: 'whisper.cpp releases' })).toHaveAttribute('href', 'https://github.com/ggml-org/whisper.cpp/releases')
+      await expect(card.getByRole('link', { name: 'Hugging Face' })).toHaveAttribute('href', 'https://huggingface.co/ggerganov/whisper.cpp/tree/main')
       // Both shell shortcuts and both doc links are rendered (their OS side
       // is dispositioned; what is asserted is that they exist and are
       // reachable from this branch).
@@ -11192,6 +11199,86 @@ test.describe('Scan VOD - one scan at a time, in main (T-138 (9))', () => {
         }
       }
       await app.close().catch(() => undefined)
+    }
+  })
+})
+
+
+// ── T-139 (9): a double-press on a button that makes a record makes one record ─────────────────────────────────────────────────────────────
+//
+// "+ Log post" cleared the form in the same tick, so the second press of a double-click found no name and raised the red "Add a clip name first" right after
+// "Added to your posting log"; "+ Save preset" cleared the name after the awaited write, so the second press got the red "Give it a name" or, on a slow write,
+// saved a DUPLICATE. A repeat press (the second of a double-click, `detail` 2) is ignored (`isRepeatPress`), the save is claimed before its first await
+// (`claimFirst`) and its button is off while the write is out. The Cleanup presets (audio.spec.ts) are the same.
+test.describe('T-139 (9): a double-click on a record-creating button makes one record and raises no error', () => {
+  /** A double-click the way a person does it: the second press ~120 ms after the first, with the browser's own click count (2), at the button's centre. */
+  async function doubleClickSlowly(window: Page, button: Locator, between: () => Promise<void> = async () => window.waitForTimeout(120)): Promise<void> {
+    await button.scrollIntoViewIfNeeded()
+    const box = await button.boundingBox()
+    if (!box) throw new Error('the button has no box')
+    await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await window.mouse.down({ clickCount: 1 })
+    await window.mouse.up({ clickCount: 1 })
+    await between()
+    await window.mouse.down({ clickCount: 2 })
+    await window.mouse.up({ clickCount: 2 })
+  }
+
+  test('+ Log post: a double-click adds ONE entry, says so once, and raises no "Add a clip name first"', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchWithVideo('t139-log')
+    const { app, window, userDataDir } = studio
+    try {
+      const card = postCard(window)
+      await card.getByPlaceholder('Clip name').fill('Double clip')
+      await doubleClickSlowly(window, card.getByRole('button', { name: '+ Log post' }))
+      await expect(card.getByText('Logged posts (1)')).toBeVisible()
+      await window.waitForTimeout(1200)
+      const toasts = await readToastLog(window)
+      expect(toasts.filter((t) => t === 'Added to your posting log'), 'said once').toHaveLength(1)
+      expect(toasts.filter((t) => /Add a clip name first/.test(t)), 'and no error after it').toEqual([])
+      await expect
+        .poll(() => (readConfig(userDataDir).postingDiary as unknown[] | undefined)?.length ?? 0, { timeout: 15_000, intervals: [200] })
+        .toBe(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('+ Save preset (Custom export presets): a double-click saves ONE preset and raises no "Give it a name"; the button is off while the write is out', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchWithVideo('t139-custom')
+    const { app, window, userDataDir } = studio
+    try {
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByText('Saved presets (0)')).toBeVisible({ timeout: 15_000 })
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      const save = modal.getByRole('button', { name: '+ Save preset' })
+
+      // ── the write finishes between the two presses: the second finds an empty box, and is a repeat, so it is ignored ──
+      await nameInput.fill('Twice once')
+      await doubleClickSlowly(window, save, async () => {
+        await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      })
+      await window.waitForTimeout(1200)
+      expect((await readToastLog(window)).filter((t) => /Give it a name/.test(t)), 'no error after the save').toEqual([])
+      expect(readdirSync(presetsDir).filter((f) => f.endsWith('.json')), 'one preset on disk').toHaveLength(1)
+
+      // ── the write is still out when the second press lands: nothing is written twice, and the button says it is busy ──
+      await slowPresetWrites(app, 1500)
+      await nameInput.fill('Twice slowly')
+      await save.dblclick()
+      await expect(save, 'off while the write is out').toBeDisabled()
+      await expect(modal.getByText('Saved presets (2)')).toBeVisible({ timeout: 15_000 })
+      await expect(save, 'and back when it is done').toBeEnabled()
+      await window.waitForTimeout(1200)
+      expect(readdirSync(presetsDir).filter((f) => f.endsWith('.json')), 'a second preset, not a third').toHaveLength(2)
+      expect((await readToastLog(window)).filter((t) => /Give it a name/.test(t)), 'still no error').toEqual([])
+      expect((await readToastLog(window)).filter((t) => t === 'Saved "Twice slowly"'), 'said once').toHaveLength(1)
+    } finally {
+      await app.close()
     }
   })
 })

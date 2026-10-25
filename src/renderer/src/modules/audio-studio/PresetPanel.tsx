@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { ChainSpec } from '@shared/audio'
 import { cleanupSettings } from '@shared/audioPreset'
 import type { ChainPreset } from '@shared/workspace'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 /**
  * What Apply puts on the recording in front of the user (T-90): the preset's
@@ -22,6 +24,10 @@ export function PresetPanel(): JSX.Element {
   const patchChain = useAudioStore((s) => s.patchChain)
   const [presets, setPresets] = useState<ChainPreset[]>([])
   const [name, setName] = useState('')
+  // T-139 (9): one save at a time. `savingRef` is the claim (raised before the first await, so a held Enter in the box cannot start a second write either);
+  // `saving` is what the button draws while the write is out.
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
 
   async function refresh(): Promise<void> {
     // Round 18: swallow-and-report instead of letting a rejection escape the
@@ -39,6 +45,17 @@ export function PresetPanel(): JSX.Element {
   }, [])
 
   async function save(): Promise<void> {
+    await claimFirst(savingRef, async () => {
+      setSaving(true)
+      try {
+        await saveOnce()
+      } finally {
+        setSaving(false)
+      }
+    })
+  }
+
+  async function saveOnce(): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) {
       toast.error('Name your preset first')
@@ -85,7 +102,15 @@ export function PresetPanel(): JSX.Element {
           placeholder="My mic preset"
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-xs"
         />
-        <button className="btn-primary px-3 py-1 text-xs" onClick={save}>
+        {/* T-139 (9): the second press of a double-click is not a second preset (a repeat), nor a "Name your preset first" after the first cleared the box. */}
+        <button
+          className="btn-primary px-3 py-1 text-xs disabled:opacity-50"
+          onClick={(e) => {
+            if (isRepeatPress(e)) return
+            void save()
+          }}
+          disabled={saving}
+        >
           Save current
         </button>
       </div>

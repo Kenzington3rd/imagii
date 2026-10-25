@@ -111,8 +111,10 @@ describe('the Stream Graphics preview is not "downsampled" (T-123 (28))', () => 
     expect(readme).not.toMatch(/downsamples to 2048/)
     expect(readme).toContain('places an imported image at most 800 px on its long side')
     // T-137 (6): the 800 px is the shared constant now (the stored copy is a second one, twice as big), and ImportPanel places the layer with it.
+    // T-139 (2): through `placementFor`, which applies that bound and then the document's (re-pointed from the `scaleToFit` call that moved into it, not loosened).
     expect(read('src/shared/imageBounds.ts')).toMatch(/export const LAYER_DRAWN_MAX_DIM = 800\n/)
-    expect(read('src/renderer/src/modules/image-studio/ImportPanel.tsx')).toMatch(/scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/)
+    expect(read('src/shared/imageBounds.ts')).toMatch(/const scale = scaleToFit\(picWidth, picHeight, LAYER_DRAWN_MAX_DIM\)/)
+    expect(read('src/renderer/src/modules/image-studio/ImportPanel.tsx')).toMatch(/placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/)
   })
 
   it('and nothing in the renderer resamples to 2048', () => {
@@ -219,7 +221,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:47', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 47, 47, /<PositionBox value=\{layer\.x\}/],
-    ['ImportPanel.tsx:65', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 65, 65, /scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/],
+    ['ImportPanel.tsx:76', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 76, 76, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]
 
@@ -536,7 +538,9 @@ describe('the RunningCancel placement rule is true of the five it names, and the
     expect(placements).toMatch(/when the primary is the right-most item of its row or its busy label is a sentence \(GIF, Compile, Picture-in-picture, the Export panel, the Clip Kit button\)/)
     expect(placements).toContain('Whether the busy label is narrower than the idle one is not the test')
     // And the order a new Cancel is decided in, so "the first placement that applies" can be decided.
-    expect(placements).toMatch(/takes the first placement that applies, decided in this order: a progress row if the job reports a percent; else the caption row if there is no primary; else beside the primary if a native dialog is answered between the press and the job; else the row under the primary/)
+    // T-139 (7): the order is the one that reproduces the guide's own list (the Clip Kit under the primary, Audio Studio's export beside it, the Export panel under it, the
+    // progress rows on theirs) - the first draft sent each of those three to another placement; it is held to the code in the T-139 (7) block below.
+    expect(placements).toMatch(/takes the first placement that applies, decided in this order: a progress row if the job has one of its own \(a row with no primary on it that exists only while the job runs and holds its bar; a bar that stays after the job as its result, like Audio Studio's export row or the Export panel's queue, one row per file, is not one\); else the caption row if there is no primary; else the row under the primary if its busy label is a sentence \(the Clip Kit button, whatever dialog it opened first\); else beside the primary if a native dialog is ALWAYS answered between the press and the job \(Audio Studio's export; a chooser that opens only when no folder is remembered yet, as in GIF, Compile, Picture-in-picture and the Export panel, is not that\); else the row under the primary/)
     // The kit's label really is the wider when it runs, and a sentence: the two facts the guide quotes.
     const kit = read('src/renderer/src/modules/video-studio/ClipKitButton.tsx')
     expect(kit).toMatch(/whitespace-nowrap/)
@@ -589,5 +593,86 @@ describe('the guides name every loudness target the Levels picker offers (T-138 
     expect(line, 'the line is in the README').toContain('loudness target')
     const missing = LUFS_PRESETS.filter((p) => !line.includes(`−${Math.abs(p.target)}`)).map((p) => p.label)
     expect(missing, 'targets the README line does not name').toEqual([])
+  })
+})
+
+// T-139 Track B: the guides' sentences about this round's changes, held to the code they describe.
+describe('T-139 Track B - the guides say what the code does', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const src = (rel: string): string => strip(read(`src/renderer/src/modules/${rel}`))
+
+  it('(2) USER_GUIDE says a picture is placed inside the canvas, and placementFor is what a file and "-> Canvas" are placed with', () => {
+    const guide = flat(read('docs/USER_GUIDE.md'))
+    expect(guide).toContain('A picture you import is placed at most 800 px on its long side, and always inside the canvas')
+    expect(guide).toContain('a small canvas such as the 112×112 emote makes it smaller to fit')
+    expect(guide, 'the 800 px / twice-the-design sentences it sits beside are still there').toContain('keeps a copy of it up to twice the long side of your design')
+    expect(strip(read('src/shared/imageBounds.ts'))).toMatch(/const fit = Math\.min\(scale, docWidth \/ picWidth, docHeight \/ picHeight\)/)
+    expect(src('image-studio/ImportPanel.tsx')).toMatch(/makeImageLayer\(stored, place\.width, place\.height, place\.x, place\.y\)/)
+    expect(src('references/MoodBoardPanel.tsx')).toMatch(/makeReferenceLayer\(boundedDataUrl\(img, LAYER_DRAWN_MAX_DIM, true\), place\.width, place\.height, title, place\.x, place\.y\)/)
+  })
+
+  it('(4) USER_GUIDE names the byte budget, and the budget the spec asserts is the one the code has', () => {
+    const guide = flat(read('docs/USER_GUIDE.md'))
+    expect(guide).toContain('about 16 MB')
+    expect(strip(read('src/shared/imageBounds.ts'))).toMatch(/export const STORED_IMAGE_MAX_BYTES = 16 \* 1024 \* 1024\n/)
+    expect(read('tests/e2e/image.spec.ts'), 'the spec cannot import it (it must load on the build it is proven red against)').toMatch(/const STORED_IMAGE_MAX_BYTES = 16 \* 1024 \* 1024\n/)
+  })
+
+  it('(7) the decision order classifies each panel the guide lists the way the code draws it', () => {
+    // 1. A progress row of the job's own: shown only while it runs, with its bar and its Cancel together, and no primary on it.
+    expect(src('video-studio/ReframePanel.tsx')).toMatch(/\{running \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel reframe"/)
+    expect(src('video-studio/HighlightPanel.tsx')).toMatch(/\{scanning \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel scan"/)
+    const captions = src('video-studio/CaptionsPanel.tsx')
+    expect(captions).toMatch(/\{progress \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,1200}?<RunningCancel title="Cancel burn-in"/)
+    expect(captions).toMatch(/\{installing && installProgress \? \(\s*<div className="flex items-center gap-2 text-xs">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel download"/)
+    // ...and the two bars that are NOT one: Audio Studio's export row stays after the job (it is drawn for `job`, not for `running`) and holds no Cancel; the Export panel's
+    // rows are one per file, drawn from `jobs`, and its Cancel is not among them.
+    const audio = src('audio-studio/ExportDialog.tsx')
+    expect(audio).toMatch(/\{job \? \(\s*<div className="flex items-center gap-3 text-sm">[\s\S]{0,400}?<ProgressTrack/)
+    const audioRow = audio.slice(audio.indexOf('{job ? (\n        <div className="flex items-center gap-3 text-sm">'))
+    expect(audioRow.slice(0, audioRow.indexOf('<RunningCancel') < 0 ? audioRow.length : audioRow.indexOf('<RunningCancel'))).toContain('<ProgressTrack')
+    expect(audio.match(/<RunningCancel/g) ?? []).toHaveLength(1)
+    const exportPanel = src('video-studio/ExportPanel.tsx')
+    expect(exportPanel).toMatch(/\{jobs\.map\(\(j\) => \([\s\S]{0,1800}?<ProgressTrack/)
+    expect(exportPanel.slice(exportPanel.indexOf('{jobs.map((j) => ('))).not.toContain('<RunningCancel')
+
+    // 2. The caption row: no primary (the closed-video card).
+    expect(src('video-studio/ClipKitButton.tsx')).toMatch(/<span className="min-w-0 flex-1 truncate"[^>]*>\s*\{kitRunCaption\(kitRun\.clipName\)\}\s*<\/span>\s*<RunningCancel title="Cancel Clip Kit"/)
+
+    // 3. A busy label that is a sentence: the Clip Kit's is the run's phase ("Exporting platform version 2 of 5…"), kept on one line - and its chooser is asked on EVERY press, which the
+    //    order puts after this test, so the kit is not sent beside the primary.
+    const kit = src('video-studio/ClipKitButton.tsx')
+    expect(kit).toMatch(/\{kitRun !== null \? kitRun\.phase \|\| 'Working…' : `Clip Kit/)
+    expect(kit).toMatch(/const parentDir = await window\.api\.video\.pickOutputDir\(\s*typeof lastDir === 'string'/)
+    expect(kit.slice(kit.indexOf('async function runKit()'), kit.indexOf('const parentDir')), 'asked unconditionally').not.toMatch(/\bif \(!?(dir|parentDir|lastDir)\b/)
+    expect(read('src/renderer/src/modules/video-studio/clipKit.ts')).toMatch(/Exporting platform version \$\{/)
+
+    // 4. A dialog ALWAYS answered between the press and the job: Audio Studio's export asks for the file on every press; the Cancel follows the primary on its row.
+    expect(audio).toMatch(/outputPath = await window\.api\.audio\.pickOutputFile\(\{ defaultName, format: saveFormat \}\)/)
+    expect(audio.slice(audio.indexOf('async function startExport()'), audio.indexOf('pickOutputFile'))).not.toMatch(/\bif \(!?outDir\b/)
+    expect(audio).toMatch(/onClick=\{startExport\}\s*>\s*\{running \? 'Exporting…' : 'Export'\}\s*<\/button>\s*\{running && job \? \(\s*<RunningCancel title="Cancel export"/)
+    //    ...and the panels that only ask when no folder is chosen or remembered are NOT that: they take the folder from `resolveOutputDir`, which asks last; the Export panel asks only `if (!dir)`.
+    const outputDir = strip(read('src/renderer/src/hooks/useVideoOutputDir.ts'))
+    expect(outputDir).toMatch(/const chosen = useOutputDirStore\.getState\(\)\.dir\s*if \(chosen\) return chosen\s*const dir = \(await readRemembered\(\)\) \?\? \(await window\.api\.video\.pickOutputDir\(\)\)/)
+    for (const f of ['GifPanel', 'CompilationPanel', 'PipPanel']) expect(src(`video-studio/${f}.tsx`), f).toMatch(/const dir = await resolveOutDir\(\)/)
+    expect(exportPanel).toMatch(/let dir = outDir\s*if \(!dir\) \{\s*dir = await window\.api\.video\.pickOutputDir\(\)/)
+
+    // 5. The row under the primary: a wrapper that is its own row, in the three panels with no bar of their own and in the Export panel, with the Cancel after the primary's row.
+    for (const [f, title] of [['GifPanel', 'Cancel GIF export'], ['CompilationPanel', 'Cancel compilation'], ['PipPanel', 'Cancel picture-in-picture composite']] as const) {
+      const code = src(`video-studio/${f}.tsx`)
+      expect(code, f).toMatch(new RegExp(`\\{busy \\? \\(\\s*<div className="flex justify-end">\\s*<RunningCancel title="${title}"`))
+      expect(code, `${f} has no bar of its own`).not.toContain('<ProgressTrack')
+    }
+    expect(exportPanel).toMatch(/\{running \? \(\s*<div className="flex justify-end">\s*<RunningCancel\s+title="Cancel export"/)
+  })
+
+  it('(8) the busy-label widths the guide quotes are the re-measured ones, and the old figures are nowhere', () => {
+    const design = flat(read('docs/DESIGN_GUIDE.md'))
+    expect(design).toContain('GIF 102 px idle and 109 busy, Picture-in-picture 86 and 108')
+    expect(design).toContain('measured in the built app with Inter loaded')
+    expect(design).not.toMatch(/GIF 112 px idle/)
+    const lessons = flat(read('docs/LESSONS_LEARNED.md'))
+    expect(lessons, 'the entry that repeated them as "re-measured" carries the corrected pair').toContain('GIF 102 px idle and 109 busy, Picture-in-picture 86 and 108')
+    expect(lessons).not.toContain('GIF 112 px idle')
   })
 })

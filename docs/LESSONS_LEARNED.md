@@ -14,6 +14,70 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-25 — T-139 Track B (round 88): a picture placed past the edge of its canvas, a copy with no byte budget, an offer that outlived what it offered, and a double-click on three buttons that make records
+
+The twenty-fifth pass, Track B (items 2, 4, 5, 6, 7, 8 and 9 of T-139, and one comment; Track A's items 1, 3 and 10 land beside it). Ledger: r88b/ledger.tsv (17 red rows, two of them superseded by a rerun after a fixture bug - the first posting-log and preset cases pressed a button that was scrolled out of the window - and 59 mutation rows over 58 mutations, 59 of 59 restores byte-identical; two rows survived: the memo that asks a picture's opacity once, which the first test never gave a JPEG source (strengthened, then killed), and the Custom presets' claim, which the disabled button covers at E2E and the wiring pin kills). Every red was a test run against the old product code (unit files copied into a `git archive` of the base commit; every new or changed Playwright case run on a build of that tree).
+
+### (2) [MED] - an imported picture landed mostly off a small canvas
+
+- **Bug.** A 512x512 file dropped on the 112x112 emote template showed a 52 px corner of itself: the other handles were off the stage, and the Properties panel has no size field to bring it back.
+- **Root cause.** The first placement was `min(its size, 800 px)` at (60, 60) whatever the document. The 800 was chosen for the default 1200x800 canvas and was a number about the picture; where the picture lands is a fact about the document.
+- **Fix.** `placementFor(picW, picH, docW, docH)` in `@shared/imageBounds`: the drawn size is also bounded by the document, the position is 60 px in when there is room and less when there is not. The drop, the file chooser and the paste (all through `ingestFile`) and "-> Canvas" read the open document after the picture has loaded and use it. Templates' own layers are untouched.
+- **Test.** `imageBounds.test.ts` (the emote, the banner, the overlay, the margin giving way, a bad document, a sweep of pictures x documents for "wholly inside", and the rounding case `120 * (31 / 120)`), `canvasStore.test.ts`, image.spec.ts and references.spec.ts "wholly on the canvas" (red on the unchanged build: a 512 px layer at (60, 60) on a 112 px canvas; the overlay case is the control and was green there too).
+- **Lesson.** **A size chosen for the common case is a claim about every case: ask where a thing lands before deciding how big it is. The check that proves it is the box, wholly inside the container, at the smallest container the app makes.**
+
+### (4) [LOW] - one picture's stored copy could pass the project size limit by itself
+
+- **Bug.** T-138 (2) bounded the stored copy's pixels, not its bytes, and only a source that was a JPEG was re-encoded as one: a 9000x6000 PNG on the 4K overlay became a 54 MB data URL and paused autosave at once.
+- **Root cause.** The unit of the limit is bytes and the unit of the bound was pixels; noise (a screenshot of text is the opposite) costs about 4 bytes of PNG a pixel, 5.3 as a data URL.
+- **Fix.** `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) and `chooseStoredCopy`: the first copy that fits, in this order: the file as it came when it is within the bound; the copy at the bound; an opaque picture as a JPEG at that bound; the bound stepped down by a quarter, as a JPEG if opaque and a PNG if not. A picture within the pixel bound whose file is over the budget is re-encoded. Opacity is read once, and only when a copy is over.
+- **Test.** `imageBounds.test.ts` (the ladder against a stand-in encoder), `boundedImage.test.ts` (the canvases under it), image.spec.ts "an incompressible picture is stored within the byte budget" (35 MB and 41 MB noise PNGs on the 4K overlay: 13.4 and 9.1 million characters; the unchanged build stored 47.0 and 54.2 and paused autosave).
+- **Lesson.** **A limit in one unit needs a bound in that unit. When a fix for a size is written in pixels, ask what the limit counts.** The fix is a ladder and its order is the design: put the cheapest change that cannot lose anything first (a JPEG of an opaque picture), and the one that costs pixels last.
+
+### (5) [LOW] - the autosave banner outlived the project opened under it, and its Restore replaced it
+
+- **Bug.** The banner is drawn over an empty session on Home; Open project applies the project and stays on Home, so the same banner offered Restore, and pressing it applied the snapshot over what had just been opened.
+- **Root cause.** `holdsWork` is read once per mount (T-124 (5)), and a mount can outlive a change that makes the premise false. T-138 (5) had put the restore's own end on a shared signal; the OTHER way the premise ends (a project opened) had none.
+- **Fix.** `useAutosaveOffer` beside `useRestoreRun`: Home raises `withdraw()` when the project has applied, and every mounted banner drops its offer. `restore()` asks `sessionHoldsWork()` again at the press, inside its claim and before the apply, and withdraws the same way.
+- **Test.** home-chrome.spec.ts "the autosave banner goes when Open project lands" (red: the banner count was 1), `restoreRun.test.ts`, and the wiring pins for the order and the backstop (the backstop has no E2E: nothing in the UI reaches it).
+- **Lesson.** **A premise read once is a claim about a moment. Whatever makes it false should say so on the same channel the other things that make it false use, and the thing that acts on it asks again at the moment it acts.**
+
+### (6) [LOW] - the captions setup named a file the releases page does not offer
+
+- **Bug.** "Download whisper-cli.exe from the whisper.cpp releases (the Windows build)": the release marked Latest carries source archives only, the Windows builds are zips under the b-series pre-releases, and no asset is called whisper-cli.exe.
+- **Root cause.** The step was written from what the program is called on disk, not from what the page offers.
+- **Fix.** The card and USER_GUIDE name `whisper-bin-x64.zip`, the newest release that lists it (some are marked Pre-release), and say to copy `whisper-cli.exe` and every `.dll` next to it from the zip's Release folder into the folder shown; the link is `github.com/ggml-org/whisper.cpp/releases`. The zip's layout (a top-level Release folder) is read from whisper.cpp's own release workflow, which `Compress-Archive`s `build/bin/Release`; the zip itself could not be fetched from the build host.
+- **Test.** `truthInCopy.test.ts`, and the setup-card case in video-pipelines.spec.ts (the code list, both sentences, both links' addresses).
+- **Lesson.** **An instruction that names a download names what the page offers, in the words the page uses, and says where the pieces are inside it.**
+
+### (7) [LOW] - the decision order contradicted the placements beside it
+
+- **Bug.** DESIGN_GUIDE's order for a running-job Cancel sent the Clip Kit (it always asks for a folder) beside its primary, Audio Studio's export (it draws a bar) to the progress row, and the Export panel (it draws bars) to the progress row; the guide's own list and the code place them under it, beside it and under it.
+- **Root cause.** The order was one question per placement, in an order nobody ran against the list: "reports a percent" is true of a queue row and of a job row that stays after the job, and "a dialog is answered" is true of a chooser that opens only on a first run.
+- **Fix.** The order is now: a progress row of the job's own (it exists only while the job runs and holds the bar); the caption row (no primary); the row under the primary if the busy label is a sentence; beside the primary if a dialog is ALWAYS answered; else under. `docClaims.test.ts` runs it, panel by panel, against the code that draws each Cancel and each chooser.
+- **Test.** `docClaims.test.ts` "(7) the decision order classifies each panel the guide lists the way the code draws it".
+- **Lesson.** **A rule with an order is a function: run it on every example the document lists before it is written down. And a doc claim about code is held to the code, not to the other claim beside it.**
+
+### (8) [LOW] - the GIF widths did not reproduce
+
+- **Bug.** DESIGN_GUIDE said GIF's button was 112 px idle and 120 busy; LESSONS repeated them as "re-measured". In the built app, Inter loaded, they are 102 and 109, at 1632 and at 1024 px wide.
+- **Root cause.** A measurement quoted from memory of a measurement (T-138 (7) wrote the pair next to ones it did measure; Picture-in-picture's 86 and 108 and the kit's 154 and 233 do reproduce).
+- **Fix.** Corrected in both places, with how they were measured. The criterion (where a Cancel beside the primary would land) did not depend on them.
+- **Test.** `docClaims.test.ts` "(8)" (the figures, and that the old pair is nowhere).
+- **Lesson.** **"Re-measured" is a claim about a run. Say which build, which font, which window, and re-run it when the number is repeated in another document.**
+
+### (9) [LOW] - the second press of a double-click on three record-making buttons
+
+- **Bug.** "+ Log post" cleared its form in the same tick, so the second press raised a red "Add a clip name first" after the green "Added"; "Save current" and "+ Save preset" cleared the name after the awaited write, so the second press got the red error or, on a slow write, saved a duplicate. Measured first, for Welcome's "Let's go": its second press lands on Stream Graphics' card at 1366x768 (and 1306x734, 1161x653, 1024x640) and opens the studio.
+- **Root cause.** Each is a button whose first press changes what the second one means, and none had the family's guard (T-131).
+- **Fix.** `isRepeatPress(e)` on the three; `claimFirst(savingRef, ...)` and `disabled={saving}` on the two preset saves; `swallowRepeatClicks()` when Welcome is dismissed.
+- **Test.** video-pipelines.spec.ts, audio.spec.ts and home-chrome.spec.ts "T-139 (9)". Two layers cover a double-click, so the tests tell them apart: a second press AFTER the write (by hand, click count 2) holds the repeat guard; a write slowed from the test (`slowWrites.ts`) with a double-click and a held Enter holds the claim and the disabled button.
+- **Lesson.** **When two guards cover one gesture, a test of the gesture proves neither. Make the case where only one of them applies (a press that comes after the work, a press that comes during it) and show each fails alone.**
+
+### Found, not fixed
+
+- Canvas.tsx's `useImage` sets no referrer policy (ledger (g)); README.md still links the old owner's repository and the old instruction; a Restore pressed while an Open project is still applying can apply over it. See the round 88 Track B section of INTERACTION_COVERAGE.md.
+
 ## 2026-10-25 — T-138 Track A (round 87): a guard that read the Linux binary's pointer, a scan slot a reload could overwrite, and a loudness target the guide forgot
 
 The twenty-fourth pass, Track A (items 1, 6 and 9 of T-138, and one comment; Track B's items 2 to 5, 7 and 8 land beside it). Ledger: r87a/ledger.tsv (10 red rows and 26 mutation rows over 26 mutations, 26 of 26 restores byte-identical; every mutant was killed, and two early drafts of the Playwright red are kept as superseded rows). Every red was a test run against the old product code, a build of the unchanged tree `63d18ff` for the Playwright case, or the real binary for Layer 5 on the bundled 7.0.2, the distro's 6.1.1 and the SHIPPED Windows exe under Wine.
@@ -83,7 +147,7 @@ The twenty-fourth pass, Track B (items 2, 3, 4, 5, 7 and 8 of T-138, and the two
 ### (7) [LOW] - the guide's placement rule was false for the cases it named
 
 - **Bug.** DESIGN_GUIDE put a running-job Cancel under the primary "when the primary is wider than its busy label", and listed the Clip Kit, whose busy label is the wider (154 px idle, 233 running).
-- **Root cause.** The rule was written from the first measurement (GIF, T-126 (20)) and extended by listing. Re-measured in the built app's own CSS and font, it is false for more than the kit: GIF 112 px idle and 120 busy, Picture-in-picture 86 and 108, Compile equal since T-131 (13); only the Export panel with files queued is wider idle.
+- **Root cause.** The rule was written from the first measurement (GIF, T-126 (20)) and extended by listing. Re-measured in the built app's own CSS and font, it is false for more than the kit: GIF 102 px idle and 109 busy, Picture-in-picture 86 and 108, Compile equal since T-131 (13); only the Export panel with files queued is wider idle. (The GIF pair was first written here as 112 and 120, which did not reproduce: T-139 (8) re-measured it in the built app, Inter loaded, at 1632 and 1024 px wide.)
 - **Fix.** The test is where a Cancel beside the primary would land: at the row's end, on the strip the idle primary's right part held, whatever the label widths; or the busy label is a sentence that wraps. The guide now says the order a new Cancel is decided in.
 - **Test.** `docClaims.test.ts` (the rule's wording, the order, and the kit's facts it quotes).
 - **Lesson.** **A rule extended by listing is a claim about every case on the list. Measure each one before it goes in, and state the criterion that holds for all of them, not the one the first case showed.**

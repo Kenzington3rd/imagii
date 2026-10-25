@@ -248,3 +248,38 @@ describe('Captions say what they do (T-89)', () => {
     expect(panel).not.toMatch(/Whisper model installed/)
   })
 })
+
+// T-139 (6): the setup card named a file the releases page does not offer. The Windows build is a zip (listed under the newest release that has one; some are marked
+// Pre-release), and the engine in it needs the .dll files that sit beside it. whisper.cpp's release workflow zips the folder build/bin/Release, so they are in a Release folder.
+describe('the Captions setup names the download the releases page really has (T-139 (6))', () => {
+  const panelSource = read('src/renderer/src/modules/video-studio/CaptionsPanel.tsx')
+  const panel = stripComments(panelSource).replace(/\s+/g, ' ')
+  const guide = read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+
+  it('the card names whisper-bin-x64.zip, says which release lists it, and asks for the program AND the .dll files from its Release folder', () => {
+    expect(panel).toContain('1. Download <code>whisper-bin-x64.zip</code> from the{\' \'} <a href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panel).toContain('(the newest release that lists it; some are marked Pre-release)')
+    expect(panel).toMatch(/Open the zip and copy <code>whisper-cli\.exe<\/code> and every{' '} <code>\.dll<\/code> next to it \(they are in its Release folder\) into the folder below, so the engine sits exactly here:/)
+    expect(panel, 'the file the releases page does not have').not.toMatch(/Download <code>whisper-cli\.exe<\/code>/)
+    expect(panel).not.toContain('(the Windows build)')
+  })
+
+  it('the releases link is the repository the project lives under now, not the old owner\'s path', () => {
+    expect(panelSource).toContain('href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panelSource).not.toContain('github.com/ggerganov')
+    // The only two addresses on the card: the releases page and the model's page (the network allowlist's two hosts).
+    expect([...panelSource.matchAll(/href="(https:\/\/[^"]+)"/g)].map((m) => m[1])).toEqual([
+      'https://github.com/ggml-org/whisper.cpp/releases',
+      'https://huggingface.co/ggerganov/whisper.cpp/tree/main'
+    ])
+  })
+
+  it('USER_GUIDE says the same: the zip, the newest release that lists it, a Pre-release, the .dll files, the Release folder - and the older name still works', () => {
+    expect(guide).toContain('download `whisper-bin-x64.zip` (the newest release that lists it; some are marked Pre-release), open the zip, and copy `whisper-cli.exe` and every `.dll` next to it (they are in the zip\'s `Release` folder)')
+    expect(guide).toContain('(The older name, `whisper.exe`, also works.)')
+    expect(guide).toContain('imagii does not download these files for you.')
+    expect(guide).not.toContain('Get `whisper-cli.exe` from the whisper.cpp releases page')
+    // "also works" is true of the code, which looks for either name.
+    expect(stripComments(read('src/main/sidecars/paths.ts'))).toMatch(/WHISPER_EXE_NAMES = \['whisper-cli\.exe', 'whisper\.exe'\]/)
+  })
+})

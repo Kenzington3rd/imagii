@@ -5785,7 +5785,7 @@ IMG-PREC.
   the FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** open (round 88, two tracks)
+- **Status:** Track B done (round 88, see the Done entry); Track A sent back once, in expedite
 
 ---
 
@@ -6288,6 +6288,45 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 88, Track B — T-139 items 2, 4, 5, 6, 7, 8 and 9, landed in the
+commit that carries this entry (Track A, items 1, 3 and 10, lands
+next, after a send-back). Worked by one Sonnet in a fresh clone of
+d7e1738. The fixes: a picture's FIRST placement fits the document
+(`placementFor`: the drawn size bounded by the canvas as well as by
+800 px, the position kept inside it) for a drop, the chooser, a paste
+and "→ Canvas", so art on the 112 px emote canvas lands whole; a
+stored copy has a byte budget (`STORED_IMAGE_MAX_BYTES`, 16 MiB of
+data URL: an opaque picture over it is re-encoded as JPEG, then the
+bound steps down by a quarter until it fits — measured: a 4000x3000
+noise PNG stored as a 13.4M-character JPEG and autosave kept writing,
+where it was 47M and paused); the autosave banner goes when Home's
+Open project lands (`useAutosaveOffer.withdraw()` after the apply),
+and Restore re-asks `sessionHoldsWork()` inside its claim; the
+captions setup names whisper-bin-x64.zip (the newest release that
+lists it, some marked Pre-release) and says to copy whisper-cli.exe
+and every .dll from its Release folder (the layout read from
+whisper.cpp's own release workflow — the zip itself could not be
+fetched from this session); DESIGN_GUIDE's decision order reproduces
+its own placements (checked against the code by a new docClaims
+block) and its GIF figures are re-measured (102 / 109 px); "+ Log
+post" ignores a repeat press, both preset saves are claimed and
+disabled while they write, and Welcome's "Let's go" swallows the
+repeat press that MEASURED as landing on the Stream Graphics card at
+1366x768 and smaller windows. 59 ledger mutations all restored
+byte-identical (two survived a first pass: one killed after two
+assertions were added, one - CustomPresetManager's claim at e2e - held
+by its wiring pin, the form having no Enter path), 17 reds.
+Expedited personally: verify x2 (191/5221), test:media on 7.0.2 (370
+passed | 13 skipped of 383), build + FULL Playwright 469/469 with zero
+flakes, key-file shas unchanged; integrity and ledger audit clean (no
+forbidden files, no Track A file touched, no file at a mutant's sha);
+one independent mutation at a seam no ledger row names (Home
+withdrawing the offer on a FAILED open) → the T-139 (5) wiring pin red
+→ restored byte-identical, sha256 verified (the e2e has no failed-open
+case; the wiring pin is what holds it). Landed conflict-free onto its
+own base, all 33 paths byte-identical to the expedited clone, whose
+gates are this tree's; verify re-run on the landed tree.
 
 Round 87, Track A — T-138 items 1, 6 and 9, landed in the commit that
 carries this entry, merged onto Track B's (67ca808). Worked by one

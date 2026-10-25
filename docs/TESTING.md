@@ -1294,3 +1294,26 @@ up in `afterEach`; check that pattern if you see flakes.
 Add it to `ALLOWED` in `scripts/check-emoji.mjs`. Reasonable
 candidates: typographic glyphs in the U+2300–U+27BF range that aren't
 emoji presentations.
+
+## Round 88, Track B (T-139): what the new cases hold
+
+- **Unit.** `src/shared/imageBounds.test.ts` (`placementFor` at the emote, the banner and the overlay, the margin giving way, an invalid document, and a sweep of pictures x
+  documents for "wholly inside, aspect kept, never enlarged"; `nextStoredDim`; `chooseStoredCopy` with a stand-in encoder: which copy, in what order, opacity asked once and
+  only when needed, the budget boundary, the 1 px end), `src/renderer/src/lib/boundedImage.test.ts` (`storedDataUrl` over a stand-in `document.createElement('canvas')`: the
+  canvas sizes and formats, the JPEG quality, opacity read on one canvas), `canvasStore.test.ts` (the layer makers' position), the new
+  `src/renderer/src/components/restoreRun.test.ts` (the withdrawal signal), and pins in `interactionWiring.test.ts` ("T-139 Track B": the placement is read after the load
+  by every way a picture arrives, the ladder, the withdrawal after the apply and the press-time backstop inside the claim, the three record-making buttons, Welcome),
+  `docClaims.test.ts` (the guides' placement, budget and figures; the decision order held to the code it classifies, panel by panel) and `truthInCopy.test.ts` (the Captions
+  setup names the zip, the .dll files and the Release folder; the two links on the card are exactly the releases page and the model's page).
+- **Playwright**, each red on a build of the unchanged tree first: image.spec.ts "a picture is first placed wholly on the canvas it lands on" (the emote by drop, chooser and
+  paste, the banner, the overlay as the control) and "an incompressible picture is stored within the byte budget" (4000x3000 uniform-noise PNGs, 35 MB opaque and 41 MB with a
+  transparent corner, on the 4K overlay: the opaque copy 13.4 million characters as a JPEG, the transparent one a PNG stepped down to 1687 px at 9.1 million, autosave written
+  with both and never paused; the unchanged build stored 47.0 and 54.2 million and paused it), references.spec.ts "-> Canvas places the picture wholly on a small canvas",
+  home-chrome.spec.ts "the autosave banner goes when Open project lands" and "a double-click on Welcome's Let's go" (at 1366x768 and 1306x734), video-pipelines.spec.ts and
+  audio.spec.ts "a double-click on a record-creating button makes one record" and the Captions setup case (the zip, the .dll files, the link's address).
+- **A write slowed from the test.** `tests/e2e/slowWrites.ts` replaces `writeFile` of `node:fs/promises` in main with one that waits when the target is in a presets folder
+  (the technique of `mainSpawn.ts`), so a second press lands while the first write is still out. Without it the two layers of the fix (the repeat press ignored, the save
+  claimed) cannot be told apart: a fast write is over before a real second press arrives. The repeat press is held by a second press that comes AFTER the write (a clickCount-2
+  press by hand); the claim and the disabled button by a double-click and an Enter during the slow write.
+- **Fixtures.** Noise comes from the bundled ffmpeg (`color=...,noise=alls=100:allf=u`, `-compression_level 1`; the transparent corner is `alphamerge` with a gray mask), and
+  goes in through the real file chooser, not as a base64 argument over the debugging protocol.

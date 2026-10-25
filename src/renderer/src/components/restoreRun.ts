@@ -1,3 +1,4 @@
+import { create } from 'zustand'
 import { createRunStore } from '../lib/runStore'
 
 /**
@@ -16,3 +17,17 @@ import { createRunStore } from '../lib/runStore'
  * run ending with `applied` false, and the banner and its Restore stay, as they always have, so the person can try again.
  */
 export const useRestoreRun = createRunStore<{ applied: boolean }>()
+
+/**
+ * The autosave offer is withdrawn (T-139 (5)): the person opened a project of their own, from Home, so the banner's "pick up where you left off" is about a session
+ * that is not theirs any more.
+ *
+ * `AutosaveRestore` reads `sessionHoldsWork()` once per mount (T-124 (5)) and Open project applies the project and STAYS on Home, so the same banner went on offering
+ * Restore, and pressing it applied the snapshot over the project that had just been opened (executed). Home raises this after the open has applied, and every
+ * mounted banner drops its offer, as it does for `applied`. A counter in a store and not a flag, so a second open says it again and a listener hears every one; it
+ * is a listener's business (`subscribe`), not a selector's.
+ */
+export const useAutosaveOffer = create<{ withdrawn: number; withdraw: () => void }>((set) => ({
+  withdrawn: 0,
+  withdraw: () => set((s) => ({ withdrawn: s.withdrawn + 1 }))
+}))

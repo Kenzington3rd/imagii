@@ -3,6 +3,7 @@ import { NavCard } from '../components/NavCard'
 import { Icon } from '../components/Icon'
 import { audioSettled, captureProject, describeApplyOutcome } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
+import { useAutosaveOffer } from '../components/restoreRun'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
 import { claimFirst } from '../lib/claimFirst'
@@ -45,6 +46,9 @@ async function handleLoad(): Promise<void> {
     // T-113: autosave is held for the apply and for nothing else — not the file dialog before
     // it, not 1.5 s after it (a quit then saved none of what was done during a long conversion).
     const outcome = await applyProjectHeld(result.project)
+    // T-139 (5): the project is in the stores. The autosave banner on this page offers a session that is not the person's any more: it goes (Restore would apply
+    // the snapshot over what was just opened).
+    useAutosaveOffer.getState().withdraw()
     // T-112: also the files that would not open for another reason, and a source
     // skipped because the person opened a different one while it loaded.
     const note = describeApplyOutcome(outcome, 'project')

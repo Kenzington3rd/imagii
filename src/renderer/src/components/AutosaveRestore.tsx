@@ -8,7 +8,7 @@ import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
 import { Icon } from './Icon'
-import { useRestoreRun } from './restoreRun'
+import { useAutosaveOffer, useRestoreRun } from './restoreRun'
 
 interface AutosaveSnapshot {
   ok: boolean
@@ -99,6 +99,10 @@ export function AutosaveRestore(): JSX.Element | null {
     if (state.run?.applied) setDismissed(true)
   }), [])
 
+  // T-139 (5): and when the person opens a project from Home. `holdsWork` above is read once per mount, so a banner that was mounted over an empty session offered
+  // Restore over the project that had just been opened; Home says the offer is withdrawn once that project has applied.
+  useEffect(() => useAutosaveOffer.subscribe(() => setDismissed(true)), [])
+
   if (dismissed || holdsWork || !snapshot || !snapshot.info) {
     // Round 17 B7: even when there's no restore prompt to show, surface a
     // single-line "Last autosave: 5 min ago" so the user knows imagii is
@@ -118,6 +122,13 @@ export function AutosaveRestore(): JSX.Element | null {
     // T-138 (5): the claim, ahead of the first await. A second press (or a banner that mounted since) finds the run held and changes nothing.
     if (!useRestoreRun.getState().begin({ applied: false })) return
     try {
+      // T-139 (5): asked again now, at the press. The banner's `holdsWork` was read at mount, and a session can come to hold work after it by a way that does not
+      // go through Home's Open project (which says so itself): applying a snapshot of an earlier moment over it would wipe it and its undo histories (T-124 (5)).
+      // The offer is withdrawn the same way Open project withdraws it, so every mounted banner hears it; nothing is applied.
+      if (sessionHoldsWork()) {
+        useAutosaveOffer.getState().withdraw()
+        return
+      }
       // T-113: autosave is held for the apply alone (see `applyProjectHeld`).
       const outcome = await applyProjectHeld(snapshot.project)
       // T-84: same rule as Open project — what could be restored is, and the

@@ -453,7 +453,8 @@ describe('the board and preset writes report their refusals (T-135 (8))', () => 
     ['modules/references/MoodBoardPanel.tsx', 'onDelete', 'deleteCollection', "Couldn't delete that board."],
     ['modules/references/ReferencePanel.tsx', 'saveInto', 'addToCollection', "Couldn't save that picture."],
     ['modules/references/ReferencePanel.tsx', 'createBoardAndSave', 'createCollection', "Couldn't create that board."],
-    ['modules/video-studio/CustomPresetManager.tsx', 'save', 'video.saveCustomPreset', "Couldn't save that preset."],
+    // T-139 (9): `save` is the claim around `saveOnce`, which holds the write and its catch (re-pointed to the function the await sits in, not loosened).
+    ['modules/video-studio/CustomPresetManager.tsx', 'saveOnce', 'video.saveCustomPreset', "Couldn't save that preset."],
     ['modules/video-studio/CustomPresetManager.tsx', 'remove', 'video.deleteCustomPreset', "Couldn't delete that preset."]
   ]
   it.each(cases)('%s %s() awaits %s in a try whose catch is reportFailure', (rel, fn, needle, sentence) => {

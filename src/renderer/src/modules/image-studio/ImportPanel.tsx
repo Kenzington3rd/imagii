@@ -12,11 +12,11 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
-import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
+import { loadImage, storedDataUrl } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
-import { LAYER_DRAWN_MAX_DIM, scaleToFit, storedImageMaxDim } from '@shared/imageBounds'
+import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
 import { isImageFilename } from '@shared/mediaFormats'
 
 function cloneDoc<T>(obj: T): T {
@@ -62,23 +62,19 @@ export function ImportPanel(): JSX.Element {
       const dataUrl = await readFileAsDataUrl(file)
       const img = await loadImage(dataUrl)
       const dims = { width: img.naturalWidth, height: img.naturalHeight }
-      const scale = scaleToFit(dims.width, dims.height, LAYER_DRAWN_MAX_DIM)
-      const w = dims.width * scale
-      const h = dims.height * scale
       // T-137 (6): the document keeps a copy bounded in size, not the file: a project that holds a few 4000 px PNGs is over the size limit (autosave stops,
       // Save writes a file Open refuses). PNG unless the picture came as a JPEG and is opaque, so transparency is never lost.
       // T-138 (2): the bound is the document's, read now (after the load, from whatever canvas is open when the picture lands): twice its longer side, never
       // under 1600 px. A layer is freely resizable, so the 800 px it is first PLACED at is not the largest it is shown at, and a fixed 1600 px copy of a picture
       // enlarged to fill a 1920 / 2560 / 3840 px overlay was exported upscaled.
-      // simplification: a picture already within the bound is kept as it came, so its bytes are not bounded (a small animated GIF can be many MB); the size
-      // rule at Save and autosave catches the sum. Upgrade: re-encode anything over a byte threshold.
+      // T-139 (4): and the copy has a byte budget (`STORED_IMAGE_MAX_BYTES`): a picture within the bound whose file is over it is re-encoded rather than kept
+      // as it came, an opaque one as a JPEG, and a copy still over (or a transparent one) steps the bound down until it fits.
+      // T-139 (2): and the same document sizes WHERE it lands: wholly on the canvas, so a 512 px picture on the 112 px emote is the emote, not a corner of it.
       const { width: docWidth, height: docHeight } = useCanvasStore.getState().doc
       const storedMax = storedImageMaxDim(docWidth, docHeight)
-      const stored =
-        scaleToFit(dims.width, dims.height, storedMax) < 1
-          ? boundedDataUrl(img, storedMax, file.type === 'image/jpeg')
-          : dataUrl
-      addLayer({ ...makeImageLayer(stored, w, h), name: file.name })
+      const stored = storedDataUrl(img, dataUrl, storedMax, file.type === 'image/jpeg')
+      const place = placementFor(dims.width, dims.height, docWidth, docHeight)
+      addLayer({ ...makeImageLayer(stored, place.width, place.height, place.x, place.y), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't import that image." })

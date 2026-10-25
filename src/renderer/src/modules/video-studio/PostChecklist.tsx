@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import type { DiaryEntry } from '@shared/postingDiary'
 import { DIARY_LEGACY_KEY, DIARY_MAX_ENTRIES, migrateDiary } from '@shared/postingDiary'
 import { PanelHeader } from '../../components/PanelHeader'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 const HASHTAG_TEMPLATES: Record<string, string[]> = {
   twitch_clip: ['#Twitch', '#TwitchClip', '#StreamHighlight', '#GamingClip'],
@@ -136,7 +137,10 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     })
   }
 
-  function add(): void {
+  function add(e: { detail: number }): void {
+    // T-139 (9): the first press clears the form, so the second press of a double-click found no name and raised the red "Add a clip name first" right after
+    // "Added to your posting log". A repeat is not another entry (T-131 (4): the same rule as the Fix wizard's answers; a keyboard click has no count and is not touched).
+    if (isRepeatPress(e)) return
     if (!outputName.trim()) {
       toast.error('Add a clip name first')
       return
