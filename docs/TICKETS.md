@@ -5328,6 +5328,144 @@ IMG-PREC.
   lockfile edits.
 - **Status:** done (round 85, both tracks — see the two Done entries)
 
+## T-137 — sweep-23 fixes (round 86)
+
+- **Spec:** the twenty-third sweep's verified findings — each
+  confirmed by the expediter against source; the project-size,
+  autosave-rewrite and kit-label findings were EXECUTED or measured
+  in the built app by reviewers; the Record take-deletion path was
+  traced by the expediter to the unlink. Zero-finding lens: ffmpeg.
+  12 findings, written as two tracks with DISJOINT source files.
+  **Track A (job and screen state):**
+  1. **[MED] Audio Studio's importer keeps its extraction in the
+     screen, and a late landing replaces whatever is open.**
+     AudioImporter.tsx:21,28 holds busy/busyRef/extractingRef as
+     component state and its landing (:52-58) calls loadSource with
+     no `replacedSince` — leave mid-extraction, come back to an idle
+     importer, drop a plain WAV (main's extractingFor refuses only a
+     second EXTRACTION) and edit it; the first extraction's landing
+     resets source, chain and history (no confirm, not undoable),
+     against USER_GUIDE:435-437. The exact T-136 (2) class at the
+     importer T-136 did not reach. Fix direction: an audio-import run
+     slot (the useImportRun pattern, in audio-studio state) so a
+     remounted importer shows busy and refuses a second import, and
+     a landing that asks `replacedSince(heldBefore, source)` and
+     skips with a sentence (VideoStudio's "Skipped this video's
+     sound…" shape). e2e: leave mid-extraction and return (busy);
+     open a WAV while an extraction runs → the WAV is kept.
+  2. **[MED] A second take's Discard can delete the FIRST take.**
+     RecordStudio.tsx:49,87,90 keeps phase/savePercent/discarding as
+     component state and the live-take guard registers only during
+     'recording', so leaving during a save returns an idle Record
+     over a running convert; a second take's "Discard recording"
+     calls cancelRecordingConvert() → cancelConverts('recording')
+     (convert.ts:288), which cancels EVERY recording-owner convert;
+     the first take's save then sees ConvertCancelledError with
+     byQuit false → keepTake false → recording.ts:357 unlinks its
+     raw webm (and the half mp4 is removed). Fix direction: Record's
+     save phase and percent in a module run slot (a remounted Record
+     shows the save and its Discard; Start is refused while a save
+     runs, in a T-84 sentence); Discard cancels ONLY its own take's
+     convert (scope the cancel by the take's session/job id, not by
+     owner — main must refuse to touch another take); unit for the
+     scoping; e2e: leave during a save and return → saving shown;
+     a discard cannot touch another take's file.
+  3. **[LOW] The running-kit card's live region is not reliably
+     announced.** ClipKitRunning (ClipKitButton.tsx:77-94) mounts its
+     `aria-live` paragraph WITH its text — the class T-136 (5) fixed
+     for the Player notice. Fix: an always-mounted live-region
+     wrapper (empty while no kit runs) per GifPanel.tsx:88-94.
+  4. **[LOW] The running Clip Kit label wraps mid-sentence** at the
+     default and minimum windows (measured: 197x42 px, the clip list
+     jumps ~36 px). Fix: the label on one line (whitespace-nowrap)
+     and its Cancel on a row of its own under the button (DESIGN_GUIDE's
+     rule for a primary wider than its idle label) or on the caption
+     row; an `expectOneLine` layout case (DESIGN_GUIDE:325). Name the
+     RunningCancel placements the code actually uses in DESIGN_GUIDE.
+  5. **[LOW] The preview copy's skip toast blames "another video" on
+     a plain Close** (Player.tsx:268-271; staleCaptionsMessage,
+     shared/captions.ts:354-358, documents the same wording error).
+     Fix: closed-or-replaced wording (branch on source === null or
+     reuse the staleCaptionsMessage shape); pin the sentence.
+  **Track B (data, validation, main):**
+  6. **[MED] A project over 50 MiB saves but will not reopen, and
+     autosave silently stops.** MAX_BYTES (projectValidation.ts:40)
+     gates load (:410-411) and autosave (:444-448, console only), but
+     project:save (ipc/project.ts:35-46) writes PRETTY-printed JSON
+     with no size gate, and ImportPanel.tsx:69-75 keeps each image's
+     full-size data URL though the layer is drawn at most 800 px —
+     executed: four 11 MB PNGs → autosave stops, Save writes 56.9 MiB
+     with "Project saved", Open refuses with the damaged-file
+     sentence. Fix direction: ONE size rule for save and load measured
+     on the same serialization (save refuses with a finished sentence
+     naming the size and what to do, before the dialog when the size
+     is known); a size-refused autosave raises ONE coalesced toast per
+     session (not console only); ImportPanel stores a canvas-bounded
+     copy (downscale to the layer's max dimension, keep aspect and
+     format sensibly). e2e/unit per piece.
+  7. **[LOW] The autosave dedupe never matches** — useAutosave.ts:209
+     compares JSON.stringify(captureProject()) whose savedAt is
+     Date.now() (ProjectIO.ts:83), so any non-captured store change
+     (Find chat spikes, Scan VOD, a grid toggle) rewrites an identical
+     autosave.json and rotates autosave.prev (executed: 28.4 MiB
+     rewritten for a ticked Grid). Fix: dedupe on the project with
+     savedAt neutralised; correct the :159 comment; unit: a
+     non-captured change writes nothing.
+  8. **[LOW] The loudness measure pass keeps all of its stderr.**
+     process.ts:116-117 skips the cap when collectStderr is true, and
+     stderrCapped.test.ts counts the handler as capped because a
+     slice(-16384) is PRESENT (presence, not path) — T-136 (13)'s
+     "every accumulator is capped" is false here. Fix: tail-cap the
+     measure pass too (loudnorm prints its JSON last; keep e.g. the
+     last 64 KB) and make the scan treat a cap the handler can skip
+     under a condition as uncapped, with a discrimination case for
+     exactly this shape.
+  9. **[LOW] A chat row near a VOD's end shows an end past the
+     video** (ChatHighlightPanel.tsx:144-146 prints p.endSec raw;
+     addPeak clamps to duration at :59-60) against USER_GUIDE's "adds
+     exactly that range". Fix: display the clamped start and end;
+     e2e with a tail spike.
+  10. **[LOW] Canvas reference layers die with the thumbnail cache:**
+     "→ Canvas" sets layer.src to fileUrl(item.cachedThumbPath)
+     (MoodBoardPanel.tsx:262-265 → makeReferenceLayer); Clear
+     thumbnail cache (and the launch sweep after a board item is
+     deleted) leaves an invisible layer with no marker
+     (Canvas.tsx:65-68) and saved projects carry the dead src. Fix:
+     embed a canvas-bounded copy of the picture when sending it to
+     the canvas (it must respect item 6's size rule), or say so in the
+     clear toast and USER_GUIDE:579-583 — prefer embedding (expected
+     usability).
+  11. **[LOW] A non-array customPresetIds passes validation and
+     crashes /video** (validateClipRequiredFields never checks it;
+     ExportPanel.tsx:60 iterates it in render; executed: 5, {a:1},
+     true validate ok and throw) — autosave and Restore re-crash until
+     Clear. Fix: require undefined or string[] (drop invalid entries,
+     like dropUnknownPresetIds); harden videoStore.pruneCustomPresets;
+     unit both.
+  12. **[LOW] Two stderr regexes match ffmpeg's echo of a user path.**
+     FFMPEG_UNREADABLE_PART = /Impossible to open/ (concat.ts:48) is
+     unanchored and ffmpeg echoes the output path at default log level
+     ("Output #0, mp4, to '<dir>/…'"), so a folder or source named with
+     the phrase fails a good join (any exit since T-136 (15));
+     FFMPEG_EMPTY_OUTPUT has the same shape. Fix: anchor each to
+     ffmpeg's own line (and require the seg-<job>-N.mkv name that
+     unreadableSegmentIndex parses); unit with an echoed path
+     containing each phrase.
+  **Docs (ride with the owning track):** DESIGN_GUIDE RunningCancel
+  placements (Track A, with item 4); fold the model download's
+  net.request into the T-110 (bi) wording (expediter).
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 1, 2, 4, 6, 9 and 10
+  land with their e2e or layout cases; item 8 and item 12 touch
+  main-process runners (unit + the scan; item 12's regex change is a
+  guard on ffmpeg output — add a Layer 5 assertion that a real join
+  with the phrase in its OUTPUT folder succeeds, both majors,
+  IMG-PREC); new cases in NEW describe blocks appended at the end of
+  shared files; `npm run verify`, `npm run test:media` and the FULL
+  Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits.
+- **Status:** open (round 86, two tracks)
+
 ---
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
@@ -5785,7 +5923,8 @@ IMG-PREC.
   thumbnails promise https + no referrer, both hold), so not
   gate-holding; candidate: `app.userAgentFallback` (or the
   session's) set to a generic Chromium UA at startup, pinned by the
-  loopback probe.
+  loopback probe; the Whisper model download's `net.request` carries
+  the same default UA, so the one setting covers it too (sweep 23).
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
