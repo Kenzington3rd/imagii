@@ -5468,6 +5468,169 @@ IMG-PREC.
 
 ---
 
+## T-138 — sweep-24 fixes (round 87)
+
+- **Spec:** the twenty-fourth sweep's verified findings — each
+  confirmed by the expediter against source; the Windows lost-part
+  regex was EXECUTED on the real shipped win32 ffmpeg (ffmpeg-static
+  b6.1.1, gyan.dev 6.1.1 essentials) under Wine by the ffmpeg
+  reviewer and its premise checked by the expediter in mingw-w64's
+  own printf (`%p` is zero-filled hex with no "0x"); the Clip Kit
+  dialog's live-region ancestry and the second-scan orphan were
+  executed in the built app. Zero-finding lens: privacy. 9 findings,
+  written as two tracks with DISJOINT source files.
+  **Track A (main process and ffmpeg):**
+  1. **[HIGH] The lost-part guard never matches on the shipped
+     Windows binary.** concat.ts:55 `FFMPEG_UNREADABLE_PART` and :86
+     `unreadableSegmentIndex` (T-137 (12)) accept only a glibc-style
+     `[concat @ 0x…]` prefix; the win32 build prints
+     `[concat @ 00007fffff45eb80] Impossible to open '…seg-j-9.mkv'`
+     (CRLF, often after a `\r`-ended stats line), so on Windows a
+     lost later segment saves a shorter file as "Saved" (the T-131 (1)
+     bug, back) and a lost first segment shows raw "concat exit 254";
+     the clip is never named. Layer 5 on the win32 exe: T-136 (15) x2,
+     the T-137 (12) control and T-131 (1) :7580/:7595 are red, so
+     release.yml's windows-latest `test:media` would fail at tag time.
+     Fix direction: ONE prefix for both patterns,
+     `\[concat @ [^\]\n]*\] ` (noPicture.ts's shape), the rest of
+     each pattern unchanged (still line-anchored, still the runner's
+     `seg-<job>-<n>.mkv`); unit fixtures in concat.test.ts and
+     concatRunner.test.ts with the mingw lowercase form, the MSVCRT
+     uppercase form, CRLF, and the line after a `\r` stats line (red
+     on the current regex), and the echoed-path negatives kept; audit
+     EVERY regex in src/main that reads ffmpeg/ffprobe output for a
+     platform-specific shape (pointer, line ending, path separator)
+     and list the audit in the ledger. Layer 5 (IMG-PREC): the T-131
+     (1), T-136 (15) and T-137 (12) blocks green on the bundled 7.0.2,
+     the distro 6.1.1 AND the win32 exe under Wine (harness below);
+     then the WHOLE Layer 5 file once on the win32 exe, every failure
+     reported and classified (Wine timing vs a real Windows-only
+     defect) — fix only what is in this item's scope, report the rest.
+  6. **[LOW] The guides name two of the three loudness targets.**
+     USER_GUIDE.md:473-474 ("pick … (−16) or … (−14)") and
+     README.md:127 omit "Broadcast TV and radio (−23)"
+     (LevelsPanel.tsx:35, shipped since 2ff0eb1). Fix: name it in
+     both; a docClaims pin that USER_GUIDE's Levels line names every
+     `LUFS_PRESETS` target.
+  9. **[LOW] A second highlight scan orphans the first past quit.**
+     ipc/video.ts:375-386 `video:findHighlights` has no main-side
+     claim, and highlights.ts:71/:119 keeps ONE `activeScan` slot a
+     second scan overwrites; Cancel and `cancelAllHighlightJobs` reach
+     only the slot. After a renderer reload (the render-process-gone
+     auto-reload, or Ctrl+R) the renderer's `useScanRun` is fresh
+     while main's scan runs; a second "Scan VOD" starts a second
+     ffmpeg, Cancel stops the newest, and the older survives
+     `app.quit()` (executed: PPID 1). Fix direction: `scanningFor`
+     in `registerVideoIpc`, claimed before the handler's first await
+     and given back in a `finally` (the `convertingFor` pattern), the
+     refusal a finished sentence naming the running video that
+     `userFacingError` lets stand and the panel shows; unit over the
+     real handler (a second call refused, the slot back on success,
+     failure and cancel); e2e: a scan held running, the renderer
+     reloaded, the video reopened, "Scan VOD" refused in its
+     sentence, and after `app.close()` no scan child alive (by PID);
+     audit every module-level single-slot child tracker in src/main
+     (each either has a main-side claim on its handler or holds a
+     set) and list it in the ledger.
+  Non-counted, rides with Track A: process.ts:224-226's "loudnorm is
+  linear there" becomes true to the filter (linear only when its
+  measured LRA is within the target; T-110 (bj)).
+  **Track B (renderer and guides):**
+  2. **[MED] An imported picture is stored at 1600 px whatever the
+     document.** ImportPanel.tsx:72-75 bounds the stored copy to
+     `STORED_IMAGE_MAX_DIM` (imageBounds.ts:17, 2 x 800) though a
+     layer is freely resizable and the templates are 1280 to 3840 px
+     documents: a 1920x1080 overlay frame or a 4K background enlarged
+     to fill a 1920/2560/3840 overlay exports 1.2x to 2.4x upscaled
+     (worse at the HiDPI 2x default), and re-importing bounds it
+     again. Fix direction: `storedImageMaxDim(docWidth, docHeight)` =
+     max(`STORED_IMAGE_MAX_DIM`, 2 x the document's longer side) in
+     imageBounds.ts (unit), read from the canvas document at import
+     time; a picture within it is kept as it came, the format rules
+     unchanged; the size rule handles the sum. e2e: a 1920x1080 PNG on
+     the 1920x1080 overlay template is stored at 1920x1080, a 4000x3000
+     PNG there at 3840x2880, and on the 1280x720 thumbnail template at
+     2560x1920; the existing bounded-copy case adapted (not loosened)
+     to the document it runs on; the "→ Canvas" 800 px reference copy
+     unchanged. USER_GUIDE's 1600 px wording follows.
+  3. **[LOW] The over-limit sentences say "shrink", which frees
+     nothing.** projectValidation.ts:72/:74 "Remove or shrink large
+     images on the canvas": scaling a layer changes scaleX/scaleY,
+     never `src`, so Save and autosave refuse again. Fix: "Remove some
+     of the large images on the canvas, or import smaller copies of
+     them" (Save: ", then save again."; autosave: ", and it will start
+     again."), still finished sentences under 240 characters; the
+     unit and home-chrome.spec pins and USER_GUIDE:624-625 follow.
+  4. **[LOW] The Clip Kit's confirm dialog opens inside a live
+     region.** ClipKitRunning's always-mounted `aria-live` wrapper
+     (ClipKitButton.tsx:91, T-137 (3)) holds the card, whose
+     `<KitCancel />` (:99) renders its `<Modal>` inline (Modal does not
+     portal): pressing the closed-video card's Cancel inserts the whole
+     dialog into the polite region (executed:
+     `[role=dialog].closest('[aria-live]')` is the wrapper). Fix
+     direction: the confirm Modal is rendered OUTSIDE the wrapper —
+     ClipKitRunning holds the confirm state and returns the wrapper
+     and the Modal as siblings (KitCancel split into its button and a
+     shared confirm dialog); the clip-list path keeps its arrangement
+     (already outside any live region); no Modal change. e2e: on the
+     closed-video card, the dialog has no `[aria-live]` /
+     `[role=status]` ancestor, Keep running keeps the kit, Cancel jobs
+     ends it, and the empty wrapper's 20 px gap still holds; the same
+     ancestry assertion on the clip-list path.
+  5. **[LOW] A return to Home mid-restore offers Restore again.**
+     AutosaveRestore.tsx:46 `restoring` is component state, `dismissed`
+     is set only after the await (:124) and `holdsWork` is read once
+     per mount, false while a restored sound is still being extracted:
+     the person who leaves Home during a long Restore (T-134 (1),
+     USER_GUIDE:107) and returns gets an enabled Restore; a second
+     press re-applies the project, dismisses the first restore's
+     progress toast (shared ids, ProjectIO.ts:394-401, 443-453) and can
+     run a second extraction and a false "Skipped the autosave's
+     audio" toast. Fix direction: the restore is a run slot
+     (`createRunStore`, claimed before the first await, ended in
+     `finally`); a banner mounted while it runs shows Restore as
+     "Restoring…" and both buttons off (Clear keeps its own flag,
+     T-134 (7)); when the run ends under a mounted banner the banner
+     goes. e2e: a restore held open (record.spec.ts:2148's seam), Home
+     left and re-entered: "Restoring…" and both off; released: the
+     banner gone, ONE "Restored from autosave", no skip toast, one
+     extraction request in main.
+  7. **[LOW] DESIGN_GUIDE's placement-2 rule is false for the Clip
+     Kit it names.** DESIGN_GUIDE.md:223-224: "under the primary when
+     the primary is wider than its busy label (… the Clip Kit)", but
+     the kit's busy label is the wider (measured 154 px idle, 233 px
+     running). Fix: state the criterion that is true for all five
+     (GIF, Compile, PiP, Export, Clip Kit) and keep "a new Cancel takes
+     the first placement that applies" decidable.
+  8. **[LOW] A STYLE_GUIDE sentence describes the wrong component.**
+     STYLE_GUIDE.md:975-976 "Its two buttons have a busy flag each
+     (`restoring`, `clearing` …)" follows the "→ Canvas"
+     (MoodBoardPanel) sentence; the buttons are AutosaveRestore's
+     (T-134 (7)). Fix: move it back beside the AutosaveRestore text
+     (:968-972), updated for item 5.
+  Non-counted, rides with Track B: `loadImage` (lib/boundedImage.ts)
+  sets `referrerPolicy = 'no-referrer'` (PRODUCT_GUIDE:52's promise
+  held by construction, as the two `<img>` sites do; pin it);
+  networkAllowlist.test.ts:550-553's comment says what "→ Canvas"
+  does now (it embeds a copy; ledger (g)'s premise narrowed).
+  **Docs (ride with the owning track):** LESSONS_LEARNED (item 1: a
+  pattern on a tool's log prefix holds on every platform the product
+  ships; item 2: a bound sized to where a thing is placed, not where it
+  can be dragged), IC rows, TESTING paragraphs, USER_GUIDE lines.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 2, 4, 5 and 9 land with
+  their e2e cases; item 1 lands with its unit fixtures and Layer 5 on
+  all three binaries (7.0.2, 6.1.1, win32 under Wine) and the whole
+  file once on win32 with every failure classified; items 3, 6, 7 and
+  8 with their pins; new cases in NEW describe blocks appended at the
+  end of shared files; `npm run verify`, `npm run test:media` and the
+  FULL Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID
+  only.
+- **Status:** open (round 87, two tracks)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -5925,6 +6088,19 @@ IMG-PREC.
   session's) set to a generic Chromium UA at startup, pinned by the
   loopback probe; the Whisper model download's `net.request` carries
   the same default UA, so the one setting covers it too (sweep 23).
+  From sweep 24 (verified, not gate-holding): (bj) loudnorm's
+  `linear=true` is honoured only when the measured LRA is within the
+  target LRA (hard-coded 11, chain.ts:209), the shifted true peak is
+  within TP and no measurement is a sentinel (n6.1.1 af_loudnorm.c
+  init); otherwise pass 2 runs dynamic. Loudness still lands on
+  target and no guide promises linear normalization; candidate: an
+  LRA target of max(11, measured LRA) on pass 2, with a Layer 5 case
+  on a wide-range source; (bk) Audio Studio's VolumeMeter runs its
+  60 Hz requestAnimationFrame loop and a React render for as long as
+  a file is open, paused or with the window hidden
+  (`backgroundThrottling: false`; measured about 3% renderer CPU on
+  software GL, 0.7% with the loop stubbed); candidate: run the loop
+  only between the media element's play and pause/ended.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
