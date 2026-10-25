@@ -68,6 +68,10 @@ export const __testing__ = { parseEbur128, PARSE_EBUR128_MAX_ITERATIONS }
 //   - activeScan = the full-source findHighlights pass
 //   - activeHookProcess = the per-clip analyzeClipHook pass
 // cancelAllHighlightJobs() takes both.
+// T-138 (9): "only ever one" of the scan is the HANDLER's rule, not this slot's:
+// `video:findHighlights` (ipc/video.ts, `scanningFor`) refuses a second scan while
+// one runs. The slot is single, so a second scan that got here would overwrite it
+// and orphan the first from Cancel and from the quit sweep.
 let activeScan: ChildProcess | null = null
 // T-98: the scan probes the source before it spawns. Only findHighlights opens
 // a run here — the per-clip hook analysis is superseded by the next request,

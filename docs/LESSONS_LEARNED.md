@@ -14,6 +14,38 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-25 — T-138 Track A (round 87): a guard that read the Linux binary's pointer, a scan slot a reload could overwrite, and a loudness target the guide forgot
+
+The twenty-fourth pass, Track A (items 1, 6 and 9 of T-138, and one comment; Track B's items 2 to 5, 7 and 8 land beside it). Ledger: r87a/ledger.tsv (10 red rows and 26 mutation rows over 26 mutations, 26 of 26 restores byte-identical; every mutant was killed, and two early drafts of the Playwright red are kept as superseded rows). Every red was a test run against the old product code, a build of the unchanged tree `63d18ff` for the Playwright case, or the real binary for Layer 5 on the bundled 7.0.2, the distro's 6.1.1 and the SHIPPED Windows exe under Wine.
+
+### (1) [HIGH] - the lost-part guard never matched the shipped Windows binary
+
+- **Bug.** On the Windows ffmpeg, `FFMPEG_UNREADABLE_PART` and `unreadableSegmentIndex` (T-137 (12)) never matched the join's "Impossible to open" line: a lost LATER segment saved a shorter file as "Saved" (the T-131 (1) bug, back), and a lost FIRST one showed the raw "concat exit 254" with no clip named. Layer 5 on the shipped exe was red in five places (T-131 (1) twice, T-136 (15) twice, the T-137 (12) control), so `release.yml`'s windows-latest `test:media` would have failed at tag time. Every Linux gate was green.
+- **Root cause.** The prefix was spelled `[concat @ 0x[0-9a-f]+] `, the shape glibc's `%p` prints. The shipped ffmpeg (gyan.dev 6.1.1, mingw-w64) prints the pointer bare and zero-padded, `[concat @ 00007fffff45eb80]`; the Microsoft CRT prints it in uppercase; glibc prints a null one as `(nil)`; and on Windows the line arrives in CRLF, often straight after a stats line that ends in a bare `\r`. T-136 (15) and T-137 (12) were written and proven against the only binary on the machine in front of the author.
+- **Fix.** One shared prefix for both patterns, `\[concat @ [^\]\n]*\] ` (`noPicture.ts`'s shape); the rest unchanged (still line-anchored under the `m` flag, which also starts a line after a bare CR, and still the runner's `seg-<job>-<n>.mkv`).
+- **Test.** `concat.test.ts` and `concatRunner.test.ts` (each pointer's dress as printed, in CRLF and after a stats line; the echoed-path negatives for each; through the real runner at exit 0 and 254); Layer 5, a new block that takes the line each binary REALLY printed and re-prints its pointer in each dress (red on both Linux majors on the unchanged regex, not only on the Windows exe), and the T-131 (1), T-136 (15) and T-137 (12) blocks on the bundled 7.0.2, the distro's 6.1.1 and the shipped exe under Wine (red on the unchanged tree in the five places above, green after). The whole Layer 5 file on the exe is in the ledger with every failure classified.
+- **Lesson.** **A guard on a tool's log line holds on every platform the product ships. The pointer in ffmpeg's prefix is `0x...` on glibc and bare zero-padded hex on Windows, and the line's ending and what it follows are the platform's too. Match the shape the platforms share (a bracket that closes on its own line), not the spelling of the machine in front of you, and run the guard against the SHIPPED binary before the release run does.**
+
+### (6) [LOW] - the guides named two of the three loudness targets
+
+- **Bug.** USER_GUIDE's Levels bullet and README's Audio Studio line said "pick Talking and podcasts (-16) or YouTube, TikTok, Reels (-14)"; the picker has had a third, "Broadcast TV and radio (-23)", since 2ff0eb1, and no sentence anywhere said so.
+- **Root cause.** The list is code (`LUFS_PRESETS`) and the sentence that counts it is prose; nothing tied them.
+- **Fix.** Both name all three. A docClaims pin reads `LUFS_PRESETS` and fails until USER_GUIDE's bullet names every label and README's line every number.
+- **Test.** `docClaims.test.ts` "the guides name every loudness target the Levels picker offers" (red on the unchanged guides; a fourth target added to the picker fails it until the guides name it).
+- **Lesson.** **A sentence that counts a list the code owns is read by a test that reads the list.**
+
+### (9) [LOW] - a second highlight scan orphaned the first past the quit
+
+- **Bug.** After a renderer reload (Ctrl+R, the render-process-gone recovery) the panel's `useScanRun` is fresh while main's scan runs; a second "Scan VOD" started a second ffmpeg, Cancel stopped the newest, and the older survived `app.quit()` (executed: PPID 1).
+- **Root cause.** `video:findHighlights` had no claim of its own and `highlights.ts` keeps ONE `activeScan` slot that a second scan overwrites. T-135 (1) moved the busy flag into a module store, which survives a trip to Home and not a reload.
+- **Fix.** `scanningFor` in `registerVideoIpc`, claimed before the handler's first await and given back in a `finally` (the `convertingFor` pattern). The refusal is a finished sentence naming the running video, which `userFacingError` lets stand and the panel shows as an error toast: `Still scanning "long.mp4" for highlights. Wait for it to finish, then try again.`
+- **Test.** `videoScanSingleFlight.test.ts` over the real handler (a second call refused naming the first, the same video too, two in one breath run one, the slot back after a success, a failure and a cancel, a refused start does not give the running one's slot away, a bad path never takes it, the hook analysis is not gated); video-pipelines.spec.ts "Scan VOD - one scan at a time, in main (T-138 (9))" (a scan held by SIGSTOP, the renderer reloaded, the video dropped again, the second press refused in its sentence, one scan child in the record, and no scan alive after `app.close()` by PID; red on a build of the unchanged tree on all four counts).
+- **Lesson.** **A busy flag in the renderer dies with the renderer. A single-slot child in main is guarded where the slot is, in the handler, or a reload hands the person a button over work main is still doing.**
+
+### Non-counted - "loudnorm is linear there"
+
+- `audio/process.ts` said the measure pass's loudnorm "is linear there". It is linear only when loudnorm takes its linear mode (the measured LRA within the target LRA, the shifted true peak within TP; T-110 (bj)); the comment says that. No behavior change.
+
 ## 2026-10-25 — T-138 Track B (round 87): a stored copy sized to where a picture is placed, a question inside a live region, and a Restore a returning banner could press twice
 
 The twenty-fourth pass, Track B (items 2, 3, 4, 5, 7 and 8 of T-138, and the two non-counted riders; Track A's items 1, 6 and 9 land beside it). Ledger: r87b/ledger.md: 13 red rows (5 unit and wiring runs on the unchanged code or docs, 8 Playwright cases on a build of the unchanged tree) and 47 mutation rows over 46 mutants, 47 of 47 restores byte-identical; one mutant survived its first run (the restore run never given back: the Playwright case watched the banner go and never asked the slot again), the case was extended to close the sound and return to Home, and the rerun killed it.

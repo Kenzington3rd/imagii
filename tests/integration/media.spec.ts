@@ -10289,3 +10289,100 @@ describe('the loudness measure pass keeps a 16 KB tail and the measurement is in
     expect(await decodedMd5(outputPath), 'the runner\'s file is the linear two-pass render').toBe(await decodedMd5(linear))
   }, 180_000)
 })
+
+describe('the lost-part guard reads this binary\'s own line in every platform\'s dress (real ffmpeg, T-138 (1))', () => {
+  // The guard (FFMPEG_UNREADABLE_PART, unreadableSegmentIndex) was written against `[concat @ 0x...]`, the way a glibc build prints the demuxer's context pointer. The shipped
+  // WINDOWS exe (mingw-w64) prints it bare, `[concat @ 00007fffff45eb80]`, in CRLF lines, and a lost part went unseen there: the T-131 (1), T-136 (15) and T-137 (12) cases above
+  // are red on that binary and green on both Linux majors. This block makes the platform a variable on ANY binary: the line this binary really printed for a lost segment, with
+  // its pointer re-printed the way each C library prints it, as it came, in CRLF, and straight after a stats line that ended in a bare CR - and a join that lost nothing,
+  // dressed the same way, which must stay clean (the discriminator). Run on every binary the release can ship.
+  const SEG_JOB = 't138shape'
+  const POINTERS: ReadonlyArray<readonly [string, string]> = [
+    ['glibc', '0x40dea0c0'],
+    ['mingw-w64 (the shipped Windows exe)', '00007fffff45eb80'],
+    ['the Microsoft CRT', '000001A1D4A2B940'],
+    ['glibc, a null pointer', '(nil)']
+  ]
+  const STATS = 'size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x    '
+  let dir = ''
+  let lostLater = ''
+  let lostFirst = ''
+  let clean = ''
+
+  const join = (listed: string[], name: string, level: string[] = []): Promise<{ code: number | null; stderr: string }> =>
+    writeFile(path.join(dir, `${name}.txt`), listed.map((p) => `file '${p}'`).join('\n')).then(
+      () =>
+        new Promise((resolve, reject) => {
+          const child = spawn(ffmpegPath, [...level, '-y', '-f', 'concat', '-safe', '0', '-i', path.join(dir, `${name}.txt`), '-c:v', 'copy', '-c:a', 'aac', path.join(dir, `${name}.mp4`)])
+          let stderr = ''
+          child.stderr.on('data', (b) => (stderr += String(b)))
+          child.on('error', reject)
+          child.on('close', (code) => resolve({ code, stderr }))
+        })
+    )
+
+  /** The real stderr with the pointer of every `[<context> @ <pointer>]` prefix re-printed as `pointer` (the C library's %p is the same for all of them). */
+  const withPointer = (stderr: string, pointer: string): string => stderr.replace(/ @ [^\]\n]*\]/g, ` @ ${pointer}]`)
+  /** The same text in each ending ffmpeg's log can arrive with, and the demuxer's line (the lost one if there is one) alone after a stats line. */
+  const dressings = (stderr: string): Array<readonly [string, string]> => {
+    const line = /^\[concat @ [^\]\n]*\] Impossible to open[^\r\n]*/m.exec(stderr)?.[0] ?? /^\[concat @ [^\]\n]*\] [^\r\n]*/m.exec(stderr)?.[0] ?? ''
+    return [
+      ['as printed', stderr],
+      ['CRLF throughout', stderr.replace(/\r?\n/g, '\r\n')],
+      ['straight after a stats line that ended in a CR', `${STATS}\r${line}\r\n`]
+    ]
+  }
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(workDir, 't138-shape-'))
+    const source = path.join(dir, 'source.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=15:duration=6', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', source])
+    const part = (i: number): string => path.join(dir, `seg-${SEG_JOB}-${i}.mkv`)
+    // Segment 0 is never written (it is the one that cannot be opened); 1 and 2 are the runner's segment shape.
+    for (const [i, from, to] of [[1, '1', '3'], [2, '3', '5']] as const) {
+      await ff(['-y', '-ss', from, '-to', to, '-i', source, '-vf', 'fps=15', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', part(i)])
+    }
+    const lostFirstRun = await join([part(0), part(1)], 'first-lost')
+    const lostLaterRun = await join([part(1), part(0)], 'later-lost')
+    // Debug, so the log carries the demuxer's OWN other lines, with the same bracketed context ("[concat @ ...] Opening '<list>' for reading", "[concat @ ...] All info
+    // found") and a line that names each segment file ("[AVFormatContext @ ...] Opening '<segment>' for reading"): all the text a lost-part guard could mistake.
+    const cleanRun = await join([part(1), part(2)], 'clean', ['-loglevel', 'debug'])
+    expect(lostFirstRun.code, 'the premise: a lost FIRST input fails the join').not.toBe(0)
+    expect(lostLaterRun.code, 'the premise: a lost LATER input ends the file there and exits 0').toBe(0)
+    expect(cleanRun.code).toBe(0)
+    lostFirst = lostFirstRun.stderr
+    lostLater = lostLaterRun.stderr
+    clean = cleanRun.stderr
+  }, 180_000)
+
+  it('the premise: this binary\'s lost-segment line has a bracketed context before the phrase, and the guard reads it as it is', () => {
+    for (const stderr of [lostFirst, lostLater]) {
+      const real = /^\[concat @ ([^\]\n]*)\] Impossible to open '[^\r\n]*'/m.exec(stderr)
+      expect(real, 'the line is there, at the start of a line, with its context').not.toBeNull()
+      expect(real?.[1], 'and the context has a pointer in it, in whatever dress this C library gives it').toMatch(/\S/)
+      expect(stderr).toMatch(FFMPEG_UNREADABLE_PART)
+      expect(unreadableSegmentIndex(stderr, SEG_JOB)).toBe(0)
+    }
+  })
+
+  it.each(POINTERS)('%s pointer: the lost segment is seen as it came, in CRLF, and after a stats line - for a lost first input and a lost later one', (_name, pointer) => {
+    for (const real of [lostFirst, lostLater]) {
+      for (const [how, text] of dressings(withPointer(real, pointer))) {
+        expect(text, `${pointer}, ${how}`).toMatch(FFMPEG_UNREADABLE_PART)
+        expect(unreadableSegmentIndex(text, SEG_JOB), `${pointer}, ${how}: and it says which segment`).toBe(0)
+        expect(unreadableSegmentIndex(text, 'someone-else'), `${pointer}, ${how}: only for its own job`).toBeNull()
+      }
+    }
+  })
+
+  it('discriminator: a join that lost nothing is clean in every one of those dresses (its log has the demuxer\'s other lines about the very same segments, and says nothing is wrong)', () => {
+    expect(clean, 'the premise: the demuxer has other lines of its own, with the same bracketed context').toMatch(/^\[concat @ [^\]\n]*\] \S/m)
+    expect(clean, 'and the log names the runner\'s segment files').toMatch(/Opening '[^\r\n]*seg-t138shape-1\.mkv' for reading/)
+    for (const [name, pointer] of POINTERS) {
+      for (const [how, text] of dressings(withPointer(clean, pointer))) {
+        expect(text, `${name}, ${how}`).not.toMatch(FFMPEG_UNREADABLE_PART)
+        expect(unreadableSegmentIndex(text, SEG_JOB), `${name}, ${how}`).toBeNull()
+      }
+    }
+  })
+})

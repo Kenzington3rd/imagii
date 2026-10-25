@@ -513,3 +513,65 @@ describe('a path that contains a phrase ffmpeg uses is not ffmpeg saying it (T-1
     await expect(runConcat(spec(scratch))).resolves.toBeDefined()
   })
 })
+
+// T-138 (1): the two guards above (T-136 (15), T-137 (12)) hold the join's "Impossible to open" line as the Linux binaries print it, `[concat @ 0x...]`. The shipped
+// Windows ffmpeg prints the pointer bare (`[concat @ 00007fffff45eb80]`, mingw-w64's %p), in CRLF lines, after a stats line ending in `\r`: the lost part was
+// not seen and a join that lost a segment was "Saved" (exit 0) or reported as the raw "concat exit 254". This runs the real runner over the line as the
+// Windows exe prints it, at both exit codes the demuxer uses.
+describe('a join that cannot open a segment is a lost clip on the Windows binary\'s line too (T-138 (1))', () => {
+  const spec = (names: string[]): Parameters<typeof runConcat>[0] => ({
+    jobId: 'cr-win',
+    sourcePath: '/tmp/in.mp4',
+    outDir: scratch,
+    segments: names.map((name, i) => ({ startSec: i * 10, endSec: i * 10 + 2, name })),
+    fadeMs: 0,
+    width: 1280,
+    height: 720
+  })
+  const WINDOWS_TEMP = 'C:\\Users\\x\\AppData\\Local\\Temp\\imagii-concat'
+  const STATS = 'size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x    '
+  // [what the Windows exe printed, as one stderr chunk]
+  const WINDOWS_SHAPES: ReadonlyArray<readonly [string, (index: number) => string]> = [
+    ['mingw-w64 pointer, LF', (i) => `[concat @ 00007fffff45eb80] Impossible to open '${WINDOWS_TEMP}\\seg-cr-win-${i}.mkv'\n`],
+    ['Microsoft CRT pointer (uppercase), CRLF', (i) => `[concat @ 000001A1D4A2B940] Impossible to open '${WINDOWS_TEMP}\\seg-cr-win-${i}.mkv'\r\n`],
+    ['mingw-w64 pointer straight after a stats line ending in CR', (i) => `${STATS}\r[concat @ 00007fffff45eb80] Impossible to open '${WINDOWS_TEMP}\\seg-cr-win-${i}.mkv'\r\n`]
+  ]
+  const named = (name: string): string =>
+    `The compilation could not be put together because the clip "${name}" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.`
+
+  it.each(WINDOWS_SHAPES)('%s: a LATER segment lost at exit 0 is the clip, not "Saved", and the short file is removed', async (_name, printed) => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? printed(1) : null)
+    const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe(named('Boss fight'))
+    const join = spawned.find((a) => a.includes('concat')) as string[]
+    expect(existsSync(join[join.length - 1] as string), 'the join\'s output is gone').toBe(false)
+  })
+
+  it.each(WINDOWS_SHAPES)('%s: the FIRST segment lost at exit 254 is the clip, not "concat exit 254"', async (_name, printed) => {
+    joinWrites = true
+    exitsWith = (args) => (args.includes('concat') ? 254 : 0)
+    says = (args) => (args.includes('concat') ? printed(0) : null)
+    const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe(named('Intro'))
+    expect(err?.message).not.toMatch(/concat exit/)
+    expect(userFacingError(err, 'Compilation failed.').message, 'reaches the person as written').toBe(named('Intro'))
+  })
+
+  it('the line in a Windows log that echoes the output path first (CRLF throughout) is still found, and a good Windows log is still a success', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat')
+      ? `Input #0, concat, from '${WINDOWS_TEMP}\\list-cr-win.txt':\r\nOutput #0, mp4, to 'C:\\Users\\x\\Videos\\Impossible to open\\a_compilation.mp4':\r\nframe=   10 fps=0.0 Lsize=      12kB time=00:00:01.00 speed=21.1x    \r\n`
+      : null)
+    await expect(runConcat(spec(['Intro', 'Boss fight']))).resolves.toBeDefined()
+    says = (args) => (args.includes('concat') ? `${STATS}\r[concat @ 00007fffff45eb80] Impossible to open '${WINDOWS_TEMP}\\seg-cr-win-1.mkv'\r\n` : null)
+    const lost = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(lost?.message).toBe(named('Boss fight'))
+  })
+
+  it('a Windows "Impossible to open" line about a file that is not one of the runner\'s segments is not a lost part', async () => {
+    joinWrites = true
+    says = (args) => (args.includes('concat') ? "[concat @ 00007fffff45eb80] Impossible to open 'C:\\Users\\x\\Videos\\else.mkv'\r\n" : null)
+    await expect(runConcat(spec(['Intro', 'Boss fight']))).resolves.toBeDefined()
+  })
+})

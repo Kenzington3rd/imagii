@@ -190,6 +190,18 @@ function convertBusyMessage(runningFor: string): string {
   return `Still converting ${name ? `"${name}"` : 'another video'}. Wait for it to finish, then try again.`
 }
 
+/**
+ * What a streamer is told when they press "Scan VOD" while a scan is still going (T-138 (9)). `highlights.ts` keeps ONE scan slot, and the panel's busy flag is the
+ * renderer's: a renderer reload (the render-process-gone auto-reload, Ctrl+R) starts a fresh store over a scan main is still running, and a second press ran a
+ * SECOND ffmpeg whose slot overwrote the first's - Cancel then reached only the newest, and the older survived the quit. The guard goes where every caller goes
+ * through, as `video:convertForImport`'s does. A finished sentence naming the video that is being scanned, so it reaches the person as written; the name is cut by
+ * code point and the sentence stays on one line.
+ */
+function scanBusyMessage(runningFor: string): string {
+  const name = clipNameForSentence({ name: path.basename(runningFor) })
+  return `Still scanning ${name ? `"${name}"` : 'another video'} for highlights. Wait for it to finish, then try again.`
+}
+
 export function registerVideoIpc(): void {
   // Per registration, not per module: the app registers once, and a test that
   // registers again starts with the gate open.
@@ -197,6 +209,9 @@ export function registerVideoIpc(): void {
   // T-136 (2): the file `video:convertForImport` is transcoding right now, or null. One conversion at a time, whoever asks. Claimed before the
   // handler's first await, given back in a `finally`.
   let convertingFor: string | null = null
+  // T-138 (9): the video `video:findHighlights` is scanning right now, or null. One scan at a time, whoever asks - the slot in `highlights.ts` is single, and the
+  // renderer's own flag does not survive a reload. Claimed before the handler's first await, given back in a `finally`.
+  let scanningFor: string | null = null
 
   ipcMain.handle('video:probe', async (_e, filePath: string) => {
     assertNonEmptyString(filePath, 'video:probe filePath')
@@ -378,11 +393,16 @@ export function registerVideoIpc(): void {
       assertNonEmptyString(sourcePath, 'video:findHighlights sourcePath')
       // INIT-C (round 15)
       assertSafeAbsolutePath(sourcePath, 'video:findHighlights sourcePath')
-      const jobId = `highlights-${Date.now()}`
-      const candidates = await findHighlights(jobId, sourcePath, (p) =>
-        sendIfAlive(e.sender, 'video:highlightProgress', p)
-      )
-      return candidates
+      if (scanningFor !== null) throw new Error(scanBusyMessage(scanningFor))
+      scanningFor = sourcePath
+      try {
+        const jobId = `highlights-${Date.now()}`
+        return await findHighlights(jobId, sourcePath, (p) =>
+          sendIfAlive(e.sender, 'video:highlightProgress', p)
+        )
+      } finally {
+        scanningFor = null
+      }
     }
   )
 

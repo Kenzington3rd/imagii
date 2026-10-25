@@ -11088,3 +11088,110 @@ test.describe('T-138 (4): the Clip Kit\'s Cancel question is outside every live 
   })
 })
 
+
+// T-138 (9): `video:findHighlights` had no claim in main, and `highlights.ts` keeps ONE scan slot. After a renderer reload (the render-process-gone auto-reload,
+// Ctrl+R) the panel's `useScanRun` is fresh while main's scan runs: a second "Scan VOD" started a second ffmpeg, Cancel stopped the newest, and the older survived
+// `app.quit()` (executed: PPID 1). Main refuses a second scan in a sentence naming the one that runs.
+test.describe('Scan VOD - one scan at a time, in main (T-138 (9))', () => {
+  /**
+   * Hold every highlight scan the app starts from now on, by PID. A scan is the full-source `ebur128` pass (the per-clip hook analysis runs the same filter
+   * with `-ss`, which the scan does not have). Each is stopped (SIGSTOP) the moment it exists - from inside main's own `spawn`, so there is no window - which makes
+   * "a scan is running" a fact of the process table and not a race with a scan of a 20-minute file that takes about two seconds. SIGKILL (the cancel and the quit
+   * sweep) still reaches a stopped process. Nothing in `src/` changes.
+   */
+  async function holdScans(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+      const g = globalThis as unknown as { __heldScans?: number[] }
+      g.__heldScans = []
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => { pid?: number; kill: (signal: string) => boolean } }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const child = real(cmd, args, opts)
+        if (Array.isArray(args) && args.some((a) => typeof a === 'string' && a.startsWith('ebur128=')) && !args.includes('-ss')) {
+          g.__heldScans?.push(child.pid ?? 0)
+          child.kill('SIGSTOP')
+        }
+        return child
+      }
+      mod.syncBuiltinESMExports()
+    })
+  }
+  const heldScans = (app: ElectronApplication): Promise<number[]> => app.evaluate(() => (globalThis as unknown as { __heldScans?: number[] }).__heldScans ?? [])
+  /** Running, stopped or sleeping: anything but gone. A killed child nobody has reaped yet is a zombie (state Z) and is gone. */
+  const scanAlive = (pid: number): boolean => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)
+      return state !== 'Z' && state !== 'X'
+    } catch {
+      return false
+    }
+  }
+
+  test('a second "Scan VOD" after a renderer reload is refused in a sentence, starts no second ffmpeg, and no scan outlives the quit', async () => {
+    test.skip(process.platform !== 'linux', 'the scan is held with SIGSTOP and its survival read from /proc')
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t138-scan', longSrc)
+    // Recorded before the close: after it, the only evidence left is the process table.
+    let pids: number[] = []
+    try {
+      await holdScans(app)
+      const scan = (): Locator => highlightCard(window)
+      await scan().getByRole('button', { name: 'Scan VOD' }).click()
+      await expect.poll(() => heldScans(app), { timeout: 30_000, intervals: [100] }).toHaveLength(1)
+      pids = await heldScans(app)
+      expect(scanAlive(pids[0] as number), 'the scan main started is running').toBe(true)
+      await expect(scan().getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+
+      // The renderer is reloaded, as Ctrl+R does (and the render-process-gone recovery, which lands on Home instead): a fresh page and fresh stores over the
+      // scan main still runs. `reload()` keeps the URL's hash, so the page is back in Video Studio, empty; the video is opened again.
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.reload()
+      })
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(0)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, longSrc, path.basename(longSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      const press = scan().getByRole('button', { name: 'Scan VOD' })
+      await expect(press, 'the reloaded panel knows nothing of the scan main runs: it offers a scan').toBeEnabled()
+      await press.click()
+
+      const sentence = `Still scanning "${path.basename(longSrc)}" for highlights. Wait for it to finish, then try again.`
+      await expect
+        .configure({ soft: true })
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200], message: 'the refusal is shown as written' })
+        .toEqual(expect.arrayContaining([sentence]))
+      const entries = await readToastEntries(window)
+      expect.soft(entries.find((e) => e.text === sentence)?.hasIcon, 'and it is an error toast, not a "Found" or "No standout moments" one').toBe(true)
+      expect.soft((await readToastLog(window)).join(' | '), 'no scan result was announced').not.toMatch(/Found \d|No standout moments|Scan canceled/)
+      // The refusal ends the panel's run (it started one): the button is back, and no second ffmpeg was ever spawned.
+      pids = await heldScans(app)
+      expect.soft(pids, 'main started no second scan').toHaveLength(1)
+      await expect.soft(press, 'the panel is idle again').toBeEnabled()
+      await expect.soft(scan().getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+
+      // A scan that outlives the quit also holds the debugging pipe Playwright closes the app through (the child inherited it), so `close()` would wait on it
+      // for the whole test: it is raced against a bound, and the survivors are what the test reports.
+      const quit = await Promise.race([app.close().then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20_000))])
+      await expect
+        .poll(() => pids.filter(scanAlive), { timeout: 15_000, intervals: [200], message: 'every scan ffmpeg main started is gone once the app has quit' })
+        .toEqual([])
+      expect.soft(quit, 'and the app quit by itself').toBe(true)
+    } finally {
+      // Whatever the assertions above found, nothing this test started is left running: by explicit PID, the ones recorded above.
+      for (const pid of pids) {
+        if (scanAlive(pid)) {
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            /* gone in the meantime */
+          }
+        }
+      }
+      await app.close().catch(() => undefined)
+    }
+  })
+})

@@ -222,8 +222,12 @@ async function exportAudio(
   // drift. Without a secondary track the primary IS the final audio and the
   // cut stays first in its chain, ahead of the loudnorm that should measure
   // only what is kept. (The measure pass above stays cut-first on purpose:
-  // loudnorm is linear there, so a gain measured on the kept audio is the
-  // right constant to apply before or after the cut.)
+  // it measures the audio that is kept. When loudnorm takes its linear mode
+  // - only if the measured LRA is within the target LRA and the shifted true
+  // peak within TP, T-110 (bj) - pass 2 is one constant gain, and a gain
+  // measured on the kept audio is the right constant to apply before or
+  // after the cut; otherwise pass 2 runs dynamic, and the measurement is
+  // still of what is kept.)
   const cutAfterMix = Boolean(secondary)
   const finalChain = buildChain(
     cutAfterMix ? { ...spec.chain, cutRegions: [] } : spec.chain,

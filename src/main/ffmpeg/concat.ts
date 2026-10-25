@@ -45,14 +45,26 @@ export const SEGMENT_AUDIO_CODEC = 'pcm_s16le'
 type SegmentClip = Pick<CompileSegment, 'startSec' | 'endSec'> & Partial<ClipRecipe>
 
 /**
+ * The context ffmpeg puts in front of a demuxer's log line: `[concat @ <pointer>] `. The pointer is the C library's `%p`, and the libraries the product ships on
+ * print it differently: glibc `0x40dea0c0`, mingw-w64 (the shipped Windows ffmpeg, gyan.dev) bare zero-padded hex `00007fffff45eb80`, the Microsoft CRT the same in
+ * uppercase, glibc's `(nil)` for a null one. T-138 (1): the guards below spelled `0x[0-9a-f]+` and never matched the Windows exe. What is shared is the shape -
+ * a bracket that opens with `concat @ ` and closes on its own line - so the pointer is read as "anything but the closing bracket", as `noPicture.ts` reads the
+ * `[out#0/mp4 @ ...]` context.
+ */
+const CONCAT_CONTEXT = '\\[concat @ [^\\]\\n]*\\] '
+
+/**
  * What the concat demuxer says (exit 0, both majors, measured) when it cannot open a listed segment, and stops there: its own line, at the start of a
  * line, naming one of the runner's segment files (`seg-<job>-<index>.mkv`).
  *
  * T-137 (12): it was /Impossible to open/ tested against ALL of stderr, and ffmpeg echoes the person's paths there at the default log level
  * ("Output #0, mp4, to '<dir>/<name>.mp4':"), so a good join into a folder named with the phrase failed as a lost clip (any exit, since T-136 (15) made
  * the line the evidence). A path can spell the words but not start a line with them, and not be a segment file of the runner's scratch folder.
+ *
+ * T-138 (1): and the line is read the way EVERY platform prints it. `^` with the `m` flag also starts a line after a bare `\r`, which is where the Windows exe's
+ * line arrives (straight after a stats line that ends in `\r`), and the pattern ends at the segment's extension, so a CRLF after it is not in the way.
  */
-export const FFMPEG_UNREADABLE_PART = new RegExp(`^(?:\\[concat @ 0x[0-9a-f]+\\] )?Impossible to open '[^\\n]*seg-[^\\n]*-\\d+\\.${SEGMENT_EXTENSION}`, 'm')
+export const FFMPEG_UNREADABLE_PART = new RegExp(`^(?:${CONCAT_CONTEXT})?Impossible to open '[^\\n]*seg-[^\\n]*-\\d+\\.${SEGMENT_EXTENSION}`, 'm')
 
 // FFMPEG_EMPTY_OUTPUT moved to ./noPicture with the other runners' guards (T-132 (4)); the name stays importable from here.
 export { FFMPEG_EMPTY_OUTPUT }
@@ -83,7 +95,7 @@ export function lostPartMessage(seg: { name?: unknown } | undefined): string {
  */
 export function unreadableSegmentIndex(stderr: string, jobId: string): number | null {
   const escaped = jobId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const found = new RegExp(`^(?:\\[concat @ 0x[0-9a-f]+\\] )?Impossible to open '[^\\n]*?seg-${escaped}-(\\d+)\\.${SEGMENT_EXTENSION}`, 'm').exec(stderr)
+  const found = new RegExp(`^(?:${CONCAT_CONTEXT})?Impossible to open '[^\\n]*?seg-${escaped}-(\\d+)\\.${SEGMENT_EXTENSION}`, 'm').exec(stderr)
   return found?.[1] === undefined ? null : Number(found[1])
 }
 

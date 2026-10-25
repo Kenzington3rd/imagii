@@ -472,7 +472,7 @@ never called loaded.
     50 Hz in most other regions. Pick yours in the **Power-line frequency**
     list that appears when the box is checked.
   - **Levels** — the compressor preset, **Even volume** with a loudness target
-    (pick **Talking and podcasts (−16)** or **YouTube, TikTok, Reels (−14)**;
+    (pick **Talking and podcasts (−16)**, **YouTube, TikTok, Reels (−14)** or **Broadcast TV and radio (−23)**;
     the line under the picker says −14 also suits Spotify), and manual gain. The target box takes −70 to −5; a number outside that
     becomes the nearest edge when you leave the box. imagii measures the whole file
     first, so exports with a loudness target take a little longer. A mono file is

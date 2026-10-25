@@ -124,7 +124,7 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 2. **Cut regions (optional).** Drag on the waveform.
 3. **Volume meter** sits below the waveform — turns red on clipping.
 4. **Cleanup panel:** quieter background (light/medium/aggressive), low-rumble removal, hum removal (60 Hz or 50 Hz mains), softer harsh 's' sounds.
-5. **Levels panel:** voice/music/mixed compressor preset, an even-volume loudness target (−16 for talking, −14 for YouTube/Spotify/TikTok/Reels), ±12 dB manual gain. Whatever you switch on or cut out, peaks above −1 dBFS are limited when you export, so a boost cannot clip; an export with nothing switched on and nothing cut keeps the file's levels as they are.
+5. **Levels panel:** voice/music/mixed compressor preset, an even-volume loudness target (−16 for talking, −14 for YouTube/Spotify/TikTok/Reels, −23 for broadcast TV and radio), ±12 dB manual gain. Whatever you switch on or cut out, peaks above −1 dBFS are limited when you export, so a boost cannot clip; an export with nothing switched on and nothing cut keeps the file's levels as they are.
 6. **Cleanup presets:** name and save your tuned cleanup settings ("My USB mic") for one-click re-apply next session. Cuts and the second track stay with the recording.
 7. **Add a second track** for background music with optional ducking, a co-host's mic, or game audio.
 8. **Click Export.** MP3 / WAV / FLAC / AAC (saved as `.m4a`). If you imported audio from a video, you can re-attach the cleaned audio to a new MP4 — any cut regions are removed from the picture too, so that video is re-encoded and takes longer than a plain export.

@@ -394,3 +394,84 @@ describe('FFMPEG_UNREADABLE_PART is the concat demuxer\'s own line about a segme
     expect(unreadableSegmentIndex("[concat @ 0x1] Impossible to open '/x/Impossible to open 'draft'/seg-job-3.mkv'", 'job'), 'the line itself, whatever the folder is called').toBe(3)
   })
 })
+
+// T-138 (1): the guard above was written against the line as the Linux binaries print it, `[concat @ 0x40dea0c0]`. The SHIPPED Windows ffmpeg (gyan.dev 6.1.1 essentials,
+// built with mingw-w64) prints the context pointer with no `0x` at all - zero-padded hex, `[concat @ 00007fffff45eb80]` - in CRLF lines, and often straight after a
+// stats line that ends in a bare `\r`. Neither pattern matched it: on Windows a lost LATER segment saved a shorter file as "Saved" (the T-131 (1) bug, back) and a
+// lost FIRST one showed the raw "concat exit 254". The fixtures are the line as each platform prints it (the Windows one is a capture of the real exe, Layer 5 holds it
+// against the binaries), so a pattern that learns one platform's pointer fails here, not in a release run.
+describe('the lost-part line is read the way every platform prints it (T-138 (1))', () => {
+  const POSIX_PATH = '/tmp/imagii-concat/seg-job.1-7.mkv'
+  const WINDOWS_PATH = 'C:\\Users\\x\\AppData\\Local\\Temp\\imagii-concat\\seg-job.1-7.mkv'
+  const line = (pointer: string, file = POSIX_PATH): string => `[concat @ ${pointer}] Impossible to open '${file}'`
+  const STATS = 'size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x    '
+  const LEAD = "Input #0, concat, from 'C:\\Users\\x\\AppData\\Local\\Temp\\imagii-concat\\list-job.1.txt':"
+
+  // The pointer is whatever the C library's %p prints: glibc `0x` + lowercase hex, mingw-w64 bare zero-padded lowercase hex (the shipped exe), the Microsoft CRT
+  // bare uppercase hex, glibc's `(nil)` for a null pointer. The pattern must not care.
+  const POINTERS: ReadonlyArray<readonly [string, string]> = [
+    ['glibc: 0x and lowercase hex', '0x40dea0c0'],
+    ['mingw-w64: bare zero-padded lowercase hex (the shipped exe)', '00007fffff45eb80'],
+    ['Microsoft CRT: bare zero-padded uppercase hex', '000001A1D4A2B940'],
+    ['glibc null pointer', '(nil)']
+  ]
+
+  it.each(POINTERS)('%s: the line is the lost part, and says segment 7 of this job', (_name, pointer) => {
+    for (const file of [POSIX_PATH, WINDOWS_PATH]) {
+      expect(FFMPEG_UNREADABLE_PART.test(line(pointer, file)), `${pointer} ${file}`).toBe(true)
+      expect(unreadableSegmentIndex(line(pointer, file), 'job.1'), `${pointer} ${file}`).toBe(7)
+    }
+  })
+
+  it.each(POINTERS)('%s: CRLF line endings, and the line right after a stats line that ends in a bare CR', (_name, pointer) => {
+    const crlf = `${LEAD}\r\n${line(pointer, WINDOWS_PATH)}\r\nframe=  1 fps=0.0\r\n`
+    expect(FFMPEG_UNREADABLE_PART.test(crlf), 'CRLF').toBe(true)
+    expect(unreadableSegmentIndex(crlf, 'job.1'), 'CRLF').toBe(7)
+    // ffmpeg rewrites its stats line in place with `\r`, so the next log line starts after a CR, not an LF.
+    const afterStats = `${STATS}\r${line(pointer, WINDOWS_PATH)}\r\n`
+    expect(FFMPEG_UNREADABLE_PART.test(afterStats), 'after a stats line').toBe(true)
+    expect(unreadableSegmentIndex(afterStats, 'job.1'), 'after a stats line').toBe(7)
+  })
+
+  it('the mingw-w64 transcript the shipped exe wrote, whole: banner, the line in the middle of the log, a stats tail', () => {
+    const transcript = [
+      'ffmpeg version 6.1.1-essentials_build-www.gyan.dev Copyright (c) 2000-2023 the FFmpeg developers',
+      '  built with gcc 12.2.0 (Rev10, Built by MSYS2 project)',
+      "[matroska,webm @ 00007fffff468b80] Auto-inserting h264_mp4toannexb bitstream filter",
+      LEAD,
+      '  Duration: N/A, start: 0.000000, bitrate: N/A',
+      `${STATS}\r${line('00007fffff45eb80', WINDOWS_PATH)}`,
+      'Output #0, mp4, to \'C:\\Users\\x\\Videos\\stream_compilation.mp4\':',
+      'frame=   10 fps=0.0 q=-1.0 Lsize=      12kB time=00:00:01.00 bitrate=  98.3kbits/s speed=21.1x    '
+    ].join('\r\n')
+    expect(FFMPEG_UNREADABLE_PART.test(transcript)).toBe(true)
+    expect(unreadableSegmentIndex(transcript, 'job.1')).toBe(7)
+    expect(unreadableSegmentIndex(transcript, 'another-job'), 'only for its own job').toBeNull()
+  })
+
+  it('control: the glibc form with CRLF alone was never the break (these two passed before T-138)', () => {
+    expect(FFMPEG_UNREADABLE_PART.test(`${line('0x40dea0c0')}\r\n`)).toBe(true)
+    expect(unreadableSegmentIndex(`${LEAD}\r\n${line('0x40dea0c0')}\r\n`, 'job.1')).toBe(7)
+  })
+
+  it('a path that spells the whole line, on any platform, is still not the line (the prefix is the line\'s own, at the start of it)', () => {
+    for (const pointer of POINTERS.map((p) => p[1])) {
+      for (const echo of [
+        `Output #0, mp4, to 'C:\\x\\${line(pointer)}/o.mp4':\r\n`,
+        `Output #0, mp4, to '/home/me/${line(pointer)}/o.mp4':\n`,
+        `Input #0, concat, from 'C:\\x\\${line(pointer, WINDOWS_PATH)}\\list.txt':\r\n`,
+        `    title           : ${line(pointer)}\r\n`,
+        `${STATS}${line(pointer)}\r\n`
+      ]) {
+        expect(FFMPEG_UNREADABLE_PART.test(echo), echo).toBe(false)
+        expect(unreadableSegmentIndex(echo, 'job.1'), echo).toBeNull()
+      }
+    }
+  })
+
+  it('and the prefix is the demuxer\'s: another context\'s line, or a bracket that never closes on its line, is not it', () => {
+    expect(FFMPEG_UNREADABLE_PART.test("[mov,mp4,m4a,3gp,3g2,mj2 @ 00007fffff45eb80] Impossible to open '/tmp/imagii-concat/seg-job-1.mkv'")).toBe(false)
+    expect(FFMPEG_UNREADABLE_PART.test("[concat @ 00007fffff45eb80\r\n] Impossible to open '/tmp/imagii-concat/seg-job-1.mkv'")).toBe(false)
+    expect(unreadableSegmentIndex("[concat @ 00007fffff45eb80\n] Impossible to open '/tmp/imagii-concat/seg-job-1.mkv'", 'job')).toBeNull()
+  })
+})

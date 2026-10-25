@@ -299,8 +299,10 @@ Repeated UI is a component, not copy-paste:
   what T-135 premised - so a run shown only on its own clip's button lost its progress and its Cancel behind a disabled idle label the moment another
   clip was selected, and for good when its clip was removed or the video closed. Now the button shows the running kit whichever clip is selected, names the
   clip from the run, and starts nothing; `ClipKitRunning` draws the same Cancel beside the importer once the video is closed. A single slot in main (the
-  audio extraction, and since T-136 (2) the conversion `video:convertForImport`) refuses a second start itself, in a sentence that names the file that is
-  running. `interactionWiring.test.ts` pins each panel to its store; the stores have
+  audio extraction, since T-136 (2) the conversion `video:convertForImport`, and since T-138 (9) the highlight scan `video:findHighlights`) refuses a second
+  start itself, in a sentence that names the file that is running: the store outlives a trip to Home but not a renderer reload (Ctrl+R, the
+  render-process-gone recovery), which starts a FRESH store over a job main is still running, and a second ffmpeg started there overwrote the scan's one
+  slot (Cancel then reached only the newest and the older survived the quit). `interactionWiring.test.ts` pins each panel to its store; the stores have
   unit tests; one Playwright case per panel leaves the studio and comes back with the job still running. T-136 (2), (4): the same for the three that
   T-135 did not reach - the Importer's load (`useImportRun`: a trip to Home re-armed it over a conversion main was still running, and its second landing
   replaced the video being edited, so a landing asks `replacedSince` first and says what it skipped), the Player's "Make a preview copy"
@@ -1014,9 +1016,17 @@ If you write the same markup a third time, extract it.
 - **A guard on ffmpeg's output reads ffmpeg's LINE, never a phrase in stderr (T-137 (12)).** ffmpeg echoes the person's paths at the default log level
   ("Output #0, mp4, to '<dir>/<name>.mp4':", "Input #0, ..., from '<source>':"), so `FFMPEG_UNREADABLE_PART` (`/Impossible to open/`) and `FFMPEG_EMPTY_OUTPUT`
   (`/Output file is empty/`), tested against all of stderr, failed a GOOD compilation, export, reframe or burn-in whose folder or source was named with the phrase.
-  Each is anchored to the start of a line, with ffmpeg's own bracketed context (`[concat @ 0x...]`, `[out#0/mp4 @ 0x...]`), and the join's also needs a segment file of the
+  Each is anchored to the start of a line, with ffmpeg's own bracketed context (`[concat @ ...]`, `[out#0/mp4 @ ...]`), and the join's also needs a segment file of the
   runner's (`seg-<job>-<index>.mkv`, the name `unreadableSegmentIndex` parses). A path can spell the words but not start a line with them. Layer 5 runs a real join
   into a folder named "Impossible to open" and a real export into one named "Output file is empty" on both majors, with a control that the real lines still refuse there.
+  **And the line is read the way EVERY platform the product ships prints it (T-138 (1)).** The first version spelled the context's pointer `0x[0-9a-f]+`, which is
+  what glibc's `%p` prints; the shipped Windows ffmpeg (mingw-w64) prints it bare and zero-padded, `[concat @ 00007fffff45eb80]` (the Microsoft CRT: the same in uppercase;
+  glibc's null pointer: `(nil)`), in CRLF lines, and often straight after a stats line that ends in a bare `\r`. Neither guard matched it, so on Windows a lost later
+  segment saved a shorter file as "Saved" and a lost first one showed the raw "concat exit 254", while every Linux gate stayed green. The pointer is "anything up to the
+  closing bracket" (`CONCAT_CONTEXT`, one prefix for both patterns, `noPicture.ts`'s shape); `^` with the `m` flag already starts a line after a bare `\r`. A pattern on a
+  tool's log is held against the binary the product SHIPS, not only the one the developer's machine has: `release.yml` runs Layer 5 on windows-latest at tag time, round 87
+  ran the lost-part blocks on the shipped exe under Wine first (TESTING.md, Layer 5), and the "every platform's dress" block re-prints the pointer of the real line each
+  binary produces, so a Linux gate holds the Windows shape too.
 - **An `await` in a start that can outlive its screen is followed by the unmount check (T-120).** `RecordStudio.startRecording` awaits the
   capture, the microphone, the camera, the compositor and the main-process session, and the unmount cleanup runs before any of them lands.
   `unmountedRef` is cleared on mount (StrictMode runs the cleanup and the effect again in dev) and set in the cleanup;

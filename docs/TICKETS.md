@@ -5627,7 +5627,7 @@ IMG-PREC.
   FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** Track B done (round 87, see the Done entry); Track A in expedite
+- **Status:** done (round 87, both tracks — see the two Done entries)
 
 ---
 
@@ -6110,6 +6110,63 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 87, Track A — T-138 items 1, 6 and 9, landed in the commit that
+carries this entry, merged onto Track B's (67ca808). Worked by one
+Sonnet in a fresh clone of 63d18ff; the same container restart stopped
+it, and after the expediter's audit found all 26 recorded mutations
+restored byte-identical and no file at a mutant's sha, the same worker
+was resumed in the same clone (its whole-file Layer 5 run on the
+Windows exe had survived and was waited on, not restarted). The fixes:
+the lost-part line is read in every platform's dress - one shared
+context, `\[concat @ [^\]\n]*\] `, for both patterns, so the bare
+zero-padded pointer the shipped Windows ffmpeg prints (mingw-w64's
+`%p`) is ffmpeg's line again, line-anchored and naming the runner's
+segment file as before; unit fixtures for the glibc, mingw-w64,
+Microsoft CRT and glibc-null pointers, as printed, in CRLF and after a
+stats line ending in a bare CR; a new Layer 5 block that re-prints
+each binary's real line in every dress, red on the unchanged regex on
+all three binaries; and the T-131 (1), T-136 (15) and T-137 (12)
+blocks green on the bundled 7.0.2, the distro's 6.1.1 AND the shipped
+win32 exe under Wine (a private prefix in scratch). An audit of every
+parser of ffmpeg / ffprobe output in src/main found no other platform
+assumption (smoke.ts's version line keeps a CR on Windows - one
+console line, left). The highlight scan is single-flight in main
+(`scanningFor`, claimed before the first await, given back in
+`finally`, the refusal a finished sentence naming the running video),
+held by a unit over the real handler and an e2e that reloads the
+renderer mid-scan, presses Scan VOD again and finds the sentence, one
+ffmpeg, and no scan alive after the close; an audit of every
+module-level child tracker found one other single slot (frame.ts's
+`activeFrame`, reported). USER_GUIDE and README name the third
+loudness target, pinned against `LUFS_PRESETS`. The whole Layer 5 file
+on the Windows exe: 354 passed, 16 failed, every one classified - 5
+pins written for the Linux binaries (`skipIf(win32)` on a Windows
+host), 1 Cancel bound that Wine's launcher overshoots, and 10 caption
+burn-ins that paint no glyphs because the Wine prefix has no fonts
+(the same command with an explicit fontsdir paints them); no
+Windows-only defect, and the release run's windows-latest test:media
+is where those ten are confirmed. 26 ledger mutations, 0 survivors,
+10 reds. Expedited personally: verify x2 (189/5153), test:media on
+7.0.2 (370 passed | 13 skipped of 383), the item-1 blocks 26/26 on
+6.1.1 and 26/26 on the win32 exe under Wine, build + FULL Playwright
+451/451 with zero flakes, key-file shas unchanged; integrity and
+ledger audit clean (no forbidden files, no Track B file touched, no
+file at a mutant's sha); the whole-file classification checked
+against the spec's platform gates; one independent mutation at a seam
+no ledger row names (`unreadableSegmentIndex` without its multiline
+flag) → 9 named unit cases red → restored byte-identical, sha256
+verified. Merged by structure onto 67ca808 (rehearsed in a scratch
+clone first): five shared files conflicted where both tracks appended
+or inserted, each track's block was lifted by a unique window of the
+base's last lines and re-appended (Track B's first, as it landed
+first; A's LESSONS entry above B's, newest first; B's TESTING
+paragraphs before A's), the middle edits merged cleanly; a line-level
+proof over all seven files both tracks touched showed neither side
+lost a line beyond what the other deliberately changed, every Track-A
+-only file is byte-identical to the expedited clone, and the rehearsed
+tree verified at 190 files / 5175 tests, the tracks' counts summed
+exactly. The merged tree's gates are this entry's commit.
 
 Round 87, Track B — T-138 items 2, 3, 4, 5, 7 and 8, landed in the
 commit that carries this entry (Track A, items 1, 6 and 9, lands

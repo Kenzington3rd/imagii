@@ -4,6 +4,7 @@ import path from 'node:path'
 import { RENDERER_ROOT } from './routeSources'
 import ts from 'typescript'
 import { parseSource, sourceFilesUnder } from './renderedStrings'
+import * as lufsPanel from '../../src/renderer/src/modules/audio-studio/LevelsPanel'
 
 /**
  * T-123 (21)-(34): claims in the docs and the comments that a test can hold, held.
@@ -559,3 +560,34 @@ describe('the RunningCancel placement rule is true of the five it names, and the
   })
 })
 
+
+// T-138 (6): USER_GUIDE and README named two of the picker's three loudness targets ("pick Talking and podcasts (-16) or YouTube, TikTok, Reels (-14)"); the third,
+// "Broadcast TV and radio (-23)", had shipped since 2ff0eb1 with no sentence anywhere that said it exists. The list is the picker's own (`LUFS_PRESETS`), so a fourth
+// target added there fails here until the guides name it.
+describe('the guides name every loudness target the Levels picker offers (T-138 (6))', () => {
+  const { LUFS_PRESETS } = lufsPanel
+
+  it('the picker has more than one target, and each has a label that carries its number', () => {
+    expect(LUFS_PRESETS.length).toBeGreaterThanOrEqual(3)
+    for (const preset of LUFS_PRESETS) expect(preset.label, preset.value).toContain(`−${Math.abs(preset.target)}`)
+  })
+
+  it('USER_GUIDE\'s Levels bullet names every target by the label the picker shows', () => {
+    const guide = read('docs/USER_GUIDE.md')
+    const start = guide.indexOf('- **Levels**')
+    expect(start, 'the Levels bullet is in the guide').toBeGreaterThan(-1)
+    const rest = guide.slice(start + 1)
+    const end = rest.search(/\n {2}- \*\*|\n\S/)
+    const bullet = flat(rest.slice(0, end === -1 ? undefined : end))
+    expect(bullet, 'the extract is the Levels bullet').toContain('**Even volume**')
+    const missing = LUFS_PRESETS.filter((p) => !bullet.includes(p.label)).map((p) => p.label)
+    expect(missing, 'targets the Levels bullet does not name').toEqual([])
+  })
+
+  it('README\'s Audio Studio Levels line names every target\'s number', () => {
+    const line = read('README.md').split('\n').find((l) => l.includes('**Levels panel:**')) ?? ''
+    expect(line, 'the line is in the README').toContain('loudness target')
+    const missing = LUFS_PRESETS.filter((p) => !line.includes(`−${Math.abs(p.target)}`)).map((p) => p.label)
+    expect(missing, 'targets the README line does not name').toEqual([])
+  })
+})
