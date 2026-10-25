@@ -676,3 +676,90 @@ describe('T-139 Track B - the guides say what the code does', () => {
     expect(lessons).not.toContain('GIF 112 px idle')
   })
 })
+
+// T-139 Track C: the README's whisper and Stream Graphics sentences, and the Home inventory's cites, held to the code they name.
+// Each Home cite is checked two ways: the inventory row must carry it, and the cited line(s) must hold the element the row names.
+describe('T-139 Track C: README and the Home inventory say what the code does', () => {
+  const readme = flat(read('README.md'))
+  const inventory = read('docs/INTERACTION_COVERAGE.md')
+  const homeRows = inventory.slice(inventory.indexOf('### Home (15)'), inventory.indexOf('### Record (17'))
+  const welcomeRows = inventory.slice(inventory.indexOf('### Welcome (1)'), inventory.indexOf('### Home (15)'))
+  const home = 'src/renderer/src/routes/Home.tsx'
+  const autosave = 'src/renderer/src/components/AutosaveRestore.tsx'
+  const welcome = 'src/renderer/src/routes/Welcome.tsx'
+  /** The lines `from` to `to` (1-based, both included) of a source, joined with newlines. */
+  const lines = (rel: string, from: number, to: number = from): string => read(rel).split('\n').slice(from - 1, to).join('\n')
+
+  it('(1)-(3) the README names the whisper.cpp zip and its ggml-org home, and drops the ggerganov link and the full-size sentence', () => {
+    expect(readme).toContain('whisper-bin-x64.zip')
+    expect(readme).toContain('github.com/ggml-org/whisper.cpp')
+    expect(readme).not.toContain('ggerganov')
+    expect(readme).not.toContain('the original stays at full size')
+  })
+
+  it('(1)-(3) the README says what the captions panel asks now, and what the image copy is', () => {
+    expect(readme).toContain('copy `whisper-cli.exe` and the `.dll` files from its `Release` folder into the folder the panel opens')
+    expect(readme).toContain('copy `whisper-cli.exe` and the `.dll` files that come with it (from the `Release` folder in `whisper-bin-x64.zip`) into the folder the panel\'s open-folder button opens (the older name, `whisper.exe`, also works)')
+    expect(readme).toContain('the document keeps a copy of it bounded to twice the long side of your design (1600 px at the least) and to about 16 MB, so a huge picture is not kept at full size')
+    expect(readme).toContain('Captions are English only.')
+    expect(readme).toContain('Then click "Refresh status".')
+  })
+
+  // The Home table's rows, the cite each must carry, and the lines that cite names: `[the row's label, the cite, the file, the first line, the last line,
+  // what those lines hold]`. A row is found by its label, so a stale cite that is another row's cite (Open project was Home.tsx:90, Redo's line) still fails.
+  const rowOf = (label: string): string => homeRows.split('\n').find((l) => l.startsWith(`| ${label}`)) ?? ''
+  const CITES: ReadonlyArray<readonly [string, string, string, number, number, readonly string[]]> = [
+    ['Undo button', 'Home.tsx:82', home, 82, 82, ['onClick={undo.undo}']],
+    ['Redo button', 'Home.tsx:90', home, 90, 90, ['onClick={undo.redo}']],
+    ['"last:" readout', 'Home.tsx:97', home, 97, 97, ['last:']],
+    ['Open project', 'Home.tsx:101', home, 101, 101, ['onClick={handleLoad}']],
+    ['Save project', 'Home.tsx:107', home, 107, 107, ['onClick={handleSave}']],
+    ['NavCard x5', 'Home.tsx:117-151', home, 117, 151, ['<NavCard']],
+    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:242-262', autosave, 242, 262, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
+    // The row writes this cite in its shorthand (`:216-229`, the same file as the cite before it).
+    ['AutosaveRestore: Restore / Clear / Later', ':216-229', autosave, 216, 229, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
+  ]
+
+  it('the Home table was found, with its rows (a scan that matched nothing would look like a clean table)', () => {
+    expect(homeRows.length).toBeGreaterThan(500)
+    expect(homeRows).toContain('Undo button')
+  })
+
+  it.each(CITES)('the "%s" row cites %s, and those lines hold the element it names', (label, cite, file, from, to, anchors) => {
+    const row = rowOf(label)
+    expect(row, `no Home row is labelled "${label}"`).not.toBe('')
+    expect(row, `the "${label}" row does not cite ${cite}`).toContain(cite)
+    const text = lines(file, from, to)
+    for (const anchor of anchors) expect(text, `${file}:${from}-${to} does not hold ${anchor}`).toContain(anchor)
+  })
+
+  it('the Home.tsx:117-151 range holds the five NavCards, and its last line closes the fifth', () => {
+    expect(lines(home, 117, 151).match(/<NavCard\b/g)).toHaveLength(5)
+    expect(lines(home, 151)).toMatch(/^\s*\/>$/)
+  })
+
+  it('the Welcome row cites the button where it stands, and no longer says no test clicks it', () => {
+    expect(welcomeRows).toContain('Welcome.tsx:44')
+    expect(lines(welcome, 44)).toContain('<button')
+    expect(lines(welcome, 44, 49)).toContain('Let&apos;s go')
+    expect(welcomeRows).not.toContain('never directly clicked in any test')
+    expect(welcomeRows).toContain('home-chrome.spec.ts')
+    expect(welcomeRows).toContain('T-139 (9)')
+    expect(read('tests/e2e/home-chrome.spec.ts')).toContain('getByRole(\'button\', { name: "Let\'s go" }).click()')
+  })
+
+  it('the Welcome row\'s Chain says what the handler does: persistSetting (App.tsx:84), then swallowRepeatClicks() (App.tsx:88), and both cited lines hold them', () => {
+    const welcomeRow = welcomeRows.split('\n').find((l) => l.startsWith('| Button "Let\'s go"')) ?? ''
+    expect(welcomeRow, 'the Let\'s go row was found').not.toBe('')
+    // The row is `| element | file:line | chain | end state | flags |`, so the Chain cell is the fourth split part.
+    const chain = welcomeRow.split('|')[3] ?? ''
+    expect(chain, 'the Chain cell names the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
+    expect(chain).toContain('App.tsx:84')
+    expect(chain).toContain('swallowRepeatClicks()')
+    expect(chain).toContain('App.tsx:88')
+    expect(chain, 'the Chain cell no longer names the bare settings.set').not.toContain('settings.set(\'welcomeSeen\')')
+    const app = 'src/renderer/src/App.tsx'
+    expect(lines(app, 84), 'App.tsx:84 is the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
+    expect(lines(app, 88), 'App.tsx:88 is the double-press swallow').toContain('swallowRepeatClicks()')
+  })
+})

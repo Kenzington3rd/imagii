@@ -5772,6 +5772,14 @@ IMG-PREC.
   Non-counted, rides with Track B: boundedImage.ts's "third place an
   Image fetches one" comment undercounts (Canvas.tsx's useImage is
   another; ledger (g)).
+  **Track C (docs; expediter follow-up from Track B's found-not-fixed,
+  Haiku):** README.md's whisper lines (the ggml-org link, the
+  whisper-bin-x64.zip download, the exe and its .dll files) and its
+  large-picture line (the stored copy is bounded, not the original
+  at full size); the INTERACTION_COVERAGE Home table's stale
+  Home.tsx / AutosaveRestore.tsx cites and the Welcome row (its
+  chain and "never directly clicked" flag); a docClaims block that
+  holds each.
   **Docs (ride with the owning track):** LESSONS_LEARNED entries
   (item 1: a write over the person's file is the old file until the
   new one is whole; item 2: a placement is sized to where it lands),
@@ -6288,6 +6296,22 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 88, Track C — T-139 docs follow-up, landed in the commit that
+carries this entry, onto Track B (f60e617). Worked by one Haiku in a
+fresh clone of f60e617 (sent back once for the Welcome row's chain
+column). README.md now says what the captions panel says (the
+ggml-org link, whisper-bin-x64.zip, whisper-cli.exe and its .dll
+files from the Release folder) and what the importer does (a copy
+bounded to twice the design's long side and about 16 MB, not the
+original at full size); the IC Home table's eight cites point at
+the current lines, and the Welcome row names persistSetting and
+swallowRepeatClicks and the e2e cases that click it. A new docClaims
+block (14 cases) holds every one of those lines, red-first against
+the old README and IC (11 failed, and the Welcome chain case 1 more). Expedited personally: verify x2
+(191/5235); one independent mutation (the Save project row back to
+Home.tsx:96) → its named case red → restored byte-identical. No
+source file changed.
 
 Round 88, Track B — T-139 items 2, 4, 5, 6, 7, 8 and 9, landed in the
 commit that carries this entry (Track A, items 1, 3 and 10, lands

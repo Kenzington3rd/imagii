@@ -23,7 +23,7 @@ Crash-safe autosave plus full project save / load. No accounts, no subscriptions
 
 **Hardware notes:**
 - No GPU is required. The previous AI image-generation feature was removed in the refit; nothing in imagii now needs CUDA / VRAM.
-- Auto-captions are optional and use [whisper.cpp](https://github.com/ggerganov/whisper.cpp). The captions panel inside Video Studio walks you through it: you download `whisper-cli.exe` once, and imagii downloads the English model (~141 MB) for you — that download goes online, once. Captions are English only.
+- Auto-captions are optional and use [whisper.cpp](https://github.com/ggml-org/whisper.cpp). The captions panel inside Video Studio walks you through it: you download `whisper-bin-x64.zip` from the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) once (the newest release that lists it; some are marked Pre-release), copy `whisper-cli.exe` and the `.dll` files from its `Release` folder into the folder the panel opens, and imagii downloads the English model (~141 MB) for you — that download goes online, once. Captions are English only.
 
 ---
 
@@ -164,9 +164,9 @@ The sidebar also has: Output preview, Smart highlight finder (audio peaks), Chat
 
 **Audio export is slow** → If "Even volume" is on, imagii measures the whole file first and then renders. Turn it off for a faster export.
 
-**The Stream Graphics canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. imagii places an imported image at most 800 px on its long side, but the original stays at full size in memory, so a very large one still takes memory and can slow the canvas.
+**The Stream Graphics canvas feels laggy with a huge image** → Images over 4096 px on a side may stall the canvas. imagii places an imported image at most 800 px on its long side, and the document keeps a copy of it bounded to twice the long side of your design (1600 px at the least) and to about 16 MB, so a huge picture is not kept at full size. A very large picture can still take a moment to import.
 
-**Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps to drop `whisper-cli.exe` (the older name, `whisper.exe`, also works) and the `ggml-base.en.bin` model in place — or let imagii download the model for you. Then click "Refresh status".
+**Captions panel says missing whisper** → Click the in-panel "open folder" buttons and follow the steps: copy `whisper-cli.exe` and the `.dll` files that come with it (from the `Release` folder in `whisper-bin-x64.zip`) into the folder the panel's open-folder button opens (the older name, `whisper.exe`, also works), and put the `ggml-base.en.bin` model in place — or let imagii download the model for you. Then click "Refresh status".
 
 **Reference search returns nothing** → DuckDuckGo's image endpoint is undocumented and occasionally rate-limits. Wait a minute.
 

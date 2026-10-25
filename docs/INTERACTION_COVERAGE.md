@@ -207,19 +207,19 @@ until a row carries one, treat it as OPEN.
 
 | Element | file:line | Chain | End state | Flags |
 |---|---|---|---|---|
-| Button "Let's go" | Welcome.tsx:44 | settings.set('welcomeSeen') | config.json written; Home renders | never directly clicked in any test |
+| Button "Let's go" | Welcome.tsx:44 | void persistSetting('welcomeSeen', true) (App.tsx:84; a refused write is one toast, and the press goes on) -> setStatus ready -> swallowRepeatClicks() (App.tsx:88) | config.json written; Home renders | clicked for real in home-chrome.spec.ts: the T-21 welcome case (writes welcomeSeen), the T-128 (4) refusal case, and the T-139 (9) double-press cases |
 
 ### Home (15)
 
 | Element | file:line | Chain | End state | Flags |
 |---|---|---|---|---|
-| Undo button | Home.tsx:73 | useGlobalUndo -> last store .undo() | state reverts | |
-| Redo button | Home.tsx:81 | store .redo() | state advances | |
-| "last:" readout | Home.tsx:84 | readout | assertion target | |
-| Open project | Home.tsx:90 | project:load -> showOpenDialog -> applyProject | stores rehydrated; toast | HL dialog |
-| Save project | Home.tsx:96 | project:save -> showSaveDialog | .imagii.json written; toast | HL dialog |
-| NavCard x5 | Home.tsx:104-138 | router | route change | COV smoke |
-| AutosaveRestore: Restore / Clear / Later (the healthy banner), Clear / Dismiss (the damaged one); T-92 renamed the healthy banner's Discard to Clear | AutosaveRestore.tsx:199-219 (Restore, Clear, Later), :173-186 (Clear, Dismiss) | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden; a clear that fails toasts the reason and KEEPS the banner (T-57) | |
+| Undo button | Home.tsx:82 | useGlobalUndo -> last store .undo() | state reverts | |
+| Redo button | Home.tsx:90 | store .redo() | state advances | |
+| "last:" readout | Home.tsx:97 | readout | assertion target | |
+| Open project | Home.tsx:101 | project:load -> showOpenDialog -> applyProject | stores rehydrated; toast | HL dialog |
+| Save project | Home.tsx:107 | project:save -> showSaveDialog | .imagii.json written; toast | HL dialog |
+| NavCard x5 | Home.tsx:117-151 | router | route change | COV smoke |
+| AutosaveRestore: Restore / Clear / Later (the healthy banner), Clear / Dismiss (the damaged one); T-92 renamed the healthy banner's Discard to Clear | AutosaveRestore.tsx:242-262 (Restore, Clear, Later), :216-229 (Clear, Dismiss) | applyProject / autosave:clear / dismiss | stores rehydrated / file deleted / banner hidden; a clear that fails toasts the reason and KEEPS the banner (T-57) | |
 
 ### Record (17; 13 HL)
 
