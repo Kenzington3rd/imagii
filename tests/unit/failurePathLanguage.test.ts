@@ -463,3 +463,36 @@ describe('the board and preset writes report their refusals (T-135 (8))', () => 
     expect(found.failed).toBe(sentence)
   })
 })
+
+// T-136 (12): the two mood-board writes T-135 (8) did not reach. "Clear thumbnail cache" awaited `moodboard.clearThumbs()` bare and toasted "Thumbnail
+// cache cleared" after it (a refused clear never got there, and the rejection was unhandled), and the tile's ✕ called `removeFromCollection` with
+// nothing awaiting it at all. Each is a named handler now: the await sits in a try whose catch reports, and a refused write leaves the tile.
+describe('the mood-board cache clear and the tile remove report their refusals (T-136 (12))', () => {
+  const panel = (): (typeof FILES)[number] => {
+    const f = FILES.find((x) => x.rel === 'modules/references/MoodBoardPanel.tsx')
+    if (!f) throw new Error('MoodBoardPanel.tsx not found')
+    return f
+  }
+  const cases: Array<[string, string, string]> = [
+    ['onClearThumbs', 'moodboard.clearThumbs', "Couldn't clear the thumbnail cache."],
+    ['onRemoveItem', 'removeFromCollection', "Couldn't remove that picture."]
+  ]
+  it.each(cases)('%s() awaits %s in a try whose catch is reportFailure', (fn, needle, sentence) => {
+    const found = guardedAwait(panel().ast, fn, needle)
+    expect(found.awaited, `${fn} still awaits ${needle}`).toBe(true)
+    expect(found.guarded, 'the await has a catch that reports').toBe(true)
+    expect(found.failed).toBe(sentence)
+  })
+
+  it('the success toast of the clear comes after the await, in the same try (a refusal never says "cleared")', () => {
+    const body = /async function onClearThumbs\(\)[\s\S]*?\n  }\n/.exec(panel().text)?.[0] ?? ''
+    expect(body).toMatch(/try \{\s*await window\.api\.moodboard\.clearThumbs\(\)\s*toast\.success\('Thumbnail cache cleared'\)\s*\} catch/)
+  })
+
+  it('both handlers are the ones the buttons call (no inline arrow awaiting a write is left in the JSX)', () => {
+    expect(panel().text).toMatch(/onClick=\{\(\) => void onClearThumbs\(\)\}/)
+    expect(panel().text).toMatch(/onClick=\{\(\) => void onRemoveItem\(item\.id\)\}/)
+    expect(panel().text).not.toMatch(/onClick=\{async/)
+    expect(panel().text.split('reportFailure(').length - 1, 'sendToCanvas, create, rename, delete, and these two').toBeGreaterThanOrEqual(6)
+  })
+})

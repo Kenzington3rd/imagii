@@ -383,8 +383,11 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       activeJobs.delete(childKey)
       // T-131 (1): a segment the join cannot open ends the join THERE and ffmpeg still exits 0: a shorter file, "Saved". The catch
       // below removes it like any failed join's output.
-      if (code === 0 && lostAPart) {
-        reject(new Error(lostPartMessage(lostIndex === null ? undefined : spec.segments[lostIndex])))
+      // T-136 (15): the line is the evidence, whatever the exit code. The demuxer exits 0 for a LATER input it cannot open and non-zero (254, both
+      // majors) for the FIRST, which reached the person as the raw "concat exit 254" and then as a sentence about their source. A Cancel still wins:
+      // `cancelledOr` answers for a join the user killed, whatever it had printed.
+      if (lostAPart) {
+        reject(cancelledOr(child, new Error(lostPartMessage(lostIndex === null ? undefined : spec.segments[lostIndex]))))
       } else if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })

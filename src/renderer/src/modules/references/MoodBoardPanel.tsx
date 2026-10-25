@@ -129,6 +129,27 @@ export function MoodBoardPanel(): JSX.Element {
     toast.success('Deleted — press Ctrl+Z to undo')
   }
 
+  // T-136 (12): the two writes beside them that had no catch. A refused clear used to be an unhandled rejection with a button that did nothing, and the
+  // success toast sits after the await so it is never said over a refusal; a refused remove leaves the tile where it is (the store changes only after
+  // main has answered) and says so.
+  async function onClearThumbs(): Promise<void> {
+    try {
+      await window.api.moodboard.clearThumbs()
+      toast.success('Thumbnail cache cleared')
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't clear the thumbnail cache." })
+    }
+  }
+
+  async function onRemoveItem(itemId: string): Promise<void> {
+    if (!collection) return
+    try {
+      await removeFromCollection(collection.id, itemId)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't remove that picture." })
+    }
+  }
+
   return (
     <>
     <NameDialog
@@ -207,10 +228,7 @@ export function MoodBoardPanel(): JSX.Element {
             image above, so pressing it costs a re-download, never a board. */}
         <button
           className="btn-ghost px-2 py-1 text-xs text-ink-dim hover:text-ink-base self-start mt-auto"
-          onClick={async () => {
-            await window.api.moodboard.clearThumbs()
-            toast.success('Thumbnail cache cleared')
-          }}
+          onClick={() => void onClearThumbs()}
           title="Clear the on-disk thumbnail cache for mood boards"
         >
           Clear thumbnail cache
@@ -282,7 +300,7 @@ export function MoodBoardPanel(): JSX.Element {
                         // `.btn-primary` already answers this against accent;
                         // here it reads 7.20:1.
                         className="absolute top-1 right-1 bg-bg-base/80 hover:bg-danger-strong hover:text-bg-base text-xs rounded-full w-6 h-6 flex items-center justify-center"
-                        onClick={() => removeFromCollection(collection.id, item.id)}
+                        onClick={() => void onRemoveItem(item.id)}
                         title="Remove"
                         aria-label="Remove item"
                       >

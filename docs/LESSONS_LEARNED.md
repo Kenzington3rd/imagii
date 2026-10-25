@@ -14,6 +14,63 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-24 — T-136 Track B (round 85): a rank that rewarded length, a sentence true at one moment and said at another, and a keyword read out of a file name
+
+The twenty-second pass, Track B (items 9 to 15 of T-136; Track A's items 1 to 8 land beside it). Ledger: r85b/ledger.md (21 red rows and 84 mutation rows, 84 of 84 restores byte-identical; 8 mutants survived, each listed in the ledger's notes; every red a test run against the old product code, a build of the unchanged tree `47ef529` for the Playwright cases, or the real binary for Layer 5; item 15 at Layer 5 on both ffmpeg majors).
+
+### (9) [LOW] - the chat spike finder ranked by length, showed half a range, accepted a negative pad, and said nothing when it found nothing
+
+- **Bug.** (a) T-135 (3)'s merge made a row's length unbounded while the row showed only its start, and rows ranked by their SUMMED count, so a raid (twenty windows of 6 messages, 120 in all) outranked a short explosion (15 in one window) when the 12-row cap forced a choice and "+ Clip" could add a five-minute clip unannounced. (b) "Extra seconds around each clip" was `Number(v) || 0` with an advisory `min`: -5 made a window of zero length (executed: [105, 105]) and the "+ Clip" refusal blamed the log. (c) A log with no spike was a 4 s toast, and the panel then looked as if it had not been run. (d) The two number boxes sat 16 px apart where the long label wraps (measured at 1024, 1632 and 1920).
+- **Root cause.** A row was ranked by an aggregate that grows with its length, where what makes it a spike is its densest window; a number box's `min`/`max` attributes were taken for a rule; "analyzed, nothing found" was drawn as nothing, the same as "not analyzed"; and two controls were positioned by their labels' heights.
+- **Fix.** `findChatPeaks` ranks by the densest window (then the total, then time order) and keeps `count` as the total; the pad is clamped to 0..60 inside it (`MAX_CHAT_PAD_SEC`, NaN is 0). The panel's row shows start → end on one line with the preview on a second, the extra seconds is a `DraftField` with the spike window's 0..60 clamp (a fraction of a second is kept), `NO_CHAT_SPIKES_MESSAGE` (the rule, built from `MIN_SPIKE_MESSAGES` and `MIN_SPIKE_WINDOWS`) stays under the button for `derived.spikes === []`, and both boxes take `mt-auto`.
+- **A second bug, found by the new layout case and fixed in the same item.** The row this item draws is wider than the one it replaced (a range, not a start), and the first layout case measured a 2 s video's short range and a 120-message count: green, with one pixel to spare at the 1024 px minimum (the card leaves the row 258 px: 122 for a 17-character range, 33 for "+ Clip", 86 for "120 messages"). A ten-hour stream's range (`10:01:25 → 10:05:15`) or a fourth digit in the count left "+ Clip" no room, and it wrapped onto two lines ("+" over "Clip") and ended 5 px past the row; the default 1632 px window has the same 258 px row. The first-line row is `flex-wrap` now (the button drops under the range, `ml-auto` keeps it at the right edge, the count's `whitespace-nowrap` makes the row wrap by item), and the case measures the widest row the panel draws and the list's own overflow (the list is `overflow-y-auto`, so a row wider than the list is a scrollbar the card's check never sees).
+- **Test.** `chatPeaks.test.ts` (the raid against the explosions at the cap, the total kept, the tie-break, the densest window in the middle of a run, the clamp at -5, -1e9, 600, Infinity and NaN, the sentence tied to the constants and the constants to the function's edges); video-pipelines.spec.ts "ChatHighlightPanel - range, extra seconds, empty result, alignment" (four cases; the alignment one at 1024, 1632 and 1920 px, red on the unchanged build at 16 px lower at every size, and red again on this tree before the row fix at "+ Clip wraps onto 2 lines" and "-5 px from the row's right edge") and the six existing row pins now read "start → end".
+- **Lesson.** **Rank a thing by the property that makes it that thing, not by an aggregate that also grows with its size. And when a state has two meanings ("not run", "ran and found none"), draw them differently: a toast is gone by the time anyone looks at the panel. And a layout case measures the WIDEST content the control can hold, not the fixture that is handy: it had one pixel of slack at three hours and none at ten, and the short fixture was green.**
+
+### (10) [LOW] - "Remove it" over a track nothing had added
+
+- **Bug.** The pick-time refusal reused the export's sentence, "The second track has no sound in it. Remove it or pick another file.", and the panel adds nothing when it refuses (the e2e pinned zero Remove buttons right after it).
+- **Fix.** `SECOND_TRACK_PICK_NO_SOUND_MESSAGE` = "That file has no sound in it. Pick another file."; the export keeps its own words for a track that is added and loses its sound afterwards.
+- **Test.** `audio.test.ts` (both sentences, finished, through the envelope); audio.spec.ts "a second track with no sound in it is refused when picked, and when the file loses its sound before the export" now asserts each sentence once and no "remove" at the pick. The other half of the pick's rule - only that verdict refuses, so a file whose length cannot be read (a MediaRecorder WebM) is still added - had no test: the expediter's mutation (refuse on ANY probe error) left the whole suite green, and audio.spec.ts "a second track whose length cannot be read is still added (T-135 (11) pick rule)" and a pin of the catch's condition in `interactionWiring.test.ts` now kill it (ledger `M-i10g`, `M-i10h`).
+- **Lesson.** **A sentence that says what to do next is true of a state. Say it at the moment that state holds; one string reused for two moments says the wrong thing at one of them.**
+
+### (11) [LOW] - "Last autosave: N ago" under "Autosave cleared"
+
+- **Bug.** The dismissed state draws its status line from the `info` read when the page mounted; a successful Clear deleted the file and left the line up until the next visit to Home.
+- **Fix.** A successful Clear sets `info` to `{ exists: false }`; a refused one touches nothing.
+- **Test.** home-chrome.spec.ts "T-136 (11): the status line goes with the file" (healthy and damaged banner, in the same visit; the controls: Later keeps the line, a refused Clear keeps it).
+- **Lesson.** **A line derived from a read made at mount is wrong the moment the action it reports on succeeds. The action that changes the source updates what is derived from it, on its success path only.**
+
+### (12) [LOW] - two mood-board writes with no catch
+
+- **Bug.** "Clear thumbnail cache" awaited `moodboard.clearThumbs()` bare (a refusal was an unhandled rejection and the button did nothing) and the tile's ✕ called `removeFromCollection` with nothing awaiting it. T-135 (8) had fixed the four writes beside them.
+- **Fix.** `onClearThumbs` and `onRemoveItem`: the await in a `try`, the success toast inside it, `reportFailure` in the `catch`; a refused remove leaves the tile (the store changes after main answers).
+- **Test.** `failurePathLanguage.test.ts` (both handlers, the toast's place, no inline `async` arrow in the JSX); references.spec.ts "a refused Clear thumbnail cache never says "cleared", and a refused ✕ says so and leaves the tile" (main's handlers replaced by ones that throw; the same ✕ with a working main is the control).
+- **Lesson.** **When a sweep fixes writes in a file, grep the file for every `window.api` await, not the ones the ticket named: the sibling that was not listed is the next ticket.**
+
+### (13) [LOW] - the one spawn nobody capped
+
+- **Bug.** `audio/extract.ts` did `stderr += String(b)` with no cap, against the round-18 rule that every spawn keeps a 16 KB tail; T-129 made multi-hour extractions reachable.
+- **Fix.** The tail idiom in the handler, and `tests/unit/stderrCapped.test.ts`: every `<x>.stderr.on('data', handler)` under `src/main`, read with the syntax tree, must assign the accumulator a tail of at most 16384 (or be a row in the table of audited exceptions, with its reason). The scan found four more uncapped handlers: the two ebur128 loudness scans (the stderr is the measurement), `ffmpeg -version`, and the two ffprobe header reads; the first three are audited as they are, the probes are listed as found, not fixed.
+- **Test.** The scan (red on the unchanged tree: `extract.ts`), a discrimination block over sample code and over its accounting; mutations: the cap removed, 16 MB, a head slice, a slice whose result is thrown away, and nine of the scan itself.
+- **Lesson.** **A rule applied spawn by spawn from memory misses one. The fix for a missed instance of a class is the scan that lists the class, and the scan's first run is its own audit of the instances nobody remembered.**
+
+### (14) [LOW] - a file's name read as the cause of its failure
+
+- **Bug.** `describeImportError` matched 'codec', 'decoder' and the rest anywhere in the message, and main's finished sentence "Still extracting the sound from "codec_test.mp4". Wait for it to finish, then try again." became "imagii can't read this audio format..." (executed).
+- **Fix.** The keywords are looked for in the message with its double-quoted spans taken out; a lone quote removes nothing.
+- **Test.** `importDiagnostics.test.ts` (eight names that hold a keyword, a clean-name control, and the controls that a real cause is still found: beside a quoted name, between two, after a lone quote).
+- **Lesson.** **A classifier that reads free text must not read what the person typed. Judge the part of the message the program wrote.**
+
+### (15) [LOW] - a compilation whose first segment was lost blamed the person's source
+
+- **Bug.** `concat.ts` guarded the lost-segment sentence with `code === 0 && lostAPart`. The concat demuxer exits 0 for a LATER input it cannot open and non-zero (254, both majors) for the FIRST, so that case reached the person as the raw "concat exit 254" and then as the generic missing-file sentence, about their source.
+- **Fix.** The guard is the line, whatever the exit code (`if (lostAPart)`), still through `cancelledOr`, so a join the user killed is a cancel.
+- **Test.** `concatRunner.test.ts` (the fake ffmpeg takes an exit code: a lost first segment at 254, 1, 255 and 234, a later one at 0 and non-zero, the control without the line, the control that succeeds, a Cancel that wins); Layer 5 "a compilation whose FIRST segment is lost at the join names its clip" on both majors (the shape with the real binary, and the real `runConcat` with segment 0 deleted between the list and the join; red on the unchanged tree on both).
+- **Lesson.** **An exit code is not the evidence; the line the program printed is. When one cause has two exit shapes, key the guard on the cause.**
+
+---
+
 ## 2026-10-24 — T-136 Track A (round 85): a run keyed to a row the list does not draw, a busy flag the remount forgot, a debounce a playing video starved, and a Cancel copied eleven times
 
 The twenty-second pass, Track A (items 1-8, expediter-ticketed; Track B's seven are logged separately). The theme: the edges of T-135 (1) - the long jobs its module-store conversion did not reach, and a premise it introduced. Ledger: r85a/ledger.md (20 red rows and 71 mutation rows, 71 of 71 restores byte-identical; 2 mutants survived their first run, M-i3b and M-i6b, each killed on a rerun after the test was strengthened and both rows kept; no Layer 5 block is touched by this track; every red a test run against the old product code or, for the Playwright cases, a build of the unchanged tree `47ef529`).

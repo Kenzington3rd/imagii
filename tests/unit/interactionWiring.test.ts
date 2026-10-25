@@ -2857,3 +2857,17 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     expect(read('modules/video-studio/ClipKitButton.tsx')).not.toMatch(/one button per row/)
   })
 })
+
+describe('T-135 (11) pick rule - a picked second track is refused ONLY on the probe\'s no-sound verdict', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  // E2E: audio.spec.ts "a second track whose length cannot be read is still added" drives a durationless WebM to the added track; the refusal
+  // itself is "a second track with no sound in it is refused when picked". This holds the condition between them (round 85: a refusal on ANY
+  // probe error passed both cases and every unit test).
+  it('the catch around the pick-time probe refuses on isNoAudioStreamError(err) alone, and any other failure falls through to the add', () => {
+    const panel = strip(read('modules/audio-studio/SecondaryTrackPanel.tsx'))
+    expect(panel).toMatch(
+      /try \{\s*await window\.api\.audio\.probe\(filePath\)\s*\} catch \(err\) \{\s*if \(isNoAudioStreamError\(err\)\) \{\s*toast\.error\(SECOND_TRACK_PICK_NO_SOUND_MESSAGE, \{ duration: ERROR_TOAST_MS \}\)\s*return\s*\}\s*\}\s*setSecondaryTrack\(\{/
+    )
+  })
+})

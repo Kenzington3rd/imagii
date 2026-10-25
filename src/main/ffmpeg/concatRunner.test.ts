@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -37,10 +38,15 @@ let says: ((args: string[]) => string | null) | null = null
 let joinWrites = false
 /** What the probe answers: the picture's length in seconds, or an Error (a recording whose header has no duration). T-131 (2). */
 let probedSec: number | Error = 60
+/** The exit code the fake ffmpeg closes with, by command: null is 0 (T-136 (15): the concat demuxer exits 254 when it cannot open its FIRST input). */
+let exitsWith: ((args: string[]) => number) | null = null
+/** Every child the runner spawned, in order, so a test can mark one as killed on the user's behalf. */
+let children: FakeChild[] = []
 
 vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
+    children.push(child)
     spawned.push(args)
     const isJoin = args.includes('concat')
     if (isJoin) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
@@ -48,7 +54,7 @@ vi.mock('node:child_process', () => ({
     setImmediate(() => {
       const text = says?.(args) ?? null
       if (text !== null) child.stderr.emit('data', text)
-      child.emit('close', 0, null)
+      child.emit('close', exitsWith?.(args) ?? 0, null)
     })
     return child
   }
@@ -73,6 +79,7 @@ vi.mock('./probe', () => ({
 
 const { runConcat, runPipComposite, SEGMENT_EXTENSION, SEGMENT_AUDIO_CODEC, FFMPEG_EMPTY_OUTPUT, FFMPEG_UNREADABLE_PART } = await import('./concat')
 const { outputFolderRefusal } = await import('./outputPath')
+const { killAsCancelled } = await import('./cancelMark')
 const { userFacingError } = await import('../../shared/userFacingError')
 
 let scratch = ''
@@ -84,6 +91,8 @@ beforeEach(() => {
   says = null
   joinWrites = false
   probedSec = 60
+  exitsWith = null
+  children = []
 })
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
@@ -377,5 +386,73 @@ describe('a compilation checks its output folder before it encodes anything (T-1
     }).then(() => null, (e: Error) => e)
     expect(err?.message).toBe(outputFolderRefusal('Clips'))
     expect(spawned, 'ffmpeg was never started: the whole segment encode used to run before this was found out').toEqual([])
+  })
+})
+
+// T-136 (15): the join's "Impossible to open" guard was `code === 0 && lostAPart`. The concat demuxer exits 0 when it cannot open a LATER input
+// (it ends the file there) but 254 when it cannot open its FIRST (measured on both majors; Layer 5, "a compilation whose FIRST segment is lost at
+// the join"), so a lost first segment reached the person as the raw "concat exit 254" and then as the generic missing-file or video-tool sentence,
+// about the person's source. The line is the evidence, whatever the exit code: every lost part names its clip.
+describe('a join that cannot open a segment names its clip whatever its exit code (T-136 (15))', () => {
+  const spec = (names: string[]): Parameters<typeof runConcat>[0] => ({
+    jobId: 'cr-lost',
+    sourcePath: '/tmp/in.mp4',
+    outDir: scratch,
+    segments: names.map((name, i) => ({ startSec: i * 10, endSec: i * 10 + 2, name })),
+    fadeMs: 0,
+    width: 1280,
+    height: 720
+  })
+  const lostLine = (index: number): string => `[concat @ 0x1] Impossible to open '/tmp/imagii-concat/seg-cr-lost-${index}.mkv'`
+  const lostFirst = 'The compilation could not be put together because the clip "Intro" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.'
+
+  it.each([254, 1, 255, 234])('the FIRST segment lost, exit %i: the sentence names the clip and the half-written file is removed', async (code) => {
+    joinWrites = true
+    exitsWith = (args) => (args.includes('concat') ? code : 0)
+    says = (args) => (args.includes('concat') ? lostLine(0) : null)
+    const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(err?.message).toBe(lostFirst)
+    expect(err?.message, 'not the raw runner line').not.toMatch(/concat exit/)
+    expect(userFacingError(err, 'Compilation failed.').message, 'reaches the person as written').toBe(lostFirst)
+    const join = spawned.find((a) => a.includes('concat')) as string[]
+    expect(existsSync(join[join.length - 1] as string), 'the join\'s output is gone').toBe(false)
+  })
+
+  it('a later segment lost at exit 0 and at a non-zero exit say the same thing (the guard is the line, not the code)', async () => {
+    const run = async (code: number): Promise<string | undefined> => {
+      joinWrites = true
+      exitsWith = (args) => (args.includes('concat') ? code : 0)
+      says = (args) => (args.includes('concat') ? lostLine(1) : null)
+      return (await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e))?.message
+    }
+    const exit0 = await run(0)
+    expect(exit0).toContain('the clip "Boss fight" could not be read')
+    expect(await run(254)).toBe(exit0)
+    expect(await run(1)).toBe(exit0)
+  })
+
+  it('control: a join that fails WITHOUT the line is still the runner\'s own failure (the guard keys on the evidence, not on any non-zero exit)', async () => {
+    exitsWith = (args) => (args.includes('concat') ? 254 : 0)
+    says = (args) => (args.includes('concat') ? 'Invalid data found when processing input' : null)
+    const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(err?.message).toMatch(/^concat exit 254: /)
+    expect(err?.message).not.toContain('could not be read')
+  })
+
+  it('control: a join that opens everything and exits 0 still succeeds', async () => {
+    joinWrites = true
+    const { outputPath } = await runConcat(spec(['Intro', 'Boss fight']))
+    expect(existsSync(outputPath)).toBe(true)
+  })
+
+  it('a Cancel wins over the line: a join the user killed after it printed the line is a cancel, not a lost clip', async () => {
+    exitsWith = (args) => (args.includes('concat') ? 254 : 0)
+    says = (args) => {
+      if (!args.includes('concat')) return null
+      killAsCancelled(children[children.length - 1] as unknown as ChildProcess)
+      return lostLine(0)
+    }
+    const err = await runConcat(spec(['Intro', 'Boss fight'])).then(() => null, (e: Error) => e)
+    expect(userFacingError(err, 'Compilation failed.').cancelled).toBe(true)
   })
 })

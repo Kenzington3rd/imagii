@@ -2987,3 +2987,113 @@ test.describe('T-131: review-gate fixes, sweep 17 (Home and the tours)', () => {
     }
   })
 })
+
+// T-136 (11): the banner's Clear deleted the file and said "Autosave cleared", and the line "Last autosave: N min ago" stayed up under it - the dismissed
+// branch draws from the `info` read when the page mounted, and a successful Clear did not change it. It lasted until the next visit to Home, which is
+// the one place a person looks for it. A successful Clear is a file that is not there.
+test.describe('T-136 (11): the status line goes with the file', () => {
+  test('after Clear on the healthy banner there is no "Last autosave" line, at once, and none after a visit either', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-healthy')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => await readToastLog(window), { timeout: 20_000 }).toContain('Autosave cleared')
+      expect(existsSync(autosaveFile(userDataDir)), 'the file is gone').toBe(false)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      // The point of the case: not "after a reload" - right now, in the same visit.
+      await expect(window.getByText(/^Last autosave: /), 'no backup is reported: there is none').toHaveCount(0)
+      await window.waitForTimeout(500)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+
+      // And a visit afterwards agrees with it.
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the control: Later keeps the file and the line says so', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-later')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Later' }).click()
+      await expect(window.getByText(/^Last autosave: /)).toBeVisible()
+      expect(existsSync(autosaveFile(userDataDir))).toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('after Clear on the damaged banner there is no "Last autosave" line either', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-damaged')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => await readToastLog(window), { timeout: 20_000 }).toContain('Autosave cleared')
+      expect(existsSync(autosaveFile(userDataDir))).toBe(false)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /), 'a deleted file is not a backup').toHaveCount(0)
+      await window.waitForTimeout(500)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a Clear that is refused leaves the banner, the file and (after Dismiss) the line: nothing says the file is gone', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-refused')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => {
+          throw new Error('could not delete autosave.json')
+        })
+      })
+      await expect(window.getByText(/but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => (await readToastLog(window)).join(' | '), { timeout: 20_000 }).toContain("Couldn't clear the autosave")
+      expect(existsSync(autosaveFile(userDataDir)), 'the file is still there').toBe(true)
+      await window.getByRole('button', { name: 'Dismiss' }).click()
+      await expect(window.getByText(/^Last autosave: /), 'and the line still reports it').toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
-import { findChatPeaks, type ChatPeak } from '@shared/chatPeaks'
+import { MAX_CHAT_PAD_SEC, NO_CHAT_SPIKES_MESSAGE, findChatPeaks, type ChatPeak } from '@shared/chatPeaks'
 import { countOf } from '@shared/plural'
 import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
 import { Icon } from '../../components/Icon'
@@ -103,40 +103,56 @@ export function ChatHighlightPanel(): JSX.Element | null {
               if (n !== null) setBucketSec(n)
               return null
             }}
-            className="bg-bg-base rounded px-2 py-1"
+            className="bg-bg-base rounded px-2 py-1 mt-auto"
           />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-ink-muted">Extra seconds around each clip</span>
-          <input
+          {/* T-136 (9): the same box as the spike window. `Number(v) || 0` took a negative number as typed (a window of zero length) and the "min" was
+              advice; 0 to 60 is enforced when typing ends, and a fraction of a second is kept. `mt-auto` on both boxes: this label wraps in the narrow
+              column and the other does not, and the boxes sat 16 px apart; they share the bottom of the row now whatever the labels do. */}
+          <DraftField
             type="number"
             min={0}
-            max={60}
-            value={padSec}
-            onChange={(e) => setPadSec(Number(e.target.value) || 0)}
-            className="bg-bg-base rounded px-2 py-1"
+            max={MAX_CHAT_PAD_SEC}
+            value={String(padSec)}
+            live={(typed) => isTypedInRange(typed, 0, MAX_CHAT_PAD_SEC, false)}
+            commit={(typed) => {
+              const n = clampTyped(typed, 0, MAX_CHAT_PAD_SEC, false)
+              if (n !== null) setPadSec(n)
+              return null
+            }}
+            className="bg-bg-base rounded px-2 py-1 mt-auto"
           />
         </label>
       </div>
       <button className="btn-primary px-3 py-1.5 text-xs self-start" onClick={analyze}>
         Find chat spikes
       </button>
+      {/* T-136 (9): analyzed and nothing found is a state of its own (`[]`; `null` is "not analyzed"). The 4 s toast is gone by the time anyone looks at the panel. */}
+      {peaks && peaks.length === 0 ? <p className="text-xs text-ink-dim">{NO_CHAT_SPIKES_MESSAGE}</p> : null}
       {peaks && peaks.length > 0 ? (
         <ul className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
           {peaks.map((p, i) => (
-            <li
-              key={i}
-              className="flex items-start gap-2 px-2 py-1.5 bg-bg-hover rounded text-xs"
-            >
-              <span className="font-mono">{formatClock(p.startSec)}</span>
-              <span className="text-ink-dim">{countOf(p.count, 'message')}</span>
-              <span className="flex-1 truncate text-ink-muted" title={p.topMessages.join(' · ')}>{p.topMessages.join(' · ')}</span>
-              <button
-                className="text-accent hover:underline"
-                onClick={() => addPeak(p, i)}
-              >
-                + Clip
-              </button>
+            <li key={i} className="flex flex-col gap-1 px-2 py-1.5 bg-bg-hover rounded text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* T-136 (9): where the clip runs, not just where it starts (a merged spike can be minutes long); the Smart highlight rows say the same.
+                    The range is wider than the start was, so the preview moved to a line of its own: squeezed beside it, it left a few letters.
+                    The row is 258 px at every window the app opens at, and a ten-hour stream's range (17 characters) and a four-digit count leave "+ Clip"
+                    no room (it wrapped onto two lines and ended past the row): `flex-wrap` drops it under the range instead, `ml-auto` keeps it at the
+                    right edge there, and the count's `whitespace-nowrap` makes the row wrap by item (without it the count itself breaks onto two lines). */}
+                <span className="font-mono">
+                  {formatClock(p.startSec)} → {formatClock(p.endSec)}
+                </span>
+                <span className="flex-1 text-ink-dim whitespace-nowrap">{countOf(p.count, 'message')}</span>
+                <button
+                  className="text-accent hover:underline ml-auto"
+                  onClick={() => addPeak(p, i)}
+                >
+                  + Clip
+                </button>
+              </div>
+              <div className="truncate text-ink-muted" title={p.topMessages.join(' · ')}>{p.topMessages.join(' · ')}</div>
             </li>
           ))}
         </ul>

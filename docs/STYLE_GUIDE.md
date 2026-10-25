@@ -338,6 +338,13 @@ Repeated UI is a component, not copy-paste:
   `tests/unit/progressSendsGuarded.test.ts` is the grep for siblings, kept: it fails on any `.send(` under `src/main` but
   the helper and `quitFlush.ts` (which wraps its own in a `try`). Record's convert holds the WebContents it took while the
   window was certainly alive, because a destroyed `BrowserWindow` throws on `.webContents` itself.
+- **A `stderr` accumulator in main keeps a 16 KB tail (T-136 (13)).** A handler that does `stderr += chunk` holds all of an hour-long ffmpeg's log
+  for the last few hundred characters a failure message uses (LESSONS_LEARNED, "runBurnIn stderr accumulator was uncapped", round 18: "every other
+  spawn caps at 16 KB"). The audio extraction was the one nobody had capped, and T-129 made multi-hour runs of it reachable. The idiom is
+  `if (stderr.length > 16384) stderr = stderr.slice(-16384)` inside the `data` handler (or `stderr = (stderr + text).slice(-16384)`), and
+  `tests/unit/stderrCapped.test.ts` reads every `<x>.stderr.on('data', handler)` under `src/main` with the syntax tree and fails on a handler that
+  accumulates without assigning a tail of at most 16384 to the accumulator. A handler whose stderr IS the product (the ebur128 scans parse every
+  line) or that cannot grow (`-version`) is a row in its table of audited exceptions, with the reason, never a silent skip.
 - **`recording:begin` takes its slot before its first await (T-123).** The cap on open sessions was read, then `mkdir` and
   the stream's `open` were awaited, then the session was inserted: twelve concurrent begins all read the same size and all
   passed a cap that four sequential ones enforce. `beginsInFlight` is counted in the same synchronous step as the check
@@ -669,7 +676,9 @@ Repeated UI is a component, not copy-paste:
 - **`<NameDialog>`** (`components/NameDialog.tsx`) — "ask the user for
   one name", the whole of it: Modal chrome, a labeled field, Enter or
   the confirm button, a blank name refused, Cancel/Escape/scrim leaving
-  the caller untouched. **Never `window.prompt` or `window.alert`** —
+  the caller untouched. Its optional `maxLength` is the caller's limit, enforced on
+  the input itself (T-135 (8): the mood-board rename passes `MAX_BOARD_NAME`, the
+  number main enforces); unset, the field takes any length. **Never `window.prompt` or `window.alert`** —
   Electron does not implement them, so the call throws inside the click
   handler and the control looks fine while doing nothing (T-28).
   `tests/unit/interactionWiring.test.ts` parses `src/` and fails on any
@@ -710,7 +719,7 @@ Repeated UI is a component, not copy-paste:
   text a second time. Every number
   box whose value feeds a gate (the overlay's Time, Size and Color, PiP width, the spike window, a custom preset's width,
   height and frame rate, the grid size, a text layer's Size, and (T-124 (15)) a layer's x / y / Rotation in Properties and the
-  overlay's x / y) is one; a new one is too, never `|| <default>` in an `onChange`. A `type="number"` box fed
+  overlay's x / y, and (T-136 (9)) the chat spike finder's extra seconds, 0 to 60) is one; a new one is too, never `|| <default>` in an `onChange`. A `type="number"` box fed
   `String(n)` on every keystroke cannot be typed a minus sign into (`"-"` is not a number, so the store's old value replaced it)
   and turns ".5" into 1: the clamps are `layerOffsetRange` and `LAYER_ROTATION_RANGE` (`@shared/canvas`) for a layer and 0..1
   for the overlay's fractions, applied by `clampTyped` when typing ends.

@@ -2908,13 +2908,17 @@ test.describe('imagii Audio Studio', () => {
       const silentMp4 = path.join(studio.root, 'source', 'picture-only.mp4')
       const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `testsrc2=size=160x120:rate=15:duration=${FIXTURE_SECONDS}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', silentMp4])
       if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      // T-136 (10): two sentences. The pick says "Pick another file" (nothing was added, so there is nothing to remove); the export, which runs with
+      // the track already added, says "Remove it or pick another file".
+      const PICK_SENTENCE = 'That file has no sound in it. Pick another file.'
       const SENTENCE = 'The second track has no sound in it. Remove it or pick another file.'
 
       // ── picked: refused by name, nothing is added ──
       await stubOpenDialog(app, silentMp4)
       await panel.getByRole('button', { name: /Background music/ }).click()
-      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain(SENTENCE)
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain(PICK_SENTENCE)
       expect((await readToastLog(window)).some((t) => t.includes('Background music added')), 'no "added"').toBe(false)
+      expect((await readToastLog(window)).some((t) => /remove/i.test(t)), 'and it does not tell the person to remove what was never added').toBe(false)
       await expect(panel).toContainText('Layer in background music')
       await expect(panel.getByRole('button', { name: /Remove/ })).toHaveCount(0)
 
@@ -2931,10 +2935,12 @@ test.describe('imagii Audio Studio', () => {
       const exportPanel = window.locator(EXPORT)
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       await exportButton.click()
-      // The pick said it once; the export says it again (the same words: it is the same fact about the same track).
+      // The pick said its sentence once; the export says the second track's, once (the same fact about the same track, in the words that fit what
+      // the person can do now: the track is added, so it can be removed).
       await expect
         .poll(async () => (await readToastLog(window)).filter((t) => t === SENTENCE).length, { timeout: 60_000, intervals: [250] })
-        .toBe(2)
+        .toBe(1)
+      expect((await readToastLog(window)).filter((t) => t === PICK_SENTENCE)).toHaveLength(1)
       await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       expect(existsSync(path.join(studio.root, 'mix.wav'))).toBe(false)
@@ -3775,6 +3781,56 @@ test.describe('T-131: review-gate fixes, sweep 17 (Audio Studio)', () => {
       await window.waitForTimeout(800)
       expect(await chooserCalls(app), 'one chooser, not two').toHaveLength(1)
       expect((await readToastLog(window)).filter((t) => t === 'Background music added'), 'added once, not replaced by a second answer').toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// T-135 (11)'s pick rule, the half the refusal case above cannot see. The panel refuses a picked second track ONLY on the probe's "no audio
+// stream" verdict. Any other probe failure - here the one a streamed MediaRecorder WebM produces, `NoUsableDurationError`, because its header
+// carries no length - is no verdict on the file (ffmpeg mixes it; the export looks again), so the track is ADDED. A panel that refused on ANY probe
+// error passed every other case in this file and the unit suite (the expediter's mutation, round 85): nothing held the rule until this.
+test.describe('a second track whose length cannot be read is still added (T-135 (11) pick rule)', () => {
+  test('a MediaRecorder WebM with no duration in its header is added as a second track, and the pick-time no-sound sentence is not said', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('second-no-duration')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      const webm = path.join(studio.root, 'source', 'take-no-duration.webm')
+      const made = await runBinary(ffmpegPath, [
+        '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+        '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-c:a', 'libopus', '-live', '1', '-f', 'webm', webm
+      ])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      // The fixture is what it says: no duration in the header (ffprobe prints N/A), so `probeAudio` cannot use it.
+      const probed = spawnSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', webm])
+      expect(probed.stdout.toString().trim(), 'a header with no duration').toBe('N/A')
+      // And the panel's own probe really fails on it, with the length verdict and NOT the sound one: the premise the rule is about. (Were the
+      // probe to start reading this file, the case below would pass for the wrong reason, so the premise is asserted, not assumed.)
+      const probeAnswer = await window.evaluate(
+        (p) =>
+          (window as unknown as { api: { audio: { probe: (f: string) => Promise<unknown> } } }).api.audio
+            .probe(p)
+            .then(() => 'read', (e: unknown) => (e instanceof Error ? e.message : String(e))),
+        webm
+      )
+      expect(probeAnswer, 'the probe could not read a length from it').toContain('no usable duration')
+      expect(probeAnswer, 'and did not say it has no sound').not.toContain('No audio stream')
+
+      // ── picked: added, the way a file the probe read would be ──
+      await stubOpenDialog(app, webm)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Background music added')
+      await expect(panel).toContainText('Background music: take-no-duration.webm')
+      await expect(panel.getByRole('button', { name: /Remove/ }), 'the track is there to be removed').toHaveCount(1)
+      await expect(panel).not.toContainText('Layer in background music')
+      // Nobody told the person the file has no sound: it has some, and the pick refused nothing.
+      const log = await readToastLog(window)
+      expect(log.some((t) => t.includes('has no sound in it')), 'no "no sound" sentence of the pick or the export').toBe(false)
+      expect(log.filter((t) => t === 'Background music added'), 'added once').toHaveLength(1)
     } finally {
       await closeStudio(studio)
     }

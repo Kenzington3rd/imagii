@@ -5326,7 +5326,7 @@ IMG-PREC.
   `npm run verify`, `npm run test:media` and the FULL Playwright
   suite green before handback; no docs/TICKETS.md, package.json or
   lockfile edits.
-- **Status:** Track A done (round 85, see the Done entry); Track B in expedite
+- **Status:** done (round 85, both tracks — see the two Done entries)
 
 ---
 
@@ -5795,6 +5795,54 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 85, Track B — T-136 items 9-15, landed in the commit that
+carries this entry, merged onto Track A's (2c85611). Worked by one
+Sonnet in a fresh clone of 47ef529 and, after the same container
+restart, resumed in the same clone by a second Sonnet once the
+expediter's audit found all 67 recorded mutations restored
+byte-identical and no file at a mutant's sha. 84 ledger mutations
+all restored byte-identical (eight survived a first run and are
+listed: three killed on rerun after the tests were strengthened,
+one superseded, two equivalent or by-design at their layer and
+killed at unit level, and one - the chat row's `whitespace-nowrap`
+- that led the worker to a real layout defect: a 10-hour stream's
+range wrapped "+ Clip" past its row at the 1024 and default
+windows, now fixed with a wrapping first line), 21 reds incl. both
+majors at Layer 5. The fixes: the chat spike finder ranks rows by
+their densest window, shows start → end, clamps "Extra seconds" to
+0..60 (in the box and in findChatPeaks), keeps an inline line
+naming the rule when a log holds no spike, and lines its two boxes
+up; the pick-time refusal of a soundless second track has its own
+sentence with no "Remove it"; a successful autosave Clear takes the
+"Last autosave" line with it; Clear thumbnail cache and a tile's ✕
+report a refused write; the extraction caps its stderr at 16 KB and
+a source-scan test holds every main-process stderr accumulator to
+a cap; the importer's classifier ignores keywords inside quoted
+file names, so a finished sentence from main passes through; a
+compilation whose first segment is lost at the join names its clip
+like any later one (any exit code; a Cancel still wins). Sent back
+once by the expediter: an independent mutation (the pick refusing
+on ANY probe error) survived the whole unit suite and both
+second-track e2e cases - T-135 (11)'s rule that only a no-audio
+verdict refuses was pinned nowhere in the renderer; a follow-up
+Sonnet added an e2e (a MediaRecorder WebM with no header duration
+is added, and the no-sound sentence is not said) and a wiring pin,
+both killing that exact mutant, re-confirmed red/green by the
+expediter. Expedited personally: verify x2 (180/4929 before the
+follow-up), test:media on 7.0.2 (355 passed | 13 skipped of 368),
+the T-136 (15) Layer 5 block on 6.1.1 (3/3), build + FULL
+Playwright 424/424 with zero flakes; integrity and ledger audit
+clean (no forbidden files, no Track A file touched). Merged by
+structure, not by hunk: both tracks appended whole blocks to the
+same eight shared docs and test files, so each track's block was
+lifted out by a unique window of the base's last lines, the middle
+edits merged cleanly, and the blocks were re-appended (B's LESSONS
+entry above A's, newest first); a line-level proof showed neither
+side lost a line beyond what the other deliberately changed and
+every line either side added is present, and every Track-B-only
+file is byte-identical to the expedited clone. The merged tree's
+gates are this entry's commit.
 
 Round 85, Track A — T-136 items 1-8, landed in the commit that
 carries this entry (Track B, items 9-15, lands next). Worked by one

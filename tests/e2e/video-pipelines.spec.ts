@@ -978,7 +978,8 @@ test.describe('ChatHighlightPanel', () => {
       const row = card.locator('li').first()
       // bucketStart 30 s, minus the 15 s pad = 0:15. The count is the
       // spike bucket's own size, and the preview is its first 3 messages.
-      await expect(row.locator('span.font-mono')).toHaveText('0:15')
+      // T-136 (9): and where it ENDS (the row used to show only the start), so what "+ Clip" adds is what the row says.
+      await expect(row.locator('span.font-mono')).toHaveText('0:15 → 0:55')
       await expect(row.getByText('9 messages')).toBeVisible()
       await expect(row).toContainText('POG that was insane · POG that was insane')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-01-chat-peaks.png') })
@@ -998,7 +999,7 @@ test.describe('ChatHighlightPanel', () => {
       // Pad 15 -> 0 moves the peak's start from 0:15 to the bucket itself.
       await card.getByRole('spinbutton').nth(1).fill('0')
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30')
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30 → 0:40')
       await expect(card.locator('li').first().getByText('9 messages')).toBeVisible()
 
       // Bucket 10 -> 5 splits the 9-message spike across two 5 s buckets;
@@ -1006,7 +1007,7 @@ test.describe('ChatHighlightPanel', () => {
       await card.getByRole('spinbutton').first().fill('5')
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
       await expect(card.locator('li').first().getByText('5 messages')).toBeVisible()
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30')
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:30 → 0:35')
 
       // And the re-run's + clip uses the NEW numbers: 30 -> 30 + 5 + 0. By now
       // there is no whole-video clip left to retire, so this one just adds.
@@ -1033,7 +1034,7 @@ test.describe('ChatHighlightPanel', () => {
       await expectToast(window, 'Found 1 chat spike')
       await expect(card.locator('li'), 'one spike, one row').toHaveCount(1)
       const row = card.locator('li').first()
-      await expect(row.locator('span.font-mono')).toHaveText('1:45')
+      await expect(row.locator('span.font-mono')).toHaveText('1:45 → 2:45')
       await expect(row.getByText('24 messages')).toBeVisible()
       await row.getByRole('button', { name: '+ Clip' }).click()
       await expectToast(window, 'Clip added')
@@ -1090,7 +1091,7 @@ test.describe('ChatHighlightPanel', () => {
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
       // The peak itself is real: 0:15, past the end of this 2 s source.
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:15')
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:15 → 0:55')
       await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       const REFUSAL =
         'That spike is past the end of this video — check the log matches this source.'
@@ -1109,7 +1110,7 @@ test.describe('ChatHighlightPanel', () => {
       await card.locator('textarea').fill(chatLogWithEarlySpike())
       await analyze.click()
       await expect(card.locator('li')).toHaveCount(1)
-      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00')
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00 → 0:25')
       await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(window, 'Clip added')
       // T-94: it replaced the untouched whole-video clip (also 0:00 → 0:02 on
@@ -2827,7 +2828,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await expect(scan().locator('textarea'), 'the chat log is where it was left').toHaveValue(chatLogOverBurst())
       await expect(chat().locator('textarea')).toHaveValue(chatLogWithOneSpike())
       await expect(chat().locator('li'), 'the spikes are still listed').toHaveCount(1)
-      await expect(chat().locator('li').first().locator('span.font-mono')).toHaveText('0:15')
+      await expect(chat().locator('li').first().locator('span.font-mono')).toHaveText('0:15 → 0:55')
 
       // Clean audio navigates to Audio Studio: the same trip.
       await window.getByRole('button', { name: 'Clean audio' }).click()
@@ -10570,6 +10571,204 @@ test.describe('T-136 (6): the Output preview says why it is black, until a previ
       await expect(card.getByText(NOTE)).toHaveCount(0)
     } finally {
       await plain.app.close()
+    }
+  })
+})
+
+// ═════════ The chat spike finder's range, extra seconds, empty result and number boxes (T-136 (9)) ═════════
+
+// A late import on purpose: this block is appended so the two tracks of the round land cleanly, and the line beside the others would be a hunk both touch.
+import { expectSameRow } from './layout'
+
+/** What the panel says under the button for a log that was analyzed and holds no spike (`NO_CHAT_SPIKES_MESSAGE`, `shared/chatPeaks.ts`). */
+const NO_SPIKES_LINE =
+  'No chat spikes found. A spike is a window with at least 5 messages and twice as many as a usual window, and the log needs messages in at least 3 different windows to compare.'
+
+/**
+ * T-136 (9): a LONG, moderately busy stretch of chat - a raid. A quiet bed of one message per 10 s window to 1000 s (the median must be the bed's), and twenty adjacent windows from 100 s
+ * to 290 s with 6 messages each (120 in all, the densest window 6). One row: from 100 - 15 = 85 s (1:25) to 290 + 10 + 15 = 315 s (5:15).
+ */
+function chatLogWithLongRun(offsetSec = 0, perWindow = 6): string {
+  const lines: string[] = []
+  for (let t = 1; t < 1000; t += 10) {
+    if (t >= 100 && t < 300) continue
+    lines.push(`[${mmss(t + offsetSec)}] viewer${t}: quiet chatter ${t}`)
+  }
+  for (let bucket = 100; bucket < 300; bucket += 10) {
+    for (let i = 0; i < perWindow; i++) lines.push(`[${mmss(bucket + (i % 10) + offsetSec)}] raid${bucket}x${i}: welcome raiders`)
+  }
+  return lines.join('\n')
+}
+
+/** Twenty messages in only two different windows: loud, and nothing to compare it against. */
+function chatLogInTwoWindows(): string {
+  const lines: string[] = []
+  for (let i = 0; i < 10; i++) lines.push(`[${mmss(i)}] a${i}: POG`)
+  for (let i = 0; i < 10; i++) lines.push(`[${mmss(10 + i)}] b${i}: POG`)
+  return lines.join('\n')
+}
+
+test.describe('ChatHighlightPanel - range, extra seconds, empty result, alignment (T-136 (9))', () => {
+  test('a long spike shows where it runs, and + Clip adds exactly that range', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t136chat-range', longSrc)
+    try {
+      const card = chatCard(window)
+      await card.locator('textarea').fill(chatLogWithLongRun())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li'), 'twenty windows in a row are one spike').toHaveCount(1)
+      const row = card.locator('li').first()
+      await expect(row.locator('span.font-mono'), 'the row says how long the clip it adds is').toHaveText('1:25 → 5:15')
+      await expect(row.getByText('120 messages')).toBeVisible()
+      await row.getByRole('button', { name: '+ Clip' }).click()
+      await expectToast(window, 'Clip added')
+      expect(await clipRows(window), 'what the row said is what landed').toEqual([{ name: 'Chat spike 1', range: '1:25 → 5:15' }])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the extra seconds are 0 to 60: a negative number is clamped when typing ends, and the clip it adds has a real length', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t136chat-pad', longSrc)
+    try {
+      const card = chatCard(window)
+      const pad = card.getByLabel('Extra seconds around each clip')
+      await expect(pad).toHaveValue('15')
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+
+      // -5 used to be taken as typed: a window of zero length (30 + 5 .. 30 + 10 - 5), and a "+ Clip" refusal that blamed the log.
+      await retype(pad, '-5')
+      await leave(pad)
+      await expect(pad, 'a negative number is clamped to 0 when typing ends').toHaveValue('0')
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      const row = card.locator('li').first()
+      await expect(row.locator('span.font-mono')).toHaveText('0:30 → 0:40')
+      await row.getByRole('button', { name: '+ Clip' }).click()
+      await expectToast(window, 'Clip added')
+      expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '0:30 → 0:40' }])
+
+      await retype(pad, '600')
+      await leave(pad)
+      await expect(pad, 'and a number past 60 is 60').toHaveValue('60')
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:00 → 1:40')
+
+      // An emptied box goes back to what it was, as the spike window's does.
+      await pad.click()
+      await pad.press('Control+a')
+      await pad.press('Backspace')
+      await expect(pad, 'emptied: nothing snaps back into it').toHaveValue('')
+      await leave(pad)
+      await expect(pad).toHaveValue('60')
+      // A number inside the range is kept as typed, a fraction of a second included.
+      await retype(pad, '2.5')
+      await leave(pad)
+      await expect(pad).toHaveValue('2.5')
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li').first().locator('span.font-mono')).toHaveText('0:27 → 0:42')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a log with no spike leaves the rule on the panel, which is gone when a spike is found and is still there after a trip to Home', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t136chat-empty', longSrc)
+    try {
+      const card = chatCard(window)
+      const line = card.getByText(NO_SPIKES_LINE, { exact: true })
+      // Not analyzed yet: nothing to say, which is not the same as "analyzed, and there is none".
+      await expect(line).toHaveCount(0)
+
+      await card.locator('textarea').fill(chatLogWithNoSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expectToast(window, 'No chat spikes detected')
+      await expect(line, 'the rule stays on the panel after the 4 s toast is gone').toBeVisible()
+      await expect(card.locator('li')).toHaveCount(0)
+
+      // A trip to Home and back keeps it: the result is the open video's.
+      await leaveAndReturn(window)
+      await expect(line).toBeVisible()
+
+      // A log that has too few windows to compare is the same refusal in the same words.
+      await card.locator('textarea').fill(chatLogInTwoWindows())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(line).toBeVisible()
+      await expect(card.locator('li')).toHaveCount(0)
+
+      // A text with no messages is a refusal of the LOG, not an empty result: the rule is not printed for it, and what was there stays.
+      await card.locator('textarea').fill('these are my stream notes')
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expectToast(window, 'No timestamped messages found')
+
+      // A spike takes the line away.
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li')).toHaveCount(1)
+      await expect(line).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the two number boxes share one line at the minimum window, the default one and 1920 px, and a row keeps its range and count on one line', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t136chat-layout', clipSrc)
+    try {
+      const card = chatCard(window)
+      // The widest row the panel draws: a spike ten hours into a marathon stream ("10:01:25 → 10:05:15") with a four-digit count ("1200 messages"); the clip is
+      // refused on a 2 s video, but the row is what is measured. At the 1024 px minimum the card leaves the row 258 px: 122 for a 17-character range and 33 for
+      // "+ Clip" left 87 for a count, and "120 messages" is 86 of them, so a longer range or a fourth digit pushed the row past its edge.
+      await card.locator('textarea').fill(chatLogWithLongRun(36000, 60))
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li')).toHaveCount(1)
+      await expect(card.locator('li span.font-mono'), 'the widest range the panel draws').toHaveText('10:01:25 → 10:05:15')
+      await expect(card.locator('li').getByText('1200 messages'), 'and the biggest count').toBeVisible()
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      for (const [size, where] of [
+        [MIN_WINDOW, 'the 1024 px minimum'],
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [{ width: 1920, height: 1080 }, '1920 px']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        // The long label ("Extra seconds around each clip") wraps in the narrow column and the short one does not: the boxes sat 16 px apart.
+        await check(() =>
+          expectSameRow(
+            [
+              { name: 'the Spike window box', locator: card.getByLabel('Spike window (s)') },
+              { name: 'the Extra seconds box', locator: card.getByLabel('Extra seconds around each clip') }
+            ],
+            `the chat spike finder's number boxes at ${where}`
+          )
+        )
+        await check(() => expectNoHorizontalOverflow(card, `the chat spike finder at ${where}`))
+        // The list scrolls (it is `overflow-y-auto`, which makes sideways overflow auto too), so a row wider than its list is a scrollbar the card check above
+        // does not see: the list and the row are measured themselves, and the row's "+ Clip" must end inside the row.
+        await check(() => expectNoHorizontalOverflow(card.locator('ul'), `the spike list at ${where}`))
+        const clipButton = card.locator('li').getByRole('button', { name: '+ Clip' })
+        await check(() => expectControlsWhole(card.locator('li'), clipButton, `the spike row's + Clip at ${where}`))
+        await check(() => expectOneLine(card.locator('li span'), `the spike row's range and count at ${where}`))
+        // "+ Clip" is one line, and it ends at the row's right edge whether it shares the first line or the count left it no room (it drops under the range).
+        await check(() => expectOneLine(clipButton, `the spike row's + Clip at ${where}`))
+        await check(async () => {
+          const fromEdge = await clipButton.evaluate((el) => {
+            const li = el.closest('li') as HTMLElement
+            return Math.round(li.getBoundingClientRect().right - parseFloat(getComputedStyle(li).paddingRight) - el.getBoundingClientRect().right)
+          })
+          expect(Math.abs(fromEdge), `+ Clip ends ${fromEdge} px from the row's right edge at ${where}`).toBeLessThanOrEqual(1)
+        })
+      }
+      expect(problems, 'the two boxes are on one line at every size, and so is the row').toEqual([])
+    } finally {
+      await app.close()
     }
   })
 })

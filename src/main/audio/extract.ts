@@ -125,7 +125,12 @@ async function extractUnderRun(
     activeExtractions.add(p)
     onChild?.(p)
     let stderr = ''
-    p.stderr.on('data', (b) => (stderr += String(b)))
+    // T-136 (13): the 16 KB tail every other spawn keeps (LESSONS_LEARNED, round 18). T-129 made multi-hour extractions reachable, and this one
+    // held ALL of an hour-long run's stderr for the last 500 characters the failure uses. `stderrCapped.test.ts` finds the next one that forgets.
+    p.stderr.on('data', (b) => {
+      stderr += String(b)
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
+    })
     p.on('error', (err) => {
       activeExtractions.delete(p)
       reject(cancelledOr(p, err))

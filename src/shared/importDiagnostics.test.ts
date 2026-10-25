@@ -209,3 +209,73 @@ describe('describeImportError', () => {
     expect(errorSpy).toHaveBeenCalledWith("[imagii] imagii couldn't open that file.", odd)
   })
 })
+
+/**
+ * T-136 (14): the classifier matched its keywords ('codec', 'decoder', 'moov atom', ...) anywhere in the message, and a finished sentence from main
+ * that QUOTES the person's file name carries that name: "Still extracting the sound from "codec_test.mp4". Wait for it to finish, then try again."
+ * became "imagii can't read this audio format..." (executed in the built app), a sentence about a problem that did not exist. A quoted name is not
+ * a cause, so the keywords are looked for in the message with its double-quoted spans taken out.
+ */
+describe('describeImportError - a quoted file name is not a cause (T-136 (14))', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const wrap = (channel: string, inner: string): Error =>
+    new Error(`Error invoking remote method '${channel}': Error: ${inner}`)
+  /** main's single-flight refusal for the audio extraction (`ipc/audio.ts`): a finished sentence that quotes the file being worked on. */
+  const busy = (name: string): string => `Still extracting the sound from "${name}". Wait for it to finish, then try again.`
+
+  it('the sentence the executed case hit passes through whole, whatever the importer', () => {
+    const sentence = busy('codec_test.mp4')
+    for (const kind of ['audio', 'video'] as const) {
+      expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/codec_test.mp4', kind)).toBe(sentence)
+    }
+  })
+
+  it.each([
+    ['codec_test.mp4', 'audio'],
+    ['decoder notes.mp4', 'audio'],
+    ['moov atom.mp4', 'video'],
+    ['invalid data found.mov', 'video'],
+    ['no usable duration.mkv', 'audio'],
+    ['no video stream.mp4', 'video'],
+    ['no audio stream.wav', 'audio'],
+    ['cannot find me.mp4', 'video']
+  ] as const)('a file called "%s" (%s importer): main\'s sentence is not rewritten for the word in its name', (name, kind) => {
+    const sentence = busy(name)
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), `/clips/${name}`, kind)).toBe(sentence)
+    expect(errorSpy, 'no "could not open" line: nothing was classified').not.toHaveBeenCalledWith('[imagii] could not open', expect.anything(), expect.anything())
+  })
+
+  it('a clean name is the control: the same sentence passes through as it always did', () => {
+    const sentence = busy('saturday-stream.mp4')
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/saturday-stream.mp4', 'audio')).toBe(sentence)
+  })
+
+  describe('and a real cause is still found, with or without a quoted name beside it', () => {
+    it.each([
+      ['Could not find codec parameters for stream 0 of "clip.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec for "codec_test.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['No decoder for stream 0 in "x.wav"', 'audio', "imagii can't read this audio format. Re-export it as WAV or MP3 and try again."],
+      ['"a.mp4": Invalid data found when processing input', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['moov atom not found in "a b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec "unterminated', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A lone quote (an inch mark, a stray character) is not a span: it takes nothing with it, so a cause printed after it is still found.
+      ['Opening 5" capture failed: unsupported codec', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A keyword BETWEEN two quoted names is outside both: a span ends at the next quote, it does not run to the last one.
+      ['Could not open "a.mp4": unsupported codec in "b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."]
+    ] as const)('%s (%s)', (raw, kind, expected) => {
+      expect(describeImportError(new Error(raw), '/x/clip.mp4', kind)).toBe(expected)
+      expect(errorSpy).toHaveBeenCalled()
+    })
+
+    it('a cause that is in the quoted text only is not one: the message is judged by what is left, so it falls through to the plain sentence', () => {
+      expect(describeImportError(new Error('Could not open "codec.mp4"'), null, 'video')).toBe("imagii couldn't open that file.")
+    })
+  })
+})

@@ -262,7 +262,10 @@ NOT roll their own fixed-inset scrim — they should compose
 
 Adoption is now project-wide as of round 16: TemplatesDialog,
 SafeZoneWarningModal, FixWizard, ThumbnailVariants, CustomPresetManager,
-HotkeyOverlay and NameDialog all use `<Modal>`. The only "modal-shaped"
+HotkeyOverlay and NameDialog all use `<Modal>`, and so do the confirms
+added since: Clip Kit's two (the long-clip warning and "Cancel Clip Kit"),
+the Captions panel's "Clear saved transcripts?" and the Export panel's
+"Cancel running jobs". The only "modal-shaped"
 UIs that DON'T use it are the image-studio and audio-studio export bars,
 which are inline panels, not dialogs. If you find yourself writing
 `fixed inset-0 bg-black/70` again, stop — that's a bug.

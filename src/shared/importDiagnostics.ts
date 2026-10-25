@@ -98,7 +98,10 @@ export function describeImportError(
   filePath?: string | null,
   kind: ImportKind = 'video'
 ): string {
-  const lowered = ipcErrorMessage(err, '').toLowerCase()
+  // T-136 (14): the keywords are looked for OUTSIDE double quotes. A finished sentence from main quotes the person's file name ("Still extracting the
+  // sound from "codec_test.mp4"..."), and a name is not a cause: it was read as the unreadable-format error. A quote that is never closed removes
+  // nothing, so a cause printed after a lone quote is still found.
+  const lowered = ipcErrorMessage(err, '').replace(/"[^"]*"/g, ' ').toLowerCase()
   const inCloud = pathLooksLikeCloudSync(filePath ?? '')
   const known = (sentence: string): string => {
     console.error('[imagii] could not open', filePath ?? '(no path)', err)

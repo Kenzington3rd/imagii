@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, unlinkSync, watch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -9905,5 +9905,100 @@ describe('a second track with no sound is refused up front and named, not blamed
     expect(err?.message).toMatch(/No such file or directory/i)
     expect(events, 'ahead of the measuring pass: the probe said so, not the render').toEqual([])
     expect(existsSync(spec.outputPath)).toBe(false)
+  }, 120_000)
+})
+
+describe('a compilation whose FIRST segment is lost at the join names its clip (real ffmpeg, T-136 (15))', () => {
+  // The concat demuxer cannot open an input: for a LATER one it ends the file there and exits 0 (T-131 (1): "a shorter file, Saved"), for the FIRST one it
+  // exits non-zero (254 on both majors, measured) with the same "Impossible to open" line. The runner's guard was `code === 0 && lostAPart`, so a lost first
+  // segment reached the person as the raw "concat exit 254" and then as the generic missing-file sentence, about their source. The line is the evidence,
+  // whatever the exit code. Run on both majors.
+  let source = ''
+  const run = (args: string[]): Promise<{ code: number | null; stderr: string }> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(ffmpegPath, args)
+      let stderr = ''
+      child.stderr.on('data', (b) => (stderr += String(b)))
+      child.on('error', reject)
+      child.on('close', (code) => resolve({ code, stderr }))
+    })
+  const intro = 'The compilation could not be put together because the clip "Intro" could not be read, so nothing was saved. Try again, and if it keeps happening, leave that clip out.'
+
+  beforeAll(async () => {
+    source = path.join(workDir, 't136-15-source.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=8', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', source])
+  }, 60_000)
+
+  it('the shape: a missing FIRST input exits non-zero with the line naming segment 0, and a missing LATER one still exits 0 with it (this binary)', async () => {
+    const dir = await mkdtemp(path.join(workDir, 't136-first-'))
+    const parts = [0, 1].map((i) => path.join(dir, `seg-t136first-${i}.mkv`))
+    await ff(['-y', '-ss', '1', '-to', '3', '-i', source, '-vf', 'fps=15', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'pcm_s16le', parts[1] as string])
+    const join = async (listed: string[], out: string): Promise<{ code: number | null; stderr: string }> => {
+      const list = path.join(dir, `${out}.txt`)
+      await writeFile(list, listed.map((p) => `file '${p}'`).join('\n'))
+      return run(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'copy', '-c:a', 'aac', path.join(dir, `${out}.mp4`)])
+    }
+    const first = await join([parts[0] as string, parts[1] as string], 'first-lost')
+    expect(first.code, 'the first input is not there: the join fails').not.toBe(0)
+    expect(first.stderr).toMatch(FFMPEG_UNREADABLE_PART)
+    expect(unreadableSegmentIndex(first.stderr, 't136first'), 'and the line says which').toBe(0)
+    const later = await join([parts[1] as string, parts[0] as string], 'later-lost')
+    expect(later.code, 'a later one ends the file there and exits 0: the case the old guard was written for').toBe(0)
+    expect(later.stderr).toMatch(FFMPEG_UNREADABLE_PART)
+    expect(unreadableSegmentIndex(later.stderr, 't136first'), 'the same line, naming the segment that is not there').toBe(0)
+  }, 120_000)
+
+  it('through runConcat: segment 0 is deleted after the list is written, and the person reads which clip, not "concat exit"', async () => {
+    const jobId = 't136lost0'
+    const outDir = await mkdtemp(path.join(workDir, 't136-lost0-'))
+    const scratch = path.join(os.tmpdir(), 'imagii-concat')
+    await mkdir(scratch, { recursive: true })
+    const seg0 = path.join(scratch, `seg-${jobId}-0.${SEGMENT_EXTENSION}`)
+    let removed = false
+    // The list is the runner's last write before the join starts (the output's name is chosen, then ffmpeg is spawned): the moment it appears, the
+    // first segment goes. Deleting it any earlier would be the encode failing, and any later the join having opened it.
+    const watcher = watch(scratch, (_event, name) => {
+      if (name === `list-${jobId}.txt` && !removed) {
+        try {
+          unlinkSync(seg0)
+          removed = true
+        } catch {
+          /* the event fired twice, or the file was already gone */
+        }
+      }
+    })
+    let err: Error | null = null
+    try {
+      err = await runConcat({
+        jobId,
+        sourcePath: source,
+        outDir,
+        segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 4, endSec: 6, name: 'Boss fight' }],
+        fadeMs: 0,
+        width: 320,
+        height: 180
+      }).then(() => null, (e: Error) => e)
+    } finally {
+      watcher.close()
+    }
+    expect(removed, 'the case really took segment 0 away between the list and the join').toBe(true)
+    expect(err?.message, 'the sentence names the clip').toBe(intro)
+    expect(err?.message).not.toMatch(/concat exit/)
+    expect(await readdir(outDir), 'no short file is left').toEqual([])
+    expect((await readdir(scratch)).filter((f) => f.includes(jobId)), 'and the scratch is gone').toEqual([])
+  }, 120_000)
+
+  it('control: the same compilation, nothing deleted, joins both clips', async () => {
+    const outDir = await mkdtemp(path.join(workDir, 't136-ok-'))
+    const { outputPath } = await runConcat({
+      jobId: 't136ok',
+      sourcePath: source,
+      outDir,
+      segments: [{ startSec: 1, endSec: 3, name: 'Intro' }, { startSec: 4, endSec: 6, name: 'Boss fight' }],
+      fadeMs: 0,
+      width: 320,
+      height: 180
+    })
+    near(Number((await ffprobeJson(outputPath)).format.duration), 4, 0.3, 'two 2 s clips')
   }, 120_000)
 })

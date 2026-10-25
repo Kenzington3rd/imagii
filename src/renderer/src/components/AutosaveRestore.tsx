@@ -147,6 +147,9 @@ export function AutosaveRestore(): JSX.Element | null {
     try {
       await window.api.autosave.clear()
       toast('Autosave cleared', { icon: <Icon name="trash" size={18} /> })
+      // T-136 (11): the dismissed state draws "Last autosave: N ago" from `info`, which was read when the page mounted. A file that was just deleted
+      // is not a backup, so the status line goes with it now, not on the next visit to Home.
+      setInfo({ exists: false })
       setDismissed(true)
     } catch (err) {
       // T-57: a clear that failed leaves the file exactly where it was, so

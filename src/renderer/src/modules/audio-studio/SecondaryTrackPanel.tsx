@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
-import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_NO_SOUND_MESSAGE, isNoAudioStreamError } from '@shared/audio'
+import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_PICK_NO_SOUND_MESSAGE, isNoAudioStreamError } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
@@ -60,12 +60,12 @@ export function SecondaryTrackPanel(): JSX.Element {
       // T-135 (11): the file is looked at when it is picked. One with no sound stream can never be mixed (the export's `[1:a]` reference to it died
       // late, after a minutes-long loudness pass, in a sentence about the source), so it is refused here by what it is. ONLY that verdict refuses:
       // a probe that could not read a LENGTH (a streamed WebM) or failed another way is no verdict on the file - ffmpeg mixes those - and the
-      // export looks again.
+      // export looks again. T-136 (10): the sentence is the pick's own - nothing was added, so it does not tell the person to remove anything.
       try {
         await window.api.audio.probe(filePath)
       } catch (err) {
         if (isNoAudioStreamError(err)) {
-          toast.error(SECOND_TRACK_NO_SOUND_MESSAGE, { duration: ERROR_TOAST_MS })
+          toast.error(SECOND_TRACK_PICK_NO_SOUND_MESSAGE, { duration: ERROR_TOAST_MS })
           return
         }
       }

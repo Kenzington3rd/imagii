@@ -8,6 +8,7 @@ import {
   LOUDNESS_TARGET_LUFS,
   SECONDARY_GAIN_DB,
   SECOND_TRACK_NO_SOUND_MESSAGE,
+  SECOND_TRACK_PICK_NO_SOUND_MESSAGE,
   audioFileExtension,
   audioPassLabel,
   audioPassPlan,
@@ -419,5 +420,38 @@ describe('NoUsableDurationError - a probe that read the streams and found no len
     expect(err.hasVideo).toBe(hasVideo)
     expect(err.name).toBe('NoUsableDurationError')
     expect(new Error(NO_USABLE_DURATION_MESSAGE) instanceof NoUsableDurationError, 'a plain Error with the same text carries no answer').toBe(false)
+  })
+})
+
+/**
+ * T-136 (10): the pick-time refusal reused the export's sentence, "The second track has no sound in it. Remove it or pick another file.", and the
+ * panel adds nothing when it refuses (the e2e pins zero Remove buttons right after it): there was nothing to remove. The pick has a sentence of its
+ * own; the export's stays for an export whose second track lost its sound AFTER it was added.
+ */
+describe('the second track\'s two no-sound sentences (T-136 (10))', () => {
+  it('the pick says what the file is and what to do, and offers nothing to remove', () => {
+    expect(SECOND_TRACK_PICK_NO_SOUND_MESSAGE).toBe('That file has no sound in it. Pick another file.')
+    expect(SECOND_TRACK_PICK_NO_SOUND_MESSAGE).not.toMatch(/remove/i)
+  })
+
+  it('the export keeps its own, which does tell the person to remove the track (it is added by then)', () => {
+    expect(SECOND_TRACK_NO_SOUND_MESSAGE).toBe('The second track has no sound in it. Remove it or pick another file.')
+    expect(SECOND_TRACK_PICK_NO_SOUND_MESSAGE).not.toBe(SECOND_TRACK_NO_SOUND_MESSAGE)
+  })
+
+  it('is a finished sentence that userFacingError lets stand, through Electron\'s envelope too, and is not the importer\'s no-sound verdict', () => {
+    const sentence = SECOND_TRACK_PICK_NO_SOUND_MESSAGE
+    expect(sentence.endsWith('.')).toBe(true)
+    expect(sentence).not.toContain('\n')
+    expect(sentence).not.toBe(NO_AUDIO_STREAM_MESSAGE)
+    expect(isNoAudioStreamError(new Error(sentence))).toBe(false)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const wrapped = new Error(`Error invoking remote method 'audio:probe': Error: ${sentence}`)
+      expect(userFacingError(wrapped, "Couldn't add that file.")).toEqual({ cancelled: false, message: sentence })
+      expect(userFacingError(new Error(sentence), "Couldn't add that file.").message).toBe(sentence)
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 })

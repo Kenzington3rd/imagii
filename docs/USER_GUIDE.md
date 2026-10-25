@@ -360,11 +360,19 @@ that names the file being converted.)
 Paste a Twitch chat log, one message per line in the form
 `[mm:ss] user: message`, and click **Find chat spikes**. imagii counts messages
 in short time windows (the **Spike window (s)** field) and lists the busiest
-moments with the messages in them. A spike that runs over several windows in a row is
-one moment, not several. **+ Clip** on a moment adds it as a clip named
-**Chat spike N**, with **Extra seconds around each clip** on either side. Like
-the Smart highlight finder, the first one you add replaces the untouched
-whole-video **Clip 1**.
+moments with the messages in them. A window is a spike when it has at least 5
+messages and twice as many as a usual window, and the log needs messages in at
+least 3 different windows to compare. A spike that runs over several windows in a
+row is one moment, not several, and it is ranked by its busiest window (a long,
+moderately busy stretch does not outrank a short explosion); at most 12 moments are
+listed, in time order. Each row shows where its clip would run, start → end, with
+the extra seconds included, so a long moment is not a surprise. **+ Clip** on a
+moment adds exactly that range as a clip named **Chat spike N**, with **Extra
+seconds around each clip** (0 to 60; a number outside that is brought into it when you
+leave the box) on either side. Like the Smart highlight finder, the first one you
+add replaces the untouched whole-video **Clip 1**. When nothing in the log
+qualifies, the panel says so under the button and repeats the rule above, and keeps
+saying it when you come back to the video.
 
 ### Captions setup
 
@@ -468,8 +476,10 @@ never called loaded.
     saved in a preset.
   - **Add a second track** — layer in background music, a co-host's mic, or game
     audio. **Duck under your voice** lowers it while you speak. A file with no sound in it is
-    refused when you pick it ("The second track has no sound in it. Remove it or pick another
-    file."), and an export says the same if the file loses its sound before you export.
+    refused when you pick it ("That file has no sound in it. Pick another file."; nothing is
+    added), and an export says it again, naming the second track ("The second track has no
+    sound in it. Remove it or pick another file."), if the file loses its sound before you
+    export.
 - The wizard's last card lists exactly the settings it is about to apply — the
   hum line names the power-line frequency it keeps (**Hum removal: on (50 Hz
   mains)**). **Start over** goes back to its first question; **Close** leaves it.

@@ -45,9 +45,16 @@ export function isNoAudioStreamError(err: unknown): boolean {
  * The refusal for a second track whose file has no sound in it (T-135 (11)), T-84 voice, a finished sentence `userFacingError` lets stand.
  * The export's `[1:a]` reference to such a file exits 234 with "matches no streams", which no known-cause pattern recognises, so the person
  * read the generic source / disk sentence - after a minutes-long loudness measurement when Even volume is on - about the WRONG file. The
- * export probes the second track first (and the panel when the file is picked) and says which file it is.
+ * export probes the second track first and says which file it is (the panel looks when the file is picked, in `SECOND_TRACK_PICK_NO_SOUND_MESSAGE`).
  */
 export const SECOND_TRACK_NO_SOUND_MESSAGE = 'The second track has no sound in it. Remove it or pick another file.'
+
+/**
+ * The same refusal at the moment a file is PICKED (T-136 (10)). Nothing has been added then, so the export's "Remove it or pick another file" told
+ * the person to remove something that was never there (the e2e pins zero Remove buttons right after it). Same voice, same finished-sentence rule;
+ * the export keeps its own words for a track that is added and loses its sound afterwards.
+ */
+export const SECOND_TRACK_PICK_NO_SOUND_MESSAGE = 'That file has no sound in it. Pick another file.'
 
 /**
  * The refusal for an export whose cuts remove everything (T-135 (12)), T-84 voice. ffmpeg exits 0 for such a chain having written a header-only

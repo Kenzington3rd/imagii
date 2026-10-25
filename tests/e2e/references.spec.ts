@@ -2017,3 +2017,66 @@ test.describe('imagii References studio', () => {
     }
   })
 })
+
+// T-136 (12): T-135 (8) gave the board create / rename / delete / save a catch. Two writes beside them had none: "Clear thumbnail cache" awaited its IPC call
+// bare (a refusal was an unhandled rejection and the button did nothing, visibly), and the tile's ✕ called the store's `removeFromCollection` with nothing
+// awaiting it at all. A refused write says so, in a sentence, and the tile stays where it is. Main's refusals cannot be produced from the UI (the clear
+// removes a folder the app owns; the remove takes an id the app minted), so the handlers are replaced in main by ones that throw, as the autosave
+// Clear's refusal case does.
+test.describe('T-136 (12): the mood board\'s cache clear and tile remove report a refusal', () => {
+  test('a refused Clear thumbnail cache never says "cleared", and a refused ✕ says so and leaves the tile', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t136-refused')
+    const owned = ['a.jpg', 'b.jpg']
+    owned.forEach((name) => writeFileSync(path.join(fx.thumbsDir, name), Buffer.alloc(1024)))
+    writeFileSync(path.join(fx.boardsDir, 'refusedboard.json'), JSON.stringify(boardOwning('refusedboard', 'Refused board', fx.thumbsDir, owned)), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+      const boardItems = (): string[] => readBoardsFromDisk(fx.boardsDir).flatMap((b) => b.items.map((i) => i.id))
+      expect(boardItems()).toEqual(['refusedboarditem0', 'refusedboarditem1'])
+
+      // ── control: the same ✕ with a working main removes the tile ──
+      await window.getByRole('button', { name: 'Remove item' }).first().click()
+      await expect(window.locator('img[alt="Cached a.jpg"]')).toHaveCount(0)
+      await expect.poll(boardItems).toEqual(['refusedboarditem1'])
+
+      // ── main refuses both writes ──
+      await app.evaluate(({ ipcMain }) => {
+        for (const channel of ['moodboard:clearThumbs', 'moodboard:removeItem']) {
+          ipcMain.removeHandler(channel)
+          ipcMain.handle(channel, () => {
+            throw new Error('the write was refused by the test')
+          })
+        }
+      })
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't clear the thumbnail cache.")
+      expect((await readToastLog(window)).some((t) => t.includes('Thumbnail cache cleared')), 'a refusal is never reported as a success').toBe(false)
+      expect(readdirSync(fx.thumbsDir).sort(), 'and the cache is as it was').toEqual(owned)
+
+      await window.getByRole('button', { name: 'Remove item' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't remove that picture.")
+      await expect(window.locator('img[alt="Cached b.jpg"]'), 'the tile is still on the board').toBeVisible()
+      await expect(window.getByText('Empty. Switch to Reference Search and click Save to add inspiration here.')).toHaveCount(0)
+      expect(boardItems(), 'the board file is as it was').toEqual(['refusedboarditem1'])
+      // The raw cause goes to the console, never to the person.
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/refused by the test|Error invoking/)
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
