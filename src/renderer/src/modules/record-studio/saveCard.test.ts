@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { micLostLine, saveCard } from './saveCard'
+import { SAVE_RUNNING_MESSAGE, micLostLine, saveCard } from './saveCard'
 
 /**
  * T-88 — the post-Stop card tells the truth per state.
@@ -83,5 +83,20 @@ describe('micLostLine', () => {
 
   it('a negative elapsed (a clock that stepped back) reads as the start, never "-0:05"', () => {
     expect(micLostLine(-5_000)).toBe('Microphone stopped at 00:00 — no sound after that')
+  })
+})
+
+/**
+ * T-137 (2): the save is a run that outlives the screen, so Start meets it. The idle controls are not drawn over a save (a Record that comes back
+ * mid-save draws the saving card), and this is the sentence for a Start that arrives anyway.
+ */
+describe('SAVE_RUNNING_MESSAGE', () => {
+  it('is a finished sentence in the importers\' words, and says what to do', () => {
+    expect(SAVE_RUNNING_MESSAGE).toBe('Still saving the last recording. Wait for it to finish.')
+    expect(SAVE_RUNNING_MESSAGE).toMatch(/^Still [a-z]+ the last [a-z]+\. Wait for it to finish\.$/)
+  })
+
+  it('does not blame the person or promise a retry the app does not make', () => {
+    expect(SAVE_RUNNING_MESSAGE).not.toMatch(/error|failed|try again|cannot|can't/i)
   })
 })

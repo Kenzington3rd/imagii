@@ -128,6 +128,16 @@ export const PREVIEW_UNAVAILABLE_MESSAGE =
 export const OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE =
   "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
 
+/**
+ * The toast when a preview copy finishes for a video that is no longer the open one (T-137 (5)). The copy is made for ONE video; if that file is not
+ * the open one when the conversion ends, nothing is stored (`setPreviewCopyFor`) - and that is true of two different things the person did: they
+ * CLOSED the video (nothing replaced it) or opened ANOTHER one. The sentence said "because you opened another video", which was false after a plain
+ * Close (`staleCaptionsMessage` documents the same wording error for the transcript), so it says what is true of both and names the file.
+ */
+export function previewCopySkippedMessage(fileName: string): string {
+  return `Skipped the preview copy for ${fileName} because the video was closed or replaced while the copy was being made`
+}
+
 /** "MP4, MOV, AVI" — uppercase hint copy for drop zones, from one list. */
 export function formatHint(extensions: readonly string[]): string {
   return extensions.map((e) => e.toUpperCase()).join(', ')

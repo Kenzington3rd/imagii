@@ -80,8 +80,18 @@ export class ConvertFailedError extends Error {
  * discarding a take killed the flv they had just dropped on the importer,
  * and starting a second convert made the first one uncancellable (its
  * registration was overwritten, so before-quit could not reap it either).
+ *
+ * T-137 (2): and a recording's owner is its TAKE (`recordingOwner(takeId)`), not "recording". One owner for every take meant a Discard
+ * pressed on a second take cancelled the FIRST take's save too (`cancelConverts('recording')` swept every recording-owner convert), and the first
+ * take's save, seeing a cancel that was not the quit's, threw its raw webm away - the only copy of a recording the person never discarded. The
+ * type has no owner-wide recording cancel: a Discard names the take it is for, and only that take's convert is aimed at.
  */
-export type ConvertOwner = 'recording' | 'import'
+export type ConvertOwner = 'import' | `recording:${string}`
+
+/** The owner of one take's save: the main-process session id the renderer holds for it (`recording:begin`'s answer). */
+export function recordingOwner(takeId: string): ConvertOwner {
+  return `recording:${takeId}`
+}
 
 // One entry per in-flight child, and the entry IS the job's handle: it
 // carries the owner that cancellation is keyed on and the `cancelled` flag,
@@ -281,9 +291,9 @@ function cancelWhere(match: (active: ActiveConvert) => boolean, byQuit = false):
 /**
  * Abort the in-flight converts started by `owner`, and only those. Returns
  * true when there was something to cancel. Used by the recorder's "Discard
- * recording" path. Each cancelled convert's promise rejects with
- * `ConvertCancelledError` rather than an exit-code error, so callers can
- * tell a deliberate discard from a real failure (T-44).
+ * recording" path, with that TAKE's owner (T-137 (2)). Each cancelled convert's
+ * promise rejects with `ConvertCancelledError` rather than an exit-code error,
+ * so callers can tell a deliberate discard from a real failure (T-44).
  */
 export function cancelConverts(owner: ConvertOwner): boolean {
   convertLatch.cancel(owner)

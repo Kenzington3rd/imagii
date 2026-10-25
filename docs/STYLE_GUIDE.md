@@ -246,7 +246,7 @@ Repeated UI is a component, not copy-paste:
   twice, and a decline takes the "Skipped this video's sound..." path with its own reason.
 - **A start that takes time is single-flight: the flag is claimed before the first `await` and given back in a `finally`
   (T-112, T-119).** `RecordStudio.startRecording` (`startingRef`; the button reads **Starting…** and is disabled),
-  `AudioImporter.loadFile` (`busyRef` and `refuseIfBusy`, the video Importer's rule), `ExportPanel.startExport`
+  `AudioImporter.loadFile` (the import run's `begin()` and `refuseIfBusy`, the video Importer's rule; T-137 (1)), `ExportPanel.startExport`
   (T-125 (18): `startingRef`, claimed before the settings writes it awaits, because a fast double-click used to start two
   queue displays while main's gate stopped only the second encode) and main's Export gate are one
   shape. State alone is not the guard - a second press in the same breath reads it before the first render - so a
@@ -308,6 +308,16 @@ Repeated UI is a component, not copy-paste:
   Player that hears the new element's metadata is not always the one that asked) and the caption model's download (`useModelInstallRun`, whose
   progress listener lasts exactly the download, and `useCaptionsStatus`, which the finishing download writes: refreshing a panel that is gone left the
   one that came back asking for setup over an installed model). A panel that mounts over a running job opens whatever holds its bar (the setup card).
+  T-137 (1), (2): the same for the two screens that kept a job in their own state. Audio Studio's importer (`useAudioImportRun`, the file and whether it
+  extracts: a returning importer is the same import, busy and refusing a second in the same words, and its landing asks `replacedSince(heldBefore, source)`
+  after the extraction and skips with a sentence naming the file, "Skipped the sound of x.mp4 because you opened another file in Audio Studio while it was
+  extracting") and Record's save (`useRecordSave`: the take's session id, whether the save is the MP4 convert, the percent, "discarding", the microphone's
+  line; the closure `finalizeRecording` keeps writing to it after its screen is gone, the progress listener lasts exactly the save, and a Record that mounts
+  over a run draws the saving card with its bar and its Discard and offers no Start - `startRecording` refuses in a sentence besides, as a backstop). **A
+  Discard is aimed at one take**: a convert's owner is `recording:<takeId>` (`recordingOwner`, `ffmpeg/convert.ts`), `recording:cancelSave` takes the id and
+  refuses a call without one, and there is no owner-wide recording cancel left (the type has none) - one owner for every take let a Discard on a second take
+  cancel the first take's convert, and that save, told "cancelled" by something other than the quit, unlinked its raw webm. The quit sweep
+  (`cancelAllConverts`) still takes every take, and keeps each raw take.
 - **A change to the playhead is not an edit, and a pending change has a ceiling (T-136 (3)).** `useAutosave` subscribed a 5 s debounce to whole stores,
   and the Player writes `currentTime` on every `timeupdate` (about four a second) and the waveform on every `audioprocess`, so while anything played the
   timer never elapsed: clips marked during a long review were not on disk until playback stopped for 5 s, against the guide's "every few seconds". The

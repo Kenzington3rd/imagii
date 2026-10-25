@@ -25,6 +25,13 @@ export function micLostLine(atMs: number | null): string | null {
   return `Microphone stopped at ${formatTimer(Math.max(0, atMs) / 1000)} — no sound after that`
 }
 
+/**
+ * T-137 (2): what Start says when a take is still being saved. The studio draws the saving card (not the idle controls) over a save, including
+ * one it came back to after a visit elsewhere, so this is the backstop for a Start that arrives anyway: a second take over a running save is what
+ * let a Discard on it cancel the first take's convert. Same shape as the importers' "Still converting the last video. Wait for it to finish."
+ */
+export const SAVE_RUNNING_MESSAGE = 'Still saving the last recording. Wait for it to finish.'
+
 export interface SaveCard {
   /** The status line. */
   status: string

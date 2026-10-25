@@ -253,6 +253,18 @@ exit, the exit-0 control, a Cancel that wins), `failurePathLanguage.test.ts` (th
 "a compilation whose FIRST segment is lost at the join names its clip", which runs the real `runConcat` with segment 0 deleted between the list and the
 join (a directory watcher on the runner's scratch folder), on the bundled 7.0.2 and on the distro's 6.1.1.
 
+**Round 86, Track A (T-137; the count line above is the expediter's).** No new unit file; four grew and one block was appended to each shared one.
+`recordingQuit.test.ts` gains "a Discard cancels its own take and no other (T-137 (2))": two takes saving at once over the REAL convert module and the
+real handlers (only the ffmpeg child is a stand-in), the MP4 convert and the WebM remux both, a Discard on the second take, and the first take asserted
+by what is on disk and in the registry (its child unsignalled, its output in place, its raw take there, its run open, then a success that reaps the temp
+take), plus the channel's gates (no id, a malformed id, an id that names no take) and a quit after a Discard. `convertCancel.test.ts` and
+`convertQuit.test.ts` gain the owner-is-the-take blocks, `saveCard.test.ts` the Start refusal's sentence, `mediaFormats.test.ts` the preview copy's skip
+sentence, and `interactionWiring.test.ts` the "T-137 Track A" block (one pin per item, and one that reads the guides for the four `RunningCancel`
+placements). The existing owner literals (`'recording'`) in `convertCancel`, `convertQuit`, `cancelSentinel`, `recordingCancel`, `recordingQuit` and
+Layer 5 are `recordingOwner('take-a')` now: the type has no owner-wide recording cancel. Layer 5 gains one block, "a Discard on one take leaves another
+take's save running", two concurrent real encodes of two takes with one cancel (bundled 7.0.2 and the distro's 6.1.1). The Playwright cases: audio.spec.ts
+"T-137 (1)" (2), record.spec.ts "T-137 (2)" (2), video-pipelines.spec.ts "T-137 (3), (4)" (2) and "T-137 (5)" (1).
+
 **Adding a test.** Drop `foo.test.ts` next to `foo.ts`. Vitest picks it
 up automatically. If the module under test imports `electron`, see
 `src/main/audio/presets.test.ts` for the `vi.mock('electron', …)`
@@ -550,6 +562,18 @@ whose end state is Explorer):
   BEFORE the press, record every DOM state that violates the rule (the `<video>` is on the copy and the note is still on screen), and assert the
   record is empty AND that the observer saw the event it watches (`sawCopy`), so a mis-aimed observer cannot pass vacuously. A React commit is one
   DOM batch, so the observer's callback reads the page between that commit and the next task.
+- **Open a second session through the bridge to aim a call at a stranger (T-137 (2)).** The bug needed two takes, and the fixed product offers no way to
+  start the second one while the first is saving, so the case does not try: `window.api.recording.begin()` opens a real second session, its Discard
+  (`cancelSave(id)`) is called with the second id while the first take's convert is held, and the assertions are on the first take (it finishes, the file
+  is h264). On the unchanged build the same call answers true and the first take is gone. A call with no id goes through the same bridge and is read for
+  main's refusal.
+- **A live region is an element with an identity (T-137 (3)).** "Announced reliably" is a screen reader's behavior, but its precondition is DOM: the
+  region exists BEFORE it has something to say. The case takes `elementHandle()` of the wrapper while nothing is running, drives the state that fills
+  it, and asserts the handle `isConnected` and now holds the text; a region that mounts with its content fails the first locator (count 0) and the
+  identity check. The empty region's cost is read too (the 20 px gap between the header and the studio, before and after).
+- **Measure the wrap, not the label (T-137 (4)).** `expectOneLine` on the button, at 1632 x 918 and at 1024 x 640, plus the geometry that makes it true
+  (the Cancel's top at or below the button's bottom, its right edge on the button's, the button less than 34 px tall). It was red on the unchanged build at
+  the default window, "wraps onto 2 lines", the finding's own measurement.
 - **Wait past the default to prove a duration.** `expectRevealToast` (video-pipelines.spec.ts)
   finds "Show in folder" on a success toast, waits 3.5 s (react-hot-toast's success toast lasts 2 s)
   and asserts the button is still there — the one place a fixed wait IS the assertion. It was

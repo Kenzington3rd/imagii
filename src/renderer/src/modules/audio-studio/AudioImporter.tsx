@@ -1,8 +1,11 @@
 import { useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore, waveformArrived, type AudioSource } from './state/audioStore'
+import { useAudioImportRun } from './state/audioImport'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
+import { basename } from '../../components/OutputDirLabel'
+import { replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
 import {
@@ -18,23 +21,23 @@ import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/medi
 
 export function AudioImporter(): JSX.Element {
   const loadSource = useAudioStore((s) => s.loadSource)
-  const [busy, setBusy] = useState(false)
+  // T-137 (1): the import - the load, and for a video or an AIFF / WMA the extraction - is a module store, not this component's state. T-119's
+  // `busyRef` died with the route: a trip to Home re-armed the importer over an extraction main was still running, a plain WAV dropped on the idle
+  // importer opened (main refuses only a second EXTRACTION) and was tuned, and the extraction's landing then replaced it, its chain and its undo
+  // history, with no confirm. The claim is `begin()`, taken the instant the import starts (a second drop or Recent pick in the same breath reads the
+  // store, not a render); `extracting` only chooses the words of the refusal. A returning importer is the same import: busy, refusing a second.
+  const busy = useAudioImportRun((s) => s.run !== null)
   const [dragOver, setDragOver] = useState(false)
   const { recent, push, clear } = useRecentFiles('audio')
-  // T-119: one import at a time, the video Importer's rule (T-112). `busy` is state, and a second drop or
-  // Recent pick in the same breath reads it before the first one's render; the ref is set the instant the
-  // import starts. `extractingRef` only chooses the words of the refusal. A slow extraction of a video's
-  // sound used to land after a second file had loaded (and been tuned) and replace it.
-  const busyRef = useRef(false)
-  const extractingRef = useRef(false)
   // T-131 (5): and one chooser at a time (the Importer's `pickingRef`): `busy` is set only once a file was picked.
   const pickingRef = useRef(false)
 
   /** Refuses a second import while one runs. */
   function refuseIfBusy(): boolean {
-    if (!busyRef.current) return false
+    const running = useAudioImportRun.getState().run
+    if (running === null) return false
     toast(
-      extractingRef.current
+      running.extracting
         ? 'Still extracting audio from the last file. Wait for it to finish.'
         : 'Still loading the last file. Wait for it to finish.',
       { id: 'audio-importer-busy', icon: <Icon name="warning" size={18} /> }
@@ -44,16 +47,27 @@ export function AudioImporter(): JSX.Element {
 
   async function loadFile(filePath: string): Promise<void> {
     if (refuseIfBusy()) return
-    busyRef.current = true
-    setBusy(true)
+    const extracting = audioNeedsExtraction(filePath)
+    if (!useAudioImportRun.getState().begin({ filePath, extracting })) return
+    // T-137 (1): what Audio Studio held when this import began. The importer is on screen only while no sound is open, but an extraction takes
+    // minutes and nothing locks the app: a sound that arrives meanwhile (a project opened from Home, Clean audio on a video) is the one being edited.
+    const heldBefore = useAudioStore.getState().source
     try {
       console.info('[audio-import] loading', filePath)
       let opened: AudioSource
-      if (audioNeedsExtraction(filePath)) {
-        extractingRef.current = true
+      if (extracting) {
         toast.loading('Extracting audio…', { id: 'extract' })
         const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(filePath)
         toast.dismiss('extract')
+        // The rule of a project open and of Video Studio's Clean audio (`replacedSince`, T-112): a sound that is open now and was not when this began
+        // is the person's, and the extracted one is not loaded over it (loading resets the chain and the undo history, and cannot be undone).
+        if (replacedSince(heldBefore, useAudioStore.getState().source)) {
+          toast(`Skipped the sound of ${basename(filePath)} because you opened another file in Audio Studio while it was extracting`, {
+            icon: <Icon name="warning" size={18} />,
+            duration: 8000
+          })
+          return
+        }
         opened = await loadSource(wavPath, filePath, undefined, hasVideo)
       } else {
         opened = await loadSource(filePath)
@@ -68,9 +82,7 @@ export function AudioImporter(): JSX.Element {
       toast.dismiss('extract')
       toast.error(describeImportError(err, filePath, 'audio'), { duration: 8000 })
     } finally {
-      busyRef.current = false
-      extractingRef.current = false
-      setBusy(false)
+      useAudioImportRun.getState().end()
     }
   }
 

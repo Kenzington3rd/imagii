@@ -169,7 +169,7 @@ describe('a quit in the middle of the MP4 convert (T-128 (5))', () => {
     const outPath = path.join(TMP, 'take.mp4')
     const { id, saving } = await startSave(outPath, true)
     await untilSpawned(1)
-    expect(cancelRecordingConvert(), 'the Discard found the convert').toBe(true)
+    expect(cancelRecordingConvert(id), 'the Discard found the convert').toBe(true)
     expect(await saving).toBeNull()
     expect(existsSync(outPath)).toBe(false)
     expect(existsSync(tempPathFor(id)), 'Discard recording means the take is gone').toBe(false)
@@ -206,5 +206,82 @@ describe('what the quit does not wait for, and what it leaves alone (T-128 (5))'
     expect(existsSync(tempPathFor(id))).toBe(false)
     expect(openRunCount()).toBe(0)
     expect(readdirSync(path.join(TMP, 'recordings'))).toEqual([])
+  })
+})
+
+// T-137 (2): leaving Record during a save returned an idle Record over a convert main was still running, a second take was recorded, and its
+// "Discard recording" called `cancelConverts('recording')`, which cancelled EVERY recording-owner convert: the first take's save saw a cancel that was not
+// the quit's, kept nothing, and unlinked its raw webm (the only copy). A Discard is aimed at one take now. Over the real convert module and the real
+// handlers; only the ffmpeg child is a stand-in.
+describe('a Discard cancels its own take and no other (T-137 (2))', () => {
+  /** Two takes saving at once: the first has been converting for a while, the second has just started. `mp4`: Convert to MP4 (the convert), else the WebM copy (the remux). */
+  async function twoTakesSaving(mp4 = true): Promise<{
+    first: { id: string; saving: Promise<unknown>; out: string }
+    second: { id: string; saving: Promise<unknown>; out: string }
+  }> {
+    const ext = mp4 ? 'mp4' : 'webm'
+    const firstOut = path.join(TMP, `first.${ext}`)
+    const first = await startSave(firstOut, mp4)
+    await untilSpawned(1)
+    const secondOut = path.join(TMP, `second.${ext}`)
+    const second = await startSave(secondOut, mp4)
+    await untilSpawned(2)
+    expect(openRunCount(), 'both saves are runs').toBe(2)
+    return { first: { ...first, out: firstOut }, second: { ...second, out: secondOut } }
+  }
+
+  it.each([
+    ['converting to MP4', true],
+    ['saving a WebM (the remux)', false]
+  ])('discarding the second take leaves the first take %s, its output in place and its raw take on disk - and it finishes as a success', async (_label, mp4) => {
+    const { first, second } = await twoTakesSaving(mp4)
+
+    expect(cancelRecordingConvert(second.id), 'the Discard found the second take\'s convert').toBe(true)
+    expect(await second.saving, 'the second take was discarded: null, as a Discard answers').toBeNull()
+    expect(existsSync(second.out), 'its half-written mp4 is gone').toBe(false)
+    expect(existsSync(tempPathFor(second.id)), 'and the take the person threw away').toBe(false)
+
+    // The first take, which nobody discarded.
+    expect(spawned[0]?.child.signals, 'its ffmpeg was not signalled').toEqual([])
+    expect(spawned[1]?.child.signals).toEqual(['SIGKILL'])
+    expect(existsSync(first.out), 'its output is still being written').toBe(true)
+    expect(readFileSync(tempPathFor(first.id), 'utf8'), 'its raw take is the only copy, and it is still there').toBe(TAKE)
+    expect(openRunCount(), 'its save is still a run').toBe(1)
+
+    spawned[0]?.child.emit('close', 0, null)
+    const result = (await first.saving) as { outputPath: string; format: string }
+    expect(result, 'it saved').toMatchObject({ outputPath: first.out, format: mp4 ? 'mp4' : 'webm' })
+    expect(existsSync(first.out)).toBe(true)
+    expect(existsSync(tempPathFor(first.id)), 'and its temp take is reaped after a SUCCESS, as always').toBe(false)
+    expect(openRunCount()).toBe(0)
+  })
+
+  it('the channel is aimed at one take: with no id, or an id that is not a take\'s, it is refused or finds nothing, and no other take\'s convert is touched', async () => {
+    const { first, second } = await twoTakesSaving()
+
+    await expect(invoke('recording:cancelSave'), 'a Discard with no id').rejects.toThrow(/cancelSave id/)
+    await expect(invoke('recording:cancelSave', '../../etc'), 'an id that is not a nanoid').rejects.toThrow(/cancelSave id malformed/)
+    expect(await invoke<boolean>('recording:cancelSave', 'aTakeNobodyHas'), 'a well-formed id that names no take').toBe(false)
+    expect(spawned.map((s) => s.child.signals), 'nothing was signalled').toEqual([[], []])
+
+    expect(await invoke<boolean>('recording:cancelSave', second.id)).toBe(true)
+    expect(await second.saving).toBeNull()
+    expect(spawned.map((s) => s.child.signals), 'only the named take\'s child was').toEqual([[], ['SIGKILL']])
+
+    spawned[0]?.child.emit('close', 0, null)
+    expect(await first.saving).toMatchObject({ outputPath: first.out })
+  })
+
+  it('a quit that follows a Discard still keeps the take it ends: the discarded one is gone, the other\'s raw take survives the sweep', async () => {
+    const { first, second } = await twoTakesSaving()
+    expect(cancelRecordingConvert(second.id)).toBe(true)
+    expect(await second.saving).toBeNull()
+
+    cancelAllConverts()
+    await expect(drainRuns(3000)).resolves.toBe('drained')
+    expect(await first.saving, 'the quit ended the first take\'s save').toBeNull()
+    expect(existsSync(first.out), 'no half-written mp4').toBe(false)
+    expect(readFileSync(tempPathFor(first.id), 'utf8'), 'the quit keeps the raw take').toBe(TAKE)
+    expect(existsSync(tempPathFor(second.id)), 'the Discard did not').toBe(false)
   })
 })

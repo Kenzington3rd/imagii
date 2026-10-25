@@ -207,8 +207,8 @@ const api: ImagiiApi = {
     finalize: (id: string, spec: RecordingFinalizeSpec) =>
       ipcRenderer.invoke('recording:finalize', id, spec),
     abandon: (id: string) => ipcRenderer.invoke('recording:abandon', id),
-    // M6 fix (round 15): renderer can show conversion progress and abort.
-    cancelSave: () => ipcRenderer.invoke('recording:cancelSave'),
+    // M6 fix (round 15): renderer can show conversion progress and abort. T-137 (2): the abort names the take (the session id it holds).
+    cancelSave: (id: string) => ipcRenderer.invoke('recording:cancelSave', id),
     onProgress: (handler: (info: { percent?: number; message?: string }) => void) => {
       const listener = (
         _e: unknown,

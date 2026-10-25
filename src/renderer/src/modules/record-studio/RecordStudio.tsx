@@ -17,7 +17,8 @@ import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
-import { micLostLine, saveCard } from './saveCard'
+import { micLostLine, saveCard, SAVE_RUNNING_MESSAGE } from './saveCard'
+import { useRecordSave } from './saveRun'
 
 type Phase = 'idle' | 'recording' | 'saving'
 
@@ -82,12 +83,16 @@ export function RecordStudio(): JSX.Element {
   const unmountedRef = useRef(false)
 
   // M6 fix (round 15): surface webm→mp4 progress + give the user an abort button.
-  // T-115: null is "working, no measurement" (the convert had no length): an indeterminate
+  // T-137 (2): the save - its percent, whether Discard has been pressed, which take it is - is a run in a module store (`saveRun.ts`), not this
+  // component's state: leaving Record during it returned an IDLE screen over a convert main was still running, and a second take's Discard then
+  // cancelled the first take's convert too and threw its raw webm away. A Record that mounts over a run shows the saving card (the bar, the
+  // Discard) and offers no Start; `phase === 'saving'` is only the instant between the Stop click and the run beginning.
+  // T-115: a null percent is "working, no measurement" (the convert had no length): an indeterminate
   // bar, like the captions panel's. 0 is a measurement - nothing converted yet.
-  const [savePercent, setSavePercent] = useState<number | null>(0)
-  // T-88: "Discard recording" has been pressed and the convert has not yet
-  // rejected. Lets the card say so, and keeps the button from being clicked twice.
-  const [discarding, setDiscarding] = useState(false)
+  const saveRun = useRecordSave((s) => s.run)
+  const saving = phase === 'saving' || (phase === 'idle' && saveRun !== null)
+  const savePercent = saveRun === null ? 0 : saveRun.percent
+  const discarding = saveRun?.discarding ?? false
 
   // Round 18 D: record → clip handoff. The saved file is pushed into the
   // shared recentFiles.video bucket (same one Video Studio's Importer
@@ -154,14 +159,6 @@ export function RecordStudio(): JSX.Element {
       unmountedRef.current = true
       stopAllStreams()
     }
-  }, [])
-
-  // M6 fix (round 15): wire the main-side conversion progress channel.
-  useEffect(() => {
-    const off = window.api.recording.onProgress((info) => {
-      setSavePercent(info.percent ?? null)
-    })
-    return off
   }, [])
 
   // Round 18 C: the `?` HotkeyOverlay has documented "Esc: Stop recording"
@@ -335,6 +332,12 @@ export function RecordStudio(): JSX.Element {
 
   async function startRecording(): Promise<void> {
     if (startingRef.current) return
+    // T-137 (2): a take is still being saved (this screen was left during it and came back). The idle controls are not drawn over a save, so this is
+    // the backstop, not the way a person meets the rule; a second take over a running save is what let a Discard reach the first take's convert.
+    if (useRecordSave.getState().run !== null) {
+      toast(SAVE_RUNNING_MESSAGE, { id: 'record-save-busy', icon: <Icon name="warning" size={18} /> })
+      return
+    }
     if (!selectedSourceId) {
       toast.error('Pick a screen / window first')
       return
@@ -564,11 +567,20 @@ export function RecordStudio(): JSX.Element {
     // with a Stop that did nothing and no Discard. The same call in `stopRecording` is the instant answer to a click;
     // setting a state to the value it already has is nothing.
     setPhase('saving')
-    setSavePercent(0)
     const sessionId = sessionIdRef.current
     const durationMs = Date.now() - startTimeRef.current
     const lostLine = micLostLine(micLostAtRef.current)
     stopAllStreams()
+    // T-137 (2): the save is a run in the module store from here until the take is dealt with (saved, discarded or failed), claimed before the
+    // first await and given back in the `finally`. `claimed` is false only with no session to save (the failure below says so) or if a run is
+    // somehow already there - which Start's refusal prevents - and then this save leaves the other run alone. The progress listener lasts exactly
+    // the save (it was an effect of the screen, and lost every event that arrived while the screen was gone).
+    const claimed =
+      sessionId !== null &&
+      useRecordSave.getState().begin({ takeId: sessionId, convertToMp4, percent: 0, discarding: false, micLostAt: micLostAtRef.current })
+    const offProgress = window.api.recording.onProgress((info) => {
+      useRecordSave.getState().patch({ percent: info.percent ?? null })
+    })
     try {
       // All chunks were queued by ondataavailable before onstop fired, so
       // awaiting the queue's tail awaits every pending appendChunk. Each
@@ -635,9 +647,9 @@ export function RecordStudio(): JSX.Element {
         void window.api.recording.abandon(sessionId).catch(() => undefined)
       }
     } finally {
+      offProgress()
+      if (claimed) useRecordSave.getState().end()
       setElapsed(0)
-      setSavePercent(0)
-      setDiscarding(false)
       micLostAtRef.current = null
       setMicLostAt(null)
       setPhase('idle')
@@ -654,22 +666,28 @@ export function RecordStudio(): JSX.Element {
    * discard, which `finalizeRecording` announces. If there was nothing to
    * kill — the click landed before the convert started or after it finished —
    * the button comes back instead of sitting on "Discarding…" forever.
+   * T-137 (2): and it is aimed at ONE take, the run's (`takeId`): main cancels that take's convert and no other's, so a Discard here can never
+   * reach another take's save. Pressed in the instant before the run begins (the Stop click, the recorder's last chunk) there is no take to name
+   * yet and nothing to stop.
    */
   function discardRecording(): void {
-    setDiscarding(true)
+    const takeId = useRecordSave.getState().run?.takeId
+    if (takeId === undefined) return
+    useRecordSave.getState().patch({ discarding: true })
     window.api.recording
-      .cancelSave()
+      .cancelSave(takeId)
       .then((hadConvert) => {
-        if (!hadConvert) setDiscarding(false)
+        if (!hadConvert) useRecordSave.getState().patch({ discarding: false })
       })
       .catch((err) => {
-        setDiscarding(false)
+        useRecordSave.getState().patch({ discarding: false })
         reportFailure(err, { failed: "Couldn't discard the recording." })
       })
   }
 
-  const save = saveCard(convertToMp4, discarding)
-  const micLine = micLostLine(micLostAt)
+  // The card draws the SAVE's own facts when a run exists (a Record that mounted over it has neither the checkbox's value nor the take's mic line).
+  const save = saveCard(saveRun === null ? convertToMp4 : saveRun.convertToMp4, discarding)
+  const micLine = micLostLine(saveRun === null ? micLostAt : saveRun.micLostAt)
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
@@ -715,7 +733,7 @@ export function RecordStudio(): JSX.Element {
         ) : null}
       </header>
 
-      {phase === 'idle' ? (
+      {phase === 'idle' && !saving ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(320px,20%,520px)] gap-5">
           <div className="card p-4 flex flex-col gap-3">
             <PanelHeader
@@ -927,7 +945,7 @@ export function RecordStudio(): JSX.Element {
         </div>
       ) : null}
 
-      {phase === 'saving' ? (
+      {saving ? (
         <div className="card p-6 text-center flex flex-col items-center gap-3">
           <div className="text-accent">
             <Icon name="save" size={28} />

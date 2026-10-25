@@ -17,7 +17,8 @@ import {
   canStreamCopyIntoMp4,
   MP4_COPYABLE_VIDEO_CODECS,
   PREVIEW_UNAVAILABLE_MESSAGE,
-  OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE
+  OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE,
+  previewCopySkippedMessage
 } from './mediaFormats'
 
 describe('mediaFormats lists', () => {
@@ -164,5 +165,27 @@ describe('OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE - what the Output preview says in p
 
   it('does not promise a live picture (it replaces the caption that does)', () => {
     expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/live snapshot/i)
+  })
+})
+
+describe('previewCopySkippedMessage - the toast when a preview copy finished for a video that is gone (T-137 (5))', () => {
+  // The Player's `setPreviewCopyFor` stores nothing when the video the copy was made for is not the open one - and it cannot tell a CLOSE from a
+  // REPLACE (the store holds the open video or none). The toast said "because you opened another video", which was false after a plain Close.
+  it('names the file and says what is true of both a close and a replace', () => {
+    expect(previewCopySkippedMessage('stream.mov')).toBe(
+      'Skipped the preview copy for stream.mov because the video was closed or replaced while the copy was being made'
+    )
+  })
+
+  it('does not claim the person opened another video (false after a Close), and is one line without a period like the other skip toasts', () => {
+    const message = previewCopySkippedMessage('a.mov')
+    expect(message).not.toMatch(/another video|you opened/i)
+    expect(message).toMatch(/closed or replaced/)
+    expect(message.endsWith('.')).toBe(false)
+    expect(message).not.toContain('\n')
+  })
+
+  it('carries whatever file name it is given whole', () => {
+    expect(previewCopySkippedMessage('My "stream" (final).mov')).toContain('for My "stream" (final).mov because')
   })
 })

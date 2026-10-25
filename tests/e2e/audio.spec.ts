@@ -3836,3 +3836,104 @@ test.describe('a second track whose length cannot be read is still added (T-135 
     }
   })
 })
+
+// ═══════ T-137 Track A (round 86): the audio importer's extraction is the run, not the screen ═══════
+
+test.describe('T-137 (1): the audio importer keeps its extraction across a trip to Home, and a late extraction never replaces a sound that is open', () => {
+  // T-119's `busyRef` was the importer's own: a trip to Home re-armed an idle importer over an extraction main was still running, a plain WAV dropped
+  // on it opened (main refuses only a second EXTRACTION) and was tuned, and the extraction's landing then called `loadSource` and replaced the WAV,
+  // its chain and its undo history with no confirm. The import is a run in a module store (`useAudioImportRun`), and a landing asks `replacedSince`.
+  const SKIPPED = 'Skipped the sound of e2e-clip.mp4 because you opened another file in Audio Studio while it was extracting'
+
+  test('the importer is still busy after a trip to Home: Choose file is off, a second file is refused, one extraction runs, and the first file is what opens', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t137busy')
+    const { window, app } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      // The extraction's ffmpeg (the first this page starts) is held, so it is still running when the person is back.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 20_000 }])
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+
+      // Back: this is the same import, not an idle importer.
+      await expect(window.getByRole('button', { name: 'Loading…' }), 'off while the extraction runs').toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Choose file…' })).toHaveCount(0)
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain('Still extracting audio from the last file. Wait for it to finish.')
+      await expect(window.locator(WAVEFORM), 'the second file did not open').toHaveCount(0)
+      expect((await readSpawnLog(app)).filter((k) => k === 'ffmpeg'), 'one extraction, not two').toHaveLength(1)
+
+      // Main's own guard, for whoever asks: the same video again is refused in a sentence that names the one that runs.
+      const refusal = await window.evaluate(
+        (p) => window.api.audio.extractFromVideo(p).then(() => 'started', (e: unknown) => String(e)),
+        video
+      )
+      expect(refusal).toContain('Still extracting the sound from "e2e-clip.mp4". Wait for it to finish, then try again.')
+
+      // The extraction ends and the sound that opens is the FIRST file's.
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(window.locator('header').getByText('e2e-tone.wav', { exact: true })).toHaveCount(0)
+      expect(await readToastLog(window)).toContain('Loaded')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a sound opened while an extraction runs is kept: the late extraction is skipped in a sentence, and the chain the person set is untouched', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t137keep')
+    const { window, app } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      const projectFile = path.join(studio.root, 'keep.imagii.json')
+      writeFileSync(
+        projectFile,
+        JSON.stringify({
+          schemaVersion: 3,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          audioStudio: { sourcePath: studio.fixture, chain: DEFAULT_CHAIN_SPEC }
+        }),
+        'utf8'
+      )
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 14_000 }])
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      // While it extracts, a project with a plain WAV is opened from Home.
+      await stubOpenDialog(app, projectFile)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Project loaded')
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('e2e-tone.wav', { exact: true })).toBeVisible()
+      // The person tunes it.
+      const medium = window.locator(CLEANUP).getByRole('button', { name: 'Medium', exact: true })
+      await medium.click()
+      await expectSelected(medium)
+
+      // The extraction ends. It used to load the video's sound over the WAV (and reset the chain, with no confirm).
+      await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain(SKIPPED)
+      await window.waitForTimeout(500)
+      await expect(window.locator('header').getByText('e2e-tone.wav', { exact: true }), 'the sound the person opened is still the one open').toBeVisible()
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toHaveCount(0)
+      await expectSelected(window.locator(CLEANUP).getByRole('button', { name: 'Medium', exact: true }))
+      expect(await readToastLog(window), 'no "Loaded" for a file that was not loaded').not.toContain('Loaded')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

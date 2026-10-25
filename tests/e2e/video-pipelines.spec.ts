@@ -10772,3 +10772,139 @@ test.describe('ChatHighlightPanel - range, extra seconds, empty result, alignmen
     }
   })
 })
+
+// ═══════ T-137 Track A (round 86): the running Clip Kit's label and live region, and the preview copy's skip toast ═══════
+
+test.describe('T-137 (3), (4): the running Clip Kit keeps its label on one line with its Cancel under it, and its card speaks from a live region that was already there', () => {
+  /** Start a kit on the first of two clips and hold it in its export phase (job 2's probe is held), so it is still running when the test acts. */
+  async function startHeldKit(label: string): Promise<Studio> {
+    const studio = await launchWithVideo(label)
+    const { app, window, outDir } = studio
+    await stubDialogs(app, { open: [outDir] })
+    await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+    await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+    await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+    await kitButton(window).click()
+    await expect(kitButton(window)).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+    return studio
+  }
+  /** The studio's live region for the closed-video kit card: a direct child of the studio's column, mounted whether a video is open or not. */
+  const REGION = 'div.h-full.overflow-auto > div[aria-live="polite"]'
+
+  test('the running label is one line at the default window and at the minimum, its Cancel sits on a row of its own under it, and nothing pokes out of the clip list', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t137kitline')
+    try {
+      const list = clipListCard(window)
+      const cancel = list.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel).toHaveCount(1)
+      for (const [where, size] of [['the default window', DEFAULT_WINDOW], ['the minimum window', MIN_WINDOW]] as const) {
+        await setWindowSize(app, window, size)
+        await expect(kitButton(window)).toHaveText('Exporting platform version 2 of 5…')
+        await expectOneLine(kitButton(window), `the running kit label at ${where}`)
+        await expectNoHorizontalOverflow(list, `the clip list at ${where}`)
+        const geometry = await window.evaluate(() => {
+          const button = document.querySelector('button[title="Export this clip for all 5 platforms + 3 thumbnails into one folder"]') as HTMLElement
+          const cancelButton = Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Cancel' && b.title === 'Cancel Clip Kit') as HTMLElement
+          const b = button.getBoundingClientRect()
+          const c = cancelButton.getBoundingClientRect()
+          return { buttonTop: b.top, buttonBottom: b.bottom, buttonRight: b.right, cancelTop: c.top, cancelBottom: c.bottom, cancelRight: c.right, buttonHeight: b.height }
+        })
+        expect(geometry.cancelTop, `Cancel is on a row of its own, under the button, at ${where} (button ends ${Math.round(geometry.buttonBottom)}, Cancel starts ${Math.round(geometry.cancelTop)})`).toBeGreaterThanOrEqual(geometry.buttonBottom - 0.5)
+        expect(Math.abs(geometry.cancelRight - geometry.buttonRight), `and ends where the button does, at ${where}`).toBeLessThanOrEqual(1)
+        // A one-line label in a text-xs button with py-1 is about 26 px tall; the wrapped one was 42.
+        expect(geometry.buttonHeight, `the button is one line tall at ${where}`).toBeLessThan(34)
+      }
+      await cancel.click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the card for a kit that outlives its video is announced from a live region that was already mounted - empty while no kit runs, leaving no gap - and the same element holds it', async () => {
+    test.setTimeout(600_000)
+    const studio = await launchWithVideo('t137kitlive')
+    const { app, window, outDir } = studio
+    try {
+      // Before any kit: the region is there, empty, and takes no room (the studio's column has a 20 px gap between its children).
+      await expect(window.locator(REGION), 'the region is mounted with a video open and no kit running').toHaveCount(1)
+      await expect(window.locator(REGION)).toHaveText('')
+      const gapOpen = await window.evaluate(() => {
+        const header = document.querySelector('div.h-full.overflow-auto > header') as HTMLElement
+        const grid = document.querySelector('div.h-full.overflow-auto > div.grid') as HTMLElement
+        return Math.round(grid.getBoundingClientRect().top - header.getBoundingClientRect().bottom)
+      })
+      expect(gapOpen, 'an empty region leaves no hole between the header and the studio').toBe(20)
+      const region = await window.locator(REGION).elementHandle()
+      expect(region, 'the region element').not.toBeNull()
+
+      await stubDialogs(app, { open: [outDir] })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+      await kitButton(window).click()
+      await expect(kitButton(window)).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+      // The video is open, so the clip list's own kit button shows the run and the closed-video card is not drawn.
+      await expect(window.locator(REGION)).toHaveText('')
+
+      // Close the video: the card arrives INSIDE the region that was there before it had anything to say.
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await expect(window.locator(REGION)).toContainText('Clip Kit for "Clip 1"')
+      await expect(window.locator(REGION)).toContainText('The video is closed; the kit keeps writing its files until it finishes or you cancel it.')
+      expect(await region?.evaluate((el) => el.isConnected), 'the same element, not a region mounted together with its text').toBe(true)
+      expect(await window.locator('div[aria-live="polite"] p[aria-live]').count(), 'the paragraph inside carries no live region of its own').toBe(0)
+      // The importer sits where it always did: the empty region adds no gap either.
+      const gapClosed = await window.evaluate(() => {
+        const card = document.querySelector('[data-tutorial="video-import"]') as HTMLElement
+        const region = document.querySelector('div.h-full.overflow-auto > div[aria-live="polite"]') as HTMLElement
+        return Math.round(card.getBoundingClientRect().top - region.getBoundingClientRect().bottom)
+      })
+      expect(gapClosed, 'the card, then the importer, one gap apart').toBe(20)
+
+      await window.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+      // The kit is over: the card goes, the region stays - still the same element, empty again, and no hole above the importer.
+      await expect(window.locator(REGION)).toHaveText('', { timeout: 60_000 })
+      expect(await region?.evaluate((el) => el.isConnected)).toBe(true)
+      const gapAfter = await window.evaluate(() => {
+        const header = document.querySelector('div.h-full.overflow-auto > header') as HTMLElement
+        const card = document.querySelector('[data-tutorial="video-import"]') as HTMLElement
+        return Math.round(card.getBoundingClientRect().top - header.getBoundingClientRect().bottom)
+      })
+      expect(gapAfter, 'the importer is one gap under the header, as it was before the region existed').toBe(20)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('T-137 (5): a preview copy that finishes for a video that was closed does not say the person opened another one', () => {
+  const SENTENCE = "imagii can't preview this video's picture format — trimming, scanning and export still work."
+
+  test('closing the video while the copy is made says it was closed or replaced, and names the file', async () => {
+    test.setTimeout(300_000)
+    const { app, window } = await launchWithVideo('t137pcopyclose', proresSrc)
+    try {
+      await expect(window.getByText(SENTENCE)).toBeVisible({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 6_000 }])
+      await window.getByRole('button', { name: 'Make a preview copy' }).click()
+      await expect(window.getByRole('button', { name: 'Making a preview copy…' })).toBeDisabled()
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+
+      const toasts = await expectToast(
+        window,
+        'Skipped the preview copy for undecodable-prores.mov because the video was closed or replaced while the copy was being made'
+      )
+      expect(toasts.join(' | '), 'nobody opened another video').not.toMatch(/you opened another video/)
+    } finally {
+      await app.close()
+    }
+  })
+})

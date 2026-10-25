@@ -208,7 +208,7 @@ const {
   cancelAllHighlightJobs
 } = await import('./highlights')
 const { extractFrame, cancelAllFrameJobs } = await import('./frame')
-const { convertToMp4, remuxWebm, cancelConverts, cancelAllConverts, ConvertCancelledError } = await import(
+const { convertToMp4, remuxWebm, cancelConverts, cancelAllConverts, recordingOwner, ConvertCancelledError } = await import(
   './convert'
 )
 const { runAudioExport, runAudioMux, runAudioReattach, cancelAudioJob, cancelAllAudioJobs } = await import(
@@ -488,9 +488,9 @@ const CASES: Case[] = [
   },
   {
     name: 'convert to mp4',
-    start: () => convertToMp4('recording', '/tmp/in.webm', '/tmp/out.mp4', () => undefined),
+    start: () => convertToMp4(recordingOwner('take-a'), '/tmp/in.webm', '/tmp/out.mp4', () => undefined),
     cancels: [
-      { via: 'cancelConverts(owner)', run: () => void cancelConverts('recording') },
+      { via: 'cancelConverts(owner)', run: () => void cancelConverts(recordingOwner('take-a')) },
       { via: 'cancelAllConverts', run: () => void cancelAllConverts() }
     ],
     failure: /convert-to-mp4 exit 1/,
@@ -499,9 +499,9 @@ const CASES: Case[] = [
   {
     // T-120: the WebM save is the same child registry as the convert, with a packet copy for its argv.
     name: 'remux the recording to webm (Convert off)',
-    start: () => remuxWebm('recording', '/tmp/in.webm', '/tmp/out.webm'),
+    start: () => remuxWebm(recordingOwner('take-a'), '/tmp/in.webm', '/tmp/out.webm'),
     cancels: [
-      { via: 'cancelConverts(owner)', run: () => void cancelConverts('recording') },
+      { via: 'cancelConverts(owner)', run: () => void cancelConverts(recordingOwner('take-a')) },
       { via: 'cancelAllConverts', run: () => void cancelAllConverts() }
     ],
     failure: /convert-to-mp4 exit 1/,

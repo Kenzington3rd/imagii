@@ -72,23 +72,37 @@ function KitCancel(): JSX.Element {
 /**
  * A kit that is still running after the video it was started on was closed (T-136 (1)). The kit's files are written by main from the paths the run
  * captured, so Close does not stop it - and with the clip list gone, no kit button was left to cancel it (only quitting stopped it, minutes later). Drawn
- * beside the importer by `VideoStudio`; nothing when no kit runs.
+ * beside the importer by `VideoStudio`; the card is there only while a kit runs AND no video is open (a video that is open has the clip list's own
+ * kit button, which shows the same run).
+ *
+ * T-137 (3): the live region is the wrapper, and the wrapper is ALWAYS mounted (VideoStudio mounts this component whether a video is open or not).
+ * A region that arrives together with its text is not reliably announced - the class T-136 (5) fixed for the Player's notice, GifPanel's wrapper (T-112,
+ * T-114) is the pattern: the phase paragraph used to carry its own `aria-live`, and the whole card mounted at the moment the video was closed, so the
+ * one moment a screen-reader user most needed telling ("the kit is still running") was the one it was not. Empty, it is still a flex item of the
+ * studio's `gap-5` column, so `-mb-5` takes the second gap back and nothing is hidden (no display:none: either would drop it from the accessibility
+ * tree). The paragraph below is plain text inside it and its changes are announced as the phase moves on. Not `role="status"`: that is atomic, and
+ * would read the whole card again at every phase.
  */
-export function ClipKitRunning(): JSX.Element | null {
+export function ClipKitRunning(): JSX.Element {
   const kitRun = useKitRun((s) => s.run)
-  if (kitRun === null) return null
+  const videoOpen = useVideoStore((s) => s.source !== null)
+  const shown = kitRun !== null && !videoOpen
   return (
-    <div className="card p-3 flex flex-col gap-1 text-sm">
-      <div className="flex items-center gap-2">
-        <Icon name="package" size={14} />
-        <span className="min-w-0 flex-1 truncate" title={kitRunCaption(kitRun.clipName)}>
-          {kitRunCaption(kitRun.clipName)}
-        </span>
-        <KitCancel />
-      </div>
-      <p className="text-xs text-ink-muted" aria-live="polite">
-        {kitRun.phase || 'Working…'} The video is closed; the kit keeps writing its files until it finishes or you cancel it.
-      </p>
+    <div aria-live="polite" className={shown ? undefined : '-mb-5'}>
+      {shown ? (
+        <div className="card p-3 flex flex-col gap-1 text-sm">
+          <div className="flex items-center gap-2">
+            <Icon name="package" size={14} />
+            <span className="min-w-0 flex-1 truncate" title={kitRunCaption(kitRun.clipName)}>
+              {kitRunCaption(kitRun.clipName)}
+            </span>
+            <KitCancel />
+          </div>
+          <p className="text-xs text-ink-muted">
+            {kitRun.phase || 'Working…'} The video is closed; the kit keeps writing its files until it finishes or you cancel it.
+          </p>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -331,27 +345,31 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           {kitRunCaption(kitRun.clipName)}
         </span>
       ) : null}
-      <span className="inline-flex items-center gap-1">
-        <button
-          onClick={startKit}
-          disabled={kitRun !== null}
-          // T-125 (24): the Video tour's Clip Kit step points here.
-          data-tutorial="video-clipkit"
-          // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
-          // it is announced as it changes (GifPanel's pattern; role="status" would clobber the
-          // button role).
-          aria-live="polite"
-          title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
-          // T-112: ink on the wash, the accent border carries the identity. accent text on
-          // an accent wash over the row's bg-hover measured 4.10:1 at rest and about 3.6:1
-          // on hover (under the 4.5:1 AA floor); ink-base clears it with room.
-          className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-ink-base disabled:opacity-50 inline-flex items-center gap-1.5"
-        >
-          <Icon name="package" size={13} />
-          {kitRun !== null ? kitRun.phase || 'Working…' : `Clip Kit (${KIT_PLATFORM_IDS.length} + thumbs)`}
-        </button>
-        {kitRun !== null ? <KitCancel /> : null}
-      </span>
+      <button
+        onClick={startKit}
+        disabled={kitRun !== null}
+        // T-125 (24): the Video tour's Clip Kit step points here.
+        data-tutorial="video-clipkit"
+        // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
+        // it is announced as it changes (GifPanel's pattern; role="status" would clobber the
+        // button role).
+        aria-live="polite"
+        title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
+        // T-112: ink on the wash, the accent border carries the identity. accent text on
+        // an accent wash over the row's bg-hover measured 4.10:1 at rest and about 3.6:1
+        // on hover (under the 4.5:1 AA floor); ink-base clears it with room.
+        // T-137 (4): the running label is a sentence ("Exporting platform version 2 of 5…") and it stays on ONE line (`whitespace-nowrap`):
+        // beside its Cancel it wrapped mid-sentence at the default and the minimum windows (measured 197 x 42 px), and the clip list
+        // jumped about 36 px each time the phase changed length.
+        className="text-xs px-2 py-1 rounded border border-accent/40 bg-accent/10 hover:bg-accent/20 text-ink-base whitespace-nowrap disabled:opacity-50 inline-flex items-center gap-1.5"
+      >
+        <Icon name="package" size={13} />
+        {kitRun !== null ? kitRun.phase || 'Working…' : `Clip Kit (${KIT_PLATFORM_IDS.length} + thumbs)`}
+      </button>
+      {/* T-137 (4): Cancel has a row of its own under the button (the column this span is), as GIF, Compile, Picture-in-picture and Export
+          have since T-126 (20): the busy label is the longer and the idle one the shorter, so beside the button it took the strip the
+          button's right edge held a moment ago, and it is what made the label wrap. */}
+      {kitRun !== null ? <KitCancel /> : null}
       <Modal
         open={pendingOver !== null}
         onClose={() => setPendingOver(null)}

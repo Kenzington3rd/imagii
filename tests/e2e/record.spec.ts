@@ -6,7 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
-import { installSpawnStall } from './mainSpawn'
+import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { localDay, skewTimeZone, utcDay } from './skewedClock'
@@ -3457,6 +3457,126 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('link', { name: 'Home' }).click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
       expect(dialogMessages.length).toBe(before)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ═══════ T-137 Track A (round 86): the save is the run, not the screen ═══════
+
+test.describe('T-137 (2): a take that is being saved is still being saved when the person comes back, and a Discard reaches only its own take', () => {
+  // `phase`, the percent and "discarding" were Record's component state, so leaving the screen during a save returned an IDLE screen (Start enabled)
+  // over a convert main was still running. A second take's Discard then called `cancelConverts('recording')`, which cancelled EVERY recording-owner
+  // convert: the first take's save was told "cancelled" by something other than the quit, kept nothing, and unlinked its raw webm. The save is a run
+  // in a module store, a Record that mounts over it draws the saving card, and a Discard names its take (`recording:cancelSave(takeId)`).
+  /** Record a few seconds with the microphone off, press Stop with the convert's ffmpeg held for `holdMs`, and wait until main has spawned it. */
+  async function stopWithHeldConvert(
+    app: ElectronApplication,
+    window: Page,
+    seconds: RegExp,
+    holdMs: number
+  ): Promise<void> {
+    await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: holdMs }])
+    await gotoRecordFromHome(window)
+    await installToastLog(window)
+    await window.getByRole('checkbox').nth(0).uncheck()
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    await window.getByRole('button', { name: /Start recording/ }).click()
+    await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+    await expect(window.getByText(seconds)).toBeVisible({ timeout: 30_000 })
+    await window.getByRole('button', { name: 'Stop' }).click()
+    await expect(window.getByText('Finishing up — converting to MP4…')).toBeVisible({ timeout: 20_000 })
+    // The convert's child is registered in main: a Discard now has something to find (a press before it would find nothing, on any build).
+    await expect.poll(async () => (await readSpawnLog(app)).filter((k) => k === 'ffmpeg').length, { timeout: 20_000, intervals: [100] }).toBe(1)
+  }
+
+  test('leaving Record during a save and coming back shows the saving card with its bar and its Discard, offers no Start, and the Discard it offers discards that take', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t137return')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'aborted.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await stopWithHeldConvert(app, window, /REC 00:0[2-9]/, 40_000)
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+
+      // Back: this is the same save, not an idle Record.
+      await expect(window.getByText('Finishing up — converting to MP4…'), 'the saving card, not the idle controls').toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('progressbar', { name: 'Converting the recording to MP4' })).toBeVisible()
+      await expect(window.getByRole('button', { name: 'Discard recording' })).toBeEnabled()
+      await expect(window.getByRole('button', { name: /Start recording/ }), 'no second take can be started over a save').toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Refresh sources' })).toHaveCount(0)
+
+      // Its Discard is the take's own: it kills that convert, says so calmly, and the idle screen comes back.
+      await window.getByRole('button', { name: 'Discard recording' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [200] }).toContain('Recording discarded')
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+      expect(existsSync(outPath)).toBe(false)
+      expect(readConfig(userDataDir).recentFiles?.video ?? []).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a Discard aimed at another take (what a second take\'s Discard sends) finds nothing and leaves the take that is being saved: it finishes, and its file is a real mp4', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t137other')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'first-take.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await stopWithHeldConvert(app, window, /REC 00:0[2-9]/, 8_000)
+
+      // A second take's session: what a Record opened over the first take's save used to begin. Its Discard names IT.
+      const outcome = await window.evaluate(async () => {
+        const api = (window as unknown as {
+          api: {
+            recording: {
+              begin: () => Promise<{ id: string }>
+              cancelSave: (id: string) => Promise<boolean>
+              abandon: (id: string) => Promise<boolean>
+            }
+          }
+        }).api
+        const { id } = await api.recording.begin()
+        const hadConvert = await api.recording.cancelSave(id)
+        // A Discard with no take to name is refused by main, not swept over every take.
+        const noId = await api.recording.cancelSave(undefined as unknown as string).then(
+          () => 'accepted',
+          (err: unknown) => (err instanceof Error ? err.message : String(err))
+        )
+        await api.recording.abandon(id)
+        return { hadConvert, noId }
+      })
+      expect(outcome.hadConvert, 'the second take has no convert to cancel').toBe(false)
+      expect(outcome.noId, 'a Discard with no id is refused').toContain('recording:cancelSave id')
+
+      // The first take was not touched: its save finishes, as a save.
+      await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toEqual(expect.arrayContaining([expect.stringMatching(/^Saved \d/)]))
+      expect(await readToastLog(window)).not.toContain('Recording discarded')
+      expect(existsSync(outPath), 'its file is where the person chose it').toBe(true)
+      const probe = await probeFile(outPath)
+      expect(probe.streams?.find((s) => s.codec_type === 'video')?.codec_name).toBe('h264')
+      expect(leftoverTemps(userDataDir), 'its raw take is reaped after a SUCCESS, the second session\'s with it').toEqual([])
     } finally {
       await app.close()
       cleanup(root)

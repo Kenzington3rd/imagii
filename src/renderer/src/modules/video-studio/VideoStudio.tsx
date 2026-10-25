@@ -204,6 +204,10 @@ export function VideoStudio(): JSX.Element {
         </div>
       </header>
 
+      {/* T-137 (3): mounted whether a video is open or not, so its live region exists BEFORE the moment it has something to say (a kit still running when
+          the video is closed). It draws its card only while a kit runs and no video is open (T-136 (1)), above the importer where it always was. */}
+      <ClipKitRunning />
+
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">
           <div className="flex flex-col gap-4 min-w-0">
@@ -227,12 +231,7 @@ export function VideoStudio(): JSX.Element {
           </div>
         </div>
       ) : (
-        <>
-          {/* T-136 (1): a Clip Kit that was running when the video was closed is still running (main writes its files from the paths the run
-              captured), and the clip list that held its Cancel is gone: it is cancelable here. Nothing when no kit runs. */}
-          <ClipKitRunning />
-          <div data-tutorial="video-import"><Importer /></div>
-        </>
+        <div data-tutorial="video-import"><Importer /></div>
       )}
 
       {tutorial.active ? (

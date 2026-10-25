@@ -8,8 +8,10 @@ import {
   convertToMp4,
   remuxWebm,
   cancelConverts,
+  recordingOwner,
   ConvertCancelledError,
-  ConvertFailedError
+  ConvertFailedError,
+  type ConvertOwner
 } from '../ffmpeg/convert'
 import type { LatchRun } from '../ffmpeg/cancelLatch'
 import type {
@@ -216,9 +218,9 @@ export function recordingConvertFailureMessage(err: unknown): string {
  * millisecond clock and no ffmpeg option changes that for a stream copy), which is why `probeVideo`
  * treats a rate above 240 as unknown.
  */
-async function saveWebm(tempPath: string, outputPath: string): Promise<void> {
+async function saveWebm(owner: ConvertOwner, tempPath: string, outputPath: string): Promise<void> {
   try {
-    await remuxWebm('recording', tempPath, outputPath)
+    await remuxWebm(owner, tempPath, outputPath)
   } catch (err) {
     if (err instanceof ConvertCancelledError) throw err
     console.error('[recording] remux failed, saving the take as recorded:', err)
@@ -240,8 +242,12 @@ async function saveWebm(tempPath: string, outputPath: string): Promise<void> {
 async function promoteTempWebm(
   win: BrowserWindow,
   tempPath: string,
-  spec: RecordingFinalizeSpec
+  spec: RecordingFinalizeSpec,
+  takeId: string
 ): Promise<RecordingResult | null> {
+  // T-137 (2): this take's convert is registered under THIS take's owner, so a Discard aimed at it reaches it and a Discard aimed at another take
+  // (a second recording started while this one saved) cannot.
+  const owner = recordingOwner(takeId)
   // The WebContents, taken while the window is certainly alive (the caller just asked for it): a
   // destroyed BrowserWindow throws on `.webContents` itself, the WebContents only answers
   // `isDestroyed()` (T-123 (1)).
@@ -273,7 +279,7 @@ async function promoteTempWebm(
     }
 
     const outputPath = result.filePath
-    run = beginConvertRun('recording')
+    run = beginConvertRun(owner)
     if (spec.convertToMp4) {
       try {
         // T-115: the length of the take is what turns ffmpeg's position into a percent. The
@@ -282,7 +288,7 @@ async function promoteTempWebm(
         const takeSec =
           spec.durationMs !== undefined && spec.durationMs > 0 ? spec.durationMs / 1000 : undefined
         await convertToMp4(
-          'recording',
+          owner,
           tempPath,
           outputPath,
           (info) => {
@@ -325,7 +331,7 @@ async function promoteTempWebm(
       }
     } else {
       try {
-        await saveWebm(tempPath, outputPath)
+        await saveWebm(owner, tempPath, outputPath)
       } catch (err) {
         // The same discard the convert honors: "Discard recording" killed the remux, and the
         // half-written webm at the chosen name is not a take anyone can open.
@@ -370,7 +376,8 @@ async function promoteTempWebm(
 // ffmpeg/convert.ts now (generalized so imported flv/ts/wmv containers
 // use the same transcode). T-60: cancellation is keyed on the owner that
 // started the convert, so "Discard recording" reaches the recording's own
-// child and never an import transcode. before-quit still takes them all
+// child and never an import transcode. T-137 (2): and the owner is the TAKE,
+// so it never reaches another take's. before-quit still takes them all
 // (cancelAllConverts, wired in main/index.ts).
 
 export type RecordingProgressListener = (info: {
@@ -379,12 +386,13 @@ export type RecordingProgressListener = (info: {
 }) => void
 
 /**
- * Abort the recording's in-flight conversion child if any. Returns true
- * when there was something to cancel. Scoped to the recording (T-60): an
- * import transcode running at the same time is not this button's business.
+ * Abort ONE take's in-flight conversion child if any. Returns true when there was something to cancel. Scoped to the take (T-137 (2); to the
+ * recording owner at T-60): another take's save and an import transcode running at the same time are not this button's business. `takeId` is the
+ * session id the renderer holds for the take it is discarding; a take with no convert running (the Save dialog is still open, or the convert is over)
+ * answers false and nothing is touched.
  */
-export function cancelRecordingConvert(): boolean {
-  return cancelConverts('recording')
+export function cancelRecordingConvert(takeId: string): boolean {
+  return cancelConverts(recordingOwner(takeId))
 }
 
 export function registerRecordingIpc(): void {
@@ -516,7 +524,7 @@ export function registerRecordingIpc(): void {
         const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
         if (!win) return null
         reachedSave = true
-        return await promoteTempWebm(win, session.tempPath, spec)
+        return await promoteTempWebm(win, session.tempPath, spec, id)
       } finally {
         streamSessions.delete(id)
         // promoteTempWebm reaps the temp on the paths that reach it; this
@@ -540,8 +548,11 @@ export function registerRecordingIpc(): void {
     return abandonSession(id)
   })
 
-  // M6 fix (round 15): renderer-callable cancel for the save phase.
-  ipcMain.handle('recording:cancelSave', async (): Promise<boolean> => {
-    return cancelRecordingConvert()
+  // M6 fix (round 15): renderer-callable cancel for the save phase. T-137 (2): aimed at one take - a Discard with no id, or an id that is not a
+  // take's, is refused here, and a Discard can only ever cancel the take whose id the renderer holds.
+  ipcMain.handle('recording:cancelSave', async (_e, id: string): Promise<boolean> => {
+    assertNonEmptyString(id, 'recording:cancelSave id')
+    assertAlways(SAFE_ID_RE.test(id), 'recording:cancelSave id malformed')
+    return cancelRecordingConvert(id)
   })
 }

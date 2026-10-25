@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import type { ConvertOwner } from './convert'
 
 // T-44: a convert the user cancelled must be distinguishable from a convert
 // that crashed, and the distinction has to be made HERE — at the spawn site
@@ -40,14 +41,17 @@ const {
   remuxWebm,
   cancelConverts,
   cancelAllConverts,
+  recordingOwner,
   ConvertCancelledError,
   ConvertFailedError
 } = await import('./convert')
+// T-137 (2): a recording's owner is its take. These tests are about one take's convert; the scoping between takes is the block at the end.
+const TAKE = recordingOwner('take-a')
 const { EVEN_PICTURE } = await import('./filters')
 
 /** Start a convert and hand back the promise plus its (fake) child. */
 function startConvert(
-  owner: 'recording' | 'import' = 'recording'
+  owner: ConvertOwner = TAKE
 ): { promise: Promise<void>; child: FakeChild } {
   const promise = convertToMp4(owner, '/tmp/in.webm', '/tmp/out.mp4', () => {})
   const child = lastChild
@@ -121,17 +125,17 @@ describe('convertToMp4 exit handling', () => {
 
 describe('cancelConverts', () => {
   it('returns false when there is no in-flight conversion', () => {
-    expect(cancelConverts('recording')).toBe(false)
+    expect(cancelConverts(TAKE)).toBe(false)
   })
 
   it('is idempotent', () => {
-    expect(cancelConverts('recording')).toBe(false)
-    expect(cancelConverts('recording')).toBe(false)
+    expect(cancelConverts(TAKE)).toBe(false)
+    expect(cancelConverts(TAKE)).toBe(false)
   })
 
   it('SIGKILLs the running child and reports that there was one', () => {
     const { promise, child } = startConvert()
-    expect(cancelConverts('recording')).toBe(true)
+    expect(cancelConverts(TAKE)).toBe(true)
     expect(child.signals).toEqual(['SIGKILL'])
     child.emit('close', null, 'SIGKILL')
     return expect(promise).rejects.toBeInstanceOf(ConvertCancelledError)
@@ -140,7 +144,7 @@ describe('cancelConverts', () => {
   it('makes the convert reject as CANCELLED, not as a SIGKILL crash', async () => {
     const { promise, child } = startConvert()
     child.stderr.emit('data', 'frame= 120 fps= 30 q=28.0 size= 256kB')
-    cancelConverts('recording')
+    cancelConverts(TAKE)
     // The kill's close event carries no exit code and a SIGKILL signal —
     // indistinguishable from a crash without the cancelled flag.
     child.emit('close', null, 'SIGKILL')
@@ -155,22 +159,22 @@ describe('cancelConverts', () => {
 
   it('reports cancelled even if the child errors instead of closing', async () => {
     const { promise, child } = startConvert()
-    cancelConverts('recording')
+    cancelConverts(TAKE)
     child.emit('error', new Error('kill EPERM'))
     await expect(promise).rejects.toBeInstanceOf(ConvertCancelledError)
   })
 
   it('clears the entry, so a second cancel finds nothing to kill', () => {
     const { promise, child } = startConvert()
-    expect(cancelConverts('recording')).toBe(true)
-    expect(cancelConverts('recording')).toBe(false)
+    expect(cancelConverts(TAKE)).toBe(true)
+    expect(cancelConverts(TAKE)).toBe(false)
     child.emit('close', null, 'SIGKILL')
     return expect(promise).rejects.toBeInstanceOf(ConvertCancelledError)
   })
 
   it('does not taint the next convert — a later failure is still a failure', async () => {
     const first = startConvert()
-    cancelConverts('recording')
+    cancelConverts(TAKE)
     first.child.emit('close', null, 'SIGKILL')
     await expect(first.promise).rejects.toBeInstanceOf(ConvertCancelledError)
 
@@ -192,10 +196,10 @@ describe('cancelConverts', () => {
 // runs two actual encodes and cancels one.
 describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
   it('cancelling the recording leaves a concurrent import running', async () => {
-    const recording = startConvert('recording')
+    const recording = startConvert(TAKE)
     const importing = startConvert('import')
 
-    expect(cancelConverts('recording')).toBe(true)
+    expect(cancelConverts(TAKE)).toBe(true)
 
     expect(recording.child.signals).toEqual(['SIGKILL'])
     expect(importing.child.signals).toEqual([])
@@ -208,7 +212,7 @@ describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
   })
 
   it('cancelling the import leaves a concurrent recording convert running', async () => {
-    const recording = startConvert('recording')
+    const recording = startConvert(TAKE)
     const importing = startConvert('import')
 
     expect(cancelConverts('import')).toBe(true)
@@ -224,7 +228,7 @@ describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
 
   it('finds nothing to cancel when the only convert belongs to someone else', () => {
     const importing = startConvert('import')
-    expect(cancelConverts('recording')).toBe(false)
+    expect(cancelConverts(TAKE)).toBe(false)
     expect(importing.child.signals).toEqual([])
     cancelAllConverts()
     importing.child.emit('close', null, 'SIGKILL')
@@ -249,7 +253,7 @@ describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
 
   it('cancelAllConverts takes every owner, and reports nothing when idle', async () => {
     expect(cancelAllConverts()).toBe(false)
-    const recording = startConvert('recording')
+    const recording = startConvert(TAKE)
     const importing = startConvert('import')
 
     expect(cancelAllConverts()).toBe(true)
@@ -263,7 +267,7 @@ describe('cancelConverts is scoped to the owner that asked (T-60)', () => {
   })
 
   it('a convert that ends on its own leaves the other registrations alone', async () => {
-    const recording = startConvert('recording')
+    const recording = startConvert(TAKE)
     const importing = startConvert('import')
 
     // The finished child clears ITS entry, not the whole registry — the
@@ -312,7 +316,7 @@ describe('convertToMp4 - frames keep their own times (T-120)', () => {
 // T-120: the WebM save is a packet copy through the same child registry (so Discard and the quit sweep
 // reach it), and it never re-encodes.
 describe('remuxWebm (T-120)', () => {
-  function startRemux(owner: 'recording' | 'import' = 'recording'): {
+  function startRemux(owner: ConvertOwner = TAKE): {
     promise: Promise<void>
     child: FakeChild
   } {
@@ -330,8 +334,8 @@ describe('remuxWebm (T-120)', () => {
   })
 
   it('is canceled by "Discard recording" like the convert: the sentinel, not a crash', async () => {
-    const { promise, child } = startRemux('recording')
-    expect(cancelConverts('recording')).toBe(true)
+    const { promise, child } = startRemux(TAKE)
+    expect(cancelConverts(TAKE)).toBe(true)
     expect(child.signals).toEqual(['SIGKILL'])
     child.emit('close', null, 'SIGKILL')
     await expect(promise).rejects.toBeInstanceOf(ConvertCancelledError)
@@ -345,7 +349,7 @@ describe('remuxWebm (T-120)', () => {
   })
 
   it('is not reached by an import convert\'s owner', async () => {
-    const { child } = startRemux('recording')
+    const { child } = startRemux(TAKE)
     expect(cancelConverts('import')).toBe(false)
     expect(child.signals).toEqual([])
     cancelAllConverts()
@@ -366,7 +370,7 @@ describe('convertToMp4 - progress is a measurement, or it is absent (T-115)', ()
     reports: Array<{ percent?: number }>
   } {
     const reports: Array<{ percent?: number }> = []
-    const promise = convertToMp4('recording', '/tmp/in.webm', '/tmp/out.mp4', (p) => reports.push(p), durationSec)
+    const promise = convertToMp4(TAKE, '/tmp/in.webm', '/tmp/out.mp4', (p) => reports.push(p), durationSec)
     const child = lastChild
     if (!child) throw new Error('spawn was never called')
     return { promise, child, reports }
@@ -440,5 +444,70 @@ describe('convertToMp4 - progress is a measurement, or it is absent (T-115)', ()
     child.stdout.emit('data', tick('00:00:03.000000'))
     child.emit('close', 0, null)
     await expect(promise).resolves.toBeUndefined()
+  })
+})
+
+// T-137 (2): a recording's owner is its TAKE. One owner for every take ("recording") meant a Discard on a second take - the first was still being
+// saved, because leaving Record during a save returned an idle Record - cancelled the FIRST take's convert too, and that save, seeing a cancel that was
+// not the quit's, threw its raw webm away: the only copy of a recording the person never discarded. The owner names the take; there is no owner-wide
+// recording cancel (the type has none), and a take that has nothing running answers false.
+describe('cancelConverts is scoped to the TAKE that asked (T-137 (2))', () => {
+  const A = recordingOwner('take-a')
+  const B = recordingOwner('take-b')
+
+  it('a recording owner is the take\'s, and no two takes share one', () => {
+    expect(A).not.toBe(B)
+    expect(recordingOwner('take-a')).toBe(A)
+    expect(A).not.toBe('import')
+    expect(A).toContain('take-a')
+  })
+
+  it('cancelling the second take leaves the first take\'s convert running, and it finishes', async () => {
+    const first = startConvert(A)
+    const second = startConvert(B)
+
+    expect(cancelConverts(B)).toBe(true)
+
+    expect(second.child.signals).toEqual(['SIGKILL'])
+    expect(first.child.signals, 'the first take\'s child was not signalled').toEqual([])
+    second.child.emit('close', null, 'SIGKILL')
+    await expect(second.promise).rejects.toBeInstanceOf(ConvertCancelledError)
+
+    // The first take is intact: it finishes on its own terms, as a success and not as a discard.
+    first.child.emit('close', 0, null)
+    await expect(first.promise).resolves.toBeUndefined()
+  })
+
+  it('a take with nothing running finds nothing to cancel, and touches no other take', () => {
+    const first = startConvert(A)
+    const importing = startConvert('import')
+    expect(cancelConverts(B)).toBe(false)
+    expect(first.child.signals).toEqual([])
+    expect(importing.child.signals).toEqual([])
+    cancelAllConverts()
+    first.child.emit('close', null, 'SIGKILL')
+    importing.child.emit('close', null, 'SIGKILL')
+    return Promise.all([expect(first.promise).rejects.toBeInstanceOf(ConvertCancelledError), expect(importing.promise).rejects.toBeInstanceOf(ConvertCancelledError)])
+  })
+
+  it('the quit sweep still takes every take, and says it is the quit\'s (the raw take is kept)', async () => {
+    const first = startConvert(A)
+    const second = startConvert(B)
+    expect(cancelAllConverts()).toBe(true)
+    first.child.emit('close', null, 'SIGKILL')
+    second.child.emit('close', null, 'SIGKILL')
+    for (const run of [first, second]) {
+      const err = await run.promise.catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(ConvertCancelledError)
+      expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(true)
+    }
+  })
+
+  it('a Discard is not a quit: the cancel of one take says byQuit is false', async () => {
+    const { promise, child } = startConvert(A)
+    cancelConverts(A)
+    child.emit('close', null, 'SIGKILL')
+    const err = await promise.catch((e: unknown) => e)
+    expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
   })
 })

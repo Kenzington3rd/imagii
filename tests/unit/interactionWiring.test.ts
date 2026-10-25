@@ -670,13 +670,16 @@ describe('T-88 — Record: Refresh sources re-checks what its hints send people 
   })
 
   it('the save card is the saveCard() copy, and Discard is gated on it', () => {
-    expect(code).toMatch(/const save = saveCard\(convertToMp4, discarding\)/)
+    // T-137 (2): the card is drawn from the save's own facts when a run exists (a Record that mounted over it has neither the checkbox's value nor
+    // the take's `discarding`), and from the checkbox only in the instant before the run begins.
+    expect(code).toMatch(/const save = saveCard\(saveRun === null \? convertToMp4 : saveRun\.convertToMp4, discarding\)/)
+    expect(code).toMatch(/const discarding = saveRun\?\.discarding \?\? false/)
     expect(code).toMatch(/disabled=\{!save\.canDiscard\}/)
     expect(code).not.toMatch(/converting and writing to disk/)
   })
 
   it('a rejected discard goes through the one failure helper, and a sentinel rejection is a discard', () => {
-    expect(code).toMatch(/\.cancelSave\(\)[\s\S]*?\.catch\(\(err\) => \{[\s\S]*?reportFailure\(err/)
+    expect(code).toMatch(/\.cancelSave\(takeId\)[\s\S]*?\.catch\(\(err\) => \{[\s\S]*?reportFailure\(err/)
     expect(code).toMatch(/if \(isCancelledError\(err\)\) \{/)
   })
 
@@ -684,8 +687,9 @@ describe('T-88 — Record: Refresh sources re-checks what its hints send people 
   // it is "working": the bar slides (E2E "the convert bar draws what main reports"). `?? 0` here
   // would be the old lie in a new place - a bar parked at its 2% floor for the whole convert.
   it('a progress event without a percent is "no measurement" (null), and null draws the sliding bar', () => {
-    expect(code).toMatch(/setSavePercent\(info\.percent \?\? null\)/)
-    expect(code).toMatch(/useState<number \| null>\(0\)/)
+    // T-137 (2): the percent is the save run's field (a module store), written by the listener that lasts exactly the save.
+    expect(code).toMatch(/useRecordSave\.getState\(\)\.patch\(\{ percent: info\.percent \?\? null \}\)/)
+    expect(code).toMatch(/const savePercent = saveRun === null \? 0 : saveRun\.percent/)
     expect(code).toMatch(/savePercent === null \? \(\s*<div className="h-full bg-accent progress-indeterminate" \/>/)
   })
 })
@@ -1155,7 +1159,8 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
 
   it('the audio importer refuses a second import from the drop, the picker and Recent, and releases the flag in a finally (6)', () => {
     const importer = read('modules/audio-studio/AudioImporter.tsx')
-    expect(singleFlight(importer, 'loadFile', 'busyRef')).toEqual({ claimedFirst: true, releasedInFinally: true })
+    // T-137 (1): the claim is the import run's `begin()` in the module store (it was a component ref), taken before the first await and given back in a finally.
+    expect(importer).toMatch(/useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)/)
     expect(importer).toMatch(/async function loadFile\(filePath: string\): Promise<void> \{\s*\n\s*if \(refuseIfBusy\(\)\) return/)
     expect(importer).toMatch(/if \(file && refuseIfBusy\(\)\) return\s*\n\s*const diag = examineDroppedFile\(file\)/)
     expect(importer).toMatch(/if \(refuseIfBusy\(\)\) return\s*\n\s*if \(pathLooksLikeCloudSync\(filePath\)\)/)
@@ -2759,10 +2764,12 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     // The run names the clip it was started on, so the line survives a rename, a removal and a Close.
     expect(kit).toMatch(/\{kitRunCaption\(kitRun\.clipName\)\}/)
     expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/useKitRun = createRunStore<\{ clipId: string; clipName: string; phase: string; canceled: boolean \}>\(\)/)
-    // The closed video's kit: a component reading the same run, mounted where the importer is, and nowhere the clip list is.
-    expect(kit).toMatch(/export function ClipKitRunning\(\): JSX\.Element \| null \{\s*const kitRun = useKitRun\(\(s\) => s\.run\)\s*if \(kitRun === null\) return null/)
+    // The closed video's kit: a component reading the same run, drawn above the importer, and nowhere the clip list is. T-137 (3): the component is
+    // mounted whether a video is open or not (its live region is the always-mounted wrapper) and draws its card only for a run with no video open.
+    expect(kit).toMatch(/export function ClipKitRunning\(\): JSX\.Element \{\s*const kitRun = useKitRun\(\(s\) => s\.run\)\s*const videoOpen = useVideoStore\(\(s\) => s\.source !== null\)\s*const shown = kitRun !== null && !videoOpen/)
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
-    expect(studio).toMatch(/<>\s*<ClipKitRunning \/>\s*<div data-tutorial="video-import"><Importer \/><\/div>\s*<\/>/)
+    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*\{source \? \(/)
+    expect(studio).toMatch(/\) : \(\s*<div data-tutorial="video-import"><Importer \/><\/div>\s*\)\}/)
     // Cancel is the shared component, behind the same question, and the question is the kit's.
     expect(kit).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setShowCancelConfirm\(true\)\} \/>/)
     expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)\s*void window\.api\.video\.cancelAll\(\)/)
@@ -2869,5 +2876,120 @@ describe('T-135 (11) pick rule - a picked second track is refused ONLY on the pr
     expect(panel).toMatch(
       /try \{\s*await window\.api\.audio\.probe\(filePath\)\s*\} catch \(err\) \{\s*if \(isNoAudioStreamError\(err\)\) \{\s*toast\.error\(SECOND_TRACK_PICK_NO_SOUND_MESSAGE, \{ duration: ERROR_TOAST_MS \}\)\s*return\s*\}\s*\}\s*setSecondaryTrack\(\{/
     )
+  })
+})
+
+// T-137 Track A: the twenty-third sweep's wiring, where the person reaches it. E2E per item: (1) audio.spec.ts "T-137 (1)" (the importer after a trip to Home;
+// a sound opened during an extraction is kept), (2) record.spec.ts "T-137 (2)" (the saving card after a trip to Home; a Discard aimed at another take
+// finds nothing) with the two-take cases in recordingQuit.test.ts, (3) video-pipelines.spec.ts "T-137 (3)" (the always-mounted live region), (4) the same
+// block (one line at 1024 and 1632), (5) mediaFormats.test.ts (the sentence).
+describe('T-137 Track A - the twenty-third sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const readMain = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../main', rel), 'utf8')
+  const readPreload = (): string => readFileSync(path.resolve(RENDERER_ROOT, '../../preload/index.ts'), 'utf8')
+  const readShared = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../shared', rel), 'utf8')
+
+  it('(1) the audio importer\'s run is a module store, claimed before the first await; a sound that arrived during the extraction is not replaced', () => {
+    const importer = strip(read('modules/audio-studio/AudioImporter.tsx'))
+    expect(importer).toMatch(/const busy = useAudioImportRun\(\(s\) => s\.run !== null\)/)
+    expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|extractingRef|setBusy\(/)
+    const load = importer.slice(importer.indexOf('async function loadFile('), importer.indexOf('function onDrop('))
+    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const extracting = audioNeedsExtraction\(filePath\)\s*if \(!useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)\) return\s*const heldBefore = useAudioStore\.getState\(\)\.source/)
+    expect(load).toMatch(/finally \{\s*useAudioImportRun\.getState\(\)\.end\(\)\s*\}/)
+    // After the wait, before the load: the same rule as a project open's and Clean audio's.
+    expect(load).toMatch(/if \(replacedSince\(heldBefore, useAudioStore\.getState\(\)\.source\)\) \{\s*toast\(`Skipped the sound of/)
+    expect(load.indexOf('extractFromVideo(')).toBeLessThan(load.indexOf('replacedSince(heldBefore, useAudioStore.getState().source)'))
+    expect(load.indexOf('replacedSince(')).toBeLessThan(load.indexOf('await loadSource(wavPath'))
+    expect(load).toMatch(/Skipped the sound of \$\{basename\(filePath\)\} because you opened another file in Audio Studio while it was extracting/)
+    expect(load, 'the skip returns before the load, the Recent entry and "Loaded"').toMatch(/duration: 8000\s*\}\)\s*return\s*\}/)
+    // The refusal reads the store, so a returning importer refuses with the same words.
+    expect(load.slice(0, load.indexOf('async function loadFile(')).length).toBe(0)
+    expect(importer).toMatch(/const running = useAudioImportRun\.getState\(\)\.run\s*if \(running === null\) return false\s*toast\(\s*running\.extracting\s*\?\s*'Still extracting audio from the last file\. Wait for it to finish\.'\s*:\s*'Still loading the last file\. Wait for it to finish\.'/)
+    expect(strip(read('modules/audio-studio/state/audioImport.ts'))).toMatch(/export const useAudioImportRun = createRunStore<\{ filePath: string; extracting: boolean \}>\(\)/)
+  })
+
+  it('(2) Record\'s save is a module store: begun before the first await of finalizeRecording, given back in its finally, drawn by whoever mounts over it', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    expect(studio).toMatch(/const saveRun = useRecordSave\(\(s\) => s\.run\)/)
+    expect(studio, 'none of the component-state spellings this replaced').not.toMatch(/setSavePercent|setDiscarding|useState<number \| null>\(0\)/)
+    const finalize = studio.slice(studio.indexOf('async function finalizeRecording'), studio.indexOf('function announceDiscarded'))
+    expect(finalize.length, 'the slice found finalizeRecording').toBeGreaterThan(500)
+    const begin = finalize.indexOf('useRecordSave.getState().begin({ takeId: sessionId, convertToMp4,')
+    expect(begin, 'the run is begun with the take\'s session id').toBeGreaterThan(-1)
+    expect(begin, 'before the first await').toBeLessThan(finalize.indexOf('await '))
+    expect(finalize).toMatch(/const claimed =\s*sessionId !== null &&/)
+    expect(finalize).toMatch(/finally \{\s*offProgress\(\)\s*if \(claimed\) useRecordSave\.getState\(\)\.end\(\)/)
+    // The progress listener lasts the save: registered after the run begins, taken off in the finally - not an effect of the screen.
+    expect(finalize.indexOf('const offProgress = window.api.recording.onProgress(')).toBeGreaterThan(begin)
+    expect(studio.match(/window\.api\.recording\.onProgress\(/g) ?? [], 'one listener, the save\'s').toHaveLength(1)
+    // A Record that mounts over a run draws the saving card, and the idle controls are not drawn over it.
+    expect(studio).toMatch(/const saving = phase === 'saving' \|\| \(phase === 'idle' && saveRun !== null\)/)
+    expect(studio).toMatch(/\{phase === 'idle' && !saving \? \(/)
+    expect(studio).toMatch(/\{saving \? \(\s*<div className="card p-6 text-center flex flex-col items-center gap-3">/)
+  })
+
+  it('(2) a Discard names its take, and Start is refused over a running save, right after the re-entry gate', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    expect(studio).toMatch(/const takeId = useRecordSave\.getState\(\)\.run\?\.takeId\s*if \(takeId === undefined\) return/)
+    expect(studio).toMatch(/\.cancelSave\(takeId\)/)
+    expect(studio, 'no Discard without a take').not.toMatch(/\.cancelSave\(\)/)
+    expect(studio).toMatch(/async function startRecording\(\): Promise<void> \{\s*if \(startingRef\.current\) return\s*if \(useRecordSave\.getState\(\)\.run !== null\) \{\s*toast\(SAVE_RUNNING_MESSAGE, \{ id: 'record-save-busy'/)
+    // (The re-entry claim itself - startingRef before the first await, released in a finally - is T-119's pin, in 'Start recording claims startingRef' above.)
+  })
+
+  it('(2) the channel is aimed at one take from the button to main: the preload and the type carry the id, and main refuses a Discard without one', () => {
+    expect(readPreload()).toMatch(/cancelSave: \(id: string\) => ipcRenderer\.invoke\('recording:cancelSave', id\)/)
+    expect(readShared('api.ts')).toMatch(/cancelSave\(id: string\): Promise<boolean>/)
+    const recording = strip(readMain('ipc/recording.ts'))
+    expect(recording).toMatch(/ipcMain\.handle\('recording:cancelSave', async \(_e, id: string\): Promise<boolean> => \{\s*assertNonEmptyString\(id, 'recording:cancelSave id'\)\s*assertAlways\(SAFE_ID_RE\.test\(id\), 'recording:cancelSave id malformed'\)\s*return cancelRecordingConvert\(id\)/)
+    expect(recording).toMatch(/export function cancelRecordingConvert\(takeId: string\): boolean \{\s*return cancelConverts\(recordingOwner\(takeId\)\)/)
+    // The save registers its convert, its remux and its run under the take's owner - the one thing that lets a Discard find only that take.
+    const promote = recording.slice(recording.indexOf('async function promoteTempWebm('), recording.indexOf('export type RecordingProgressListener'))
+    expect(promote).toMatch(/const owner = recordingOwner\(takeId\)/)
+    expect(promote).toMatch(/run = beginConvertRun\(owner\)/)
+    expect(promote).toMatch(/await convertToMp4\(\s*owner,/)
+    expect(promote).toMatch(/await saveWebm\(owner, tempPath, outputPath\)/)
+    expect(recording).toMatch(/return await promoteTempWebm\(win, session\.tempPath, spec, id\)/)
+    expect(recording, 'no owner-wide recording cancel is left').not.toMatch(/cancelConverts\('recording'\)/)
+    expect(strip(readMain('ffmpeg/convert.ts'))).toMatch(/export type ConvertOwner = 'import' \| `recording:\$\{string\}`/)
+  })
+
+  it('(3) the Clip Kit card\'s live region is a wrapper that is always mounted, empty while no kit runs; the paragraph inside carries none of its own', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    const running = kit.slice(kit.indexOf('export function ClipKitRunning('), kit.indexOf('export function ClipKitButton('))
+    expect(running).toMatch(/return \(\s*<div aria-live="polite" className=\{shown \? undefined : '-mb-5'\}>\s*\{shown \? \(\s*<div className="card p-3 flex flex-col gap-1 text-sm">/)
+    expect(running).toMatch(/\) : null\}\s*<\/div>\s*\)\s*\}/)
+    expect(running.match(/aria-live/g) ?? [], 'one live region, the wrapper').toHaveLength(1)
+    expect(running.match(/\breturn\b/g) ?? [], 'one return: the wrapper is drawn on every path, never an early exit for "no kit"').toHaveLength(1)
+    expect(running).not.toMatch(/if \(kitRun === null\) return null/)
+    // Mounted whether a video is open or not, ahead of the conditional - not inside the branch that mounts when the video closes.
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    expect(studio.match(/<ClipKitRunning \/>/g) ?? []).toHaveLength(1)
+    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*\{source \? \(\s*<div className="grid grid-cols-1 lg:grid-cols-/)
+  })
+
+  it('(4) the running kit label is one line, and its Cancel is a row of its own under the button, not beside it', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toMatch(/className="text-xs px-2 py-1 rounded border border-accent\/40 bg-accent\/10 hover:bg-accent\/20 text-ink-base whitespace-nowrap disabled:opacity-50 inline-flex items-center gap-1\.5"/)
+    expect(kit, 'the button and its Cancel are no longer one inline row').not.toMatch(/<span className="inline-flex items-center gap-1">\s*<button/)
+    expect(kit).toMatch(/<\/button>\s*\{kitRun !== null \? <KitCancel \/> : null\}\s*<Modal/)
+  })
+
+  it('(5) the preview copy\'s skip toast is the shared sentence for a close AND a replace, and no longer says the person opened another video', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/toast\(previewCopySkippedMessage\(startedName\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: 8000 \}\)/)
+    expect(player).toMatch(/const startedName = source\.fileName/)
+    expect(player).not.toMatch(/because you opened another video while it was being made/)
+  })
+
+  it('the guides say what the code does: the RunningCancel placements are named, and the new runs are in the module-store rule', () => {
+    const docs = path.resolve(RENDERER_ROOT, '../../../docs')
+    const design = readFileSync(path.join(docs, 'DESIGN_GUIDE.md'), 'utf8')
+    const cancel = design.slice(design.indexOf('**The Cancel of a job that is running is one button'), design.indexOf('**A chip that shows a name the person chose is capped'))
+    expect(cancel.length, 'the section was found').toBeGreaterThan(500)
+    for (const placement of ['Clip Kit', 'caption row', 'beside the primary', 'Audio Studio\'s export']) expect(cancel, placement).toContain(placement)
+    const style = readFileSync(path.join(docs, 'STYLE_GUIDE.md'), 'utf8')
+    expect(style).toMatch(/useAudioImportRun/)
+    expect(style).toMatch(/useRecordSave/)
   })
 })

@@ -25,6 +25,7 @@ import {
   remuxWebm,
   cancelConverts,
   cancelAllConverts,
+  recordingOwner,
   ConvertCancelledError
 } from '../../src/main/ffmpeg/convert'
 import { drainRuns } from '../../src/main/ffmpeg/cancelLatch'
@@ -5260,7 +5261,7 @@ describe('job-scoped convert cancellation (real ffmpeg, T-60)', () => {
       // against, so its ticks carry none (the recording is given its real 30 s).
       let recTicks = 0
       let impTicks = 0
-      const recording = convertToMp4('recording', recSrc, recOut, () => {
+      const recording = convertToMp4(recordingOwner('take'), recSrc, recOut, () => {
         recTicks++
       }, 30)
       const importing = convertForImport(impSrc, () => {
@@ -5288,7 +5289,7 @@ describe('job-scoped convert cancellation (real ffmpeg, T-60)', () => {
       expect(impTicks, 'the import convert is running').toBeGreaterThan(0)
 
       // The user clicks "Discard recording".
-      cancelConverts('recording')
+      cancelConverts(recordingOwner('take'))
 
       const imp = await importSettled
       const rec = await recordingSettled
@@ -5340,7 +5341,7 @@ describe('the convert reports a measured progress, or none (real ffmpeg, T-115)'
   async function reports(durationSec?: number): Promise<Array<{ percent?: number }>> {
     const out = path.join(workDir, `t115-progress-${durationSec ?? 'none'}.mp4`)
     const seen: Array<{ percent?: number }> = []
-    await convertToMp4('recording', src, out, (p) => seen.push(p), durationSec)
+    await convertToMp4(recordingOwner('take'), src, out, (p) => seen.push(p), durationSec)
     await rm(out, { force: true })
     return seen
   }
@@ -5492,7 +5493,7 @@ describe('a MediaRecorder take: saved as WebM and converted to MP4 (real ffmpeg,
 
     it('Convert off: the save remux gives the saved take a duration, every packet, and a probe Video Studio accepts', async () => {
       const out = path.join(workDir, `t120-saved-${kind}.webm`)
-      await remuxWebm('recording', fixtures[kind], out)
+      await remuxWebm(recordingOwner('take'), fixtures[kind], out)
 
       // Bug 1: a finite duration of about the take's length, so `probeVideo` accepts it.
       const probe = await probeVideo(out)
@@ -5523,7 +5524,7 @@ describe('a MediaRecorder take: saved as WebM and converted to MP4 (real ffmpeg,
 
     it('Convert on: the mp4 has the frames the take has, at a sane rate, not one per millisecond', async () => {
       const out = path.join(workDir, `t120-converted-${kind}.mp4`)
-      await convertToMp4('recording', fixtures[kind], out, () => undefined, SEC)
+      await convertToMp4(recordingOwner('take'), fixtures[kind], out, () => undefined, SEC)
 
       const facts = await streamFacts(out, 'frames')
       const fps = rate(facts.avg)
@@ -7989,7 +7990,7 @@ describe('the compilation follows the source\'s frame rate, up to 60 (real ffmpe
     const raw = path.join(workDir, 't130-q-record.webm')
     const saved = path.join(workDir, 't130-q-record-saved.webm')
     await mediaRecorderWebm('libvpx', raw, 4)
-    await remuxWebm('recording', raw, saved)
+    await remuxWebm(recordingOwner('take'), raw, saved)
     expect((await ffprobeJson(saved)).streams.find((s) => s.codec_type === 'video')?.avg_frame_rate, 'the fixture reads 1000/1').toBe('1000/1')
     expect((await probeVideo(saved)).fps, 'and the product\'s probe says it states no rate').toBe(0)
     const { outputPath } = await runConcat({
@@ -9506,7 +9507,7 @@ describe('an odd-sized picture through every other libx264 command (real ffmpeg,
   describe('the MP4 convert (the recording flow and the importer)', () => {
     it('an odd-sized webm converts to an even-sized h264 mp4 that plays - the take is not lost', async () => {
       const out = path.join(workDir, 't114-convert-odd.mp4')
-      await convertToMp4('recording', oddWebm, out, () => {})
+      await convertToMp4(recordingOwner('take'), oddWebm, out, () => {})
       const { info, v } = await videoOf(out)
       expect([v?.codec_name, v?.pix_fmt]).toEqual(['h264', 'yuv420p'])
       // One pixel trimmed off the odd edge (EVEN_PICTURE is a crop since T-115, so nothing is
@@ -9531,7 +9532,7 @@ describe('an odd-sized picture through every other libx264 command (real ffmpeg,
 
     it('the control: an even-sized webm keeps its size exactly', async () => {
       const out = path.join(workDir, 't114-convert-even.mp4')
-      await convertToMp4('recording', evenWebm, out, () => {})
+      await convertToMp4(recordingOwner('take'), evenWebm, out, () => {})
       const { v } = await videoOf(out)
       expect([v?.width, v?.height]).toEqual([ODD_W - 1, ODD_H - 1])
     }, 120_000)
@@ -9603,7 +9604,7 @@ describe('an odd-sized picture through every other libx264 command (real ffmpeg,
 
       it('the control: an even checkerboard is exactly as hard after the convert (the encoder is not the softener)', async () => {
         const out = path.join(workDir, 't115-checker-even.mp4')
-        await convertToMp4('recording', checkerEven, out, () => {})
+        await convertToMp4(recordingOwner('take'), checkerEven, out, () => {})
         for (const y of [7, 100, 233]) {
           const row = await rowOf(out, ODD_W - 1, y)
           expect(hardness(row), `even row ${y}: ${[...row.subarray(0, 8)].join(',')}`).toEqual({ soft: 0, flat: 0 })
@@ -9612,7 +9613,7 @@ describe('an odd-sized picture through every other libx264 command (real ffmpeg,
 
       it('an odd checkerboard comes out hard too: one column and one row are cut off, the rest is not resampled', async () => {
         const out = path.join(workDir, 't115-checker-odd.mp4')
-        await convertToMp4('recording', checkerOdd, out, () => {})
+        await convertToMp4(recordingOwner('take'), checkerOdd, out, () => {})
         expect((await videoOf(out)).v).toMatchObject({ width: ODD_W - 1, height: ODD_H - 1 })
         for (const y of [7, 100, 233]) {
           const row = await rowOf(out, ODD_W - 1, y)
@@ -10001,4 +10002,83 @@ describe('a compilation whose FIRST segment is lost at the join names its clip (
     })
     near(Number((await ffprobeJson(outputPath)).format.duration), 4, 0.3, 'two 2 s clips')
   }, 120_000)
+})
+
+describe('a Discard on one take leaves another take\'s save running (real ffmpeg, T-137 (2))', () => {
+  /**
+   * One owner for every take meant a Discard pressed on a second take cancelled the FIRST take's convert as well (`cancelConverts('recording')` swept
+   * every recording-owner child), and that save - told "cancelled" by something other than the quit - threw its raw webm away. A recording's owner is its
+   * take now (`recordingOwner(takeId)`), and a cancel names one. No ffmpeg command or filter changed: the registry the SIGKILL is aimed through did,
+   * and "the child that dies is the one the person meant" is the binary's to prove, as T-60's block above does for an import. Two concurrent real
+   * encodes of two takes, one cancel, and ffprobe on the one that survived. (The unit proof is `recordingQuit.test.ts`, over the real convert module with
+   * a fake child and the real handlers.)
+   */
+  const SEC = 30
+
+  /** A screen recording's webm, looped from a 2 s seed (0.06 s of vp8 instead of 15 s): the convert under test is the slow part. */
+  async function takeWebm(name: string): Promise<string> {
+    const seed = path.join(workDir, `${name}-seed.webm`)
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=duration=2:size=1280x720:rate=30',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+      '-shortest',
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '2M',
+      '-c:a', 'libvorbis',
+      seed
+    ])
+    const long = path.join(workDir, `${name}.webm`)
+    await ff(['-y', '-stream_loop', '14', '-i', seed, '-c', 'copy', long])
+    return long
+  }
+
+  it(
+    'discarding the second take kills its encode and nothing else: the first take, started before it, finishes as a valid mp4',
+    async () => {
+      const firstSrc = await takeWebm('t137-first')
+      const secondSrc = await takeWebm('t137-second')
+      const firstOut = path.join(workDir, 't137-first.mp4')
+      const secondOut = path.join(workDir, 't137-second.mp4')
+      const first = recordingOwner('take-first')
+      const second = recordingOwner('take-second')
+
+      let firstTicks = 0
+      let secondTicks = 0
+      const firstRun = convertToMp4(first, firstSrc, firstOut, () => {
+        firstTicks++
+      }, SEC)
+      const secondRun = convertToMp4(second, secondSrc, secondOut, () => {
+        secondTicks++
+      }, SEC)
+      // Park both rejections now: an unhandled one would take the run down before the assertions read them.
+      const firstSettled = firstRun.then(() => ({ err: null as unknown }), (err: unknown) => ({ err }))
+      const secondSettled = secondRun.then(() => ({ err: null as unknown }), (err: unknown) => ({ err }))
+
+      // Both children are alive and encoding (ffmpeg only emits `out_time` while it works), so the cancel is not a race with two spawns.
+      const deadline = Date.now() + 60_000
+      while ((firstTicks === 0 || secondTicks === 0) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      expect(firstTicks, 'the first take\'s convert is running').toBeGreaterThan(0)
+      expect(secondTicks, 'the second take\'s convert is running').toBeGreaterThan(0)
+
+      // The person presses "Discard recording" on the second take.
+      expect(cancelConverts(second), 'the Discard found the second take\'s encode').toBe(true)
+
+      const secondResult = await secondSettled
+      const firstResult = await firstSettled
+      expect(secondResult.err, 'the second take was cancelled, as a Discard and not as a quit').toBeInstanceOf(ConvertCancelledError)
+      expect((secondResult.err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
+      // The money shot: before T-137 this rejected too - the SIGKILL meant for the second take, delivered to the first - and the save unlinked its raw take.
+      expect(firstResult.err, 'the first take\'s encode was not touched').toBeNull()
+      const probe = await ffprobeJson(firstOut)
+      expect(probe.streams.find((s) => s.codec_type === 'video')?.codec_name).toBe('h264')
+      expect(probe.streams.find((s) => s.codec_type === 'audio')?.codec_name).toBe('aac')
+      expect(Number(probe.format.duration ?? 0)).toBeGreaterThan(SEC - 5)
+      await assertFaststart(firstOut)
+      await rm(firstOut, { force: true })
+      await rm(secondOut, { force: true })
+    },
+    240_000
+  )
 })

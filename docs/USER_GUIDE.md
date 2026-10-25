@@ -155,6 +155,10 @@ for 8 seconds, and a new take can already be running under it: while a take is r
 every way off the Record screen (the **Home** link, and the toasts' **Edit in Video Studio**
 and **Open Audio Studio**) asks "A recording is in progress. Stop and save it before
 leaving?" first. **OK** stops the take and saves it where you are; **Cancel** keeps recording.
+Once a take is being saved you can leave (the save carries on); when you come back, Record
+shows the same saving card with its bar and **Discard recording**, and offers no **Start
+recording** until the save is done. **Discard recording** throws away the take it is showing and
+no other.
 
 Your webcam corner and your MP4 choice are remembered for next time. If no
 screens or windows turn up, the panel says so — grant screen recording
@@ -192,7 +196,8 @@ that names the file being converted.)
   work", and the **Play** button stays on **Play** instead of turning into **Pause** over a black
   rectangle. Everything else works on the file as it is; **Make a preview copy** converts a copy just for
   watching in the player (the button reads **Making a preview copy…** while it works, also when you
-  come back to the studio, and the picture resumes where you were). Your video, your clips and every export
+  come back to the studio, and the picture resumes where you were; if you close the video, or open another one, before
+  it finishes, imagii says it skipped the copy for that file because the video was closed or replaced). Your video, your clips and every export
   are untouched. Until a copy can be drawn, the **Output preview** card says it has no snapshot to show
   instead of calling a black box a live one.
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
@@ -339,8 +344,8 @@ that names the file being converted.)
   reads "Exporting…", "Scanning…" or the like and is off, the progress bar is there, and so is **Cancel**
   — and a batch that finished while you were away shows its finished rows with **Show in folder**. Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
-  names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel**, and no second kit starts
-  until it ends. If you remove that clip the kit keeps running and stays cancelable; if you close the video,
+  names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
+  running label stays on one line), and no second kit starts until it ends. If you remove that clip the kit keeps running and stays cancelable; if you close the video,
   a card beside the importer keeps the kit's name and its **Cancel** until it ends. The caption model's download is the
   same: its bar and its **Cancel** are there when you come back to **Auto-captions**, and the panel is ready the moment it ends.
   The scan's candidates, the chat log you pasted, the spikes found in it and
@@ -434,7 +439,11 @@ The posting helpers sit at the bottom of Video Studio, in three parts:
 
 Drop in audio, or any video, and imagii extracts its audio. (One file loads at a
 time: if you drop another, or pick one from **Recent**, while the last is still being
-extracted, imagii says it is still working on the last one and leaves the new one alone.)
+extracted, imagii says it is still working on the last one and leaves the new one alone — and
+that holds if you leave Audio Studio and come back while it is still working: the screen you
+return to is the same import, **Loading…** and off, and it still refuses a second file. If you
+opened a sound some other way meanwhile (a project from **Home**, for instance), imagii keeps that one
+and says it skipped the sound that was being pulled out, naming the file.)
 Audio Studio opens sound of any length, a whole stream recording included. The studio
 opens on the file at once, and while imagii reads the sound to draw its waveform, the
 box where the waveform will be says how far it has got ("Drawing the waveform… 42%").

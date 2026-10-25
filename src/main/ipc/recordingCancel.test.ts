@@ -154,12 +154,12 @@ afterEach(() => {
 
 describe('cancelRecordingConvert', () => {
   it('returns false when there is no in-flight conversion', () => {
-    expect(cancelRecordingConvert()).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
   })
 
   it('is idempotent', () => {
-    expect(cancelRecordingConvert()).toBe(false)
-    expect(cancelRecordingConvert()).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
   })
 })
 

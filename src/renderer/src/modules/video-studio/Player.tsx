@@ -3,7 +3,7 @@ import type { KeyboardEvent, SyntheticEvent } from 'react'
 import toast from 'react-hot-toast'
 import { computeCropBox, type CropBox } from '@shared/safeZone'
 import { formatFps } from '@shared/units'
-import { PREVIEW_UNAVAILABLE_MESSAGE } from '@shared/mediaFormats'
+import { PREVIEW_UNAVAILABLE_MESSAGE, previewCopySkippedMessage } from '@shared/mediaFormats'
 import { playableDuration, playheadNow, useVideoStore } from './store/videoStore'
 import { usePreviewCopyRun } from './store/runs'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
@@ -256,6 +256,7 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     await claimFirst(copyingRef, async () => {
       if (!source) return
       const startedFor = source.filePath
+      const startedName = source.fileName
       // T-136 (2): the run is claimed here and given back in the finally, in a module store: the closure outlives this component.
       if (!usePreviewCopyRun.getState().begin({ sourcePath: startedFor })) return
       toast.loading('Making a preview copy…', { id: 'preview-copy' })
@@ -266,8 +267,9 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         // the store's last reading.
         const resumeAt = playheadNow(useVideoStore.getState())
         if (!useVideoStore.getState().setPreviewCopyFor(startedFor, copyPath, resumeAt)) {
-          // The video was closed or replaced while the copy was made: it is for a video that is gone.
-          toast('Skipped the preview copy because you opened another video while it was being made', { icon: <Icon name="warning" size={18} />, duration: 8000 })
+          // The video was closed or replaced while the copy was made: it is for a video that is gone. T-137 (5): which of the two is not known
+          // here (the store holds the open video or none), so the sentence is true of both.
+          toast(previewCopySkippedMessage(startedName), { icon: <Icon name="warning" size={18} />, duration: 8000 })
         }
       } catch (err) {
         toast.dismiss('preview-copy')

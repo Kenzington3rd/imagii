@@ -65,7 +65,7 @@ vi.mock('node:child_process', () => ({
   }
 }))
 
-const { convertForImport, beginConvertRun, cancelConverts, cancelAllConverts, ConvertCancelledError, ConvertFailedError } = await import('./convert')
+const { convertForImport, beginConvertRun, cancelConverts, cancelAllConverts, recordingOwner, ConvertCancelledError, ConvertFailedError } = await import('./convert')
 
 const importDir = (): string => path.join(tmpdir(), 'imagii-import')
 const outputOf = (i: number): string => spawned[i]?.args[(spawned[i]?.args.length ?? 1) - 1] as string
@@ -152,7 +152,7 @@ describe('the import transcode in the middle of a quit (T-128 (5))', () => {
   it('Discard recording does not reach an import: the run is scoped by owner', async () => {
     const done = settle(convertForImport('/videos/keep-going.flv'))
     await untilSpawned(1)
-    expect(cancelConverts('recording'), 'nothing of the recording\'s is running').toBe(false)
+    expect(cancelConverts(recordingOwner('take-a')), 'nothing of the recording\'s is running').toBe(false)
     expect(spawned[0]?.child.signals, 'the import\'s child was not signalled').toEqual([])
     spawned[0]?.child.emit('close', 0, null)
     expect(await done).toEqual({ resolved: outputOf(0) })
@@ -161,15 +161,28 @@ describe('the import transcode in the middle of a quit (T-128 (5))', () => {
 
 describe('beginConvertRun (the recording save\'s run)', () => {
   it('is marked by its owner\'s cancel and by the quit sweep, and by nobody else\'s', () => {
-    const recording = beginConvertRun('recording')
+    const recording = beginConvertRun(recordingOwner('take-a'))
     const imported = beginConvertRun('import')
-    cancelConverts('recording')
+    cancelConverts(recordingOwner('take-a'))
     expect(() => recording.check()).toThrow()
     expect(() => imported.check()).not.toThrow()
     cancelAllConverts()
     expect(() => imported.check()).toThrow()
     recording.end()
     imported.end()
+    expect(openRunCount()).toBe(0)
+  })
+})
+
+describe('beginConvertRun is scoped to the take (T-137 (2))', () => {
+  it('a Discard aimed at one take marks that take\'s run and not another take\'s', () => {
+    const first = beginConvertRun(recordingOwner('take-a'))
+    const second = beginConvertRun(recordingOwner('take-b'))
+    cancelConverts(recordingOwner('take-b'))
+    expect(() => second.check(), 'the discarded take\'s run is marked').toThrow()
+    expect(() => first.check(), 'the other take\'s run is not').not.toThrow()
+    first.end()
+    second.end()
     expect(openRunCount()).toBe(0)
   })
 })

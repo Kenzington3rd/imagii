@@ -5464,7 +5464,7 @@ IMG-PREC.
   shared files; `npm run verify`, `npm run test:media` and the FULL
   Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits.
-- **Status:** open (round 86, two tracks)
+- **Status:** Track A done (round 86, see the Done entry); Track B in expedite
 
 ---
 
@@ -5934,6 +5934,47 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 86, Track A — T-137 items 1-5, landed in the commit that
+carries this entry (Track B, items 6-12, lands next). Worked by one
+Sonnet in a fresh clone of 7690cf5. The data-loss fix (item 2): a
+recording's convert owner is now its TAKE (`recording:<takeId>`,
+convert.ts), every convert, remux and save run registers under it,
+and `recording:cancelSave` takes the take's id (refused when empty
+or malformed), so a second take's Discard can no longer cancel the
+first take's save and delete its raw file — held by a unit that runs
+two concurrent saves over the real convert module, a Layer 5 case on
+both majors and a bridge-driven e2e; Record's save phase lives in a
+module run (saveRun.ts), so a Record that mounts over a running save
+draws its card and Discard, and Start refuses in a sentence while a
+save runs. Audio Studio's importer holds its import in a run slot
+(audioImport.ts) and its landing asks `replacedSince`, so a file
+opened during a long extraction is kept and the late sound is
+skipped with a sentence. The running-kit card's live region is
+always mounted (and now mounts ahead of the video's branch, so a
+Close does not mount it with its text); the kit label stays on one
+line with its Cancel on a row of its own, held by an expectOneLine
+case at the default and minimum windows, and DESIGN_GUIDE names the
+four RunningCancel placements the code uses; the preview copy's
+skip toast says "closed or replaced". 40 ledger mutations all
+restored byte-identical (five survived a first run: three killed
+after pins were strengthened from the string to the condition, one
+invalid mutant redone and killed, and two disclosed - an equivalent
+latch-run id and a nowrap that the moved Cancel makes invisible at
+the tested widths, pin-held), 11 reds incl. a unit that reproduces
+the first-take kill on the unchanged tree. Expedited personally:
+verify x2 (185/5040), test:media on 7.0.2 (356 passed | 13 skipped
+of 369), the WHOLE Layer 5 file on 6.1.1 (349 passed + exactly the
+7 documented platform pins, since the owner literals moved across
+it), build + FULL Playwright 442/442 with zero flakes; integrity and
+ledger audit clean (no forbidden files, no Track B file touched, no
+file at a mutant's sha); spot-read of the take-scoped cancel end to
+end; one independent mutation at a seam no ledger row names (the
+preload bridge dropping the take id from cancelSave → "the channel
+is aimed at one take from the button to main" red → restored
+byte-identical, sha256 verified, 209/209). Landed conflict-free onto
+its own base, every patched path byte-identical to the expedited
+clone. The landed tree's gates are this entry's commit.
 
 Round 85, Track B — T-136 items 9-15, landed in the commit that
 carries this entry, merged onto Track A's (2c85611). Worked by one
