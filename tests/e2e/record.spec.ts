@@ -3583,3 +3583,113 @@ test.describe('T-137 (2): a take that is being saved is still being saved when t
     }
   })
 })
+
+// ═══════ T-138 (5): a return to Home while an autosave Restore is still running does not offer Restore again ═══════
+//
+// `restoring` was the banner's component state and `holdsWork` is read once per mount, false while a restored sound is still being extracted: the person who
+// leaves Home during a long Restore (USER_GUIDE) and comes back got an enabled Restore, and a second press re-applied the project, dismissed the first
+// restore's progress toast (the two share toast ids) and could run a second extraction and a false "Skipped the autosave's audio" toast. The restore is a run
+// in a module store now, claimed before its first await: a banner that mounts over it says "Restoring…" with both buttons off, and goes when the restore is applied.
+test.describe('T-138 (5): a Restore that is still running when the person comes back to Home', () => {
+  /** Count the extractions main starts from now on: a spawn of ffmpeg with `-vn` whose output is a file in the scratch folder `imagii-audio`. Installed AFTER the stall, so it sees the original command. */
+  async function countExtractions(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const g = globalThis as unknown as { __extractionsStarted?: number }
+      g.__extractionsStarted = 0
+      const inner = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        if (/ffmpeg/i.test(String(cmd)) && argv.includes('-vn') && /imagii-audio/.test(String(argv[argv.length - 1]))) g.__extractionsStarted = (g.__extractionsStarted ?? 0) + 1
+        return inner(cmd, args, opts)
+      }
+      mod.syncBuiltinESMExports()
+    })
+  }
+  const extractionsStarted = (app: ElectronApplication): Promise<number> =>
+    app.evaluate(() => (globalThis as unknown as { __extractionsStarted?: number }).__extractionsStarted ?? 0)
+
+  test('Home shows "Restoring…" with both buttons off while it runs, then the banner goes: one "Restored from autosave", no skip toast, one extraction', async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('restorerun')
+    const userDataDir = path.join(root, 'userData')
+    const clip = path.join(root, 'tour.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+    const made = await runBinary(ffmpegPath, [
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip
+    ])
+    if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+    // The session the person left: Audio Studio holding the sound of a video, so Restore extracts it again - the one thing in a project that is a wait and puts
+    // nothing in a studio until it ends (`holdsWork` is false meanwhile). No `place`: the person stays on Home when it ends, so the banner going is the banner
+    // going, not Home being left.
+    mkdirSync(path.join(userDataDir, 'autosave'), { recursive: true })
+    writeFileSync(
+      path.join(userDataDir, 'autosave', 'autosave.json'),
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        audioStudio: { sourcePath: clip, extractedFromVideo: true, chain: DEFAULT_CHAIN_SPEC }
+      }),
+      'utf8'
+    )
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // The extraction ffmpeg is the first one the restore starts; it is held for 15 s, which is the time the person has to leave and come back.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 15_000 }])
+      await countExtractions(app)
+      await window.getByRole('button', { name: 'Restore', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await expect(window.getByRole('button', { name: 'Restoring…' }), 'on the page that started it').toBeDisabled()
+
+      // Away and back: the banner is a NEW mount, over a restore that is still running.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      const restoring = window.getByRole('button', { name: 'Restoring…' })
+      await expect(restoring, 'the returning banner says the restore is running').toBeVisible({ timeout: 15_000 })
+      await expect(restoring).toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Clear', exact: true }), 'Clear acts on the same file, so it is off too').toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Restore', exact: true }), 'no enabled Restore to press a second time').toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Later' }), 'Later is not part of the busy state').toBeEnabled()
+
+      // It ends: the toast says so once, the banner is gone, nothing else was started or reported.
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toEqual(expect.arrayContaining(['Restored from autosave']))
+      await expect(window.getByText(/imagii autosaved your work/), 'the banner goes when the restore it was waiting on is applied').toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByRole('button', { name: /^Restor/ })).toHaveCount(0)
+      await window.waitForTimeout(1500)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => t === 'Restored from autosave'), 'one completion').toHaveLength(1)
+      expect(log.filter((t) => /Skipped the autosave's audio/.test(t)), 'and no false skip').toEqual([])
+      expect(await extractionsStarted(app), 'main was asked to extract the sound once').toBe(1)
+
+      // The restore was not lost by any of it: the sound is waiting in Audio Studio.
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('tour.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      // The run was given back: with the sound closed the session holds nothing, so the next visit to Home offers the autosave again - and its Restore can be
+      // pressed. A run that was never ended would read "Restoring…", off, for the rest of the session.
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.locator('header').getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/), 'the offer is back on a session that holds nothing').toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Restore', exact: true }), 'and nothing is still running').toBeEnabled()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

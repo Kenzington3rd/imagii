@@ -15,10 +15,15 @@ const JPEG_QUALITY = 0.92
 /**
  * Decode a picture so it can be drawn. `crossOrigin: 'anonymous'` for a picture that is fetched (a mood-board thumbnail's source), so the canvas it is
  * drawn on is not tainted: a picture whose server does not allow it fails to LOAD here, as it already did for the layer that drew it.
+ *
+ * T-138: and no referrer, whatever the address. PRODUCT_GUIDE promises a thumbnail is fetched without telling its host where from, and the two `<img>` that
+ * draw one (ReferencePanel, MoodBoardPanel) say `referrerPolicy="no-referrer"`; this is the third place an `Image` fetches one (the mood-board tile whose cached
+ * file is gone falls back to the address it came from), so it holds the promise by construction. Set before `src`, which is what starts the request.
  */
 export function loadImage(src: string, crossOrigin?: 'anonymous'): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
+    img.referrerPolicy = 'no-referrer'
     if (crossOrigin) img.crossOrigin = crossOrigin
     img.onload = () => resolve(img)
     img.onerror = () => reject(new Error('Decode failed'))

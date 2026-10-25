@@ -3512,9 +3512,10 @@ test.describe('Image Studio — history', () => {
 // ── T-137 (6): a picture is stored as a bounded copy ─────────────────────────────────────────────────────────────────────────────────────
 //
 // ImportPanel kept every picture's full-size data URL in the document though the layer is drawn at most 800 px wide, so four 11 MB PNGs put a project
-// over the 50 MiB size limit (executed: autosave stopped, Save wrote 56.9 MiB, Open refused it). The document keeps a copy bounded to 1600 px on the longer
-// side (twice the drawn size, so the default 2x export of a placed picture keeps its pixels): PNG, which keeps transparency, unless the picture came as a
-// JPEG, which stays one. A picture already within the bound is kept as it came. The Konva node's own `<img>` is the stored src, decoded.
+// over the 50 MiB size limit (executed: autosave stopped, Save wrote 56.9 MiB, Open refused it). The document keeps a copy bounded to a size that fits the
+// document (T-138 (2): twice its longer side and never under 1600 px - this case runs on the default blank canvas, 1200x800, so the bound is 2400 px; the
+// templates' are the next block's): PNG, which keeps transparency, unless the picture came as a JPEG, which stays one. A picture already within the bound is
+// kept as it came. The Konva node's own `<img>` is the stored src, decoded.
 test.describe('Image Studio — an imported picture is stored as a bounded copy (T-137 (6))', () => {
   /** A still made by the repo's own ffmpeg: `args` are the lavfi input and the codec options; `out` the file. */
   async function makeStill(out: string, lavfi: string, extra: string[] = []): Promise<void> {
@@ -3580,7 +3581,7 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
     })
   }
 
-  test('a 4000x3000 PNG is kept at 1600x1200 and drawn at 800x600; a JPEG stays a JPEG; a transparent PNG keeps its transparency; a small PNG is kept exactly as it came', async () => {
+  test('on the default 1200x800 canvas a 4000x3000 PNG is kept at 2400x1800 and drawn at 800x600; a JPEG stays a JPEG; a transparent PNG keeps its transparency; a small PNG is kept exactly as it came', async () => {
     test.setTimeout(240_000)
     const studio = await openStudio('t137-bounded')
     const { window } = studio
@@ -3590,7 +3591,8 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
       const ghost = path.join(studio.root, 'ghost.png')
       await makeStill(big, 'testsrc2=size=4000x3000:rate=1')
       await makeStill(photo, 'testsrc2=size=3000x2000:rate=1', ['-q:v', '3'])
-      await makeStill(ghost, 'color=c=0xFF0000@0.5:size=2400x1600:rate=1,format=rgba')
+      // (3000x2000, not the 2400x1600 it was: that fits the 2400 px bound of this document and would be kept as it came, which is the control below.)
+      await makeStill(ghost, 'color=c=0xFF0000@0.5:size=3000x2000:rate=1,format=rgba')
 
       // ── a 4000x3000 PNG ──
       await dropPng(window, readFileSync(big).toString('base64'), 'huge.png')
@@ -3598,7 +3600,7 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
       await expectShapeCount(window, 1)
       const huge = await lastStored(window)
       expect(huge.prefix).toBe('data:image/png;base64')
-      expect.soft({ w: huge.naturalWidth, h: huge.naturalHeight }, 'the stored copy, not the 4000 px file').toEqual({ w: 1600, h: 1200 })
+      expect.soft({ w: huge.naturalWidth, h: huge.naturalHeight }, 'the stored copy, not the 4000 px file').toEqual({ w: 2400, h: 1800 })
       expect({ w: huge.drawnWidth, h: huge.drawnHeight }, 'the layer is still placed at 800 px').toEqual({ w: 800, h: 600 })
       expect.soft(huge.srcLength, 'and its bytes are the copy\'s (a 4000x3000 PNG\'s data URL is several times this)').toBeLessThan(readFileSync(big).length * 1.33)
 
@@ -3608,7 +3610,7 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
       await expectShapeCount(window, 2)
       const jpeg = await lastStored(window)
       expect(jpeg.prefix).toBe('data:image/jpeg;base64')
-      expect.soft({ w: jpeg.naturalWidth, h: jpeg.naturalHeight }, 'a JPEG is bounded too').toEqual({ w: 1600, h: 1067 })
+      expect.soft({ w: jpeg.naturalWidth, h: jpeg.naturalHeight }, 'a JPEG is bounded too').toEqual({ w: 2400, h: 1600 })
       expect(jpeg.drawnWidth).toBe(800)
       expect(jpeg.cornerAlpha, 'a JPEG has no transparency to lose').toBe(255)
 
@@ -3617,9 +3619,9 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
       await expectLayerCount(window, 3)
       await expectShapeCount(window, 3)
       const alpha = await lastStored(window)
-      expect.soft(alpha.naturalWidth, 'and so is a transparent PNG').toBe(1600)
+      expect.soft(alpha.naturalWidth, 'and so is a transparent PNG').toBe(2400)
       expect(alpha.prefix, 'PNG, not JPEG').toBe('data:image/png;base64')
-      expect.soft(alpha.naturalHeight).toBe(1067)
+      expect.soft(alpha.naturalHeight).toBe(1600)
       expect(alpha.cornerAlpha, 'half transparent, as it was dropped').toBeGreaterThan(100)
       expect(alpha.cornerAlpha).toBeLessThan(155)
 
@@ -3637,3 +3639,131 @@ test.describe('Image Studio — an imported picture is stored as a bounded copy 
     }
   })
 })
+
+// ── T-138 (2): the stored copy is sized to the document the picture is placed on ─────────────────────────────────────────────────────────────
+//
+// The copy was bounded to a fixed 1600 px though a layer is freely resizable and the templates are 1280 to 3840 px documents: a 1920x1080 frame (or a 4K
+// background) enlarged to fill a 1920 / 2560 / 3840 px overlay exported 1.2x to 2.4x upscaled, worse at the HiDPI 2x default, and importing the file again
+// bounded it again. The bound is twice the document's longer side (what a picture that fills the document is exported at in a default HiDPI export) and never
+// under 1600 px; a picture within it is kept as it came. The picture is still PLACED at most 800 px wide, whatever the document.
+test.describe('Image Studio — a stored picture is sized to the document it is placed on (T-138 (2))', () => {
+  async function makeStillPng(out: string, size: string): Promise<void> {
+    const result = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=1`, '-frames:v', '1', out])
+    if (result.code !== 0) throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+
+  interface PlacedPicture {
+    naturalWidth: number
+    naturalHeight: number
+    drawnWidth: number
+    drawnHeight: number
+  }
+
+  /** Every picture on the canvas, bottom to top: the node's decoded `<img>` is the layer's stored `src`, and the node's own size is where it was placed. */
+  function pictures(window: Page): Promise<PlacedPicture[]> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; width(): number; height(): number; image?: () => HTMLImageElement }> }> }
+        | undefined
+      if (!stage) throw new Error('__imagiiStage is not set')
+      return (stage.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && typeof n.image === 'function')
+        .map((n) => {
+          const img = (n.image as () => HTMLImageElement)()
+          return { naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, drawnWidth: Math.round(n.width()), drawnHeight: Math.round(n.height()) }
+        })
+    })
+  }
+
+  test('on the 1920x1080 overlay a 1920x1080 picture is kept whole and a 4000x3000 one is stored at 3840x2880; both are still placed at 800 px', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t138-overlay')
+    const { window } = studio
+    try {
+      const frame = path.join(studio.root, 'frame.png')
+      const huge = path.join(studio.root, 'huge.png')
+      await makeStillPng(frame, '1920x1080')
+      await makeStillPng(huge, '4000x3000')
+      const overlay = templateById('tw-overlay-streamer')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+      expect(overlay.doc.width, 'the document these numbers are for').toBe(1920)
+
+      await dropPng(window, readFileSync(frame).toString('base64'), 'frame.png')
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(1)
+      await dropPng(window, readFileSync(huge).toString('base64'), 'huge.png')
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(2)
+
+      const [kept, bounded] = await pictures(window)
+      expect.soft({ w: kept?.naturalWidth, h: kept?.naturalHeight }, 'a full-HD frame on a full-HD document is stored as it came, not at 1600x900').toEqual({ w: 1920, h: 1080 })
+      expect.soft({ w: bounded?.naturalWidth, h: bounded?.naturalHeight }, 'a 4000x3000 picture is stored at twice the overlay\'s width, not at 1600x1200').toEqual({ w: 3840, h: 2880 })
+      expect({ w: kept?.drawnWidth, h: kept?.drawnHeight }, 'placed at 800 px wide, as before').toEqual({ w: 800, h: 450 })
+      expect({ w: bounded?.drawnWidth, h: bounded?.drawnHeight }).toEqual({ w: 800, h: 600 })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('on the 1280x720 thumbnail the same 4000x3000 picture is stored at 2560x1920, and a 1920x1080 one, inside that, is kept whole', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t138-thumb')
+    const { window } = studio
+    try {
+      const frame = path.join(studio.root, 'frame.png')
+      const huge = path.join(studio.root, 'huge.png')
+      await makeStillPng(frame, '1920x1080')
+      await makeStillPng(huge, '4000x3000')
+      const thumbnail = templateById('yt-thumb-bold')
+      await templateCard(window, thumbnail).click()
+      await expectTemplateApplied(window, thumbnail)
+      expect(thumbnail.doc.width, 'the document these numbers are for').toBe(1280)
+
+      await dropPng(window, readFileSync(huge).toString('base64'), 'huge.png')
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(1)
+      await dropPng(window, readFileSync(frame).toString('base64'), 'frame.png')
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(2)
+
+      const [bounded, kept] = await pictures(window)
+      expect.soft({ w: bounded?.naturalWidth, h: bounded?.naturalHeight }, 'the bound follows the document: 2 x 1280').toEqual({ w: 2560, h: 1920 })
+      expect.soft({ w: kept?.naturalWidth, h: kept?.naturalHeight }, 'inside the bound: kept as it came').toEqual({ w: 1920, h: 1080 })
+      expect({ w: bounded?.drawnWidth, h: bounded?.drawnHeight }).toEqual({ w: 800, h: 600 })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a paste and a chosen file are sized to the document that is open when the picture lands, not the one the studio opened with', async () => {
+    test.setTimeout(240_000)
+    // The paste listener is registered when the panel mounts (empty canvas, the default 1200x800), long before a template is picked: a bound read from what the panel
+    // saw at mount would be 2400 there. The 1920x1080 overlay is what is open when these land.
+    const studio = await openStudio('t138-paths')
+    const { window } = studio
+    try {
+      const huge = path.join(studio.root, 'huge.png')
+      await makeStillPng(huge, '4000x3000')
+      const overlay = templateById('tw-overlay-streamer')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+
+      // ── paste: a REAL image on Electron's clipboard + a real Ctrl+V ──
+      await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+        clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+      }, `data:image/png;base64,${readFileSync(huge).toString('base64')}`)
+      await window.keyboard.press('Control+v')
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(1)
+
+      // ── + Import image: the real <input type=file> click path ──
+      const chooserPromise = window.waitForEvent('filechooser', { timeout: 15_000 })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await (await chooserPromise).setFiles(huge)
+      await expect.poll(async () => (await pictures(window)).length, { timeout: 30_000 }).toBe(2)
+
+      const [pasted, chosen] = await pictures(window)
+      expect.soft({ w: pasted?.naturalWidth, h: pasted?.naturalHeight }, 'the pasted picture: twice the overlay\'s width').toEqual({ w: 3840, h: 2880 })
+      expect.soft({ w: chosen?.naturalWidth, h: chosen?.naturalHeight }, 'the chosen file: the same').toEqual({ w: 3840, h: 2880 })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+

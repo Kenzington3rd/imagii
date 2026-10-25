@@ -1343,8 +1343,11 @@ describe('one size rule for Save, Open and autosave (T-137 (6))', () => {
 
   it('each refusal names the size and the limit, and what to do when there is something to do', () => {
     expect(sentenceFor('save')).toMatch(/too large to save \(55\.4 MB; the limit is 50 MB\)/)
-    expect(sentenceFor('save')).toMatch(/Remove or shrink large images on the canvas, then save again\.$/)
-    expect(sentenceFor('autosave')).toMatch(/^Autosave is paused: this project is too large to keep \(55\.4 MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/)
+    // T-138 (3): scaling a layer changes scaleX / scaleY, never its `src`, so "shrink" frees nothing and Save refused again. What does free bytes is
+    // a layer removed, or a smaller copy imported in its place.
+    expect(sentenceFor('save')).toMatch(/Remove some of the large images on the canvas, or import smaller copies of them, then save again\.$/)
+    expect(sentenceFor('autosave')).toMatch(/^Autosave is paused: this project is too large to keep \(55\.4 MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/)
+    for (const doing of ['save', 'autosave'] as const) expect(sentenceFor(doing), `${doing}: shrinking a layer does not shrink the project`).not.toMatch(/shrink/i)
     expect(sentenceFor('open')).toMatch(/too large to open \(55\.4 MB; the limit is 50 MB\)/)
     expect(sentenceFor('open'), 'not the damaged-file guess').not.toMatch(/damaged|newer version/i)
   })

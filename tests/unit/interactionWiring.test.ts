@@ -2246,11 +2246,14 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
 
   it('(9) the Cancel question goes with its batch: Export closes it the moment `running` is false, and Clip Kit\'s lives in a component that exists only while a kit runs (T-136 (1))', () => {
     expect(strip(read('modules/video-studio/ExportPanel.tsx'))).toMatch(/useEffect\(\(\) => \{\s*if \(!running\) setShowCancelConfirm\(false\)\s*\}, \[running\]\)/)
-    // The kit's question is KitCancel's state, and KitCancel is drawn only for a run that exists - so it cannot outlive the run.
+    // The clip list's question is KitCancel's state, and KitCancel is drawn only for a run that exists - so it cannot outlive the run.
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
-    expect(kit).toMatch(/function KitCancel\(\): JSX\.Element \{\s*const \[showCancelConfirm, setShowCancelConfirm\] = useState\(false\)/)
+    expect(kit).toMatch(/function KitCancel\(\): JSX\.Element \{\s*const \[asking, setAsking\] = useState\(false\)/)
     expect(kit.match(/\{kitRun !== null \? <KitCancel \/> : null\}/g) ?? [], 'the button draws it only while a kit runs').toHaveLength(1)
-    expect(kit.match(/<KitCancel \/>/g) ?? [], 'and ClipKitRunning (the closed video) is the only other place').toHaveLength(2)
+    expect(kit.match(/<KitCancel \/>/g) ?? [], 'and the clip list is the only place KitCancel is drawn').toHaveLength(1)
+    // T-138 (4): the closed-video card's question is held by ClipKitRunning, which is always mounted and so outlives the card (the dialog is drawn outside the
+    // card's live region): the state is put down in the render that finds no card, which is what keeps the question from outliving the run there.
+    expect(kit).toMatch(/const \[confirming, setConfirming\] = useState\(false\)\s*if \(!shown && confirming\) setConfirming\(false\)/)
   })
 
   it('(13) the four folder chips are off while their job runs', () => {
@@ -2540,14 +2543,16 @@ describe('T-134 — a Restore that outlasts the person does not move them, a hel
 
   it('(7) Restore and Clear each have their own busy flag: only Restore\'s sets the "Restoring…" label', () => {
     const src = restoreSrc()
-    expect(src).toMatch(/const \[restoring, setRestoring\] = useState\(false\)/)
+    // T-138 (5): Restore's flag is the restore run slot's (a banner that mounts over a running restore must say "Restoring…" too); Clear keeps a local one.
+    expect(src).toMatch(/const restoring = useRestoreRun\(\(s\) => s\.run !== null\)/)
+    expect(src, 'Restore\'s busy state is no longer component state').not.toMatch(/setRestoring/)
     expect(src).toMatch(/const \[clearing, setClearing\] = useState\(false\)/)
     expect(src, 'no shared flag is left').not.toMatch(/\bsetBusy\b/)
     const label = src.slice(src.indexOf('btn-primary'), src.indexOf('Clear\n', src.indexOf('btn-primary')))
     expect(label).toMatch(/\{restoring \? 'Restoring…' : 'Restore'\}/)
     const clearFn = src.slice(src.indexOf('async function clearAutosave()'), src.indexOf('const ageText'))
     expect(clearFn, 'Clear runs on its own flag').toMatch(/setClearing\(true\)[\s\S]*setClearing\(false\)/)
-    expect(clearFn, 'and never touches Restore\'s').not.toMatch(/setRestoring/)
+    expect(clearFn, 'and never touches Restore\'s').not.toMatch(/useRestoreRun|setRestoring/)
     expect(restoreBody(), 'nor Restore Clear\'s').not.toMatch(/setClearing/)
     // Either running dims all of the banner's buttons that act on the file: one at a time, as before.
     expect(src.match(/disabled=\{restoring \|\| clearing\}/g) ?? [], 'Restore and Clear in the healthy banner, Clear in the damaged one').toHaveLength(3)
@@ -2770,8 +2775,10 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
     expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*\{source \? \(/)
     expect(studio).toMatch(/\) : \(\s*<div data-tutorial="video-import"><Importer \/><\/div>\s*\)\}/)
-    // Cancel is the shared component, behind the same question, and the question is the kit's.
-    expect(kit).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setShowCancelConfirm\(true\)\} \/>/)
+    // Cancel is the shared component, behind the same question, and the question is the kit's. T-138 (4): the clip list's button asks its own KitCancel's
+    // question, and the closed-video card's asks the one ClipKitRunning draws outside its live region.
+    expect(kit).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setAsking\(true\)\} \/>/)
+    expect(kit).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setConfirming\(true\)\} \/>/)
     expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)\s*void window\.api\.video\.cancelAll\(\)/)
   })
 
@@ -2957,8 +2964,9 @@ describe('T-137 Track A - the twenty-third sweep', () => {
   it('(3) the Clip Kit card\'s live region is a wrapper that is always mounted, empty while no kit runs; the paragraph inside carries none of its own', () => {
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     const running = kit.slice(kit.indexOf('export function ClipKitRunning('), kit.indexOf('export function ClipKitButton('))
-    expect(running).toMatch(/return \(\s*<div aria-live="polite" className=\{shown \? undefined : '-mb-5'\}>\s*\{shown \? \(\s*<div className="card p-3 flex flex-col gap-1 text-sm">/)
-    expect(running).toMatch(/\) : null\}\s*<\/div>\s*\)\s*\}/)
+    // T-138 (4): the wrapper is the first child of a fragment, and the Cancel question is its SIBLING after it (the dialog is not announced as part of the region).
+    expect(running).toMatch(/return \(\s*<>\s*<div aria-live="polite" className=\{shown \? undefined : '-mb-5'\}>\s*\{shown \? \(\s*<div className="card p-3 flex flex-col gap-1 text-sm">/)
+    expect(running).toMatch(/\) : null\}\s*<\/div>\s*<KitCancelConfirm open=\{confirming\} onClose=\{\(\) => setConfirming\(false\)\} \/>\s*<\/>\s*\)\s*\}/)
     expect(running.match(/aria-live/g) ?? [], 'one live region, the wrapper').toHaveLength(1)
     expect(running.match(/\breturn\b/g) ?? [], 'one return: the wrapper is drawn on every path, never an early exit for "no kit"').toHaveLength(1)
     expect(running).not.toMatch(/if \(kitRun === null\) return null/)
@@ -2993,3 +3001,67 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     expect(style).toMatch(/useRecordSave/)
   })
 })
+
+// T-138 Track B: the twenty-fourth sweep's wiring, where the person reaches it. E2E per item: (2) image.spec.ts "T-138 (2)" (the stored copy on the 1920x1080
+// overlay and on the 1280x720 thumbnail), (4) video-pipelines.spec.ts "T-138 (4)" (the Clip Kit's Cancel question outside the live region, on both paths),
+// (5) record.spec.ts "T-138 (5)" (a return to Home mid-restore). Unit: imageBounds.test.ts, projectValidation.test.ts, boundedImage.test.ts.
+describe('T-138 Track B - the twenty-fourth sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(2) an imported picture is bounded to the document it is placed on: read from the canvas store after the picture has loaded, with the shared helper, not the old constant', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    const ingest = panel.slice(panel.indexOf('async function ingestFile('), panel.indexOf('useEffect(() => {'))
+    expect(ingest.length, 'found ingestFile').toBeGreaterThan(300)
+    expect(ingest).toMatch(/const \{ width: docWidth, height: docHeight \} = useCanvasStore\.getState\(\)\.doc\s*const storedMax = storedImageMaxDim\(docWidth, docHeight\)/)
+    expect(ingest.indexOf('useCanvasStore.getState().doc'), 'the document is read at import time, after the load').toBeGreaterThan(ingest.indexOf('await loadImage('))
+    expect(ingest).toMatch(/scaleToFit\(dims\.width, dims\.height, storedMax\) < 1\s*\? boundedDataUrl\(img, storedMax, file\.type === 'image\/jpeg'\)\s*: dataUrl/)
+    expect(panel, 'the fixed 1600 is not the bound any more').not.toMatch(/STORED_IMAGE_MAX_DIM/)
+    // The drawn size is unchanged (the layer is first placed at most 800 px), and so is "to Canvas" (an 800 px reference copy).
+    expect(ingest).toMatch(/scaleToFit\(dims\.width, dims\.height, LAYER_DRAWN_MAX_DIM\)/)
+    expect(strip(read('modules/references/MoodBoardPanel.tsx'))).toMatch(/boundedDataUrl\(img, LAYER_DRAWN_MAX_DIM, true\)/)
+  })
+
+  it('(4) the Clip Kit\'s Cancel question is one dialog component with an open and an onClose; the closed-video card holds its state and draws it OUTSIDE the live region', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toMatch(/function KitCancelConfirm\(\{ open, onClose \}: \{ open: boolean; onClose: \(\) => void \}\): JSX\.Element \{\s*return \(\s*<Modal open=\{open\} onClose=\{onClose\} title="Cancel Clip Kit"/)
+    expect(kit.match(/<Modal\b/g) ?? [], 'two Modals in the file: the long-clip question and the Cancel question, which is drawn once, by KitCancelConfirm').toHaveLength(2)
+    expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)\s*void window\.api\.video\.cancelAll\(\)/)
+    const running = kit.slice(kit.indexOf('export function ClipKitRunning('), kit.indexOf('export function ClipKitButton('))
+    // The state is here, the button inside the card asks, and the question is not part of the wrapper.
+    expect(running).toMatch(/const \[confirming, setConfirming\] = useState\(false\)/)
+    expect(running).toMatch(/<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setConfirming\(true\)\} \/>/)
+    const wrapper = running.slice(running.indexOf('<div aria-live="polite"'), running.indexOf('<KitCancelConfirm'))
+    expect(wrapper, 'the dialog is drawn after the wrapper closes').toMatch(/<\/div>\s*$/)
+    expect(wrapper).not.toContain('KitCancelConfirm')
+    expect(wrapper, 'no Modal is rendered inside the live region').not.toMatch(/<Modal\b/)
+    // The question goes with the kit (T-131 (9)): the card is gone, so the state is put down in the same render, and the next kit is not met by an open question.
+    expect(running).toMatch(/if \(!shown && confirming\) setConfirming\(false\)/)
+    // The clip list keeps its arrangement: the same button and question together, inside the component that exists only while a kit runs.
+    expect(kit).toMatch(/function KitCancel\(\): JSX\.Element \{\s*const \[asking, setAsking\] = useState\(false\)\s*return \(\s*<>\s*<RunningCancel title="Cancel Clip Kit" onClick=\{\(\) => setAsking\(true\)\} \/>\s*<KitCancelConfirm open=\{asking\} onClose=\{\(\) => setAsking\(false\)\} \/>\s*<\/>\s*\)\s*\}/)
+    expect(kit).toMatch(/\{kitRun !== null \? <KitCancel \/> : null\}/)
+  })
+
+  it('(5) the autosave Restore is a run in a module store: claimed before the first await, given back in a finally, applied under every mounted banner', () => {
+    const run = strip(read('components/restoreRun.ts'))
+    expect(run).toMatch(/import \{ createRunStore \} from '\.\.\/lib\/runStore'/)
+    expect(run).toMatch(/export const useRestoreRun = createRunStore<\{ applied: boolean \}>\(\)/)
+    const banner = strip(read('components/AutosaveRestore.tsx'))
+    expect(banner).toMatch(/import \{ useRestoreRun \} from '\.\/restoreRun'/)
+    expect(banner).toMatch(/const restoring = useRestoreRun\(\(s\) => s\.run !== null\)/)
+    const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
+    expect(body.length, 'found restore()').toBeGreaterThan(300)
+    // The claim: the function's second statement (after the "nothing to restore" gate), ahead of every await, and a second press while it is held changes nothing.
+    expect(body).toMatch(/async function restore\(\): Promise<void> \{\s*if \(!snapshot\?\.project\) return\s*if \(!useRestoreRun\.getState\(\)\.begin\(\{ applied: false \}\)\) return\s*try \{/)
+    expect(body.indexOf('begin('), 'claimed before the first await').toBeLessThan(body.indexOf('await '))
+    expect(body, 'given back in a finally, whether the apply finished or threw').toMatch(/finally \{\s*useRestoreRun\.getState\(\)\.end\(\)\s*\}/)
+    // Applied: said after the apply (a failure leaves the banner and its Restore, as before), and before the person is taken anywhere.
+    expect(body).toMatch(/useRestoreRun\.getState\(\)\.patch\(\{ applied: true \}\)/)
+    expect(body.indexOf('patch({ applied: true })')).toBeGreaterThan(body.indexOf('await applyProjectHeld('))
+    expect(body.indexOf('patch({ applied: true })')).toBeLessThan(body.indexOf('navigate(route)'))
+    expect(body, 'the banner is dismissed by the run (every mounted banner hears it), not by the closure that started it').not.toMatch(/setDismissed/)
+    expect(banner).toMatch(/useEffect\(\(\) => useRestoreRun\.subscribe\(\(state\) => \{\s*if \(state\.run\?\.applied\) setDismissed\(true\)\s*\}\), \[\]\)/)
+    // The gate in front of both banners is the T-124 (5) one, unchanged: a restore that is running is not a reason to offer anything else.
+    expect(banner).toMatch(/if \(dismissed \|\| holdsWork \|\| !snapshot \|\| !snapshot\.info\) \{/)
+  })
+})
+

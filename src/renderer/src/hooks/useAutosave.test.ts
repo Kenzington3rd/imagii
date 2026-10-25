@@ -564,7 +564,7 @@ describe('startAutosave - a project over the size limit pauses autosave and says
     expect(write, 'the over-limit project never crosses the bridge').not.toHaveBeenCalled()
     expect(errors).toHaveBeenCalledTimes(1)
     const [message, options] = errors.mock.calls[0] as [string, { id?: string; duration?: number }]
-    expect(message).toMatch(/^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/)
+    expect(message).toMatch(/^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/)
     expect(options.id, 'a fixed toast id, so a repeat replaces the card').toBe('autosave-too-large')
     expect(options.duration, 'long enough to read').toBeGreaterThanOrEqual(8000)
   })

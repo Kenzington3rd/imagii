@@ -497,3 +497,65 @@ describe('the native-dialog inventory lists every native dialog call in the rend
     expect(calls('const ok = confirm(\n"x")')).toEqual([1])
   })
 })
+
+// T-138 (2), (3): the sizes and sentences USER_GUIDE quotes, held to the code that makes them.
+describe('the stored copy of an imported picture and the over-limit sentences, as the guide says them (T-138 (2), (3))', () => {
+  const guide = flat(read('docs/USER_GUIDE.md'))
+
+  it('USER_GUIDE says the project keeps a copy up to twice the design\'s long side (1600 px at the least), and ImportPanel bounds it with exactly that', () => {
+    expect(guide).toContain('keeps a copy of it up to twice the long side of your design')
+    expect(guide).toContain('1600 px at the least')
+    expect(guide, 'the fixed 1600 px is not the whole rule any more').not.toMatch(/copy of it up to 1600 px on the long side/)
+    expect(read('src/shared/imageBounds.ts')).toMatch(/return Math\.max\(STORED_IMAGE_MAX_DIM, 2 \* Math\.max\(docWidth, docHeight\)\)/)
+    expect(read('src/renderer/src/modules/image-studio/ImportPanel.tsx')).toMatch(/storedImageMaxDim\(docWidth, docHeight\)/)
+    // The two examples the sentence gives are the templates' real sizes.
+    const templates = read('src/renderer/src/modules/image-studio/templates.ts')
+    expect(templates).toMatch(/id: 'tw-overlay-streamer',[\s\S]*?width: 1920,\s*height: 1080/)
+    expect(templates).toMatch(/id: 'yt-thumb-bold',[\s\S]*?width: 1280,\s*height: 720/)
+  })
+
+  it('USER_GUIDE and the code both say what frees bytes (remove some, or import smaller copies) and neither says "shrink"', () => {
+    const validation = read('src/shared/projectValidation.ts')
+    expect(validation).toContain('Remove some of the large images on the canvas, or import smaller copies of them, then save again.')
+    expect(validation).toContain('Remove some of the large images on the canvas, or import smaller copies of them, and it will start again.')
+    expect(validation).not.toMatch(/shrink/i)
+    expect(guide).toContain('to remove some of the large images or import smaller copies of them')
+    expect(guide).not.toMatch(/remove or shrink/i)
+  })
+})
+
+// T-138 (7), (8): two sentences that were false of the tree they sat in.
+describe('the RunningCancel placement rule is true of the five it names, and the AutosaveRestore sentence is about AutosaveRestore (T-138 (7), (8))', () => {
+  const design = flat(read('docs/DESIGN_GUIDE.md'))
+  const placements = design.slice(design.indexOf('**The Cancel of a job that is running is one button'), design.indexOf('**A chip that shows a name the person chose is capped'))
+
+  it('(7) the row under the primary is for a primary at the end of its row or a busy label that is a sentence - not "when the primary is wider than its busy label", which GIF, Picture-in-picture and the Clip Kit are not', () => {
+    expect(placements.length, 'the paragraph was found').toBeGreaterThan(1000)
+    expect(placements).not.toMatch(/when the primary is wider than its busy label/)
+    expect(placements).toMatch(/when the primary is the right-most item of its row or its busy label is a sentence \(GIF, Compile, Picture-in-picture, the Export panel, the Clip Kit button\)/)
+    expect(placements).toContain('Whether the busy label is narrower than the idle one is not the test')
+    // And the order a new Cancel is decided in, so "the first placement that applies" can be decided.
+    expect(placements).toMatch(/takes the first placement that applies, decided in this order: a progress row if the job reports a percent; else the caption row if there is no primary; else beside the primary if a native dialog is answered between the press and the job; else the row under the primary/)
+    // The kit's label really is the wider when it runs, and a sentence: the two facts the guide quotes.
+    const kit = read('src/renderer/src/modules/video-studio/ClipKitButton.tsx')
+    expect(kit).toMatch(/whitespace-nowrap/)
+    expect(kit).toMatch(/Clip Kit \(\$\{KIT_PLATFORM_IDS\.length\} \+ thumbs\)/)
+    expect(read('src/renderer/src/modules/video-studio/clipKit.ts')).toMatch(/Exporting platform version \$\{/)
+  })
+
+  it('(8) the busy-flag sentence names AutosaveRestore and sits with its text, not after the "-> Canvas" sentence about MoodBoardPanel', () => {
+    const style = flat(read('docs/STYLE_GUIDE.md'))
+    expect(style, 'the sentence that described the wrong component').not.toContain('Its two buttons have a busy flag each')
+    const restore = style.indexOf('**The autosave Restore is the case a click-time premise hid (T-134 (1)):**')
+    const sentence = style.indexOf("**`AutosaveRestore`'s two buttons have a busy flag each, and Restore's is a run (T-134 (7), T-138 (5)):**")
+    const canvas = style.indexOf('**"→ Canvas" was the same premise on References (T-135 (13)):**')
+    expect(restore, 'found the AutosaveRestore text').toBeGreaterThan(-1)
+    expect(sentence, 'found the sentence').toBeGreaterThan(restore)
+    expect(canvas, 'and the "-> Canvas" sentence follows it').toBeGreaterThan(sentence)
+    // What it says is what the banner does.
+    const banner = read('src/renderer/src/components/AutosaveRestore.tsx')
+    expect(banner).toMatch(/const restoring = useRestoreRun\(\(s\) => s\.run !== null\)/)
+    expect(banner).toMatch(/const \[clearing, setClearing\] = useState\(false\)/)
+  })
+})
+

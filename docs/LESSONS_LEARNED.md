@@ -14,6 +14,56 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-10-25 — T-138 Track B (round 87): a stored copy sized to where a picture is placed, a question inside a live region, and a Restore a returning banner could press twice
+
+The twenty-fourth pass, Track B (items 2, 3, 4, 5, 7 and 8 of T-138, and the two non-counted riders; Track A's items 1, 6 and 9 land beside it). Ledger: r87b/ledger.md: 13 red rows (5 unit and wiring runs on the unchanged code or docs, 8 Playwright cases on a build of the unchanged tree) and 47 mutation rows over 46 mutants, 47 of 47 restores byte-identical; one mutant survived its first run (the restore run never given back: the Playwright case watched the banner go and never asked the slot again), the case was extended to close the sound and return to Home, and the rerun killed it.
+
+### (2) [MED] - an imported picture was stored at 1600 px whatever the document
+
+- **Bug.** A 1920x1080 frame (or a 4K background) enlarged to fill a 1920 / 2560 / 3840 px overlay was exported from a 1600 px copy: 1.2x to 2.4x upscaled, worse at the HiDPI 2x default, and importing the exported file again bounded it again.
+- **Root cause.** T-137 (6) sized the copy to where a picture is first PLACED (at most 800 px, doubled for a HiDPI export). A layer is freely resizable and the templates are 1280 to 3840 px documents, so the largest a picture is ever shown at is the document it fills, not the size it started at.
+- **Fix.** `storedImageMaxDim(docWidth, docHeight)` in `imageBounds.ts`: twice the document's longer side, never under 1600, a size that is not a size back to the floor. `ImportPanel` reads the open canvas document from the store at import time (the paste listener is registered when the panel mounts, so a value captured by the component would be the mount-time document) and a picture within the bound is kept as it came. The placed size (800 px) and the "to Canvas" 800 px copy are unchanged.
+- **Test.** `imageBounds.test.ts`; image.spec.ts "T-138 (2)" (the 1920x1080 overlay: 1920x1080 kept whole, 4000x3000 at 3840x2880; the 1280x720 thumbnail: 2560x1920, and 1920x1080 kept; a paste and a chosen file on the overlay), and the T-137 (6) case adapted to the default 1200x800 canvas it runs on (2400 px; its transparent fixture made 3000x2000 so it still takes the bounded path). Red on a build of the unchanged tree.
+- **Lesson.** **A bound sized to where a thing is placed is not a bound on where it can be dragged. Ask what the thing can be made into, not what it starts as, and read the value that answers it when it is needed, from the store, not from what a long-lived listener saw at mount.**
+
+### (3) [LOW] - the over-limit sentences told the person to do something that freed nothing
+
+- **Bug.** "Remove or shrink large images on the canvas": scaling a layer changes `scaleX` / `scaleY`, never its `src`, so Save and autosave refused again.
+- **Fix.** "Remove some of the large images on the canvas, or import smaller copies of them" (Save: ", then save again."; autosave: ", and it will start again."), still one finished line under 240 characters that `userFacingError` lets stand.
+- **Test.** `projectValidation.test.ts` (the sentences, no "shrink"; the existing finished-line case holds length and no known cause), the two pins that read the toast and the thrown error (`useAutosave.test.ts`, `projectSave.test.ts`), home-chrome.spec.ts "T-137 (6)".
+- **Lesson.** **Advice in a refusal has to name an action that changes the thing the rule measures. Read the rule's input before writing the verb.**
+
+### (4) [LOW] - the Clip Kit's Cancel question opened inside a live region
+
+- **Bug.** The closed-video card sits in `ClipKitRunning`'s always-mounted `aria-live` wrapper (T-137 (3)), and its Cancel rendered the confirm `<Modal>` inline: the whole dialog was inserted into the polite region (executed: `[role=dialog].closest('[aria-live]')` was the wrapper).
+- **Root cause.** `Modal` does not portal. Splitting a component's markup from its dialog is not cosmetic when the dialog's position in the tree is its position in the accessibility tree.
+- **Fix.** The question is `KitCancelConfirm({ open, onClose })`; `ClipKitRunning` holds the state and returns the wrapper and the dialog as siblings (the dialog is `fixed`, so it takes no room in the studio's column: the empty wrapper's 20 px gap holds). Its state now outlives the card, so it is put down in the render that finds no card, which keeps T-131 (9) true (an unanswered question goes with the kit). The clip list keeps `KitCancel` (button and question together; nothing there is a live region).
+- **Test.** video-pipelines.spec.ts "T-138 (4)": the dialog has no `[aria-live]` / `[role="status"]` ancestor on the card and in the clip list, Keep running keeps the kit, Cancel jobs ends it, an unanswered question goes with the kit. Red on the unchanged build for the card (`div[polite]`). The wiring pins that named the old arrangement were re-pointed.
+- **Lesson.** **Where a dialog is written is where it sits in the accessibility tree. A component that renders one inline inherits every ancestor's semantics; draw it beside the region, not in it, and make its state outlive whatever it used to unmount with.**
+
+### (5) [LOW] - a return to Home mid-restore offered Restore again
+
+- **Bug.** The person who left Home during a long Restore and came back got an enabled Restore: `restoring` was the banner's state, and `holdsWork` is read once per mount and is false while a restored sound is still being extracted. A second press re-applied the project, took down the first restore's progress toast (they share toast ids) and could start a second extraction and say "Skipped the autosave's audio".
+- **Fix.** The restore is a run in a module store (`useRestoreRun`, `components/restoreRun.ts`), claimed with `begin()` before `restore()`'s first await and ended in a `finally`; `restoring` is derived from it (Clear keeps its own local flag); a banner that mounts over the run says "Restoring…" with both buttons off. The closure raises `applied` after the apply and every mounted banner drops its offer through a `subscribe` listener, not a selector: `applied` is raised and the run ended in the same tick, and a render in between would never see it. An apply that threw never raises it, so the banner and its Restore stay for another try.
+- **Test.** record.spec.ts "T-138 (5)" (a restore held open, Stream Graphics and back: "Restoring…", Restore and Clear off, Later on; then the banner gone, one "Restored from autosave", no skip toast, one extraction request counted in main; the sound closed and Home visited again, the offer is back with a Restore that can be pressed, which is what killed the mutant that never ended the run; red on the unchanged build), `interactionWiring.test.ts` (the claim before the first await, the `finally`, `applied` after the apply and before the navigate, the listener).
+- **Lesson.** **A flag that guards a long operation belongs where the operation lives, not in the screen that started it, and whoever decides to offer the operation again asks that place. When one signal is raised and cleared in the same tick, listen; do not select.**
+
+### (7) [LOW] - the guide's placement rule was false for the cases it named
+
+- **Bug.** DESIGN_GUIDE put a running-job Cancel under the primary "when the primary is wider than its busy label", and listed the Clip Kit, whose busy label is the wider (154 px idle, 233 running).
+- **Root cause.** The rule was written from the first measurement (GIF, T-126 (20)) and extended by listing. Re-measured in the built app's own CSS and font, it is false for more than the kit: GIF 112 px idle and 120 busy, Picture-in-picture 86 and 108, Compile equal since T-131 (13); only the Export panel with files queued is wider idle.
+- **Fix.** The test is where a Cancel beside the primary would land: at the row's end, on the strip the idle primary's right part held, whatever the label widths; or the busy label is a sentence that wraps. The guide now says the order a new Cancel is decided in.
+- **Test.** `docClaims.test.ts` (the rule's wording, the order, and the kit's facts it quotes).
+- **Lesson.** **A rule extended by listing is a claim about every case on the list. Measure each one before it goes in, and state the criterion that holds for all of them, not the one the first case showed.**
+
+### (8) [LOW] - a sentence about AutosaveRestore sat under the paragraph about MoodBoardPanel
+
+- **Fix.** "Its two buttons have a busy flag each" is back beside the AutosaveRestore text, names the component and the run slot of (5). **Test.** `docClaims.test.ts` (the sentence's place, and what it says against the banner's code). **Lesson.** **A sentence that starts with a pronoun is a claim about the nearest noun; when an edit separates it from its noun, it describes something else.**
+
+### Non-counted - `loadImage` sent the default referrer policy
+
+- **Fix.** `loadImage` (the one place a picture is decoded to be copied) sets `referrerPolicy = 'no-referrer'` before `src`, as the two `<img>` that draw a thumbnail do; PRODUCT_GUIDE's promise holds by construction. **Test.** `boundedImage.test.ts` (the policy, before `src`, with and without `crossOrigin`). The `networkAllowlist.test.ts` comment on ledger (g) now says "to Canvas" embeds a copy.
+
 ## 2026-10-25 — T-137 Track B (round 86): a file Save wrote that Open refused, an autosave that rewrote itself, and two phrases a folder name could say
 
 The twenty-third pass, Track B (items 6 to 12 of T-137; Track A's items 1 to 5 land beside it). Ledger: r86b/ledger.md (27 red rows and 59 mutation rows over 51 mutations, 59 of 59 restores byte-identical; 4 mutants survived and each is listed in the ledger's notes: one is equivalent (a redundant `typeof`, deleted) and three sent a test back to be strengthened and were killed on the rerun). Every red was a test run against the old product code, a build of the unchanged tree `7690cf5` for the Playwright cases, or the real binary for Layer 5 on both majors.

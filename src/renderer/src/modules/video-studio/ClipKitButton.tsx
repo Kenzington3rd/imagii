@@ -35,36 +35,46 @@ interface ClipKitButtonProps {
 }
 
 /**
- * The running kit's Cancel and the question in front of it (INIT-I, round 16: Clip Kit always has at least 5 platform exports + 3 thumbs queued, so we
- * always confirm). It exists only while a kit runs (T-136 (1): drawn wherever the kit is - the clip list's button for WHICHEVER clip is selected, and
- * beside the importer once the video is closed), so the question goes with the run by construction (T-131 (9): "Cancel jobs" had nothing to cancel).
+ * The question in front of the running kit's Cancel (INIT-I, round 16: Clip Kit always has at least 5 platform exports + 3 thumbs queued, so we always
+ * confirm). It is a component of its own, with its `open` held by whoever draws the Cancel button, because `Modal` does not portal: where the dialog is
+ * rendered is where it sits in the page (T-138 (4): inside the closed-video card's live region it was announced as part of that region).
+ */
+function KitCancelConfirm({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element {
+  return (
+    <Modal open={open} onClose={onClose} title="Cancel Clip Kit" className="max-w-sm w-full p-5">
+      <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
+      <p className="text-sm text-ink-base mb-4">Cancel the Clip Kit batch ({KIT_PLATFORM_IDS.length} exports + thumbnails)?</p>
+      <div className="flex justify-end gap-2">
+        <button className="btn-ghost px-3 py-1.5 text-sm" onClick={onClose}>
+          Keep running
+        </button>
+        <button
+          className="btn-primary px-3 py-1.5 text-sm"
+          onClick={() => {
+            onClose()
+            useKitRun.getState().patch({ canceled: true })
+            void window.api.video.cancelAll()
+          }}
+        >
+          Cancel jobs
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * The clip list's running-kit Cancel and its question together (B8 fix, round 15: the Clip Kit batch can run several minutes; users who pick the wrong
+ * source need an abort, and the multi-job confirm prevents a misclick from torching the batch silently). It exists only while a kit runs (T-136 (1): the
+ * clip list's button for WHICHEVER clip is selected), so the question goes with the run by construction (T-131 (9): "Cancel jobs" had nothing to cancel). Nothing
+ * around it is a live region, so the dialog may sit beside the button; the closed-video card's (`ClipKitRunning`) may not, and draws the two apart.
  */
 function KitCancel(): JSX.Element {
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [asking, setAsking] = useState(false)
   return (
     <>
-      {/* B8 fix (round 15) + INIT-I (round 16): the Clip Kit batch can run several minutes; users who pick the wrong source need an abort, and the
-          multi-job confirm prevents a misclick from torching the batch silently. */}
-      <RunningCancel title="Cancel Clip Kit" onClick={() => setShowCancelConfirm(true)} />
-      <Modal open={showCancelConfirm} onClose={() => setShowCancelConfirm(false)} title="Cancel Clip Kit" className="max-w-sm w-full p-5">
-        <h2 className="text-lg font-semibold mb-2">Cancel Clip Kit</h2>
-        <p className="text-sm text-ink-base mb-4">Cancel the Clip Kit batch ({KIT_PLATFORM_IDS.length} exports + thumbnails)?</p>
-        <div className="flex justify-end gap-2">
-          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setShowCancelConfirm(false)}>
-            Keep running
-          </button>
-          <button
-            className="btn-primary px-3 py-1.5 text-sm"
-            onClick={() => {
-              setShowCancelConfirm(false)
-              useKitRun.getState().patch({ canceled: true })
-              void window.api.video.cancelAll()
-            }}
-          >
-            Cancel jobs
-          </button>
-        </div>
-      </Modal>
+      <RunningCancel title="Cancel Clip Kit" onClick={() => setAsking(true)} />
+      <KitCancelConfirm open={asking} onClose={() => setAsking(false)} />
     </>
   )
 }
@@ -82,28 +92,38 @@ function KitCancel(): JSX.Element {
  * studio's `gap-5` column, so `-mb-5` takes the second gap back and nothing is hidden (no display:none: either would drop it from the accessibility
  * tree). The paragraph below is plain text inside it and its changes are announced as the phase moves on. Not `role="status"`: that is atomic, and
  * would read the whole card again at every phase.
+ *
+ * T-138 (4): the Cancel question is NOT inside that region. `Modal` is rendered where it is written (it does not portal), so a dialog opened from the card's
+ * button was inserted into the polite region whole. This component holds the question (`confirming`) and returns the wrapper and the dialog as siblings: the
+ * dialog is `fixed`, so beside the wrapper it takes no room in the studio's column. The question goes with the kit (T-131 (9)): its state lives here, which
+ * outlasts the card, so it is put down in the render that finds no card, and the next kit is not met by an open question.
  */
 export function ClipKitRunning(): JSX.Element {
   const kitRun = useKitRun((s) => s.run)
   const videoOpen = useVideoStore((s) => s.source !== null)
   const shown = kitRun !== null && !videoOpen
+  const [confirming, setConfirming] = useState(false)
+  if (!shown && confirming) setConfirming(false)
   return (
-    <div aria-live="polite" className={shown ? undefined : '-mb-5'}>
-      {shown ? (
-        <div className="card p-3 flex flex-col gap-1 text-sm">
-          <div className="flex items-center gap-2">
-            <Icon name="package" size={14} />
-            <span className="min-w-0 flex-1 truncate" title={kitRunCaption(kitRun.clipName)}>
-              {kitRunCaption(kitRun.clipName)}
-            </span>
-            <KitCancel />
+    <>
+      <div aria-live="polite" className={shown ? undefined : '-mb-5'}>
+        {shown ? (
+          <div className="card p-3 flex flex-col gap-1 text-sm">
+            <div className="flex items-center gap-2">
+              <Icon name="package" size={14} />
+              <span className="min-w-0 flex-1 truncate" title={kitRunCaption(kitRun.clipName)}>
+                {kitRunCaption(kitRun.clipName)}
+              </span>
+              <RunningCancel title="Cancel Clip Kit" onClick={() => setConfirming(true)} />
+            </div>
+            <p className="text-xs text-ink-muted">
+              {kitRun.phase || 'Working…'} The video is closed; the kit keeps writing its files until it finishes or you cancel it.
+            </p>
           </div>
-          <p className="text-xs text-ink-muted">
-            {kitRun.phase || 'Working…'} The video is closed; the kit keeps writing its files until it finishes or you cancel it.
-          </p>
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+      <KitCancelConfirm open={confirming} onClose={() => setConfirming(false)} />
+    </>
   )
 }
 

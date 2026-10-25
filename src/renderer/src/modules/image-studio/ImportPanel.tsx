@@ -16,7 +16,7 @@ import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
-import { LAYER_DRAWN_MAX_DIM, STORED_IMAGE_MAX_DIM, scaleToFit } from '@shared/imageBounds'
+import { LAYER_DRAWN_MAX_DIM, scaleToFit, storedImageMaxDim } from '@shared/imageBounds'
 import { isImageFilename } from '@shared/mediaFormats'
 
 function cloneDoc<T>(obj: T): T {
@@ -65,14 +65,18 @@ export function ImportPanel(): JSX.Element {
       const scale = scaleToFit(dims.width, dims.height, LAYER_DRAWN_MAX_DIM)
       const w = dims.width * scale
       const h = dims.height * scale
-      // T-137 (6): the document keeps a copy bounded to twice the size the layer is drawn at, not the file: a project that holds a few 4000 px PNGs
-      // is over the size limit (autosave stops, Save writes a file Open refuses). PNG unless the picture came as a JPEG and is opaque, so transparency
-      // is never lost.
+      // T-137 (6): the document keeps a copy bounded in size, not the file: a project that holds a few 4000 px PNGs is over the size limit (autosave stops,
+      // Save writes a file Open refuses). PNG unless the picture came as a JPEG and is opaque, so transparency is never lost.
+      // T-138 (2): the bound is the document's, read now (after the load, from whatever canvas is open when the picture lands): twice its longer side, never
+      // under 1600 px. A layer is freely resizable, so the 800 px it is first PLACED at is not the largest it is shown at, and a fixed 1600 px copy of a picture
+      // enlarged to fill a 1920 / 2560 / 3840 px overlay was exported upscaled.
       // simplification: a picture already within the bound is kept as it came, so its bytes are not bounded (a small animated GIF can be many MB); the size
       // rule at Save and autosave catches the sum. Upgrade: re-encode anything over a byte threshold.
+      const { width: docWidth, height: docHeight } = useCanvasStore.getState().doc
+      const storedMax = storedImageMaxDim(docWidth, docHeight)
       const stored =
-        scaleToFit(dims.width, dims.height, STORED_IMAGE_MAX_DIM) < 1
-          ? boundedDataUrl(img, STORED_IMAGE_MAX_DIM, file.type === 'image/jpeg')
+        scaleToFit(dims.width, dims.height, storedMax) < 1
+          ? boundedDataUrl(img, storedMax, file.type === 'image/jpeg')
           : dataUrl
       addLayer({ ...makeImageLayer(stored, w, h), name: file.name })
       toast.success(`Added ${file.name}`)

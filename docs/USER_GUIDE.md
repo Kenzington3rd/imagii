@@ -105,7 +105,8 @@ controls:
   recent autosave on launch, it offers to pick up where you left off, and
   **Restore** takes you back to the studio you were in, with your selections
   and the playhead where you left them (if you have gone to another screen while a long restore was
-  still loading, it leaves you where you are). Choosing **Later** or **Clear**
+  still loading, it leaves you where you are, and coming back to Home meanwhile shows the offer as
+  **Restoring…** until it is done). Choosing **Later** or **Clear**
   starts a fresh session instead; nothing is restored unless you ask for it.
 
 ---
@@ -552,10 +553,12 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and remove them. The **Properties** panel edits the selected layer. A picture
    you import is placed at most 800 px on its long side, and the project keeps a
-   copy of it up to 1600 px on the long side (PNG, so transparency stays; a JPEG
-   stays a JPEG), not the full-size file: a few 4000 px screenshots would otherwise
-   make a project too large to save (see **Saving your work**). A picture already
-   smaller than that is kept as it came.
+   copy of it up to twice the long side of your design (3840 px on a 1920×1080
+   overlay, 2560 px on a 1280×720 thumbnail; 1600 px at the least), so a picture you
+   enlarge to fill the design still exports sharp. The copy is a PNG, so
+   transparency stays (a JPEG stays a JPEG), and it is not the full-size file: a few
+   4000 px screenshots would otherwise make a project too large to save (see
+   **Saving your work**). A picture already smaller than that is kept as it came.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
    design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
    of the file in pixels (it adds a note when a 16:9 export is bigger than
@@ -622,9 +625,10 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   video in Audio Studio: it is taken from the video again on open, with the
   same kind of note. A project can be up to 50 MB (almost all of that is pictures on
   the Stream Graphics canvas). Over that, **Save project** says how big it is and
-  to remove or shrink large images, and does not ask where to save; **Open
-  project** names the size of a file that is over it (one saved by an earlier
-  version of imagii that did not check) instead of calling it damaged.
+  to remove some of the large images or import smaller copies of them, and does
+  not ask where to save; **Open project** names the size of a file that is over
+  it (one saved by an earlier version of imagii that did not check) instead of
+  calling it damaged.
 - **Autosave** runs in the background — every few seconds after you change something, and
   never more than 30 seconds after a change however busy you are, a video playing included
   (moving the playhead is not a change; it is saved with the next one) — and imagii takes one final snapshot as
@@ -644,6 +648,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   video and its clips do not come back from it. If you go to another screen while Restore is
   loading (a long recording's sound is extracted again first), you stay there when it finishes:
   the restored work is in its studio, and "Restored from autosave" says it is done.
+  If you come back to Home before it has, the banner reads **Restoring…** with
+  **Restore** and **Clear** off, so a second press cannot start it again, and it goes
+  when the restore is done.
   A project over 50 MB is not autosaved: imagii says autosave is paused and why, once,
   and starts again by itself when the project is under the limit. Changes that are not
   part of the project (a grid you switch on, the results of a scan) do not write the file

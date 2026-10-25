@@ -10959,3 +10959,132 @@ test.describe('ChatHighlightPanel - the range a row shows is the range + Clip ad
     }
   })
 })
+
+// ═══════ T-138 (4): the Clip Kit's Cancel question is not drawn inside a live region ═══════
+//
+// The closed-video card sits in `ClipKitRunning`'s always-mounted `aria-live` wrapper (T-137 (3)), and its Cancel rendered the confirm `<Modal>` inline (Modal
+// does not portal): pressing Cancel inserted the whole dialog into the polite region (executed: `[role=dialog].closest('[aria-live]')` was the wrapper). The
+// question is a sibling of the wrapper now. The clip list's own Cancel is not inside any live region and keeps its arrangement.
+
+test.describe('T-138 (4): the Clip Kit\'s Cancel question is outside every live region, on the closed-video card and in the clip list', () => {
+  /** The studio's live region for the closed-video kit card (T-137 (3)): a direct child of the studio's column. */
+  const REGION = 'div.h-full.overflow-auto > div[aria-live="polite"]'
+
+  /** What the open dialog is inside, from the page: null when no ancestor is a live region or a status. */
+  async function liveAncestorOfDialog(window: Page): Promise<string | null> {
+    return window.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]')
+      if (!dialog) throw new Error('no dialog on screen')
+      const hit = dialog.closest('[aria-live],[role="status"]')
+      return hit ? `${hit.tagName.toLowerCase()}[${hit.getAttribute('aria-live') ?? hit.getAttribute('role')}]` : null
+    })
+  }
+
+  /** Start a kit on the first of two clips and hold it in its export phase (job 2's probe is held), so it is still running when the test acts. */
+  async function startHeldKit(label: string): Promise<Studio> {
+    const studio = await launchWithVideo(label)
+    const { app, window, outDir } = studio
+    await stubDialogs(app, { open: [outDir] })
+    await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+    await clipListCard(window).locator('li').first().getByRole('button', { name: /^Select clip/ }).click()
+    await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+    await kitButton(window).click()
+    await expect(kitButton(window)).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+    return studio
+  }
+
+  async function closeTheVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+
+  test('the closed-video card: the question is no descendant of a live region, adds no gap, Keep running keeps the kit and Cancel jobs ends it', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t138kitcard')
+    try {
+      await closeTheVideo(window)
+      const region = window.locator(REGION)
+      await expect(region).toContainText('Clip Kit for "Clip 1"')
+      await region.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog.getByText('Cancel the Clip Kit batch (5 exports + thumbnails)?')).toBeVisible()
+
+      expect(await liveAncestorOfDialog(window), 'the open question is inside no aria-live and no role=status element').toBeNull()
+      // It is a sibling of the region, drawn after it: the region still holds the card (and only the card), and the fixed dialog adds no gap in the studio's column.
+      await expect(region).toContainText('Clip Kit for "Clip 1"')
+      expect(await region.locator('[role="dialog"]').count(), 'the region does not contain the dialog').toBe(0)
+      const gapUnderQuestion = await window.evaluate(() => {
+        const card = document.querySelector('[data-tutorial="video-import"]') as HTMLElement
+        const live = document.querySelector('div.h-full.overflow-auto > div[aria-live="polite"]') as HTMLElement
+        return Math.round(card.getBoundingClientRect().top - live.getBoundingClientRect().bottom)
+      })
+      expect(gapUnderQuestion, 'the card, then the importer, one gap apart, with the question open').toBe(20)
+
+      // Keep running: the question closes and the kit is still going, in the same card.
+      await dialog.getByRole('button', { name: 'Keep running' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(region).toContainText(/Exporting platform version \d of 5…/)
+      await expect(region).toContainText('Clip Kit for "Clip 1"')
+
+      // Cancel jobs: the kit ends, the card goes, the region stays and is empty again.
+      await region.getByRole('button', { name: 'Cancel', exact: true }).click()
+      expect(await liveAncestorOfDialog(window), 'and the second time').toBeNull()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+      await expect(region).toHaveText('', { timeout: 60_000 })
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the closed-video card: a question nobody answered goes with the kit when it finishes, and does not wait for the next one (T-131 (9), now that the card is not what holds the question)', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t138kitends', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 1_200 }])
+      await kitButton(window).click()
+      await expect(kitButton(window)).toHaveText(EXPORTING_N_OF_5, { timeout: 120_000 })
+      await closeTheVideo(window)
+      const region = window.locator(REGION)
+      await region.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toContainText('Cancel the Clip Kit batch')
+      // Not answered: the kit runs on under the question, finishes, and the question goes with it. The question is held by the always-mounted component now, so
+      // "the card is gone" no longer closes it by itself.
+      await expect(dialog, 'the question is gone with the kit').toHaveCount(0, { timeout: 540_000 })
+      await expect(region).toHaveText('', { timeout: 60_000 })
+      expect(readdirSync(outDir).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the clip list: the same question is in no live region either, Keep running keeps the kit and Cancel jobs ends it', async () => {
+    test.setTimeout(600_000)
+    const { app, window } = await startHeldKit('t138kitlist')
+    try {
+      const list = clipListCard(window)
+      await list.getByRole('button', { name: 'Cancel', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await expect(dialog.getByText('Cancel the Clip Kit batch (5 exports + thumbnails)?')).toBeVisible()
+      expect(await liveAncestorOfDialog(window), 'the clip list\'s question is in no aria-live and no role=status element').toBeNull()
+
+      await dialog.getByRole('button', { name: 'Keep running' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await expect(kitButton(window)).toHaveText(EXPORTING_N_OF_5)
+
+      await list.getByRole('button', { name: 'Cancel', exact: true }).click()
+      expect(await liveAncestorOfDialog(window), 'and the second time').toBeNull()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})
+

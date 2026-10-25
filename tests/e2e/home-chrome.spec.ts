@@ -3127,8 +3127,8 @@ test.describe('T-137 (6): a project over the size limit', () => {
     return make('A'.repeat(size - make('').length))
   }
 
-  const SAVE_REFUSAL = /^This project is too large to save \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas, then save again\.$/
-  const AUTOSAVE_PAUSED = /^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove or shrink large images on the canvas and it will start again\.$/
+  const SAVE_REFUSAL = /^This project is too large to save \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, then save again\.$/
+  const AUTOSAVE_PAUSED = /^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/
   const OPEN_REFUSAL = /^That project is too large to open \(\d+\.\d MB; the limit is 50 MB\)\./
 
   /** A launched app that has opened the seeded project one text layer short of the limit (so it is a project that fits), on Home. */

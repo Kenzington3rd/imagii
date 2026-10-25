@@ -291,6 +291,26 @@ tail and the measurement is in it" (a damaged mp3 whose decoder floods stderr pa
 the real runner whose decoded samples are compared with a hand-built linear two-pass render, after proving that the single-pass fallback writes different samples, so a measurement
 that did not survive the cap would fail it: the first version of this case only checked the level and a 16-character tail passed it). One existing Layer 5 case now names its files like the runner's segments (`seg-<job>-<index>.mkv`), because the pattern it reads is the demuxer's line about one.
 
+**Round 87, Track B (T-138; the count lines are the expediter's).** One new unit file: `src/renderer/src/lib/boundedImage.test.ts` (`loadImage` with `Image` stood in
+for by a class that records what is assigned and in what order: the no-referrer policy is set, before `src`, with and without `crossOrigin`; a picture that does not decode
+rejects in the sentence callers report). Grown files: `imageBounds.test.ts` (`storedImageMaxDim`: twice the longer side for the templates' real sizes, the 1600 floor for an
+emote and a card, a portrait document read by its height, every size that is not a size back to the floor, and what the stored copy does with it: a 4000x3000 picture
+3840x2880 on the 1920x1080 overlay and 2560x1920 on the 1280x720 thumbnail, a 1920x1080 one kept whole), `projectValidation.test.ts` (the Save and autosave sentences name
+what frees bytes and say nothing of shrinking; the existing "one finished line `userFacingError` lets stand" case holds the 240-character and no-known-cause rules for
+both), `useAutosave.test.ts` and `projectSave.test.ts` (the same sentences, where the toast and the thrown error are read), `interactionWiring.test.ts` (a "T-138 Track B"
+block: ImportPanel reads the document after the load and has no fixed bound left; the Clip Kit's Cancel question is one component, held by `ClipKitRunning` and drawn after
+the live wrapper, put down in the render that finds no card; the restore run is claimed before the first await, given back in a `finally`, `applied` raised after the
+apply and before the navigate and heard by a subscription), `docClaims.test.ts` (USER_GUIDE's stored-copy and over-limit wording against the code, DESIGN_GUIDE's placement
+rule and the order a new Cancel is decided in, the STYLE_GUIDE sentence's place). Pins that named the moved code were re-pointed, and said so in the pin: the T-134 (7) busy-flag
+pin (`restoring` is the run slot's now, `clearing` is still local), the T-137 (3) fragment shape of `ClipKitRunning`, the T-131 (9) and T-136 (1) KitCancel pins (the clip
+list's `KitCancel` keeps its own state; the card's button and question are `ClipKitRunning`'s), and `runningJobControls.test.ts`'s title list (two `RunningCancel`
+titles in `ClipKitButton.tsx`, the clip list's and the card's). Playwright: image.spec.ts "T-138 (2)" (two cases: the 1920x1080 overlay and the 1280x720 thumbnail; the node's
+decoded `<img>` is the stored src) and the T-137 (6) case adapted to the default 1200x800 canvas it runs on (2400x1800, 2400x1600, and a 3000x2000 transparent fixture so the
+alpha case still exercises the bounded path); home-chrome.spec.ts "T-137 (6)" (the two sentences it pins); video-pipelines.spec.ts "T-138 (4)" (three cases: the closed-video
+card's question has no `[aria-live]` / `[role="status"]` ancestor, adds no gap, Keep running keeps the kit and Cancel jobs ends it; a question nobody answers goes with the
+kit; the clip list's the same ancestry); record.spec.ts "T-138 (5)" (a Restore held open, Stream Graphics and back to Home: "Restoring…" with Restore and Clear off and Later on,
+then the banner gone, one "Restored from autosave", no skip toast, one extraction request in main, and, with the sound closed and Home visited again, an offer whose Restore can be pressed: a run that was never ended survived its first mutation until this last step was added).
+
 **Adding a test.** Drop `foo.test.ts` next to `foo.ts`. Vitest picks it
 up automatically. If the module under test imports `electron`, see
 `src/main/audio/presets.test.ts` for the `vi.mock('electron', …)`
@@ -600,6 +620,13 @@ whose end state is Explorer):
 - **Measure the wrap, not the label (T-137 (4)).** `expectOneLine` on the button, at 1632 x 918 and at 1024 x 640, plus the geometry that makes it true
   (the Cancel's top at or below the button's bottom, its right edge on the button's, the button less than 34 px tall). It was red on the unchanged build at
   the default window, "wraps onto 2 lines", the finding's own measurement.
+- **Ask the DOM what a dialog is inside (T-138 (4)).** A dialog that is announced as part of a live region is a fact about its ancestors, so the case reads it
+  from the page: `document.querySelector('[role="dialog"]').closest('[aria-live],[role="status"]')` is null. It is red on the unchanged build with the wrapper
+  named (`div[polite]`), and the same call on the clip list is the control that passes on both builds. A `Modal` does not portal, so where it is written is where it sits.
+- **Count what main was asked, from a wrapper that sees the original command (T-138 (5)).** "One extraction request" is a fact of the main process: a second wrapper
+  around `child_process.spawn`, installed AFTER `installSpawnStall` so it sees the command before the stall rewrites it, counts the spawns of ffmpeg with `-vn` whose
+  output is in the scratch folder `imagii-audio`. A held run is a state the test makes (the first ffmpeg is held 15 s), and "away and back" is Stream Graphics and Home
+  inside that window; the case seeds no `place`, so the banner going is the banner going and not Home being left.
 - **Wait past the default to prove a duration.** `expectRevealToast` (video-pipelines.spec.ts)
   finds "Show in folder" on a success toast, waits 3.5 s (react-hot-toast's success toast lasts 2 s)
   and asserts the button is still there — the one place a fixed wait IS the assertion. It was

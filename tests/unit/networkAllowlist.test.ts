@@ -550,7 +550,10 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // T-125 (26), ledger (g): the image layer's `src` goes to `useImage` unvalidated, and CSP `img-src https:` lets a shared project
   // file point it at any host (a GET that tells that host the streamer's IP). This line is the KNOWN, OWNER-PENDING exposure the
   // ticket ledger names - it is on the list so the scan sees the path, and it is not an approval: the owner decides between
-  // rejecting a remote `src` in `validateProject` and keeping the reference layer whose thumbnail is a DuckDuckGo https address.
+  // rejecting a remote `src` in `validateProject` and keeping a reference layer whose thumbnail is a DuckDuckGo https address.
+  // T-138: ledger (g)'s second half is narrower than it was written. Since T-137 (10) "-> Canvas" embeds a bounded copy of the picture (a data URL)
+  // instead of the tile's address, so no layer this app makes today carries a remote `src`; what a strict `validateProject` would still break is a
+  // reference layer an earlier build saved with the cached thumbnail's address (or DuckDuckGo's, when the cache was gone).
   'renderer/src/modules/image-studio/Canvas.tsx': ['import:use-image', 'useImage('],
   // T-125 (26): `smoke.ts` runs `-version` on exactly two programs (`runVersion(ffmpegPath)`, `runVersion(ffprobePath)`); the
   // command is a parameter there, which is why the scan names it. Every other `spawn(` in src is handed `ffmpegPath`,

@@ -145,7 +145,8 @@ describe('a running job\'s Cancel is RunningCancel, everywhere (T-136 (7))', () 
       ['modules/video-studio/CaptionsPanel.tsx', ['Cancel burn-in', 'Cancel transcription', 'Cancel download']],
       ['modules/video-studio/ExportPanel.tsx', ['Cancel export']],
       ['modules/audio-studio/ExportDialog.tsx', ['Cancel export']],
-      ['modules/video-studio/ClipKitButton.tsx', ['Cancel Clip Kit']]
+      // Two sites, one job (T-138 (4)): the clip list's kit button (button and question together) and the closed-video card, whose question is drawn outside its live region.
+      ['modules/video-studio/ClipKitButton.tsx', ['Cancel Clip Kit', 'Cancel Clip Kit']]
     ]
     for (const [rel, titles] of SITES) {
       const text = FILES.find((f) => f.rel === rel)?.text ?? ''

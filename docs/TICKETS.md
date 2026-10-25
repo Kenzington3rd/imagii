@@ -5627,7 +5627,7 @@ IMG-PREC.
   FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** open (round 87, two tracks)
+- **Status:** Track B done (round 87, see the Done entry); Track A in expedite
 
 ---
 
@@ -6110,6 +6110,48 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 87, Track B — T-138 items 2, 3, 4, 5, 7 and 8, landed in the
+commit that carries this entry (Track A, items 1, 6 and 9, lands
+next). Worked by one Sonnet in a fresh clone of 63d18ff; a container
+restart stopped it mid-run, and after the expediter's audit found all
+37 recorded mutations restored byte-identical and no file at a
+mutant's sha, the same worker was resumed in the same clone (its e2e
+mutation batch had survived the restart and finished). The fixes: an
+imported picture's stored copy is bounded by the document it lands on
+(`storedImageMaxDim`: twice the canvas's longer side, never under 1600
+px), so a full-frame overlay or background on a 1920 / 2560 / 3840 px
+template exports from its own pixels; the over-limit sentences say
+"Remove some of the large images on the canvas, or import smaller
+copies of them" (scaling a layer frees nothing); the closed-video Clip
+Kit card's confirm dialog is a sibling of its live region, not inside
+it (`KitCancelConfirm`; an unanswered question goes with the kit); the
+autosave Restore is a run slot (`useRestoreRun`), so a banner that
+mounts during a long restore reads "Restoring…" with both buttons off
+and goes when the restore is applied; DESIGN_GUIDE's RunningCancel
+rule and the misplaced STYLE_GUIDE sentence are corrected; `loadImage`
+sets no-referrer before its src. Two deviations accepted: the
+DESIGN_GUIDE criterion the dispatch dictated ("the idle primary is
+wider than its busy label") was measured false in the built app (GIF
+112 / 120 px, Picture-in-picture 86 / 108, Compile equal), so the guide
+now says what is true of all five (the primary is the right-most item
+of its row, or its busy label is a sentence) and the order a new
+Cancel is decided in; and the restore run holds `{ applied }`, read by
+a store listener, because the run ends in the same tick it is applied.
+47 ledger mutations all restored byte-identical (one survived a first
+run - the Restore slot never given back - and was killed once the
+case asked the slot again), 13 reds. Expedited personally: verify x2
+(189/5141), test:media on 7.0.2 (364 passed | 13 skipped of 377),
+build + FULL Playwright 457/457 with zero flakes while Track A's Wine
+job ran beside it, key-file shas unchanged; integrity and ledger audit
+clean (no forbidden files, no Track A file touched, no file at a
+mutant's sha); one independent mutation at a seam no ledger row names
+(the confirm dialog wrapped in an in-flow element) → T-137 (3) "an
+empty region leaves no hole" and T-138 (4) "with the question open"
+red at 40 px for 20 → restored byte-identical, sha256 verified.
+Landed conflict-free onto its own base, all 26 paths byte-identical to
+the expedited clone, whose gates are this tree's; verify re-run on the
+landed tree.
 
 Round 86, Track B — T-137 items 6-12, landed in the commit that
 carries this entry, merged onto Track A's (6ac4768). Worked by one

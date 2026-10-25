@@ -67,11 +67,12 @@ function megabytes(size: number): string {
 export function projectSizeProblem(size: number, doing: 'save' | 'open' | 'autosave'): string | null {
   if (size <= MAX_PROJECT_BYTES) return null
   const sized = `(${megabytes(size)} MB; the limit is ${MAX_PROJECT_BYTES / MEBIBYTE} MB)`
+  // T-138 (3): what Save and autosave can ask for is what frees bytes. Scaling a layer changes its scaleX / scaleY and never its `src`, so it frees nothing.
   switch (doing) {
     case 'save':
-      return `This project is too large to save ${sized}. Remove or shrink large images on the canvas, then save again.`
+      return `This project is too large to save ${sized}. Remove some of the large images on the canvas, or import smaller copies of them, then save again.`
     case 'autosave':
-      return `Autosave is paused: this project is too large to keep ${sized}. Remove or shrink large images on the canvas and it will start again.`
+      return `Autosave is paused: this project is too large to keep ${sized}. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again.`
     case 'open':
       return `That project is too large to open ${sized}. An earlier version of imagii let one be saved this big; its images are the likely cause.`
   }

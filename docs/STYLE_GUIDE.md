@@ -308,6 +308,7 @@ Repeated UI is a component, not copy-paste:
   Player that hears the new element's metadata is not always the one that asked) and the caption model's download (`useModelInstallRun`, whose
   progress listener lasts exactly the download, and `useCaptionsStatus`, which the finishing download writes: refreshing a panel that is gone left the
   one that came back asking for setup over an installed model). A panel that mounts over a running job opens whatever holds its bar (the setup card).
+  T-138 (5): the autosave Restore is the same shape for a banner (`useRestoreRun`; see the navigate rule below, where the banner's two busy flags are).
   T-137 (1), (2): the same for the two screens that kept a job in their own state. Audio Studio's importer (`useAudioImportRun`, the file and whether it
   extracts: a returning importer is the same import, busy and refusing a second in the same words, and its landing asks `replacedSince(heldBefore, source)`
   after the extraction and skips with a sentence naming the file, "Skipped the sound of x.mp4 because you opened another file in Audio Studio while it was
@@ -337,9 +338,14 @@ Repeated UI is a component, not copy-paste:
   after which a new overflow is told again. The dedupe key (`AutosaveMemory.lastHash`) is the capture with its `savedAt` set aside (a fixed 13-digit stamp, the length of
   a real one): `savedAt` is `Date.now()` at the capture, so the key never matched, and a store change that is not in the project (Find chat spikes, Scan VOD, a grid
   toggle) rewrote an identical file and rotated `autosave.prev`. What makes a project big is pictures, so a picture on the canvas is a COPY bounded to the size it can
-  show (`@shared/imageBounds`, `lib/boundedImage.ts`): ImportPanel keeps 1600 px on the longer side (twice the 800 px a layer is first drawn at, because a HiDPI screen
-  defaults to a 2x export), PNG unless the picture came as a JPEG and is opaque, and a picture already within the bound is kept as it came; "-> Canvas" embeds the
+  show (`@shared/imageBounds`, `lib/boundedImage.ts`): ImportPanel keeps a copy bounded to `storedImageMaxDim(doc.width, doc.height)` - twice the document's longer
+  side, never under 1600 px (T-138 (2); it was a fixed 1600, which a layer enlarged to fill a 1920 / 2560 / 3840 px overlay exported upscaled 1.2x to 2.4x, because a layer is
+  freely resizable and a default HiDPI export is 2x) - read from the canvas store when the picture lands, PNG unless the picture came as a JPEG and is opaque, and a picture
+  already within the bound is kept as it came; the layer is still PLACED at most 800 px wide (`LAYER_DRAWN_MAX_DIM`). "-> Canvas" embeds the
   tile's picture (800 px; JPEG only when every pixel is opaque) instead of the address of the cached thumbnail, a file Clear thumbnail cache and the launch sweep remove.
+  `loadImage` (the one place a picture is decoded to be copied) sets `referrerPolicy = 'no-referrer'` before `src`, as the two `<img>` that draw a thumbnail do
+  (PRODUCT_GUIDE: a thumbnail's host is told nothing about where the request came from). The over-limit sentences name what frees bytes - remove some of the large
+  images, or import smaller copies - because scaling a layer changes `scaleX` / `scaleY` and never its `src` (T-138 (3)).
 - **A result belongs to the video it was made for (T-135 (4)).** A scan's candidates, the pasted chat logs, the spikes found in them and the
   transcript preview were panels' `useState`, so every visit to Home emptied them. They are `derived` in the video store: applied with
   `setDerivedFor(sourcePath, patch)` (a result that arrives after the video was replaced is dropped, the `setSrtPathFor` rule), emptied by
@@ -969,11 +975,18 @@ If you write the same markup a third time, extract it.
   `AutosaveRestore` awaits `applyProjectHeld` (minutes, for a sound that is extracted again) and then went to the snapshot's route; the T-133
   navigate table had blessed it as "on Home", which is true at the click and false at the `navigate`. It goes only if `currentRoute()` is
   still `/home` once the apply is over, and otherwise says nothing more than "Restored from autosave" (a person who went to Record and started
-  a take stays on Record, recording). **"→ Canvas" was the same premise on References (T-135 (13)):** `MoodBoardPanel.sendToCanvas` awaits the
+  a take stays on Record, recording). **`AutosaveRestore`'s two buttons have a busy flag each, and Restore's is a run (T-134 (7), T-138 (5)):** Clear's
+  (`clearing`) is the banner's own, so Clear never relabels Restore "Restoring…"; Restore's is the restore run in a module store (`useRestoreRun`,
+  `components/restoreRun.ts`), claimed with `begin()` before `restore()`'s first await and given back in a `finally`, because the banner mounts again on every
+  visit to Home and `holdsWork` (read once per mount) is false while a restored sound is still being extracted: a person who left Home during a long Restore got
+  a NEW banner with an enabled Restore, and a second press re-applied the project, took down the first restore's progress toast (the ids are shared) and could
+  start a second extraction and say "Skipped the autosave's audio". A banner that mounts over the run says "Restoring…" with Restore and Clear both dimmed (either
+  running dims both, they act on one file), and the closure tells every mounted banner when the snapshot is applied (`patch({ applied: true })`, heard by a
+  `subscribe` listener, not a selector: the run ends in the same tick) so the one that replaced the banner that pressed Restore drops its offer too; an apply that
+  threw never says it, and the banner and its Restore stay for another try. **"→ Canvas" was the same premise on References (T-135 (13)):** `MoodBoardPanel.sendToCanvas` awaits the
   picture's load (which can be a network fetch for a tile whose cached thumbnail is gone) and then navigated to `/image` wherever the person
   was. The layer is added and the toast reports it either way; the navigate happens only if `currentRoute() === '/references'`, read after the
-  await. Its two buttons have a busy flag each (`restoring`, `clearing`; both dim while either runs), so Clear
-  never relabels Restore "Restoring…". **A toast outlives its screen, so its buttons ask where the person
+  await. **A toast outlives its screen, so its buttons ask where the person
   IS before they take them anywhere (T-133 (1)):** the "Open Audio Studio" button that fix put in an 8 s toast sat over the REC screen, and
   one press unmounted RecordStudio and cut the take. A take that is being recorded is REGISTERED (`registerLiveTake`, `lib/liveTake.ts`,
   for as long as the phase is "recording") and every way off that screen asks `mayLeaveLiveTake()` first: the Home link, the toast's "Open

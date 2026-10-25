@@ -219,15 +219,21 @@ Buttons that pair an icon with a label use
 **The Cancel of a job that is running is one button, `RunningCancel` (T-136 (7)).** A `btn-ghost px-2 py-1.5 text-xs` with the danger ink
 (`text-danger`, brightening to `danger-soft` on hover), the word "Cancel" and the job it stops as its `title` ("Cancel GIF export", "Cancel
 picture-in-picture composite"): a ghost, not a filled button, because the person's next move is usually to wait; danger ink, because it ends work that
-cost minutes. Where it sits (four placements, and the code uses exactly these): on the progress row when the job reports one (Reframe, the highlight
-scan, Captions, the model download); on a row of its own under the primary when the primary is wider than its busy label (GIF, Compile,
-Picture-in-picture, the Export panel and, since T-137 (4), the Clip Kit button; T-126 (20): beside the primary it took the strip the primary's right edge
-had a moment ago, and a double-click's second press canceled the job it had just started; the kit's running label is a sentence, "Exporting platform
-version 2 of 5...", and beside its Cancel it wrapped mid-sentence, 197 x 42 px at the default and the minimum window, so the label is `whitespace-nowrap`
-and the kit's column is the caption, the button, the Cancel); on the caption row beside the job's name when there is no primary to press (the Clip Kit card
-that outlives its closed video, `ClipKitRunning`); and beside the primary in Audio Studio's export row, the one place it is (the primary is `ml-auto` on a
-`flex-wrap` row and Cancel follows it, drawn only while a job exists, after the Save dialog has been answered). A new running-job Cancel takes the first
-placement that applies, with a layout case at 1024 and 1632 px beside it. A dialog's "Cancel" is
+cost minutes. Where it sits (four placements, and the code uses exactly these): (1) on the progress row when the job reports one (Reframe, the highlight
+scan, Captions, the model download); (2) on a row of its own under the primary, right-aligned to it, when the primary is the right-most item of its row or its
+busy label is a sentence (GIF, Compile, Picture-in-picture, the Export panel, the Clip Kit button). Whether the busy label is narrower than the idle one is not
+the test: GIF's and Picture-in-picture's busy labels are the wider (GIF 112 px idle and 120 busy, Picture-in-picture 86 and 108), Compile's is the same since
+T-131 (13), and the kit's is 233 px against 154. The test is where a Cancel beside the primary would land: at the row's end, on the strip the idle primary's right
+part held a moment ago, so a double-click's second press canceled the job it had just started (T-126 (20); measured, the idle button spans 1093-1205 and Cancel
+1147-1205). And a label that is a sentence wraps beside a Cancel: the kit's running label, "Exporting platform version 2 of 5...", was 197 x 42 px at the default
+and the minimum window (T-137 (4)), so it is `whitespace-nowrap` and the kit's column is the caption, the button, the Cancel; (3) on the caption row beside the job's name when there is no
+primary to press (the Clip Kit card that outlives its closed video, `ClipKitRunning`); and (4) beside the primary in Audio Studio's export row, the one place it
+is (the primary is `ml-auto` on a `flex-wrap` row and Cancel follows it, drawn only while a job exists, after the Save dialog has been answered: the second press
+of a double-click meets the dialog, not the strip). A new running-job Cancel takes the first placement that applies, decided in this order: a progress row if
+the job reports a percent; else the caption row if there is no primary; else beside the primary if a native dialog is answered between the press and the job;
+else the row under the primary. A job none of these fits is a fifth placement, and gets its own line here and a layout case at 1024 and 1632 px, as every
+placement has. A question the Cancel asks (the Clip Kit's) is a `Modal` drawn OUTSIDE any live region the Cancel sits in (T-138 (4): `Modal` does not portal, so
+it opens where it is written). A dialog's "Cancel" is
 a different button: an answer, in the `Modal`, `btn-ghost px-3 py-1.5 text-sm`. The bar beside it is `ProgressTrack`: `bg-hover` track, `accent` fill,
 gray (`ink-muted`) for a row the person canceled and `danger-strong` only for a fault.
 

@@ -89,7 +89,7 @@ describe('project:save - the size rule (T-137 (6))', () => {
     expect(err).toBeInstanceOf(Error)
     const message = (err as Error).message
     expect(message).toBe(
-      'This project is too large to save (50.1 MB; the limit is 50 MB). Remove or shrink large images on the canvas, then save again.'
+      'This project is too large to save (50.1 MB; the limit is 50 MB). Remove some of the large images on the canvas, or import smaller copies of them, then save again.'
     )
     expect(showSaveDialog, 'the person is not asked where to save a file that will not be written').not.toHaveBeenCalled()
     expect(existsSync(picked)).toBe(false)

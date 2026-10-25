@@ -8,6 +8,7 @@ import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
 import { Icon } from './Icon'
+import { useRestoreRun } from './restoreRun'
 
 interface AutosaveSnapshot {
   ok: boolean
@@ -43,7 +44,9 @@ export function AutosaveRestore(): JSX.Element | null {
   const [holdsWork] = useState(sessionHoldsWork)
   // T-134 (7): one flag per button. They shared one, so pressing Clear relabelled Restore "Restoring…" for the unlink's duration - a word about
   // an action nobody took. Either one running still dims both buttons (`restoring || clearing`): the two act on the same file.
-  const [restoring, setRestoring] = useState(false)
+  // T-138 (5): Restore's flag is the restore run's (`restoreRun.ts`), not this mount's state: this banner mounts on every visit to Home, and one that mounts
+  // over a restore that is still running must say so and offer nothing. Clear's stays local - nothing outlives the banner that pressed it.
+  const restoring = useRestoreRun((s) => s.run !== null)
   const [clearing, setClearing] = useState(false)
   // Round 17 B7: lightweight metadata (size + age) shown via `autosave.info`
   // without loading the whole project. Lets the home page show "Last
@@ -89,6 +92,13 @@ export function AutosaveRestore(): JSX.Element | null {
     }
   }, [])
 
+  // T-138 (5): the restore is applied under EVERY banner that is mounted, not only the one that pressed Restore (that one may be gone: the person went to
+  // another studio and came back to a new banner). A listener, not a selector: `applied` is raised and the run ended in the same tick, and a render in between
+  // would never see it.
+  useEffect(() => useRestoreRun.subscribe((state) => {
+    if (state.run?.applied) setDismissed(true)
+  }), [])
+
   if (dismissed || holdsWork || !snapshot || !snapshot.info) {
     // Round 17 B7: even when there's no restore prompt to show, surface a
     // single-line "Last autosave: 5 min ago" so the user knows imagii is
@@ -105,7 +115,8 @@ export function AutosaveRestore(): JSX.Element | null {
 
   async function restore(): Promise<void> {
     if (!snapshot?.project) return
-    setRestoring(true)
+    // T-138 (5): the claim, ahead of the first await. A second press (or a banner that mounted since) finds the run held and changes nothing.
+    if (!useRestoreRun.getState().begin({ applied: false })) return
     try {
       // T-113: autosave is held for the apply alone (see `applyProjectHeld`).
       const outcome = await applyProjectHeld(snapshot.project)
@@ -121,7 +132,8 @@ export function AutosaveRestore(): JSX.Element | null {
           if (settled) toast.success('Restored from autosave')
         })
       }
-      setDismissed(true)
+      // T-138 (5): said to every mounted banner (see the listener above), which drops its offer: this one's, or the one that replaced it.
+      useRestoreRun.getState().patch({ applied: true })
       // T-47: and back to the studio they were in, with the selections and
       // the playhead applyProject just put back. Only on the user's own
       // click — continuity is what Restore means, never something that
@@ -135,7 +147,7 @@ export function AutosaveRestore(): JSX.Element | null {
     } catch (err) {
       reportFailure(err, { failed: "Couldn't restore the autosave." })
     } finally {
-      setRestoring(false)
+      useRestoreRun.getState().end()
     }
   }
 
