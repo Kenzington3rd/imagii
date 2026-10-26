@@ -256,3 +256,31 @@ export async function expectEllipsized(chip: Locator, fullText: string, what: st
   expect(m.scrollWidth, `${what}: this name is longer than the room (the case is meaningless if it fits)`).toBeGreaterThan(m.clientWidth)
   expect(m.title, `${what}: the full path is the tooltip`).toBe(fullText)
 }
+
+/**
+ * T-140 (5): `element` is wholly inside the window a person is looking at, as it stands: no click and no `scrollIntoView` first. Its box is inside the viewport on all four
+ * sides, and the point at its centre belongs to it (or something in it) - a control clipped by a container that `overflow-hidden`s it can have a box in the window and still
+ * not be there. Stream Graphics' Export bar sat at y = 640-694 of a 640 px window and its Layers card was off the right edge after a shrink, while every case that used them
+ * passed: `click()` scrolls the element into view before it presses, which is exactly what a person's mouse wheel could not do (the root was `overflow-hidden`).
+ */
+export async function expectInViewport(element: Locator, what: string): Promise<void> {
+  await expect(element, `${what} is on the page`).toBeVisible()
+  const m = await element.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return {
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      onTop: hit !== null && (el === hit || el.contains(hit))
+    }
+  })
+  expect(m.left, `${what} starts ${Math.round(-m.left)} px left of the window`).toBeGreaterThanOrEqual(-0.5)
+  expect(m.top, `${what} starts ${Math.round(-m.top)} px above the window`).toBeGreaterThanOrEqual(-0.5)
+  expect(m.right, `${what} ends ${Math.round(m.right - m.width)} px right of the window (${Math.round(m.right)} of ${m.width})`).toBeLessThanOrEqual(m.width + 0.5)
+  expect(m.bottom, `${what} ends ${Math.round(m.bottom - m.height)} px below the window (${Math.round(m.bottom)} of ${m.height})`).toBeLessThanOrEqual(m.height + 0.5)
+  expect(m.onTop, `${what} has something else (or nothing) at its centre: it is clipped or covered`).toBe(true)
+}

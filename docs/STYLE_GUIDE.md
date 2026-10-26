@@ -365,6 +365,14 @@ Repeated UI is a component, not copy-paste:
   both read the open document from the canvas store AFTER the picture has loaded, as the stored copy's bound does, and pass the box to `makeImageLayer` /
   `makeReferenceLayer` (`x`, `y`: they default to 60, 60, the corner they always started at). A document that is not a size places a picture as it was before. A template's
   own layers are untouched.
+- **A new text layer is sized, placed and inked for the open document (T-140 (2), (3), (5)).** `textLayerFor(doc)` (canvas store) hands
+  `newTextLook` (`@shared/newText`) the document and the three token colors (BG_BASE as the dark ink, INK_BASE as the light one, BG_BASE again as the
+  workspace a transparent document shows): the size scales 32 px per 800 px of the shorter side (20 px floor, never wider or taller than the document),
+  the position is `placementFor`'s margin rule on the word's estimated box, and the ink is the one with the better WCAG contrast; `makeTextLayer` is
+  unchanged for its other callers. A corner drag keeps a picture's and a word's ratio (`keepsRatioOnCornerDrag`; the Transformer's `shiftBehavior` is
+  `inverted` for them, so Shift frees it, and `default` for shapes). `CANVAS_MIN_H` is both the canvas box's minimum height and the ResizeObserver's
+  floor - one constant, so the Stage never outgrows its box - and the canvas column is `min-w-0`, so a wide document's fixed-pixel Stage cannot hold
+  the `1fr` track open.
 - **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy's pixels; `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) bounds its bytes, and
   `chooseStoredCopy` (the order) with `storedDataUrl` (`lib/boundedImage.ts`, the canvas under it) take the first copy that fits: the file as it came when it is within the
   pixel bound; else a copy at the bound (a PNG, or a JPEG when the file is one and is opaque); then an opaque picture as a JPEG at that same bound; then the bound stepped

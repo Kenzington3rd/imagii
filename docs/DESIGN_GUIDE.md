@@ -359,6 +359,14 @@ third layer; compose `<Modal>` and inherit the one that exists.
   buttons: a handle that must avoid it goes in a left corner. Changing the pair is a change to
   `watermark.test.ts`, `filters.test.ts`, `clipKitWatermark.test.ts` and the win32 pixel case in the T-51 block of `media.spec.ts`
   (bands measured against the box's 8 px border), and to the USER_GUIDE sentence that names the numbers.
+- **A fixed-pixel child in a `1fr` track needs `min-w-0`, and the smallest window has to fit (T-140 (5)).** A grid item's automatic minimum width is its content's, so
+  a child that sizes itself in pixels from its container (Stream Graphics' Konva Stage, fitted to the column in `Canvas.tsx`) holds the `1fr` track open at the width it was
+  last drawn: the 1200x480 Twitch banner pushed the Layers card 76 px past the right edge of a fresh 1024x640 window (it started at x = 840) and wholly off screen after a
+  1632 to 1024 shrink (x = 1040). The
+  column that holds such a child is `min-w-0`. The same box flexes in height and gives way first (`CANVAS_MIN_H`, 240 px; the room the 1024x640 minimum leaves it is 326 px,
+  291 on the emote whose Export bar wraps), so the whole Export bar and the Layers card are inside the minimum window with no scroll; and the studio's root is `overflow-auto`
+  like the four sibling studios, the backstop for a window or a text size that leaves less. `tests/e2e/layout.ts` `expectInViewport` measures it (box inside the window and
+  the element on top at its centre) with no click between the resize and the measurement, because `click()` scrolls the element into view and a wheel cannot.
 
 ---
 

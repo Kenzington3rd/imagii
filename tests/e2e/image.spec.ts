@@ -17,11 +17,13 @@ import {
   type CanvasTemplate
 } from '../../src/renderer/src/modules/image-studio/templates'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
+import { BG_BASE } from '../../src/renderer/src/styles/tokens'
 import { dragThrough, dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
   MIN_WINDOW,
   expectControlsWhole,
+  expectInViewport,
   expectNoHorizontalOverflow,
   expectNoOverlap,
   expectOneLine,
@@ -53,7 +55,7 @@ const __dirname = path.dirname(__filename)
  *
  * ── Three mechanisms worth explaining ──────────────────────────────────
  *
- * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:411) is the ledger's
+ * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:424) is the ledger's
  *    own hook. `stageShapes()` reads the document layer's children — class +
  *    attrs — which is the rendered end state of `doc.layers`: React re-renders
  *    every node from the store, so a value read back off a node is the value
@@ -61,7 +63,7 @@ const __dirname = path.dirname(__filename)
  *    eye toggle assertable at the stage.
  *
  * 2. Mouse work is in DOC coordinates. The stage is scaled to fit its
- *    container (Canvas.tsx:170-179), so every screen point is computed from the
+ *    container (Canvas.tsx:183-192), so every screen point is computed from the
  *    live `stage.scaleX()` and the canvas rect (`stageGeom`). Transformer
  *    anchors are Konva nodes, not DOM: their screen position comes from
  *    `getAbsolutePosition()`, which already includes the stage scale.
@@ -1120,7 +1122,7 @@ test.describe('Image Studio — tools and drawing', () => {
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
       expect((pencil.points as number[]).length).toBeGreaterThan(4)
-      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:325).
+      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:331).
       expect(await layerNames(window)).toEqual([
         'Line',
         'Line',
@@ -1130,7 +1132,7 @@ test.describe('Image Studio — tools and drawing', () => {
         'Text'
       ])
 
-      // ── a drag under the 4px floor commits nothing (Canvas.tsx:253) ──
+      // ── a drag under the 4px floor commits nothing (Canvas.tsx:266) ──
       await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 }, { expectPreview: false })
       await expectLayerCount(window, 6)
@@ -1176,7 +1178,7 @@ test.describe('Image Studio — tools and drawing', () => {
 
       // ── snap ON: the same gesture quantizes to multiples of 40 ──
       // Math.round(133/40)*40 = 120 and Math.round(93/40)*40 = 80
-      // (canvasStore rule read off Canvas.tsx:165-168). At the DEFAULT grid of
+      // (canvasStore rule read off Canvas.tsx:178-181). At the DEFAULT grid of
       // 20 the same gesture would land on 140/100, so this also proves the
       // grid-size field feeds the snap.
       await snap.check()
@@ -1406,7 +1408,7 @@ test.describe('Image Studio — selection', () => {
       await window.keyboard.press('Delete')
       await expectLayerCount(window, 2)
       expect(await layerNames(window)).not.toContain('Keep m')
-      // Removing the selected layer clears the selection (canvasStore.ts:148).
+      // Removing the selected layer clears the selection (canvasStore.ts:154).
       await expect(propsCard(window)).toHaveCount(0)
 
       // ── Backspace, the other binding ──
@@ -2011,8 +2013,9 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 4)
       const text = await lastShape(window)
       expect(text.cls).toBe('Text')
-      expect(text.x).toBe(120)
-      expect(text.y).toBe(120)
+      // T-140 (2): on the default 1200x800 page a new text layer is 60 px in from the corner, as a picture is (it was a fixed (120, 120)), at the 32 px it has always been.
+      expect(text.x).toBe(60)
+      expect(text.y).toBe(60)
       expect(text.fontSize).toBe(32)
 
       // ── paste: a REAL image on Electron's clipboard + a real Ctrl+V ──
@@ -2148,7 +2151,7 @@ test.describe('Image Studio — export', () => {
       expect(calls1.save[0]?.filters).toEqual([{ name: 'PNG image', extensions: ['png'] }])
 
       // T-45: "1×" means one document pixel per exported pixel. The on-screen
-      // stage is a fit-to-container render (Canvas.tsx:170-179) and is NOT the
+      // stage is a fit-to-container render (Canvas.tsx:183-192) and is NOT the
       // document size here — asserted first, so every dimension below is a
       // claim about the export math and not an accident of this window.
       expect(geom.stageW, 'the stage is zoomed, not 1:1').not.toBe(t.doc.width)
@@ -2275,7 +2278,7 @@ test.describe('Image Studio — export', () => {
       const sizes = [28, 56, 112].map((n) => pngSize(bySize(n)))
 
       // T-45: the bytes carry the sizes the filenames and the toast promise.
-      // This doc sits at the 4x zoom cap (Canvas.tsx:179) — 112 document px
+      // This doc sits at the 4x zoom cap (Canvas.tsx:192) — 112 document px
       // are drawn as 448 screen px — which is exactly the zoom that used to
       // leak into the capture and write 112/224/448. Asserting the cap is
       // really engaged first is what makes the trio below a claim about the
@@ -3499,7 +3502,7 @@ test.describe('Image Studio — history', () => {
       await window.keyboard.press('Control+Shift+z')
       await expectLayerCount(window, 1)
 
-      // A new action after an undo drops the redo branch (canvasStore.ts:107).
+      // A new action after an undo drops the redo branch (canvasStore.ts:109).
       await window.keyboard.press('Control+z')
       await expectLayerCount(window, 2)
       await layerRow(window, 'Rectangle').getByRole('button', { name: 'Duplicate layer' }).click()
@@ -4119,6 +4122,544 @@ test.describe('Image Studio — a save in flight leaves a tmp in the folder (T-1
         'imagii-emote-28-STAMP.png',
         'imagii-emote-56-STAMP.png'
       ])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-140 (2): "+ Add text" on the document that is open ───────────────────────────────────────────────────────────────────────────────────
+//
+// `addLayer(makeTextLayer(120, 120))` put 32 px text in `BG_BASE` (#120c0c) at a fixed point whatever the document: on the 112x112 emote it started at (120, 120), wholly
+// off the canvas (selected and invisible); every template background is #120c0c, #241614 or transparent, so the text was 1.00 to 1.11:1 against it; on a 3840 px overlay it
+// was a speck. The layer is now sized to the document, placed inside it by the rule a picture follows, and inked against what the document shows (`textLayerFor`).
+test.describe('Image Studio — "+ Add text" lands wholly on the document and can be read against it (T-140 (2))', () => {
+  /** WCAG 2 contrast between two #rrggbb colors, written out here and not imported: the case must load on the unchanged build, and it must not use the rule it checks. */
+  function contrastOf(a: string, b: string): number {
+    const lum = (hex: string): number => {
+      const { r, g, b: blue } = hexRgb(hex)
+      const lin = (c: number): number => {
+        const v = c / 255
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(blue)
+    }
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+    return ((hi as number) + 0.05) / ((lo as number) + 0.05)
+  }
+
+  interface TextBox {
+    x: number
+    y: number
+    width: number
+    height: number
+    fill: string
+    fontSize: number
+  }
+
+  /** The newest Text node on the stage: its box in DOCUMENT units (as drawn, with the stage's zoom taken out), its color and its size. */
+  function newestText(window: Page): Promise<TextBox> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        children: Array<{
+          find(sel: string): Array<{
+            getClientRect(o: { relativeTo: unknown }): { x: number; y: number; width: number; height: number }
+            fill(): string
+            fontSize(): number
+          }>
+        }>
+      }
+      const layer = stage.children[0]
+      const texts = layer ? layer.find('Text') : []
+      const t = texts[texts.length - 1]
+      if (!layer || !t) throw new Error('no Text node on the stage')
+      const r = t.getClientRect({ relativeTo: layer })
+      return { x: r.x, y: r.y, width: r.width, height: r.height, fill: t.fill(), fontSize: t.fontSize() }
+    })
+  }
+
+  function expectInsideDocument(box: TextBox, doc: { width: number; height: number }, what: string): void {
+    expect.soft(box.x, `${what}: left edge on the document (${JSON.stringify(box)})`).toBeGreaterThanOrEqual(-0.01)
+    expect.soft(box.y, `${what}: top edge on the document (${JSON.stringify(box)})`).toBeGreaterThanOrEqual(-0.01)
+    expect.soft(box.x + box.width, `${what}: right edge on the document (${JSON.stringify(box)})`).toBeLessThanOrEqual(doc.width + 0.01)
+    expect.soft(box.y + box.height, `${what}: bottom edge on the document (${JSON.stringify(box)})`).toBeLessThanOrEqual(doc.height + 0.01)
+  }
+
+  test('on the emote, the dark thumbnails, the banner and the 4K overlay the new word is wholly inside the document and 4.5:1 against its background', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t140-text')
+    const { window } = studio
+    try {
+      const ids = ['emote-blank-112', 'yt-thumb-bold', 'yt-thumb-clean', 'tw-banner-videoplayer', 'tw-overlay-streamer-4k']
+      const dialog = window.locator('[role="dialog"]')
+      for (const [i, id] of ids.entries()) {
+        const t = templateById(id)
+        if (i === 0) {
+          await templateCard(window, t).click()
+        } else {
+          await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+          await dialog.locator('button.card').filter({ has: window.getByText(t.name, { exact: true }) }).click()
+          await expect(dialog).toHaveCount(0)
+        }
+        await expectTemplateApplied(window, t)
+
+        await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+        await expectLayerCount(window, t.doc.layers.length + 1)
+        const box = await newestText(window)
+        const what = `${t.name} (${t.doc.width}x${t.doc.height}, ${t.doc.background})`
+        expectInsideDocument(box, t.doc, what)
+        // A transparent document is the dark workspace (and most scenes) behind it: the same surface the rule is held to.
+        const surface = t.doc.background === 'transparent' ? BG_BASE : t.doc.background
+        expect.soft(box.fill.toLowerCase(), `${what}: the ink is not the background`).not.toBe(surface.toLowerCase())
+        expect.soft(contrastOf(box.fill, surface), `${what}: ${box.fill} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+        // Readable: not a speck beside the document (a 32 px line on 2160 px is 1.5% of its height).
+        expect.soft(box.fontSize, `${what}: the size grows with the document`).toBeGreaterThanOrEqual(t.doc.height / 60)
+        if (id === 'tw-overlay-streamer-4k') expect.soft(box.fontSize, `${what}: more than the 32 px it was`).toBeGreaterThan(32)
+        if (id === 'emote-blank-112') {
+          // The word is in the emote with room to spare, and the Transformer has it (the selected layer is the new one).
+          expect.soft(box.width, `${what}: a word that fits the 112 px canvas`).toBeLessThan(112 / 2)
+          await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Text'])
+        }
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('on the blank white page the new word keeps its dark ink, 32 px, 60 px in from the corner; both "Start with text" and "+ Add text"', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-text-blank')
+    const { window } = studio
+    try {
+      const doc = { width: 1200, height: 800 }
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expectLayerCount(window, 1)
+      await expect(window.getByText(`${doc.width} × ${doc.height}`)).toBeVisible()
+      const first = await newestText(window)
+      expectInsideDocument(first, doc, 'Start with text')
+      expect(first.fill.toLowerCase(), 'the ink is the near-black token').toBe(BG_BASE.toLowerCase())
+      expect(contrastOf(first.fill, '#ffffff'), 'against white').toBeGreaterThanOrEqual(4.5)
+      expect(first.fontSize).toBe(32)
+      expect([first.x, first.y], 'the corner rule a picture follows').toEqual([60, 60])
+
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 2)
+      const second = await newestText(window)
+      expect(second.fill.toLowerCase()).toBe(BG_BASE.toLowerCase())
+      expect([second.x, second.y, second.fontSize]).toEqual([60, 60, 32])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-140 (3): a corner drag keeps a picture's proportions ─────────────────────────────────────────────────────────────────────────────────
+//
+// `keepRatio={false}` for every layer: dragging a picture's corner distorted it, the distortion was exported (scaleX / scaleY are stored) and Shift, Konva's key for the other
+// behavior, was documented nowhere. A picture and a word have proportions of their own (a stretched logo, stretched glyphs); a rectangle's, ellipse's or line's width and height
+// are the point of resizing it. So a corner drag keeps the ratio of a picture and of text, and Shift frees it (`shiftBehavior="inverted"`); a shape's corner drag stretches, and
+// Shift keeps ITS ratio (Konva's own default, unchanged). Side handles stretch every layer, as they always did.
+test.describe('Image Studio — a corner drag keeps a picture\'s and a word\'s proportions; Shift frees them; a shape still stretches (T-140 (3))', () => {
+  async function makeFlatPng(out: string, size: string): Promise<void> {
+    const result = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `color=c=red:s=${size}`, '-frames:v', '1', out])
+    if (result.code !== 0) throw new Error(`fixture ffmpeg exit ${result.code}: ${result.stderr.slice(-800)}`)
+  }
+
+  /** The size of the red box in an exported PNG: the picture as the file shows it (a red pixel is r > 200, g < 60, b < 60; the page is white). */
+  async function redSize(studio: Studio, bytes: Buffer): Promise<{ w: number; h: number }> {
+    const { w, h } = pngSize(bytes)
+    const source = path.join(studio.root, 'red-bounds.png')
+    const raw = path.join(studio.root, 'red-bounds.raw')
+    writeFileSync(source, bytes)
+    const result = await runBinary(ffmpegPath, ['-y', '-i', source, '-vf', 'format=rgba', '-f', 'rawvideo', '-pix_fmt', 'rgba', raw])
+    if (result.code !== 0) throw new Error(`red-bounds probe exit ${result.code}: ${result.stderr.slice(-800)}`)
+    const px = readFileSync(raw)
+    let minX = w
+    let maxX = -1
+    let minY = h
+    let maxY = -1
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4
+        if ((px[i] as number) > 200 && (px[i + 1] as number) < 60 && (px[i + 2] as number) < 60) {
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (maxX < 0) throw new Error('no red pixel in the export')
+    return { w: maxX - minX + 1, h: maxY - minY + 1 }
+  }
+
+  /** The newest layer's scale of this Konva class, as the node has it. */
+  async function scaleOf(window: Page, cls: string): Promise<{ x: number; y: number }> {
+    const shapes = (await stageShapes(window)).filter((sh) => sh.cls === cls)
+    const last = shapes[shapes.length - 1]
+    if (!last) throw new Error(`no ${cls} on the stage`)
+    return { x: last.scaleX, y: last.scaleY }
+  }
+
+  /** A real drag of the bottom-right corner handle by (dx, dy) document px, with Shift held for the whole gesture when asked. */
+  async function dragCorner(window: Page, cls: string, by: Point, shift = false): Promise<void> {
+    const before = await scaleOf(window, cls)
+    const g = await stageGeom(window)
+    const anchor = await anchorPoint(window, 'bottom-right')
+    if (shift) await window.keyboard.down('Shift')
+    try {
+      await dragTo(window, anchor, { x: anchor.x + by.x * g.scale, y: anchor.y + by.y * g.scale }, {
+        extent: {
+          label: `${cls} corner drag by ${by.x},${by.y}${shift ? ' with Shift' : ''}`,
+          read: async () => (await scaleOf(window, cls)).x,
+          settled: (scaleX) => Math.abs(scaleX - before.x) > 0.05
+        }
+      })
+    } finally {
+      if (shift) await window.keyboard.up('Shift')
+    }
+  }
+
+  test('a picture: a corner drag keeps its ratio and the exported picture is not stretched; Shift frees the ratio', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-keep-ratio-pic')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      const flat = path.join(studio.root, 'flat.png')
+      await makeFlatPng(flat, '200x100')
+      await dropPng(window, readFileSync(flat).toString('base64'), 'flat.png')
+      await expectLayerCount(window, 1)
+      await expectShapeCount(window, 1)
+      await expect.poll(() => transformerClasses(window), { timeout: 15_000, message: 'the picture has no handles' }).toEqual(['Image'])
+      expect(await scaleOf(window, 'Image')).toEqual({ x: 1, y: 1 })
+
+      // ── a corner drag far more across than down: a free resize would make this 1.5 x 1.1 ──
+      await dragCorner(window, 'Image', { x: 100, y: 10 })
+      await expect.poll(async () => (await scaleOf(window, 'Image')).x, { timeout: 10_000 }).toBeGreaterThan(1.2)
+      const kept = await scaleOf(window, 'Image')
+      expect(Math.abs(kept.x - kept.y), `scaleX ${kept.x} and scaleY ${kept.y} are one scale`).toBeLessThan(0.01)
+
+      // ── the file: export at 1x and measure the red box. 200x100 is 2:1; stretched, it would not be ──
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const [png] = await waitForDownloads(studio, 1)
+      expect(pngSize(png as Buffer)).toEqual({ w: 1200, h: 800 })
+      const red = await redSize(studio, png as Buffer)
+      expect(red.w, 'the picture is drawn larger in the file').toBeGreaterThan(260)
+      expect(Math.abs(red.w / red.h - 2), `the exported picture is ${red.w} x ${red.h}, not 2:1`).toBeLessThan(0.03)
+
+      // ── Shift frees it: the same gesture with Shift held changes the width alone ──
+      await dragCorner(window, 'Image', { x: 60, y: 0 }, true)
+      await expect.poll(async () => (await scaleOf(window, 'Image')).x, { timeout: 10_000 }).toBeGreaterThan(kept.x + 0.1)
+      const freed = await scaleOf(window, 'Image')
+      expect(freed.y, 'the height did not move').toBeCloseTo(kept.y, 2)
+      expect(freed.x - freed.y, 'width and height are no longer one scale').toBeGreaterThan(0.15)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('text keeps its ratio on a corner drag and Shift frees it; a rectangle still stretches, and Shift keeps its ratio', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-keep-ratio-shapes')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      await startBlank(window)
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Text'])
+
+      // ── text: one scale, then Shift frees it ──
+      await dragCorner(window, 'Text', { x: 80, y: 4 })
+      await expect.poll(async () => (await scaleOf(window, 'Text')).x, { timeout: 10_000 }).toBeGreaterThan(1.2)
+      const word = await scaleOf(window, 'Text')
+      expect(Math.abs(word.x - word.y), `text scaleX ${word.x} and scaleY ${word.y} are one scale`).toBeLessThan(0.01)
+      await dragCorner(window, 'Text', { x: 60, y: 0 }, true)
+      await expect.poll(async () => (await scaleOf(window, 'Text')).x, { timeout: 10_000 }).toBeGreaterThan(word.x + 0.1)
+      const wide = await scaleOf(window, 'Text')
+      expect(wide.y, 'the text kept its height').toBeCloseTo(word.y, 2)
+
+      // ── a rectangle: a corner drag stretches it ──
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 300, y: 300 }, { x: 600, y: 500 })
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Rect'])
+      await dragCorner(window, 'Rect', { x: 150, y: 10 })
+      await expect.poll(async () => (await scaleOf(window, 'Rect')).x, { timeout: 10_000 }).toBeGreaterThan(1.3)
+      const stretched = await scaleOf(window, 'Rect')
+      expect(stretched.x - stretched.y, `a rectangle's corner drag still stretches it (${stretched.x} x ${stretched.y})`).toBeGreaterThan(0.2)
+
+      // ── Shift on a rectangle keeps its proportions (Konva's own, unchanged): both scales grow by the same factor ──
+      await dragCorner(window, 'Rect', { x: 60, y: 0 }, true)
+      await expect.poll(async () => (await scaleOf(window, 'Rect')).x, { timeout: 10_000 }).toBeGreaterThan(stretched.x + 0.05)
+      const kept = await scaleOf(window, 'Rect')
+      expect(kept.x / kept.y, 'Shift kept the rectangle\'s ratio').toBeCloseTo(stretched.x / stretched.y, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the shortcuts dialog on Stream Graphics documents Shift+drag', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t140-shift-row')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.keyboard.press('?')
+      const shortcuts = window.locator('[role="dialog"]')
+      await expect(shortcuts).toBeVisible()
+      const row = shortcuts.locator('li').filter({ hasText: 'Shift+drag' })
+      await expect(row).toHaveCount(1)
+      await expect(row).toContainText('Corner handle: resize a picture or text freely; keep a shape\'s proportions')
+      await window.keyboard.press('Escape')
+      await expect(shortcuts).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-140 (4): "start blank" is the blank page ──────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The empty screen says "Pick a template to start ... or start blank below". The store kept the template's width, height and background when its last layer was removed, so an
+// import from that screen landed on the 112x112 emote, and Export wrote the emote pack. An empty document IS the blank page (1200x800, white); Undo of the removal brings the
+// template back whole.
+test.describe('Image Studio — "start blank" after a template\'s last layer is removed is the blank page (T-140 (4))', () => {
+  async function removeEveryLayer(window: Page, count: number): Promise<void> {
+    for (let i = count; i > 0; i -= 1) {
+      await window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' }).click()
+    }
+    await expect(window.getByText('Pick a template to start')).toBeVisible()
+  }
+
+  test('apply the emote, remove its layer, import from the empty screen: the document is 1200x800 white and Export writes ONE png of it; Undo walks back to the emote', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-blank-import')
+    const { window } = studio
+    try {
+      const emote = templateById('emote-blank-112')
+      await templateCard(window, emote).click()
+      await expectTemplateApplied(window, emote)
+      await removeEveryLayer(window, emote.doc.layers.length)
+
+      // Undo of the last removal brings the template's document back whole; Redo takes the layer away again.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expectTemplateApplied(window, emote)
+      await window.getByRole('button', { name: 'Redo' }).click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+
+      // "Start blank": a picture dropped on the empty screen lands on the blank page.
+      const png = readFileSync(studio.fixturePng).toString('base64')
+      await dropPng(window, png, 'blank-start.png')
+      await expectLayerCount(window, 1)
+      await expectShapeCount(window, 1)
+      await expect(window.getByText('1200 × 800')).toBeVisible()
+      await expect(window.getByTestId('export-output-size')).toHaveText('Output: 1200×800')
+
+      // Export writes that page: one PNG, 1200x800, white where the picture is not (the emote would be transparent, and a pack of three).
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByLabel('Scale').selectOption('1')
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const [file] = await waitForDownloads(studio, 1)
+      expect(pngSize(file as Buffer)).toEqual({ w: 1200, h: 800 })
+      expect(await samplePixel(studio, file as Buffer, 'png', 1190, 790)).toEqual({ r: 255, g: 255, b: 255, a: 255 })
+      expect(savedNames(studio)).toHaveLength(1)
+
+      // Undo walks back through the history: the picture, then the removal.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expectTemplateApplied(window, emote)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('"Start with text" on that screen is the blank page too: 1200x800, white, dark 32 px text', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-blank-text')
+    const { window } = studio
+    try {
+      const emote = templateById('emote-blank-112')
+      await templateCard(window, emote).click()
+      await expectTemplateApplied(window, emote)
+      await removeEveryLayer(window, emote.doc.layers.length)
+
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expectLayerCount(window, 1)
+      await expect(window.getByText('1200 × 800')).toBeVisible()
+      await expect(window.getByTestId('export-output-size')).toHaveText('Output: 1200×800')
+      const text = await lastShape(window)
+      expect(text.cls).toBe('Text')
+      expect([text.x, text.y, text.fontSize, text.fill?.toLowerCase()]).toEqual([60, 60, 32, BG_BASE.toLowerCase()])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-140 (5): Stream Graphics fits the smallest window ─────────────────────────────────────────────────────────────────────────────────────
+//
+// At 1024x640 (MIN_WINDOW) the Export bar sat at y = 640-694, past the window: the root was `overflow-hidden` (its four sibling studios are `overflow-auto`) and the canvas had
+// `min-h-[400px]`; and the canvas column had no `min-w-0`, so a wide document's fixed-pixel Stage held the `1fr` track open and pushed the Layers card off the right edge (wholly off
+// screen after a 1632 -> 1024 shrink). Every older case reached those controls with `click()`, which scrolls the element into view first; these read the geometry, with no click
+// between the resize and the measurement.
+test.describe('Image Studio — the Export bar and the Layers card are on screen at the smallest window, without a scroll (T-140 (5))', () => {
+  const SIZES: Array<[{ width: number; height: number }, string]> = [
+    [MIN_WINDOW, '1024x640 (the minimum)'],
+    [{ width: 1280, height: 728 }, '1280x728'],
+    [{ width: 1366, height: 768 }, '1366x768'],
+    [DEFAULT_WINDOW, '1632x918 (the default)']
+  ]
+
+  /** The Export button, the whole Export bar, the Layers card and the stage: on screen, and the stage inside the box that holds it. */
+  async function expectStudioOnScreen(window: Page, what: string): Promise<void> {
+    await expectInViewport(window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }), `the Export button ${what}`)
+    await expectInViewport(window.locator(EXPORT), `the Export bar ${what}`)
+    await expectInViewport(window.locator(LAYERS), `the Layers card ${what}`)
+    const fit = await window.locator('.konvajs-content canvas').first().evaluate((canvas) => {
+      const box = canvas.getBoundingClientRect()
+      const holder = (canvas.closest('.relative') as HTMLElement).getBoundingClientRect()
+      return { right: box.right - holder.right, bottom: box.bottom - holder.bottom, left: holder.left - box.left, top: holder.top - box.top }
+    })
+    for (const [side, over] of Object.entries(fit)) expect(over, `the stage ${what} sticks out of its box on the ${side} by ${over} px`).toBeLessThanOrEqual(1)
+    // And the page itself has no sideways scroll: nothing in it is wider than the window (the root is `overflow-auto` now, so a too-wide child would show a scrollbar, not hide).
+    const root = window.locator('h1', { hasText: 'Stream Graphics' }).locator('xpath=ancestor::div[contains(@class, "h-full")][1]')
+    await expectNoHorizontalOverflow(root, `the Stream Graphics page ${what}`)
+  }
+
+  test('on the blank page, a thumbnail, the emote and the Twitch banner, at four window sizes', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t140-fit')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      await startBlank(window)
+      const dialog = window.locator('[role="dialog"]')
+      const docs: Array<[string, string | null]> = [
+        ['the blank page', null],
+        ['the Bold thumbnail', 'yt-thumb-bold'],
+        ['the emote', 'emote-blank-112'],
+        ['the Twitch banner', 'tw-banner-videoplayer']
+      ]
+      for (const [name, id] of docs) {
+        if (id) {
+          const t = templateById(id)
+          await resizeAndSettle(app, window, MIN_WINDOW)
+          await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+          await dialog.locator('button.card').filter({ has: window.getByText(t.name, { exact: true }) }).click()
+          await expect(dialog).toHaveCount(0)
+          await expectTemplateApplied(window, t)
+        }
+        for (const [size, label] of SIZES) {
+          await resizeAndSettle(app, window, size)
+          // No click, no scroll: the controls are where a person who just opened the studio at this size finds them.
+          await expectStudioOnScreen(window, `with ${name} at ${label}`)
+        }
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a fresh open at 1024x640 with the Twitch banner as the first canvas: the Layers card is inside the window', async () => {
+    // The Stage mounts at its 800 px starting size (Canvas.tsx) and a wide document is limited by its width, so the container reads the 800 px the track was held open at
+    // and keeps it: the card sat at x = 840-1100 of 1024. A canvas that was already mounted (the case above switches documents) never gets stuck, which is why this is its own launch.
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-fresh-banner')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      const banner = templateById('tw-banner-videoplayer')
+      await templateCard(window, banner).click()
+      await expectTemplateApplied(window, banner)
+      await expectStudioOnScreen(window, 'with the banner opened first at 1024x640')
+      expect((await stageGeom(window)).stageW, 'the stage was fitted to the column, not left at the 800 px it started at').toBeLessThan(760)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('after a 1632x918 -> 1024x640 resize with the banner open, and back', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-shrink')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      const banner = templateById('tw-banner-videoplayer')
+      await templateCard(window, banner).click()
+      await expectTemplateApplied(window, banner)
+      const wide = (await stageGeom(window)).stageW
+      await expectStudioOnScreen(window, 'with the banner at 1632x918')
+
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      await expectStudioOnScreen(window, 'with the banner after the shrink to 1024x640')
+      expect((await stageGeom(window)).stageW, 'the stage followed the window down').toBeLessThan(wide)
+
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      await expectStudioOnScreen(window, 'with the banner after growing back to 1632x918')
+      expect((await stageGeom(window)).stageW, 'and back up').toBeGreaterThan(900)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('below the minimum the studio scrolls (the backstop): the wheel brings the Export bar into view', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-backstop')
+    const { app, window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      // Shorter than the minimum window can be (a person cannot drag it there; a larger system text size or zoom gets the same box): the bar is off the page.
+      await resizeAndSettle(app, window, { width: 1024, height: 500 })
+      const off = await window.locator(EXPORT).boundingBox()
+      expect(off && off.y + off.height, 'the bar starts below the window, so the wheel is what has to reach it').toBeGreaterThan(500)
+      await window.mouse.move(500, 40)
+      await window.mouse.wheel(0, 600)
+      // (Chromium's wheel scroll animates: wait for the bar to arrive, then measure it as a person sees it.)
+      await expect
+        .poll(async () => {
+          const box = await window.locator(EXPORT).boundingBox()
+          return box ? box.y + box.height <= 500.5 : false
+        }, { timeout: 10_000, message: 'the wheel never brought the Export bar up: the studio does not scroll' })
+        .toBe(true)
+      await expectInViewport(window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }), 'the Export button after a wheel')
+      await expectInViewport(window.locator(EXPORT), 'the Export bar after a wheel')
+      // The canvas gave way no further than its floor (CANVAS_MIN_H, 240 px) before the studio started to scroll: a drawing squeezed to nothing is not a fit.
+      const canvasBox = await window.locator('.konvajs-content').locator('xpath=..').boundingBox()
+      expect(canvasBox?.height ?? 0, 'the canvas keeps its floor').toBeGreaterThanOrEqual(239.5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the measurement itself discriminates: an element hanging past the edge, and one a dialog covers, are both refused', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t140-helper')
+    const { app, window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      const bar = window.locator(EXPORT)
+      await expectInViewport(bar, 'the Export bar (the control: it is on screen)')
+      // Hanging 50 px past the right edge.
+      await window.evaluate(() => {
+        const box = document.createElement('div')
+        box.id = 'probe-edge'
+        box.textContent = 'probe'
+        box.style.cssText = `position:fixed;top:100px;height:30px;width:120px;left:${window.innerWidth - 70}px;background:#fff;z-index:100`
+        document.body.appendChild(box)
+      })
+      await expect(expectInViewport(window.locator('#probe-edge'), 'a box past the right edge')).rejects.toThrow(/right of the window/)
+      // Under the Templates dialog's scrim: in the window by its box, not there to a person.
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      await expect(window.locator('[role="dialog"]')).toBeVisible()
+      await expect(expectInViewport(bar, 'the Export bar under a dialog')).rejects.toThrow(/clipped or covered/)
     } finally {
       await closeStudio(studio)
     }

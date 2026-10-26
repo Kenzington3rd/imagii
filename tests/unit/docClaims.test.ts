@@ -209,14 +209,14 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
   // names, the first line, the last line, what those lines hold]`. ImportPanel.tsx:70 was the one found (the cap is :71), and the
   // others were re-read with it: a cite that moves now fails here instead of waiting for the next sweep.
   const CITES: ReadonlyArray<readonly [string, string, number, number, RegExp]> = [
-    ['Canvas.tsx:411', 'src/renderer/src/modules/image-studio/Canvas.tsx', 411, 411, /__imagiiStage/],
-    ['Canvas.tsx:170-179', 'src/renderer/src/modules/image-studio/Canvas.tsx', 170, 179, /Fit-to-container scaling[\s\S]*MAX_STAGE_ZOOM/],
-    ['Canvas.tsx:253', 'src/renderer/src/modules/image-studio/Canvas.tsx', 253, 253, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
-    ['Canvas.tsx:165-168', 'src/renderer/src/modules/image-studio/Canvas.tsx', 165, 168, /function snap\([\s\S]*gridSize/],
-    ['Canvas.tsx:179', 'src/renderer/src/modules/image-studio/Canvas.tsx', 179, 179, /MAX_STAGE_ZOOM = 4/],
-    ['canvasStore.ts:325', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 325, 325, /'Line'/],
-    ['canvasStore.ts:148', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 148, 148, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
-    ['canvasStore.ts:107', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 107, 107, /future: \[\]/],
+    ['Canvas.tsx:424', 'src/renderer/src/modules/image-studio/Canvas.tsx', 424, 424, /__imagiiStage/],
+    ['Canvas.tsx:183-192', 'src/renderer/src/modules/image-studio/Canvas.tsx', 183, 192, /Fit-to-container scaling[\s\S]*MAX_STAGE_ZOOM/],
+    ['Canvas.tsx:266', 'src/renderer/src/modules/image-studio/Canvas.tsx', 266, 266, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
+    ['Canvas.tsx:178-181', 'src/renderer/src/modules/image-studio/Canvas.tsx', 178, 181, /function snap\([\s\S]*gridSize/],
+    ['Canvas.tsx:192', 'src/renderer/src/modules/image-studio/Canvas.tsx', 192, 192, /MAX_STAGE_ZOOM = 4/],
+    ['canvasStore.ts:331', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 331, 331, /'Line'/],
+    ['canvasStore.ts:154', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 154, 154, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
+    ['canvasStore.ts:109', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 109, 109, /future: \[\]/],
     ['ImageStudio.tsx:67-76', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 67, 76, /e\.key === 'v'[\s\S]*setTool\('pencil'\)/],
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],

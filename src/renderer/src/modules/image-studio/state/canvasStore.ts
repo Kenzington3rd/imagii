@@ -1,15 +1,17 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import { ACCENT, ACCENT_MUTED, BG_BASE, EMBER, withAlpha } from '../../../styles/tokens'
+import { ACCENT, ACCENT_MUTED, BG_BASE, EMBER, INK_BASE, withAlpha } from '../../../styles/tokens'
 import type {
   CanvasDocument,
   CanvasLayer,
   EllipseLayer,
   ImageLayer,
+  LayerType,
   LineLayer,
   RectLayer,
   TextLayer
 } from '@shared/canvas'
+import { newTextLook } from '@shared/newText'
 
 const HISTORY_LIMIT = 50
 
@@ -143,8 +145,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   removeLayer: (id) => {
     const prev = get().doc
+    const layers = prev.layers.filter((l) => l.id !== id)
     set({
-      doc: { ...prev, layers: prev.layers.filter((l) => l.id !== id) },
+      // T-140 (4): a document with no layers IS the blank page. The studio shows its templates-first screen for one ("Pick a template to start ... or start blank"), so
+      // the size and background of the template that was open are not a canvas anyone chose, and an import or "Start with text" from that screen used to land on the
+      // 112x112 emote (and Export wrote the emote pack). Undo puts the template's document back whole: `prev` is what the history keeps.
+      doc: layers.length === 0 ? defaultDoc() : { ...prev, layers },
       selectedLayerId: get().selectedLayerId === id ? null : get().selectedLayerId,
       history: pushHistory(get().history, prev)
     })
@@ -336,6 +342,25 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
     strokeWidth: 3,
     closed
   }
+}
+
+/**
+ * A new text layer for the document that is open (T-140 (2)): sized to it, placed inside it by the rule a picture follows, and inked against its background - the near-black
+ * on a white page, the light ink on a dark or transparent one (`newTextLook`, `@shared/newText`, which takes the colors from here so they stay tokens). `makeTextLayer` is
+ * the layer itself and stays what it was for its other callers (a position it is given, 32 px, `BG_BASE`).
+ */
+export function textLayerFor(doc: Pick<CanvasDocument, 'width' | 'height' | 'background'>): TextLayer {
+  const look = newTextLook(doc, { dark: BG_BASE, light: INK_BASE, behind: BG_BASE })
+  return { ...makeTextLayer(look.x, look.y), fontSize: look.fontSize, fill: look.fill }
+}
+
+/**
+ * Does a corner drag on this kind of layer keep its proportions (T-140 (3))? A picture and a word have proportions of their own (a stretched logo, stretched glyphs, and
+ * the stretch is what the export carries); a rectangle's, an ellipse's and a line's width and height are the point of resizing them. Shift flips it either way (Konva's
+ * Transformer; `Canvas.tsx`). The side handles stretch every layer.
+ */
+export function keepsRatioOnCornerDrag(type: LayerType): boolean {
+  return type === 'image' || type === 'text'
 }
 
 export function makeTextLayer(x: number, y: number, text = 'Text'): TextLayer {

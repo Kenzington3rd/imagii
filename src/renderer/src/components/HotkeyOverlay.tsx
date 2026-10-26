@@ -41,6 +41,7 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
     { keys: 'L', description: 'Line tool' },
     { keys: 'P', description: 'Pencil tool' },
     { keys: 'Ctrl+V', description: 'Paste image from clipboard' },
+    { keys: 'Shift+drag', description: "Corner handle: resize a picture or text freely; keep a shape's proportions" },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo' },
     { keys: 'Delete / Backspace', description: 'Remove selected layer' },
     { keys: '?', description: 'Toggle this overlay' }

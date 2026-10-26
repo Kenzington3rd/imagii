@@ -6009,7 +6009,7 @@ IMG-PREC.
   FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** in progress (round 89: Track C landed — see its Done entry; Tracks A and B in expedite)
+- **Status:** in progress (round 89: Tracks C and B landed — see their Done entries; Track A sent back once, in rework)
 
 ---
 
@@ -6523,6 +6523,60 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 89, Track B — T-140 items 2-5, landed in the commit that carries
+this entry, merged onto Track C (ed96e14). Worked by one Sonnet in a
+fresh clone of 9a5fe93 (resumed once after a container restart; the
+audit found no file at a mutant's sha). The fixes: "+ Add text"
+places a word sized, placed and inked for the open document - one
+pure rule in `@shared/newText` (32 px per 800 px of the shorter side,
+a 20 px floor, never larger than the document; `placementFor`'s
+margin rule on the word's estimated box; the token ink with the better
+WCAG contrast, a transparent document counting as the dark workspace)
+behind `textLayerFor(doc)`; a corner drag keeps a picture's and a
+word's ratio (`keepsRatioOnCornerDrag`), with Shift freeing it - the
+ticket assumed Konva's Shift frees a kept ratio, the worker found its
+default `shiftBehavior` is `keepRatio || shiftKey` and set `inverted`
+for those layers, so shapes keep their old Shift; removing a
+template's last layer leaves the default blank document (undo brings
+the template back with its layer), so "start blank" is blank; and the
+studio fits 1024x640 (the canvas column `min-w-0`, one
+`CANVAS_MIN_H` = 240 for the box and the ResizeObserver floor, the
+root `overflow-auto` like its siblings), with an `expectInViewport`
+layout helper that measures without a click. 52 ledger mutations, all
+killed on the first run and restored byte-identical; 30 reds. The
+worker's own slip (a replace in LESSONS_LEARNED that ate ~165 lines,
+caught by docClaims and rebuilt from the base) was checked by the
+expediter: the file's diff is 41 insertions and no deletions.
+Expedited personally: integrity (no Track A or C file touched;
+hotkeyTable and docClaims rows edited, disclosed), verify x2
+(194/5431), test:media on 7.0.2 (370 passed | 13 skipped of 383; no
+ffmpeg command changed), FULL Playwright 482 of 483 - my run was cut
+by a background time limit at test 479 and finished in two pieces:
+the 4 unrun tests passed, and the one failure (home-chrome "T-124 (5)
+a damaged autosave is announced at launch", 31.5 s, a file and a flow
+this track does not touch; green in the worker's full run) passed 5
+of 5 standalone - a load flake, recorded here and watched for in the
+merged run; one independent mutation at a seam no ledger row names
+(the Transformer's ratio follows the FIRST layer instead of the
+selected one → the T-140 (3) text-and-rectangle case red; the unit
+suite cannot see it), restored byte-identical, sha256 verified.
+Merged by structure onto ed96e14 (rehearsed in a scratch clone):
+three shared docs conflicted - LESSONS (B's entry on top, newest
+first), TESTING and the coverage ledger (each track's appended block,
+C's first) - and a line-level proof over all five files both tracks
+touched showed neither side lost a line (the only delta is one blank
+line at TESTING's end, removed); all 12 Track-B-only files are
+byte-identical to the expedited clone except layout.ts, whose one
+blank line at the end is removed; the STYLE_GUIDE bullet the worker
+proposed (its file was Track C's) is added beside T-139 (2). The
+rehearsed tree verified at 194 files / 5480 tests, the two tracks'
+counts summed exactly; FULL Playwright on the merged tree 494/494 (58.1 min; the T-124 (5) flake did not recur).
+Found, not fixed (the worker's list, in the IC): the word's width
+estimate is a fixed 0.6 em; the "Shift+drag" row's pin reads source
+text (the e2e carries the behavior); the mood board's "→ Canvas" into
+an empty canvas lands on the blank page through the same guard and has
+no e2e of its own.
 
 Round 89, Track C — T-140 items 6-10 and the two non-counted
 STYLE_GUIDE fixes, landed in the commit that carries this entry, the

@@ -81,7 +81,9 @@ export function ImageStudio(): JSX.Element {
   }, [selectedLayerId, removeLayer, setTool])
 
   return (
-    <div className="h-full overflow-hidden px-6 py-5 flex flex-col gap-4">
+    // T-140 (5): `overflow-auto` like the four sibling studios, the backstop: the canvas gives way first (it flexes down to its floor), and a window short enough that the
+    // rest still does not fit scrolls instead of clipping the Export bar where the wheel cannot reach it.
+    <div className="h-full overflow-auto px-6 py-5 flex flex-col gap-4">
       <header className="flex items-center justify-between flex-shrink-0">
         <div>
           <HomeLink />
@@ -117,7 +119,9 @@ export function ImageStudio(): JSX.Element {
           <ImportPanel />
           <Toolbar />
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_clamp(260px,16%,380px)] gap-4 min-h-0">
-            <div className="flex flex-col gap-3 min-h-0">
+            {/* min-w-0: the Stage inside is a fixed-pixel box fitted to this column, and a grid item's automatic minimum is its content's width - without it a wide
+                document (the 1200x480 banner) held the 1fr track at the Stage's width and pushed the Layers card off the right edge (T-140 (5)). */}
+            <div className="flex flex-col gap-3 min-h-0 min-w-0">
               <Canvas />
               <ExportDialog />
             </div>

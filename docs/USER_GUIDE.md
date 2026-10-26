@@ -560,8 +560,19 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    the BRB screen, "STARTING SOON", "THANKS FOR HANGING OUT" — export as they
    are. A hint's words are drawn dimmed on the canvas, so what you see tells you
    what the file won't have. Shapes, bars and borders are part of the design and always export.
+   **Or start blank** is always the blank page, 1200×800 and white, even after you have removed
+   every layer of a template (Undo brings the template back).
 2. Edit with the toolbar: **Select**, **Rectangle**, **Ellipse**, and (under
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
+   **+ Add text** (and **Start with text**) puts the word "Text" wholly inside the canvas, 60 px in
+   from the corner (nearer the corner on a canvas too small for that). It is sized to the canvas
+   (32 px on the blank page, 43 px on a 1920×1080 overlay, 86 px on a 4K one, and never under
+   20 px, so it fits the 112×112 emote) and colored to be read against it: dark on a white page,
+   light on a dark or transparent one. Change the words, size and color in **Properties**.
+   To resize a layer, drag a corner handle. A picture or text keeps its proportions, so a logo
+   is never stretched by accident; hold **Shift** while you drag to stretch it freely. A
+   rectangle or ellipse stretches, and Shift keeps its proportions instead. The handles on the
+   sides always stretch.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and remove them. The **Properties** panel edits the selected layer. A picture
    you import is placed at most 800 px on its long side, and always inside the canvas

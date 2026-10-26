@@ -1,7 +1,7 @@
 import { useEffect, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
-import { makeImageLayer, makeTextLayer, useCanvasStore } from './state/canvasStore'
+import { makeImageLayer, textLayerFor, useCanvasStore } from './state/canvasStore'
 import { TemplatesDialog } from './TemplatesDialog'
 import {
   getTemplatesByCategory,
@@ -119,8 +119,9 @@ export function ImportPanel(): JSX.Element {
     input.click()
   }
 
+  // T-140 (2): the word is sized, placed and inked for the document that is open when the button is pressed (it was a fixed (120, 120) in the app's near-black).
   function addText(): void {
-    addLayer(makeTextLayer(120, 120))
+    addLayer(textLayerFor(useCanvasStore.getState().doc))
   }
 
   if (layers.length > 0) {

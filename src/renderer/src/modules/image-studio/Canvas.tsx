@@ -23,6 +23,7 @@ import {
   type TextLayer
 } from '@shared/canvas'
 import {
+  keepsRatioOnCornerDrag,
   makeEllipseLayer,
   makeLineLayer,
   makeRectLayer,
@@ -110,6 +111,15 @@ function GridOverlay({
   return <Group>{lines}</Group>
 }
 
+/**
+ * The least the box that holds the stage is (px), and the floor the stage is fitted to: the box's `minHeight` and the ResizeObserver's floor are these two numbers, so
+ * the Stage is never taller than the box that clips it. T-140 (5): the height was 400 / 300, which at the 1024x640 minimum window pushed the Export bar below the
+ * window (y = 640-694) - the box is what flexes (it takes whatever the column leaves), so its floor is the least a drawing is worth looking at, not a share of a
+ * window the app cannot be dragged smaller than: the room left at 1024x640 is 326 px (291 on the emote, whose bar wraps).
+ */
+const CANVAS_MIN_W = 400
+const CANVAS_MIN_H = 240
+
 export function Canvas(): JSX.Element {
   const doc = useCanvasStore((s) => s.doc)
   const tool = useCanvasStore((s) => s.tool)
@@ -120,6 +130,9 @@ export function Canvas(): JSX.Element {
   const selectLayer = useCanvasStore((s) => s.selectLayer)
   const addLayer = useCanvasStore((s) => s.addLayer)
   const updateLayer = useCanvasStore((s) => s.updateLayer)
+
+  const selectedType = doc.layers.find((l) => l.id === selectedLayerId)?.type
+  const selectedKeepsRatio = selectedType !== undefined && keepsRatioOnCornerDrag(selectedType)
 
   const stageRef = useRef<Konva.Stage>(null)
   const transformerRef = useRef<Konva.Transformer>(null)
@@ -139,7 +152,7 @@ export function Canvas(): JSX.Element {
     if (!containerRef.current) return
     function update(): void {
       const rect = containerRef.current?.getBoundingClientRect()
-      if (rect) setContainerSize({ w: Math.max(400, rect.width), h: Math.max(300, rect.height) })
+      if (rect) setContainerSize({ w: Math.max(CANVAS_MIN_W, rect.width), h: Math.max(CANVAS_MIN_H, rect.height) })
     }
     update()
     const ro = new ResizeObserver(update)
@@ -413,7 +426,11 @@ export function Canvas(): JSX.Element {
   })
 
   return (
-    <div ref={containerRef} className="relative flex-1 min-h-[400px] bg-bg-base/60 rounded-lg overflow-hidden flex items-center justify-center">
+    <div
+      ref={containerRef}
+      className="relative flex-1 bg-bg-base/60 rounded-lg overflow-hidden flex items-center justify-center"
+      style={{ minHeight: CANVAS_MIN_H }}
+    >
       <Stage
         ref={stageRef}
         width={stageWidth}
@@ -513,7 +530,10 @@ export function Canvas(): JSX.Element {
             <Transformer
               ref={transformerRef}
               rotateEnabled
-              keepRatio={false}
+              // T-140 (3): a corner drag keeps a picture's and a word's proportions (the export carries whatever scaleX / scaleY they end at), and Shift - `inverted` -
+              // frees it. A shape stretches, and Shift keeps ITS ratio (Konva's `default`, which is what it always did). The side handles stretch every layer.
+              keepRatio={selectedKeepsRatio}
+              shiftBehavior={selectedKeepsRatio ? 'inverted' : 'default'}
               // A box may not be shrunk below 5 px on a side. T-124 (11): only a SHRINK is refused. The rule used to refuse any box
               // under 5 px, and a straight line is as thin as its stroke (about 2 px at the usual zoom), so every move of its handles
               // (stretching it, rotating it) came back as "no change": the first horizontal line the Line tool allowed could not be
