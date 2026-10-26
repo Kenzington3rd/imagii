@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import type { DiaryEntry } from '@shared/postingDiary'
 import { DIARY_LEGACY_KEY, DIARY_MAX_ENTRIES, migrateDiary } from '@shared/postingDiary'
 import { PanelHeader } from '../../components/PanelHeader'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 const HASHTAG_TEMPLATES: Record<string, string[]> = {
   twitch_clip: ['#Twitch', '#TwitchClip', '#StreamHighlight', '#GamingClip'],
@@ -81,6 +82,12 @@ export function fillTitle(pattern: string, verb: TitleVerb, subject: string, n: 
 
 interface PostChecklistProps {}
 
+/**
+ * Where a post can be logged: the five the Clip Kit writes a file for (`*_youtube.mp4`, `*_reels.mp4`, `*_tiktok.mp4`,
+ * `*_twitter.mp4`, `*_facebook.mp4`), then the two a stream goes to. T-123 (17): Facebook had a file in every kit and no chip here.
+ */
+const POSTING_PLATFORMS = ['YouTube', 'Reels', 'TikTok', 'X', 'Facebook', 'Twitch', 'Discord']
+
 export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
   const [diary, setDiary] = useState<DiaryEntry[]>([])
   const [outputName, setOutputName] = useState('')
@@ -130,7 +137,10 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     })
   }
 
-  function add(): void {
+  function add(e: { detail: number }): void {
+    // T-139 (9): the first press clears the form, so the second press of a double-click found no name and raised the red "Add a clip name first" right after
+    // "Added to your posting log". A repeat is not another entry (T-131 (4): the same rule as the Fix wizard's answers; a keyboard click has no count and is not touched).
+    if (isRepeatPress(e)) return
     if (!outputName.trim()) {
       toast.error('Add a clip name first')
       return
@@ -188,6 +198,9 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
     save(diary.filter((e) => e.id !== entry.id))
   }
 
+  // T-128 (1): the pack as one line, for the preview (cut with an ellipsis), its tooltip and the Copy button.
+  const hashtagLine = (HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' ')
+
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="clipboard">Posting helpers</PanelHeader>
@@ -228,12 +241,12 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
           ))}
         </select>
         <div className="flex items-center gap-2 text-xs">
-          <code className="bg-bg-hover rounded px-2 py-1 flex-1 truncate font-mono">
-            {(HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' ')}
+          <code className="bg-bg-hover rounded px-2 py-1 flex-1 truncate font-mono" title={hashtagLine}>
+            {hashtagLine}
           </code>
           <button
             className="text-accent hover:underline"
-            onClick={() => copy((HASHTAG_TEMPLATES[hashtagPick] ?? []).join(' '))}
+            onClick={() => copy(hashtagLine)}
           >
             Copy
           </button>
@@ -251,10 +264,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
             className="bg-bg-base rounded px-2 py-1 text-xs"
           />
           <div className="flex items-center gap-1.5 flex-wrap">
-            {['YouTube', 'Reels', 'TikTok', 'X', 'Twitch', 'Discord'].map((p) => (
+            {POSTING_PLATFORMS.map((p) => (
               <button
                 key={p}
                 onClick={() => togglePlatform(p)}
+                aria-pressed={platforms.includes(p)}
                 className={`px-2 py-0.5 rounded border text-xs ${
                   platforms.includes(p)
                     ? 'bg-accent text-bg-base border-accent'
@@ -287,7 +301,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
               className="bg-bg-hover rounded px-2 py-1.5 text-xs flex flex-col gap-1"
             >
               <div className="flex items-center gap-2">
-                <span className="font-medium flex-1 truncate">{e.outputName}</span>
+                <span className="font-medium flex-1 truncate" title={e.outputName}>{e.outputName}</span>
                 <span className="text-ink-dim">{e.platforms.join(' · ')}</span>
                 <button
                   onClick={() => deleteEntry(e)}
@@ -298,8 +312,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                   ✕
                 </button>
               </div>
-              {e.notes ? <div className="text-ink-muted">{e.notes}</div> : null}
-              <div className="flex items-center gap-1 text-xs">
+              {/* T-123 (26): `break-words` so a link pasted into the notes wraps instead of widening the list. */}
+              {e.notes ? <div className="text-ink-muted break-words">{e.notes}</div> : null}
+              {/* T-123 (26): the row WRAPS. Three labels and three w-16 boxes are 337 px and the list is 274 px, so
+                  "comments" (and its box) were pushed off the right edge behind the list's hidden horizontal scrollbar. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 {(['views', 'likes', 'comments'] as const).map((f) => (
                   <label key={f} className="flex items-center gap-1">
                     <span className="text-ink-dim">{f}</span>

@@ -1,5 +1,6 @@
 import { assert } from './assert'
 import type { ChatMessage } from './chatLog'
+import { clipSpeed, type Clip } from './clip'
 
 /**
  * Phase 4B: unified highlight scoring. Combines:
@@ -245,6 +246,73 @@ export interface HookScore {
   tier: HookTier
   reasons: string[]
   audioEnergyDb: number
+}
+
+/** How much of a clip's OUTPUT the hook badge is about: the first three seconds a viewer sees. */
+export const HOOK_OUTPUT_SEC = 3
+
+/**
+ * The shortest and longest stretch of the SOURCE the hook analysis will listen to, in
+ * seconds — the gate in `video:analyzeClipHook` (main) takes exactly this range, and
+ * the badge asks only for windows inside it (T-113). The minimum is also the shortest
+ * OUTPUT a hook is rated for: under half a second there is nothing to hear.
+ */
+export const HOOK_MIN_SEC = 0.5
+export const HOOK_MAX_SOURCE_SEC = 30
+
+/**
+ * The part of the source the hook badge listens to (T-112). A viewer's first
+ * `HOOK_OUTPUT_SEC` are `HOOK_OUTPUT_SEC * speed` seconds of the source (output
+ * time is source time over the speed — `clipSpeed`, the one reading of it), cut
+ * short at the clip's own end so it never scores the loudness of a part of the
+ * video the clip does not contain. `outputSec` is what that window comes to as
+ * the viewer sees it (3, unless the clip is shorter).
+ *
+ * `null` when the clip has no hook to rate (T-113): its window, in source seconds or
+ * as the viewer sees it, is under `HOOK_MIN_SEC`. The window used to floor at 0.1 s,
+ * and main refuses anything under 0.5 s — so a clip of 0.3 s showed a "Hook…" badge
+ * that died silently on the refusal. No window means no row, and nothing is asked.
+ */
+export function hookWindow(
+  clip: Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier'>
+): { sourceSec: number; outputSec: number } | null {
+  const speed = clipSpeed(clip)
+  const length = Math.max(0, clip.endSec - clip.startSec)
+  const sourceSec = Math.min(HOOK_OUTPUT_SEC * speed, length, HOOK_MAX_SOURCE_SEC)
+  const outputSec = sourceSec / speed
+  return sourceSec >= HOOK_MIN_SEC && outputSec >= HOOK_MIN_SEC ? { sourceSec, outputSec } : null
+}
+
+/**
+ * How long the hook badge waits, after the clip's start or window last changed, before it asks
+ * (T-115). A drag of the start handle changes `startSec` on every mousemove and the speed slider
+ * changes the window on every 0.05 tick, and each ask kills the running ffmpeg in main and starts
+ * another, so the badge asks once the numbers have been still for this long - on the EXACT start
+ * and window, so what it shows after the drag is what the trimmed clip is. (T-113 and T-114 keyed
+ * the effect on whole seconds instead, which stopped the respawning and left the badge describing
+ * a start up to half a second off until the next whole second: the upgrade this replaces.) A
+ * quarter second is past the gap between a drag's mousemoves (~16 ms) and short enough that the
+ * badge settles before the person has finished looking at the timeline. It is the wait for a
+ * CHANGE: a badge's first ask (a clip selected, a studio re-entered) goes out at once.
+ */
+export const HOOK_DEBOUNCE_MS = 250
+
+/**
+ * What the hook badge asks main for: the exact start and window, or `null` when either is not
+ * something main takes (T-115) - a start that is NaN, infinite or negative, a window under
+ * `HOOK_MIN_SEC` or over `HOOK_MAX_SOURCE_SEC`. `video:analyzeClipHook` refuses those, and a
+ * refusal the badge swallows is a spinner for nothing; no ask means no badge. The numbers are
+ * passed through untouched: the badge is about the window the clip actually has.
+ */
+export function hookAsk(
+  startSec: number,
+  sourceSec: number
+): { startSec: number; durationSec: number } | null {
+  if (!Number.isFinite(startSec) || startSec < 0) return null
+  if (!Number.isFinite(sourceSec) || sourceSec < HOOK_MIN_SEC || sourceSec > HOOK_MAX_SOURCE_SEC) {
+    return null
+  }
+  return { startSec, durationSec: sourceSec }
 }
 
 export function scoreHookQuality(audioEnergyDb: number): HookScore {

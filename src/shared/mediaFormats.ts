@@ -110,7 +110,52 @@ export function audioNeedsExtraction(name: string): boolean {
   return isVideoFilename(name) || hasExtension(name, EXTRACT_AUDIO_EXTENSIONS)
 }
 
+/**
+ * What the Player says when it cannot draw a video's picture (T-135 (2)). The preview is Chromium's `<video>`, which decodes what Chromium has a
+ * decoder for (H.264, VP9, AV1); ProRes and 10-bit HEVC probe fine, load ("Video loaded"), play their sound and draw nothing, with no error to hear.
+ * Everything else reads the file with ffmpeg, so the sentence says what still works (the person's next worry is whether the file is lost) and does
+ * not blame the file. The Player offers a preview copy beside it.
+ */
+export const PREVIEW_UNAVAILABLE_MESSAGE =
+  "imagii can't preview this video's picture format — trimming, scanning and export still work."
+
+/**
+ * What the Output preview says in place of "Live snapshot at the playhead position..." while the Player cannot draw the video's picture (T-136 (6)).
+ * The preview mirrors the Player's element onto a canvas, so the same video that leaves the Player black leaves this box black; a caption promising a
+ * live snapshot under a black box is the silent dead end T-135 (2) fixed in the Player. One line: what the box shows, why, and that the export is not
+ * affected. The Player's note beside the picture is the one that offers the preview copy.
+ */
+export const OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE =
+  "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
+
+/**
+ * The toast when a preview copy finishes for a video that is no longer the open one (T-137 (5)). The copy is made for ONE video; if that file is not
+ * the open one when the conversion ends, nothing is stored (`setPreviewCopyFor`) - and that is true of two different things the person did: they
+ * CLOSED the video (nothing replaced it) or opened ANOTHER one. The sentence said "because you opened another video", which was false after a plain
+ * Close (`staleCaptionsMessage` documents the same wording error for the transcript), so it says what is true of both and names the file.
+ */
+export function previewCopySkippedMessage(fileName: string): string {
+  return `Skipped the preview copy for ${fileName} because the video was closed or replaced while the copy was being made`
+}
+
 /** "MP4, MOV, AVI" — uppercase hint copy for drop zones, from one list. */
 export function formatHint(extensions: readonly string[]): string {
   return extensions.map((e) => e.toUpperCase()).join(', ')
+}
+
+/**
+ * The video codecs (ffprobe's `codec_name`) an MP4 can carry as they are
+ * (T-111): what a stream-copy mux into `.mp4` may be handed. Anything else —
+ * wmv2 from a .wmv, vp8/vp9 from a .webm, theora, mpeg2video, prores, dv — makes
+ * `-c:v copy` into an mp4 fail ("Could not find tag for codec wmv2 in stream
+ * #0, codec not currently supported in container") or write a file that no
+ * player opens, so those pictures are re-encoded instead. VP9 is on the wrong
+ * side of the line on purpose: ffmpeg will write it into an MP4, and half the
+ * players a streamer's audience owns will not play it.
+ */
+export const MP4_COPYABLE_VIDEO_CODECS: readonly string[] = ['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg']
+
+/** True when a picture in `codec` can be stream-copied into an mp4. */
+export function canStreamCopyIntoMp4(codec: string | null | undefined): boolean {
+  return typeof codec === 'string' && MP4_COPYABLE_VIDEO_CODECS.includes(codec.toLowerCase())
 }

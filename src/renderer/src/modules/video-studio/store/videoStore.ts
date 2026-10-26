@@ -2,15 +2,47 @@ import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { VideoProbe } from '@shared/api'
-import { DEFAULT_COLOR_GRADE } from '@shared/clip'
+import { DEFAULT_COLOR_GRADE, clipSpeed } from '@shared/clip'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
+import { newTextOverlay, normalizeOverlayPatch } from '@shared/textOverlay'
+import type { CaptionSegment } from '@shared/captions'
+import type { ChatPeak } from '@shared/chatPeaks'
+import type { AudioCandidate } from '@shared/highlights'
+import { countOf } from '@shared/plural'
+import { NON_TEXT_INPUT_TYPES } from '../../../lib/keyOwnership'
 
 export interface VideoSource {
+  /** The file the app plays and ffmpeg reads — for a converted import, the mp4 working copy. */
   filePath: string
+  /** What the person calls it: the name of the file they dropped, not of the working copy. */
   fileName: string
   url: string
   probe: VideoProbe
+  /** T-107: the ORIGINAL file `filePath` was converted from on import, when it was. The
+   *  working copy lives under the OS temp folder, which a later launch prunes, so a saved
+   *  project stores this path instead and converts again on open. */
+  convertedFrom?: string
 }
+
+/**
+ * What the panels derive from the open video (T-135 (4)): the loud moments a scan found, the chat logs pasted into the two finders and the spikes
+ * found in one, and the transcript the Captions panel previews. They were each panel's `useState`, so leaving the studio - or pressing Clean audio,
+ * which navigates - threw away a scan that took minutes. They belong to the open video: `loadSource` and `clearSource` empty them, which is exactly
+ * the lifetime they need (a different video starts clean, the same one keeps them across any number of visits), so no panel resets them on mount.
+ */
+export interface DerivedResults {
+  /** The highlight scan's candidates; null until a scan has finished for this video. */
+  scanCandidates: AudioCandidate[] | null
+  /** The chat log pasted into the highlight finder. */
+  highlightChat: string
+  /** The chat log pasted into the chat spike finder, and the spikes found in it (null: not analyzed). */
+  spikeChat: string
+  spikes: ChatPeak[] | null
+  /** The transcript the Captions panel previews (the file itself is `srtPath`); null until a transcription finished for this video. */
+  transcript: CaptionSegment[] | null
+}
+
+const EMPTY_DERIVED: DerivedResults = { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null }
 
 /** One undo step: the clip-editing state as it was before a mutation.
  *  selectedClipId travels with the clips so undoing a removal also
@@ -26,9 +58,49 @@ interface History {
   future: ClipsSnapshot[]
 }
 
+/**
+ * What the Player lends the rest of the studio (T-120), registered while it is mounted. The Player owns the
+ * `<video>`; the Timeline's keys need two things only the element knows.
+ */
+export interface PlayerTransport {
+  /**
+   * The element's own `currentTime`, in seconds, or null when there is no element. The store's `currentTime`
+   * is written on `timeupdate` (about every 250 ms during playback) and on seeks, so a marker set from it
+   * during playback lands up to a quarter second behind the frame on screen; the Player's I / O read the
+   * element, and the Timeline's now read it through this.
+   */
+  readTime: () => number | null
+  /** Play if paused, pause if playing: the Player's own toggle, so the two surfaces cannot disagree. */
+  togglePlay: () => void
+}
+
+/**
+ * The playhead as the picture shows it right now (T-120): the Player's element when one is mounted, else the
+ * store's `currentTime`, the number the track draws. Both Timeline markers (I / O) read it.
+ */
+export function playheadNow(state: Pick<VideoStudioState, 'transport' | 'currentTime'>): number {
+  return state.transport?.readTime() ?? state.currentTime
+}
+
 interface VideoStudioState {
   source: VideoSource | null
   currentTime: number
+  /** The Player's handle on its `<video>`, or null when no Player is mounted (T-120). */
+  transport: PlayerTransport | null
+  /** T-135 (2): the address of a playable COPY of the open video, when the preview cannot decode its picture (ProRes, 10-bit HEVC) and the person
+   *  asked for one; null while the element plays the source itself. It replaces only what the `<video>` plays: `source` (the object, the path every
+   *  export reads, the probe) is untouched, so the saved project and the exports stay on the original. Cleared with the source. */
+  previewUrl: string | null
+  /** T-136 (6): the Player's verdict that the preview cannot draw the open video's picture (ProRes, 10-bit HEVC: see `PREVIEW_UNAVAILABLE_MESSAGE`).
+   *  The Player owns the `<video>` and hears the element; the Output preview, which mirrors that element onto a canvas, needs the same fact to say why
+   *  its canvas is black instead of captioning a black box "Live snapshot". Reset by `loadSource` / `clearSource`; the Player sets it as the element speaks. */
+  noPicture: boolean
+  /** T-136 (2): where the playhead was when `previewUrl` was swapped in. The new element starts at 0 and its `loadedmetadata` puts it back - and the
+   *  Player that hears that event can be a different instance from the one that was mounted when the copy was asked for, so the position cannot be a
+   *  ref in the component. Taken (and emptied) by the first element that reads it. */
+  previewResumeAt: number | null
+  /** T-135 (4): scan results, pasted chat logs and spikes, and the transcript preview - kept with the open video (see `DerivedResults`). */
+  derived: DerivedResults
   /** The media element's OWN duration, published by the Player on
    *  `durationchange`. ffprobe reports the container's rounded number and the
    *  decoder has the real one (the E2E fixture probes 2.000 s and decodes
@@ -60,31 +132,49 @@ interface VideoStudioState {
    *  actions, undo/redo and `endGesture` reset it to null. */
   historyKey: string | null
 
-  loadSource: (filePath: string) => Promise<void>
+  /** `convertedFrom`: the original of a file the importer converted (T-107). */
+  loadSource: (filePath: string, convertedFrom?: string) => Promise<void>
   clearSource: () => void
   setCurrentTime: (t: number) => void
+  /** The Player registers itself on mount and passes null on unmount (T-120). */
+  registerTransport: (transport: PlayerTransport | null) => void
   /** Trust boundary: the element reports NaN before metadata and Infinity for
    *  a live stream, and neither is a duration. Both land as null. */
   setMediaDuration: (seconds: number) => void
   requestSeek: (seconds: number) => void
   setSrtPath: (p: string | null) => void
+  /** T-112 — apply a transcription's SRT to the video it was made from, and only
+   *  to it. `sourcePath` is the file the job started on; if the studio holds
+   *  anything else by the time the job finishes (another video opened, or none)
+   *  nothing is stored and the answer is false. `null` forgets the transcript (T-128 (3): "Clear
+   *  saved transcripts" deleted the file), under the same rule. */
+  setSrtPathFor: (sourcePath: string, srtPath: string | null) => boolean
+  /** T-135 (2) - play a converted copy of the open video in the preview. Like `setSrtPathFor`, the copy belongs to the video it was made for: if
+   *  that file is no longer the open one nothing is stored and the answer is false. `source` is not replaced (see `previewUrl`). */
+  setPreviewCopyFor: (sourcePath: string, copyPath: string, resumeAt?: number) => boolean
+  /** T-136 (6): the Player reports whether the element can draw the picture. */
+  setNoPicture: (noPicture: boolean) => void
+  /** T-136 (2): the playhead to put the new preview element back at - once. Null when nothing is waiting. */
+  takePreviewResume: () => number | null
+  /** T-135 (4) - patch the derived results of the open video (typing in a chat box). */
+  setDerived: (patch: Partial<DerivedResults>) => void
+  /** T-135 (4) - patch them with a RESULT, for the video the job started on and only that one (T-112's rule): false, and nothing stored, when it is no
+   *  longer the open video. A scan that finishes after the video was replaced is for a video that is gone. */
+  setDerivedFor: (sourcePath: string, patch: Partial<DerivedResults>) => boolean
 
   addClip: () => void
-  /** True when a clip was actually added, false when the range was refused
-   *  (no source, non-finite, reversed, or collapsed after clamping). The
-   *  panels that call it report success from this answer rather than
-   *  assuming one — a refusal used to be silent while the caller toasted
-   *  "Clip added" anyway (T-48). */
-  addClipFromRange: (name: string, startSec: number, endSec: number) => boolean
-  /** T-94 — the highlight scanners' add. Same range rules and the same one
-   *  undo step as `addClipFromRange`, plus one more thing the scanners are
-   *  entitled to: if the untouched whole-video clip that `loadSource` created
-   *  is still in the list, it steps aside IN THE SAME ACTION. Someone who
-   *  scans a VOD for highlights and presses "+ Clip" wants those excerpts, not
-   *  the 3-hour original re-encoded beside them in every export. The answer
-   *  says which of the three things happened so the caller can tell the user:
-   *  'refused' (nothing changed), 'added', or 'added-dropped-whole-video'. One
-   *  Ctrl+Z restores the whole-video clip and removes the highlight together. */
+  /** The ONE add-a-clip-from-a-range action (T-101 deleted its manual twin,
+   *  `addClipFromRange`, which nothing in the renderer ever called).
+   *
+   *  T-94 — the highlight scanners' add. If the untouched whole-video clip
+   *  that `loadSource` created is still in the list, it steps aside IN THE SAME
+   *  ACTION. Someone who scans a VOD for highlights and presses "+ Clip" wants
+   *  those excerpts, not the 3-hour original re-encoded beside them in every
+   *  export. The answer says which of the three things happened so the caller
+   *  can tell the user: 'refused' (nothing changed — no source, non-finite,
+   *  reversed, or collapsed after clamping; the caller must not report success
+   *  for it, T-48), 'added', or 'added-dropped-whole-video'. One Ctrl+Z restores
+   *  the whole-video clip and removes the highlight together. */
   addScannedClip: (name: string, startSec: number, endSec: number) => ScannedClipResult
   removeClip: (id: string) => void
   selectClip: (id: string) => void
@@ -93,7 +183,6 @@ interface VideoStudioState {
   setClipStart: (id: string, startSec: number) => void
   setClipEnd: (id: string, endSec: number) => void
   togglePreset: (id: string, preset: PlatformId) => void
-  setSelectedPresets: (id: string, presets: PlatformId[]) => void
   /** T-50 — queue / unqueue a saved custom preset on one clip. Mirrors
    *  `togglePreset`; the two lists are separate because one holds platform
    *  ids and the other holds preset ids that only exist on disk. */
@@ -171,6 +260,36 @@ function makeDefaultClip(duration: number, index: number): Clip {
   }
 }
 
+/**
+ * T-119: the question asked before the video being edited goes away, or null when there is nothing to
+ * lose. Loading a source always makes at least one clip, so "nothing loaded" is zero clips. Close asks it
+ * (`'close'`, since round 18); Record's "Edit in Video Studio" asks it before it replaces the open video
+ * (`'replace'`: nothing is being closed when a button on a recording loads another file, T-113's
+ * lead-in for Clean audio). The same list in both so neither studio can say less than the other.
+ */
+export function videoDiscardMessage(clipCount: number, lead: 'close' | 'replace' = 'close'): string | null {
+  if (clipCount <= 0) return null
+  const leadIn = lead === 'close' ? 'Close this video?' : "Replace the video you're editing?"
+  // T-120: "1 clip and their edits" read wrong at one. The possessive agrees with the count, like the noun.
+  return `${leadIn} ${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits will be discarded.`
+}
+
+/** What the panels that need a sound track say when the loaded video has none (T-112). */
+export const NO_SOUND_MESSAGE = 'This video has no sound.'
+
+/**
+ * T-112 — the loaded video has no audio stream, so cleaning its audio,
+ * transcribing it and scanning it for loud moments have nothing to work on. The
+ * probe says so with `audioCodec: null`. No video open is not "no sound": the
+ * panels that ask are not on screen then.
+ */
+export function videoHasNoSound(source: Pick<VideoSource, 'probe'> | null): boolean {
+  return source !== null && source.probe.audioCodec === null
+}
+
+/** The shortest clip a scanner's add makes (s): a range with less than this left in the video is refused (T-131 (3)). */
+const MIN_SCANNED_CLIP_SEC = 0.1
+
 /** What `addScannedClip` did (T-94). */
 export type ScannedClipResult = 'refused' | 'added' | 'added-dropped-whole-video'
 
@@ -209,7 +328,7 @@ export function isPristineWholeVideoClip(clip: Clip, durationSec: number): boole
     !clip.cropRect &&
     clip.textOverlays.length === 0 &&
     gradeUntouched &&
-    (clip.speedMultiplier === undefined || clip.speedMultiplier === 1) &&
+    clipSpeed(clip) === 1 &&
     !clip.autoZoom &&
     !clip.hypeShake &&
     clip.selectedPresets.length === 1 &&
@@ -219,6 +338,17 @@ export function isPristineWholeVideoClip(clip: Clip, durationSec: number): boole
 }
 
 const HISTORY_LIMIT = 50
+
+/**
+ * A new overlay as the store keeps it (T-113): its color run through the same
+ * normalization an edit gets — a name becomes hex, and one that is neither falls
+ * back to the default — and its size clamped, so what is stored is always what
+ * the overlay gates take.
+ */
+function newOverlay(overlay: Omit<TextOverlay, 'id'>): TextOverlay {
+  const base = newTextOverlay(overlay.startSec, overlay.endSec)
+  return { ...base, ...normalizeOverlayPatch(overlay), id: nanoid(8) }
+}
 
 function pushHistory(history: History, snapshot: ClipsSnapshot): History {
   const past = [...history.past, snapshot]
@@ -258,15 +388,9 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     })
   }
 
-  /** The one add-a-clip-from-a-range path: `addClipFromRange` (manual and
-   *  programmatic callers) and `addScannedClip` (the highlight scanners) share
-   *  it, so the guards and the single undo step cannot drift apart. */
-  function appendRange(
-    name: string,
-    startSec: number,
-    endSec: number,
-    retirePristine: boolean
-  ): ScannedClipResult {
+  /** The add-a-clip-from-a-range path behind `addScannedClip`: the guards, the
+   *  clamp and the single undo step live here. */
+  function appendRange(name: string, startSec: number, endSec: number): ScannedClipResult {
     const { source, clips } = get()
     if (!source) return 'refused'
     // Bug-fix (Phase 2.12): callers (auto-highlight finder, chat-spike
@@ -276,13 +400,15 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return 'refused'
     if (endSec <= startSec) return 'refused'
     const duration = source.probe.duration
+    // T-131 (3): a range that begins at the end of the video, or past it, has no picture to hold. Clamping it made a clip that
+    // STARTED at the duration and ended 0.1 s after it (a stale scanner row, a chat log longer than the video), and the panel said
+    // "Clip added". The 0.1 s is the shortest clip this function makes, so a start with less than that left is the same refusal.
+    if (duration - startSec < MIN_SCANNED_CLIP_SEC) return 'refused'
     const safeStart = Math.max(0, Math.min(startSec, duration))
-    const safeEnd = Math.max(safeStart + 0.1, Math.min(endSec, duration))
+    const safeEnd = Math.max(safeStart + MIN_SCANNED_CLIP_SEC, Math.min(endSec, duration))
     const base = makeDefaultClip(duration, clips.length + 1)
     const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
-    const kept = retirePristine
-      ? clips.filter((c) => !isPristineWholeVideoClip(c, duration))
-      : clips
+    const kept = clips.filter((c) => !isPristineWholeVideoClip(c, duration))
     // ONE snapshot of the state before either change: the retirement and the
     // add are a single undo step, so Ctrl+Z puts the whole-video clip back and
     // takes the highlight away together (T-94).
@@ -297,6 +423,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
   return {
     source: null,
     currentTime: 0,
+    transport: null,
     mediaDuration: null,
     seekRequest: null,
     clips: [],
@@ -304,8 +431,12 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     srtPath: null,
     history: EMPTY_HISTORY,
     historyKey: null,
+    previewUrl: null,
+    noPicture: false,
+    previewResumeAt: null,
+    derived: EMPTY_DERIVED,
 
-    loadSource: async (filePath: string) => {
+    loadSource: async (filePath: string, convertedFrom?: string) => {
       const probe = await window.api.video.probe(filePath)
       const url = window.api.video.fileUrl(filePath)
       const initial = makeDefaultClip(probe.duration, 1)
@@ -315,9 +446,12 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({
         source: {
           filePath,
-          fileName: fileNameFromPath(filePath),
+          // T-107: a converted import is named for the file the person dropped,
+          // not for the working copy ("stream-aB3dE5fG.mp4").
+          fileName: fileNameFromPath(convertedFrom ?? filePath),
           url,
-          probe
+          probe,
+          ...(convertedFrom ? { convertedFrom } : {})
         },
         currentTime: 0,
         // A new file's element duration is unknown until its element loads;
@@ -328,6 +462,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         clips: [initial],
         selectedClipId: initial.id,
         srtPath: null,
+        previewUrl: null,
+        noPicture: false,
+        previewResumeAt: null,
+        derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
       })
@@ -341,10 +479,15 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         clips: [],
         selectedClipId: null,
         srtPath: null,
+        previewUrl: null,
+        noPicture: false,
+        previewResumeAt: null,
+        derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
         historyKey: null
       }),
     setCurrentTime: (t: number) => set({ currentTime: t }),
+    registerTransport: (transport) => set({ transport }),
     setMediaDuration: (seconds: number) =>
       set({
         mediaDuration: Number.isFinite(seconds) && seconds > 0 ? seconds : null
@@ -367,6 +510,33 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({ currentTime: target, seekRequest: { seconds: target } })
     },
     setSrtPath: (p: string | null) => set({ srtPath: p }),
+    setSrtPathFor: (sourcePath, srtPath) => {
+      if (get().source?.filePath !== sourcePath) return false
+      set({ srtPath })
+      return true
+    },
+    setDerived: (patch) => set({ derived: { ...get().derived, ...patch } }),
+    setDerivedFor: (sourcePath, patch) => {
+      if (get().source?.filePath !== sourcePath) return false
+      set({ derived: { ...get().derived, ...patch } })
+      return true
+    },
+    setPreviewCopyFor: (sourcePath, copyPath, resumeAt) => {
+      if (get().source?.filePath !== sourcePath) return false
+      set({
+        previewUrl: window.api.video.fileUrl(copyPath),
+        previewResumeAt: resumeAt !== undefined && Number.isFinite(resumeAt) && resumeAt > 0 ? resumeAt : null
+      })
+      return true
+    },
+    setNoPicture: (noPicture) => {
+      if (get().noPicture !== noPicture) set({ noPicture })
+    },
+    takePreviewResume: () => {
+      const at = get().previewResumeAt
+      if (at !== null) set({ previewResumeAt: null })
+      return at
+    },
 
     addClip: () => {
       const { source, clips } = get()
@@ -378,9 +548,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         selectedClipId: next.id
       })
     },
-    addClipFromRange: (name, startSec, endSec) =>
-      appendRange(name, startSec, endSec, false) !== 'refused',
-    addScannedClip: (name, startSec, endSec) => appendRange(name, startSec, endSec, true),
+    addScannedClip: (name, startSec, endSec) => appendRange(name, startSec, endSec),
     removeClip: (id) => {
       const { clips, selectedClipId } = get()
       const filtered = clips.filter((c) => c.id !== id)
@@ -429,11 +597,6 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
           }
         })
       }),
-    setSelectedPresets: (id, presets) =>
-      set({
-        ...snapshot(null),
-        clips: get().clips.map((c) => (c.id === id ? { ...c, selectedPresets: presets } : c))
-      }),
     toggleCustomPreset: (id, presetId) =>
       set({
         ...snapshot(null),
@@ -451,11 +614,16 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     pruneCustomPresets: (existingIds) => {
       const alive = new Set(existingIds)
       const { clips } = get()
-      const next = clips.map((c) =>
-        c.customPresetIds && c.customPresetIds.some((id) => !alive.has(id))
-          ? { ...c, customPresetIds: c.customPresetIds.filter((id) => alive.has(id)) }
-          : c
-      )
+      // T-137 (11): the field is read as `unknown`: the validator drops a non-list, but the prune runs on every visit to Export with whatever the clips
+      // hold, and `.some` on a number threw there. A non-list is removed, and an entry that is not a live string id goes with the ids whose preset is gone.
+      const next = clips.map((c) => {
+        const ids: unknown = c.customPresetIds
+        if (ids === undefined) return c
+        if (!Array.isArray(ids)) return { ...c, customPresetIds: undefined }
+        // `alive` holds strings, so a number, an object or null in the list is not alive and goes with the ids whose preset is gone.
+        const keep = (id: unknown): boolean => alive.has(id as string)
+        return ids.every(keep) ? c : { ...c, customPresetIds: ids.filter(keep) as string[] }
+      })
       // Nothing to drop: return without touching state so the panel's
       // refresh-on-mount cannot churn every subscriber.
       if (next.every((c, i) => c === clips[i])) return
@@ -473,10 +641,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
           c.id === id
             ? {
                 ...c,
-                speedMultiplier:
-                  Number.isFinite(speedMultiplier) && speedMultiplier > 0
-                    ? speedMultiplier
-                    : 1
+                speedMultiplier: clipSpeed({ speedMultiplier })
               }
             : c
         )
@@ -508,11 +673,14 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         ...snapshot(null),
         clips: get().clips.map((c) =>
           c.id === id
-            ? { ...c, textOverlays: [...c.textOverlays, { ...overlay, id: nanoid(8) }] }
+            ? { ...c, textOverlays: [...c.textOverlays, newOverlay(overlay)] }
             : c
         )
       }),
-    updateTextOverlay: (clipId, overlayId, patch) =>
+    updateTextOverlay: (clipId, overlayId, patch) => {
+      // T-113: a color name becomes its hex and a size is clamped HERE, so no
+      // writer can leave an overlay the gates refuse.
+      const safe = normalizeOverlayPatch(patch)
       // Fired per keystroke / per drag-move by the overlay editor — coalesce.
       set({
         ...snapshot(`overlay:${clipId}:${overlayId}`),
@@ -521,12 +689,13 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
             ? {
                 ...c,
                 textOverlays: c.textOverlays.map((o) =>
-                  o.id === overlayId ? { ...o, ...patch } : o
+                  o.id === overlayId ? { ...o, ...safe } : o
                 )
               }
             : c
         )
-      }),
+      })
+    },
     removeTextOverlay: (clipId, overlayId) =>
       set({
         ...snapshot(null),
@@ -578,23 +747,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
   }
 })
 
-/**
- * Input types whose RELEASE is the end of a gesture: a slider let go, a box
- * ticked, a colour picked. Anything else — and anything unrecognized, which
- * is also what the DOM reports for a missing `type` — is text entry, where
- * the release is a caret being placed and the edit is still going.
- */
-const RELEASE_ON_POINTER_UP = new Set([
-  'range',
-  'checkbox',
-  'radio',
-  'color',
-  'button',
-  'submit',
-  'reset',
-  'image',
-  'file'
-])
+// The input types whose RELEASE is the end of a gesture (a slider let go, a box ticked, a colour picked) are
+// `NON_TEXT_INPUT_TYPES`; anything else - and anything unrecognized, which is also what the DOM reports for a
+// missing `type` - is text entry, where the release is a caret being placed and the edit is still going. The
+// list lives in `lib/keyOwnership` since T-123 (2): the shortcuts' guards ask the same question.
 
 /**
  * T-80 — does this pointerup end the coalescing window?
@@ -626,7 +782,7 @@ export function endsGestureOnPointerUp(
   const tag = tagName.toUpperCase()
   if (tag === 'TEXTAREA') return false
   if (tag !== 'INPUT') return true
-  return RELEASE_ON_POINTER_UP.has((inputType ?? 'text').toLowerCase())
+  return NON_TEXT_INPUT_TYPES.has((inputType ?? 'text').toLowerCase())
 }
 
 /**

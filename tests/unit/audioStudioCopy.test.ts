@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT } from './routeSources'
+import { denoiseFilter } from '../../src/main/audio/chain'
 
 /**
  * T-90 — Audio Studio speaks to a streamer, not a broadcast engineer.
@@ -184,5 +185,47 @@ describe('the scan discriminates — it flags the copy that shipped', () => {
       ts.ScriptKind.TSX
     )
     expect(readableStrings(code)).toEqual([])
+  })
+})
+
+/**
+ * T-112 — a number in a hint is a claim about main's chain.
+ *
+ * The Custom noise-floor slider's hint said "-25 ≈ medium preset". `chain.ts` built
+ * Light as `afftdn=nf=-25:nr=12` and Medium as `nf=-30:nr=18`: -25 was LIGHT's floor,
+ * so someone who set -25 to "match medium" got the gentler of the two. The hint is
+ * held to the filters themselves: whichever preset owns the number it names is the
+ * word it uses. (T-125 (3) swapped the floors so the strengths are ordered by what they
+ * remove - Light -35, Medium -30, Aggressive -25 - and the hint moved with the number.)
+ */
+describe('the Custom noise floor hint names the preset that owns its number (T-112)', () => {
+  const source = readFileSync(path.join(AUDIO_DIR, 'CleanupPanel.tsx'), 'utf8')
+  const hint = /label="Noise floor"[\s\S]*?hint="([^"]*)"/.exec(source)?.[1] ?? ''
+
+  it('finds the hint at all', () => {
+    expect(hint).toMatch(/-?\d+/)
+  })
+
+  it('the preset it names is the one whose filter has that floor', () => {
+    const named = /(-\d+)/.exec(hint)?.[1]
+    expect(named, `a floor in "${hint}"`).toBeDefined()
+    const owners = (['light', 'medium', 'aggressive'] as const).filter((strength) =>
+      new RegExp(`nf=${named}:`).test(denoiseFilter(strength) ?? '')
+    )
+    expect(owners, `the preset whose filter has nf=${named}`).toHaveLength(1)
+    const owner = owners[0] as string
+    expect(hint.toLowerCase()).toContain(owner)
+    for (const other of ['light', 'medium', 'aggressive'].filter((x) => x !== owner)) {
+      expect(hint.toLowerCase(), `not ${other}`).not.toContain(other)
+    }
+  })
+
+  it('and today that preset is Light (T-125 (3): the nf axis was swapped, so -35 is Light\'s and -25 is Aggressive\'s)', () => {
+    expect(denoiseFilter('light')).toBe('afftdn=nf=-35:nr=12')
+    expect(denoiseFilter('aggressive')).toBe('afftdn=nf=-25:nr=24')
+    expect(hint).toMatch(/-35/)
+    expect(hint).not.toMatch(/-25/)
+    expect(hint).toMatch(/Light/)
+    expect(hint).not.toMatch(/medium/i)
   })
 })

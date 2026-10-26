@@ -1,4 +1,4 @@
-import { assert } from './assert'
+import { assertAlways } from './assert'
 
 /**
  * Defense-in-depth path validation for paths that originate from
@@ -80,11 +80,34 @@ export function isSafeAbsolutePath(p: unknown): p is string {
 }
 
 /**
- * Throwing variant for places where rejection is unrecoverable.
+ * Throwing variant for places where rejection is unrecoverable. It throws in every
+ * environment (T-113): it gates the paths that reach `ffmpeg -i`, and `assert()`
+ * would only log under NODE_ENV=production.
  */
 export function assertSafeAbsolutePath(p: unknown, name: string): asserts p is string {
-  assert(
+  assertAlways(
     isSafeAbsolutePath(p),
     `${name} must be an absolute path without traversal or reserved device names`
   )
+}
+
+/**
+ * T-117: an id a renderer hands back that main joins into a path (`<userData>/<dir>/<id>.json`)
+ * is held to the alphabet nanoid mints, `[A-Za-z0-9_-]`. A dot, a slash, a backslash, a space or
+ * a newline cannot be in it, so `../config` cannot leave the folder and `x.json` cannot smuggle
+ * an extension. `$` without the `m` flag matches only the very end of the string, so a trailing
+ * newline is refused too. T-128 (6): this is the ONE spelling of the alphabet in `src` - the custom export
+ * presets, the mood boards, the search handlers, the recording sessions and the video job ids import the
+ * constant instead of writing it out again, and a unit pin fails on a second copy. The pattern has no `g` or
+ * `y` flag, so `test()` keeps no state between calls.
+ */
+export const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
+
+export function isSafeId(id: unknown): id is string {
+  return typeof id === 'string' && SAFE_ID_RE.test(id)
+}
+
+/** Throwing variant (every environment, like `assertSafeAbsolutePath`): the same message the sibling stores use. */
+export function assertSafeId(id: unknown, name: string): asserts id is string {
+  assertAlways(isSafeId(id), `${name} must match nanoid alphabet`)
 }

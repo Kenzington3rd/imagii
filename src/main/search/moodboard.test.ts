@@ -29,7 +29,28 @@ vi.mock('electron', () => ({
   }
 }))
 
+// T-139 (1): the failures a disk makes, injected into the real `node:fs/promises` (everything else in it stays real). Off unless a test turns one on.
+const faults = vi.hoisted(() => ({
+  /** A write to a path this accepts puts the first half of its bytes on disk, then fails with ENOSPC. */
+  failWhen: null as ((file: string) => boolean) | null
+}))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    writeFile: async (file: string, data: string | Buffer, ...rest: unknown[]) => {
+      if (faults.failWhen?.(String(file))) {
+        const bytes = Buffer.from(data)
+        await real.writeFile(file, bytes.subarray(0, Math.ceil(bytes.length / 2)))
+        throw Object.assign(new Error('ENOSPC: simulated, write'), { code: 'ENOSPC' })
+      }
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    }
+  }
+})
+
 beforeEach(() => {
+  faults.failWhen = null
   TMP = mkdtempSync(path.join(tmpdir(), 'imagii-moodboard-'))
 })
 afterEach(() => {
@@ -195,6 +216,34 @@ describe('restoreCollections — the single inverse the undo history steps throu
   })
 })
 
+// T-117 (2): the thumbnail gate is the third site that asked `rel.startsWith('..')`. A cached thumbnail
+// whose own name starts with two dots is in the cache; one that is not in the cache is still dropped.
+describe('the thumbnail confinement reads a real parent segment (T-117)', () => {
+  it('keeps a ..-named thumbnail inside the cache and still unsets one outside it', async () => {
+    const m = await import('./moodboard')
+    const inCache = seedThumb('..cover.jpg')
+    const subCache = path.join(thumbsDir(), '..old')
+    mkdirSync(subCache, { recursive: true })
+    const inSub = path.join(subCache, 'a.jpg')
+    writeFileSync(inSub, 'jpeg-bytes')
+    const outside = path.join(TMP, 'cache', 'thumbs-evil', 'secret.jpg')
+    const board = withThumb('dots', 'Dots', inCache)
+    board.items.push(
+      { ...board.items[0]!, id: 'sub', cachedThumbPath: inSub },
+      { ...board.items[0]!, id: 'outside', cachedThumbPath: outside },
+      { ...board.items[0]!, id: 'parent', cachedThumbPath: path.join(TMP, 'cache', 'secret.jpg') }
+    )
+    seedBoard(board)
+
+    const [read] = await m.listCollections()
+    const thumbs = Object.fromEntries((read?.items ?? []).map((i) => [i.id, i.cachedThumbPath]))
+    expect(thumbs.dotsitem, 'a name that starts with two dots is in the cache').toBe(inCache)
+    expect(thumbs.sub, 'so is a folder that does').toBe(inSub)
+    expect(thumbs.outside, 'a sibling that starts with the cache folder\'s name is not').toBeUndefined()
+    expect(thumbs.parent, 'nor is a file one level up').toBeUndefined()
+  })
+})
+
 describe('destructive edits leave the thumbnail cache alone (T-58)', () => {
   it('deleting a board keeps its cached thumbs, so an undo can restore it whole', async () => {
     const m = await import('./moodboard')
@@ -348,3 +397,107 @@ describe('clearThumbCache — the button empties it, whatever it holds (T-29, T-
     await expect(m.clearThumbCache()).resolves.toBeUndefined()
   })
 })
+
+/**
+ * T-139 (1) - a board is the old board until the new one is whole.
+ *
+ * Every board write was `writeFile(board.json, ...)`, which truncates the file first. A write that failed part-way (a full drive) left a truncated
+ * `<id>.json`, and `readCollection` returns null for a file that does not parse, so the board silently dropped out of the list with its items. The five
+ * writes (create, rename, add, remove, and the undo history's restore) go through `writeFileAtomic` now; the failing write is injected into the real
+ * `node:fs/promises` and the functions, the lock and the files are real.
+ */
+describe('a board write that fails leaves the board as it was (T-139 (1))', () => {
+  const onDisk = (id: string): Buffer => readFileSync(path.join(boardsDir(), `${id}.json`))
+  const inBoards = (file: string): boolean => path.dirname(file) === boardsDir()
+  const justTheBoards = (...ids: string[]): string[] => ids.map((id) => `${id}.json`).sort()
+
+  async function boardWithOneItem(): Promise<{ m: typeof import('./moodboard'); id: string; before: Buffer }> {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Keepers')
+    const withOne = await m.addToCollection(board.id, makeResult(1))
+    expect(withOne?.items).toHaveLength(1)
+    return { m, id: board.id, before: onDisk(board.id) }
+  }
+
+  it('rename: the old board is byte-identical, still listed under its old name, and no tmp is left', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    faults.failWhen = inBoards
+    await expect(m.renameCollection(id, 'A much longer name than before '.repeat(20))).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+    faults.failWhen = null
+    const listed = await m.listCollections()
+    expect(listed.map((c) => [c.name, c.items.length])).toEqual([['Keepers', 1]])
+  })
+
+  it('add: the item is not half-saved, the board keeps its first item, and a retry then lands both', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    faults.failWhen = inBoards
+    await expect(m.addToCollection(id, makeResult(2))).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+    faults.failWhen = null
+    const retried = await m.addToCollection(id, makeResult(2))
+    expect(retried?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl, makeResult(2).fullUrl])
+  })
+
+  it('remove: the item stays, byte-identical board, no tmp', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    const itemId = (await m.listCollections())[0]?.items[0]?.id as string
+    faults.failWhen = inBoards
+    await expect(m.removeFromCollection(id, itemId)).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  it('restore (the undo history): a board it could not rewrite is still the board that was there', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    const snapshot = (await m.listCollections()).map((c) => ({ ...c, name: 'Restored name', items: [] }))
+    faults.failWhen = inBoards
+    await expect(m.restoreCollections(snapshot)).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  it('create: a board that could not be written leaves no stub file (the list never has a board it cannot read)', async () => {
+    const m = await import('./moodboard')
+    expect(await m.listCollections()).toEqual([])
+    faults.failWhen = inBoards
+    await expect(m.createCollection('Doomed')).rejects.toThrow('ENOSPC')
+    expect(readdirSync(boardsDir())).toEqual([])
+  })
+
+  it('every write that succeeds is the whole board as JSON, and leaves no tmp beside it', async () => {
+    const { m, id } = await boardWithOneItem()
+    const renamed = await m.renameCollection(id, 'Renamed')
+    expect(onDisk(id).toString('utf8')).toBe(JSON.stringify(renamed, null, 2))
+    const removed = await m.removeFromCollection(id, renamed?.items[0]?.id as string)
+    expect(onDisk(id).toString('utf8')).toBe(JSON.stringify(removed, null, 2))
+    await m.restoreCollections((await m.listCollections()).map((c) => ({ ...c, name: 'Back' })))
+    expect(JSON.parse(onDisk(id).toString('utf8')).name).toBe('Back')
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  // Found by the tests above: `withCollectionLock` ended with `void next.finally(...)`, and a `finally` on a promise that REJECTED is a new promise that rejects
+  // too, with nobody to hear it. Every failed board write was therefore also an unhandled rejection in main (Node's default is to raise it), on top of the
+  // caller's own rejection. The clean-up now settles on either outcome and ends there.
+  it('a failed board write is the caller\'s rejection only: the lock\'s clean-up raises no unhandled one', async () => {
+    const { m, id } = await boardWithOneItem()
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      faults.failWhen = inBoards
+      await expect(m.addToCollection(id, makeResult(2))).rejects.toThrow('ENOSPC')
+      await expect(m.renameCollection(id, 'x'.repeat(2000))).rejects.toThrow('ENOSPC')
+      // The rejection of a dropped promise is reported on a later turn of the event loop.
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+})
+

@@ -72,6 +72,8 @@ const RULES: Rule[] = [
   { name: 'a "(s)" / "(es)" plural — use countOf', test: /\w\((s|es)\)/ },
   { name: 'a unit glued to its number ("30fps", "480px") — units are spaced', test: new RegExp(`[0-9${HOLE}](fps|px|kbps|Mbps|ms|ch)\\b`) },
   { name: '"sec" as a unit — seconds are "s" after a number', test: /\d\s?sec\b/ },
+  // T-131 (15): the image ExportDialog spelled "1280x720" and "28x28" with the letter x beside the canvas readout's "1920 × 1080".
+  { name: 'the letter x as a multiplication sign between numbers — sizes are spelled with ×', test: new RegExp(`[0-9${HOLE}]x[0-9${HOLE}]`) },
   // ── cut-short words ──────────────────────────────────────────────────
   { name: '"Rect" — spell it Rectangle', test: /\bRect\b/ },
   { name: '"Top L" / "Bot R" — spell the corner out', test: /\b(Top|Bot|Bottom) [LR]\b|\bBot\b/ },
@@ -85,7 +87,8 @@ const RULES: Rule[] = [
     only: ['toast', 'toast.success']
   },
   { name: 'British spelling (cancelled, colour, centre, behaviour)', test: /\b(cancelled|cancelling|colour(s|ed)?|centre|behaviour|favourite|grey)\b/i },
-  { name: '"tick" a box — check it', test: /\btick(ed|ing|s)?\b/i },
+  // `\b` sits between a non-word and a word character, so `\btick` cannot match inside "untick" (T-116).
+  { name: '"tick" a box — check it', test: /\b(un)?tick(ed|ing|s)?\b/i },
   { name: 'the first person ("I\'ll", "I will") — imagii speaks as imagii', test: /\bI(['’](ll|m|ve|d)| will| can)\b/ },
   {
     name: 'an exclamation mark',
@@ -279,6 +282,63 @@ describe('the words a person reads in the renderer follow the copy conventions',
   }
 })
 
+/**
+ * T-116: the same two word rules, over the sentences main and shared hand a person.
+ *
+ * The scan above reads `src/renderer`, but a good deal of what a streamer reads is written in main and
+ * crosses the bridge as a thrown message or a returned reason (`recordingConvertFailureMessage`,
+ * `captions:saveSrt`'s refusals, the gate sentences): "untick" sat in one of those for a round because no
+ * scan looked there. There is no "rendered string" in main to separate copy from the rest, so this reads
+ * EVERY string literal under `src/main`, `src/shared` and `src/preload` for the two rules that are about
+ * words alone (US spelling, never "tick" a box). A protocol id is not copy and is not read (`imagii:cancelled`,
+ * the cancel sentinel's value, is spelled the way the sentinel is; renaming it would break the match
+ * `isCancelledError` makes). The structural rules (labels, toasts, units) are renderer rules and stay there.
+ */
+const WORD_RULES = RULES.filter((r) => r.name.startsWith('British spelling') || r.name.startsWith('"tick"'))
+const MAIN_ROOTS = ['main', 'shared', 'preload'].map((d) => path.resolve(RENDERER_ROOT, '../../', d))
+
+export function mainWordViolations(sf: ts.SourceFile, file: string): Violation[] {
+  const hits: Violation[] = []
+  for (const r of allLiterals(sf)) {
+    if (/^imagii:[a-z-]+$/.test(r.text)) continue
+    for (const rule of WORD_RULES) {
+      if (rule.test.test(r.text)) hits.push({ file, line: r.line, rule: rule.name, text: r.text })
+    }
+  }
+  return hits
+}
+
+describe('the words main and shared hand a person follow the spelling and tick rules (T-116)', () => {
+  const MAIN_FILES = MAIN_ROOTS.flatMap((root) => sourceFilesUnder(root))
+
+  it('finds the sources (the scan is not vacuously empty)', () => {
+    const rels = MAIN_FILES.map((f) => path.relative(path.resolve(RENDERER_ROOT, '../../'), f).replace(/\\/g, '/'))
+    for (const must of ['main/ipc/recording.ts', 'main/ipc/captions.ts', 'shared/userFacingError.ts', 'preload/index.ts']) {
+      expect(rels).toContain(must)
+    }
+    expect(MAIN_FILES.flatMap((f) => allLiterals(parseSource(f))).length).toBeGreaterThan(500)
+  })
+
+  it('no string in main, shared or preload says "untick" or spells a word the British way', () => {
+    const hits = MAIN_FILES.flatMap((f) => mainWordViolations(parseSource(f), f)).map(
+      (v) => `${path.relative(path.resolve(RENDERER_ROOT, '../../'), v.file)}:${v.line} [${v.rule}] "${v.text}"`
+    )
+    expect(hits).toEqual([])
+  })
+
+  it('discriminates: it fires on the convert-failure sentence that shipped, and not on a protocol id or good copy', () => {
+    const run = (src: string): string[] => mainWordViolations(parseSource('x.ts', src), 'x.ts').map((v) => v.rule)
+    expect(run(`return 'try again, or untick "Convert to MP4 after recording" to keep the WebM.'`)).toEqual([
+      '"tick" a box \u2014 check it'
+    ])
+    expect(run('throw new Error(`Autosave cancelled`)')).toEqual([
+      'British spelling (cancelled, colour, centre, behaviour)'
+    ])
+    expect(run(`const SENTINEL = 'imagii:cancelled'`)).toEqual([])
+    expect(run(`return 'try again, or uncheck "Convert to MP4 after recording" to keep the WebM.'`)).toEqual([])
+  })
+})
+
 describe('the sites that once hard-coded a plural all go through countOf', () => {
   // The six the review listed, plus the ones the sweep found beside them. A
   // pin of the call, not of the output: the output is the helper's own test.
@@ -287,8 +347,10 @@ describe('the sites that once hard-coded a plural all go through countOf', () =>
     ['modules/video-studio/HighlightPanel.tsx', /Found \$\{countOf\(narrowed\.length, 'highlight'\)\}/],
     ['modules/video-studio/ChatHighlightPanel.tsx', /Found \$\{countOf\(found\.length, 'chat spike'\)\}/],
     ['modules/video-studio/ChatHighlightPanel.tsx', /countOf\(p\.count, 'message'\)/],
-    ['modules/video-studio/VideoStudio.tsx', /countOf\(clipCount, 'clip'\)/],
-    ['modules/audio-studio/AudioStudio.tsx', /countOf\(cuts, 'cut'\)/],
+    // T-119 moved the Close question into `videoDiscardMessage`, so Record's "Edit in Video Studio" asks the same one.
+    ['modules/video-studio/store/videoStore.ts', /countOf\(clipCount, 'clip'\)/],
+    // T-112 moved the close message out of the component so Video Studio's Clean audio can ask it.
+    ['modules/audio-studio/audioClose.ts', /countOf\(cuts, 'cut'\)/],
     ['modules/references/MoodBoardPanel.tsx', /countOf\(collection\.items\.length, 'item'\)/],
     ['components/AutosaveRestore.tsx', /countOf\(Math\.floor\(ms \/ 86400000\), 'day'\)/],
     ['modules/video-studio/CompilationPanel.tsx', /countOf\(clips\.length, 'clip'\)/],
@@ -351,7 +413,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
         <p>Tick the box. I'll set it. Great!</p>
         <label>Bucket sec</label><label>V bitrate</label>
         <option>Top L</option><option>Bot R</option><option>Rect</option>
-        <span>{a} msgs</span><span>First 3 sec</span>
+        <span>{a} msgs</span><span>First 3 sec</span><span title="Output: 1280x720" />
         <span>{busy ? 'Image Canvas' : 'Found 3 hype moments'}</span>
         <i title="30 clip(s)" aria-label="Safe zones" />
       </div>
@@ -363,6 +425,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
     confirm('Delete "x" and all 3 item(s)?')
     const p = { label: 'sustained-loud', hint: 'Found 1 candidates', description: 'A colour grade' }
     const t = { fps: \`\${p.fps}fps · \${p.w}px\` }
+    const size = { hint: \`Output: \${out.width}x\${out.height}\` }
   `
 
   it('names every rule it was given a violation of', () => {
@@ -377,6 +440,7 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
       '(s)',
       'glued to its number',
       '"sec" as a unit',
+      'the letter x as a multiplication sign',
       '"Rect"',
       '"Top L"',
       '"Bucket sec"',
@@ -394,6 +458,16 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
       'trailing period'
     ]) {
       expect(rules, needle).toContain(needle)
+    }
+  })
+
+  it('"tick" is caught with its un- prefix too (T-116: \\btick cannot match inside "untick")', () => {
+    for (const word of ['Tick', 'tick', 'ticked', 'ticking', 'ticks', 'Untick', 'untick', 'unticked', 'unticking', 'unticks']) {
+      expect(run(`const a = <p>${word} the box</p>`), word).toEqual(['"tick" a box \u2014 check it'])
+    }
+    // The right words, and words that merely contain the letters.
+    for (const fine of ['Check the box', 'Uncheck it', 'a ticket', 'the ticker', 'a stick', 'quick tip']) {
+      expect(run(`const a = <p>${fine}</p>`), fine).toEqual([])
     }
   })
 

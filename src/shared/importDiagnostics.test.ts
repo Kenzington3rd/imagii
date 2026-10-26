@@ -209,3 +209,132 @@ describe('describeImportError', () => {
     expect(errorSpy).toHaveBeenCalledWith("[imagii] imagii couldn't open that file.", odd)
   })
 })
+
+/**
+ * T-136 (14): the classifier matched its keywords ('codec', 'decoder', 'moov atom', ...) anywhere in the message, and a finished sentence from main
+ * that QUOTES the person's file name carries that name: "Still extracting the sound from "codec_test.mp4". Wait for it to finish, then try again."
+ * became "imagii can't read this audio format..." (executed in the built app), a sentence about a problem that did not exist. A quoted name is not
+ * a cause, so the keywords are looked for in the message with its double-quoted spans taken out.
+ */
+describe('describeImportError - a quoted file name is not a cause (T-136 (14))', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const wrap = (channel: string, inner: string): Error =>
+    new Error(`Error invoking remote method '${channel}': Error: ${inner}`)
+  /** main's single-flight refusal for the audio extraction (`ipc/audio.ts`): a finished sentence that quotes the file being worked on. */
+  const busy = (name: string): string => `Still extracting the sound from "${name}". Wait for it to finish, then try again.`
+
+  it('the sentence the executed case hit passes through whole, whatever the importer', () => {
+    const sentence = busy('codec_test.mp4')
+    for (const kind of ['audio', 'video'] as const) {
+      expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/codec_test.mp4', kind)).toBe(sentence)
+    }
+  })
+
+  it.each([
+    ['codec_test.mp4', 'audio'],
+    ['decoder notes.mp4', 'audio'],
+    ['moov atom.mp4', 'video'],
+    ['invalid data found.mov', 'video'],
+    ['no usable duration.mkv', 'audio'],
+    ['no video stream.mp4', 'video'],
+    ['no audio stream.wav', 'audio'],
+    ['cannot find me.mp4', 'video']
+  ] as const)('a file called "%s" (%s importer): main\'s sentence is not rewritten for the word in its name', (name, kind) => {
+    const sentence = busy(name)
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), `/clips/${name}`, kind)).toBe(sentence)
+    expect(errorSpy, 'no "could not open" line: nothing was classified').not.toHaveBeenCalledWith('[imagii] could not open', expect.anything(), expect.anything())
+  })
+
+  it('a clean name is the control: the same sentence passes through as it always did', () => {
+    const sentence = busy('saturday-stream.mp4')
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/saturday-stream.mp4', 'audio')).toBe(sentence)
+  })
+
+  describe('and a real cause is still found, with or without a quoted name beside it', () => {
+    it.each([
+      ['Could not find codec parameters for stream 0 of "clip.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec for "codec_test.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['No decoder for stream 0 in "x.wav"', 'audio', "imagii can't read this audio format. Re-export it as WAV or MP3 and try again."],
+      ['"a.mp4": Invalid data found when processing input', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['moov atom not found in "a b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec "unterminated', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A lone quote (an inch mark, a stray character) is not a span: it takes nothing with it, so a cause printed after it is still found.
+      ['Opening 5" capture failed: unsupported codec', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A keyword BETWEEN two quoted names is outside both: a span ends at the next quote, it does not run to the last one.
+      ['Could not open "a.mp4": unsupported codec in "b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."]
+    ] as const)('%s (%s)', (raw, kind, expected) => {
+      expect(describeImportError(new Error(raw), '/x/clip.mp4', kind)).toBe(expected)
+      expect(errorSpy).toHaveBeenCalled()
+    })
+
+    it('a cause that is in the quoted text only is not one: the message is judged by what is left, so it falls through to the plain sentence', () => {
+      expect(describeImportError(new Error('Could not open "codec.mp4"'), null, 'video')).toBe("imagii couldn't open that file.")
+    })
+  })
+})
+
+// T-139 (10): the same ffmpeg line the export's catch reads (userFacingError.test.ts), as the IMPORTER reads it. A recording held open by another app makes ffprobe say
+// "<path>: Permission denied"; describeImportError listed EBUSY / EPERM / EACCES / "access ... denied" and not that phrase, so the person was told the file was not
+// a format imagii can read.
+describe('describeImportError - ffmpeg\'s "Permission denied" from a runner or probe (T-139 (10))', () => {
+  const BLOCKED = 'Windows blocked access. Close any app using the file, or check your antivirus.'
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  const wrap = (channel: string, inner: string): Error => new Error(`Error invoking remote method '${channel}': Error: ${inner}`)
+
+  it.each([
+    ['the probe', 'video', wrap('video:probe', 'ffprobe exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the probe, thrown by the runner', 'video', new Error('ffprobe exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the audio probe', 'audio', wrap('audio:probe', 'ffprobe exit 1: C:\\x\\rec.wav: Permission denied')],
+    ['the sound extraction', 'audio', wrap('audio:extractFromVideo', 'audio extract exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the conversion', 'video', wrap('video:convertForImport', 'convert-to-mp4 exit 1: C:\\x\\rec.mkv: Permission denied')],
+    [
+      'an input the shipped win32 ffmpeg could not open, all three lines as it prints them (captured under Wine)',
+      'audio',
+      wrap(
+        'audio:extractFromVideo',
+        'audio extract exit 243: [in#0 @ 00007fffff45e500] Error opening input: Permission denied\r\nError opening input file C:\\x\\rec.mp4.\r\nError opening input files: Permission denied\r\n'
+      )
+    ],
+    [
+      'an ffmpeg run, with the real win32 lines (CRLF)',
+      'video',
+      wrap('video:probe', 'FFmpeg exit 1: [out#0/mp4 @ 00007fffff46bfc0] Error opening output C:\\x\\clip.mp4: Permission denied\r\nError opening output files: Permission denied')
+    ]
+  ] as const)('%s (%s) says Windows blocked it and names the way out', (_label, kind, err) => {
+    expect(describeImportError(err, 'C:\\x\\rec.mp4', kind)).toBe(BLOCKED)
+    expect(errorSpy, 'the raw error goes to the console').toHaveBeenCalled()
+  })
+
+  it.each([
+    ['screen recording refused', new Error('Screen recording permission denied')],
+    ['a bare message', new Error('Permission denied')],
+    ['ffmpeg\'s line with no runner around it', new Error('Error opening output files: Permission denied')],
+    ['a runner exit that only mentions the words', new Error('ffprobe exit 1: Permission denied for the codec; try again')]
+  ])('%s is NOT read as a blocked file', (_label, err) => {
+    expect(describeImportError(err, 'C:\\x\\rec.mp4')).not.toBe(BLOCKED)
+  })
+
+  it('the controls stay as they were: the same words for EACCES and "access is denied", and "Screen recording permission denied" is the plain sentence', () => {
+    expect(describeImportError(new Error('EACCES: permission denied, open'))).toBe(BLOCKED)
+    expect(describeImportError(new Error('Access is denied.'))).toBe(BLOCKED)
+    expect(describeImportError(new Error('Screen recording permission denied'))).toBe("imagii couldn't open that file.")
+  })
+
+  it('a missing file still wins over the phrase when ffprobe says both (the file is not there to be blocked)', () => {
+    expect(describeImportError(new Error('ffprobe exit 1: C:\\x\\a.mp4: No such file or directory'), 'C:\\x\\a.mp4')).toMatch(/can't find that file/)
+  })
+})
+

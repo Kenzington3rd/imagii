@@ -1,16 +1,20 @@
-import type { CropRect, ExportJobSpec, ExportProgress, ExportResult } from './clip'
+import type { ClipRecipe, CompileSegment, CropRect, ExportJobSpec, ExportProgress, ExportResult } from './clip'
 import type {
   AudioProbe,
   AudioExportSpec,
   AudioJobProgress,
   AudioJobResult,
   AudioMuxSpec,
-  ChainSpec
+  ChainSpec,
+  ExtractedSound,
+  WaveformPeaks,
+  WaveformPeaksProgress
 } from './audio'
 import type { SearchResponse, MoodBoardCollection, SearchResult } from './search'
 import type {
   CaptionsInstallStatus,
   CaptionsProgress,
+  ClearTranscriptsResult,
   ModelInstallProgress,
   TranscribeRequest,
   TranscribeResult,
@@ -20,11 +24,11 @@ import type {
   ImagiiProject,
   ChainPreset,
   RecordingSource,
-  RecordingSpec,
   RecordingFinalizeSpec,
   RecordingResult
 } from './workspace'
 import type { CustomPreset } from './customPresets'
+import type { ReframePhase } from './reframe'
 import type { ImageSaveManyRequest, ImageSaveRequest } from './canvas'
 
 export type SettingsKey =
@@ -50,6 +54,7 @@ export type SettingsKey =
   // exporting many clips doesn't have to re-pick on every batch.
   | 'export.lastOutputDir'
   | 'clipKit.lastOutputDir'
+  | 'video.lastOutputDir'
   // T-47: the window's own geometry, written by main on move/resize/close
   // and validated against the connected displays on the next launch.
   | 'windowBounds'
@@ -77,7 +82,6 @@ export interface ImagiiApi {
     set<T = unknown>(key: SettingsKey, value: T): Promise<void>
   }
   app: {
-    quit(): void
     getVersion(): Promise<string>
   }
   video: {
@@ -85,24 +89,32 @@ export interface ImagiiApi {
     pickFile(): Promise<string | null>
     /** Round 20: transcode a non-native container to an mp4 working copy. */
     convertForImport(filePath: string): Promise<string>
-    pickOutputDir(): Promise<string | null>
+    /** `defaultPath`: the folder the chooser opens on (T-120: Clip Kit opens on the one it last wrote to). */
+    pickOutputDir(defaultPath?: string): Promise<string | null>
     fileUrl(filePath: string): string
     exportBatch(jobs: ExportJobSpec[]): Promise<ExportResult[]>
-    cancel(jobId: string): Promise<boolean>
     cancelAll(): Promise<void>
     revealInFolder(filePath: string): Promise<void>
     onProgress(handler: (p: ExportProgress) => void): Unsubscribe
     onJobComplete(handler: (info: { jobId: string; outputPath: string }) => void): Unsubscribe
-    reframe(params: {
-      jobId?: string
-      sourcePath: string
-      outDir: string
-      position: 'left' | 'center' | 'right'
-      startSec: number
-      endSec: number
-      targetWidth: number
-      targetHeight: number
-    }): Promise<{ outputPath: string }>
+    reframe(
+      params: {
+        jobId?: string
+        sourcePath: string
+        /** The name of the file the person opened, without its extension: the output is named from it (T-124 (17)). */
+        sourceName?: string
+        /** The clip's name, which follows it in the file's (T-125 (22)). */
+        clipName?: string
+        outDir: string
+        position: 'left' | 'center' | 'right'
+        startSec: number
+        endSec: number
+        targetWidth: number
+        targetHeight: number
+        // The clip's whole recipe (`ClipRecipe`, T-125 (9); the crop and the speed since T-124 (16)): the 9:16 strip is cut from the
+        // crop, at the speed, with the clip's text, grade, Auto Zoom and Hype Shake - the fields Compile carries.
+      } & Partial<ClipRecipe>
+    ): Promise<{ outputPath: string }>
     // Round 17 B1-B5: per-job cancel buttons in each long-running panel.
     cancelReframe(jobId: string): Promise<boolean>
     cancelGif(jobId: string): Promise<boolean>
@@ -110,7 +122,7 @@ export interface ImagiiApi {
     cancelPip(jobId: string): Promise<boolean>
     cancelHighlight(): Promise<boolean>
     onReframeProgress(
-      handler: (p: { jobId: string; phase: string; percent: number }) => void
+      handler: (p: { jobId: string; phase: ReframePhase; percent?: number }) => void
     ): Unsubscribe
     findHighlights(sourcePath: string): Promise<
       Array<{ startSec: number; endSec: number; peakDb: number; reason: string }>
@@ -124,8 +136,12 @@ export interface ImagiiApi {
       sourcePath: string
       timeSec: number
       outputPath: string
+      /** The clip's manual crop (T-130 (t)): the thumbnail is the cropped picture. Absent or null: the whole frame. */
+      cropRect?: CropRect | null
     }): Promise<{ outputPath: string }>
     makeKitDir(params: { parentDir: string; clipName: string }): Promise<string>
+    /** Removes the kit folder only if it is empty (a non-recursive rmdir); never rejects for a folder that stays. */
+    removeKitDir(kitDir: string): Promise<void>
     onHighlightProgress(
       handler: (p: { jobId: string; phase: string; percent: number }) => void
     ): Unsubscribe
@@ -140,6 +156,10 @@ export interface ImagiiApi {
       speed: number
       /** The clip's manual crop (T-96): the GIF is made from that rectangle. */
       cropRect?: CropRect | null
+      /** The name of the file the person opened, without its extension: the GIF is named from it (T-124 (17)). */
+      sourceName?: string
+      /** The clip's name, which follows it in the file's (T-125 (22)). */
+      clipName?: string
     }): Promise<{ outputPath: string }>
     listCustomPresets(): Promise<CustomPreset[]>
     saveCustomPreset(preset: Omit<CustomPreset, 'id'>): Promise<CustomPreset>
@@ -148,16 +168,13 @@ export interface ImagiiApi {
       jobId?: string
       sourcePath: string
       outDir: string
-      segments: Array<{
-        startSec: number
-        endSec: number
-        name: string
-        /** The clip's manual crop (T-96): the segment is made from that rectangle. */
-        cropRect?: CropRect | null
-      }>
+      /** Each clip's range and its recipe (T-96 crop, T-105 the rest): see `CompileSegment`. */
+      segments: CompileSegment[]
       fadeMs: number
       width: number
       height: number
+      /** The name of the file the person opened, without its extension: the compilation is named from it (T-125 (22)). */
+      sourceName?: string
     }): Promise<{ outputPath: string }>
     pipComposite(params: {
       jobId?: string
@@ -173,7 +190,13 @@ export interface ImagiiApi {
     probe(filePath: string): Promise<AudioProbe>
     pickFile(): Promise<string | null>
     pickOutputFile(options: { defaultName?: string; format: string }): Promise<string | null>
-    extractFromVideo(videoPath: string): Promise<string>
+    extractFromVideo(videoPath: string): Promise<ExtractedSound>
+    /**
+     * T-129: `filePath`'s waveform, read by main from a stream of its sound - the renderer never decodes the file. `jobId` is the
+     * caller's own, for `cancel(jobId)`; `onPeaksProgress` reports how much of the sound has been read.
+     */
+    peaks(filePath: string, jobId: string): Promise<WaveformPeaks>
+    onPeaksProgress(handler: (p: WaveformPeaksProgress) => void): Unsubscribe
     export(spec: AudioExportSpec): Promise<AudioJobResult>
     mux(spec: AudioMuxSpec): Promise<AudioJobResult>
     cancel(jobId: string): Promise<boolean>
@@ -202,18 +225,31 @@ export interface ImagiiApi {
   captions: {
     status(): Promise<CaptionsInstallStatus>
     transcribe(req: TranscribeRequest): Promise<TranscribeResult>
-    /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). */
+    /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). `outputPath` is the file that exists: beside `req.outputPath` when that one was open in another app (T-140 (1)). */
     burnIn(req: BurnInRequest): Promise<{ outputPath: string; captioned: boolean }>
     saveSrt(srtPath: string, defaultName: string): Promise<string | null>
-    copySrtTo(params: {
-      srcPath: string
-      destPath: string
-    }): Promise<{ ok: true } | { ok: false; reason: string }>
+    /** How many transcripts `<userData>/captions` holds (T-128 (3)). No argument: the folder is main's. */
+    countTranscripts(): Promise<number>
+    /** Empties that folder of its transcripts and says how many went and how many would not (T-128 (3)). */
+    clearTranscripts(): Promise<ClearTranscriptsResult>
+    /**
+     * The Clip Kit's captions (T-113): the transcript `srtPath` re-expressed on the clock of the
+     * clip `startSec`-`endSec` played at `speed`, written to `dest`. `written` is false when no
+     * cue falls inside the clip (nothing is written).
+     */
+    writeKitSrt(params: {
+      srtPath: string
+      dest: string
+      startSec: number
+      endSec: number
+      speed: number
+    }): Promise<{ ok: true; written: boolean } | { ok: false; reason: string }>
     pickBurnInOutput(defaultName: string): Promise<string | null>
     openBinFolder(): Promise<void>
     openModelsFolder(): Promise<void>
     // Round 17 B6
     cancelBurnIn(): Promise<boolean>
+    cancelTranscribe(): Promise<boolean>
     onProgress(handler: (p: CaptionsProgress) => void): Unsubscribe
     installModel(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
     cancelInstall(): Promise<boolean>
@@ -270,20 +306,21 @@ export interface ImagiiApi {
   }
   recording: {
     listSources(): Promise<RecordingSource[]>
-    save(spec: RecordingSpec): Promise<RecordingResult | null>
     // Round 18 H1: streaming save protocol. begin opens a temp-file write
     // stream in main; appendChunk streams each MediaRecorder chunk as it
-    // arrives (call order = byte order); finalize closes the stream and
-    // runs the same dialog + convert/copy flow as save; abandon reaps a
-    // partial temp file on failure/discard paths.
+    // arrives (call order = byte order); finalize closes the stream, then
+    // runs the save dialog + convert/copy flow; abandon reaps a partial temp
+    // file on failure/discard paths. (T-101 deleted the buffered `save` this
+    // replaced: it had no caller.)
     begin(): Promise<{ id: string }>
     appendChunk(id: string, chunk: ArrayBuffer): Promise<void>
     finalize(id: string, spec: RecordingFinalizeSpec): Promise<RecordingResult | null>
     abandon(id: string): Promise<boolean>
-    // M6 fix (round 15): expose conversion progress + cancel to the renderer.
-    cancelSave(): Promise<boolean>
+    // M6 fix (round 15): expose conversion progress + cancel to the renderer. T-137 (2): the cancel is aimed at ONE take, the session id `begin` answered.
+    cancelSave(id: string): Promise<boolean>
+    // T-115: `percent` is absent while the convert has no measurement (indeterminate bar).
     onProgress(
-      handler: (info: { percent: number; message?: string }) => void
+      handler: (info: { percent?: number; message?: string }) => void
     ): Unsubscribe
   }
 }

@@ -29,6 +29,8 @@ const KEYBOARD_EVIDENCE: Record<string, RegExp> = {
   'Ctrl+Z / Ctrl+Y': /useUndoRedoHotkeys\(/,
   'Ctrl+V': /addEventListener\('paste'/,
   'Delete / Backspace': /e\.key === 'Delete' \|\| e\.key === 'Backspace'/,
+  // T-140 (3): the Transformer's own Shift handling, set on the canvas (pictures and text: Shift frees the ratio; shapes keep Konva's default).
+  'Shift+drag': /shiftBehavior=\{selectedKeepsRatio \? 'inverted' : 'default'\}/,
   V: /setTool\('select'\)/,
   R: /setTool\('rect'\)/,
   O: /setTool\('ellipse'\)/,
@@ -42,7 +44,7 @@ const KEYBOARD_EVIDENCE: Record<string, RegExp> = {
 const MOUSE_HINTS = new Set([
   'Click timeline',
   'Drag on waveform',
-  'Click cut tag',
+  'Click a mark',
   'Click thumbnail',
   'Click any card',
   'Save button',

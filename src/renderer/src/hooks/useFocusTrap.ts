@@ -104,7 +104,13 @@ export function useFocusTrap(
     previouslyFocused.current = (document.activeElement as HTMLElement | null) ?? null
     const root = containerRef.current
     if (root) {
-      const first = root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+      // T-114: a dialog can name the control it should open on (`data-initial-focus`) - the safe
+      // answer of a question. Without one, the first thing in the DOM that takes focus, which for the
+      // safe-zone question was the scrollable list of clips ABOVE its two buttons: Enter on arrival
+      // scrolled nothing and decided nothing.
+      const first =
+        root.querySelector<HTMLElement>('[data-initial-focus]') ??
+        root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
       if (first) {
         first.focus()
       } else {

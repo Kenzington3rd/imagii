@@ -11,6 +11,8 @@ interface NameDialogProps {
   initialValue?: string
   /** The primary button's copy, e.g. "Rename" or "Create board". */
   confirmLabel: string
+  /** The longest name the field takes (the caller's limit, enforced on the input itself). Unset: no cap. */
+  maxLength?: number
   onCancel: () => void
   onConfirm: (name: string) => void
 }
@@ -27,7 +29,7 @@ interface NameDialogProps {
  * uses.
  *
  * The behavior a name field owes the user is in one place rather than two:
- * Enter submits, a blank name cannot be confirmed, and cancelling — button,
+ * Enter submits, a blank name cannot be confirmed, and canceling — button,
  * Escape, or scrim — leaves the caller's state untouched.
  */
 export function NameDialog({
@@ -36,6 +38,7 @@ export function NameDialog({
   label,
   initialValue = '',
   confirmLabel,
+  maxLength,
   onCancel,
   onConfirm
 }: NameDialogProps): JSX.Element {
@@ -82,6 +85,7 @@ export function NameDialog({
           }}
           className="bg-bg-base rounded px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-accent"
           aria-label={label}
+          maxLength={maxLength}
         />
       </label>
       <div className="flex justify-end gap-2 mt-4">

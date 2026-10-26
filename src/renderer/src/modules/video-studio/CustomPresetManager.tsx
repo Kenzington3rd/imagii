@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { CustomPreset } from '@shared/customPresets'
 import { formatBitrate, normalizeBitrate } from '@shared/customPresets'
 import type { PlatformId } from '@shared/clip'
-import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
+import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetStartFor } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
+import { DraftField } from '../../components/DraftField'
+import { claimFirst } from '../../lib/claimFirst'
+import { reportFailure } from '../../lib/reportFailure'
+import { isRepeatPress } from '../../lib/repeatPress'
+import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface CustomPresetManagerProps {
   open: boolean
@@ -21,6 +26,18 @@ interface CustomPresetManagerProps {
 
 const DEFAULT_BASE: PlatformId = 'youtube'
 
+// What a preset's boxes take. Width and height stop at 16384, the most the save accepts (`video:saveCustomPreset`),
+// so a typed 70000 is that and not a refusal nobody can read. Their FLOOR is deliberately not enforced here: a
+// width under 64 is refused at Save, in a sentence ("Width / height must be at least 64"), and that refusal is
+// kept (T-123 (4)). The frame rate is the 1 to 120 its attributes say.
+const SIZE_MIN = 64
+const SIZE_MAX = 16384
+const FPS_MIN = 1
+const FPS_MAX = 120
+// T-134 (5): the name box takes no more than this. The name is drawn in the Export panel's preset labels and the queue rows too (each cuts it
+// with an ellipsis), so a name nobody can read whole in any of them is a name nobody needs; the row below cuts a longer one that is already on disk.
+const PRESET_NAME_MAX = 60
+
 export function CustomPresetManager({
   open,
   onClose,
@@ -34,6 +51,9 @@ export function CustomPresetManager({
   const [videoBitrate, setVideoBitrate] = useState('8M')
   const [audioBitrate, setAudioBitrate] = useState('192k')
   const [base, setBase] = useState<PlatformId>(DEFAULT_BASE)
+  // T-139 (9): one save at a time. `savingRef` is the claim, raised before the first await; `saving` is what the button draws while the write is out.
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
 
   // Re-read on open, so a preset folder edited outside the app still shows
   // up. Keyed on `open` alone deliberately: `onChanged` is a stable
@@ -46,13 +66,28 @@ export function CustomPresetManager({
   if (!open) return null
 
   function loadFromBase(p: PlatformId): void {
-    const info = PLATFORM_INFO[p]
-    setWidth(info.width)
-    setHeight(info.height)
+    // T-132 (7): the platform's whole encode, not its size alone - a preset based on YouTube 1080p60 starts at 60 fps and 12M.
+    const start = customPresetStartFor(p)
+    setWidth(start.width)
+    setHeight(start.height)
+    setFps(start.fps)
+    setVideoBitrate(start.videoBitrate)
+    setAudioBitrate(start.audioBitrate)
     setBase(p)
   }
 
   async function save(): Promise<void> {
+    await claimFirst(savingRef, async () => {
+      setSaving(true)
+      try {
+        await saveOnce()
+      } finally {
+        setSaving(false)
+      }
+    })
+  }
+
+  async function saveOnce(): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) {
       toast.error('Give it a name')
@@ -81,15 +116,22 @@ export function CustomPresetManager({
     }
     setVideoBitrate(video.value)
     setAudioBitrate(audio.value)
-    await window.api.video.saveCustomPreset({
-      name: trimmed,
-      width,
-      height,
-      fps,
-      videoBitrate: video.value,
-      audioBitrate: audio.value,
-      basePlatformId: base
-    })
+    // T-135 (8): a refused write (a full disk, a folder that cannot be made) was an unhandled rejection and the form looked as if it had saved; the
+    // audio Cleanup presets have had this catch since T-90. The name stays in the box for the retry.
+    try {
+      await window.api.video.saveCustomPreset({
+        name: trimmed,
+        width,
+        height,
+        fps,
+        videoBitrate: video.value,
+        audioBitrate: audio.value,
+        basePlatformId: base
+      })
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save that preset." })
+      return
+    }
     setName('')
     await onChanged()
     toast.success(`Saved "${trimmed}"`)
@@ -97,7 +139,12 @@ export function CustomPresetManager({
 
   async function remove(p: CustomPreset): Promise<void> {
     if (!confirm(`Delete preset "${p.name}"?`)) return
-    await window.api.video.deleteCustomPreset(p.id)
+    try {
+      await window.api.video.deleteCustomPreset(p.id)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't delete that preset." })
+      return
+    }
     // The parent's refresh also prunes the deleted id off every clip, so the
     // checkbox and its queued job disappear together (T-50).
     await onChanged()
@@ -142,6 +189,7 @@ export function CustomPresetManager({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="bg-bg-base rounded px-2 py-1.5"
+                maxLength={PRESET_NAME_MAX}
                 // M11 fix (round 15): the visible label "Preset name (e.g. …)"
                 // is the placeholder, which AT does not treat as a label.
                 aria-label="Custom preset name"
@@ -164,32 +212,48 @@ export function CustomPresetManager({
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Width (px)</span>
-                  <input
+                  {/* T-123 (4): kept until typing ends; `Number(typed) || 64` appended "1280" to an emptied box as 641280. */}
+                  <DraftField
                     type="number"
-                    min={64}
-                    value={width}
-                    onChange={(e) => setWidth(Number(e.target.value) || 64)}
+                    min={SIZE_MIN}
+                    value={String(width)}
+                    live={(typed) => isTypedInRange(typed, SIZE_MIN, SIZE_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, 1, SIZE_MAX)
+                      if (n !== null) setWidth(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Height (px)</span>
-                  <input
+                  <DraftField
                     type="number"
-                    min={64}
-                    value={height}
-                    onChange={(e) => setHeight(Number(e.target.value) || 64)}
+                    min={SIZE_MIN}
+                    value={String(height)}
+                    live={(typed) => isTypedInRange(typed, SIZE_MIN, SIZE_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, 1, SIZE_MAX)
+                      if (n !== null) setHeight(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-ink-muted">Frame rate (fps)</span>
-                  <input
+                  <DraftField
                     type="number"
-                    min={1}
-                    max={120}
-                    value={fps}
-                    onChange={(e) => setFps(Number(e.target.value) || 30)}
+                    min={FPS_MIN}
+                    max={FPS_MAX}
+                    value={String(fps)}
+                    live={(typed) => isTypedInRange(typed, FPS_MIN, FPS_MAX)}
+                    commit={(typed) => {
+                      const n = clampTyped(typed, FPS_MIN, FPS_MAX)
+                      if (n !== null) setFps(n)
+                      return null
+                    }}
                     className="bg-bg-base rounded px-2 py-1"
                   />
                 </label>
@@ -216,7 +280,17 @@ export function CustomPresetManager({
                   kilobits.
                 </p>
               </div>
-              <button className="btn-primary px-4 py-1.5 text-sm self-start" onClick={save}>
+              {/* T-139 (9): the second press of a double-click is not a second preset, nor a "Give it a name" after the first cleared the box.
+                  T-140 (8): `aria-disabled` and not `disabled` while the write is out - a disabled button the keyboard just pressed is blurred and focus falls to the
+                  page behind this dialog (T-120 (10)); an aria-disabled one keeps it. The press it still takes is a no-op: `save()` is the claim (`savingRef`). */}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm self-start aria-disabled:opacity-50"
+                onClick={(e) => {
+                  if (isRepeatPress(e)) return
+                  void save()
+                }}
+                aria-disabled={saving}
+              >
                 + Save preset
               </button>
             </div>
@@ -235,13 +309,17 @@ export function CustomPresetManager({
                     key={p.id}
                     className="flex items-center gap-3 px-3 py-2 bg-bg-hover rounded text-sm"
                   >
-                    <span className="font-medium">{p.name}</span>
-                    <span className="text-xs text-ink-dim font-mono">
+                    {/* T-134 (5): the name gives way (an ellipsis, the whole of it as the tooltip); the numbers and Delete never move. An 80-character
+                        unbroken name used to push Delete past the card's edge. */}
+                    <span className="font-medium min-w-0 truncate" title={p.name}>
+                      {p.name}
+                    </span>
+                    <span className="text-xs text-ink-dim font-mono shrink-0">
                       {p.width}×{p.height} · {p.fps} fps · {formatBitrate(p.videoBitrate)} ·{' '}
                       {PLATFORM_INFO[p.basePlatformId].label}
                     </span>
                     <button
-                      className="ml-auto text-ink-dim hover:text-danger text-xs"
+                      className="ml-auto shrink-0 text-ink-dim hover:text-danger text-xs"
                       onClick={() => remove(p)}
                     >
                       Delete

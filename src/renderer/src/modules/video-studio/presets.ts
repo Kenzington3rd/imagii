@@ -1,5 +1,6 @@
-import type { Clip, PlatformId } from '@shared/clip'
+import { clipSpeed, type Clip, type PlatformId } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
+import { COMPILE_FPS } from '@shared/compileFps'
 import { cropFrameSize } from '@shared/safeZone'
 
 export interface PlatformInfo {
@@ -11,6 +12,10 @@ export interface PlatformInfo {
    *  every export used to run at 30 fps and nothing said so (T-92). Mirrors
    *  main's table; `presetTablesInSync.test.ts` holds the two together. */
   fps: number
+  /** The encode's two bitrates, as main's table writes them ("8M", "192k"): the custom-preset form starts a preset on a platform at
+   *  these (T-132 (7)). Mirrors main's table; `presetTablesInSync.test.ts` holds the two together. */
+  videoBitrate: string
+  audioBitrate: string
   aspectRatio: number
   durationSweetSpot: { min: number; max: number }
   durationHardLimit: number
@@ -23,6 +28,21 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1920,
     height: 1080,
     fps: 30,
+    videoBitrate: '8M',
+    audioBitrate: '192k',
+    aspectRatio: 16 / 9,
+    durationSweetSpot: { min: 60, max: 600 },
+    durationHardLimit: 12 * 60 * 60
+  },
+  // T-130 (q): the same platform at 60 fps; 12M is YouTube's own recommendation for 1080p60 (main's table carries the same).
+  youtube60: {
+    id: 'youtube60',
+    label: 'YouTube 1080p60',
+    width: 1920,
+    height: 1080,
+    fps: 60,
+    videoBitrate: '12M',
+    audioBitrate: '192k',
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 60, max: 600 },
     durationHardLimit: 12 * 60 * 60
@@ -33,11 +53,18 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1080,
     height: 1920,
     fps: 30,
+    videoBitrate: '6M',
+    audioBitrate: '128k',
     aspectRatio: 9 / 16,
-    // B4 fix (round 15): Meta extended Reels to 3 minutes in 2024; sweet spot
+    // B4 fix (round 15): Meta extended Reels to 3 minutes in January 2025; sweet spot
     // bumped to 90 s to match the longer-form Reels norm.
+    // T-112: 3 minutes (`REELS_RECOMMEND_CUTOFF_SEC`) is where Instagram stops
+    // RECOMMENDING a Reel to people who do not follow the account — it was
+    // recorded here as the cap, and a streamer's 5-minute Reel read "Too long"
+    // in red for an upload the platform takes (up to about 20 minutes). The cutoff
+    // is a yellow note in `evaluateSuccess`; the hard limit is the 20 minutes.
     durationSweetSpot: { min: 15, max: 90 },
-    durationHardLimit: 180
+    durationHardLimit: 20 * 60
   },
   tiktok: {
     id: 'tiktok',
@@ -45,6 +72,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1080,
     height: 1920,
     fps: 30,
+    videoBitrate: '6M',
+    audioBitrate: '128k',
     aspectRatio: 9 / 16,
     durationSweetSpot: { min: 21, max: 34 },
     // B3 fix (round 15): TikTok extended uploads to 60 minutes in late 2024.
@@ -57,6 +86,8 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1280,
     height: 720,
     fps: 30,
+    videoBitrate: '5M',
+    audioBitrate: '128k',
     aspectRatio: 16 / 9,
     // INIT-B (round 15): free tier caps at 2:20 (140 s); Premium subscribers
     // upload longer. Setting the hard limit at 140 s red-flagged Premium
@@ -72,19 +103,44 @@ export const PLATFORM_INFO: Record<PlatformId, PlatformInfo> = {
     width: 1280,
     height: 720,
     fps: 30,
+    videoBitrate: '5M',
+    audioBitrate: '128k',
     aspectRatio: 16 / 9,
     durationSweetSpot: { min: 15, max: 240 },
     durationHardLimit: 240 * 60
   }
 }
 
+/**
+ * T-112 — where Instagram stops recommending a Reel to people who do not follow
+ * the account. Advice, not a cap: Reels upload up to `PLATFORM_INFO.reels
+ * .durationHardLimit`. Past this the grid says so in yellow and in Instagram's terms.
+ */
+export const REELS_RECOMMEND_CUTOFF_SEC = 180
+const REELS_RECOMMEND_NOTE = "Over 3 minutes — Instagram won't recommend it to new viewers"
+
+/**
+ * T-112 — TikTok's Creator Rewards pay for videos of a minute or more, so the
+ * "over the sweet spot" note is not said of a clip that long: the short-clip
+ * advice (21-34 s) holds for everything shorter and nothing longer.
+ */
+export const TIKTOK_REWARDS_MIN_SEC = 60
+
 export const ALL_PLATFORM_IDS: PlatformId[] = [
   'youtube',
+  'youtube60',
   'reels',
   'tiktok',
   'twitter',
   'facebook'
 ]
+
+/**
+ * The platforms Clip Kit writes a file for (T-130 (q)): the five, in queue order. The grid lists YouTube 1080p60 beside YouTube, but a
+ * kit is one version per PLATFORM, and a second YouTube file would be the clip at 60 fps whatever the recording was (a 30 fps source
+ * upsampled to twice the frames, at 12 Mbps). Its button, its jobs and its length question read this list, not the grid's.
+ */
+export const KIT_PLATFORM_IDS: PlatformId[] = ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']
 
 /**
  * T-50 — a saved custom preset seen through the advisory table's own shape,
@@ -99,14 +155,64 @@ export const ALL_PLATFORM_IDS: PlatformId[] = [
  */
 export function customPresetInfo(preset: CustomPreset): PlatformInfo {
   const base = PLATFORM_INFO[preset.basePlatformId]
+  // T-111: the encoder writes even pixels (`resolveExportPreset` -> `even`,
+  // main/ffmpeg/filters.ts; yuv420p and libx264 refuse an odd side), so the grid
+  // judges the 1080x606 file that will exist, not the 1081x607 that was typed.
+  // `& ~1` is `even`, which the renderer cannot import from main;
+  // presetTablesInSync.test.ts holds the two to the same answer.
+  const width = Math.trunc(preset.width) & ~1
+  const height = Math.trunc(preset.height) & ~1
   return {
     ...base,
     label: preset.name,
-    width: preset.width,
-    height: preset.height,
+    width,
+    height,
     fps: preset.fps,
-    aspectRatio: preset.width / preset.height
+    aspectRatio: width / height
   }
+}
+
+/**
+ * T-132 (7): what the custom-preset form's five boxes are set to when a platform is picked as its "Base on": that platform's size, its
+ * frame rate and its two bitrates (the same table the grid prints and main encodes from). The form used to load the size alone, so a
+ * preset based on YouTube 1080p60 started at 30 fps and 8M while its ledger sentence said 60.
+ */
+export function customPresetStartFor(id: PlatformId): Pick<PlatformInfo, 'width' | 'height' | 'fps' | 'videoBitrate' | 'audioBitrate'> {
+  const { width, height, fps, videoBitrate, audioBitrate } = PLATFORM_INFO[id]
+  return { width, height, fps, videoBitrate, audioBitrate }
+}
+
+/**
+ * The frame a compilation is written at (T-105). The Compile panel sends this to
+ * main AND judges every clip against it, so the file and the verdict cannot be
+ * about two different frames. The rate is the source's up to 60, derived by
+ * `compileFps` (@shared/compileFps) in main AND in the card, from the same probe.
+ */
+export const COMPILE_SIZE = { width: 1920, height: 1080 } as const
+
+/**
+ * The compilation seen as an export target, so its card can use the grid's own
+ * verdict (`evaluateSuccess`, T-83/T-97) for the one question that is the
+ * grid's: how much of each clip's picture survives a cut to 16:9, and is it
+ * enlarged to get there. A compilation has no platform behind it, so it has no
+ * length to be too long for: the sweet spot and the limit are open-ended, and
+ * `id` is only the field `PlatformInfo` requires (nothing in the verdict reads it
+ * but the X-specific length wording).
+ */
+export const COMPILE_TARGET: PlatformInfo = {
+  id: 'youtube',
+  label: 'Compilation',
+  width: COMPILE_SIZE.width,
+  height: COMPILE_SIZE.height,
+  // The fallback rate: a compilation is written at its source's (T-130 (q), `compileFps`), and the verdict this row stands for never reads it.
+  fps: COMPILE_FPS,
+  // T-132 (7): required by the shape, read by nothing for a compilation (it is not a base platform; its picture is not encoded at a set
+  // bitrate and its join writes AAC at 192k): YouTube's, the figures a 1080p export would carry.
+  videoBitrate: PLATFORM_INFO.youtube.videoBitrate,
+  audioBitrate: '192k',
+  aspectRatio: COMPILE_SIZE.width / COMPILE_SIZE.height,
+  durationSweetSpot: { min: 0, max: Number.POSITIVE_INFINITY },
+  durationHardLimit: Number.POSITIVE_INFINITY
 }
 
 export type SuccessLevel = 'green' | 'yellow' | 'red'
@@ -148,18 +254,14 @@ export type JudgedClip = Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier' | 
  * its speed. A 6-minute range at 2x is a 3-minute video, and 3 minutes is what
  * a platform's limit is a limit ON. The grid's verdict and Clip Kit's long-clip
  * question both read the clip's length through this, so neither can warn "too
- * long" at half of what the file will really be. The same speed rule
- * `buildVideoFilter` and `runExportJob` apply: a missing, zero, negative or
- * non-finite multiplier is 1x.
+ * long" at half of what the file will really be. The speed is `clipSpeed`'s,
+ * the one reading `buildVideoFilter`, `runExportJob` and a compilation also use
+ * (T-105): a missing, zero, negative or non-finite multiplier is 1x.
  */
 export function outputDurationSec(
   clip: Pick<Clip, 'startSec' | 'endSec' | 'speedMultiplier'>
 ): number {
-  const speed =
-    typeof clip.speedMultiplier === 'number' && Number.isFinite(clip.speedMultiplier) && clip.speedMultiplier > 0
-      ? clip.speedMultiplier
-      : 1
-  return Math.max(0, clip.endSec - clip.startSec) / speed
+  return Math.max(0, clip.endSec - clip.startSec) / clipSpeed(clip)
 }
 
 /**
@@ -200,7 +302,14 @@ export function evaluateSuccess(
   } else if (clipDuration < platform.durationSweetSpot.min) {
     reasons.push(`Under the ${spanAdjective(platform.durationSweetSpot.min)} sweet spot`)
     if (level === 'green') level = 'yellow'
-  } else if (clipDuration > platform.durationSweetSpot.max) {
+  } else if (platform.id === 'reels' && clipDuration > REELS_RECOMMEND_CUTOFF_SEC) {
+    // T-112: advice in Instagram's terms, yellow, until the platform's real limit.
+    reasons.push(REELS_RECOMMEND_NOTE)
+    if (level === 'green') level = 'yellow'
+  } else if (
+    clipDuration > platform.durationSweetSpot.max &&
+    !(platform.id === 'tiktok' && clipDuration >= TIKTOK_REWARDS_MIN_SEC)
+  ) {
     // INIT-B (round 15): special-case X so Premium users see honest copy
     // instead of a red flag. The free tier's usual ceiling is 2:20; Premium
     // accounts go much longer.

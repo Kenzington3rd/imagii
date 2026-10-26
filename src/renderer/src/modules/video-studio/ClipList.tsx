@@ -1,15 +1,11 @@
-import { handleGestureEndPointerUp, useVideoStore } from './store/videoStore'
+import { clipSpeed } from '@shared/clip'
+import { hookWindow } from '@shared/highlights'
+import { handleGestureEndPointerUp, useVideoStore, videoHasNoSound } from './store/videoStore'
 import { ClipKitButton } from './ClipKitButton'
 import { HookIndicator } from './HookIndicator'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
-
-function formatShort(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
+import { formatClock } from '@shared/clockTime'
 
 export function ClipList(): JSX.Element {
   const clips = useVideoStore((s) => s.clips)
@@ -22,7 +18,8 @@ export function ClipList(): JSX.Element {
   const endGesture = useVideoStore((s) => s.endGesture)
   const source = useVideoStore((s) => s.source)
   const selected = clips.find((c) => c.id === selectedClipId)
-  const selectedSpeed = selected?.speedMultiplier ?? 1
+  const selectedSpeed = selected ? clipSpeed(selected) : 1
+  const hook = selected ? hookWindow(selected) : null
 
   return (
     // T-40: the speed slider and each rename field coalesce their own stream
@@ -60,12 +57,12 @@ export function ClipList(): JSX.Element {
               step={0.05}
               value={selectedSpeed}
               onChange={(e) => setClipSpeed(selected.id, Number(e.target.value))}
-              className="flex-1"
+              className="flex-1 min-w-0"
               // M11 fix (round 15)
               aria-label="Clip playback speed"
               aria-valuetext={`${selectedSpeed.toFixed(2)} times normal speed`}
             />
-            <span className="font-mono w-10 text-right">{selectedSpeed.toFixed(2)}×</span>
+            <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{selectedSpeed.toFixed(2)}×</span>
             <button
               className="text-ink-dim hover:text-ink-base flex"
               onClick={() => setClipSpeed(selected.id, 1)}
@@ -75,15 +72,36 @@ export function ClipList(): JSX.Element {
               <Icon name="refresh" size={14} />
             </button>
           </div>
+          {/* T-124 (19): BRANDING says a control with no live preview says so in one line (the color grade's exemplar). The player
+              always plays at normal speed (nothing sets a playback rate); the speed is in the exported file. */}
+          <p className="text-xs text-ink-dim">
+            Speed is applied when you export. The player here always plays at normal speed.
+          </p>
           {/* Phase 4C: hook indicator. Lazy-fetches first-3-seconds energy
               for the selected clip. Hover for the explanation. */}
-          {source ? (
+          {source && hook && !videoHasNoSound(source) ? (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-ink-muted">First 3 s:</span>
-              <HookIndicator sourcePath={source.filePath} startSec={selected.startSec} />
+              {/* T-112: three seconds of what the viewer sees, so the window to
+                  listen to is 3 x the clip's speed in the source (hookWindow). A clip
+                  shorter than that is listened to whole, and the label says so. A clip
+                  too short to have a hook (hookWindow is null, T-113) has no row, and neither
+                  has a video with no sound (T-114: the badge rates how LOUD the opening is -
+                  the three panels that need sound were gated, this one was left behind). */}
+              <span className="text-ink-muted">
+                First {Math.round(hook.outputSec * 10) / 10} s:
+              </span>
+              {/* T-114: one badge per clip. Its previous score stays up while a new one is worked
+                  out (a start-handle drag), which is right for the SAME clip and wrong for another. */}
+              <HookIndicator
+                key={`${source.filePath}|${selected.id}`}
+                sourcePath={source.filePath}
+                startSec={selected.startSec}
+                durationSec={hook.sourceSec}
+                outputSec={hook.outputSec}
+              />
             </div>
           ) : null}
-          {/* Phase 4D: one-click clip kit (5 platforms + 3 thumbnails). */}
+          {/* Phase 4D: one-click clip kit (5 platforms + 3 thumbnails). T-136 (1): ONE button, for the selected clip; a running kit shows on it. */}
           <div className="flex items-center justify-end">
             <ClipKitButton clip={selected} />
           </div>
@@ -95,6 +113,10 @@ export function ClipList(): JSX.Element {
           return (
             <li
               key={clip.id}
+              // T-112: the selected row says so to a screen reader too, not only by its
+              // border. (The select button below carries it as well: that is where
+              // keyboard focus lands.)
+              aria-current={isSelected ? 'true' : undefined}
               className={`flex items-center gap-2 px-3 py-2 rounded-md border ${
                 isSelected
                   ? 'border-accent bg-bg-hover'
@@ -111,16 +133,19 @@ export function ClipList(): JSX.Element {
                 type="text"
                 value={clip.name}
                 onChange={(e) => renameClip(clip.id, e.target.value)}
-                className="bg-transparent flex-1 min-w-0 outline-none focus:bg-bg-base px-1 rounded text-sm"
+                className="bg-transparent flex-1 min-w-0 outline-none focus:bg-bg-base focus:ring-1 focus:ring-accent px-1 rounded text-sm"
                 aria-label={`Rename clip ${clip.name}`}
               />
               <button
                 onClick={() => selectClip(clip.id)}
                 className="text-left flex items-center gap-3 text-xs text-ink-muted font-mono hover:text-ink-base"
                 title="Select clip"
-                aria-label={`Select clip ${clip.name}`}
+                aria-current={isSelected ? 'true' : undefined}
+                // T-112 (label in name): the name CONTAINS the timecode the button shows,
+                // so someone who speaks the visible text to a voice-control tool reaches it.
+                aria-label={`Select clip ${clip.name}, ${formatClock(clip.startSec)} → ${formatClock(clip.endSec)}`}
               >
-                {formatShort(clip.startSec)} → {formatShort(clip.endSec)}
+                {formatClock(clip.startSec)} → {formatClock(clip.endSec)}
               </button>
               {clips.length > 1 ? (
                 <button

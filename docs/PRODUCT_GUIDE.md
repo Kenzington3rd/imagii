@@ -31,8 +31,8 @@ imagii is a `react-router` app; each studio is a route.
 | Studio | Route | What it does |
 |---|---|---|
 | **Record** | `/record` | Capture a screen or window to one video, with an optional webcam and mic. The webcam composites into the recording (picture-in-picture, user-chosen corner). Game and desktop sound are not captured. Saves MP4 or WebM locally. |
-| **Video Studio** | `/video` | Trim and clip video; export per-platform (YouTube, Reels, TikTok, X, Facebook). Smart highlight finder, Chat spike finder, reframe to 9:16 (a fixed center/left/right strip — it tracks nothing), captions, color grading, GIF export, compilation, picture-in-picture, Clip Kit batch export. |
-| **Audio Studio** | `/audio` | Clean noise, level volume, denoise, sidechain-duck a secondary track, and polish raw audio to podcast quality. A "fix wizard" picks settings for non-experts. |
+| **Video Studio** | `/video` | Trim and clip video; export per-platform (YouTube — at 30 or, for a 60 fps game, 1080p60 —, Reels, TikTok, X, Facebook). Smart highlight finder, Chat spike finder, reframe to 9:16 (a fixed center/left/right strip — it tracks nothing), captions, color grading, GIF export, compilation, picture-in-picture, Clip Kit batch export. |
+| **Audio Studio** | `/audio` | Clean noise, level volume, denoise, sidechain-duck a secondary track, and polish raw audio to podcast quality. A "fix wizard" picks settings for non-experts. Opens sound of any length (the waveform is computed in the main process from a stream of the sound). |
 | **Stream Graphics** | `/image` | A Konva canvas editor for thumbnails, Twitch overlays, banners, and emotes. Templates-first: pick a preset (1080p / 2K / 4K), edit, export PNG/JPG. |
 | **References** | `/references` | Search inspiration (DuckDuckGo image search, SafeSearch locked on), save mood boards, and drop a curated CC0 stream asset straight onto the Stream Graphics canvas. |
 
@@ -51,7 +51,9 @@ and round-trips through Save / Open and autosave.
    searches (DuckDuckGo), the search-result thumbnails those return
    (loaded over https, no referrer), saving a result to a mood board
    (caches its thumbnail locally), and the one-click Whisper model
-   download (SHA-256 verified).
+   download (SHA-256 verified). The browser engine's own cache in
+   `%APPDATA%\imagii` can keep copies of the images those searches fetch;
+   Clear thumbnail cache does not touch it (USER_GUIDE says so).
 3. **Streamer-shaped.** Features, presets, and defaults target the
    streaming workflow. Generic "image editor" features lose to
    "thumbnail maker" features.
@@ -72,7 +74,7 @@ and round-trips through Save / Open and autosave.
   sides import.
 - **State** — Zustand stores per studio; `electron-store` for settings.
 - **Media** — `ffmpeg-static` / `ffprobe-static` for video/audio;
-  Whisper.cpp for transcription (model auto-installed on first use).
+  Whisper.cpp for transcription (the English model is a one-time download that starts from the Captions panel's Download model button; the engine file is one you add yourself).
 - **Canvas** — Konva (`react-konva`) for Stream Graphics.
 - **Build** — `electron-vite` + `electron-builder` → a portable Windows
   `.exe`.

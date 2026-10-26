@@ -1,9 +1,13 @@
-import { useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
-import { useAudioStore } from './state/audioStore'
+import { useAudioStore, waveformArrived, type AudioSource } from './state/audioStore'
+import { useAudioImportRun } from './state/audioImport'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
+import { basename } from '../../components/OutputDirLabel'
+import { replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
+import { claimFirst } from '../../lib/claimFirst'
 import {
   describeImportError,
   examineDroppedFile,
@@ -17,22 +21,60 @@ import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/medi
 
 export function AudioImporter(): JSX.Element {
   const loadSource = useAudioStore((s) => s.loadSource)
-  const [busy, setBusy] = useState(false)
+  // T-137 (1): the import - the load, and for a video or an AIFF / WMA the extraction - is a module store, not this component's state. T-119's
+  // `busyRef` died with the route: a trip to Home re-armed the importer over an extraction main was still running, a plain WAV dropped on the idle
+  // importer opened (main refuses only a second EXTRACTION) and was tuned, and the extraction's landing then replaced it, its chain and its undo
+  // history, with no confirm. The claim is `begin()`, taken the instant the import starts (a second drop or Recent pick in the same breath reads the
+  // store, not a render); `extracting` only chooses the words of the refusal. A returning importer is the same import: busy, refusing a second.
+  const busy = useAudioImportRun((s) => s.run !== null)
   const [dragOver, setDragOver] = useState(false)
   const { recent, push, clear } = useRecentFiles('audio')
+  // T-131 (5): and one chooser at a time (the Importer's `pickingRef`): `busy` is set only once a file was picked.
+  const pickingRef = useRef(false)
+
+  /** Refuses a second import while one runs. */
+  function refuseIfBusy(): boolean {
+    const running = useAudioImportRun.getState().run
+    if (running === null) return false
+    toast(
+      running.extracting
+        ? 'Still extracting audio from the last file. Wait for it to finish.'
+        : 'Still loading the last file. Wait for it to finish.',
+      { id: 'audio-importer-busy', icon: <Icon name="warning" size={18} /> }
+    )
+    return true
+  }
 
   async function loadFile(filePath: string): Promise<void> {
-    setBusy(true)
+    if (refuseIfBusy()) return
+    const extracting = audioNeedsExtraction(filePath)
+    if (!useAudioImportRun.getState().begin({ filePath, extracting })) return
+    // T-137 (1): what Audio Studio held when this import began. The importer is on screen only while no sound is open, but an extraction takes
+    // minutes and nothing locks the app: a sound that arrives meanwhile (a project opened from Home, Clean audio on a video) is the one being edited.
+    const heldBefore = useAudioStore.getState().source
     try {
       console.info('[audio-import] loading', filePath)
-      if (audioNeedsExtraction(filePath)) {
+      let opened: AudioSource
+      if (extracting) {
         toast.loading('Extracting audio…', { id: 'extract' })
-        const wavPath = await window.api.audio.extractFromVideo(filePath)
+        const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(filePath)
         toast.dismiss('extract')
-        await loadSource(wavPath, filePath)
+        // The rule of a project open and of Video Studio's Clean audio (`replacedSince`, T-112): a sound that is open now and was not when this began
+        // is the person's, and the extracted one is not loaded over it (loading resets the chain and the undo history, and cannot be undone).
+        if (replacedSince(heldBefore, useAudioStore.getState().source)) {
+          toast(`Skipped the sound of ${basename(filePath)} because you opened another file in Audio Studio while it was extracting`, {
+            icon: <Icon name="warning" size={18} />,
+            duration: 8000
+          })
+          return
+        }
+        opened = await loadSource(wavPath, filePath, undefined, hasVideo)
       } else {
-        await loadSource(filePath)
+        opened = await loadSource(filePath)
       }
+      // T-132 (11): the file is OPEN, but its waveform is read after that (T-129) and main can still refuse it (an unknown WAV format,
+      // a damaged stream): the studio then lets go of it and says why. "Loaded" and a Recent entry are for a file that stayed.
+      if (!(await waveformArrived(opened))) return
       await push(filePath)
       toast.success('Loaded')
     } catch (err) {
@@ -40,7 +82,7 @@ export function AudioImporter(): JSX.Element {
       toast.dismiss('extract')
       toast.error(describeImportError(err, filePath, 'audio'), { duration: 8000 })
     } finally {
-      setBusy(false)
+      useAudioImportRun.getState().end()
     }
   }
 
@@ -48,6 +90,9 @@ export function AudioImporter(): JSX.Element {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
+    // Before anything else is said about the file: a cloud-sync warning followed by a refusal would be
+    // two sentences that disagree.
+    if (file && refuseIfBusy()) return
     const diag = examineDroppedFile(file)
     console.info('[audio-import] drop', diag)
 
@@ -74,15 +119,20 @@ export function AudioImporter(): JSX.Element {
   }
 
   async function onPickFile(): Promise<void> {
-    const filePath = await window.api.audio.pickFile()
-    if (!filePath) return
-    if (pathLooksLikeCloudSync(filePath)) {
-      toast(
-        'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
-        { icon: <Icon name="warning" size={18} />, duration: 6000 }
-      )
-    }
-    await loadFile(filePath)
+    await claimFirst(pickingRef, async () => {
+      const filePath = await window.api.audio.pickFile()
+      if (!filePath) return
+      // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
+      // before the cloud-sync warning, for the reason the drop does.
+      if (refuseIfBusy()) return
+      if (pathLooksLikeCloudSync(filePath)) {
+        toast(
+          'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
+          { icon: <Icon name="warning" size={18} />, duration: 6000 }
+        )
+      }
+      await loadFile(filePath)
+    })
   }
 
   return (
@@ -105,7 +155,7 @@ export function AudioImporter(): JSX.Element {
         {formatHint(AUDIO_EXTENSIONS)} — or any video to extract its audio.
       </p>
       <div className="flex items-center gap-2">
-        <button className="btn-primary" onClick={onPickFile} disabled={busy}>
+        <button className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
           {busy ? 'Loading…' : 'Choose file…'}
         </button>
         <RecentFilesMenu recent={recent} onPick={(p) => void loadFile(p)} onClear={() => void clear()} />

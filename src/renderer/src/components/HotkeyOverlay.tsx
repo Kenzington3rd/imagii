@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Modal, openModalCount } from './Modal'
+import { inputTypeOf, isTextEntryTarget } from '../lib/keyOwnership'
 
 export interface Shortcut {
   keys: string
@@ -18,18 +19,18 @@ export interface Shortcut {
  */
 export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   '/video': [
-    { keys: 'Space', description: 'Play / pause (player focused)' },
+    { keys: 'Space', description: 'Play / pause (player or timeline focused)' },
     { keys: '← / →', description: 'Nudge 0.1 s (player or timeline focused)' },
     { keys: 'Home / End', description: 'Jump to start / end (timeline focused)' },
     { keys: 'Click timeline', description: 'Scrub the playhead to that point' },
-    { keys: ', / .', description: 'Frame step back / forward' },
-    { keys: 'I / O', description: 'Set in / out point at playhead' },
+    { keys: ', / .', description: 'Frame step back / forward (player or timeline focused)' },
+    { keys: 'I / O', description: 'Set in / out point at playhead (player or timeline focused)' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo clip edits' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
   '/audio': [
     { keys: 'Drag on waveform', description: 'Mark region to cut' },
-    { keys: 'Click cut tag', description: 'Undo a cut' },
+    { keys: 'Click a mark', description: 'Put a cut back' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo cleanup chain' },
     { keys: '?', description: 'Toggle this overlay' }
   ],
@@ -40,6 +41,7 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
     { keys: 'L', description: 'Line tool' },
     { keys: 'P', description: 'Pencil tool' },
     { keys: 'Ctrl+V', description: 'Paste image from clipboard' },
+    { keys: 'Shift+drag', description: "Corner handle: resize a picture or text freely; keep a shape's proportions" },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo' },
     { keys: 'Delete / Backspace', description: 'Remove selected layer' },
     { keys: '?', description: 'Toggle this overlay' }
@@ -86,14 +88,21 @@ export function isOverlayToggleKey(e: {
   ctrlKey: boolean
   metaKey: boolean
   tagName: string
+  /** The target's `type` when it is an `<input>` (T-123 (2): a ticked checkbox is not a text field). */
+  inputType?: string | null
   /** `Modal.openModalCount()` at event time — this overlay's own included. */
   openModals: number
   /** Whether this overlay is currently the one rendering a Modal. */
   overlayOpen: boolean
+  /** `KeyboardEvent.repeat`: the key is held and this is its auto-repeat (T-133 (7b)). */
+  repeat?: boolean
 }): boolean {
   if (e.key !== '?') return false
+  // T-133 (7b): a toggle is one decision per press. A held `?` opened and shut the dialog at the keyboard's repeat rate.
+  if (e.repeat) return false
   if (e.ctrlKey || e.metaKey) return false
-  if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') return false
+  // T-123 (2): a text field owns `?`; a checkbox or a slider (focused after it was used) has no use for it.
+  if (isTextEntryTarget(e.tagName, e.inputType)) return false
   return e.openModals <= (e.overlayOpen ? 1 : 0)
 }
 
@@ -120,8 +129,10 @@ export function HotkeyOverlay(): JSX.Element | null {
           ctrlKey: e.ctrlKey,
           metaKey: e.metaKey,
           tagName: (e.target as HTMLElement | null)?.tagName ?? '',
+          inputType: inputTypeOf(e.target),
           openModals: openModalCount(),
-          overlayOpen: open
+          overlayOpen: open,
+          repeat: e.repeat
         })
       ) {
         return

@@ -6,6 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
+import { withEverything } from './atomicTmp'
 import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -239,7 +240,7 @@ test.describe('imagii Video Studio import -> export', () => {
       expect(toasts).toContain('Exported 1 file')
 
       // Exactly one artifact, named by the default filename template.
-      expect(readdirSync(outDir)).toEqual([expectedName])
+      expect(withEverything(readdirSync(outDir))).toEqual([expectedName])
 
       // ── ffprobe accepts the bytes ──
       const probe = await ffprobeJson(expectedPath)

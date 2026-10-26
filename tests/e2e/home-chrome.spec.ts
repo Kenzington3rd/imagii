@@ -1,15 +1,18 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
+import { installSpawnStall } from './mainSpawn'
 import { videoTutorial } from '../../src/renderer/src/tutorials/videoTutorial'
 import { audioTutorial } from '../../src/renderer/src/tutorials/audioTutorial'
 import { imageTutorial } from '../../src/renderer/src/tutorials/imageTutorial'
 import { aiTutorial } from '../../src/renderer/src/tutorials/aiTutorial'
 import type { TutorialDef } from '../../src/renderer/src/tutorials/types'
+import { chooserCalls, recordSlowChooser } from './chooser'
 import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -317,6 +320,21 @@ async function currentStep(window: Page): Promise<number> {
   return Number(match[1])
 }
 
+/**
+ * T-125 (13): the background colors painted inside the toast bar that holds `message` - the status disc (the green tick of a success,
+ * the red cross of an error) is one of them. react-hot-toast draws its own stock green and red unless `iconTheme` says otherwise.
+ */
+async function toastDiscColors(window: Page, message: string): Promise<string[]> {
+  return window.evaluate((text) => {
+    const status = Array.from(document.querySelectorAll('[data-rht-toaster] [role="status"]')).find((el) => (el.textContent ?? '').includes(text))
+    const bar = status?.parentElement
+    if (!bar) return []
+    return Array.from(bar.querySelectorAll('*'))
+      .map((el) => getComputedStyle(el).backgroundColor)
+      .filter((c) => c !== 'rgba(0, 0, 0, 0)')
+  }, message)
+}
+
 async function waitForHome(window: Page): Promise<void> {
   await window.waitForLoadState('domcontentloaded')
   await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
@@ -388,6 +406,42 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect
         .poll(() => readConfig(userDataDir).welcomeSeen, { timeout: 15_000, intervals: [200] })
         .toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-128 (4), T-110 (x): the Welcome screen's button awaited the write of `welcomeSeen` BEFORE it let the person in, so a write main refused
+  // (a full disk, a config it cannot replace) left "Let's go" doing nothing, with nothing said. Main's `settings:set` is made to refuse here
+  // (the same ipcMain handler swapped in the running app; every other channel is the real one).
+  test('Welcome "Let\'s go" still lets the person in when main refuses to remember it, and says so in one sentence (T-128 (4))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('welcome-refused')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, {})
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toBeVisible({ timeout: 30_000 })
+      await installToastLog(window)
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('settings:set')
+        ipcMain.handle('settings:set', () => {
+          throw new Error('config write refused')
+        })
+      })
+
+      await window.getByRole('button', { name: "Let's go" }).click()
+
+      await expect(window.locator('h1', { hasText: 'imagii' }), 'the person is let in').toBeVisible({ timeout: 15_000 })
+      await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toHaveCount(0)
+      await expect
+        .poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't save your settings.")
+      expect(readConfig(userDataDir).welcomeSeen, 'and nothing was written: the next launch asks again').toBeUndefined()
     } finally {
       await app.close()
       cleanup(root)
@@ -664,6 +718,80 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  /**
+   * T-119 (11) - the coachmark's scroll honors the OS "Reduce motion" setting.
+   *
+   * `scrollIntoView({ behavior: 'smooth' })` is an explicit option, and CSS `scroll-behavior` (what the
+   * `prefers-reduced-motion` block in index.css sets) does not govern an explicit one - so the page animated to
+   * every step's target under Reduce motion, the thing that setting exists to stop. The behavior is chosen when
+   * the step is entered: 'auto' (an instant jump) under Reduce motion, 'smooth' otherwise.
+   */
+  test('T-119 the coachmark scrolls instantly under Reduce motion and smoothly otherwise', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-motion')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Every scrollIntoView on the page is recorded with the `behavior` it was asked for.
+      await window.addInitScript(() => {
+        const calls: Array<{ name: string; behavior: string | null }> = []
+        ;(window as unknown as { __scrollBehaviors: typeof calls }).__scrollBehaviors = calls
+        const original = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = function patched(this: Element, ...args: unknown[]): void {
+          const opts = args[0]
+          calls.push({
+            name: this.getAttribute('data-tutorial') ?? this.tagName,
+            behavior: opts && typeof opts === 'object' ? ((opts as ScrollIntoViewOptions).behavior ?? null) : null
+          })
+          ;(original as (...a: unknown[]) => void).apply(this, args)
+        }
+      })
+      await window.reload()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+
+      const reduced = (): Promise<boolean> =>
+        window.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      const behaviorsOn = (name: string): Promise<Array<string | null>> =>
+        window.evaluate(
+          (n) =>
+            ((window as unknown as { __scrollBehaviors?: Array<{ name: string; behavior: string | null }> })
+              .__scrollBehaviors ?? [])
+              .filter((c) => c.name === n)
+              .map((c) => c.behavior),
+          name
+        )
+      const counter = (n: number): ReturnType<Page['getByText']> =>
+        window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+
+      // Reduce motion on: arriving at the importer's step is an instant jump.
+      await window.emulateMedia({ reducedMotion: 'reduce' })
+      expect(await reduced(), 'the emulation took').toBe(true)
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => behaviorsOn('video-import'), { timeout: 10_000 }).toEqual(['auto'])
+
+      // Reduce motion off: the same arrival glides, as it always did.
+      await window.emulateMedia({ reducedMotion: 'no-preference' })
+      expect(await reduced(), 'the emulation was lifted').toBe(false)
+      await window.getByRole('button', { name: 'Next' }).click()
+      await expect(counter(3)).toBeVisible()
+      await window.getByRole('button', { name: 'Back' }).click()
+      await expect(counter(2)).toBeVisible()
+      await expect.poll(() => behaviorsOn('video-import'), { timeout: 10_000 }).toEqual(['auto', 'smooth'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('AutosaveRestore: Restore rehydrates the video and image stores', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()
@@ -728,6 +856,18 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // never happening.
       await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
       expect(await readToastLog(window)).toContain('Restored from autosave')
+      // T-125 (13): the success mark is the palette's ok-strong, not react-hot-toast's stock green, and the page's native controls
+      // are told the window is dark and which color is the accent (they were stock Chromium: blue ticks and sliders, light scrollbars).
+      const successDiscs = await toastDiscColors(window, 'Restored from autosave')
+      expect(successDiscs, 'the success disc is OK_STRONG').toContain('rgb(52, 211, 153)')
+      expect(successDiscs, 'and not the library\'s stock green').not.toContain('rgb(97, 211, 69)')
+      expect(
+        await window.evaluate(() => {
+          const cs = getComputedStyle(document.documentElement)
+          return { colorScheme: cs.colorScheme, accentColor: cs.accentColor }
+        }),
+        'native controls: dark, with the accent token'
+      ).toEqual({ colorScheme: 'dark', accentColor: 'rgb(255, 49, 49)' })
 
       // The banner dismisses itself once the restore lands.
       await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0, { timeout: 20_000 })
@@ -1059,6 +1199,79 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-133 (9): the banner's Restore and Clear are `disabled` while one of them runs, and drew like live buttons. The clear is held 4 s here (main's
+  // handler is replaced by one that waits, then does what the real one does: removes the file), so "while it runs" is a state the test creates.
+  async function holdAutosaveClear(app: ElectronApplication, userDataDir: string): Promise<void> {
+    await app.evaluate(async ({ ipcMain }, file) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fs = getBuiltin('node:fs') as { rmSync: (path: string, opts: { force: boolean }) => void }
+      ipcMain.removeHandler('autosave:clear')
+      ipcMain.handle('autosave:clear', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+        fs.rmSync(file, { force: true })
+      })
+    }, autosaveFile(userDataDir))
+  }
+  const opacityOf = (button: ReturnType<Page['getByRole']>): Promise<number> => button.evaluate((el) => Number(getComputedStyle(el).opacity))
+
+  test('AutosaveRestore: Restore and Clear are dimmed while one of them runs; Later stays live (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('autosave-dim')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // (Restore's label becomes "Restoring…" only while RESTORE runs: each button has a busy flag of its own since T-134 (7), so Clear
+      // running leaves the label "Restore" while both buttons dim. The pattern allows either label because this case does not pin which.)
+      const restore = window.getByRole('button', { name: /^Restor(e|ing…)$/ })
+      const clear = window.getByRole('button', { name: 'Clear', exact: true })
+      const later = window.getByRole('button', { name: 'Later' })
+      expect(await opacityOf(restore), 'live').toBe(1)
+      expect(await opacityOf(clear), 'live').toBe(1)
+      await holdAutosaveClear(app, userDataDir)
+      await clear.click()
+      await expect(restore).toBeDisabled()
+      await expect(clear).toBeDisabled()
+      await expect.poll(() => opacityOf(restore), { timeout: 5_000, message: 'Restore looks off while the clear runs' }).toBeLessThan(0.7)
+      await expect.poll(() => opacityOf(clear), { timeout: 5_000, message: 'Clear looks off' }).toBeLessThan(0.7)
+      await expect(later, 'Later is not part of the busy state').toBeEnabled()
+      expect(await opacityOf(later)).toBe(1)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('AutosaveRestore: the damaged banner\'s Clear is dimmed while the clear runs (T-133 (9))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('autosave-dim-damaged')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii found an autosave from .*, but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      const clear = window.getByRole('button', { name: 'Clear', exact: true })
+      expect(await opacityOf(clear), 'live').toBe(1)
+      await holdAutosaveClear(app, userDataDir)
+      await clear.click()
+      await expect(clear).toBeDisabled()
+      await expect.poll(() => opacityOf(clear), { timeout: 5_000, message: 'Clear looks off while it runs' }).toBeLessThan(0.7)
+      expect(await opacityOf(window.getByRole('button', { name: 'Dismiss' })), 'Dismiss is not part of the busy state').toBe(1)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('AutosaveRestore: a corrupt autosave says so — Dismiss hides it, Clear deletes the file', async () => {
     test.setTimeout(180_000)
     const root = makeRoot('autosave-corrupt')
@@ -1170,7 +1383,9 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // mean different things to root and to Windows and this assertion is
       // about what the user is told, which must be the same everywhere.
       // The message is verbatim what main/autosave.ts raises when a file it
-      // tried to delete is still there afterwards.
+      // tried to delete is still there afterwards and the failed unlink
+      // carried no errno code (T-118: with one, it ends in "(EBUSY)" - the
+      // second stub below). This is the shape the helper has no words for.
       await app.evaluate(async ({ ipcMain }) => {
         ipcMain.removeHandler('autosave:clear')
         ipcMain.handle('autosave:clear', () => {
@@ -1194,8 +1409,17 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
         })
         .toContain("Couldn't clear the autosave")
       const failedToasts = (await readToastLog(window)).join(' | ')
-      expect(failedToasts).toContain('could not delete autosave.json')
-      expect(failedToasts).toContain("It's still on disk")
+      // T-117: the sentence is the banner's own. It used to splice main's string in as written
+      // ("Couldn't clear the autosave: could not delete autosave.json. ..."); a locked file now reads
+      // as the plain cause when the shape is known (below), and is not shown when it is not.
+      expect(failedToasts).toContain("Couldn't clear the autosave. It's still on disk.")
+      // T-125 (13): and the error mark is the palette's danger-strong, not the library's stock red.
+      const errorDiscs = await toastDiscColors(window, "Couldn't clear the autosave")
+      expect(errorDiscs, 'the error disc is DANGER_STRONG').toContain('rgb(251, 113, 133)')
+      expect(errorDiscs, 'and not the library\'s stock red').not.toContain('rgb(255, 75, 75)')
+      expect(failedToasts).not.toContain('could not delete autosave.json')
+      // T-118: no code on the message, so no cause is guessed - the bare sentence is the whole toast.
+      expect(failedToasts).not.toContain('Windows blocked access')
       // The success copy must NOT appear — a failed delete that says
       // "Autosave cleared" is the lie this ticket exists to remove.
       expect(failedToasts).not.toContain('Autosave cleared')
@@ -1211,6 +1435,26 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(clearButton).toBeVisible()
       await expect(clearButton).toBeEnabled()
       await expect(window.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+
+      // A cause the helper knows is named in plain words, and the code and file name it came with are
+      // not shown. The stub is main's real shape for a locked file (T-118): clearAutosave appends the
+      // first failed unlink's errno to the names that survived. (Before T-118 main swallowed the errno
+      // and could never raise this, so the toast below was unreachable outside a stub.)
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => {
+          throw new Error('could not delete autosave.json (EBUSY)')
+        })
+      })
+      await window.getByRole('button', { name: 'Clear' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 20_000, intervals: [200] })
+        .toContain(
+          "Couldn't clear the autosave. It's still on disk. Windows blocked access to a file. " +
+            'Close any app using it, or check your antivirus.'
+        )
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EBUSY|maken|AppData|autosave\.json|unlink/)
+      await expect(banner).toBeVisible()
 
       // Discrimination: the SAME button, with a clear that works. What is
       // being told apart here is the renderer's two branches, so the stub is
@@ -1400,6 +1644,139 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-132 (6): focus is put on Next after every step, and Enter on a focused button is its click on keydown - which auto-repeats while the key
+  // is held. Each repeat was a click on the next step's Next, so a held Enter walked the whole tour to Done in a second, and Done persists
+  // "seen" (the tour never came back). The Fix wizard has had the guard since T-120; the tour's window keydown holds a repeat the same way.
+  // Playwright marks a keydown for a key that is already down as a repeat, which is what a held key does.
+  test('Video tutorial: a held Enter steps once, a held arrow steps once, and the tour is neither finished nor marked seen (T-132 (6))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-held')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-held.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { audio: true, image: true, ai: true } })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-held.mp4')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const total = (await stepsWithATarget(window, videoTutorial)).length
+      const counter = (n: number): ReturnType<Page['getByText']> => window.getByText(`Video Studio · ${n} of ${total}`, { exact: true })
+      await expect(counter(1)).toBeVisible({ timeout: 20_000 })
+      // Focus is on Next (the tour puts it there on every step).
+      await expect(window.getByRole('button', { name: 'Next' })).toBeFocused()
+
+      // Hold Enter: the first keydown is Next's own click (step 2) ...
+      await window.keyboard.down('Enter')
+      await expect(counter(2)).toBeVisible()
+      // ... and the auto-repeats are not more decisions. Without the guard each one clicked the new step's Next.
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(counter(2), 'six repeats walked the tour on').toBeVisible()
+      expect(await currentStep(window)).toBe(2)
+
+      // The same for a held ArrowRight (the window-level binding).
+      await window.keyboard.down('ArrowRight')
+      await expect(counter(3)).toBeVisible()
+      for (let i = 0; i < 6; i++) await window.keyboard.down('ArrowRight')
+      await window.keyboard.up('ArrowRight')
+      await expect(counter(3), 'six repeats of the arrow walked the tour on').toBeVisible()
+
+      // A fresh press is still a decision, and the tour is not finished: it was never marked seen.
+      await window.keyboard.press('Enter')
+      await expect(counter(4)).toBeVisible()
+      await window.waitForTimeout(500)
+      expect(readConfig(userDataDir).tutorialSeen?.video, 'a held key did not finish the tour').not.toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-133 (7a): the other end of the held-Enter problem. A held Enter on the tour's Done (or Skip) closes the tour with its FIRST press, the trap puts
+  // focus back on the "?" that opened it, and the key's auto-repeats are keyboard clicks (detail 0) on THAT button: the tour reopened itself, and a
+  // person who only wanted it gone saw it come back. The guard is on the key: the Enter that was down when the dialog closed does nothing until it
+  // is let go. The repeats arrive 800 ms after the press here, as they do after a real OS repeat delay (a fixed-length window would have lapsed).
+  test('Video tutorial: a held Enter on Done closes the tour once; the repeats do not reopen it (T-133 (7a))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tutorial-held-done')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-held-done.mp4')
+    await makeFixtureMp4(fixture)
+    // Started from the "?" button (the tour does not open by itself): that is the control focus goes back to when the tour is gone.
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-held-done.mp4')
+      await expect(window.locator('header').getByText('tour-held-done.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+      const total = (await stepsWithATarget(window, videoTutorial)).length
+      await expect(window.getByText(`Video Studio · 1 of ${total}`, { exact: true })).toBeVisible({ timeout: 20_000 })
+      for (let i = 1; i < total; i++) await window.getByRole('button', { name: 'Next' }).click()
+      const done = window.getByRole('button', { name: /^Done/ })
+      await expect(done).toBeFocused()
+
+      // Hold Enter on Done: the first keydown closes the tour ...
+      await window.keyboard.down('Enter')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      // ... and the auto-repeats, arriving after the OS's repeat delay, land on the "?" button focus went back to. They are not presses.
+      await window.waitForTimeout(800)
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(300)
+      await expect(window.getByRole('dialog'), 'the repeats reopened the tour').toHaveCount(0)
+
+      // The guard is not a latch: a fresh press of Enter on the "?" button is a decision and opens the tour again.
+      await expect(window.getByRole('button', { name: 'Show tutorial' })).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('dialog')).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-133 (7b): the `?` shortcuts overlay toggled on EVERY auto-repeat of a held key (open, shut, open... at the keyboard's repeat rate). Four
+  // keydowns of one held `?` are one press: the overlay is open, and stays open.
+  test('Shortcuts overlay: a held ? opens it once and it stays open (T-133 (7b))', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('overlay-held')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const overlay = window.getByRole('dialog').filter({ hasText: 'Press Esc or ? to close.' })
+      for (let i = 0; i < 4; i++) await window.keyboard.down('?')
+      await window.keyboard.up('?')
+      await window.waitForTimeout(300)
+      await expect(overlay, 'four keydowns of a held ? are one press: open (the old toggle on every repeat ended shut)').toBeVisible()
+      // A fresh press still closes it (the repeats were ignored, not the key).
+      await window.keyboard.press('?')
+      await expect(overlay).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('Video tutorial: the left/right coachmark stays inside a 1280x800 window and its buttons are clickable (T-34)', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()
@@ -1532,11 +1909,15 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await expect(
         alert.getByRole('heading', { name: 'Something went wrong in this studio' })
       ).toBeVisible()
+      // T-125 (21): and what is safe is stated truthfully. It said "most of it should be waiting on the Home screen", which
+      // Reload to Home never made true (it changes the hash and rebuilds no store, so nothing "waits" on Home); the next case drives
+      // the real claim, that the work is still open in its studio.
       await expect(
         alert.getByText(
-          'imagii saves your work every few seconds, so most of it should be waiting on the Home screen.'
+          'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'
         )
       ).toBeVisible()
+      expect(await alert.innerText()).not.toMatch(/waiting on/i)
       // What the user can SEE says neither — `innerText` skips the closed
       // Details, whose thrown message ("Forced render error …") legitimately
       // does.
@@ -1629,6 +2010,325 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
     }
   })
 
+  // T-125 (21): the crash screen's promise, driven. A person who sees "Your work is still open in its studios" and presses Reload to
+  // Home must find it there: the studio they were in has what they were doing, and no restore banner appears over it (the banner is for
+  // a launch, or a render process that died - a hash change is neither).
+  test('ErrorBoundary: after Reload to Home the work is still open in its studio, and no restore banner is offered over it (T-125 (21))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('error-boundary-open')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Work in Stream Graphics: a text layer on the canvas.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+
+      // The studio throws.
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      await expect(alert.getByText(/^Your work is still open in its studios/)).toBeVisible()
+
+      await window.getByRole('button', { name: 'Reload to Home' }).click()
+      await expect(alert).toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+      // No restore banner over Home: nothing was restarted, so there is nothing to restore.
+      await expect(window.getByText(/autosaved your work/)).toHaveCount(0)
+
+      // The work is where the screen said it was: back in the studio, the layer is still on the canvas (and the empty-state button is not).
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Layers (1)'), 'the text layer is still open in its studio').toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Start with text' })).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('T-123 (15) a renderer that dies is reloaded to Home and the autosave is offered again; a second death at once is left, not looped', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    // What main says about it: the handler logs, and the log is how a person finds out why the window blinked.
+    const mainLog: string[] = []
+    app.process().stdout?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    app.process().stderr?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      // "Later" hides the banner for this renderer only, so its coming back is the proof of a NEW page.
+      await window.getByRole('button', { name: 'Later' }).click()
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __beforeCrash?: boolean }).__beforeCrash = true
+      })
+
+      // The page is read from MAIN (webContents.executeJavaScript), not through the Playwright Page:
+      // the Page handle belongs to the process that died. A dead renderer never answers, so the read
+      // is raced against a short timer and counts as "nothing there".
+      const readWindow = (): Promise<{
+        crashed: boolean
+        page: { h1: string | null; marker: boolean; banner: boolean } | null
+      }> =>
+        app.evaluate(async ({ BrowserWindow }) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return { crashed: true, page: null }
+          const read = wc
+            .executeJavaScript(
+              `({ h1: document.querySelector('h1')?.textContent ?? null,
+                  marker: globalThis.__beforeCrash === true,
+                  banner: document.body.innerText.includes('imagii autosaved your work') })`
+            )
+            .catch(() => null)
+          const page = await Promise.race([
+            read,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+          ])
+          return { crashed: wc.isCrashed(), page }
+        })
+      const crash = (): Promise<void> =>
+        app.evaluate(({ BrowserWindow }) => {
+          BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+        })
+
+      // ── the first death: reloaded, on Home, a new page, the work offered again ──
+      await crash()
+      await expect
+        .poll(readWindow, { timeout: 30_000, intervals: [500] })
+        .toEqual({ crashed: false, page: { h1: 'imagii', marker: false, banner: true } })
+      expect(mainLog.join('')).toMatch(/renderer process went away \(crashed/)
+
+      // ── a second death straight after: left as it is, said so, and NOT reloaded in a loop ──
+      await crash()
+      await expect
+        .poll(() => mainLog.join(''), { timeout: 15_000 })
+        .toMatch(/renderer process went away \(crashed[^\n]*leaving the window as it is/)
+      await new Promise((resolve) => setTimeout(resolve, 3000))
+      expect((await readWindow()).crashed).toBe(true)
+      // One reload, not two: the first log line for each death, and only one reload between them.
+      expect((mainLog.join('').match(/renderer process went away/g) ?? []).length).toBe(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (2): the T-123 (15) recovery called `webContents.reload()`, which keeps the URL's hash, so a crash inside a
+  // studio reloaded INTO the dead studio: the page the reload lands on is `#/audio` again, no Home, no autosave banner,
+  // while the log said "reloading to Home." The entry is now loaded fresh.
+  test('T-124 (2) a renderer that dies inside a studio is reloaded to Home, with the autosave offered, not into the studio it died in', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone-studio')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    const mainLog: string[] = []
+    app.process().stdout?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    app.process().stderr?.on('data', (d: Buffer) => mainLog.push(String(d)))
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Into a studio, by the card a person clicks, so the hash really is the studio's.
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 20_000 })
+      expect(await window.evaluate(() => globalThis.location.hash)).toBe('#/audio')
+
+      const readWindow = (): Promise<{
+        crashed: boolean
+        page: { hash: string; h1: string | null; marker: boolean; banner: boolean } | null
+      }> =>
+        app.evaluate(async ({ BrowserWindow }) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return { crashed: true, page: null }
+          const read = wc
+            .executeJavaScript(
+              `({ hash: globalThis.location.hash,
+                  h1: document.querySelector('h1')?.textContent ?? null,
+                  marker: globalThis.__beforeCrash === true,
+                  banner: document.body.innerText.includes('imagii autosaved your work') })`
+            )
+            .catch(() => null)
+          const page = await Promise.race([
+            read,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))
+          ])
+          return { crashed: wc.isCrashed(), page }
+        })
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __beforeCrash?: boolean }).__beforeCrash = true
+      })
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+      })
+      await expect
+        .poll(readWindow, { timeout: 30_000, intervals: [500] })
+        .toEqual({ crashed: false, page: { hash: '#/home', h1: 'imagii', marker: false, banner: true } })
+      expect(mainLog.join('')).toMatch(/renderer process went away \(crashed[^\n]*reloading to Home\./)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (3): the same reload also STRANDED the recording sessions the dead page had open (executed: four orphaned fds and
+  // webms, then `recording:begin` refused with "too many open sessions"). The reload branch abandons the ones not yet closed.
+  test('T-124 (3) a crash mid-take leaves no recording session behind: the temp webm is removed and a new take can begin', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('renderer-gone-take')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // A take in progress, through the preload bridge the Record studio uses: a session and some bytes.
+      const sessionId = await window.evaluate(async () => {
+        const api = (globalThis as unknown as {
+          api: { recording: { begin: () => Promise<{ id: string }>; appendChunk: (id: string, b: ArrayBuffer) => Promise<void> } }
+        }).api
+        const { id } = await api.recording.begin()
+        await api.recording.appendChunk(id, new Uint8Array(65536).buffer)
+        return id
+      })
+      const temp = path.join(userDataDir, 'recordings', `${sessionId}.webm`)
+      expect(existsSync(temp), 'the take has a temp file while it is being recorded').toBe(true)
+
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.forcefullyCrashRenderer()
+      })
+      await expect
+        .poll(() => existsSync(temp), {
+          timeout: 30_000,
+          intervals: [250],
+          message: 'the dead renderer\'s partial webm is still on disk after the reload'
+        })
+        .toBe(false)
+
+      // The new page can begin a take: the dead one's session is not holding a slot. (The page is read from MAIN: the
+      // Playwright Page handle belongs to the process that died.)
+      const inPage = <T,>(code: string): Promise<T | null> =>
+        app.evaluate(async ({ BrowserWindow }, js) => {
+          const wc = BrowserWindow.getAllWindows()[0]?.webContents
+          if (!wc) return null
+          return Promise.race([wc.executeJavaScript(js).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000))])
+        }, code) as Promise<T | null>
+      await expect
+        .poll(() => inPage<string>(`document.querySelector('h1')?.textContent ?? null`), { timeout: 30_000, intervals: [500] })
+        .toBe('imagii')
+      const fresh = await inPage<string>(
+        `(async () => { const { id } = await window.api.recording.begin(); await window.api.recording.abandon(id); return id })()`
+      )
+      expect(fresh).toMatch(/^[A-Za-z0-9_-]+$/)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // T-124 (5): AutosaveRestore gated on the file alone and `dismissed` is the component's own state, so every visit to Home
+  // offered the autosave again - mid-session too - and Restore applied it over the LIVE session with no question (the undo
+  // histories went with it) while the README and USER_GUIDE say the banner appears on launch and after a crash. It is for a
+  // session that holds nothing: a launch, or the page a crash reloads to.
+  async function editInStreamGraphics(window: Page): Promise<void> {
+    await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+    await window.getByRole('button', { name: 'Start with text' }).click()
+    await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+  }
+
+  test('T-124 (5) the autosave is offered on launch, and not again over the work you are doing: edit, go Home, no banner', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('banner-midsession')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // Launch: nothing is open, the work is offered.
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Restore' })).toBeVisible()
+
+      // The person declines, starts something new, and comes back to Home.
+      await window.getByRole('button', { name: 'Later' }).click()
+      await editInStreamGraphics(window)
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByText('Hi Mike — pick a studio to get started.')).toBeVisible()
+
+      // Mid-session: no offer to apply a snapshot over the work, and no Restore button to press by mistake. The quiet status line stays.
+      await expect(
+        window.getByText(/imagii autosaved your work/),
+        'the banner is offered again over the live session'
+      ).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Restore' })).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /)).toBeVisible({ timeout: 15_000 })
+
+      // And the work is still the work: the studio holds the text layer, not the seeded rect.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Kept rect')).toHaveCount(0)
+
+      // A page with nothing in it (the launch, or what a crash reloads to) gets the offer again.
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('T-124 (5) a damaged autosave is announced at launch, not over a session that has work in it', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('banner-damaged-midsession')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const banner = window.getByText(/imagii found an autosave from .*, but it's damaged/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      await editInStreamGraphics(window)
+      await window.locator('a[href="#/home"]').first().click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(banner, 'the damaged-file notice came back over the live session').toHaveCount(0)
+      // A page with nothing in it hears about the file on disk again (by then the live session's own autosave may have replaced
+      // the damaged file with a good one, so either banner is the right answer).
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work|but it's damaged/)).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
   test('RecentFilesMenu: a pick loads the video, Escape and click-outside dismiss, Clear empties the setting', async () => {
     test.setTimeout(180_000)
     ensureScreenshots()
@@ -1698,7 +2398,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       await window.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
       expect(dialogMessages).toContain(
-        'Close this video? 1 clip and their edits will be discarded.'
+        'Close this video? 1 clip and its edits will be discarded.'
       )
 
       // ── Clear empties the list, in the UI and on disk ──
@@ -1838,9 +2538,14 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       ).toBeVisible()
       const opened = await focusInfo(window)
       expect(opened.insideDialog).toBe(true)
-      expect(opened.label).toBe('Close')
+      // T-119 (8): the question opens on its first answer (it used to open on Close, the first thing in the
+      // dialog), because every later step lands on ITS first answer and the wizard is answered from the keyboard.
+      expect(opened.label).toBe('None to speak of')
 
       // ── focus trap wraps in both directions ──
+      // One step back from the first answer is Close; one more goes past the start and wraps to the last answer.
+      await window.keyboard.press('Shift+Tab')
+      expect((await focusInfo(window)).label).toBe('Close')
       await window.keyboard.press('Shift+Tab')
       const wrappedBack = await focusInfo(window)
       expect(wrappedBack.insideDialog).toBe(true)
@@ -1873,10 +2578,10 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // Apply button raises must never have been shown. Exact copy, and the
       // recorder that would have caught it is proven live above.
       expect(await readToastLog(window)).not.toContain(
-        'Cleanup configured. Tweak from the side panels if needed.'
+        'Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.'
       )
       await expect(
-        window.getByText('Cleanup configured. Tweak from the side panels if needed.')
+        window.getByText('Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.')
       ).toHaveCount(0)
       // And the studio is still on the loaded source, not back at the importer.
       await expect(window.getByText('Drop audio or video here')).toHaveCount(0)
@@ -2128,6 +2833,799 @@ test.describe('T-86 tours wait for something to point at', () => {
         .toBe(true)
     } finally {
       await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+test.describe('T-131: review-gate fixes, sweep 17 (Home and the tours)', () => {
+  /** Launch with the video tour unseen, import a video (that opens the tour) and stop at its first step. */
+  async function openVideoTour(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-source.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { audio: true, image: true, ai: true } })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+    await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-source.mp4')
+    await expect(window.getByRole('dialog')).toBeVisible({ timeout: 30_000 })
+    return { app, window, root, userDataDir }
+  }
+
+  /** Click Next (one press each) until the card's title is `title`. */
+  async function advanceTo(window: Page, title: string): Promise<void> {
+    const dialog = window.getByRole('dialog')
+    for (let i = 0; i < 30; i++) {
+      if ((await dialog.locator('h3').innerText()) === title) return
+      await dialog.getByRole('button', { name: 'Next' }).click()
+      await window.waitForTimeout(60)
+    }
+    throw new Error(`the tour never reached "${title}"`)
+  }
+
+  // (6) next() advanced once per discrete click, so a double-click skipped a step, and where two steps share a target and a placement ("Pick
+  // your platforms", "Add a watermark" and "Export" all point at the Export card) Next stays where it was, so the second press lands on it.
+  test('a double-click on Next, Back or the scrim moves the tour ONE step (T-131 (6))', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openVideoTour('tour-dblclick')
+    try {
+      const dialog = window.getByRole('dialog')
+      const title = (): Promise<string> => dialog.locator('h3').innerText()
+      await advanceTo(window, 'Pick your platforms')
+
+      // Next: one step, to the very next title ("Add a watermark"), not the one after it.
+      await dialog.getByRole('button', { name: 'Next' }).dblclick()
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+      await window.waitForTimeout(400)
+      expect(await title(), 'the second press of the double-click did not skip a step').toBe('Add a watermark')
+
+      // Back: one step, to "Pick your platforms" again, not two.
+      await dialog.getByRole('button', { name: 'Back' }).dblclick()
+      await expect(dialog.locator('h3')).toHaveText('Pick your platforms')
+      await window.waitForTimeout(400)
+      expect(await title(), 'nor did it go back two').toBe('Pick your platforms')
+
+      // The scrim (a press anywhere outside the card) is Next too, and it is one step per double-click as well.
+      const card = (await dialog.boundingBox()) as { x: number; y: number; width: number; height: number }
+      const outside = { x: card.x > 60 ? 10 : card.x + card.width + 10, y: 10 }
+      await window.mouse.dblclick(outside.x, outside.y)
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+      await window.waitForTimeout(400)
+      expect(await title(), 'the scrim moves one step per double-click').toBe('Add a watermark')
+
+      // A person who presses once at their own pace still moves one step each time: the rule is the repeat, not the speed.
+      await dialog.getByRole('button', { name: 'Next' }).click()
+      await expect(dialog.locator('h3')).toHaveText('Export')
+      await dialog.getByRole('button', { name: 'Back' }).click()
+      await expect(dialog.locator('h3')).toHaveText('Add a watermark')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // (6)+(8)+(7) The last step: it names the ? key beside the round ? button, a double-click on Done closes the tour and goes no further (the
+  // second press lands on what the centered card stood over, which was a studio control), and the studio's hint lines name the key too.
+  test('the last step names the ? key; a double-click on Done ends the tour and its second press reaches nothing; the Player and Timeline hints name the key (T-131 (6), (7), (8))', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root, userDataDir } = await openVideoTour('tour-done')
+    try {
+      const dialog = window.getByRole('dialog')
+      await advanceTo(window, "You're all set")
+      await expect(dialog).toContainText('The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on.')
+      await window.evaluate(() => {
+        const w = window as unknown as { __clicks: Array<{ detail: number; what: string }> }
+        w.__clicks = []
+        document.addEventListener('click', (e) => {
+          const el = e.target as HTMLElement
+          w.__clicks.push({ detail: e.detail, what: `${el.tagName.toLowerCase()} ${(el.textContent ?? '').trim().slice(0, 30)}`.trim() })
+        })
+      })
+      await dialog.getByRole('button', { name: 'Done' }).dblclick()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await window.waitForTimeout(600)
+      const landed = await window.evaluate(() => (window as unknown as { __clicks: Array<{ detail: number; what: string }> }).__clicks)
+      // The first press is the tour's own (it is gone with the card); the repeat must not have reached the page under it.
+      expect(landed.filter((c) => c.detail > 1), 'the second press of the double-click reached the page under the card').toEqual([])
+      await expect.poll(() => readConfig(userDataDir).tutorialSeen?.video, { timeout: 15_000 }).toBe(true)
+
+      // (7): the key is named where a person looks for it, in the Player's hint line and the Timeline's.
+      const hints = window.locator('p.text-xs.text-ink-dim').filter({ hasText: 'all shortcuts' })
+      await expect(hints, 'the Player\'s line and the Timeline\'s').toHaveCount(2)
+      await expect(hints.first()).toContainText('set in/out')
+      await expect(hints.first().locator('kbd', { hasText: /^\?$/ })).toHaveCount(1)
+      await expect(hints.nth(1)).toContainText('at the playhead')
+      await expect(hints.nth(1).locator('kbd', { hasText: /^\?$/ })).toHaveCount(1)
+      // ...and the key does what the line says.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toContainText('Keyboard shortcuts')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // (5) Home's two project buttons go straight to a native dialog. The stand-in answers after 300 ms; the second press lands in that window.
+  test('a double-click on Open project opens ONE chooser and opens the project once; a double-click on Save project opens ONE dialog and writes ONE file (T-131 (5))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('home-dblclick')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { video: true, audio: true, image: true, ai: true } })
+    const projectFile = path.join(root, 'canvas.imagii.json')
+    writeFileSync(projectFile, JSON.stringify(canvasProject('Layer from the opened project')), 'utf8')
+    const saved = path.join(root, 'saved-once.imagii.json')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+
+      await recordSlowChooser(app, { files: [projectFile, projectFile], delayMs: 300 })
+      await window.getByRole('button', { name: 'Open project' }).dblclick()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Project loaded')
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => !c.save), 'Open project: one chooser').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Project loaded'), 'opened once').toHaveLength(1)
+
+      await recordSlowChooser(app, { saveAs: saved, delayMs: 300 })
+      await window.getByRole('button', { name: 'Save project' }).dblclick()
+      await expect.poll(() => existsSync(saved), { timeout: 30_000, intervals: [200] }).toBe(true)
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'Save project: one Save dialog').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Project saved'), 'saved once').toHaveLength(1)
+      const written = JSON.parse(readFileSync(saved, 'utf8')) as { imageCanvas?: { doc?: { layers?: Array<{ name: string }> } } }
+      expect(written.imageCanvas?.doc?.layers?.[0]?.name, 'and the file holds the project that was opened').toBe('Layer from the opened project')
+      expect(readdirSync(root).filter((f) => f.endsWith('.imagii.json')).sort(), 'one new file, not two').toEqual(['canvas.imagii.json', 'saved-once.imagii.json'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// T-136 (11): the banner's Clear deleted the file and said "Autosave cleared", and the line "Last autosave: N min ago" stayed up under it - the dismissed
+// branch draws from the `info` read when the page mounted, and a successful Clear did not change it. It lasted until the next visit to Home, which is
+// the one place a person looks for it. A successful Clear is a file that is not there.
+test.describe('T-136 (11): the status line goes with the file', () => {
+  test('after Clear on the healthy banner there is no "Last autosave" line, at once, and none after a visit either', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-healthy')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => await readToastLog(window), { timeout: 20_000 }).toContain('Autosave cleared')
+      expect(existsSync(autosaveFile(userDataDir)), 'the file is gone').toBe(false)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      // The point of the case: not "after a reload" - right now, in the same visit.
+      await expect(window.getByText(/^Last autosave: /), 'no backup is reported: there is none').toHaveCount(0)
+      await window.waitForTimeout(500)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+
+      // And a visit afterwards agrees with it.
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the control: Later keeps the file and the line says so', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-later')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Later' }).click()
+      await expect(window.getByText(/^Last autosave: /)).toBeVisible()
+      expect(existsSync(autosaveFile(userDataDir))).toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('after Clear on the damaged banner there is no "Last autosave" line either', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-damaged')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await expect(window.getByText(/but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => await readToastLog(window), { timeout: 20_000 }).toContain('Autosave cleared')
+      expect(existsSync(autosaveFile(userDataDir))).toBe(false)
+      await expect(window.getByText(/but it's damaged/)).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /), 'a deleted file is not a backup').toHaveCount(0)
+      await window.waitForTimeout(500)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a Clear that is refused leaves the banner, the file and (after Dismiss) the line: nothing says the file is gone', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t136-clear-refused')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', () => {
+          throw new Error('could not delete autosave.json')
+        })
+      })
+      await expect(window.getByText(/but it's damaged/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect.poll(async () => (await readToastLog(window)).join(' | '), { timeout: 20_000 }).toContain("Couldn't clear the autosave")
+      expect(existsSync(autosaveFile(userDataDir)), 'the file is still there').toBe(true)
+      await window.getByRole('button', { name: 'Dismiss' }).click()
+      await expect(window.getByText(/^Last autosave: /), 'and the line still reports it').toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// T-137 (6): ONE size rule for Save, Open and autosave. A project over 50 MiB used to save ("Project saved", 56.9 MiB of pretty-printed JSON), refuse to
+// open again with the damaged-file sentence, and stop autosaving with a console line. Save now refuses before it asks where to save, in a sentence that
+// names the size; Open says the project is too large (not damaged); autosave stops and says so, once, in a toast. The project here is a seeded file one
+// text layer short of the limit (a picture layer whose src is padded: it need not decode, the document just carries it), so a real "+ Add text" in Stream
+// Graphics is the edit that crosses the line, and nothing is faked in the app: the files on disk are the evidence.
+test.describe('T-137 (6): a project over the size limit', () => {
+  const LIMIT = 50 * 1024 * 1024
+
+  /** A project file whose text is exactly `size` characters: one picture layer, its src padded to fit. */
+  function projectFileOfSize(size: number): string {
+    const make = (src: string): string =>
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        imageCanvas: {
+          doc: {
+            width: 1200,
+            height: 800,
+            background: '#ffffff',
+            layers: [
+              { id: 'bigpic', type: 'image', name: 'Huge picture', visible: true, locked: false, x: 60, y: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src, width: 100, height: 100 }
+            ]
+          }
+        }
+      })
+    return make('A'.repeat(size - make('').length))
+  }
+
+  const SAVE_REFUSAL = /^This project is too large to save \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, then save again\.$/
+  const AUTOSAVE_PAUSED = /^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/
+  const OPEN_REFUSAL = /^That project is too large to open \(\d+\.\d MB; the limit is 50 MB\)\./
+
+  /** A launched app that has opened the seeded project one text layer short of the limit (so it is a project that fits), on Home. */
+  async function openNearlyFull(label: string, answers: { saveAs?: string; files?: string[] } = {}): Promise<{
+    app: ElectronApplication
+    window: Page
+    root: string
+    userDataDir: string
+    nearly: string
+  }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // Under the limit by 150 characters: the captured project adds a `place` record (about 55), so it opens, saves and autosaves; one text layer (216
+    // characters, and its comma) is what takes it over.
+    const nearly = path.join(root, 'nearly.imagii.json')
+    writeFileSync(nearly, projectFileOfSize(LIMIT - 150), 'utf8')
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: [nearly, ...(answers.files ?? [])], ...(answers.saveAs ? { saveAs: answers.saveAs } : {}) })
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain('Project loaded')
+    return { app, window, root, userDataDir, nearly }
+  }
+
+  /** One real "+ Add text" in Stream Graphics: the edit that takes the seeded project over the limit. */
+  async function addTextInStreamGraphics(window: Page, layers: number): Promise<void> {
+    if (layers === 2) {
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+    }
+    await window.locator('[data-tutorial="image-import"]').getByRole('button', { name: '+ Add text' }).click()
+    await expect(window.getByRole('heading', { name: `Layers (${layers})` })).toBeVisible()
+  }
+
+  test('a project that fits is saved as the compact text that was measured, within the limit, and the file opens again', async () => {
+    test.setTimeout(240_000)
+    const savedOnce = path.join(os.tmpdir(), `imagii-e2e-t137-saved-${Date.now().toString(36)}.imagii.json`)
+    const { app, window, root } = await openNearlyFull('t137-fits', { saveAs: savedOnce, files: [savedOnce] })
+    try {
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain('Project saved')
+      expect(statSync(savedOnce).size, 'a file Save writes is within the limit it was measured against').toBeLessThanOrEqual(LIMIT)
+      expect(readFileSync(savedOnce, 'utf8').startsWith('{"schemaVersion"'), 'compact JSON: the text that was measured').toBe(true)
+      // ...and it is a file Open accepts (the point of one rule): opened again, in the same app.
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t === 'Project loaded').length, { timeout: 120_000, intervals: [250] })
+        .toBe(2)
+    } finally {
+      await app.close()
+      cleanup(root)
+      rmSync(savedOnce, { force: true })
+    }
+  })
+
+  test('autosave of a project over the limit stops and says so, once, in a toast; the file on disk stays the last project that fit', async () => {
+    test.setTimeout(300_000)
+    const { app, window, root, userDataDir } = await openNearlyFull('t137-autosave')
+    try {
+      // The control for "stops": the fitting project is autosaved.
+      await expect.poll(() => readAutosaveLayers(userDataDir) ?? 0, { timeout: 60_000, intervals: [500] }).toBe(1)
+      await addTextInStreamGraphics(window, 2)
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => AUTOSAVE_PAUSED.test(t)).length, { timeout: 60_000, intervals: [500] })
+        .toBe(1)
+      // More edits while it stays over: the one toast is not raised again, and the file on disk is still the fitting project.
+      await addTextInStreamGraphics(window, 3)
+      await window.waitForTimeout(13_000)
+      expect((await readToastLog(window)).filter((t) => AUTOSAVE_PAUSED.test(t)), 'told once').toHaveLength(1)
+      expect(readAutosaveLayers(userDataDir), 'and nothing over the limit was written').toBe(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Save refuses a project over the limit in a sentence, BEFORE the dialog, and writes nothing', async () => {
+    test.setTimeout(300_000)
+    const never = path.join(os.tmpdir(), `imagii-e2e-t137-never-${Date.now().toString(36)}.imagii.json`)
+    const { app, window, root } = await openNearlyFull('t137-save', { saveAs: never })
+    try {
+      await addTextInStreamGraphics(window, 2)
+      await window.evaluate(() => {
+        window.location.hash = '#/home'
+      })
+      await waitForHome(window)
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => SAVE_REFUSAL.test(t)).length, { timeout: 60_000, intervals: [250] })
+        .toBe(1)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'the person was never asked where to save a file that would not be written').toHaveLength(0)
+      expect(existsSync(never)).toBe(false)
+      expect((await readToastLog(window)).filter((t) => t === 'Project saved'), 'and it never said it saved').toHaveLength(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Open of a file past the limit names the size, not "damaged or saved by a newer version"', async () => {
+    test.setTimeout(240_000)
+    const tooBig = path.join(os.tmpdir(), `imagii-e2e-t137-too-big-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(tooBig, projectFileOfSize(LIMIT + 5000), 'utf8')
+    const root = makeRoot('t137-open')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await recordSlowChooser(app, { files: [tooBig] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => OPEN_REFUSAL.test(t)).length, { timeout: 120_000, intervals: [250] })
+        .toBe(1)
+      expect((await readToastLog(window)).some((t) => /damaged|newer version/.test(t))).toBe(false)
+    } finally {
+      await app.close()
+      cleanup(root)
+      rmSync(tooBig, { force: true })
+    }
+  })
+})
+
+/** The number of layers in the canvas the autosave file holds, or null when there is no readable autosave. */
+function readAutosaveLayers(userDataDir: string): number | null {
+  const file = autosaveFile(userDataDir)
+  if (!existsSync(file)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { imageCanvas?: { doc?: { layers?: unknown[] } } }
+    return parsed.imageCanvas?.doc?.layers?.length ?? null
+  } catch {
+    return null
+  }
+}
+
+// ── T-139 (5): the autosave banner goes when Home's Open project lands ─────────────────────────────────────────────────────────────────────
+//
+// `AutosaveRestore` reads "does the session hold work" once per mount, and Open project applies the project and STAYS on Home, so the banner that was drawn over an
+// empty session went on offering "pick up where you left off" - and its Restore applied the snapshot over the project that had just been opened (executed by QA).
+// Home says the offer is withdrawn once the open has applied, and every mounted banner drops it; `restore()` also asks again at the press (a wiring pin, in
+// interactionWiring.test.ts). T-140 (6) corrected what this comment said here ("no way in the UI puts work into the session behind a banner that did not hear Home"):
+// a conversion or an extraction that lands while the person is on Home does exactly that, and the banner now listens to the stores itself (see "T-140 (6)" below).
+// What stays out of the UI's reach is only the press-time backstop, which a banner that hears every landing is left to catch in the few milliseconds between a landing
+// and its re-render: the sentence it says is held by ProjectIO.test.ts and the wiring pin.
+test.describe('T-139 (5): the autosave banner goes when Open project lands', () => {
+  test('an autosave is offered; a project opened from Home takes the offer away, and the project is what Stream Graphics shows', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t139-offer')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Autosaved layer'))
+    const opened = path.join(root, 'opened.imagii.json')
+    writeFileSync(opened, JSON.stringify(canvasProject('Opened layer')), 'utf8')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      // The premise: the session holds nothing, so the autosave is offered.
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Restore', exact: true })).toBeEnabled()
+
+      await recordSlowChooser(app, { files: [opened] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+
+      // The offer is gone with the open: no banner, no Restore to press over the opened project.
+      await expect(window.getByText(/imagii autosaved your work/), 'the banner goes when the project is opened').toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(0)
+      expect((await readToastLog(window)).filter((t) => /Restored from autosave/.test(t)), 'and nothing was restored').toEqual([])
+
+      // What the opened project holds is what Stream Graphics shows - and only that.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(window.locator('[data-tutorial="image-layers"]').getByText('Opened layer', { exact: true })).toBeVisible()
+      await expect(window.locator('[data-tutorial="image-layers"]').getByText('Autosaved layer', { exact: true })).toHaveCount(0)
+
+      // And back on Home the banner stays away: the session holds the opened project.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-139 (9): a double-click on Welcome's "Let's go" does not open a studio ───────────────────────────────────────────────────────────────
+//
+// "Let's go" is replaced by Home under the pointer, and the second press of a double-click lands where the button was. Measured in the built app (a fresh userData so
+// Welcome shows): at 1366x768 (the window) it lands on Stream Graphics' card and opens that studio; the same at the 1306x734 window a 1536x864 display gives the
+// app, 1161x653 (a 1366x768 display's) and the 1024x640 minimum; at 1536x864 and 1632x918 it lands in the gap between the cards and opens nothing. The family's
+// tool is `swallowRepeatClicks()` after the dismiss (a repeat press does not reach what is under it for half a second).
+test.describe('T-139 (9): a double-click on Welcome\'s "Let\'s go"', () => {
+  for (const [width, height] of [
+    [1366, 768],
+    [1306, 734]
+  ] as const) {
+    test(`at ${width}x${height} the second press does not land on a Home card: the app stays on Home`, async () => {
+      test.setTimeout(120_000)
+      const root = makeRoot(`t139-welcome-${width}`)
+      const userDataDir = path.join(root, 'userData')
+      seedUserData(userDataDir, {})
+      const app = await launchApp(userDataDir)
+      try {
+        const window = await app.firstWindow()
+        await window.waitForLoadState('domcontentloaded')
+        const go = window.getByRole('button', { name: "Let's go" })
+        await expect(go).toBeVisible({ timeout: 30_000 })
+        await setContentSize(app, window, width, height)
+        const box = await go.boundingBox()
+        if (!box) throw new Error('"Let\'s go" has no box')
+        const x = box.x + box.width / 2
+        const y = box.y + box.height / 2
+        // A real double-click: the second press ~100 ms after the first, with the browser's own click count (detail 2).
+        await window.mouse.move(x, y)
+        await window.mouse.down({ clickCount: 1 })
+        await window.mouse.up({ clickCount: 1 })
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+        // The premise: what the second press lands on is a studio's card (a link) at these sizes.
+        const under = await window.evaluate(([px, py]) => document.elementFromPoint(px as number, py as number)?.closest('a')?.getAttribute('href') ?? null, [x, y])
+        expect(under, 'the point the button was at is now a Home card').not.toBeNull()
+        await window.waitForTimeout(100)
+        await window.mouse.down({ clickCount: 2 })
+        await window.mouse.up({ clickCount: 2 })
+        await window.waitForTimeout(1000)
+        expect(await window.evaluate(() => window.location.hash), 'the second press opened no studio').toBe('#/home')
+        await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+        // The swallow is for half a second: a press after that is a decision, and it works.
+        await window.waitForTimeout(600)
+        await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+        await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+  }
+})
+
+// ── T-140 (6): work that lands while the banner is mounted takes the offer away ────────────────────────────────────────────────────────────
+//
+// The banner reads "does the session hold work" once per mount, and the importers' runs (a conversion, an extraction) are module stores that outlive the route: a
+// sound being extracted when the person goes Home lands under a banner that mounted over an empty session. Restore then did nothing at the press and said nothing
+// (the press-time backstop withdrew the offer and returned). The banner listens to the stores now and drops its offer when work lands, without a press - except
+// while a Restore is applying the work itself, which keeps its "Restoring…" until the snapshot is in.
+test.describe('T-140 (6): the autosave banner goes when work lands on Home', () => {
+  test('a sound being extracted when the person went Home lands: the banner goes by itself, nothing is restored, and nothing was pressed', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t140-land')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'e2e-clip.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Autosaved layer'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      const banner = window.getByText(/imagii autosaved your work/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      // The extraction's ffmpeg (the first this page starts) is held, so the sound is still being made when the person is back on Home.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      await dropOnZone(window, '[data-tutorial="audio-importer"] .card', clip, 'e2e-clip.mp4')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+
+      // The premise: a banner that mounted over an EMPTY session (the sound has not landed), with a Restore that works.
+      await expect(banner, 'the session holds nothing yet, so the autosave is offered').toBeVisible({ timeout: 20_000 })
+      const restore = window.getByRole('button', { name: 'Restore', exact: true })
+      await expect(restore).toBeEnabled()
+
+      // The extraction ends and the sound lands in Audio Studio, under the banner. Nothing is pressed.
+      await expect(banner, 'the banner goes when the sound lands').toHaveCount(0, { timeout: 90_000 })
+      await expect(restore).toHaveCount(0)
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Loaded')
+      expect((await readToastLog(window)).filter((t) => /Restored from autosave|Nothing was restored/.test(t)), 'no press, no restore, no refusal').toEqual([])
+
+      // And nothing was restored: the sound is Audio Studio's, and Stream Graphics has not been given the autosave's layer.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText('Pick a template to start'), 'the canvas is still empty: the autosave was not applied').toBeVisible()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      // The offer stays away on the next visit to Home, as it does over any session that holds work.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await expect(banner).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a Restore that fills one studio and is still extracting another keeps saying "Restoring…": the work it put there is its own, not a reason to withdraw the offer', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t140-own')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'e2e-clip.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // A video (it opens at once: the apply order is video, then audio) and the sound of the same file (it is extracted again, and that is a wait). No `place`: the
+    // person stays on Home when it ends.
+    seedAutosave(userDataDir, {
+      schemaVersion: 5,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: { sourcePath: clip, clips: [], selectedClipId: null, watermark: null, srtPath: null },
+      audioStudio: { sourcePath: clip, extractedFromVideo: true, chain: DEFAULT_CHAIN_SPEC }
+    })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      const banner = window.getByText(/imagii autosaved your work/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      await window.getByRole('button', { name: 'Restore', exact: true }).click()
+      // The extraction has begun, so the video (applied first) is already in its studio: the session holds work, put there by this Restore.
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Extracting audio…')
+      const restoring = window.getByRole('button', { name: 'Restoring…' })
+      await expect(restoring, 'still restoring, still on screen').toBeVisible()
+      await expect(restoring).toBeDisabled()
+      await window.waitForTimeout(1500)
+      await expect(restoring, 'and still there a moment later').toBeVisible()
+
+      // It ends: one "Restored from autosave", and the banner goes because the snapshot is applied.
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Restored from autosave')
+      await expect(banner).toHaveCount(0, { timeout: 15_000 })
+      expect((await readToastLog(window)).filter((t) => t === 'Restored from autosave'), 'one completion').toHaveLength(1)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-140 (9): the recent-files menu hands focus to its toggle when it closes ──────────────────────────────────────────────────────────────
+//
+// The open list unmounts on Escape, on a pick and on Clear list, and focus on an item (or on Clear list) went with it - to the page, so the next Tab started at the
+// top of the window. Focus that was in the menu goes to the toggle. With no entries left the whole menu unmounts, the toggle with it, so after Clear list the focus
+// goes to the control before the menu in its row, "Choose file…" (decided: there is no toggle left to give it to).
+test.describe('T-140 (9): the recent-files menu keeps the keyboard\'s place', () => {
+  /** Launch on the importer of one studio with one recent file seeded. */
+  async function openImporter(label: string, studio: 'Video Studio' | 'Audio Studio'): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; clip: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'recent-source.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: ALL_TUTORIALS_SEEN,
+      recentFiles: studio === 'Video Studio' ? { video: [clip] } : { audio: [clip] }
+    })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await window.locator('a', { hasText: studio }).first().click()
+    await expect(window.getByText(studio === 'Video Studio' ? 'Drop a video here' : 'Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    return { app, window, root, userDataDir, clip }
+  }
+  const activeLabel = (window: Page): Promise<string> =>
+    window.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null
+      return el && el !== document.body ? (el.getAttribute('aria-label') ?? (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)) : 'BODY'
+    })
+
+  test('Tab into the list, Escape: the toggle has the focus; from Clear list too; and Escape with the focus elsewhere does not take it', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-esc', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      const chooseFile = window.getByRole('button', { name: 'Choose file…' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+      // Tab into the list: the first entry has the focus (the premise: focus really is inside the menu).
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'Escape from an entry: the toggle has the focus').toBeFocused()
+
+      // From the last control in the menu too.
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toBe('Clear list')
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'Escape from Clear list: the toggle has the focus').toBeFocused()
+
+      // The control: focus that is NOT in the menu is where the person put it. Open the menu, Shift+Tab to Choose file…, Escape: the menu closes and the focus stays.
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Shift+Tab')
+      await expect(chooseFile).toBeFocused()
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(chooseFile, 'Escape with the focus outside the menu takes nothing').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('Clear list from the keyboard: the list is emptied on disk, the menu goes with its toggle, and the focus is on Choose file… (not on the page)', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root, userDataDir } = await openImporter('t140-clear', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toBe('Clear list')
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: /^Recent/ }), 'no entries, no menu').toHaveCount(0)
+      await expect.poll(() => readConfig(userDataDir).recentFiles?.video, { timeout: 15_000, intervals: [200] }).toEqual([])
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'the control before the menu has the focus').toBeFocused()
+      // ...which a keyboard person can use at once: the next Tab moves on from there, not from the top of the window.
+      expect(await activeLabel(window)).toBe('Choose file…')
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a pointer that leaves the list while the focus is in it closes the menu and the toggle has the focus', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-leave', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      // The pointer goes onto the list (the focus does not move) and away from it: the list closes when the pointer leaves it.
+      const entry = window.getByRole('button', { name: /recent-source\.mp4/ })
+      const box = await entry.boundingBox()
+      if (!box) throw new Error('the entry has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await expect(toggle, 'still open while the pointer is on it').toHaveAttribute('aria-expanded', 'true')
+      await window.mouse.move(4, 4, { steps: 4 })
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'the entry that had the focus is gone; the toggle has it').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a keyboard pick: the toggle has the focus while the file loads (a converted or extracted file keeps the importer up; once the studio opens there is no importer to hold it)', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-pick', 'Audio Studio')
+    try {
+      // The pick of a video makes Audio Studio extract its sound; the extraction's ffmpeg is held so the importer is still on screen.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 8_000 }])
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await expect(window.getByRole('button', { name: 'Loading…' }), 'the importer is busy with the pick').toBeDisabled()
+      await expect(toggle, 'the menu is closed').toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'and the pick left the focus on the toggle').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
       cleanup(root)
     }
   })

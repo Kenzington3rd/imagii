@@ -22,6 +22,7 @@ import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
+import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
 import { imageTutorial } from '../../tutorials/imageTutorial'
 
 export function ImageStudio(): JSX.Element {
@@ -48,16 +49,23 @@ export function ImageStudio(): JSX.Element {
       // removed the selected layer behind the Variants/Templates scrim and
       // R/O/L/P switched the tool on a canvas the user could not see.
       if (isModalOpen()) return
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      const ctrl = e.ctrlKey || e.metaKey
+      // T-119: a focused <select> owns the letters (type-ahead) as a text field does: the Export format and
+      // Scale selects are inline panels, not Modals, so the check above never covered them, and typing `p`
+      // to reach PNG switched the tool while Delete over one removed the selected layer.
+      // T-123 (2): "any INPUT" also stood down for a ticked Snap box or a dragged slider, which the browser
+      // leaves focused, so R and Delete went dead after either. A text field and a select own every key here; a
+      // checkbox or a range owns none of these (Space, and the arrows, are all it has), so the tool keys fire.
+      if (focusOwnsKey((e.target as HTMLElement).tagName, inputTypeOf(e.target), e.key)) return
+      // T-124 (29): a bare-letter shortcut is for the bare letter. Only `v` honored Ctrl (so Ctrl+V could paste); Ctrl+R, Ctrl+O,
+      // Ctrl+L and Ctrl+P, and the same with Alt or Cmd, switched tools. A chord belongs to the window or the browser.
+      if (hasChordModifier(e)) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLayerId) {
           e.preventDefault()
           removeLayer(selectedLayerId)
         }
       } else if (e.key === 'v' || e.key === 'V') {
-        if (!ctrl) setTool('select')
+        setTool('select')
       } else if (e.key === 'r' || e.key === 'R') {
         setTool('rect')
       } else if (e.key === 'o' || e.key === 'O') {
@@ -73,7 +81,9 @@ export function ImageStudio(): JSX.Element {
   }, [selectedLayerId, removeLayer, setTool])
 
   return (
-    <div className="h-full overflow-hidden px-6 py-5 flex flex-col gap-4">
+    // T-140 (5): `overflow-auto` like the four sibling studios, the backstop: the canvas gives way first (it flexes down to its floor), and a window short enough that the
+    // rest still does not fit scrolls instead of clipping the Export bar where the wheel cannot reach it.
+    <div className="h-full overflow-auto px-6 py-5 flex flex-col gap-4">
       <header className="flex items-center justify-between flex-shrink-0">
         <div>
           <HomeLink />
@@ -109,7 +119,9 @@ export function ImageStudio(): JSX.Element {
           <ImportPanel />
           <Toolbar />
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_clamp(260px,16%,380px)] gap-4 min-h-0">
-            <div className="flex flex-col gap-3 min-h-0">
+            {/* min-w-0: the Stage inside is a fixed-pixel box fitted to this column, and a grid item's automatic minimum is its content's width - without it a wide
+                document (the 1200x480 banner) held the 1fr track at the Stage's width and pushed the Layers card off the right edge (T-140 (5)). */}
+            <div className="flex flex-col gap-3 min-h-0 min-w-0">
               <Canvas />
               <ExportDialog />
             </div>

@@ -1,5 +1,8 @@
 import type { ImagiiProject, PlaceRecord, ReferencesTab } from './workspace'
 import { isSafeAbsolutePath } from './pathSafety'
+import { resolveOverlayColor } from './overlayColors'
+import { secondaryTrackProblem } from './audio'
+import { PLATFORM_IDS } from './clip'
 
 /**
  * Tech-debt fix: schema version is now ranged. Validator accepts any
@@ -7,8 +10,8 @@ import { isSafeAbsolutePath } from './pathSafety'
  * to MAX_SCHEMA_VERSION before returning. New saves always emit
  * MAX_SCHEMA_VERSION.
  */
-export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const
-export const MAX_SCHEMA_VERSION = 3
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3, 4, 5] as const
+export const MAX_SCHEMA_VERSION = 5
 
 /** Every route the app can restore to (App.tsx's <Route path> set). */
 export const KNOWN_ROUTES = [
@@ -34,7 +37,46 @@ export type ValidationResult =
   | { ok: true; project: ImagiiProject }
   | { ok: false; reason: string }
 
-const MAX_BYTES = 50 * 1024 * 1024 // 50 MB sanity cap on a project file
+/**
+ * The largest a project may be, in characters of its JSON text (bytes, for everything but a path with an accented letter in it): 50 MiB.
+ *
+ * T-137 (6): ONE rule for every way a project is written or read. Open measured the file's text, autosave measured `JSON.stringify(project)`, and
+ * `project:save` measured nothing and wrote PRETTY-printed JSON, so a project Save accepted (56.9 MiB, from four 11 MB pictures) was one Open
+ * refused with the damaged-file sentence. Now every writer serializes with `serializeProject` and every gate asks `projectSizeProblem` of the
+ * length of the text it holds, so a file Save writes is exactly the text it measured and always opens.
+ */
+export const MAX_PROJECT_BYTES = 50 * 1024 * 1024
+
+/** The ONE serialization a project is measured on and written in (T-137 (6)): compact JSON, the form autosave always wrote. */
+export function serializeProject(project: ImagiiProject): string {
+  return JSON.stringify(project)
+}
+
+const MEBIBYTE = 1024 * 1024
+
+/** "55.4 MB": a size as the sentences say it, rounded UP to a tenth so a project one character over the limit never reads as "50.0 MB; the limit is 50 MB". */
+function megabytes(size: number): string {
+  return (Math.ceil((size / MEBIBYTE) * 10) / 10).toFixed(1)
+}
+
+/**
+ * T-137 (6): null when a project of `size` characters is within the limit, else the finished sentence for what was being done with it - one line a toast
+ * shows as written (`userFacingError` lets it stand): the size, the limit, and what to do. A project this big is pictures (a text, a clip or a layer is a
+ * few hundred bytes), and the canvas is the only studio that holds any.
+ */
+export function projectSizeProblem(size: number, doing: 'save' | 'open' | 'autosave'): string | null {
+  if (size <= MAX_PROJECT_BYTES) return null
+  const sized = `(${megabytes(size)} MB; the limit is ${MAX_PROJECT_BYTES / MEBIBYTE} MB)`
+  // T-138 (3): what Save and autosave can ask for is what frees bytes. Scaling a layer changes its scaleX / scaleY and never its `src`, so it frees nothing.
+  switch (doing) {
+    case 'save':
+      return `This project is too large to save ${sized}. Remove some of the large images on the canvas, or import smaller copies of them, then save again.`
+    case 'autosave':
+      return `Autosave is paused: this project is too large to keep ${sized}. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again.`
+    case 'open':
+      return `That project is too large to open ${sized}. An earlier version of imagii let one be saved this big; its images are the likely cause.`
+  }
+}
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -57,9 +99,9 @@ function isOptionalSafePath(v: unknown): boolean {
 
 /** Allowed hex-color form for a text overlay (`#RRGGBB` or `RRGGBB`). */
 const COLOR_HEX_RE = /^#?[0-9A-Fa-f]{6}$/
-/** Sane bounds for an overlay font size, in pixels. */
-const OVERLAY_SIZE_MIN = 8
-const OVERLAY_SIZE_MAX = 512
+/** Sane bounds for an overlay font size, in pixels (the editor clamps to these — `textOverlay.ts`). */
+export const OVERLAY_SIZE_MIN = 8
+export const OVERLAY_SIZE_MAX = 512
 
 /**
  * Validate a single clip text overlay. A malicious `.imagii.json` can set
@@ -85,9 +127,47 @@ export function isValidTextOverlay(v: unknown): boolean {
 }
 
 /**
- * Validate the `textOverlays` field of a clip. Absent is fine
- * (back-compat); if present it must be an array of well-formed overlays.
- * Returns a reason string on failure, or null on success.
+ * Migrate what an older build stored in a clip's text overlays, in place, before the gate looks
+ * (T-114, T-115). Two things the gate refuses today were things the editor wrote:
+ *
+ * - A NAMED color. The overlay editor's default was the name "white" until T-113, so an autosave
+ *   or a saved project written by that build holds `"colorHex": "white"`, which the hex-only gate
+ *   refuses - the person's whole session was unrecoverable. A string that fails the hex gate and
+ *   IS a CSS color name is replaced by the table's hex (`resolveOverlayColor`: a literal table,
+ *   so what is written is the table's value and never the string that was typed). Anything else -
+ *   a filter-graph payload, an unknown word, a non-string - is left exactly as it is and the gate
+ *   refuses it, so the injection pin does not move.
+ * - A SIZE outside the gate's range. The old editor had no upper clamp (it took whatever was
+ *   typed), so a project can hold 800 or 3. A finite number is clamped into
+ *   [OVERLAY_SIZE_MIN, OVERLAY_SIZE_MAX], which is what the editor does today. A value that is
+ *   not a finite number - a string, null, Infinity - is left for the gate to refuse; the clamp
+ *   produces a number from a number and nothing else, so it cannot carry text into `drawtext`.
+ *
+ * The gate itself (`isValidTextOverlay`) is unchanged and strict. Export and Compile run it on every
+ * overlay they are sent (`assertOptionalClipRecipe`) and still refuse one outside the range; Save
+ * project and a restore both go through `validateProject`, which migrates first, so neither refuses a
+ * legacy size - Save writes the clamped number.
+ */
+function migrateLegacyOverlays(clip: unknown): void {
+  if (!isPlainObject(clip) || !Array.isArray(clip.textOverlays)) return
+  for (const overlay of clip.textOverlays as unknown[]) {
+    if (!isPlainObject(overlay)) continue
+    const typed = overlay.colorHex
+    if (typeof typed === 'string' && !COLOR_HEX_RE.test(typed)) {
+      const hex = resolveOverlayColor(typed)
+      if (hex !== null) overlay.colorHex = hex
+    }
+    if (isFiniteNumber(overlay.sizePx)) {
+      overlay.sizePx = Math.min(OVERLAY_SIZE_MAX, Math.max(OVERLAY_SIZE_MIN, overlay.sizePx))
+    }
+  }
+}
+
+/**
+ * Validate the `textOverlays` field of a clip: if present it must be an array of well-formed overlays.
+ * Returns a reason string on failure, or null on success. Absent is not judged HERE - the overlays are
+ * checked first so a payload in one is named as an overlay problem - but it is refused one gate later,
+ * by `validateClipRequiredFields` (T-121): the studio reads the array bare.
  */
 function validateClipTextOverlays(clip: unknown, idx: number): string | null {
   if (!isPlainObject(clip)) return `videoStudio.clips[${idx}] not an object`
@@ -99,6 +179,81 @@ function validateClipTextOverlays(clip: unknown, idx: number): string | null {
   for (let i = 0; i < overlays.length; i++) {
     if (!isValidTextOverlay(overlays[i])) {
       return `videoStudio.clips[${idx}].textOverlays[${i}] malformed`
+    }
+  }
+  return null
+}
+
+/**
+ * T-119: the fields of a clip the app reads without a guard. `validateProject` used to look only at a
+ * clip's text overlays, so `clips: [{}]` was a valid studio and the first render threw on
+ * `for (const p of clip.selectedPresets)`. T-121 added `textOverlays`: the T-119 text called it "read with a
+ * default", and it is not - `videoStore` (`clip.textOverlays.length`, `.map`, `.filter`, `[...c.textOverlays]`),
+ * the overlay editor and `buildVideoFilter` all read it bare, so a restored clip without it crashed the studio.
+ * It has been in the saved shape since the first build, so no older file lacks it. The rest of the clip stays
+ * optional exactly as an older build left it: `cropRect`, the speed, the grade and the flags are read with a
+ * default. Reasons are `videoStudio.clips[i].<field> <what is wrong>`, like the overlay reasons beside them.
+ */
+function validateClipRequiredFields(clip: unknown, idx: number): string | null {
+  if (!isPlainObject(clip)) return `videoStudio.clips[${idx}] not an object`
+  const at = `videoStudio.clips[${idx}]`
+  if (!isBoundedId(clip.id)) return `${at}.id missing`
+  if (typeof clip.name !== 'string') return `${at}.name not a string`
+  if (!isFiniteNumber(clip.startSec)) return `${at}.startSec not a number`
+  if (!isFiniteNumber(clip.endSec)) return `${at}.endSec not a number`
+  if (!Array.isArray(clip.textOverlays)) return `${at}.textOverlays not an array`
+  if (!Array.isArray(clip.selectedPresets)) return `${at}.selectedPresets not an array`
+  for (let i = 0; i < clip.selectedPresets.length; i++) {
+    if (typeof clip.selectedPresets[i] !== 'string') return `${at}.selectedPresets[${i}] not a string`
+  }
+  return null
+}
+
+/**
+ * T-135 (10): a preset id this build has no preset for is dropped from the clip, in place, after the shape has been checked. The Export panel
+ * reads `PLATFORM_INFO[id]` for every id a clip holds, so one it has no row for (a hand-edited project, or a newer build's preset) made
+ * `findSafeZoneIssues` and the queue builder throw, and Export did nothing. DROPPED, not refused: an older build still opens a newer build's
+ * project, and what is left is the clip's own list. Only the string entries `validateClipRequiredFields` has already passed are judged;
+ * the custom preset ids are shaped by `dropMalformedCustomPresetIds` and otherwise not touched (the panel prunes them against the folder it reads).
+ */
+function dropUnknownPresetIds(clip: unknown): void {
+  if (!isPlainObject(clip) || !Array.isArray(clip.selectedPresets)) return
+  const known: readonly string[] = PLATFORM_IDS
+  clip.selectedPresets = clip.selectedPresets.filter((id: unknown) => typeof id === 'string' && known.includes(id))
+}
+
+/**
+ * T-137 (11): a clip's `customPresetIds` is a list of strings or it is absent. The gate never looked at it, so `5`, `{ a: 1 }` and `true` validated, and
+ * the Export panel's `for (const id of clip.customPresetIds ?? [])` threw in render: autosave and Restore re-crashed /video until Clear. Dropped, not
+ * refused, like the unknown platform ids above (an older build opens a newer build's project): a field that is not a list is removed, and the entries of a
+ * list that are not strings are filtered out. The ids themselves are still not judged here (the panel prunes them against the folder it reads).
+ */
+function dropMalformedCustomPresetIds(clip: unknown): void {
+  if (!isPlainObject(clip) || !('customPresetIds' in clip) || clip.customPresetIds === undefined) return
+  const ids = clip.customPresetIds
+  if (!Array.isArray(ids)) {
+    delete clip.customPresetIds
+    return
+  }
+  if (ids.some((id: unknown) => typeof id !== 'string')) clip.customPresetIds = ids.filter((id: unknown) => typeof id === 'string')
+}
+
+/**
+ * T-119: the chain's fields the Audio Studio reads without a guard: `chain.gainDb.toFixed(1)` in the Levels
+ * panel, the loudness box, `chain.cutRegions.length` in Close and Export, and each cut's times in its chip.
+ * `audioStudio.chain` was only required to be an object, so `chain: {}` opened a studio that threw in render.
+ * The switches and the named choices (`denoise`, `compressor`, `hum60`...) are not here: an absent one reads as
+ * off, and main checks every value it prints into a filter graph at export (`audio:*` handlers, T-111).
+ * `humHz`, `denoiseParams` and `secondaryTrack` are optional, as they always were.
+ */
+function validateChainRequiredFields(chain: Record<string, unknown>): string | null {
+  if (!isFiniteNumber(chain.gainDb)) return 'audioStudio.chain.gainDb not a number'
+  if (!isFiniteNumber(chain.loudnormTargetLufs)) return 'audioStudio.chain.loudnormTargetLufs not a number'
+  if (!Array.isArray(chain.cutRegions)) return 'audioStudio.chain.cutRegions not an array'
+  for (let i = 0; i < chain.cutRegions.length; i++) {
+    const cut: unknown = chain.cutRegions[i]
+    if (!isPlainObject(cut) || !isFiniteNumber(cut.startSec) || !isFiniteNumber(cut.endSec)) {
+      return `audioStudio.chain.cutRegions[${i}] malformed`
     }
   }
   return null
@@ -121,6 +276,31 @@ function migrateV1ToV2(input: Record<string, unknown>): void {
  */
 function migrateV2ToV3(input: Record<string, unknown>): void {
   input.schemaVersion = 3
+}
+
+/**
+ * Migrate a v3 project to v4. v4 added `audioStudio.extractedFromVideo` (T-99);
+ * a v3 snapshot has no marker and is read in the shape it was written in — the
+ * migration is a version bump with no data change. It deliberately does NOT
+ * turn an old extraction's `fromVideoPath` into the marker: that would
+ * re-extract a sound whose scratch file may still be there, and an old project
+ * whose scratch file is gone keeps saying so, as it always did.
+ */
+function migrateV3ToV4(input: Record<string, unknown>): void {
+  input.schemaVersion = 4
+}
+
+/**
+ * Migrate a v4 project to v5. v5 added `videoStudio.convertedForImport` (T-107);
+ * a v4 snapshot has no marker and is read in the shape it was written in — the
+ * migration is a version bump with no data change. It cannot recover an old
+ * project whose converted working copy was already pruned: that file's path
+ * says nothing about the original it was made from (the name carries a random
+ * suffix and the original's folder is not in it), so such a project keeps
+ * saying the file is gone, as it always did.
+ */
+function migrateV4ToV5(input: Record<string, unknown>): void {
+  input.schemaVersion = 5
 }
 
 function isBoundedId(v: unknown): v is string {
@@ -189,6 +369,8 @@ export function validateProject(input: unknown): ValidationResult {
   // bumps add another `if (current === N) migrateNToN+1(input)` step.
   if (schemaVersion === 1) migrateV1ToV2(input)
   if (schemaVersion <= 2) migrateV2ToV3(input)
+  if (schemaVersion <= 3) migrateV3ToV4(input)
+  if (schemaVersion <= 4) migrateV4ToV5(input)
 
   if (!isFiniteNumber(input.savedAt) || input.savedAt <= 0) {
     return { ok: false, reason: 'savedAt missing or invalid' }
@@ -208,9 +390,22 @@ export function validateProject(input: unknown): ValidationResult {
     // FFmpeg's drawtext filter string raw — a malicious project can smuggle
     // a filter-graph injection payload through them, so reject here.
     for (let i = 0; i < v.clips.length; i++) {
+      migrateLegacyOverlays(v.clips[i])
       const reason = validateClipTextOverlays(v.clips[i], i)
       if (reason !== null) return { ok: false, reason }
     }
+    // T-119: and the fields the studio reads without a guard. After the overlays, so a payload in an
+    // overlay is still named as an overlay problem.
+    for (let i = 0; i < v.clips.length; i++) {
+      const reason = validateClipRequiredFields(v.clips[i], i)
+      if (reason !== null) return { ok: false, reason }
+      // T-135 (10): after the shape is known to be sound (every entry a string), before the studio reads the ids.
+      dropUnknownPresetIds(v.clips[i])
+      dropMalformedCustomPresetIds(v.clips[i])
+    }
+    // v5: the marker says `sourcePath` is the original of a file converted on import.
+    if (v.convertedForImport !== undefined && typeof v.convertedForImport !== 'boolean')
+      return { ok: false, reason: 'videoStudio.convertedForImport not a boolean' }
     // v2 srtPath: optional, but if present must be a safe absolute path.
     if (!isOptionalSafePath(v.srtPath))
       return { ok: false, reason: 'videoStudio.srtPath unsafe or malformed' }
@@ -220,6 +415,13 @@ export function validateProject(input: unknown): ValidationResult {
     if (!isPlainObject(a)) return { ok: false, reason: 'audioStudio not an object' }
     if (!isOptionalSafePath(a.sourcePath))
       return { ok: false, reason: 'audioStudio.sourcePath unsafe or malformed' }
+    // v1-3 wrote the video of an extraction here; it reaches `ffmpeg -i` on
+    // export, so it is held to the same gate as every other path in the file.
+    if (!isOptionalSafePath(a.fromVideoPath))
+      return { ok: false, reason: 'audioStudio.fromVideoPath unsafe or malformed' }
+    // v4: the marker says `sourcePath` is a video to extract from.
+    if (a.extractedFromVideo !== undefined && typeof a.extractedFromVideo !== 'boolean')
+      return { ok: false, reason: 'audioStudio.extractedFromVideo not a boolean' }
     if (!isPlainObject(a.chain)) return { ok: false, reason: 'audioStudio.chain missing' }
     // chain.secondaryTrack carries a filePath that reaches `ffmpeg -i`
     // during audio export. A malicious project pointing it at an SSH key
@@ -234,12 +436,25 @@ export function validateProject(input: unknown): ValidationResult {
           ok: false,
           reason: 'audioStudio.chain.secondaryTrack.filePath unsafe or malformed'
         }
+      // T-111: gain and ducking numbers are printed into the filter graph on
+      // export, and this is the file a person can edit. The loudness target is
+      // deliberately NOT held here: a project that saved an odd one is still the
+      // person's project, and main refuses it at export with a sentence that
+      // says what to change.
+      const problem = secondaryTrackProblem(secondary)
+      if (problem) return { ok: false, reason: `audioStudio.chain.${problem}` }
     }
+    // T-119: after the second track, whose refusals are the ones with a security reason.
+    const chainProblem = validateChainRequiredFields(a.chain)
+    if (chainProblem !== null) return { ok: false, reason: chainProblem }
   }
   if (input.imageCanvas !== undefined) {
     const c = input.imageCanvas
     if (!isPlainObject(c)) return { ok: false, reason: 'imageCanvas not an object' }
     if (!isPlainObject(c.doc)) return { ok: false, reason: 'imageCanvas.doc missing' }
+    // T-119: `doc: {}` opened an empty-looking canvas whose autosave capture then threw on
+    // `doc.layers.length` for the rest of the session. The layers are what the capture and the canvas read.
+    if (!Array.isArray(c.doc.layers)) return { ok: false, reason: 'imageCanvas.doc.layers not an array' }
   }
   // T-47: the place record is sanitized, never fatal — see sanitizePlace.
   if (input.place !== undefined) input.place = sanitizePlace(input.place)
@@ -248,9 +463,8 @@ export function validateProject(input: unknown): ValidationResult {
 
 export function validateProjectJsonString(raw: string): ValidationResult {
   if (raw.length === 0) return { ok: false, reason: 'empty file' }
-  if (raw.length > MAX_BYTES) {
-    return { ok: false, reason: `project too large (${raw.length} > ${MAX_BYTES} bytes)` }
-  }
+  const tooLarge = projectSizeProblem(raw.length, 'open')
+  if (tooLarge !== null) return { ok: false, reason: tooLarge }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -261,26 +475,31 @@ export function validateProjectJsonString(raw: string): ValidationResult {
 }
 
 /**
+ * Does this project carry any studio state at all (a video, a sound, or a canvas with a layer)? The one definition of
+ * "has work in it": the autosave gate below refuses a project without it, and (T-124 (5)) the Home page's autosave
+ * banner is not shown over a session that has it.
+ */
+export function hasStudioState(project: ImagiiProject): boolean {
+  return Boolean(project.videoStudio || project.audioStudio || project.imageCanvas)
+}
+
+/**
  * Reject suspicious payloads before they ever reach disk. Renderer-side use.
  */
 export function isSafeToAutosave(project: ImagiiProject): { ok: true } | { ok: false; reason: string } {
   let raw: string
   try {
-    raw = JSON.stringify(project)
+    raw = serializeProject(project)
   } catch (err) {
     return {
       ok: false,
       reason: `serialization failed: ${err instanceof Error ? err.message : 'unknown'}`
     }
   }
-  if (raw.length > MAX_BYTES) {
-    return {
-      ok: false,
-      reason: `project would be ${raw.length} bytes, exceeds ${MAX_BYTES}`
-    }
-  }
+  const tooLarge = projectSizeProblem(raw.length, 'autosave')
+  if (tooLarge !== null) return { ok: false, reason: tooLarge }
   // Only autosave if there is actual user state. Empty project (default) shouldn't overwrite.
-  if (!project.videoStudio && !project.audioStudio && !project.imageCanvas) {
+  if (!hasStudioState(project)) {
     return { ok: false, reason: 'no studio state to save' }
   }
   return { ok: true }

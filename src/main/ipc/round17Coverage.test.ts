@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { isOutsideFolder } from '../pathConfine'
 
 // Round 17 phase-6 — IPC handler coverage round-out. The handlers themselves
 // import `electron` so we test the underlying pure helpers and store-backed
@@ -58,15 +59,13 @@ describe('audio cancelAudioJob', () => {
 })
 
 // ---------------------------------------------------------------------------
-// captions copySrtTo — path-confinement is the security-critical bit.
-// Reuse the same path.relative gate the handler uses to assert refusal of
-// anything outside the captions output directory.
+// captions writeKitSrt — path-confinement is the security-critical bit.
+// Ask the same helper the handler asks (T-117: this used to be a hand-copied
+// `rel.startsWith('..')`, which tested the copy and not the handler).
 // ---------------------------------------------------------------------------
-describe('captions copySrtTo path confinement', () => {
+describe('captions writeKitSrt path confinement', () => {
   function confined(allowedRoot: string, src: string): boolean {
-    const resolvedSrc = path.resolve(src)
-    const rel = path.relative(allowedRoot, resolvedSrc)
-    return !(rel.startsWith('..') || path.isAbsolute(rel))
+    return !isOutsideFolder(allowedRoot, path.resolve(src))
   }
 
   it('accepts a child of the allowed root', () => {

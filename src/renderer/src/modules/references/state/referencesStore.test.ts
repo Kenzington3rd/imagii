@@ -112,6 +112,8 @@ beforeEach(() => {
     history: { past: [], future: [] },
     searchResponse: null,
     searchError: null,
+    searchLoading: false,
+    searchQuery: '',
     tab: 'reference'
   })
 })
@@ -337,6 +339,197 @@ describe('a rejected search (T-84)', () => {
     await store().search('x')
 
     expect(store().searchError).toBe('Search failed.')
+    errorSpy.mockRestore()
+  })
+})
+
+describe('one search at a time (T-133 (8)), and the newest query is the one that is answered (T-134 (3))', () => {
+  // The Search button is disabled while a request is out; the input's Enter was not, so a second press (or a held key) sent a second request and
+  // whichever answered LAST won the results grid - a slow first answer overwrote the newer search. T-133 (8) closed that by refusing every press
+  // while a request was out, which also threw away a CORRECTED query (the typo's answer then filled a grid that no query on the page named).
+  // Now: a press of the query that is already out sends nothing (a held Enter is one request); a different query goes out at once; and an answer
+  // is drawn only if it belongs to the newest request. The guard is in the store's `search`, the one function every caller goes through.
+  function stubGatedSearch(): { images: ReturnType<typeof vi.fn>; release: (query: string) => void } {
+    const waiting: Array<{ query: string; resolve: (answered: string) => void }> = []
+    const images = vi.fn(
+      (query: string) =>
+        new Promise((resolve) => {
+          waiting.push({ query, resolve: (answered) => resolve({ query: answered, provider: 'duckduckgo', results: [] }) })
+        })
+    )
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    // `release(query)` answers the OLDEST request that was made for that query.
+    return {
+      images,
+      release: (query) => {
+        const at = waiting.findIndex((w) => w.query === query)
+        if (at >= 0) waiting.splice(at, 1)[0]?.resolve(query)
+      }
+    }
+  }
+  const answersDrawn = (): Array<string | undefined> => {
+    const seen: Array<string | undefined> = []
+    const stop = useReferencesStore.subscribe((s) => {
+      if (seen[seen.length - 1] !== s.searchResponse?.query) seen.push(s.searchResponse?.query)
+    })
+    return Object.assign(seen, { stop })
+  }
+
+  it('a second press of the query that is out sends nothing, and its answer is the one on screen', async () => {
+    const { images, release } = stubGatedSearch()
+    const first = store().search('mountains')
+    expect(store().searchLoading).toBe(true)
+
+    // Not awaited: a press that is not refused would wait on its own gate.
+    const second = store().search('mountains')
+    const third = store().search('mountains')
+    expect(images, 'one request for three presses of one query').toHaveBeenCalledTimes(1)
+
+    release('mountains')
+    await Promise.all([first, second, third])
+    expect(store().searchLoading).toBe(false)
+    expect(store().searchResponse?.query).toBe('mountains')
+  })
+
+  it('a CORRECTED query typed while one is out goes out, and its answer is what the grid shows - the typo\'s late answer is never drawn', async () => {
+    const { images, release } = stubGatedSearch()
+    const drawn = answersDrawn() as Array<string | undefined> & { stop: () => void }
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+    expect(images, 'the corrected query is asked, not dropped').toHaveBeenCalledTimes(2)
+    expect(images).toHaveBeenLastCalledWith('mountains')
+    expect(store().searchLoading, 'still waiting for the newest').toBe(true)
+
+    // The newest answers first: the grid shows it, and the button is idle even though the typo's request is still out.
+    release('mountains')
+    await corrected
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+
+    // The typo's answer arrives late: it belongs to a question nothing on the page names any more.
+    release('mountians')
+    await typo
+    expect(store().searchResponse?.query, 'the late answer did not overwrite the newest').toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+    expect(drawn.filter((q) => q === 'mountians'), 'the typo\'s answer was never on screen').toEqual([])
+    drawn.stop()
+  })
+
+  it('the corrected query answers LAST and the typo FIRST: the typo is not drawn even for a moment, and the button stays busy until the newest is in', async () => {
+    const { release } = stubGatedSearch()
+    const drawn = answersDrawn() as Array<string | undefined> & { stop: () => void }
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+
+    release('mountians')
+    await typo
+    expect(store().searchResponse, 'an older answer is not drawn while a newer request is out').toBeNull()
+    expect(store().searchLoading, 'and the panel is still searching').toBe(true)
+
+    release('mountains')
+    await corrected
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(store().searchLoading).toBe(false)
+    expect(drawn.filter((q) => q === 'mountians')).toEqual([])
+    drawn.stop()
+  })
+
+  it('typing the query that is out back in (a correction undone) is not a second request, but a different one after a different one is', async () => {
+    const { images, release } = stubGatedSearch()
+    const a = store().search('rivers')
+    const b = store().search('rivers') // the same: nothing
+    expect(images).toHaveBeenCalledTimes(1)
+    const c = store().search('lakes') // different: asked
+    expect(images).toHaveBeenCalledTimes(2)
+    const d = store().search('lakes') // now 'lakes' is the one that is out: nothing
+    expect(images).toHaveBeenCalledTimes(2)
+    release('lakes')
+    release('rivers')
+    await Promise.all([a, b, c, d])
+    expect(store().searchResponse?.query).toBe('lakes')
+  })
+
+  // T-135 (5): the panel's input was its own state, so the store's grid outlived it. The query is the store's too, and it is what the button
+  // compares the typed text with.
+  it('remembers the newest request\'s query: the one in flight, then the one that was answered - so the grid always has a name', async () => {
+    const { release } = stubGatedSearch()
+    expect(store().searchQuery).toBe('')
+    const typo = store().search('mountians')
+    expect(store().searchQuery, 'named the moment the request goes out').toBe('mountians')
+    const corrected = store().search('mountains')
+    expect(store().searchQuery, 'a correction replaces it').toBe('mountains')
+    release('mountians')
+    await typo
+    expect(store().searchQuery, 'an older answer arriving does not take the name back').toBe('mountains')
+    release('mountains')
+    await corrected
+    expect(store().searchQuery, 'and the name stays after the answer is in').toBe('mountains')
+    expect(store().searchResponse?.query).toBe(store().searchQuery)
+  })
+
+  it('a query the store refuses as already out does not rename anything; a failed search keeps the name of what was asked', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { release } = stubGatedSearch()
+    const first = store().search('rivers')
+    void store().search('rivers')
+    expect(store().searchQuery).toBe('rivers')
+    release('rivers')
+    await first
+    const images = vi.fn().mockRejectedValue(new Error('boom'))
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    await store().search('lakes')
+    expect(store().searchError).toBe('Search failed.')
+    expect(store().searchQuery, 'the box can still say what was asked').toBe('lakes')
+    errorSpy.mockRestore()
+  })
+
+  it('once the answer is in, the next search goes out', async () => {
+    const { images, release } = stubGatedSearch()
+    const first = store().search('mountains')
+    release('mountains')
+    await first
+
+    const second = store().search('rivers')
+    expect(images).toHaveBeenCalledTimes(2)
+    release('rivers')
+    await second
+    expect(store().searchResponse?.query).toBe('rivers')
+  })
+
+  it('a search that failed gives the slot back (the guard is not a latch)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const images = vi.fn().mockRejectedValueOnce(new Error('query must be a string')).mockResolvedValue({ query: 'again', provider: 'duckduckgo', results: [] })
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+
+    await store().search('x')
+    expect(store().searchError).toBe('Search failed.')
+    await store().search('again')
+    expect(images).toHaveBeenCalledTimes(2)
+    expect(store().searchResponse?.query).toBe('again')
+    errorSpy.mockRestore()
+  })
+
+  it('a typo whose request FAILS after the corrected query was asked leaves no error over the newest search', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const rejectors: Array<(e: Error) => void> = []
+    const answers: Array<(r: unknown) => void> = []
+    const images = vi.fn(
+      (query: string) =>
+        new Promise((resolve, reject) => {
+          if (query === 'mountians') rejectors.push(reject)
+          else answers.push(resolve)
+        })
+    )
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi, search: { images } } })
+    const typo = store().search('mountians')
+    const corrected = store().search('mountains')
+    answers[0]?.({ query: 'mountains', provider: 'duckduckgo', results: [] })
+    await corrected
+    rejectors[0]?.(new Error('boom'))
+    await typo
+    expect(store().searchError, 'the newest search succeeded; the typo\'s failure is not shown over it').toBeNull()
+    expect(store().searchResponse?.query).toBe('mountains')
+    expect(errorSpy, 'the failure is still logged for whoever debugs it').toHaveBeenCalled()
     errorSpy.mockRestore()
   })
 })

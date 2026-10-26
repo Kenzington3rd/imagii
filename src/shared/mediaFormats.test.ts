@@ -13,7 +13,12 @@ import {
   isImageFilename,
   videoNeedsConversion,
   audioNeedsExtraction,
-  formatHint
+  formatHint,
+  canStreamCopyIntoMp4,
+  MP4_COPYABLE_VIDEO_CODECS,
+  PREVIEW_UNAVAILABLE_MESSAGE,
+  OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE,
+  previewCopySkippedMessage
 } from './mediaFormats'
 
 describe('mediaFormats lists', () => {
@@ -104,5 +109,83 @@ describe('formatHint', () => {
   it('renders uppercase comma-separated copy from the same list', () => {
     expect(formatHint(['mp4', 'mov'])).toBe('MP4, MOV')
     expect(formatHint(NATIVE_VIDEO_EXTENSIONS)).toContain('M4V')
+  })
+})
+
+describe('canStreamCopyIntoMp4 — what an mp4 can carry as it is (T-111)', () => {
+  it.each(['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg', 'H264', 'HEVC'])('carries %s', (codec) => {
+    expect(canStreamCopyIntoMp4(codec)).toBe(true)
+  })
+
+  it.each(['wmv2', 'wmv1', 'wmv3', 'vp8', 'vp9', 'theora', 'mpeg2video', 'mpeg1video', 'prores', 'dvvideo', 'flv1', 'msmpeg4v3', 'rawvideo', 'ansi', 'unknown'])(
+    'does not carry %s: it is re-encoded, not copied',
+    (codec) => {
+      expect(canStreamCopyIntoMp4(codec)).toBe(false)
+    }
+  )
+
+  it('does not carry a codec nobody named', () => {
+    for (const v of [undefined, null, '', ' ', 'h264 ']) expect(canStreamCopyIntoMp4(v), String(v)).toBe(false)
+  })
+
+  it('is the list the doc comment names, in lower case', () => {
+    expect(MP4_COPYABLE_VIDEO_CODECS).toEqual(['h264', 'hevc', 'av1', 'mpeg4', 'mjpeg'])
+  })
+})
+
+// T-135 (2): a video whose picture the preview cannot decode (ProRes, 10-bit HEVC) probes fine, loads, plays its sound and draws nothing. The Player says
+// so, in the one sentence, and offers a preview copy; the README no longer promises that every codec ffmpeg reads "should work" in the preview.
+describe('PREVIEW_UNAVAILABLE_MESSAGE - what the Player says when it cannot draw the picture (T-135 (2))', () => {
+  it('names what is true (the preview) and what still works (trimming, scanning, export), in one finished sentence', () => {
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).toBe("imagii can't preview this video's picture format — trimming, scanning and export still work.")
+    expect(PREVIEW_UNAVAILABLE_MESSAGE.endsWith('.')).toBe(true)
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).not.toContain('\n')
+    expect(PREVIEW_UNAVAILABLE_MESSAGE.length).toBeLessThanOrEqual(240)
+  })
+
+  it('does not blame the file or promise a fix the app does not make (no "corrupt", no "unsupported file")', () => {
+    expect(PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/corrupt|damaged|unsupported|invalid/i)
+  })
+})
+
+describe('OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE - what the Output preview says in place of "Live snapshot..." (T-136 (6))', () => {
+  it('is one finished line that says what the box does not show, why, and that exports are not affected', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).toBe(
+      "No snapshot to show: imagii can't preview this video's picture format. Your exports are not affected."
+    )
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE.endsWith('.')).toBe(true)
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toContain('\n')
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE.length).toBeLessThanOrEqual(240)
+  })
+
+  it('says the same thing about the format as the Player\'s note, and does not blame the file', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).toContain("imagii can't preview this video's picture format")
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/corrupt|damaged|unsupported|invalid/i)
+  })
+
+  it('does not promise a live picture (it replaces the caption that does)', () => {
+    expect(OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE).not.toMatch(/live snapshot/i)
+  })
+})
+
+describe('previewCopySkippedMessage - the toast when a preview copy finished for a video that is gone (T-137 (5))', () => {
+  // The Player's `setPreviewCopyFor` stores nothing when the video the copy was made for is not the open one - and it cannot tell a CLOSE from a
+  // REPLACE (the store holds the open video or none). The toast said "because you opened another video", which was false after a plain Close.
+  it('names the file and says what is true of both a close and a replace', () => {
+    expect(previewCopySkippedMessage('stream.mov')).toBe(
+      'Skipped the preview copy for stream.mov because the video was closed or replaced while the copy was being made'
+    )
+  })
+
+  it('does not claim the person opened another video (false after a Close), and is one line without a period like the other skip toasts', () => {
+    const message = previewCopySkippedMessage('a.mov')
+    expect(message).not.toMatch(/another video|you opened/i)
+    expect(message).toMatch(/closed or replaced/)
+    expect(message.endsWith('.')).toBe(false)
+    expect(message).not.toContain('\n')
+  })
+
+  it('carries whatever file name it is given whole', () => {
+    expect(previewCopySkippedMessage('My "stream" (final).mov')).toContain('for My "stream" (final).mov because')
   })
 })

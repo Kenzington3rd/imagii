@@ -1,5 +1,5 @@
 import { ipcErrorMessage } from './ipcError'
-import { userFacingError } from './userFacingError'
+import { RUNNER_PERMISSION_DENIED, userFacingError } from './userFacingError'
 
 export interface DropDiagnostic {
   hadFile: boolean
@@ -98,7 +98,10 @@ export function describeImportError(
   filePath?: string | null,
   kind: ImportKind = 'video'
 ): string {
-  const lowered = ipcErrorMessage(err, '').toLowerCase()
+  // T-136 (14): the keywords are looked for OUTSIDE double quotes. A finished sentence from main quotes the person's file name ("Still extracting the
+  // sound from "codec_test.mp4"..."), and a name is not a cause: it was read as the unreadable-format error. A quote that is never closed removes
+  // nothing, so a cause printed after a lone quote is still found.
+  const lowered = ipcErrorMessage(err, '').replace(/"[^"]*"/g, ' ').toLowerCase()
   const inCloud = pathLooksLikeCloudSync(filePath ?? '')
   const known = (sentence: string): string => {
     console.error('[imagii] could not open', filePath ?? '(no path)', err)
@@ -119,7 +122,9 @@ export function describeImportError(
   }
   if (
     (lowered.includes('access') && lowered.includes('denied')) ||
-    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered)
+    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered) ||
+    // T-139 (10): ffmpeg's / ffprobe's own word for a file it may not open, when a runner reports it (never the bare phrase: userFacingError.ts).
+    RUNNER_PERMISSION_DENIED.test(lowered)
   ) {
     return known('Windows blocked access. Close any app using the file, or check your antivirus.')
   }

@@ -2,8 +2,8 @@
 /**
  * Emoji guard — enforces the no-emoji rule from docs/STYLE_GUIDE.md.
  *
- * Scans the renderer + shared + main source for emoji pictographs and
- * fails (exit 1) if any are found. Wired as a Claude Code hook in
+ * Scans the renderer, shared, main and preload source (.ts, .tsx, .html and .css)
+ * for emoji pictographs and fails (exit 1) if any are found. Wired as a Claude Code hook in
  * .claude/settings.json so every change is checked automatically, and
  * runnable by hand: `node scripts/check-emoji.mjs`.
  *
@@ -16,6 +16,10 @@
  *     plain arrows. These render identically everywhere.
  *   - Test files (*.test.ts / *.test.tsx) — fixtures legitimately
  *     contain emoji to prove the app strips them.
+ *
+ * Not covered: anything outside `src/` (docs, scripts, tests, the README), and a
+ * file type not listed in EXTENSIONS. The guard's own test fails when a file of
+ * a new type is added under `src/`, so the list cannot fall behind unseen.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,10 +38,18 @@ const EMOJI =
 // are unaffected. See docs/STYLE_GUIDE.md "The no-emoji rule".
 const ALLOWED = new Set(['✕', '✓'])
 
-const ROOTS = ['src/renderer', 'src/main', 'src/shared']
+// Every directory of src/ (T-122: src/preload was the one left off, so an emoji could be written there with
+// the hook, `npm run check:emoji` and `npm run verify` all silent). tests/unit/emojiGuard.test.ts fails when
+// a directory of src/ is not listed here.
+const ROOTS = ['src/renderer', 'src/main', 'src/shared', 'src/preload']
 const SKIP_DIR = new Set(['node_modules', 'dist', 'out', '.git'])
+// The file types read (T-123 (30): this was .ts and .tsx alone, so an emoji written into src/renderer/index.html,
+// whose <title> the OS shows, or into the stylesheet's `content:` passed with everything silent). Every type of file
+// under src/ today is one of these four; tests/unit/emojiGuard.test.ts fails when a new type appears.
+const EXTENSIONS = ['ts', 'tsx', 'html', 'css']
+const SCANNED = new RegExp(`\\.(${EXTENSIONS.join('|')})$`)
 
-/** Recursively collect .ts/.tsx files, excluding tests. Bounded by the tree. */
+/** Recursively collect the files of EXTENSIONS, excluding tests. Bounded by the tree. */
 function collect(dir, acc) {
   let entries
   try {
@@ -51,7 +63,7 @@ function collect(dir, acc) {
     const st = statSync(full)
     if (st.isDirectory()) {
       collect(full, acc)
-    } else if (/\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name)) {
+    } else if (SCANNED.test(name) && !/\.test\.(ts|tsx)$/.test(name)) {
       acc.push(full)
     }
   }

@@ -44,6 +44,26 @@ byte, so warning surfaces use the ember token rather than a second name
 for one color. `designTokensInSync.test.ts` fails if any other token is
 ever given the ember hex.
 
+**The signal pair (T-104)** — two hues that tell series apart and mean
+nothing else: the highlight finder's Audio / Chat / Hype bars and the crop
+guides for 9:16 / 1:1 / 4:5 (ember is one of those hues; these are the other
+two, and accent is the Audio bar's). They were raw `#f472b6` / `#22d3ee` literals in
+`HighlightPanel` and `SafeZoneOverlay`. They are not status colors, so they
+stay out of the semantic tier.
+
+| Token | Value | Use |
+|---|---|---|
+| `signal-pink` | `#f472b6` | The Chat signal bar and the 9:16 crop guide. 7.3:1 on `bg-base`, 6.3:1 on `bg-hover`. |
+| `signal-cyan` | `#22d3ee` | The 4:5 crop guide. 10.7:1 on `bg-base`, 9.2:1 on `bg-hover`. |
+
+The Hype bar and the 1:1 guide are `ember`; the Audio bar is `accent` — three
+crop guides, three distinct hues, pinned by `designTokensInSync.test.ts` (T-112
+removed a fourth, a 16:9 entry with a color and a shape and no caller: the
+overlay draws the three that Player asks for). They are drawn in JS contexts (an inline style, an
+SVG stroke), so they are imported from `tokens.ts` as `SIGNAL_PINK` /
+`SIGNAL_CYAN`; the Tailwind half (`signal.pink` / `signal.cyan`) exists so the
+sync test sees them.
+
 The palette (round 19, "obsidian volcano") lives in TWO files by
 necessity: `tailwind.config.js` (for classNames) and
 `src/renderer/src/styles/tokens.ts` (for JS contexts — Konva strokes,
@@ -65,19 +85,61 @@ copied from. In a className, use Tailwind's own `/NN` suffix
 (`bg-accent/25`).
 
 **Font:** Inter (`font-sans`), with `system-ui` fallbacks. One family,
-weights 400/500/600.
+weights 400/500/600. It is BUNDLED (T-126 (18)): three `@font-face` rules at the
+top of `styles/index.css` point at the latin 400, 500 and 600 **woff2** files of
+`@fontsource/inter` (T-128 (2): the package's own CSS also lists a `.woff`
+fallback after each, which Chromium 126 never requests, so the build emitted
+three files, 93 KB, that nothing could load; Vite resolves the package path in
+`url()` and emits the woff2 beside the page, nothing else). The app draws Inter
+on a machine that has never had it and requests it from no one (local-first).
+The stack stays as the fallback for a glyph the latin subset lacks. The built-app
+E2E (`smoke.spec.ts`) asks the page's `document.fonts` for all three weights,
+reads the built style sheets for a `url()` that is not a bundled file, and fails
+on any `.woff` in them or in the assets folder; `interactionWiring.test.ts`
+holds the source (no `@fontsource` CSS import, three faces, one woff2 source each).
 
-**Documented raw-color exceptions.** Four places use raw hex / rgba
-deliberately; nowhere else may:
+**Documented raw-color exceptions.** These places use raw hex or rgba
+deliberately; nowhere else may. For HEX that is mechanical since T-104:
+`tests/unit/noRawHex.test.ts` reads every renderer source file and fails on a
+string holding a hex color, so a hex exception is a visible edit to its
+allow-list (by file, or by exact literal in a file) AND to this list. Plain
+`rgba(...)` values are NOT caught by the scan — the rgba entries here are
+held by this list alone, so a new one must be added below:
 
 - **NavCard accent washes.** Per-studio NavCard accents on the Home
   screen use one-off rgba values (each studio has a tint).
-- **AppToaster.** The toast styling passes raw hex because the toaster
-  renders outside the Tailwind-themed tree.
+- **Dimming and glow chrome (rgba).** The tutorial scrim
+  (`components/Tutorial.tsx`), the crop overlay's dim
+  (`video-studio/CropOverlay.tsx`), the stage's drop shadow
+  (`image-studio/Canvas.tsx`, the `boxShadow` under the canvas), and the
+  `.btn-primary` glow shadows (`styles/index.css`) are one-off black/accent
+  washes over whatever sits beneath them; no token names a translucent scrim tier.
+- **Pure black: the video matte and the hover scrim (T-123).** `bg-black` is the letterbox behind a picture, not a
+  chrome color: the Video Studio player's stage (`video-studio/Player.tsx`) and Record's live capture preview
+  (`record-studio/RecordStudio.tsx`) are black the way an export's bars are, so a retheme must not tint the matte of a
+  video. `bg-black/60` is the dim over a reference thumbnail that makes the Save and "→ Canvas" buttons legible on any
+  picture (`references/MoodBoardPanel.tsx`, `references/ReferencePanel.tsx`): the picture under it is arbitrary, so
+  the scrim is black, not a surface token. (`Modal`'s `bg-black/70` scrim is the fifth black wash and is described under
+  Modals.) No token names pure black or a translucent scrim tier. `designTokensInSync.test.ts` fails on a `bg-black` in a
+  renderer file this list does not name.
+- **The transparency checkerboard: `CHECKER_A` and `CHECKER_B` (T-71, T-123).** Two warm darks in `styles/tokens.ts`
+  (`#221616`, `#1c1313`) drawn as an inline `repeating-conic-gradient` behind a transparent preview (the Stream Graphics
+  import panel, the Templates dialog and the Asset Library). They are JS-only tokens: no className draws them, so
+  `tailwind.config.js` has no mirror for them, and `designTokensInSync.test.ts` (which compares each token it names with its
+  Tailwind twin) has nothing to compare. `CHECKER_B` happens to be `BG_ELEVATED`'s value; it is its own token so a
+  retheme of the card does not retint the tiles. They are named here, in the one place a raw value may live, so the next
+  reader does not take them for an unmirrored drift.
 - **ErrorBoundary.** The render-error fallback (`components/ErrorBoundary.tsx`)
   uses inline-style raw hex on purpose — the error may originate in
   layout itself, so the fallback avoids Tailwind classes that depend on
   shared layout context.
+- **OutputPreview's matte** (T-104). `ctx.fillStyle = '#000'` in
+  `OutputPreview.tsx`: the preview canvas is a picture of the EXPORT's pixels,
+  and an export's bars are black by definition; the E2E suite compares it
+  against a canvas of its own black.
+- **The overlay editor's typing example** (T-104). `placeholder="white or
+  #ffcc00"` in `TextOverlayEditor.tsx` shows the user the form a color is typed
+  in; it is copy, not a color drawn.
 - **Document content** (T-71). `image-studio/templates.ts`,
   `references/assetCatalog.ts`, and the blank page's `background:
   '#ffffff'` in `canvasStore.ts` describe **artwork**, not chrome: they
@@ -88,12 +150,57 @@ deliberately; nowhere else may:
   rect / ellipse / line / text layer comes out in — DO follow the tokens,
   because a user expects new shapes to arrive in imagii's colors.
 
+**Text on a wash of its own hue (T-112).** The same check applies to a *translucent*
+fill: an accent or ember wash (`bg-accent/20`, `bg-ember/10`) over a card is a
+composite, and `text-accent` on it measured 3.6:1 (the Highlight finder's score pill,
+Clip Kit's button) and 4.1:1 (the Captions setup card's links) — under AA, and
+invisible to a check of "token on background". The readable partner of a wash is
+`ink-base` (10:1 or better on an accent wash) with the accent *border* carrying the
+identity, or `text-warn` on an ember wash (10.4:1). The Player's preview note (T-135 (2)) is the ember pairing: `ink-base` sentence and a `text-warn` icon on `bg-ember/10` with a `border-ember/40` border, and a `btn-ghost` beside it. `designTokensInSync.test.ts`
+recomputes the ratios from the tokens and fails on any renderer className that sets
+`text-accent` and a `bg-accent/NN` or `bg-ember/NN` wash together.
+
 **Text on a semantic fill.** Any token used as a `bg-*` under text needs
 its own pairing checked — the fill tones (`accent`, `danger-strong`,
 `ember`, `ok-strong`) are all bright, so the readable partner is
 `text-bg-base`, the way `.btn-primary` already does it. `ink-base` on a
 bright fill fails AA and looks fine while doing so; that was the T-71
 finding in MoodBoardPanel's remove chip (2.93:1).
+
+**Native controls are drawn in the palette (T-125 (13)).** The browser's own controls (a
+checkbox's tick, a radio, a range slider's thumb, the scrollbars, a `<select>`'s drop-down list, a
+number box's spinner) take their colors from two properties on the root, and with neither set
+they are stock Chromium: blue ticks and sliders and light scrollbars on the near-black window,
+a second accent against the one color BRANDING allows. `styles/index.css` has ONE rule for it,
+`:root { color-scheme: dark; accent-color: theme('colors.accent.DEFAULT') }`: the accent is read from
+the Tailwind theme, the token the buttons use, not a hex written beside it. A native control's
+closed face needs no class to be right (the open list of a `<select>` is the exception below),
+and a new one is not given a color of its own. The same rule for the
+two things a library draws with its own stock colors: the toast marks (the green tick and the red
+cross are react-hot-toast's own) are set from the tokens in `AppToaster` (`TOAST_ICON_THEME`:
+`OK_STRONG` and `DANGER_STRONG` discs, `BG_BASE` glyphs, 10.08:1 and 7.20:1).
+`designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, or a toast mark that
+is not a token.
+
+**What the two properties do not reach (T-126 (16)).** `color-scheme: dark` makes a `<select>`'s
+closed control and its open list dark. The row the pointer or the arrow keys are on in that open
+list is drawn by the operating system and is not styleable from CSS: it stays the system's
+highlight color, and nothing in the guide or the tests claims otherwise. **Selected text** is
+palette-colored by one rule of its own, `::selection` in `@layer base`: the accent at 40% with
+`ink-base` on it. The wash is composited over whatever surface the text is on, so the pairing is
+computed over each of them (`bg-base` 8.94:1, `bg-elevated` 8.38:1, `bg-hover` 7.74:1; AA is 4.5:1) and
+pinned the way the toast marks are. `designTokensInSync.test.ts` reads the alpha from the style
+sheet and fails on a second `::selection` rule, a different ink, or a wash that takes any surface
+under 7:1.
+
+**Placeholder text is `ink-dim` (T-127 (16)).** Tailwind's Preflight draws every `input` and `textarea`
+placeholder in its stock `#9ca3af`, a cool blue-gray brighter than the palette's own dim ink and
+the one colour in the app that belongs to no token. One rule, `input::placeholder, textarea::placeholder`
+in `@layer base`, sets it from `theme('colors.ink.dim')`: 6.2:1 on `bg-base` (where the inputs sit), 5.83:1 on
+`bg-elevated` and 5.33:1 on `bg-hover` (AA is 4.5:1). Preflight already sets the opacity to 1, so the drawn colour is
+that token exactly (measured on the glyph pixels of the built app: `156,143,139`, where the stock colour
+read `156,163,175`). `designTokensInSync.test.ts` fails on a second rule, a raw hex, another token,
+or a pairing under AA.
 
 ---
 
@@ -108,6 +215,51 @@ do not re-derive their styling inline.
 
 Buttons that pair an icon with a label use
 `inline-flex items-center gap-1.5` (or `gap-2` at larger sizes).
+
+**The Cancel of a job that is running is one button, `RunningCancel` (T-136 (7)).** A `btn-ghost px-2 py-1.5 text-xs` with the danger ink
+(`text-danger`, brightening to `danger-soft` on hover), the word "Cancel" and the job it stops as its `title` ("Cancel GIF export", "Cancel
+picture-in-picture composite"): a ghost, not a filled button, because the person's next move is usually to wait; danger ink, because it ends work that
+cost minutes. Where it sits (four placements, and the code uses exactly these): (1) on the progress row when the job has one of its own (a row with no primary on it
+that exists only while the job runs and holds its bar: Reframe, the highlight scan, Captions, the model download); (2) on a row of its own under the primary, right-aligned to it, when the primary is the right-most item of its row or its
+busy label is a sentence (GIF, Compile, Picture-in-picture, the Export panel, the Clip Kit button). Whether the busy label is narrower than the idle one is not
+the test: GIF's and Picture-in-picture's busy labels are the wider (GIF 102 px idle and 109 busy, Picture-in-picture 86 and 108; measured in the built app with Inter
+loaded, the same at 1632 and 1024 px wide), Compile's is the same since T-131 (13), and the kit's is 233 px against 154 (230 to 233 as the phase digit changes). The test is where a Cancel beside the primary would land: at the row's end, on the strip the idle primary's right
+part held a moment ago, so a double-click's second press canceled the job it had just started (T-126 (20); measured, the idle button spans 1093-1205 and Cancel
+1147-1205). And a label that is a sentence wraps beside a Cancel: the kit's running label, "Exporting platform version 2 of 5...", was 197 x 42 px at the default
+and the minimum window (T-137 (4)), so it is `whitespace-nowrap` and the kit's column is the caption, the button, the Cancel; (3) on the caption row beside the job's name when there is no
+primary to press (the Clip Kit card that outlives its closed video, `ClipKitRunning`); and (4) beside the primary in Audio Studio's export row, the one place it
+is (the primary is `ml-auto` on a `flex-wrap` row and Cancel follows it, drawn only while a job exists, after the Save dialog has been answered: the second press
+of a double-click meets the dialog, not the strip). A new running-job Cancel takes the first placement that applies, decided in this order: a progress row if
+the job has one of its own (a row with no primary on it that exists only while the job runs and holds its bar; a bar that stays after the job as its result, like
+Audio Studio's export row or the Export panel's queue, one row per file, is not one); else the caption row if there is no primary; else the row under the primary
+if its busy label is a sentence (the Clip Kit button, whatever dialog it opened first); else beside the primary if a native dialog is ALWAYS answered between the press
+and the job (Audio Studio's export; a chooser that opens only when no folder is remembered yet, as in GIF, Compile, Picture-in-picture and the Export panel, is
+not that); else the row under the primary. A job none of these fits is a fifth placement, and gets its own line here and a layout case at 1024 and 1632 px, as every
+placement has. A question the Cancel asks (the Clip Kit's) is a `Modal` drawn OUTSIDE any live region the Cancel sits in (T-138 (4): `Modal` does not portal, so
+it opens where it is written). A dialog's "Cancel" is
+a different button: an answer, in the `Modal`, `btn-ghost px-3 py-1.5 text-sm`. The bar beside it is `ProgressTrack`: `bg-hover` track, `accent` fill,
+gray (`ink-muted`) for a row the person canceled and `danger-strong` only for a fault.
+
+**A chip that shows a name the person chose is capped, and ends in an ellipsis (T-125 (11)).** The
+output-folder button (`OutputDirLabel`, in five cards) drew the whole name of the remembered
+folder, so a long one ("Stream Highlights 2026 - Season Finale - ...") pushed the card's primary
+button out of the card by 55 px. The chip is `max-w-[9rem]` with `w-full` (never past 9 rem, and never past the button it sits in, which is the item that gives in a narrow card: T-126 (13)) with the name in a
+`min-w-0 truncate` span and the full path as its `title`; the icon is `shrink-0`, and the
+accessible name still reads "Output folder: " and then the whole name. A new chip of a
+user-given name (a file, a board, a preset) gets the same three parts. **A name that a layout cuts
+with an ellipsis (`truncate`, or `line-clamp-N`, the same cut over two lines) always carries its whole self as a `title`, on the
+element itself or on a browser-drawn element around it (T-127 (15), T-128 (1))**. T-127 (15) did the second track's
+"Role: file name" line, the file name in the Video and Audio Studio headers (cut at 40 characters) and the Cleanup preset rows
+(each is pinned in `interactionWiring.test.ts` and read in the built app by audio.spec.ts and video-core.spec.ts);
+T-128 (1) did the rest and made the rule a test: the mood board's names (list row and heading) and a saved reference's title
+on its tile, the post checklist's output name and hashtag preview, the variant labels, Record's source names, the layer names,
+the highlight and chat-peak lines, and the Export panel's preset labels and queue rows. T-134 (5) added the Custom presets dialog's saved rows (the name gives way, the numbers and Delete never move: an 80-character unbroken name had pushed Delete out of the card; the name box also takes at most 60 characters, but a cap on the box does not shorten a name already on disk, so the row cuts it too) and the safe-zone warning's clip names. T-135 (6) did the warning's zone lines (each carries a custom preset's name: `truncate` and the whole line as its `title`; they scrolled the list sideways at 474 and 977 px against a 406 px list). `a11ySweep.test.ts` rule 6 fails on the
+next cut name without one (a component's `title` prop is not a tooltip: a Modal's is its heading, so only a tag the browser draws
+counts). Two are the cases where the tooltip is the ONLY place the end of the name exists: a Record source tile shows an OS window's
+own title, which is as long as the program makes it (about 33 characters fit the tile at the 1024 px minimum width), and the
+mood-board heading; record.spec.ts and references.spec.ts read both in the built app. What the rule does not reach: a cut inside a
+sentence that is not drawn by the layout (the output-folder refusal ends a long folder name with `…` in main's text), where a
+tooltip has nothing to hang on.
 
 **Panel section headers** are always the `PanelHeader` component
 (`components/PanelHeader.tsx`) — never a hand-written `<h3>`. It renders
@@ -125,7 +277,10 @@ NOT roll their own fixed-inset scrim — they should compose
 
 Adoption is now project-wide as of round 16: TemplatesDialog,
 SafeZoneWarningModal, FixWizard, ThumbnailVariants, CustomPresetManager,
-HotkeyOverlay and NameDialog all use `<Modal>`. The only "modal-shaped"
+HotkeyOverlay and NameDialog all use `<Modal>`, and so do the confirms
+added since: Clip Kit's two (the long-clip warning and "Cancel Clip Kit"),
+the Captions panel's "Clear saved transcripts?" and the Export panel's
+"Cancel running jobs". The only "modal-shaped"
 UIs that DON'T use it are the image-studio and audio-studio export bars,
 which are inline panels, not dialogs. If you find yourself writing
 `fixed inset-0 bg-black/70` again, stop — that's a bug.
@@ -162,9 +317,56 @@ third layer; compose `<Modal>` and inherit the one that exists.
   pixel panel width — see "Resolution" below.
 - **Modals** are `fixed inset-0` with a `bg-black/70` scrim, a centered
   `bg-elevated` card, `max-w-*` + `max-h-[NNvh]`, and a header row with
-  a close control.
+  a close control. The scrim closes a dialog on a click that began AND ended on it, never on the tail of a drag that
+  started in the card (T-123).
 - **Spacing** is Tailwind's scale. Cards: `p-3` to `p-6`. Gaps between
   sections: `gap-4`/`gap-5`. Tight control rows: `gap-1.5`/`gap-2`.
+- **A row of controls wraps; it never scrolls sideways (T-123).** A row that holds fixed-width controls (a labeled
+  box and a group of preset buttons, three labeled number boxes, five option buttons) is `flex flex-wrap`, or its
+  buttons take the width their label needs and share the row (`flex-1 whitespace-nowrap`), so it fits the narrowest
+  box it can land in: the `clamp()` column's minimum (260 px for Stream Graphics' layers and Properties) and the 1024 px
+  window minimum, not only the default 1632 px window. A `flex-1` input is `min-w-0`, or it is as wide as its content and pokes
+  past the card. A `<select>` fails BOTH ways (T-124 (24)): without `min-w-0` it is as wide as its longest option and pokes past
+  the card; with it, it shrinks and CLIPS the selected option's text ("60 Hz — US," of "60 Hz — US, Canada"), and its own
+  `scrollWidth` equals its `clientWidth` whatever is cut, so the overflow checks cannot see it. A select therefore gets the room
+  its selected text needs at the narrowest column (a label stacked above a full-width select, as the Power-line row is; option
+  labels written short enough, "YouTube, TikTok, Reels (−14)"), and `expectSelectsWhole` measures it. The trap: a column with `overflow-y-auto` computes its x-overflow to `auto` too, with a
+  scrollbar nobody sees, so a too-wide row is clipped silently and looks like a design choice (the Rotation row showed
+  "0" and "15" of seven presets at every window size for ten sweeps). `tests/e2e/layout.ts` measures it
+  (`expectNoHorizontalOverflow`: `scrollWidth <= clientWidth` and nothing past the right edge;
+  `expectControlsWhole`: each control inside its box and its own text not cut off; `expectSelectsWhole`: the SELECTED option's
+  text against the select's content box less its padding and arrow; `expectNoOverlap`: nothing drawn over anything else, which
+  the Text overlays card's Font select under "Size" and a layer name painted over its "Move layer up" button both passed the
+  others; `expectOneLine`: a label or readout that wraps by the word, "x / y" on three lines or "-25 dB" on two) at
+  `DEFAULT_WINDOW` and `MIN_WINDOW`, because every behavior case reaches a control with `click()`, which scrolls it into view
+  first. A new panel row gets its case beside those. A row of a name and its actions wraps the actions onto their own line
+  (the Layers panel's rows: `flex flex-wrap`, the name `min-w-[7rem]`, the four buttons together at the right), and a slider's
+  readout is `shrink-0 whitespace-nowrap` on the label's row, above a full-width slider (`ParamSlider`).
+- **A glyph that belongs to a box wraps WITH it (T-125 (17)).** A flex row that wraps by item can break
+  between a connector and what it connects: the Source time row left "→" at the end of one line and its
+  end box under it. The connector, the box and the unit are one `flex items-center` span, so the row breaks
+  before the group. `expectSameRow` measures that the pieces share a line. A card of three columns of
+  boxes in a 300 px card gives each a third, and a `<select>` or a label of more than a short word does not
+  fit in it: the Picture-in-picture card is two boxes to a row and the Position select on a row of its
+  own (T-125 (12)), and a label column is as wide as its longest label ("Size (px)": `w-14`).
+- **A watermark clears the platform's own interface on a vertical frame (T-130 (an)).** The watermark is drawn into the exported
+  picture, so its margin is a layout decision about someone else's screen. A landscape frame keeps the flat 20 px it always had
+  (`WATERMARK_EDGE_PX`). A 9:16 or taller frame (the shape decides, not the platform's name: `isVerticalFrame`, so a custom 720×1280
+  preset is vertical and a 4:5 or square one is not) is played full-screen under the app's header and over its caption, so the top corners
+  sit `VERTICAL_WATERMARK_INSET.top` (15% of the height, 288 px of 1080×1920) down and the bottom corners `.bottom` (25%, 480 px) up. That
+  ONE pair lives in `src/shared/watermark.ts` (`watermarkInset` turns it into pixels for a frame), beside the doc comment that says which
+  published safe-zone figures it was chosen against; the sides stay 20 px. It does not clear the right-hand column of like and share
+  buttons: a handle that must avoid it goes in a left corner. Changing the pair is a change to
+  `watermark.test.ts`, `filters.test.ts`, `clipKitWatermark.test.ts` and the win32 pixel case in the T-51 block of `media.spec.ts`
+  (bands measured against the box's 8 px border), and to the USER_GUIDE sentence that names the numbers.
+- **A fixed-pixel child in a `1fr` track needs `min-w-0`, and the smallest window has to fit (T-140 (5)).** A grid item's automatic minimum width is its content's, so
+  a child that sizes itself in pixels from its container (Stream Graphics' Konva Stage, fitted to the column in `Canvas.tsx`) holds the `1fr` track open at the width it was
+  last drawn: the 1200x480 Twitch banner pushed the Layers card 76 px past the right edge of a fresh 1024x640 window (it started at x = 840) and wholly off screen after a
+  1632 to 1024 shrink (x = 1040). The
+  column that holds such a child is `min-w-0`. The same box flexes in height and gives way first (`CANVAS_MIN_H`, 240 px; the room the 1024x640 minimum leaves it is 326 px,
+  291 on the emote whose Export bar wraps), so the whole Export bar and the Layers card are inside the minimum window with no scroll; and the studio's root is `overflow-auto`
+  like the four sibling studios, the backstop for a window or a text size that leaves less. `tests/e2e/layout.ts` `expectInViewport` measures it (box inside the window and
+  the element on top at its centre) with no click between the resize and the measurement, because `click()` scrolls the element into view and a wheel cannot.
 
 ---
 
@@ -193,8 +395,9 @@ imagii must look right on **1080p, 1440p (2K), and 4K** monitors.
   but stay bounded (readable on 1080p, not dominant on 4K).
 - **The Stage canvas** fits its container and may zoom past 1× (capped
   at 4×) so a 1080p document fills a 4K editing area.
-- **Export scale** defaults to `floor(devicePixelRatio)` so HiDPI
-  exports match what the user sees.
+- **Export scale** defaults from the display's pixel ratio
+  (`defaultExportScale`, `ExportDialog.tsx`): 3x at 2.5 and above, 2x
+  from 1.75, otherwise 1x, so HiDPI exports match what the user sees.
 - Chromium handles CSS pixels correctly at any DPR; Konva auto-tracks
   `devicePixelRatio`. Do not add manual DPI scaling to CSS.
 
@@ -206,8 +409,42 @@ imagii must look right on **1080p, 1440p (2K), and 4K** monitors.
 - Decorative icons are `aria-hidden` (the `Icon` component does this
   automatically when no `title` is passed).
 - Interactive elements keep a visible focus ring (`focus:ring-2
-  focus:ring-accent` — baked into `.btn-*`).
-- Color is never the only signal — pair it with text or an icon.
+  focus:ring-accent` — baked into `.btn-*`). An element that removes the browser's
+  outline with `outline-none` brings a ring of its own in the same `className` (`focus:ring-1 focus:ring-accent` on an inline
+  field, `focus-visible:ring-2` elsewhere); a background that changes on focus is not a ring - the clip rename field's
+  was 1.06:1 against its card (T-119). `a11ySweep.test.ts` rule 5 fails on `outline-none` with no `focus:ring-` or
+  `focus-visible:ring-` beside it, except the `role="dialog"` card, which is only ever focused by script.
+- Color is never the only signal — pair it with text or an icon. A control that
+  is one of a set and shows which is selected - by its fill, its border, a ring
+  or a wash - also says it with `aria-pressed` (a tab strip's open tab,
+  `aria-current`); a bar that shows a number is a `progressbar` or `meter`,
+  named and valued (T-114: the Export queue's bar is named for its job). A row
+  that selects has a real button in it, not only a clickable `<li>`: the button is
+  what takes focus and answers Enter and Space, and the row carries
+  `aria-current` as well (a row whose button is narrow keeps its own `onClick`
+  too, so a click in its blank space still selects).
+  `a11ySweep.test.ts` rule 1 fails on a button or anything with an `onClick`
+  whose class swaps to one of those styles without a state attribute.
+- A toggle that is named for its STATE says it with `aria-pressed` and a name that stays put
+  ("Layer visible"); a title that changes with the state is a tooltip, not the name. A control
+  named for its ACTION is the other standard pattern, and it is not given `aria-pressed`: the
+  name flips with the state and says what pressing will do ("Play" / "Pause" on the player's
+  transport, "Lock layer" / "Unlock layer"). The two must not be mixed on one control - a name
+  that flips and `aria-pressed` together read as the opposite of what the button does.
+- A control that is shown on hover (`opacity-0 group-hover:opacity-100`, the Save and "→ Canvas"
+  buttons on a reference tile) is shown on KEYBOARD focus too: `has-[:focus-visible]:opacity-100` on the
+  container (T-116). A button drawn at opacity 0 still takes Tab, and a keyboard user pressed Enter on it
+  blind. It is `:focus-visible`, not `focus-within`: a mouse click focuses the button as well, and
+  `focus-within` kept the scrim lit over the picture until focus moved on, long after the pointer had
+  left. `a11ySweep.test.ts` rule 4 fails on a hover-only container that holds a button, link or field and
+  does not show on `:focus-visible` (the old `focus-within` spelling fails it too).
+- Scrollable regions without focusable children are made focusable
+  (`tabIndex={0}`, an `aria-label` and `focus-visible:ring-2`, with a role when
+  it is not already a list): Chromium 126 has
+  no focusable scrollers, so a keyboard user could not scroll them at all. A
+  dialog that asks a question opens on its safe answer (`data-initial-focus`),
+  not on the first thing in the DOM with a tab stop - which is often exactly
+  such a scroller.
 
 ---
 

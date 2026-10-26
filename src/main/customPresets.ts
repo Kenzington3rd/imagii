@@ -5,6 +5,7 @@ import path from 'node:path'
 import { nanoid } from 'nanoid'
 import type { CustomPreset } from '../shared/customPresets'
 import { parseCustomPreset } from '../shared/customPresetParse'
+import { SAFE_ID_RE } from '../shared/pathSafety'
 
 function dir(): string {
   return path.join(app.getPath('userData'), 'export-presets')
@@ -48,11 +49,9 @@ export async function saveCustomPreset(p: Omit<CustomPreset, 'id'>): Promise<Cus
  * INIT-C (round 15): the renderer-supplied `id` is concatenated into a path
  * under userData. nanoid emits only [A-Za-z0-9_-], but a stale/crafted IPC
  * call could send anything (including `../`). Gate every external-facing id
- * with the same alphabet nanoid uses so a traversal can't escape the
- * preset directory.
+ * with the same alphabet nanoid uses (`SAFE_ID_RE`, shared/pathSafety.ts) so a
+ * traversal can't escape the preset directory.
  */
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
-
 export async function deleteCustomPreset(id: string): Promise<void> {
   if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
     throw new Error('deleteCustomPreset: id must match nanoid alphabet')

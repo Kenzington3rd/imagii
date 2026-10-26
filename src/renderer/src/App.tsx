@@ -10,6 +10,8 @@ import { References } from './routes/References'
 import { AppToaster } from './components/AppToaster'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { HotkeyOverlay } from './components/HotkeyOverlay'
+import { persistSetting } from './lib/persistSetting'
+import { swallowRepeatClicks } from './lib/repeatPress'
 import { Icon } from './components/Icon'
 import { useAutosave } from './hooks/useAutosave'
 
@@ -77,9 +79,13 @@ export function App(): JSX.Element {
   if (status.phase === 'welcome') {
     return (
       <Welcome
-        onContinue={async () => {
-          await window.api.settings.set('welcomeSeen', true)
+        onContinue={() => {
+          // T-128 (4): the write must not decide whether the person gets in (a refusal left "Let's go" doing nothing).
+          void persistSetting('welcomeSeen', true)
           setStatus({ phase: 'ready' })
+          // T-139 (9): "Let's go" is replaced by Home under the pointer, and the second press of a double-click lands where the button was - on Stream Graphics' card
+          // at 1366x768 (measured), which opened that studio. Same rule as a closing dialog's (T-131 (8)): a repeat press does not reach what is under it.
+          swallowRepeatClicks()
         }}
       />
     )

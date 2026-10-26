@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PlatformId } from '@shared/clip'
 import { outputSourceRect } from '@shared/safeZone'
+import { OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE } from '@shared/mediaFormats'
 import { useVideoStore } from './store/videoStore'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO } from './presets'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -13,6 +14,9 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
   const source = useVideoStore((s) => s.source)
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
+  // T-136 (6): the Player's verdict that it cannot draw this video's picture, until a preview copy it CAN draw exists. The canvas below mirrors the
+  // Player's element, so it is black for the same video; the caption must not call a black box a live snapshot.
+  const pictureUnavailable = useVideoStore((s) => s.noPicture && s.previewUrl === null)
   const [previewPlatform, setPreviewPlatform] = useState<PlatformId>('reels')
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -108,10 +112,14 @@ export function OutputPreview({ videoElement }: OutputPreviewProps): JSX.Element
       <div className="flex justify-center bg-bg-base rounded p-2">
         <canvas ref={canvasRef} className="rounded shadow-md" />
       </div>
-      <p className="text-xs text-ink-dim">
-        Live snapshot at the playhead position: your crop first, then this platform's shape cut
-        from it. Move the playhead to see different moments.
-      </p>
+      {pictureUnavailable ? (
+        <p className="text-xs text-ink-dim">{OUTPUT_PREVIEW_UNAVAILABLE_MESSAGE}</p>
+      ) : (
+        <p className="text-xs text-ink-dim">
+          Live snapshot at the playhead position: your crop first, then this platform's shape cut
+          from it. Move the playhead to see different moments.
+        </p>
+      )}
     </div>
   )
 }

@@ -1,10 +1,8 @@
 import { useState } from 'react'
-import type { ChainSpec } from '@shared/audio'
-import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
-import { countOf } from '@shared/plural'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
+import { confirmAudioClose } from './audioClose'
 import { AudioImporter } from './AudioImporter'
 import { WaveformView } from './WaveformView'
 import { CleanupPanel } from './CleanupPanel'
@@ -19,45 +17,10 @@ import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { audioTutorial } from '../../tutorials/audioTutorial'
 
-/**
- * T-19: what a Close would throw away. Everything here is unrecoverable —
- * clearSource() resets the chain AND drops the undo history with it.
- */
-export function audioCloseMessage(chain: ChainSpec): string | null {
-  const cuts = chain.cutRegions.length
-  const hasSecondary = chain.secondaryTrack !== null
-  const chainEdited = chainDiffersFromDefault(chain)
-  if (!cuts && !hasSecondary && !chainEdited) return null
-  const parts: string[] = []
-  if (chainEdited) parts.push('your cleanup settings')
-  if (cuts > 0) parts.push(countOf(cuts, 'cut'))
-  if (hasSecondary) parts.push('the second track')
-  // Mirrors VideoStudio.tsx's confirm copy: name what is lost, then say it
-  // is discarded.
-  const list = parts.join(', ')
-  return `Close this audio? ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
-}
-
-/** Field-by-field so a re-ordered object literal can't read as "edited". */
-function chainDiffersFromDefault(chain: ChainSpec): boolean {
-  const keys = Object.keys(DEFAULT_CHAIN_SPEC) as Array<keyof ChainSpec>
-  return keys.some((key) => {
-    if (key === 'cutRegions' || key === 'secondaryTrack') return false
-    return JSON.stringify(chain[key]) !== JSON.stringify(DEFAULT_CHAIN_SPEC[key])
-  })
-}
-
-/**
- * T-19: Video Studio has confirmed its Close since round 18; Audio Studio
- * silently discarded chain edits, cut regions, and a loaded second track.
- * Split out from the component so the accept AND decline branches are unit
- * testable in the node-env layer.
- */
-export function confirmAudioClose(chain: ChainSpec, ask: (message: string) => boolean): boolean {
-  const message = audioCloseMessage(chain)
-  if (message === null) return true
-  return ask(message)
-}
+// T-112: the close-confirm helpers live in `audioClose.ts` so Video Studio's "Clean
+// audio" can ask the same question without importing this component. Re-exported here
+// because this is where the Close button, and AudioStudio.test.ts, have always found them.
+export { audioCloseMessage, confirmAudioClose } from './audioClose'
 
 export function AudioStudio(): JSX.Element {
   const source = useAudioStore((s) => s.source)
@@ -108,7 +71,7 @@ export function AudioStudio(): JSX.Element {
               >
                 <Icon name="redo" size={15} /> Redo
               </button>
-              <span className="ml-3 text-ink-muted truncate max-w-[40ch]">
+              <span className="ml-3 text-ink-muted truncate max-w-[40ch]" title={source.fileName}>
                 {source.fileName}
               </span>
               <button className="btn-ghost px-3 py-1.5 ml-2" onClick={handleClose}>
@@ -140,6 +103,11 @@ export function AudioStudio(): JSX.Element {
             </div>
           </div>
           <div className="flex flex-col gap-4">
+            {/* T-124 (19): none of the panels below changes what the player plays: the waveform is the original sound, and every
+                setting is applied when you export (BRANDING: a control with no live preview says so in one line). */}
+            <p className="text-xs text-ink-dim">
+              Changes here are applied when you export. The player plays your original sound.
+            </p>
             <div data-tutorial="audio-cleanup">
               <CleanupPanel />
             </div>

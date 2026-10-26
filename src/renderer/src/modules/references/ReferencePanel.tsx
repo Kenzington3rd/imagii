@@ -1,27 +1,35 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import type { SearchResult } from '@shared/search'
+import { MAX_BOARD_NAME, type SearchResult } from '@shared/search'
 import { useReferencesStore } from './state/referencesStore'
 import { Icon } from '../../components/Icon'
 import { NameDialog } from '../../components/NameDialog'
+import { claimFirst } from '../../lib/claimFirst'
+import { reportFailure } from '../../lib/reportFailure'
 
 export function ReferencePanel(): JSX.Element {
   const search = useReferencesStore((s) => s.search)
   const response = useReferencesStore((s) => s.searchResponse)
   const loading = useReferencesStore((s) => s.searchLoading)
   const error = useReferencesStore((s) => s.searchError)
+  const inFlightQuery = useReferencesStore((s) => s.searchQuery)
   const collections = useReferencesStore((s) => s.collections)
   const selectedCollectionId = useReferencesStore((s) => s.selectedCollectionId)
   const addToCollection = useReferencesStore((s) => s.addToCollection)
   const refreshCollections = useReferencesStore((s) => s.refreshCollections)
   const createCollection = useReferencesStore((s) => s.createCollection)
 
-  const [query, setQuery] = useState('')
+  // T-135 (5): the input starts as the query the grid under it answers (a trip to Mood Boards and back unmounts this panel; the results are the store's).
+  const [query, setQuery] = useState(() => useReferencesStore.getState().searchQuery)
+  // The button is off for the question that is already out, and only for it: a corrected query is a different question (T-134 (3)) and a click
+  // must be able to send it as Enter does. The store's own same-query refusal still backstops a double-click.
+  const sameQueryOut = loading && query === inFlightQuery
   // T-28: the result waiting on a board to exist. Saving with no board yet
   // asked for a name through window's prompt — which Electron does not
   // implement, so the click threw and the FIRST save a new user tries was
   // impossible. The Save button was disabled into the bargain, which hid it.
   const [pendingResult, setPendingResult] = useState<SearchResult | null>(null)
+  const creatingRef = useRef(false)
 
   useEffect(() => {
     void refreshCollections()
@@ -40,7 +48,13 @@ export function ReferencePanel(): JSX.Element {
     boardName: string,
     result: SearchResult
   ): Promise<void> {
-    await addToCollection(collectionId, result)
+    // T-135 (8): the save is a write main can refuse (the thumbnail's fetch, a full disk); it had no catch, so a refused Save looked like a saved one.
+    try {
+      await addToCollection(collectionId, result)
+    } catch (err) {
+      reportFailure(err, { failed: "Couldn't save that picture." })
+      return
+    }
     toast.success(`Saved to "${boardName}"`)
   }
 
@@ -55,14 +69,26 @@ export function ReferencePanel(): JSX.Element {
 
   /** The first-save continuation: name the board, create it, save into it. */
   async function createBoardAndSave(name: string): Promise<void> {
-    const result = pendingResult
-    setPendingResult(null)
-    if (!result) return
-    // The id comes back from the create rather than from a re-read of the
-    // directory: `list()[0]` is the newest board by createdAt, which is the
-    // right answer only when nothing else has happened.
-    const collectionId = await createCollection(name)
-    await saveInto(collectionId, name, result)
+    // T-135 (8): the dialog and the picture it holds stay until the board EXISTS. This closed the dialog (`setPendingResult(null)`) before the create
+    // and had no catch, so a create main refused dropped the picture being saved without a word. A refusal now says so and leaves the dialog open
+    // with the name that was typed; a second press while the create is out is the same create (claimed first, so one press makes one board).
+    await claimFirst(creatingRef, async () => {
+      const result = pendingResult
+      if (!result) return
+      // The id comes back from the create rather than from a re-read of the
+      // directory: `list()[0]` is the newest board by createdAt, which is the
+      // right answer only when nothing else has happened.
+      let collectionId: string
+      try {
+        collectionId = await createCollection(name)
+      } catch (err) {
+        reportFailure(err, { failed: "Couldn't create that board." })
+        return
+      }
+      // The board exists now: the dialog has done its job whatever the save does (a refused save is its own sentence, and the picture is still on the grid).
+      setPendingResult(null)
+      await saveInto(collectionId, name, result)
+    })
   }
 
   return (
@@ -72,6 +98,7 @@ export function ReferencePanel(): JSX.Element {
         title="Name your first mood board"
         label="Board name"
         confirmLabel="Create & save"
+        maxLength={MAX_BOARD_NAME}
         onCancel={() => setPendingResult(null)}
         onConfirm={(name) => void createBoardAndSave(name)}
       />
@@ -84,8 +111,8 @@ export function ReferencePanel(): JSX.Element {
           className="flex-1 min-w-0 bg-bg-base rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
           placeholder="Search for inspiration… (e.g. minimalist mountain photography)"
         />
-        <button className="btn-primary px-4 py-2 disabled:opacity-50" onClick={submit} disabled={loading}>
-          {loading ? 'Searching…' : 'Search'}
+        <button className="btn-primary px-4 py-2 disabled:opacity-50" onClick={submit} disabled={sameQueryOut}>
+          {sameQueryOut ? 'Searching…' : 'Search'}
         </button>
       </div>
 
@@ -129,8 +156,12 @@ export function ReferencePanel(): JSX.Element {
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
-                <span className="text-xs text-ink-base line-clamp-2">{result.title}</span>
+              {/* T-115/T-116: shown on keyboard focus as well as hover - Tab reaches Save, and a
+                  button drawn at opacity 0 is one a keyboard user presses blind. :focus-visible,
+                  not focus-within: a mouse click focuses the button too, and focus-within kept
+                  the scrim lit after the pointer had left. */}
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
+                <span className="text-xs text-ink-base line-clamp-2" title={result.title}>{result.title}</span>
                 <span className="text-xs text-ink-dim">{result.source}</span>
                 {/* T-28: never disabled. "You have no board yet" is a reason
                     to ASK for one, not a reason to refuse the click — the

@@ -1,6 +1,7 @@
 import { ipcMain, app } from 'electron'
 import { getSetting, setSetting } from '../store'
 import type { SettingsKey } from '../../shared/api'
+import { folderVerdict } from '../ffmpeg/outputPath'
 
 // Round 17 phase-4: the renderer-supplied `key` reaches electron-store, which
 // happily creates whatever top-level field it's handed. A hostile or buggy
@@ -25,6 +26,7 @@ const KNOWN_SETTINGS_KEYS: readonly SettingsKey[] = [
   'record.convertToMp4',
   'export.lastOutputDir',
   'clipKit.lastOutputDir',
+  'video.lastOutputDir',
   'postingDiary',
   'windowBounds'
 ]
@@ -35,21 +37,31 @@ function assertKnownKey(key: unknown): asserts key is SettingsKey {
   }
 }
 
+/**
+ * The settings that remember a FOLDER the person chose (T-125 (10)). A stored path can outlive its folder (deleted, renamed, a drive
+ * that is not plugged in), and every reader used it as if it were there: the panels' buttons showed it, the writers wrote into it and
+ * the failure said "a file imagii needs isn't there". The read answers `undefined` for one that is not a folder now, for all of them at
+ * once, and leaves the stored value alone (the drive may come back; the next folder written replaces it). T-126 (10): the stat is
+ * shared between concurrent reads and has a deadline (`folderVerdict`), so a path that never answers cannot hold the thread pool.
+ */
+const FOLDER_SETTINGS: ReadonlySet<string> = new Set(['export.lastOutputDir', 'clipKit.lastOutputDir', 'video.lastOutputDir'])
+
 export function registerSettingsIpc(): void {
-  ipcMain.handle('settings:get', (_e, key: unknown) => {
+  ipcMain.handle('settings:get', async (_e, key: unknown) => {
     assertKnownKey(key)
-    return getSetting(key)
+    const value = getSetting(key)
+    // T-126 (10): only a folder that is KNOWN not to be one is hidden. A stat that has not answered by the deadline (an unreachable
+    // share) is "can't tell", and the stored value is answered: the real write is guarded by `ensureOutputDir` regardless.
+    if (FOLDER_SETTINGS.has(key) && (await folderVerdict(value)) === 'not-a-folder') return undefined
+    return value
   })
   ipcMain.handle('settings:set', (_e, key: unknown, value: unknown) => {
     assertKnownKey(key)
     setSetting(key, value)
   })
   ipcMain.handle('app:getVersion', () => app.getVersion())
-  ipcMain.on('app:quit', () => {
-    app.quit()
-  })
 }
 
 // Test-only export of the known-keys list so settings.test.ts can verify
 // the validation surface without re-declaring it.
-export const __settingsTesting__ = { KNOWN_SETTINGS_KEYS, assertKnownKey }
+export const __settingsTesting__ = { KNOWN_SETTINGS_KEYS, assertKnownKey, FOLDER_SETTINGS }

@@ -25,17 +25,27 @@ export const TEMPLATE_CATEGORY_ICONS: Record<TemplateCategory, IconName> = {
 }
 
 /**
- * T-91 — which template layers are `asHint(...)`, and why.
+ * T-91 + T-103 — which template layers are `asHint(...)`, and why.
  *
  * A hint layer is there to guide the person editing and is left out of every
  * export (`captureDocument`), so the file they post never says "Facecam goes
- * here". The rule, which `templates.test.ts` holds every template to:
- *   - guidance with a name that says so: "... hole", "... hint", "... placeholder",
- *     and the safe-area frames of the channel banner;
- *   - a placeholder TEXT that is literally a stand-in: "@yourhandle", "Game name".
- * Sample copy the user is expected to rewrite and keep ("YOUR TITLE HERE",
- * "TUTORIAL", a schedule line) is design, not a hint — it stays in the export.
- * A hint text layer stops being one the moment its words are edited.
+ * here" or "YOUR TITLE HERE". The rule, which `templateTruth.test.ts` holds
+ * every template and asset to with a per-card table:
+ *   - TEXT THE PERSON MUST REPLACE for the export to be theirs is a hint: a
+ *     stand-in title, a name, a handle, a game, a schedule line. The question
+ *     is "would a user plausibly ship this text verbatim ON PURPOSE?" — no
+ *     means hint. Retyping a hint text layer clears the flag (`canvasStore`),
+ *     so what a user types always exports;
+ *   - text that IS the card's deliverable is not a hint: "BE RIGHT BACK",
+ *     "STARTING SOON", "THANKS FOR HANGING OUT" and the lines under them, the
+ *     emote's "POG". Exporting the BRB card should give a BRB screen, not a
+ *     plate with no words on it. (The countdown's "0:00" is a HINT — no stream
+ *     starts at 0:00, so the user must set a real time, the definition of a
+ *     placeholder.);
+ *   - guidance with a name that says so ("... hole", "... hint", "... placeholder",
+ *     the safe-area frames of the channel banner) is a hint whatever it is.
+ * Design that is not words — plates, borders, bars, shapes — is not a hint and
+ * exports as drawn.
  */
 export interface CanvasTemplate {
   id: string
@@ -139,7 +149,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'yt-thumb-bold',
     name: 'YouTube · Bold thumbnail',
-    description: '1280×720 with a reaction-face zone and a shouty title. The face guide does not export.',
+    description:
+      '1280×720 with a reaction-face zone and a shouty title. The face guide and the sample title do not export; the title does once you type your own.',
     category: 'thumbnail',
     doc: {
       width: 1280,
@@ -147,7 +158,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       background: '#241614',
       layers: [
         rectLayer('Accent bar', 0, 540, 1280, 180, '#ff3131'),
-        textLayer('Title', 60, 60, 'YOUR TITLE\nHERE', 130, '#ffffff', 'Impact, Inter, sans-serif'),
+        asHint(textLayer('Title', 60, 60, 'YOUR TITLE\nHERE', 130, '#ffffff', 'Impact, Inter, sans-serif')),
         asHint(rectLayer('Face placeholder', 760, 110, 460, 460, 'rgba(255,49,49,0.18)', '#ff3131', 4, 24)),
         asHint(textLayer('Face hint', 880, 320, 'Drop face here', 36, '#ff3131'))
       ]
@@ -156,7 +167,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'yt-thumb-clean',
     name: 'YouTube · Clean thumbnail',
-    description: '1280×720, minimal layout for tutorials and explainers.',
+    description:
+      '1280×720, minimal layout for tutorials and explainers. The sample words (eyebrow, title, subtitle) do not export; whatever you type in their place does.',
     category: 'thumbnail',
     doc: {
       width: 1280,
@@ -164,9 +176,9 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       background: '#120c0c',
       layers: [
         rectLayer('Accent stripe', 0, 0, 12, 720, '#ff3131'),
-        textLayer('Eyebrow', 80, 80, 'TUTORIAL', 36, '#ff3131'),
-        textLayer('Title', 80, 160, 'How to do\nthe thing', 110, '#ffffff'),
-        textLayer('Subtitle', 80, 580, 'in 3 minutes', 48, '#a59a97')
+        asHint(textLayer('Eyebrow', 80, 80, 'TUTORIAL', 36, '#ff3131')),
+        asHint(textLayer('Title', 80, 160, 'How to do\nthe thing', 110, '#ffffff')),
+        asHint(textLayer('Subtitle', 80, 580, 'in 3 minutes', 48, '#a59a97'))
       ]
     }
   },
@@ -194,7 +206,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'tw-overlay-minimal',
     name: 'Twitch · Minimal overlay',
-    description: '1920×1080 transparent PNG for OBS with just a corner facecam frame.',
+    description:
+      '1920×1080 transparent PNG for OBS with just a corner facecam frame. The frame exports; the sample handle does not export until you type your own.',
     category: 'overlay',
     doc: {
       width: 1920,
@@ -225,10 +238,12 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     // projects and the tests address templates by it — but the name and the
     // description now say what the pixels fit. Layer coordinates were scaled
     // proportionally from the prior 1920-wide layout (width × 0.625).
+    // T-112: the description used to end "Not the 16:9 offline screen." — naming a screen no
+    // card in the app provides. It now points at the scene cards that do exist.
     id: 'tw-banner-videoplayer',
     name: 'Twitch · Profile banner',
     description:
-      "1200×480 — the size of the banner on your Twitch channel page. Not the 16:9 offline screen.",
+      '1200×480 — the size of the banner on your Twitch channel page. The sample handle and schedule do not export until you type your own. For a full-screen scene, use the scene cards in the Asset Library.',
     category: 'banner',
     doc: {
       width: 1200,
@@ -238,7 +253,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
         rectLayer('Bg accent', 0, 0, 1200, 480, '#ff3131', 'transparent', 0, 0),
         rectLayer('Bg dark', 0, 60, 1200, 360, '#120c0c', 'transparent', 0, 0),
         asHint(textLayer('Handle', 50, 140, '@yourhandle', 96, '#ffffff', 'Impact, Inter, sans-serif')),
-        textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#ff3131')
+        asHint(textLayer('Schedule', 50, 280, 'Streams: Mon · Wed · Fri · 7pm ET', 32, '#ff3131'))
       ]
     }
   },
@@ -251,7 +266,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     // inner TV-safe frame so they know where to keep load-bearing text.
     name: 'YouTube · Channel banner',
     description:
-      '2560×1440 YouTube channel art with both safe-area frames (all-device + TV-safe). The frames do not export.',
+      '2560×1440 YouTube channel art with both safe-area frames (all-device + TV-safe). The frames, their label and the sample channel name do not export; type your own name and it does.',
     category: 'banner',
     doc: {
       width: 2560,
@@ -266,7 +281,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
         asHint(
           textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24')
         ),
-        textLayer('Channel name', 800, 700, 'YOUR\nCHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif')
+        asHint(textLayer('Channel name', 800, 700, 'YOUR\nCHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif'))
       ]
     }
   },
@@ -274,7 +289,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     id: 'yt-thumb-bold-2k',
     name: 'YouTube · Bold thumbnail (2K)',
     description:
-      '2560×1440 reaction-style — the 720p layout at twice the pixels. YouTube thumbnails are 1280×720; export at 0.5× to match. The face guide does not export.',
+      '2560×1440 reaction-style — the 720p layout at twice the pixels. YouTube thumbnails are 1280×720; export at 0.5× to match. The face guide and the sample title do not export; the title does once you type your own.',
     category: 'thumbnail',
     doc: {
       width: 2560,
@@ -282,7 +297,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       background: '#241614',
       layers: [
         rectLayer('Accent bar', 0, 1080, 2560, 360, '#ff3131'),
-        textLayer('Title', 120, 120, 'YOUR TITLE\nHERE', 260, '#ffffff', 'Impact, Inter, sans-serif'),
+        asHint(textLayer('Title', 120, 120, 'YOUR TITLE\nHERE', 260, '#ffffff', 'Impact, Inter, sans-serif')),
         asHint(rectLayer('Face placeholder', 1520, 220, 920, 920, 'rgba(255,49,49,0.18)', '#ff3131', 6, 36)),
         asHint(textLayer('Face hint', 1760, 640, 'Drop face here', 56, '#ff3131'))
       ]
@@ -292,7 +307,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     id: 'yt-thumb-bold-4k',
     name: 'YouTube · Bold thumbnail (4K)',
     description:
-      '3840×2160 reaction-style — the 720p layout at 4K. It is 16:9, so not for vertical Shorts; YouTube thumbnails are 1280×720. The face guide does not export.',
+      '3840×2160 reaction-style — the 720p layout at 4K. It is 16:9, so not for vertical Shorts; YouTube thumbnails are 1280×720. The face guide and the sample title do not export; the title does once you type your own.',
     category: 'thumbnail',
     doc: {
       width: 3840,
@@ -300,7 +315,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       background: '#241614',
       layers: [
         rectLayer('Accent bar', 0, 1620, 3840, 540, '#ff3131'),
-        textLayer('Title', 180, 180, 'YOUR TITLE\nHERE', 390, '#ffffff', 'Impact, Inter, sans-serif'),
+        asHint(textLayer('Title', 180, 180, 'YOUR TITLE\nHERE', 390, '#ffffff', 'Impact, Inter, sans-serif')),
         asHint(rectLayer('Face placeholder', 2280, 330, 1380, 1380, 'rgba(255,49,49,0.18)', '#ff3131', 8, 54)),
         asHint(textLayer('Face hint', 2640, 960, 'Drop face here', 84, '#ff3131'))
       ]

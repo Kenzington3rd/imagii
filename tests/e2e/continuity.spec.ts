@@ -339,7 +339,7 @@ test.describe('T-47 session continuity', () => {
         })
         .toBe(2)
       const debounced = readSnapshot(userDataDir)
-      expect(debounced?.schemaVersion).toBe(3)
+      expect(debounced?.schemaVersion).toBe(5)
       expect(debounced?.place?.route).toBe('/video')
 
       // ── the last few seconds: an edit and a selection, then quit at once ──
@@ -514,6 +514,55 @@ test.describe('T-47 session continuity', () => {
         .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
         .toBe(false)
       await expectFreshSession()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  // T-134 (7): the banner's two buttons shared one busy flag, so pressing Clear relabelled Restore "Restoring…" for the unlink's duration - a word
+  // about an action nobody took. Main's clear is held open here (it removes the file when released), so "while Clear runs" is a state the test makes.
+  test('Clear does not relabel Restore: it stays "Restore" (dimmed) while the clear runs, and the banner goes when it is done (T-134 (7))', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('continuity-clearlabel')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Clear label rect', { route: '/image' }))
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await app.evaluate(({ ipcMain }, file) => {
+        const g = globalThis as unknown as { __releaseClear: () => void }
+        const gate = new Promise<void>((resolve) => {
+          g.__releaseClear = resolve
+        })
+        const fs = (process as unknown as { getBuiltinModule: (id: string) => { rmSync: (p: string, o: object) => void } }).getBuiltinModule('node:fs')
+        ipcMain.removeHandler('autosave:clear')
+        ipcMain.handle('autosave:clear', async () => {
+          await gate
+          fs.rmSync(file, { force: true })
+        })
+      }, autosaveFile(userDataDir))
+
+      const restore = window.getByRole('button', { name: /^Restor/ })
+      await expect(restore, 'before: the button says Restore').toHaveText('Restore')
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+
+      // The clear is out. Restore is dimmed (the two buttons act on one file) and says what it always says.
+      await expect(restore).toBeDisabled()
+      await window.waitForTimeout(500)
+      await expect(restore, 'Clear must not turn Restore into "Restoring…"').toHaveText('Restore')
+      await expect(window.getByText('Restoring…')).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Clear', exact: true })).toBeDisabled()
+
+      // Released: the file is gone, the banner with it, and the toast says what happened.
+      await app.evaluate(() => (globalThis as unknown as { __releaseClear: () => void }).__releaseClear())
+      await expect(window.getByText('Autosave cleared')).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      expect(existsSync(autosaveFile(userDataDir))).toBe(false)
     } finally {
       await app.close().catch(() => undefined)
       cleanup(root)

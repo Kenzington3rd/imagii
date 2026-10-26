@@ -120,14 +120,17 @@ export function reconcileDeviceId(
 }
 
 /**
- * The hint under an empty device list. It names the two real recoveries —
- * the device is not there, or Windows is not letting imagii use it — and the
- * control that re-checks (T-88: the old hint pointed at a button that only
- * re-listed screens and windows, and said nothing about permission).
+ * The hint under an empty device list. It names the three real recoveries —
+ * the device is not there, another app (OBS, the streamer's usual case) has
+ * it open, or Windows is not letting imagii use it — and the control that
+ * re-checks (T-88: the old hint pointed at a button that only re-listed
+ * screens and windows, and said nothing about permission; T-122: it named
+ * two of the three, and a camera another app holds probes exactly like an
+ * absent one).
  */
 export function noDeviceHint(kind: 'microphone' | 'camera'): string {
   return (
-    `No ${kind} found. Plug one in, or allow ${kind} access in Windows privacy ` +
-    'settings, then click Refresh sources.'
+    `No ${kind} found. Plug one in, close any other app using it, or allow ${kind} access in ` +
+    'Windows privacy settings, then click Refresh sources.'
   )
 }

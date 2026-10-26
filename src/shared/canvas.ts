@@ -110,6 +110,25 @@ export interface ImageExportSpec {
  */
 export const HINT_NODE_NAME = 'hint'
 
+/**
+ * The share of its own opacity a hint TEXT layer is drawn at on the canvas (T-112), so
+ * the words the export will leave out look like it. Display only — see `displayOpacity`.
+ */
+export const HINT_TEXT_DIM = 0.4
+
+/**
+ * What the canvas draws `layer` at (T-112). A hint text layer ("@yourhandle", "YOUR TITLE
+ * HERE") is dimmed so the canvas says what the Layers panel's tag already said: these
+ * words are not in the file. The layer's stored `opacity` is never changed — a layer whose
+ * words are retyped stops being a hint (`applyLayerPatch`) and is at full strength
+ * with nothing to undo — and `captureDocument` switches hint nodes off for every export,
+ * so the dim cannot reach a file. Only hint TEXT: a guide shape is a shape, and a mood-board
+ * reference is already authored at 40%.
+ */
+export function displayOpacity(layer: CanvasLayer): number {
+  return layer.hint === true && layer.type === 'text' ? layer.opacity * HINT_TEXT_DIM : layer.opacity
+}
+
 /** Mark a layer as guidance that never reaches an export (see `BaseLayer.hint`). */
 export function asHint<T extends CanvasLayer>(layer: T): T {
   return { ...layer, hint: true }
@@ -125,3 +144,16 @@ export function hintTag(layer: CanvasLayer): string | null {
   if (!layer.hint) return null
   return layer.type === 'image' ? "reference \u2014 won't export" : "hint \u2014 won't export"
 }
+
+/**
+ * How far a typed position may put a layer from the page's origin (T-124 (15)): one page beyond each edge. A layer is free to sit
+ * partly or wholly off the page (dragging allows it, and bleeding off an edge is ordinary design), so the bound is a sanity limit
+ * that keeps a typo ("50000") from sending a layer somewhere nobody can reach, not the page itself. `docExtent` is the page's width
+ * for x and its height for y.
+ */
+export function layerOffsetRange(docExtent: number): { min: number; max: number } {
+  return { min: -docExtent, max: 2 * docExtent }
+}
+
+/** A full turn either way: the Properties panel's Rotation box (degrees) is held to this when typing ends. */
+export const LAYER_ROTATION_RANGE = { min: -360, max: 360 } as const

@@ -59,20 +59,45 @@ const CANCELED_DEFAULT = 'Canceled.'
 const RUNNER_EXIT = /^[\w-]+(?: [\w-]+)? exit [\w-]+/
 
 /**
+ * T-139 (10): ffmpeg's "Permission denied" as the CAUSE of a runner or probe exit. The shipped Windows ffmpeg says it when it may not open a file it was
+ * handed (the Microsoft C runtime maps a sharing violation or an ACL block to EACCES, and strerror(EACCES) is that phrase): a recording another app
+ * holds open, an export aimed at a file an editor has. The runner's message carries ffmpeg's stderr, so the lines look like
+ *
+ *   FFmpeg exit 1: [out#0/mp4 @ 00007fffff46bfc0] Error opening output C:\x\clip.mp4: Permission denied\r\nError opening output files: Permission denied
+ *   ffprobe exit 1: C:\x\rec.mp4: Permission denied
+ *
+ * and were told "check that the source file still plays and the folder has room" about a file that was LOCKED. Only that shape counts: a runner exit
+ * (`RUNNER_EXIT`'s prefix) with a line that ENDS in `: Permission denied`, the way strerror's text is printed after a path or a tool's name. The phrase
+ * on its own is not a cause here: "Screen recording permission denied" (main's own words for a capture the OS refused, `record.spec.ts`), the browser's
+ * "Permission denied", and a runner line that merely mentions the words are not a locked file. Exported for `describeImportError`, which reads the same line.
+ */
+export const RUNNER_PERMISSION_DENIED = /^[\w-]+(?: [\w-]+)? exit [\w-]+[\s\S]*:[ \t]*permission denied[ \t]*(?:\r?\n|$)/i
+
+const WINDOWS_BLOCKED = 'Windows blocked access to a file. Close any app using it, or check your antivirus.'
+
+/**
  * Failure shapes recognised ANYWHERE in the message, most specific first —
  * an ffmpeg run that died on a missing file is "a file is missing", not
  * "ffmpeg exited", so these are tried before the generic runner-exit rule.
  */
+const MISSING_FILE =
+  /\bENOENT\b|no such file or directory|system cannot find the (?:file|path)/i
+
+/**
+ * True when `err` says a file is not there — the one failure the project-open
+ * sentence "Couldn't find X. It may have been moved or deleted." is true of
+ * (T-112). The same pattern `KNOWN_CAUSES` explains as a missing file, so the two
+ * cannot disagree about what "missing" is.
+ */
+export function isMissingFileError(err: unknown): boolean {
+  return MISSING_FILE.test(ipcErrorMessage(err, ''))
+}
+
 const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bENOSPC\b|no space left on device/i, 'Your disk is full. Free up some space and try again.'],
-  [
-    /\bENOENT\b|no such file or directory|system cannot find the (?:file|path)/i,
-    "A file imagii needs isn't there. It may have been moved or deleted."
-  ],
-  [
-    /\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i,
-    'Windows blocked access to a file. Close any app using it, or check your antivirus.'
-  ],
+  [MISSING_FILE, "A file imagii needs isn't there. It may have been moved or deleted."],
+  [/\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i, WINDOWS_BLOCKED],
+  [RUNNER_PERMISSION_DENIED, WINDOWS_BLOCKED],
   [
     /net::ERR_|\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\b/,
     "imagii couldn't reach the internet. Check your connection and try again."
@@ -106,6 +131,30 @@ const GENERIC_EXIT_CAUSE =
   "imagii's video tool stopped before it finished. " +
   'Check that the source file still plays and the folder has room, then try again.'
 
+/**
+ * T-140 (10): the speech engine's own failure. Its runner words it `whisper exit <code>: <stderr>` (`whisperManager.runTranscribe`), which has the runner shape above, so a
+ * failed transcription was told "imagii's video tool stopped ... check that the source file still plays and the folder has room": the wrong program and the wrong advice. The
+ * engine is a separate program the person installs by hand (`whisper-cli.exe` and the .dll files beside it, and the model), and the panel's "Captions setup" is where its
+ * folders are. Anchored at the START of the message, as `RUNNER_EXIT` is: a burn-in is ffmpeg's (`burn-in exit N`) and keeps the video tool's sentence, and a line of ffmpeg's
+ * that merely mentions the words is not the engine's. Tried after `KNOWN_CAUSES`, so a more specific cause wins for the engine as for every runner (a model another app holds
+ * open reads "Permission denied" at the end of a line and is the Windows-blocked sentence, a full disk is a full disk).
+ */
+const WHISPER_EXIT = /^whisper exit /
+const WHISPER_EXIT_CAUSE =
+  'The captions engine stopped before it finished. ' +
+  'Open Captions setup to check its files and the model, then try again.'
+
+/**
+ * T-140 (10): Windows' STATUS_DLL_NOT_FOUND (0xC0000135), the exit of an .exe whose .dll files are not beside it - the failure the setup card's zip step makes likely (the
+ * zip holds the program and the .dll files it needs; copying the .exe alone starts nothing). Node hands a Windows exit code over as the unsigned 32-bit value (libuv reads a
+ * DWORD), so it reads 3221225781; the signed spelling (-1073741515, what .NET and some debuggers print) is accepted too because nothing here depends on which one a runtime
+ * picks. Its own sentence: the fix is a different one (copy the .dll files, not re-download the model).
+ */
+const WHISPER_EXIT_DLL_MISSING = /^whisper exit (?:3221225781|-1073741515)\b/
+const WHISPER_EXIT_DLL_MISSING_CAUSE =
+  "The captions engine couldn't start because a file it needs is missing. " +
+  'Copy every .dll that came in the zip next to whisper-cli.exe (Captions setup opens that folder), then try again.'
+
 /** "A sentence a person wrote": one line, at most 240 characters, ending like one. */
 function isFinishedSentence(text: string): boolean {
   return text.length > 0 && text.length <= 240 && !text.includes('\n') && /[.!?]$/.test(text)
@@ -125,6 +174,8 @@ export function userFacingError(err: unknown, fallback: string): UserFacingError
   for (const [pattern, cause] of KNOWN_CAUSES) {
     if (pattern.test(raw)) return { cancelled: false, message: `${fallback} ${cause}` }
   }
+  if (WHISPER_EXIT_DLL_MISSING.test(raw)) return { cancelled: false, message: `${fallback} ${WHISPER_EXIT_DLL_MISSING_CAUSE}` }
+  if (WHISPER_EXIT.test(raw)) return { cancelled: false, message: `${fallback} ${WHISPER_EXIT_CAUSE}` }
   if (RUNNER_EXIT.test(raw)) return { cancelled: false, message: `${fallback} ${GENERIC_EXIT_CAUSE}` }
   if (isFinishedSentence(raw)) return { cancelled: false, message: raw }
   return { cancelled: false, message: fallback }

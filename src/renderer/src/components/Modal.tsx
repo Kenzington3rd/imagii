@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { swallowRepeatClicks } from '../lib/repeatPress'
 
 interface ModalProps {
   open: boolean
@@ -23,9 +24,10 @@ interface ModalProps {
  * ExportPanel. Centralizes:
  *   - role="dialog" + aria-modal="true"
  *   - aria-labelledby (or aria-label when no visible title)
- *   - first-focusable-on-mount + Tab trapping + focus restore on unmount
- *     (all three from `useFocusTrap`, which the tutorial coachmark shares
- *     since T-64 — one trap, two dialogs)
+ *   - first-focusable-on-mount (or the control marked `data-initial-focus`,
+ *     T-114: a question opens on its safe answer) + Tab trapping + focus
+ *     restore on unmount (all three from `useFocusTrap`, which the tutorial
+ *     coachmark shares since T-64 — one trap, two dialogs)
  *   - Escape-to-close, but only for the TOPMOST dialog (T-73)
  *   - Scrim-click-to-close (and stopPropagation on the inner card)
  *
@@ -83,6 +85,8 @@ export function Modal({
   children
 }: ModalProps): JSX.Element | null {
   const contentRef = useRef<HTMLDivElement | null>(null)
+  // Did the press now in progress begin or end inside the card (not on the scrim)? Read by the scrim's click.
+  const pressTouchedCardRef = useRef(false)
   // B7 fix (round 16): React 18 useId() so two titled Modals mounted at once
   // anywhere in the tree don't collide on a shared aria-labelledby target.
   const generatedTitleId = useId()
@@ -93,6 +97,8 @@ export function Modal({
     openModals++
     return () => {
       openModals--
+      // T-131 (8): the dialog is gone; the second press of a double-click on its button is about to land on what it covered.
+      swallowRepeatClicks()
     }
   }, [open])
 
@@ -129,7 +135,25 @@ export function Modal({
   return (
     <div
       className="fixed inset-0 z-[1200] bg-black/70 flex items-center justify-center p-6"
-      onClick={() => {
+      // T-123 (7): a click is a press AND a release on the scrim. Chromium dispatches the `click` of a drag to the
+      // COMMON ANCESTOR of where the button went down and where it came up, so pressing in the card (to select a word of
+      // a typed name) and letting go a little outside it fires a click ON the scrim, and this handler closed the dialog
+      // and threw the name away. A press that began, or a release that ended, inside the card is not a click on the scrim.
+      onMouseDown={(e) => {
+        pressTouchedCardRef.current = e.target !== e.currentTarget
+      }}
+      onMouseUp={(e) => {
+        if (e.target !== e.currentTarget) pressTouchedCardRef.current = true
+      }}
+      onClick={(e) => {
+        const dragged = pressTouchedCardRef.current
+        pressTouchedCardRef.current = false
+        if (dragged) return
+        // T-127 (8): the second click of a double-click is not a click on the scrim. A button that raises a question (Export with a
+        // safe-zone or over-limit warning, Clip Kit) draws this dialog on its FIRST click, and the second lands on the scrim a
+        // few milliseconds later (the button is outside the centered card) and closed the question it had just asked.
+        // `detail` is the click count; one change here covers every dialog.
+        if (e.detail > 1) return
         if (closeOnScrimClick) onClose()
       }}
     >
@@ -139,7 +163,11 @@ export function Modal({
         aria-modal="true"
         {...labelProps}
         className={`bg-bg-elevated border border-ink-dim/40 rounded-xl shadow-2xl outline-none ${className}`}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          // A click inside the card ends the press; it must not leave a stale "touched the card" behind for the next one.
+          pressTouchedCardRef.current = false
+        }}
       >
         {title ? (
           <h2 id={titleId} className="sr-only">

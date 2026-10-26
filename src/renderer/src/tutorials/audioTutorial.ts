@@ -64,7 +64,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'done',
       title: 'All set',
-      body: 'The ? button in the header replays this tour any time. It only points at what is on screen, so it covers more once audio is loaded.',
+      body: 'The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on. The tour only points at what is on screen, so it covers more once audio is loaded.',
       placement: 'center'
     }
   ]

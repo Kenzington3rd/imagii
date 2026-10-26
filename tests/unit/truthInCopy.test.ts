@@ -80,20 +80,28 @@ describe('Reframe is a fixed strip, and says so', () => {
     expect(panel).toMatch(/label: 'Left'/)
     expect(panel).toMatch(/label: 'Center'/)
     expect(panel).toMatch(/label: 'Right'/)
-    expect(panel.match(/label: '/g)).toHaveLength(3)
+    // The three POSITIONS rows and no fourth. (T-123 (18): the saved toast's `label: 'Edit in Video Studio'` is the
+    // same word `label` on a different object, so the count reads the rows' own shape.)
+    expect(panel.match(/\{ id: '\w+', label: '/g)).toHaveLength(3)
   })
 
   it('is titled for what it does, and states plainly that it does not track', () => {
-    expect(panel).toMatch(/Reframe to 9:16 \(center crop\)/)
+    // T-126 (14): "(center crop)" was stale the day Left and Right became positions (a Left strip is not a center crop), and the
+    // shorter title is also the one that fits the header at the 298 px card without breaking a word.
+    expect(panel).toMatch(/<PanelHeader[^>]*>[\s\S]{0,400}>\s*Reframe to 9:16\s*<\/PanelHeader>/)
+    expect(panel).not.toMatch(/center crop/)
     expect(panel).toMatch(/it does not track faces or action/)
     expect(panel).toMatch(/TikTok, Reels, and Shorts/)
   })
 
   it("the 'smart' position is gone from the type, the validator and the crop maths", () => {
     expect(read('src/shared/api.ts')).toMatch(/position: 'left' \| 'center' \| 'right'\n/)
-    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(
-      /export type ReframePosition = 'left' \| 'center' \| 'right'\n/
+    // T-125 (9): the strip is a stage of the shared builder now, so the three sides are `StripPosition` (filters.ts) and Reframe's own
+    // type is that alias - one union, not two.
+    expect(read('src/main/ffmpeg/filters.ts')).toMatch(
+      /export type StripPosition = 'left' \| 'center' \| 'right'\n/
     )
+    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(/export type ReframePosition = StripPosition\n/)
     expect(read('src/main/ipc/video.ts')).toMatch(
       /const REFRAME_POSITIONS = \['left', 'center', 'right'\] as const/
     )
@@ -147,6 +155,20 @@ describe('local-first names its two online exceptions', () => {
     expect(branding).toMatch(/Everything runs on the user's computer, except/)
     expect(read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/caption model download/)
     expect(read('docs/PRODUCT_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/Reference Search|References\s+searches/)
+  })
+
+  // T-119 (14): the fix table of T-85 missed two files that still said an absolute. The README's privacy
+  // section called reference search "the only feature that touches the internet" (its own system-requirements
+  // note names the model download as going online), and the release body said "Everything stays on your
+  // computer". A file a person reads before they ever open the app is where a promise like that is first
+  // read, so both name the two exceptions and neither says the absolute.
+  it('the README and the release notes name both exceptions, and neither says the absolute', () => {
+    const readme = read('README.md').replace(/\s+/g, ' ')
+    const release = read('.github/workflows/release.yml').replace(/\s+/g, ' ')
+    expect(readme).toMatch(EXCEPTIONS)
+    expect(release).toMatch(EXCEPTIONS)
+    expect(readme).not.toMatch(/only feature that touches the internet/i)
+    expect(release).not.toMatch(/everything stays on your computer/i)
   })
 })
 
@@ -202,13 +224,16 @@ describe('Captions say what they do (T-89)', () => {
   it('the size control is "Size" with the real height beside it — not "Font px", not "pixels"', () => {
     expect(panel).not.toMatch(/Font px|size in pixels|\d+ pixels/)
     expect(panel).toMatch(/>Size</)
-    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize\)/)
+    // T-112: about the loaded video's own frame, not 1080p.
+    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize, source\.probe\)/)
   })
 
   it('progress prints a plain label, never the phase id, and has an indeterminate branch', () => {
     expect(panel).toMatch(/captionPhaseLabel\(progress\.phase\)/)
     expect(panel).not.toMatch(/\{progress\.phase\}/)
-    expect(panel).toMatch(/progress-indeterminate/)
+    // T-136 (7): the sliding segment is the shared track's, drawn when the panel hands it no number (main sent none for this phase).
+    expect(panel).toMatch(/<ProgressTrack label=\{captionPhaseLabel\(progress\.phase\)\} percent=\{determinate \? percent : null\} \/>/)
+    expect(read('src/renderer/src/components/ProgressTrack.tsx')).toMatch(/progress-indeterminate/)
   })
 
   it('main sends no invented progress number', () => {
@@ -221,5 +246,40 @@ describe('Captions say what they do (T-89)', () => {
     expect(panel).toMatch(/if \(result\.captioned\)/)
     expect(panel).toMatch(/'Caption model downloaded'/)
     expect(panel).not.toMatch(/Whisper model installed/)
+  })
+})
+
+// T-139 (6): the setup card named a file the releases page does not offer. The Windows build is a zip (listed under the newest release that has one; some are marked
+// Pre-release), and the engine in it needs the .dll files that sit beside it. whisper.cpp's release workflow zips the folder build/bin/Release, so they are in a Release folder.
+describe('the Captions setup names the download the releases page really has (T-139 (6))', () => {
+  const panelSource = read('src/renderer/src/modules/video-studio/CaptionsPanel.tsx')
+  const panel = stripComments(panelSource).replace(/\s+/g, ' ')
+  const guide = read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+
+  it('the card names whisper-bin-x64.zip, says which release lists it, and asks for the program AND the .dll files from its Release folder', () => {
+    expect(panel).toContain('1. Download <code>whisper-bin-x64.zip</code> from the{\' \'} <a href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panel).toContain('(the newest release that lists it; some are marked Pre-release)')
+    expect(panel).toMatch(/Open the zip and copy <code>whisper-cli\.exe<\/code> and every{' '} <code>\.dll<\/code> next to it \(they are in its Release folder\) into the folder below, so the engine sits exactly here:/)
+    expect(panel, 'the file the releases page does not have').not.toMatch(/Download <code>whisper-cli\.exe<\/code>/)
+    expect(panel).not.toContain('(the Windows build)')
+  })
+
+  it('the releases link is the repository the project lives under now, not the old owner\'s path', () => {
+    expect(panelSource).toContain('href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panelSource).not.toContain('github.com/ggerganov')
+    // The only two addresses on the card: the releases page and the model's page (the network allowlist's two hosts).
+    expect([...panelSource.matchAll(/href="(https:\/\/[^"]+)"/g)].map((m) => m[1])).toEqual([
+      'https://github.com/ggml-org/whisper.cpp/releases',
+      'https://huggingface.co/ggerganov/whisper.cpp/tree/main'
+    ])
+  })
+
+  it('USER_GUIDE says the same: the zip, the newest release that lists it, a Pre-release, the .dll files, the Release folder - and the older name still works', () => {
+    expect(guide).toContain('download `whisper-bin-x64.zip` (the newest release that lists it; some are marked Pre-release), open the zip, and copy `whisper-cli.exe` and every `.dll` next to it (they are in the zip\'s `Release` folder)')
+    expect(guide).toContain('(The older name, `whisper.exe`, also works.)')
+    expect(guide).toContain('imagii does not download these files for you.')
+    expect(guide).not.toContain('Get `whisper-cli.exe` from the whisper.cpp releases page')
+    // "also works" is true of the code, which looks for either name.
+    expect(stripComments(read('src/main/sidecars/paths.ts'))).toMatch(/WHISPER_EXE_NAMES = \['whisper-cli\.exe', 'whisper\.exe'\]/)
   })
 })

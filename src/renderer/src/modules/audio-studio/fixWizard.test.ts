@@ -37,7 +37,10 @@ describe('fixSummary renders the patch it is given', () => {
     const on = (b: boolean): string => (b ? 'on' : 'off')
 
     expect(line(lines, 'Low rumble removal')).toBe(`Low rumble removal: ${on(patch.rumbleHighpass)}`)
-    expect(line(lines, 'Hum removal')).toBe(`Hum removal: ${on(patch.hum60)}`)
+    // T-112: when hum removal is on the line names the notch it applies.
+    expect(line(lines, 'Hum removal')).toBe(
+      patch.hum60 ? `Hum removal: on (${patch.humHz} Hz mains)` : 'Hum removal: off'
+    )
     expect(line(lines, "Softer harsh 's' sounds")).toBe(`Softer harsh 's' sounds: ${on(patch.deEss)}`)
     expect(line(lines, 'Compressor')).toBe(`Compressor: ${patch.compressor}`)
     expect(line(lines, 'Quieter background')).toBe(
@@ -52,6 +55,44 @@ describe('fixSummary renders the patch it is given', () => {
     const flipped = fixSummary({ ...base, rumbleHighpass: !base.rumbleHighpass })
     const changed = flipped.filter((l, i) => l !== baseLines[i])
     expect(changed).toEqual([`Low rumble removal: ${base.rumbleHighpass ? 'off' : 'on'}`])
+  })
+})
+
+/**
+ * T-112 — the summary names the notch. "Hum removal: on" left a person on 50 Hz mains
+ * to find out in the Cleanup panel, after Apply, that the wizard had left the notch
+ * at 60 (the wizard does not choose a frequency: it keeps the one the Cleanup panel
+ * has). The patch now carries that frequency, so the line says what Apply will do and
+ * Apply writes the same value back.
+ */
+describe('the hum line names the mains frequency (T-112)', () => {
+  const loud = { backgroundNoise: 'loud', echoy: false, primaryUse: 'voice' } as const
+  const quiet = { backgroundNoise: 'none', echoy: false, primaryUse: 'music' } as const
+
+  it('defaults to 60 Hz, which is what every chain without a frequency has always been', () => {
+    const patch = fixPatch(loud)
+    expect(patch.humHz).toBe(60)
+    expect(fixSummary(patch)).toContain('Hum removal: on (60 Hz mains)')
+  })
+
+  it('carries the chain\'s own 50 Hz through to both the line and the patch Apply uses', () => {
+    const patch = fixPatch(loud, 50)
+    expect(patch.humHz).toBe(50)
+    expect(fixSummary(patch)).toContain('Hum removal: on (50 Hz mains)')
+  })
+
+  it('says nothing about a notch when hum removal is off', () => {
+    for (const mains of [50, 60] as const) {
+      const lines = fixSummary(fixPatch(quiet, mains))
+      expect(lines).toContain('Hum removal: off')
+      expect(lines.join('\n')).not.toMatch(/Hz/)
+    }
+  })
+
+  it('changing only the frequency changes exactly the hum line', () => {
+    const at60 = fixSummary(fixPatch(loud, 60))
+    const at50 = fixSummary(fixPatch(loud, 50))
+    expect(at60.filter((l, i) => l !== at50[i])).toEqual(['Hum removal: on (60 Hz mains)'])
   })
 })
 

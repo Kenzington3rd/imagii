@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  NO_SOUND_MESSAGE,
   endsGestureOnPointerUp,
   isPristineWholeVideoClip,
   playableDuration,
+  playheadNow,
+  videoDiscardMessage,
+  videoHasNoSound,
   useVideoStore
 } from './videoStore'
 import type { VideoSource } from './videoStore'
-import type { Clip } from '@shared/clip'
+import { clipRecipe, type Clip } from '@shared/clip'
+import { isValidTextOverlay } from '@shared/projectValidation'
+import { newTextOverlay } from '@shared/textOverlay'
+import { assertOptionalClipRecipe } from '@shared/validators'
 
 const FAKE_SOURCE: VideoSource = {
   filePath: '/fake/path.mp4',
@@ -24,7 +31,13 @@ const FAKE_SOURCE: VideoSource = {
   }
 }
 
-describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
+// T-101: `addClipFromRange` had no caller outside these tests, so it was deleted
+// and the range rules it shared with the scanners' add are pinned where the
+// product reaches them. `appendRange` is the one implementation of "add a clip
+// from a range"; `addScannedClip` is its only caller. With no whole-video clip
+// in the list (every block below starts from `clips: []`) the scanner's add
+// retires nothing, so it is the plain add these guards were written for.
+describe('addScannedClip — reversed-range guard (Phase 2.12)', () => {
   beforeEach(() => {
     useVideoStore.setState({
       source: FAKE_SOURCE,
@@ -34,7 +47,7 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
   })
 
   it('adds a clip when range is well-formed', () => {
-    useVideoStore.getState().addClipFromRange('valid', 5, 15)
+    useVideoStore.getState().addScannedClip('valid', 5, 15)
     const clips = useVideoStore.getState().clips
     expect(clips).toHaveLength(1)
     expect(clips[0]?.startSec).toBe(5)
@@ -42,23 +55,23 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
   })
 
   it('rejects reversed range (start >= end) silently', () => {
-    useVideoStore.getState().addClipFromRange('reversed', 15, 5)
+    useVideoStore.getState().addScannedClip('reversed', 15, 5)
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 
   it('rejects equal start and end', () => {
-    useVideoStore.getState().addClipFromRange('zero-length', 5, 5)
+    useVideoStore.getState().addScannedClip('zero-length', 5, 5)
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 
   it('rejects non-finite values', () => {
-    useVideoStore.getState().addClipFromRange('nan', NaN, 5)
-    useVideoStore.getState().addClipFromRange('inf', 0, Infinity)
+    useVideoStore.getState().addScannedClip('nan', NaN, 5)
+    useVideoStore.getState().addScannedClip('inf', 0, Infinity)
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 
   it('clamps a range that extends past the source duration', () => {
-    useVideoStore.getState().addClipFromRange('overrun', -5, 999)
+    useVideoStore.getState().addScannedClip('overrun', -5, 999)
     const clip = useVideoStore.getState().clips[0]
     expect(clip).toBeDefined()
     expect(clip?.startSec).toBe(0)
@@ -67,7 +80,7 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
 
   it('does nothing when no source is loaded', () => {
     useVideoStore.setState({ source: null, clips: [] })
-    useVideoStore.getState().addClipFromRange('orphan', 5, 15)
+    useVideoStore.getState().addScannedClip('orphan', 5, 15)
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 })
@@ -76,7 +89,7 @@ describe('addClipFromRange — reversed-range guard (Phase 2.12)', () => {
 // used to toast "Clip added" regardless — a success message for a clip
 // that was never added. The answer is now the return value, and it has to
 // track the clips list exactly, in both directions.
-describe('addClipFromRange — return value reports what actually happened (T-48)', () => {
+describe('addScannedClip — return value reports what actually happened (T-48)', () => {
   beforeEach(() => {
     useVideoStore.setState({
       source: FAKE_SOURCE,
@@ -85,39 +98,74 @@ describe('addClipFromRange — return value reports what actually happened (T-48
     })
   })
 
-  it('returns true only when a clip really joined the list', () => {
-    expect(useVideoStore.getState().addClipFromRange('valid', 5, 15)).toBe(true)
+  it("answers 'added' only when a clip really joined the list", () => {
+    expect(useVideoStore.getState().addScannedClip('valid', 5, 15)).toBe('added')
     expect(useVideoStore.getState().clips).toHaveLength(1)
   })
 
-  it('returns false for every refusal, and adds nothing', () => {
-    const add = (name: string, a: number, b: number): boolean =>
-      useVideoStore.getState().addClipFromRange(name, a, b)
-    expect(add('reversed', 15, 5)).toBe(false)
-    expect(add('zero-length', 5, 5)).toBe(false)
-    expect(add('nan', NaN, 5)).toBe(false)
-    expect(add('inf', 0, Infinity)).toBe(false)
+  it("answers 'refused' for every refusal, and adds nothing", () => {
+    const add = (name: string, a: number, b: number): string =>
+      useVideoStore.getState().addScannedClip(name, a, b)
+    expect(add('reversed', 15, 5)).toBe('refused')
+    expect(add('zero-length', 5, 5)).toBe('refused')
+    expect(add('nan', NaN, 5)).toBe('refused')
+    expect(add('inf', 0, Infinity)).toBe('refused')
     expect(useVideoStore.getState().clips).toHaveLength(0)
   })
 
-  it('returns false with no source loaded', () => {
+  it("answers 'refused' with no source loaded", () => {
     useVideoStore.setState({ source: null, clips: [] })
-    expect(useVideoStore.getState().addClipFromRange('orphan', 5, 15)).toBe(false)
+    expect(useVideoStore.getState().addScannedClip('orphan', 5, 15)).toBe('refused')
   })
 
-  it('returns false for the collapsed range a past-the-end chat peak clamps to', () => {
+  it("answers 'refused' for the collapsed range a past-the-end chat peak clamps to", () => {
     // ChatHighlightPanel clamps both ends to the duration, so a peak whose
     // bucket starts after the video ends arrives here as duration→duration.
     const { duration } = FAKE_SOURCE.probe
-    expect(useVideoStore.getState().addClipFromRange('past the end', duration, duration)).toBe(
-      false
+    expect(useVideoStore.getState().addScannedClip('past the end', duration, duration)).toBe(
+      'refused'
     )
     expect(useVideoStore.getState().clips).toHaveLength(0)
     // …while a peak that merely runs OVER the end still lands, clamped.
-    expect(useVideoStore.getState().addClipFromRange('overruns', duration - 5, duration)).toBe(
-      true
+    expect(useVideoStore.getState().addScannedClip('overruns', duration - 5, duration)).toBe(
+      'added'
     )
     expect(useVideoStore.getState().clips).toHaveLength(1)
+  })
+})
+
+// T-131 (3): a scanner row from another video (HighlightPanel and ChatHighlightPanel kept the previous video's results when the open
+// video was replaced in place) asked for a range that starts past the END of this one. The clamp turned it into a clip that begins at the
+// duration and ends 0.1 s after it, and the panel said "Clip added". The panels now clear their results with the video (the e2e through
+// Reframe's Edit in Video Studio proves it); this is the store's own refusal, whoever the caller is.
+describe('addScannedClip — a range that starts at or past the end of the video is refused (T-131 (3))', () => {
+  const { duration } = FAKE_SOURCE.probe
+  beforeEach(() => {
+    useVideoStore.setState({ source: FAKE_SOURCE, clips: [], selectedClipId: null })
+  })
+
+  it.each([
+    ['exactly at the end', duration, duration + 10],
+    ['well past the end', 900, 960],
+    ['a start with less than the shortest clip left', duration - 0.05, duration + 5]
+  ])('%s: refused, and no clip joins the list', (_what, start, end) => {
+    expect(useVideoStore.getState().addScannedClip('stale', start, end)).toBe('refused')
+    expect(useVideoStore.getState().clips).toHaveLength(0)
+  })
+
+  it('no clip ever ends past the video: a start with exactly the shortest clip left is added, ending AT the duration', () => {
+    expect(useVideoStore.getState().addScannedClip('last tenth', duration - 0.1, duration + 5)).toBe('added')
+    const clip = useVideoStore.getState().clips[0]
+    expect(clip?.startSec).toBeCloseTo(duration - 0.1, 9)
+    expect(clip?.endSec).toBeLessThanOrEqual(duration)
+  })
+
+  it('a refusal retires nothing: the untouched whole-video clip is still there and the history has no new step', () => {
+    useVideoStore.setState({ clips: [pristine()] })
+    const before = useVideoStore.getState().history.past.length
+    expect(useVideoStore.getState().addScannedClip('stale', duration + 1, duration + 20)).toBe('refused')
+    expect(useVideoStore.getState().clips).toHaveLength(1)
+    expect(useVideoStore.getState().history.past.length).toBe(before)
   })
 })
 
@@ -150,6 +198,113 @@ describe('srtPath state — Phase 4 tech-debt', () => {
     useVideoStore.getState().setSrtPath('/tmp/captions.srt')
     useVideoStore.getState().clearSource()
     expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+})
+
+/**
+ * T-112 — a transcription that finishes after the video changed belongs to the
+ * video it was started on.
+ *
+ * The panel's transcription takes minutes and the app is not locked: transcribe A,
+ * close it, drop B, and A's result arrived to `setSrtPath` — B got A's captions
+ * (and "Burn into video" offered to burn them into the wrong picture). The store
+ * action takes the source the job started on and applies only if that is still
+ * the open one.
+ */
+describe('setSrtPathFor — captions go to the video they were made from (T-112)', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mp4', fileName: 'a.mp4' }
+  const VIDEO_B: VideoSource = { ...FAKE_SOURCE, filePath: '/v/b.mp4', fileName: 'b.mp4' }
+
+  beforeEach(() => {
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null, srtPath: null })
+  })
+
+  it('applies when the video the job started on is still open, and says so', () => {
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(true)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/a.srt')
+  })
+
+  it('null forgets the transcript of the open video, and only of the open video (T-128 (3))', () => {
+    useVideoStore.setState({ srtPath: '/tmp/a.srt' })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', null)).toBe(true)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    useVideoStore.setState({ source: VIDEO_B, srtPath: '/tmp/b.srt' })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', null)).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/b.srt')
+  })
+
+  it('transcribe A, open B, A finishes: B gets nothing, and the store says it did not apply', () => {
+    useVideoStore.setState({ source: VIDEO_B, srtPath: null })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('does not overwrite B\'s own captions with A\'s', () => {
+    useVideoStore.setState({ source: VIDEO_B, srtPath: '/tmp/b.srt' })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/b.srt')
+  })
+
+  it('nothing open (the video was closed meanwhile) is not the video it started on', () => {
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('the same file opened again meanwhile IS the video it started on', () => {
+    useVideoStore.setState({ source: { ...VIDEO_A }, srtPath: null })
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(true)
+  })
+
+  it('works through the real loadSource: A, then B loaded, A\'s late result is refused', async () => {
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: () => Promise.resolve(FAKE_SOURCE.probe),
+          fileUrl: (p: string) => `imagii-file://${p}`
+        }
+      }
+    })
+    try {
+      await useVideoStore.getState().loadSource('/v/a.mp4')
+      await useVideoStore.getState().loadSource('/v/b.mp4')
+      expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/tmp/a.srt')).toBe(false)
+      expect(useVideoStore.getState().srtPath).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+/**
+ * T-112 — a video with no sound has nothing to clean, transcribe or scan.
+ *
+ * `probe.audioCodec` is null for a file with no audio stream (the PiP overlay
+ * fixture is one; so is every screen-capture clip recorded with the mic off). The
+ * three audio-dependent panels ask this and say `NO_SOUND_MESSAGE`.
+ */
+describe('videoHasNoSound — what the audio-dependent panels ask (T-112)', () => {
+  const withCodec = (audioCodec: string | null): VideoSource => ({
+    ...FAKE_SOURCE,
+    probe: { ...FAKE_SOURCE.probe, audioCodec }
+  })
+
+  it('a file with no audio stream has no sound', () => {
+    expect(videoHasNoSound(withCodec(null))).toBe(true)
+  })
+
+  it('a file with an audio stream has sound, whatever its codec', () => {
+    for (const codec of ['aac', 'mp3', 'opus', 'pcm_s16le', 'flac']) {
+      expect(videoHasNoSound(withCodec(codec)), codec).toBe(false)
+    }
+  })
+
+  it('no video open is not "a video with no sound" — the panels are not on screen then', () => {
+    expect(videoHasNoSound(null)).toBe(false)
+  })
+
+  it('says it in the app\'s voice, as a sentence', () => {
+    expect(NO_SOUND_MESSAGE).toBe('This video has no sound.')
   })
 })
 
@@ -301,8 +456,8 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('undo restores a removed clip (and the prior selection)', () => {
-    useVideoStore.getState().addClipFromRange('keep', 0, 10)
-    useVideoStore.getState().addClipFromRange('doomed', 20, 30)
+    useVideoStore.getState().addScannedClip('keep', 0, 10)
+    useVideoStore.getState().addScannedClip('doomed', 20, 30)
     const doomed = useVideoStore.getState().clips[1]
     expect(doomed).toBeDefined()
 
@@ -322,7 +477,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('undo restores a previous trim range', () => {
-    useVideoStore.getState().addClipFromRange('trim-me', 5, 15)
+    useVideoStore.getState().addScannedClip('trim-me', 5, 15)
     const id = useVideoStore.getState().clips[0]!.id
 
     useVideoStore.getState().setClipRange(id, 8, 12)
@@ -335,7 +490,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('redo re-applies an undone change', () => {
-    useVideoStore.getState().addClipFromRange('redo-me', 5, 15)
+    useVideoStore.getState().addScannedClip('redo-me', 5, 15)
     const id = useVideoStore.getState().clips[0]!.id
 
     useVideoStore.getState().setClipRange(id, 8, 12)
@@ -349,7 +504,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('caps history depth at 50 entries', () => {
-    useVideoStore.getState().addClipFromRange('cap', 0, 60)
+    useVideoStore.getState().addScannedClip('cap', 0, 60)
     const id = useVideoStore.getState().clips[0]!.id
     // 60 discrete mutations (toggling membership flips every call) — the
     // stack must retain only the newest 50 snapshots.
@@ -368,7 +523,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('a trim drag (many setClipRange calls) coalesces into one undo step', () => {
-    useVideoStore.getState().addClipFromRange('drag-me', 0, 30)
+    useVideoStore.getState().addScannedClip('drag-me', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
     const before = useVideoStore.getState().history.past.length
 
@@ -386,7 +541,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('coalescing breaks across different actions, so each gesture is its own step', () => {
-    useVideoStore.getState().addClipFromRange('multi', 0, 30)
+    useVideoStore.getState().addScannedClip('multi', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
 
     for (let t = 1; t <= 5; t++) useVideoStore.getState().setClipRange(id, t, 30)
@@ -409,7 +564,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
    * is for; the surfaces call it on mouseup / Rnd stop / slider release.
    */
   it('two consecutive trim drags are two undo steps, not one', () => {
-    useVideoStore.getState().addClipFromRange('two-drags', 0, 30)
+    useVideoStore.getState().addScannedClip('two-drags', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
     const before = useVideoStore.getState().history.past.length
 
@@ -432,7 +587,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('still collapses the whole of one gesture while it is open', () => {
-    useVideoStore.getState().addClipFromRange('one-drag', 0, 30)
+    useVideoStore.getState().addScannedClip('one-drag', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
     const before = useVideoStore.getState().history.past.length
 
@@ -448,7 +603,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
     // The colour sliders and "Reset color" all carry `grade:<id>`: without a
     // gesture end, four slider drags plus the reset were ONE step, and undo
     // jumped past every one of them.
-    useVideoStore.getState().addClipFromRange('grade', 0, 30)
+    useVideoStore.getState().addScannedClip('grade', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
     const graded = { brightness: 0.25, contrast: 1.2, saturation: 1.5, temperature: -0.5 }
 
@@ -464,7 +619,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('is a no-op with no gesture open, so it cannot swallow a step', () => {
-    useVideoStore.getState().addClipFromRange('idle', 0, 30)
+    useVideoStore.getState().addScannedClip('idle', 0, 30)
     const id = useVideoStore.getState().clips[0]!.id
     const state = useVideoStore.getState()
 
@@ -480,7 +635,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('a new edit after undo clears the redo stack', () => {
-    useVideoStore.getState().addClipFromRange('branch', 5, 15)
+    useVideoStore.getState().addScannedClip('branch', 5, 15)
     const id = useVideoStore.getState().clips[0]!.id
 
     useVideoStore.getState().setClipRange(id, 8, 12)
@@ -492,7 +647,7 @@ describe('clip history — undo/redo (UX round 18)', () => {
   })
 
   it('clearSource drops history instead of snapshotting', () => {
-    useVideoStore.getState().addClipFromRange('gone', 5, 15)
+    useVideoStore.getState().addScannedClip('gone', 5, 15)
     expect(useVideoStore.getState().canUndo()).toBe(true)
 
     useVideoStore.getState().clearSource()
@@ -891,10 +1046,479 @@ describe('addScannedClip — the scanner\'s add retires the untouched whole-vide
     expect(useVideoStore.getState().clips[0]?.speedMultiplier).toBe(1)
   })
 
-  it('the manual paths never retire it: "+ Add clip" and addClipFromRange', () => {
+  it('the manual path never retires it: "+ Add clip" (T-101 deleted its range-taking twin)', () => {
     useVideoStore.getState().addClip()
     expect(names()).toEqual(['Clip 1', 'Clip 2'])
-    expect(useVideoStore.getState().addClipFromRange('Hand-made', 5, 15)).toBe(true)
-    expect(names()).toEqual(['Clip 1', 'Clip 2', 'Hand-made'])
+    useVideoStore.getState().addClip()
+    expect(names()).toEqual(['Clip 1', 'Clip 2', 'Clip 3'])
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// T-113 (1) — text overlays are normalized where they are stored.
+//
+// The editor's default color was the NAME "white" and its placeholder invited
+// "white or #ffcc00", but every overlay gate (`isValidTextOverlay`: Export,
+// Compile, Save project, a project's restore) takes `#RRGGBB` only, so the
+// untouched "+ Add text" overlay failed all four. The gates stay hex-only (they
+// guard the IPC boundary against filter injection); the store turns a name into
+// its hex before it keeps the overlay.
+// ───────────────────────────────────────────────────────────────────────────
+describe('text overlays reach the gates as hex (T-113)', () => {
+  function oneClip(): string {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [
+        {
+          id: 'c1',
+          name: 'Clip 1',
+          startSec: 10,
+          endSec: 20,
+          cropRect: null,
+          textOverlays: [],
+          selectedPresets: ['youtube']
+        }
+      ],
+      selectedClipId: 'c1',
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+    return 'c1'
+  }
+  const overlays = (): Clip['textOverlays'] => useVideoStore.getState().clips[0]?.textOverlays ?? []
+
+  it('the overlay "+ Add text" stores untouched is accepted by every gate that reads it', () => {
+    const id = oneClip()
+    useVideoStore.getState().addTextOverlay(id, newTextOverlay(10, 20))
+    const clip = useVideoStore.getState().clips[0] as Clip
+    expect(overlays()).toHaveLength(1)
+    expect(isValidTextOverlay(overlays()[0])).toBe(true)
+    // Compile and Export both run the recipe through this gate (video:concat, video:exportBatch).
+    expect(() => assertOptionalClipRecipe({ ...clipRecipe(clip) }, 'clip')).not.toThrow()
+  })
+
+  it('a name handed to addTextOverlay is stored as its hex', () => {
+    const id = oneClip()
+    useVideoStore.getState().addTextOverlay(id, { ...newTextOverlay(10, 20), colorHex: 'white' })
+    expect(overlays()[0]?.colorHex).toBe('#ffffff')
+  })
+
+  it('a color typed into an existing overlay is stored as hex, whatever case the name came in', () => {
+    const id = oneClip()
+    const s = useVideoStore.getState()
+    s.addTextOverlay(id, newTextOverlay(10, 20))
+    const oid = overlays()[0]?.id as string
+    s.updateTextOverlay(id, oid, { colorHex: 'Gold' })
+    expect(overlays()[0]?.colorHex).toBe('#ffd700')
+    s.updateTextOverlay(id, oid, { colorHex: 'FFCC00' })
+    expect(overlays()[0]?.colorHex).toBe('#ffcc00')
+  })
+
+  it('a color imagii cannot read leaves the stored one alone', () => {
+    const id = oneClip()
+    const s = useVideoStore.getState()
+    s.addTextOverlay(id, newTextOverlay(10, 20))
+    const oid = overlays()[0]?.id as string
+    s.updateTextOverlay(id, oid, { colorHex: 'notacolor', text: 'kept' })
+    expect(overlays()[0]?.colorHex).toBe('#ffffff')
+    // ...and the rest of the same patch still lands.
+    expect(overlays()[0]?.text).toBe('kept')
+  })
+
+  it('a size is clamped to the 8..512 the gate takes', () => {
+    const id = oneClip()
+    const s = useVideoStore.getState()
+    s.addTextOverlay(id, { ...newTextOverlay(10, 20), sizePx: 5000 })
+    expect(overlays()[0]?.sizePx).toBe(512)
+    const oid = overlays()[0]?.id as string
+    s.updateTextOverlay(id, oid, { sizePx: 3 })
+    expect(overlays()[0]?.sizePx).toBe(8)
+    s.updateTextOverlay(id, oid, { sizePx: 450 })
+    expect(overlays()[0]?.sizePx).toBe(450)
+    s.updateTextOverlay(id, oid, { sizePx: NaN })
+    expect(overlays()[0]?.sizePx).toBe(450)
+  })
+
+  it('every state the store can hold passes the gates (a project saves, a compile compiles)', () => {
+    const id = oneClip()
+    const s = useVideoStore.getState()
+    s.addTextOverlay(id, newTextOverlay(10, 20))
+    s.addTextOverlay(id, { ...newTextOverlay(10, 20), colorHex: 'red', sizePx: 4000 })
+    const oid = overlays()[0]?.id as string
+    s.updateTextOverlay(id, oid, { colorHex: 'nonsense', sizePx: -9 })
+    for (const o of overlays()) expect(isValidTextOverlay(o), JSON.stringify(o)).toBe(true)
+  })
+})
+
+/**
+ * T-119 (3) - what the video the person is editing would lose. Close has asked since round 18; T-112's
+ * "Clean audio" asks before it replaces Audio Studio's work; Record's "Edit in Video Studio" replaced a tuned
+ * session with nothing said. One list, one lead-in per act, and nothing to ask when nothing is loaded.
+ */
+describe('videoDiscardMessage - the question Close and Replace both ask (T-119)', () => {
+  it('asks nothing when no clip is loaded, whichever act it is', () => {
+    expect(videoDiscardMessage(0)).toBeNull()
+    expect(videoDiscardMessage(0, 'close')).toBeNull()
+    expect(videoDiscardMessage(0, 'replace')).toBeNull()
+  })
+
+  it('Close keeps its round-18 sentence, counting the clips', () => {
+    expect(videoDiscardMessage(1)).toBe('Close this video? 1 clip and its edits will be discarded.')
+    expect(videoDiscardMessage(4, 'close')).toBe('Close this video? 4 clips and their edits will be discarded.')
+  })
+
+  it("Replace names the act: nothing is being closed when a recording's button loads another video", () => {
+    expect(videoDiscardMessage(1, 'replace')).toBe(
+      "Replace the video you're editing? 1 clip and its edits will be discarded."
+    )
+    expect(videoDiscardMessage(3, 'replace')).toBe(
+      "Replace the video you're editing? 3 clips and their edits will be discarded."
+    )
+  })
+
+  // T-120 (12): the pronoun agrees with the count, like the noun. "1 clip and their edits" read wrong at one.
+  it('the possessive follows the count: its at one, their at any other', () => {
+    expect(videoDiscardMessage(1)).toMatch(/ 1 clip and its edits /)
+    for (const n of [2, 3, 10, 100]) {
+      expect(videoDiscardMessage(n)).toMatch(new RegExp(` ${n} clips and their edits `))
+      expect(videoDiscardMessage(n, 'replace')).toMatch(new RegExp(` ${n} clips and their edits `))
+    }
+    expect(videoDiscardMessage(1)).not.toMatch(/1 clip and their/)
+  })
+})
+
+/**
+ * T-120 (14, 4) - what the Player lends the Timeline.
+ *
+ * The store's `currentTime` is written on the element's `timeupdate`, about every 250 ms during playback, so
+ * a marker set from it while the video plays lands up to a quarter second behind the frame on screen; the
+ * Player's own I / O read the element. The Player registers a transport (its element's exact time and its
+ * own play / pause) for as long as it is mounted, and the Timeline's keys ask it: `playheadNow` for the
+ * markers, `togglePlay` for Space. Without a Player there is no element, and the store's number is the answer.
+ */
+describe('the Player transport: exact playhead and play / pause for the Timeline (T-120)', () => {
+  beforeEach(() => {
+    useVideoStore.setState({ source: FAKE_SOURCE, currentTime: 1, transport: null })
+  })
+  afterEach(() => {
+    useVideoStore.setState({ transport: null })
+  })
+
+  it('starts with no transport, and registering and unregistering is a plain set and clear', () => {
+    expect(useVideoStore.getState().transport).toBeNull()
+    const transport = { readTime: () => 3, togglePlay: vi.fn() }
+    useVideoStore.getState().registerTransport(transport)
+    expect(useVideoStore.getState().transport).toBe(transport)
+    useVideoStore.getState().registerTransport(null)
+    expect(useVideoStore.getState().transport).toBeNull()
+  })
+
+  it('the playhead is the element\'s time while a Player is mounted, however stale the store\'s is', () => {
+    useVideoStore.setState({ currentTime: 1 })
+    expect(playheadNow(useVideoStore.getState()), 'no Player: the store').toBe(1)
+    let elementTime = 3.25
+    useVideoStore.getState().registerTransport({ readTime: () => elementTime, togglePlay: vi.fn() })
+    expect(playheadNow(useVideoStore.getState())).toBe(3.25)
+    elementTime = 3.5
+    expect(playheadNow(useVideoStore.getState()), 'read at the moment of the key, not at registration').toBe(3.5)
+    expect(useVideoStore.getState().currentTime, 'and the store is untouched').toBe(1)
+  })
+
+  it('a Player with no element yet answers null, and the store answers instead', () => {
+    useVideoStore.getState().registerTransport({ readTime: () => null, togglePlay: vi.fn() })
+    expect(playheadNow(useVideoStore.getState())).toBe(1)
+    // 0 is a time, not "nothing": a playhead at the very start reads 0, not the store's number.
+    useVideoStore.getState().registerTransport({ readTime: () => 0, togglePlay: vi.fn() })
+    useVideoStore.setState({ currentTime: 9 })
+    expect(playheadNow(useVideoStore.getState())).toBe(0)
+  })
+
+  it('the registered togglePlay is the one the Timeline calls', () => {
+    const togglePlay = vi.fn()
+    useVideoStore.getState().registerTransport({ readTime: () => 0, togglePlay })
+    useVideoStore.getState().transport?.togglePlay()
+    expect(togglePlay).toHaveBeenCalledTimes(1)
+  })
+
+  it('opening or closing a video leaves the Player\'s registration alone (the Player outlives the file)', async () => {
+    vi.stubGlobal('window', {
+      api: { video: { probe: async () => FAKE_SOURCE.probe, fileUrl: () => 'imagii-file://x' } }
+    })
+    try {
+      const transport = { readTime: () => 2, togglePlay: vi.fn() }
+      useVideoStore.getState().registerTransport(transport)
+      await useVideoStore.getState().loadSource('/another/file.mp4')
+      expect(useVideoStore.getState().transport).toBe(transport)
+      useVideoStore.getState().clearSource()
+      expect(useVideoStore.getState().transport).toBe(transport)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+/**
+ * T-135 (2) - a preview copy is a way to WATCH the open video, not a different video.
+ *
+ * Chromium decodes what it has a decoder for (H.264, VP9, AV1), and ProRes or 10-bit HEVC probes fine, loads, plays its sound and draws
+ * no picture. The Player says so and offers a copy ffmpeg converts for the preview. The copy replaces only the address the element plays:
+ * `source` (its object, its `filePath` that every export reads, its probe, its clips) is untouched, so a project saved now still points at
+ * the original and an export is made from the original's pixels.
+ */
+describe('setPreviewCopyFor - the preview plays a copy, everything else keeps the original (T-135 (2))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mov', fileName: 'a.mov', url: 'imagii-file://v/a.mov' }
+  const VIDEO_B: VideoSource = { ...FAKE_SOURCE, filePath: '/v/b.mp4', fileName: 'b.mp4', url: 'imagii-file://v/b.mp4' }
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}` } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null, previewUrl: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts with no preview copy: the element plays the source itself', () => {
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('applies when the video the copy was made for is still open, says so, and leaves the source object and its path alone', () => {
+    const before = useVideoStore.getState().source
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(true)
+    expect(useVideoStore.getState().previewUrl).toBe('imagii-file:///tmp/imagii-import/a-xyz.mp4')
+    expect(useVideoStore.getState().source, 'the same object: a swap would read as "replaced" to a project open waiting on this studio').toBe(before)
+    expect(useVideoStore.getState().source?.filePath, 'exports and the saved project still read the original').toBe('/v/a.mov')
+  })
+
+  it('make a copy of A, open B, the copy finishes: B plays B, and the store says it did not apply', () => {
+    useVideoStore.setState({ source: VIDEO_B })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(false)
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('a video that was closed meanwhile takes nothing', () => {
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')).toBe(false)
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('clearing the source forgets the copy, so the next video starts on its own address', () => {
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('loading another source forgets it too', async () => {
+    vi.stubGlobal('window', {
+      api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } }
+    })
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4')
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+    expect(useVideoStore.getState().source?.filePath).toBe('/v/b.mp4')
+  })
+})
+
+/**
+ * T-135 (4) - what the panels derive from the open video lives with the video.
+ *
+ * Scan candidates, the pasted chat logs and their spikes, and the transcript preview were each panel's `useState`, so leaving the studio (or
+ * pressing Clean audio, which navigates) threw the lot away: the person came back to a studio that had forgotten a scan that took minutes. They are
+ * store state now, and the store's own `loadSource` / `clearSource` resets keep their lifetime exactly right: a different video starts empty, the
+ * same video keeps its results across any number of visits.
+ */
+describe('derived results - kept with the open video, gone with it (T-135 (4))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mp4', fileName: 'a.mp4' }
+  const CANDIDATES = [{ startSec: 10, endSec: 20, peakDb: -4, reason: 'loud' as const }]
+  const SEGMENTS = [{ startSec: 0, endSec: 2, text: 'hello' }]
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null })
+    useVideoStore.getState().setDerived({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts empty', () => {
+    expect(useVideoStore.getState().derived).toEqual({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+
+  it('setDerived patches the fields it is given and keeps the others', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES })
+    useVideoStore.getState().setDerived({ highlightChat: '[0:42] a: POG' })
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+    expect(useVideoStore.getState().derived.highlightChat).toBe('[0:42] a: POG')
+  })
+
+  it('a result is applied to the video it was made for, and only that one (a scan that finishes after the video was replaced is dropped)', () => {
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { transcript: SEGMENTS })).toBe(true)
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS)
+    useVideoStore.setState({ source: { ...VIDEO_A, filePath: '/v/b.mp4', fileName: 'b.mp4' } })
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { scanCandidates: CANDIDATES })).toBe(false)
+    expect(useVideoStore.getState().derived.scanCandidates).toBeNull()
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { scanCandidates: CANDIDATES })).toBe(false)
+  })
+
+  it('loading another video starts its results empty - all five fields', async () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES, highlightChat: 'x', spikeChat: 'y', spikes: [], transcript: SEGMENTS })
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().derived).toEqual({ scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null })
+  })
+
+  it('closing the video clears them too', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES, spikeChat: 'y', transcript: SEGMENTS })
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().derived.scanCandidates).toBeNull()
+    expect(useVideoStore.getState().derived.spikeChat).toBe('')
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('what a panel leaves behind when it unmounts is still there when the next one mounts (nothing to reset on mount)', () => {
+    useVideoStore.getState().setDerived({ scanCandidates: CANDIDATES })
+    // "Leaving the studio" is no store event at all: the next reader sees the same results.
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+  })
+})
+
+/**
+ * T-136 (2), (6) - what travels with the preview copy and what the Output preview is told.
+ *
+ * The playhead a preview copy resumes at was a ref of the Player instance that asked for the copy: when the copy finished after a trip to Home that
+ * instance was gone, and the picture restarted at 0:00. It is the store's now (`previewResumeAt`, set in the same update as `previewUrl`, taken once by
+ * whichever element reads it). And the Player's "I cannot draw this picture" is the store's too (`noPicture`), so the Output preview, which mirrors the
+ * Player's element onto a canvas, can say why its canvas is black.
+ */
+describe('previewResumeAt - the playhead a preview copy resumes at (T-136 (2))', () => {
+  const VIDEO_A: VideoSource = { ...FAKE_SOURCE, filePath: '/v/a.mov', fileName: 'a.mov', url: 'imagii-file://v/a.mov' }
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: VIDEO_A, clips: [], selectedClipId: null, previewUrl: null, previewResumeAt: null })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('is set together with the copy and taken once: the first element to ask gets it, the next gets nothing', () => {
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 41.5)).toBe(true)
+    expect(useVideoStore.getState().previewResumeAt).toBe(41.5)
+    expect(useVideoStore.getState().takePreviewResume()).toBe(41.5)
+    expect(useVideoStore.getState().takePreviewResume(), 'taken: a later remount starts at 0, as any remount does').toBeNull()
+    expect(useVideoStore.getState().previewUrl, 'the copy itself stays').toBe('imagii-file:///tmp/imagii-import/a-xyz.mp4')
+  })
+
+  it('a playhead at the start (or no playhead, or one that is not a time) is nothing to resume to', () => {
+    for (const at of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+      useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', at)
+      expect(useVideoStore.getState().previewResumeAt, String(at)).toBeNull()
+    }
+  })
+
+  it('a copy for a video that is no longer open stores no position either', () => {
+    useVideoStore.setState({ source: null })
+    expect(useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)).toBe(false)
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+  })
+
+  it('closing the video or loading another drops a position nobody took', async () => {
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+    useVideoStore.setState({ source: VIDEO_A })
+    useVideoStore.getState().setPreviewCopyFor('/v/a.mov', '/tmp/imagii-import/a-xyz.mp4', 12)
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().previewResumeAt).toBeNull()
+  })
+})
+
+describe('noPicture - the Player\'s verdict, shared with the Output preview (T-136 (6))', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.setState({ source: FAKE_SOURCE, noPicture: false })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('starts false and is set and cleared by the Player', () => {
+    expect(useVideoStore.getState().noPicture).toBe(false)
+    useVideoStore.getState().setNoPicture(true)
+    expect(useVideoStore.getState().noPicture).toBe(true)
+    useVideoStore.getState().setNoPicture(false)
+    expect(useVideoStore.getState().noPicture).toBe(false)
+  })
+
+  it('saying the same thing again changes nothing (no store event, so no re-render of what listens)', () => {
+    useVideoStore.getState().setNoPicture(true)
+    let events = 0
+    const off = useVideoStore.subscribe(() => events++)
+    useVideoStore.getState().setNoPicture(true)
+    off()
+    expect(events).toBe(0)
+  })
+
+  it('closing the video and loading another both clear it: a new file is judged on its own', async () => {
+    useVideoStore.getState().setNoPicture(true)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().noPicture).toBe(false)
+    useVideoStore.getState().setNoPicture(true)
+    await useVideoStore.getState().loadSource('/v/other.mp4')
+    expect(useVideoStore.getState().noPicture).toBe(false)
+  })
+})
+
+// ── T-137 (11): pruneCustomPresets tolerates a field that is not a list ─────────────────────────────────────────────────────────────────
+//
+// The validator now drops a non-list `customPresetIds` before a project reaches the store, but the prune is the other half of "the Export panel
+// cannot throw": it runs on every visit to Export with whatever the clips hold (`c.customPresetIds.some(...)` threw on a number, an object, true).
+
+describe('pruneCustomPresets - a clip whose customPresetIds is not a list (T-137 (11))', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+  })
+  const clipWith = (id: string, customPresetIds: unknown): Clip =>
+    ({ id, name: id, startSec: 0, endSec: 5, cropRect: null, textOverlays: [], selectedPresets: ['youtube'], customPresetIds }) as unknown as Clip
+
+  it.each([
+    ['a number', 5],
+    ['an object', { a: 1 }],
+    ['true', true],
+    ['a string', 'cp-a'],
+    ['null', null]
+  ])('%s: the prune does not throw, and the clip comes out with no custom presets queued', (_what, bad) => {
+    useVideoStore.setState({ clips: [clipWith('bad', bad), clipWith('good', ['cp-a', 'cp-b'])] })
+    expect(() => useVideoStore.getState().pruneCustomPresets(['cp-a'])).not.toThrow()
+    const [badClip, goodClip] = useVideoStore.getState().clips
+    expect(badClip?.customPresetIds ?? []).toEqual([])
+    expect(Array.isArray(badClip?.customPresetIds) || badClip?.customPresetIds === undefined).toBe(true)
+    expect(goodClip?.customPresetIds, 'the next clip is pruned as usual').toEqual(['cp-a'])
+  })
+
+  it('entries that are not strings are dropped with the ids whose preset is gone', () => {
+    useVideoStore.setState({ clips: [clipWith('mixed', ['cp-a', 3, null, 'cp-gone'])] })
+    useVideoStore.getState().pruneCustomPresets(['cp-a'])
+    expect(useVideoStore.getState().clips[0]?.customPresetIds).toEqual(['cp-a'])
+  })
+
+  it('a list that needs nothing is still left alone, identity included (the control: the no-op path does not churn subscribers)', () => {
+    useVideoStore.setState({ clips: [clipWith('fine', ['cp-a'])] })
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().pruneCustomPresets(['cp-a', 'cp-b'])
+    expect(useVideoStore.getState().clips).toBe(before)
+  })
+
+  it('still not an undo step', () => {
+    useVideoStore.setState({ clips: [clipWith('bad', 5)] })
+    const depth = useVideoStore.getState().history.past.length
+    useVideoStore.getState().pruneCustomPresets([])
+    expect(useVideoStore.getState().history.past.length).toBe(depth)
   })
 })
