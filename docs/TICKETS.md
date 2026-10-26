@@ -5797,6 +5797,222 @@ IMG-PREC.
 
 ---
 
+## T-140 — sweep-26 fixes (round 89)
+
+- **Spec:** the twenty-sixth sweep's verified findings — each
+  confirmed by the expediter against source; the destroyed replace
+  target was EXECUTED by two reviewers (a Cancel 1.5 s into a real
+  export, and ENOSPC on a 1 MB tmpfs); the Stream Graphics layout was
+  measured in the built app at 1024x640 and after a 1632 → 1024
+  shrink. Zero-finding lenses: privacy, ffmpeg. 11 findings (item 5
+  carries two), written as three tracks with DISJOINT source files.
+  **Track A (main process: ffmpeg outputs):**
+  1. **[MED] A cancelled or failed render destroys the file it was
+     replacing.** Every ffmpeg runner writes STRAIGHT to its final
+     path (`-y`), and its failure path then removes what is there:
+     audio/process.ts:238/:349-351 (the export the Save dialog at
+     ipc/audio.ts:159-165 named) and the re-attach mux :528-544, both
+     through :131-134 `discardPartialOutput`; whisperManager.ts:496/
+     :524-526 → :575-579 (the burn-in, captions.ts:137-147's dialog);
+     ipc/recording.ts:268-298 → :318-322 (an unconditional unlink of
+     the chosen path) and :227-232 (unlink, then copy); and the folder
+     exports, which name their outputs deterministically (video.ts:
+     360-361 `_reframe-WxH-pos.mp4`, :581 `_pip.mp4`, export.ts,
+     gif.ts, concat.ts ×2, frame.ts), so exporting the same clip into
+     the same folder again replaces the earlier export. ffmpeg
+     truncates the target when it opens it; a Cancel or a failure
+     after that leaves NEITHER the old file nor the new one, and the
+     toast says only "canceled" (executed: an existing 100,000-byte
+     file gone after `cancelAudioJob`; gone after ENOSPC exit 228).
+     The T-139 (1) class — a write over the person's file is the old
+     file until the new one is whole — for the files ffmpeg writes.
+     Fix direction: ONE shared mechanism in ffmpeg/partialOutput.ts —
+     a runner renders to a sibling partial in the SAME folder whose
+     name keeps the extension (e.g. `<stem>.<8 hex>.partial<ext>`, so
+     ffmpeg still picks the muxer from it; or pass `-f` explicitly),
+     the partial is renamed over the target only after the exit 0 AND
+     the runner's existing checks (wroteOutput, noPicture, the
+     segment checks), and the failure / cancel / quit paths unlink
+     ONLY the partial (`discardPartialOutput` keeps its spawn rule for
+     the partial). Every caller of `discardPartialOutput` and
+     recording.ts's convert/remux/copy move to it; frame.ts's kit
+     folder (a fresh folder, a target that must not exist) may keep
+     its shape if the worker shows it cannot replace anything — say
+     so. The tmp is swept like the atomic writer's: a launch sweep or
+     the existing temp cleanup must not leave a crashed run's
+     `.partial` beside the person's files forever (decide: sweep
+     partials older than N hours in the folders imagii wrote to, or
+     document the leftover as the crash ceiling, with a
+     `// simplification:` naming it). tests/unit/atomicWrites.test.ts:
+     15-18's "the discard is the answer to a failed spawn write"
+     comment changes with it. Unit over the real runners (cancel and
+     fail AFTER ffmpeg opened the output: the old file is
+     byte-identical, no partial left; success: the target holds the
+     new render, no partial left). **Layer 5 on BOTH majors
+     (IMG-PREC: every runner's command changes its output path):** a
+     real export, audio export, burn-in, GIF, reframe and compile over
+     an existing target — cancelled mid-run (old file byte-identical)
+     and completed (new file valid by ffprobe) — 7.0.2 via
+     `npm run test:media`, 6.1.1 via the 611 config. E2E: the shared
+     e2e listing filter (tests/e2e/atomicTmp.ts `withoutAtomicTmp`)
+     also drops the partial name, and one e2e re-exports a clip into
+     a folder that holds its earlier export, cancels, and finds the
+     earlier export still there.
+  Non-counted, rides with Track A: audio/process.ts:382-389's
+  unqualified "agree within one 256-sample block" (T-110 (bl) — true
+  only without afftdn or the limiter; say so, as chain.ts now does).
+  **Track B (renderer: Stream Graphics):**
+  2. **[MED] "+ Add text" places dark text at a fixed point.**
+     ImportPanel.tsx:122-124 `addLayer(makeTextLayer(120, 120))` and
+     canvasStore.ts:341-358 (`fontSize: 32`, `fill: BG_BASE`
+     #120c0c) whatever the document: on the 112x112 emote the text
+     starts at (120,120), wholly off the canvas (selected and
+     invisible); every template background is #120c0c, #241614 or
+     transparent (templates.ts), so the text is 1.00-1.11:1 against
+     it. "+ Add text" is the compact panel's control once a template
+     is applied — the thumbnail/overlay flow. The sibling of T-139
+     (2), which fixed pictures only. Fix direction: makeTextLayer's
+     caller passes the document — the text placed inside it by the
+     `placementFor` margin rule (imageBounds.ts) using the text's
+     measured or estimated box, the font size scaled to the document
+     (a 32 px line on a 3840 overlay is a speck; on the emote it must
+     fit), and a fill that contrasts with the document background
+     (light on dark or transparent; BG_BASE on light; from tokens,
+     contrast measured, the rule a pure helper in src/shared with a
+     unit). E2E: Add text on the emote and on a dark thumbnail — the
+     layer's box is wholly inside the document and its fill is not
+     the background's; the blank white canvas keeps dark text.
+  3. **[LOW] A corner drag stretches a picture.** Canvas.tsx:516
+     `keepRatio={false}` for every layer: dragging a picture's corner
+     distorts it, the distortion is exported (scaleX/scaleY stored),
+     and Shift (Konva's free-ratio key) is documented nowhere. Fix
+     direction: keepRatio for image layers (Shift frees it — say so in
+     the shortcuts overlay and USER_GUIDE), shapes and text unchanged
+     (decide text and say why). E2E: a corner drag on a picture keeps
+     its ratio (scaleX === scaleY within a rounding step); a shape's
+     corner drag still stretches.
+  4. **[LOW] "Start blank" after a template's last layer is removed
+     keeps the template.** canvasStore.ts:144-151 keeps the doc's
+     width, height and background when the last layer goes, and the
+     studio returns to the templates-first screen that says "Pick a
+     template to start … or start blank below" / "Or start blank"
+     (ImportPanel.tsx:171-174, :216): an import is then placed into
+     the 112x112 transparent emote and Export writes the emote pack.
+     The screen's promise is the rule (expected usability). Fix
+     direction: decide one — the empty screen names the canvas it
+     will use (size and background) with a way back to the default
+     document, or "start blank" means the default document (an
+     import from that screen resets the doc first). E2E: apply the
+     emote, remove its layers, import from the empty screen — the
+     document is what the screen said.
+  5. **[MED ×2] Stream Graphics does not fit the minimum window.**
+     (a) ImageStudio.tsx:84's root is `h-full overflow-hidden` (the
+     four sibling studios are `overflow-auto`) and Canvas.tsx:416 has
+     `min-h-[400px]`: at 1024x640 the Export bar (format, scale,
+     Variants, Export) sits at y=640-694, past the window, and the
+     wheel cannot reach it (Tab can; Playwright's click() scrolls
+     programmatically, which is why the MIN_WINDOW cases pass).
+     (b) ImageStudio.tsx:120's canvas column has no `min-w-0`, and
+     Canvas.tsx:135-148 sizes the Stage in pixels from its container,
+     so a wide document (the 1200x480 Twitch banner) holds the `1fr`
+     track open: the Layers card is 76 px off the right edge on a
+     fresh 1024x640 open and wholly off-screen after a 1632 → 1024
+     shrink (live: `min-w-0` → stage 700x280, card at 740-1000). Fix
+     direction: the canvas column takes `min-w-0`; the canvas's
+     minimum height lets the Export bar fit inside 1024x640 without
+     scrolling; the root becomes `overflow-auto` like its siblings
+     as the backstop. E2E at MIN_WINDOW: on the thumbnail, emote and
+     banner templates the Export button and the Layers card are
+     inside the viewport by bounding box WITHOUT a click (click()
+     scrolls first), and after a 1632x918 → 1024x640 resize with the
+     banner open; the layout.ts helpers if one fits, a new one if not.
+  **Track C (renderer: Home, focus, captions error):**
+  6. **[LOW] Restore can do nothing, silently.** AutosaveRestore.tsx:
+     44 reads `holdsWork` once per mount, and :123-131's press-time
+     backstop withdraws the offer and returns with no sentence. It IS
+     reachable: a conversion or extraction that lands while the person
+     is on Home (Importer.tsx:49-82 / AudioImporter.tsx:71-79 run from
+     module run slots that outlive the route) fills a studio under a
+     banner that mounted empty; Restore then vanishes with nothing
+     restored and no word. INTERACTION_COVERAGE's row and
+     home-chrome.spec.ts:3278-3279 say no UI path reaches it — false.
+     Fix direction: the banner withdraws itself when a studio GAINS
+     work while it is mounted (subscribe to what `sessionHoldsWork`
+     reads, not only Open project), and the backstop, if it still
+     fires, says one finished sentence (what is open, and that
+     nothing was restored). E2E: a conversion landing on Home with
+     the banner up — the banner goes (or Restore says the sentence);
+     the IC row and the spec comment corrected.
+  7. **[LOW] A held Enter in the preset name box raises error
+     toasts.** PresetPanel.tsx:101 `onKeyDown={(e) => e.key ===
+     'Enter' && save()}` has no `e.repeat` check: after the first
+     press saves and clears the name, each auto-repeat runs save →
+     "Name your preset first" in red. The held-key class (T-120,
+     T-133 (7b), T-134). Fix: ignore repeats (the repo's held-key
+     guard if one fits). E2E: a held Enter saves one preset and raises
+     no error toast.
+  8. **[LOW] The preset buttons drop keyboard focus while saving.**
+     CustomPresetManager.tsx:290 and PresetPanel.tsx:112
+     `disabled={saving}` disable the button the keyboard just pressed;
+     Chromium blurs it and focus falls to body behind the aria-modal
+     dialog (the T-120 (10) record). Fix direction: keep the claim (it
+     already makes a second press a no-op) and use `aria-disabled`
+     (with the dimmed style) instead of `disabled`, or restore focus
+     in the finally; the T-139 (9) pins follow. E2E: a keyboard press
+     under `slowPresetWrites` keeps document.activeElement on the
+     control, in both places.
+  9. **[LOW] The recent-files menu drops focus when it closes.**
+     RecentFilesMenu.tsx has no focus management: Escape, picking an
+     item or Clear list unmount the focused item and focus falls to
+     body. Fix: on a close with focus inside the menu, focus the
+     toggle. E2E: Tab into the list, Escape → focus on the toggle; a
+     keyboard pick → focus on the toggle (or wherever the pick's own
+     flow puts it — say which).
+  10. **[LOW] A failed transcription blames the video tool, and the
+     setup card is gone.** A whisper exit matches RUNNER_EXIT
+     (userFacingError.ts:59) and gets GENERIC_EXIT_CAUSE ("imagii's
+     video tool stopped… Check that the source file still plays and
+     the folder has room") — the wrong program and the wrong advice
+     for the captions engine (a missing .dll beside the exe is
+     Windows exit 0xC0000135 = 3221225781; a damaged model); and
+     CaptionsPanel.tsx:321 shows the setup card only while
+     `!status?.ready`, so after a failed Transcribe there is no way
+     back to the folders. Fix direction: a whisper-exit cause naming
+     the captions engine and its setup (the DLL case by its exit
+     code, in its own sentence), and the setup instructions reachable
+     when the files exist (a "Captions setup" disclosure that is
+     always there, or shown after a failure). Unit rows for the
+     sentence (the whisper exit, the DLL code, and a burn-in exit that
+     keeps the generic sentence); e2e: a fake whisper that exits 1 →
+     the sentence, and the setup reachable.
+  Non-counted, rides with Track C: STYLE_GUIDE.md:911's unqualified
+  "agree within one 256-sample block" (T-110 (bl)), and STYLE_GUIDE's
+  "Round 88 additions" moved inside the guide's structure (it sits
+  after the closing "When this guide changes" section).
+  **Docs (ride with the owning track):** LESSONS_LEARNED entries
+  (item 1: the T-139 (1) rule reaches the files a spawned program
+  writes; item 5: a fixed-pixel child in a `1fr` track needs
+  `min-w-0`, and click() hides an unreachable control), IC rows,
+  TESTING paragraphs, USER_GUIDE lines (Shift for a free resize; the
+  captions setup).
+  **Ledger:** T-110 (bn) — re-check YouTube's thumbnail size and byte
+  guidance at release (the help page could not be fetched in sweep 26;
+  the Android page still says 1280x720; the copy is advice only —
+  owner hand-check). (bm) gains the write side: a near-cap autosave
+  costs about 0.55 s of main's loop per write (two serializations),
+  measured in sweep 26.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 1-10 land with the
+  covering tests named above (item 1's Layer 5 cases on both majors
+  are not optional); new cases in NEW describe blocks appended at the
+  end of shared files; `npm run verify`, `npm run test:media` and the
+  FULL Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID
+  only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -6287,6 +6503,17 @@ IMG-PREC.
   `read`, even when `holdsWork` hides the banner) and every autosave
   write stringifies the project twice in main; candidate: read the
   file once and only when the banner can show.
+  From sweep 26 (verified, not gate-holding): (bm) has a write side -
+  near the 50 MiB cap one autosave write costs about 0.55 s of main's
+  loop (measured with 46.4 MB: `isSafeToAutosave`'s serialization
+  257-316 ms and `writeAutosaveNow`'s second `JSON.stringify` 246-282
+  ms; 592 ms of loop gap across three overlapping writes; about 220 ms
+  at 20 MB); candidate: serialize once and hand the string through;
+  (bn) YouTube's thumbnail guidance (1280x720, 2 MB) could not be
+  re-checked in sweep 26 (the help page did not fetch; the Android
+  page still says 1280x720, and a larger desktop recommendation is
+  reported) - the template and its copy are advice only; owner
+  hand-check at release.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
