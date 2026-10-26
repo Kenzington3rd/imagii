@@ -6009,7 +6009,7 @@ IMG-PREC.
   FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** open
+- **Status:** in progress (round 89: Track C landed — see its Done entry; Tracks A and B in expedite)
 
 ---
 
@@ -6523,6 +6523,50 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 89, Track C — T-140 items 6-10 and the two non-counted
+STYLE_GUIDE fixes, landed in the commit that carries this entry, the
+round's first landing, directly onto 9a5fe93. Worked by one Sonnet in
+a fresh clone of 9a5fe93 (resumed once after a container restart; the
+audit found no file at a mutant's sha). The fixes: the autosave
+banner withdraws itself the moment a studio gains work while it is
+mounted (it listens to the three stores `sessionHoldsWork` reads, not
+while a Restore of its own is running), and the press-time backstop
+now says "Nothing was restored: … is open now, and restoring would
+replace it." instead of vanishing in silence; a held Enter in the
+Cleanup presets' name box is one save (`!e.repeat`); both preset
+saves keep keyboard focus while the write is out (`aria-disabled`
+with the claim, not native `disabled`, and the "looks disabled" scan
+now reads `aria-disabled`); the recent-files menu hands focus back to
+its toggle when Escape, a pick or the pointer leaving closes it with
+focus inside (Clear list, which unmounts the toggle too, hands it to
+the control before the menu, "Choose file…"); a whisper exit gets the
+captions engine's own sentence, and Windows' missing-DLL exit
+(0xC0000135, both spellings) its own, ahead of the video tool's
+generic one; the captions setup instructions stay reachable once the
+files exist (a collapsed "Captions setup" disclosure). STYLE_GUIDE's
+256-sample sentence is qualified and its "Round 88 additions" block
+moved inside the guide's structure, wording unchanged. 66 ledger
+mutations, all killed on the first run and restored byte-identical;
+17 reds (3 unit on a git archive of 9a5fe93, 14 Playwright on its
+build). Expedited personally: integrity (no Track A or B file
+touched; ProjectIO.ts gained two functions under its "read-mostly"
+ownership, disclosed), verify x2 (193/5410), test:media on 7.0.2 (370
+passed | 13 skipped of 383; no ffmpeg command changed, so no 6.1.1
+run), FULL Playwright 482/482 (55.5 min, loaded), sha of every
+touched file identical before and after; one independent mutation at
+a seam no ledger row names (the ready-state disclosure's
+`aria-expanded` pinned false → 2 wiring cases and the T-140 (10) e2e
+red), restored byte-identical, sha256 verified. Applied onto 9a5fe93
+byte-identical to the expedited clone (21 files), plus this entry,
+TESTING's counts and one trailing blank line removed from TESTING.md.
+Found, not fixed (the worker's list, in the IC): other busy buttons
+the keyboard presses are still natively disabled; a pick that opens a
+file leaves focus on nothing once the studio replaces the importer; a
+Restore that throws midway leaves the banner; Open project's
+sound-only window is narrower, not closed; Clear list while "Choose
+file…" is disabled cannot hand it focus; the Custom export presets'
+name box has no Enter-to-save.
 
 Round 88, Track A — T-139 items 1, 3 and 10, landed in the commit that
 carries this entry, merged onto Track B (f60e617) and Track C

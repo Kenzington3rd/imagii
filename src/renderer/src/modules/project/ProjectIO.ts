@@ -115,6 +115,33 @@ export function sessionHoldsWork(): boolean {
 }
 
 /**
+ * T-140 (6): the stores `sessionHoldsWork` reads, as something a banner can listen to. `listener` runs on every change to the video, audio or canvas store (the three
+ * `hasStudioState` asks: a video source, a sound source, a canvas with a layer) and the caller asks `sessionHoldsWork()` itself. `AutosaveRestore` reads the question
+ * once per mount, and a conversion or an extraction that lands while the person is on Home (the importers' runs outlive the route) fills a studio under a banner that
+ * mounted over an empty session. Returns the way to stop listening.
+ */
+export function subscribeSessionStores(listener: () => void): () => void {
+  const stops = [useVideoStore.subscribe(listener), useAudioStore.subscribe(listener), useCanvasStore.subscribe(listener)]
+  return () => stops.forEach((stop) => stop())
+}
+
+/**
+ * T-140 (6): the one sentence for a Restore that finds the session holding work (the press-time backstop): what is open, and that nothing was restored. It used to
+ * withdraw the offer and return without a word. A toast shows it as written (one line, a period at the end), so it is plain words for the three studios: a video, audio
+ * (Audio Studio's own word for a sound that is open, as "Close this audio?"), a Stream Graphics canvas. Asked of `captureProject`, as `sessionHoldsWork` is, so the
+ * studios it names are the ones that made the work test true.
+ */
+export function describeRestoreRefused(project: ImagiiProject = captureProject()): string {
+  const open = [
+    project.videoStudio ? 'a video' : null,
+    project.audioStudio ? 'audio' : null,
+    project.imageCanvas ? 'a Stream Graphics canvas' : null
+  ].filter((name): name is string => name !== null)
+  const names = open.length > 1 ? `${open.slice(0, -1).join(', ')} and ${open[open.length - 1]}` : (open[0] ?? 'your work')
+  return `Nothing was restored: ${names} ${open.length > 1 ? 'are' : 'is'} open now, and restoring would replace ${open.length > 1 ? 'them' : 'it'}.`
+}
+
+/**
  * T-47 — put the user back where they were, in the stores. Everything here
  * is applied only if it still refers to something that exists: a clip id
  * from a snapshot whose clips were themselves refused would otherwise

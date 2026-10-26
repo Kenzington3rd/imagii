@@ -412,3 +412,100 @@ describe('ffmpeg\'s "Permission denied" is the Windows-blocked cause when it is 
   })
 })
 
+
+// T-140 (10): a failed transcription blamed the video tool. The speech engine's runner words its failure `whisper exit <code>: <stderr>`, which has the runner shape
+// `RUNNER_EXIT` knows, so it got the generic sentence about imagii's VIDEO tool ("check that the source file still plays and the folder has room") - the wrong
+// program and the wrong advice: a missing .dll beside the exe is Windows' exit 0xC0000135, and a damaged model is the engine's too. The engine has its own sentence,
+// and a missing-DLL exit its own again. Node reports a Windows NTSTATUS exit code as the unsigned 32-bit value (libuv hands the DWORD over as it is), so 0xC0000135 reads
+// 3221225781; the signed spelling (-1073741515, what .NET and some debuggers print) is pinned too because nothing here depends on which one a runtime picks.
+describe('a whisper exit is the captions engine\'s failure, not the video tool\'s (T-140 (10))', () => {
+  const CTX = 'Transcription failed.'
+  const ENGINE =
+    `${CTX} The captions engine stopped before it finished. ` +
+    'Open Captions setup to check its files and the model, then try again.'
+  const MISSING_FILE_OF_THE_ENGINE =
+    `${CTX} The captions engine couldn't start because a file it needs is missing. ` +
+    'Copy every .dll that came in the zip next to whisper-cli.exe (Captions setup opens that folder), then try again.'
+  const GENERIC =
+    `${CTX} imagii's video tool stopped before it finished. ` +
+    'Check that the source file still plays and the folder has room, then try again.'
+  const BLOCKED = `${CTX} Windows blocked access to a file. Close any app using it, or check your antivirus.`
+
+  it.each([
+    ['a damaged model', new Error('whisper exit 1: whisper_init_from_file_with_params_no_state: failed to load model')],
+    ['the same through the bridge', wrap('captions:transcribe', 'whisper exit 1: model file is damaged')],
+    ['another code', new Error('whisper exit 2: error: unknown argument')],
+    ['a signal-less exit (the runner prints null)', new Error('whisper exit null: ')],
+    ['a negative code', new Error('whisper exit -1: ')],
+    ['no stderr at all', new Error('whisper exit 1: ')],
+    ['a crash code that is not the missing-file one (an access violation, 0xC0000005)', new Error('whisper exit 3221225477: ')],
+    ['a code that only CONTAINS the missing-file digits', new Error('whisper exit 32212257810: ')],
+    ['the missing-file digits in the stderr, not in the code', new Error('whisper exit 1: exit 3221225781 was reported by the loader')]
+  ])('%s is the captions engine\'s sentence, and nothing of the runner reaches the person', (_label, input) => {
+    const shown = userFacingError(input, CTX).message
+    expect(shown).toBe(ENGINE)
+    expect(shown).not.toMatch(/video tool|ffmpeg|ffprobe|exit \d|whisper exit|source file|folder has room|invoking|remote/i)
+  })
+
+  it.each([
+    ['the unsigned code Node reports for 0xC0000135, with the nothing the loader prints', new Error('whisper exit 3221225781: ')],
+    ['the same, bare, as the runner throws it', new Error('whisper exit 3221225781')],
+    ['the same through the bridge', wrap('captions:transcribe', 'whisper exit 3221225781: ')],
+    ['with a stderr tail', new Error('whisper exit 3221225781: some loader text\r\nand a second line')],
+    ['the signed spelling of the same status', new Error('whisper exit -1073741515: ')],
+    ['the signed spelling through the bridge', wrap('captions:transcribe', 'whisper exit -1073741515: ')]
+  ])('%s is the missing-files sentence: the .dll files from the zip belong beside whisper-cli.exe', (_label, input) => {
+    expect(userFacingError(input, CTX).message).toBe(MISSING_FILE_OF_THE_ENGINE)
+  })
+
+  it('both are one finished sentence after the caller\'s own: one line, a period at the end, short enough for a toast', () => {
+    for (const cause of [ENGINE, MISSING_FILE_OF_THE_ENGINE]) {
+      expect(cause.startsWith(`${CTX} `)).toBe(true)
+      expect(cause).not.toContain('\n')
+      expect(cause).toMatch(/\.$/)
+      expect(cause.length).toBeLessThanOrEqual(240)
+    }
+  })
+
+  it('both name where to go: the Captions setup the panel has, and the engine in plain words ("the captions engine")', () => {
+    for (const cause of [ENGINE, MISSING_FILE_OF_THE_ENGINE]) {
+      expect(cause).toContain('Captions setup')
+      expect(cause).toContain('The captions engine')
+    }
+  })
+
+  it('a burn-in is ffmpeg\'s, so a burn-in exit keeps the video tool\'s sentence - whatever code it carries', () => {
+    expect(userFacingError(new Error('burn-in exit 1: Conversion failed!'), CTX).message).toBe(GENERIC)
+    expect(userFacingError(new Error('burn-in exit 3221225781: '), CTX).message).toBe(GENERIC)
+    expect(userFacingError(wrap('captions:burnIn', 'burn-in exit 1: [out#0/mp4 @ 0x1] Error'), CTX).message).toBe(GENERIC)
+    expect(userFacingError(new Error('FFmpeg exit 3221225781: '), CTX).message).toBe(GENERIC)
+  })
+
+  it('only a message that STARTS with the engine\'s exit is the engine\'s: an ffmpeg line that mentions it, and a sentence of ours, are not', () => {
+    expect(userFacingError(new Error('FFmpeg exit 1: whisper exit 1: not this'), CTX).message).toBe(GENERIC)
+    expect(userFacingError(new Error('Transcription stopped (whisper exit code 1).'), CTX).message).toBe('Transcription stopped (whisper exit code 1).')
+    expect(userFacingError(new Error('Whisper did not produce C:\\x\\a.srt'), CTX).message).toBe(CTX)
+    // the model download has its own words and keeps them
+    expect(userFacingError('HTTP 503', CTX).message).toContain("The website didn't send the file.")
+  })
+
+  describe('and the causes that were already known to be something else keep their sentence (decided: a more specific cause wins over the engine\'s)', () => {
+    it('"Permission denied" at the end of a line is the Windows-blocked cause for the engine too (T-139 (10)): a model another app holds is a locked file, not a damaged engine', () => {
+      expect(userFacingError(new Error('whisper exit 1: C:\\x\\ggml-base.en.bin: Permission denied'), CTX).message).toBe(BLOCKED)
+      expect(userFacingError(new Error('whisper exit 1: error: failed to open C:\\x\\a.wav: Permission denied\r\n'), CTX).message).toBe(BLOCKED)
+      // ...and a line that only mentions the words is the engine's
+      expect(userFacingError(new Error('whisper exit 1: Permission denied for the model, try again'), CTX).message).toBe(ENGINE)
+    })
+
+    it('a full disk and a missing file read as they do for every runner', () => {
+      expect(userFacingError(new Error('whisper exit 1: write failed: No space left on device'), CTX).message).toBe(`${CTX} Your disk is full. Free up some space and try again.`)
+      expect(userFacingError(new Error('whisper exit 1: C:\\x\\ggml-base.en.bin: No such file or directory'), CTX).message).toBe(
+        `${CTX} A file imagii needs isn't there. It may have been moved or deleted.`
+      )
+    })
+
+    it('a missing-DLL exit with a locked-file line is the locked file (the stderr is read first), and nothing else changes for the code', () => {
+      expect(userFacingError(new Error('whisper exit 3221225781: C:\\x\\a.dll: Permission denied'), CTX).message).toBe(BLOCKED)
+    })
+  })
+})

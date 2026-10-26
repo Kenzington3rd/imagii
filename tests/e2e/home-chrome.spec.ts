@@ -5,6 +5,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
+import { installSpawnStall } from './mainSpawn'
 import { videoTutorial } from '../../src/renderer/src/tutorials/videoTutorial'
 import { audioTutorial } from '../../src/renderer/src/tutorials/audioTutorial'
 import { imageTutorial } from '../../src/renderer/src/tutorials/imageTutorial'
@@ -3276,7 +3278,10 @@ function readAutosaveLayers(userDataDir: string): number | null {
 // `AutosaveRestore` reads "does the session hold work" once per mount, and Open project applies the project and STAYS on Home, so the banner that was drawn over an
 // empty session went on offering "pick up where you left off" - and its Restore applied the snapshot over the project that had just been opened (executed by QA).
 // Home says the offer is withdrawn once the open has applied, and every mounted banner drops it; `restore()` also asks again at the press (a wiring pin, in
-// interactionWiring.test.ts: no way in the UI puts work into the session behind a banner that did not hear Home).
+// interactionWiring.test.ts). T-140 (6) corrected what this comment said here ("no way in the UI puts work into the session behind a banner that did not hear Home"):
+// a conversion or an extraction that lands while the person is on Home does exactly that, and the banner now listens to the stores itself (see "T-140 (6)" below).
+// What stays out of the UI's reach is only the press-time backstop, which a banner that hears every landing is left to catch in the few milliseconds between a landing
+// and its re-render: the sentence it says is held by ProjectIO.test.ts and the wiring pin.
 test.describe('T-139 (5): the autosave banner goes when Open project lands', () => {
   test('an autosave is offered; a project opened from Home takes the offer away, and the project is what Stream Graphics shows', async () => {
     test.setTimeout(180_000)
@@ -3374,4 +3379,254 @@ test.describe('T-139 (9): a double-click on Welcome\'s "Let\'s go"', () => {
       }
     })
   }
+})
+
+// ── T-140 (6): work that lands while the banner is mounted takes the offer away ────────────────────────────────────────────────────────────
+//
+// The banner reads "does the session hold work" once per mount, and the importers' runs (a conversion, an extraction) are module stores that outlive the route: a
+// sound being extracted when the person goes Home lands under a banner that mounted over an empty session. Restore then did nothing at the press and said nothing
+// (the press-time backstop withdrew the offer and returned). The banner listens to the stores now and drops its offer when work lands, without a press - except
+// while a Restore is applying the work itself, which keeps its "Restoring…" until the snapshot is in.
+test.describe('T-140 (6): the autosave banner goes when work lands on Home', () => {
+  test('a sound being extracted when the person went Home lands: the banner goes by itself, nothing is restored, and nothing was pressed', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t140-land')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'e2e-clip.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Autosaved layer'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      const banner = window.getByText(/imagii autosaved your work/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      // The extraction's ffmpeg (the first this page starts) is held, so the sound is still being made when the person is back on Home.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      await dropOnZone(window, '[data-tutorial="audio-importer"] .card', clip, 'e2e-clip.mp4')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+
+      // The premise: a banner that mounted over an EMPTY session (the sound has not landed), with a Restore that works.
+      await expect(banner, 'the session holds nothing yet, so the autosave is offered').toBeVisible({ timeout: 20_000 })
+      const restore = window.getByRole('button', { name: 'Restore', exact: true })
+      await expect(restore).toBeEnabled()
+
+      // The extraction ends and the sound lands in Audio Studio, under the banner. Nothing is pressed.
+      await expect(banner, 'the banner goes when the sound lands').toHaveCount(0, { timeout: 90_000 })
+      await expect(restore).toHaveCount(0)
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Loaded')
+      expect((await readToastLog(window)).filter((t) => /Restored from autosave|Nothing was restored/.test(t)), 'no press, no restore, no refusal').toEqual([])
+
+      // And nothing was restored: the sound is Audio Studio's, and Stream Graphics has not been given the autosave's layer.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText('Pick a template to start'), 'the canvas is still empty: the autosave was not applied').toBeVisible()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      // The offer stays away on the next visit to Home, as it does over any session that holds work.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await waitForHome(window)
+      await expect(banner).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a Restore that fills one studio and is still extracting another keeps saying "Restoring…": the work it put there is its own, not a reason to withdraw the offer', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t140-own')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'e2e-clip.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // A video (it opens at once: the apply order is video, then audio) and the sound of the same file (it is extracted again, and that is a wait). No `place`: the
+    // person stays on Home when it ends.
+    seedAutosave(userDataDir, {
+      schemaVersion: 5,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: { sourcePath: clip, clips: [], selectedClipId: null, watermark: null, srtPath: null },
+      audioStudio: { sourcePath: clip, extractedFromVideo: true, chain: DEFAULT_CHAIN_SPEC }
+    })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      const banner = window.getByText(/imagii autosaved your work/)
+      await expect(banner).toBeVisible({ timeout: 20_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 12_000 }])
+      await window.getByRole('button', { name: 'Restore', exact: true }).click()
+      // The extraction has begun, so the video (applied first) is already in its studio: the session holds work, put there by this Restore.
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Extracting audio…')
+      const restoring = window.getByRole('button', { name: 'Restoring…' })
+      await expect(restoring, 'still restoring, still on screen').toBeVisible()
+      await expect(restoring).toBeDisabled()
+      await window.waitForTimeout(1500)
+      await expect(restoring, 'and still there a moment later').toBeVisible()
+
+      // It ends: one "Restored from autosave", and the banner goes because the snapshot is applied.
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Restored from autosave')
+      await expect(banner).toHaveCount(0, { timeout: 15_000 })
+      expect((await readToastLog(window)).filter((t) => t === 'Restored from autosave'), 'one completion').toHaveLength(1)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-140 (9): the recent-files menu hands focus to its toggle when it closes ──────────────────────────────────────────────────────────────
+//
+// The open list unmounts on Escape, on a pick and on Clear list, and focus on an item (or on Clear list) went with it - to the page, so the next Tab started at the
+// top of the window. Focus that was in the menu goes to the toggle. With no entries left the whole menu unmounts, the toggle with it, so after Clear list the focus
+// goes to the control before the menu in its row, "Choose file…" (decided: there is no toggle left to give it to).
+test.describe('T-140 (9): the recent-files menu keeps the keyboard\'s place', () => {
+  /** Launch on the importer of one studio with one recent file seeded. */
+  async function openImporter(label: string, studio: 'Video Studio' | 'Audio Studio'): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; clip: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'recent-source.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: ALL_TUTORIALS_SEEN,
+      recentFiles: studio === 'Video Studio' ? { video: [clip] } : { audio: [clip] }
+    })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await window.locator('a', { hasText: studio }).first().click()
+    await expect(window.getByText(studio === 'Video Studio' ? 'Drop a video here' : 'Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    return { app, window, root, userDataDir, clip }
+  }
+  const activeLabel = (window: Page): Promise<string> =>
+    window.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null
+      return el && el !== document.body ? (el.getAttribute('aria-label') ?? (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)) : 'BODY'
+    })
+
+  test('Tab into the list, Escape: the toggle has the focus; from Clear list too; and Escape with the focus elsewhere does not take it', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-esc', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      const chooseFile = window.getByRole('button', { name: 'Choose file…' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+      // Tab into the list: the first entry has the focus (the premise: focus really is inside the menu).
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'Escape from an entry: the toggle has the focus').toBeFocused()
+
+      // From the last control in the menu too.
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toBe('Clear list')
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'Escape from Clear list: the toggle has the focus').toBeFocused()
+
+      // The control: focus that is NOT in the menu is where the person put it. Open the menu, Shift+Tab to Choose file…, Escape: the menu closes and the focus stays.
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Shift+Tab')
+      await expect(chooseFile).toBeFocused()
+      await window.keyboard.press('Escape')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(chooseFile, 'Escape with the focus outside the menu takes nothing').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('Clear list from the keyboard: the list is emptied on disk, the menu goes with its toggle, and the focus is on Choose file… (not on the page)', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root, userDataDir } = await openImporter('t140-clear', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toBe('Clear list')
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: /^Recent/ }), 'no entries, no menu').toHaveCount(0)
+      await expect.poll(() => readConfig(userDataDir).recentFiles?.video, { timeout: 15_000, intervals: [200] }).toEqual([])
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'the control before the menu has the focus').toBeFocused()
+      // ...which a keyboard person can use at once: the next Tab moves on from there, not from the top of the window.
+      expect(await activeLabel(window)).toBe('Choose file…')
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a pointer that leaves the list while the focus is in it closes the menu and the toggle has the focus', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-leave', 'Video Studio')
+    try {
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      // The pointer goes onto the list (the focus does not move) and away from it: the list closes when the pointer leaves it.
+      const entry = window.getByRole('button', { name: /recent-source\.mp4/ })
+      const box = await entry.boundingBox()
+      if (!box) throw new Error('the entry has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await expect(toggle, 'still open while the pointer is on it').toHaveAttribute('aria-expanded', 'true')
+      await window.mouse.move(4, 4, { steps: 4 })
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'the entry that had the focus is gone; the toggle has it').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a keyboard pick: the toggle has the focus while the file loads (a converted or extracted file keeps the importer up; once the studio opens there is no importer to hold it)', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await openImporter('t140-pick', 'Audio Studio')
+    try {
+      // The pick of a video makes Audio Studio extract its sound; the extraction's ffmpeg is held so the importer is still on screen.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 8_000 }])
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Tab')
+      expect(await activeLabel(window)).toContain('recent-source.mp4')
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await expect(window.getByRole('button', { name: 'Loading…' }), 'the importer is busy with the pick').toBeDisabled()
+      await expect(toggle, 'the menu is closed').toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle, 'and the pick left the focus on the toggle').toBeFocused()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
 })

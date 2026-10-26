@@ -114,6 +114,16 @@ Repeated UI is a component, not copy-paste:
   awaits, so a refusal looked like success and a dialog that closed first dropped the picture it held. Each reports one sentence ("Couldn't
   create that board.") and keeps its dialog and its text; the first-save dialog closes after the board EXISTS, and a name box carries the
   number main enforces (`MAX_BOARD_NAME`, one copy in `shared/search.ts`) as its `maxLength`.
+- **A runner's exit is named for the program that ran (T-140 (10)).** The speech engine's runner words its failure `whisper exit <code>: <stderr>`, which has the runner
+  shape `RUNNER_EXIT` knows, so a failed transcription was told "imagii's video tool stopped ... check that the source file still plays and the folder has room": the wrong
+  program and the wrong advice. `userFacingError` has the engine's own sentences, anchored at the START of the message as the runner shape is (a burn-in is ffmpeg's: `burn-in
+  exit N` keeps the video tool's sentence, and so does a line of ffmpeg's that only mentions the words): "The captions engine stopped before it finished. Open Captions setup
+  to check its files and the model, then try again.", and for Windows' 0xC0000135 (STATUS_DLL_NOT_FOUND, an .exe whose .dll files are not beside it; Node reports a Windows
+  exit code as the unsigned value, 3221225781, and the signed spelling -1073741515 is accepted too) "The captions engine couldn't start because a file it needs is missing.
+  Copy every .dll that came in the zip next to whisper-cli.exe (Captions setup opens that folder), then try again." They are tried after `KNOWN_CAUSES`, so a more specific
+  cause still wins for the engine as for every runner: a model another app holds open ends a line in "Permission denied" and is the Windows-blocked sentence, a full disk is a
+  full disk. "Captions setup" is the name of a control that exists: the panel keeps its setup instructions reachable once the engine and the model are there (a closed
+  disclosure under the panel, the same markup the "Captions need setup" card shows), so the sentence never points at something the person cannot reach.
 - **`persistSetting(key, value)`** (`lib/persistSetting.ts`, T-128 (4)) - how a screen remembers a preference without letting the remembering
   break what the person pressed. `window.api.settings.set` is an IPC round trip main can refuse (a full disk, a config it cannot
   replace); written bare in a handler it ended the handler (the Welcome screen's "Let's go" stayed put; Export, which saved the
@@ -348,6 +358,19 @@ Repeated UI is a component, not copy-paste:
   `loadImage` (the one place a picture is decoded to be copied) sets `referrerPolicy = 'no-referrer'` before `src`, as the two `<img>` that draw a thumbnail do
   (PRODUCT_GUIDE: a thumbnail's host is told nothing about where the request came from). The over-limit sentences name what frees bytes - remove some of the large
   images, or import smaller copies - because scaling a layer changes `scaleX` / `scaleY` and never its `src` (T-138 (3)).
+- **A first placement is sized to where it lands (T-139 (2)).** `placementFor(picW, picH, docW, docH)` (`@shared/imageBounds`) is the one place a picture's first box is
+  worked out: the drawn size is the 800 px bound (`LAYER_DRAWN_MAX_DIM`) and the document's (the aspect kept, never enlarged), and the position is 60 px in from the
+  corner (`PLACEMENT_MARGIN`) when the document has the room, less (down to the edge) when it does not, so a 512x512 file on the 112x112 emote is the emote, and a 400x1600
+  picture on the 1200x480 banner is 120x480 at the top. `ImportPanel.ingestFile` (the drop, the file chooser and the paste all go through it) and `MoodBoardPanel.sendToCanvas`
+  both read the open document from the canvas store AFTER the picture has loaded, as the stored copy's bound does, and pass the box to `makeImageLayer` /
+  `makeReferenceLayer` (`x`, `y`: they default to 60, 60, the corner they always started at). A document that is not a size places a picture as it was before. A template's
+  own layers are untouched.
+- **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy's pixels; `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) bounds its bytes, and
+  `chooseStoredCopy` (the order) with `storedDataUrl` (`lib/boundedImage.ts`, the canvas under it) take the first copy that fits: the file as it came when it is within the
+  pixel bound; else a copy at the bound (a PNG, or a JPEG when the file is one and is opaque); then an opaque picture as a JPEG at that same bound; then the bound stepped
+  down by a quarter (`nextStoredDim`, whole pixels, never under 1 px) as a JPEG if the picture is opaque and a PNG if it is not, so transparency is never lost. A picture
+  within the pixel bound whose FILE is over the budget is re-encoded, not kept as it came. Whether the picture is opaque is read from its pixels once, and only when a copy
+  is over the budget (or a JPEG source's has to be made).
 - **A result belongs to the video it was made for (T-135 (4)).** A scan's candidates, the pasted chat logs, the spikes found in them and the
   transcript preview were panels' `useState`, so every visit to Home emptied them. They are `derived` in the video store: applied with
   `setDerivedFor(sourcePath, patch)` (a result that arrives after the video was replaced is dropped, the `setSrtPathFor` rule), emptied by
@@ -740,6 +763,27 @@ Repeated UI is a component, not copy-paste:
   `?` overlay ignore `e.repeat`; so does a marker (T-134 (2)): a held I or O set the point on every auto-repeat, each an undo step, and a second
   of holding filled the store's 50-step history and evicted real edits. The nudge (arrows) and frame-step (`,` `.`) keys repeat by design and
   are not guarded.
+- **A button that makes a record ignores the repeat of its double-click, claims before it writes, and is off while the write is out (T-139 (9)).** "+ Log post" (the
+  posting log), "Save current" (Cleanup presets) and "+ Save preset" (Custom export presets) clear their form after the first press, so the second press of a double-click
+  found no name and raised a red "Add a clip name first" / "Name your preset first" / "Give it a name", and on a slow write the presets saved a duplicate. `isRepeatPress(e)`
+  is the first line of each click; the two preset saves run under `claimFirst(savingRef, ...)` (raised before the first await, so an Enter held in the name box is covered
+  too) and the button is `disabled={saving}` with `disabled:opacity-50` while the write is out. Welcome's "Let's go" is replaced by Home under the pointer, so the second
+  press of its double-click landed on whatever Home draws there (Stream Graphics' card at 1366x768, 1306x734, 1161x653 and 1024x640, measured; the gap between the cards at
+  1536x864 and 1632x918): the dismiss calls `swallowRepeatClicks()`, as a closing dialog does.
+- **The button the keyboard just pressed stays focusable while it works, and a held Enter is one save (T-140 (7), (8); revises the T-139 (9) bullet above).** Chromium blurs
+  a focused button that turns `disabled`, and behind an `aria-modal` dialog the focus falls to the page and not to the dialog (the T-120 (10) record), so the two preset
+  saves, which were `disabled={saving}`, took a keyboard person's place away on the press that saved. They are `aria-disabled={saving}` with `aria-disabled:opacity-50`
+  (Tailwind's `disabled:` is the `:disabled` pseudo-class, which an aria-disabled button never matches; the "every disabled button looks disabled" scan in
+  `interactionWiring.test.ts` reads `aria-disabled` too). A press on an aria-disabled button still reaches its handler, and the handler is the claim
+  (`claimFirst(savingRef, ...)`, up for as long as `saving` is), so a second press while the write is out starts nothing. The Enter in the Cleanup presets' name box
+  ignores `e.repeat`, as the Player's Space and the markers do (the held-key bullet above): the first press saved and cleared the box, and each auto-repeat after it
+  found no name and raised the red "Name your preset first".
+- **A popover that closes with focus inside it gives the focus to its toggle (T-140 (9)).** `RecentFilesMenu`'s list unmounts on Escape, on a pick and on Clear list, and
+  focus on an entry went with it - to the page, so the next Tab started at the top of the window. `closeToToggle()` asks whether focus is inside the menu BEFORE it closes
+  (the unmount is what drops it) and hands it to the toggle (a `ref`), for Escape, a pick and a mouse that left the list; focus that was somewhere else (a press outside, or
+  Shift+Tab to the control before the menu) is where the person put it and is left alone. Clear list is the exception that has to be: with no entries left the whole menu
+  unmounts, the toggle with it, so the control before the menu in its row (the importers' "Choose file…") takes the focus. A pick that opens a file replaces the importer
+  with the studio, as Choose file… does, so what is held is the part the menu owns: the toggle keeps the focus while the pick loads (`home-chrome.spec.ts`).
 - **`DraftField`** (`components/DraftField.tsx`, T-113 for Size and Color, lifted by T-123) — a box that keeps what is typed
   to itself until typing ends. A controlled number input that judges every keystroke cannot be typed into: `Number(typed)
   || 360` snapped an emptied box to 360, so "600" typed after clearing it was 360600 (and the PiP composite failed with a bare
@@ -909,7 +953,9 @@ If you write the same markup a third time, extract it.
   rounded the retimed stamp onto the frame grid before the encoder was involved (a duplicate on the BUNDLED 7.0.2 too, which
   `-enc_time_base:v filter` cannot undo); a microsecond base between `select` and `setpts` hands it room for the fraction.
   At each cut picture and sound agree to within one 256-sample block of sound (5.3 ms at 48 kHz), and the errors ADD UP over
-  several cuts (T-110 (i)): the bound is per cut, not per file. T-124 (32): the block is OURS, not the decoder's. `aselect` keeps
+  several cuts (T-110 (i)): the bound is per cut, not per file. That agreement is the CUTS' only: it holds for a chain without `afftdn` or the export limiter. `afftdn` delays
+  the sound by two hops (about 25 ms at any rate) and `alimiter` (latency off) by 5 ms, so a denoised or limited export's sound sits that much behind the picture whatever
+  the cuts do (T-110 (bl); `chain.ts` says the same of `vselectForCuts`). T-124 (32): the block is OURS, not the decoder's. `aselect` keeps
   or drops whole FRAMES and a frame is whatever the decoder produced (FLAC 4608 samples, ALAC 4096, a WAV 1024 on 6.1.1 but
   4096 on the bundled 7.0.2: up to 96 ms), so `aselectForCuts` puts `asetnsamples=n=256:p=0` ahead of it (`asetpts=N/SR/TB`
   after the select is sample-indexed, so the retime is unaffected) and Layer 5 measures FLAC, ALAC and WAV sources through
@@ -996,6 +1042,21 @@ If you write the same markup a third time, extract it.
   question word for word (`LIVE_TAKE_MESSAGE`); OK stops the take and its normal save runs where the person is, Cancel keeps recording, and
   either way the caller does not navigate now. `interactionWiring.test.ts` holds the set of renderer `navigate()` calls to a decided
   table, so a new exit fails until it is decided.
+- **The autosave offer is withdrawn by a project opened from Home (T-139 (5)).** `AutosaveRestore` reads `sessionHoldsWork()` once per mount and Open project applies
+  the project and stays on Home, so the banner went on offering Restore over what had just been opened. `useAutosaveOffer` (`components/restoreRun.ts`, beside
+  `useRestoreRun`) is the signal: `Home.handleLoad` calls `withdraw()` once the project has applied (not on a refusal), and every mounted banner drops its offer (a
+  `subscribe` listener, as for `applied`). `restore()` asks `sessionHoldsWork()` again at the press, inside its claim and before the apply, as the backstop: if the session
+  now holds work it withdraws the offer the same way and applies nothing.
+- **The offer is withdrawn when work lands, too (T-140 (6); extends the bullet above).** `AutosaveRestore` read `sessionHoldsWork()` once per mount, and the importers'
+  runs (a conversion, an extraction) are module stores that outlive the route, so a sound that landed while the person was on Home filled a studio under a banner that
+  mounted over an empty session; Restore then withdrew at the press and said nothing. The banner listens now: `withdrawWhenSessionGainsWork()` (`components/restoreRun.ts`)
+  asks `sessionHoldsWork()` at once and on every change of the three stores it reads (`subscribeSessionStores`, `ProjectIO.ts`: video, audio and canvas, the stores
+  `captureProject` builds the three studio sections from) and withdraws on the signal above; it is not listening once the banner is dismissed, or over a session that
+  already held work at the mount. Nor does it act while a Restore is running (`useRestoreRun`): the work a restore puts in the stores is its own, and the banner keeps its
+  "Restoring…" until the closure says the snapshot is applied (a banner that vanished when the video landed would hide a sound that is still being extracted). The
+  press-time backstop stays, and when it fires it says one finished sentence instead of returning in silence (`describeRestoreRefused`: "Nothing was restored: a video is
+  open now, and restoring would replace it.", naming a video, audio and a Stream Graphics canvas as they are open). What is left of it is the few milliseconds between a
+  landing and the re-render, so it has no end-to-end test: `ProjectIO.test.ts` holds the sentence and the wiring pin the order.
 - **`ffmpeg exited 0` is not "ffmpeg wrote a picture" (T-131 (1), T-132 (4), T-133 (4), (5), T-134 (4)).** A range that lies past the PICTURE exits 0 having written a
   261-byte stream-less container ("Output file is empty") or an audio-only mp4 (the sound outlasts the picture; no such line). Three runners
   that cut a video out of a RANGE of a source (Export, Reframe and, since T-133 (4), the caption burn-in, which
@@ -1116,33 +1177,3 @@ loops bounded, no recursion, check every return value.
 A convention change updates this file in the **same commit** as the
 code. The `/guide-sync` command and the `design-reviewer` agent treat
 this document as authoritative.
-
----
-
-## Round 88 additions (T-139 Track B)
-
-- **A first placement is sized to where it lands (T-139 (2)).** `placementFor(picW, picH, docW, docH)` (`@shared/imageBounds`) is the one place a picture's first box is
-  worked out: the drawn size is the 800 px bound (`LAYER_DRAWN_MAX_DIM`) and the document's (the aspect kept, never enlarged), and the position is 60 px in from the
-  corner (`PLACEMENT_MARGIN`) when the document has the room, less (down to the edge) when it does not, so a 512x512 file on the 112x112 emote is the emote, and a 400x1600
-  picture on the 1200x480 banner is 120x480 at the top. `ImportPanel.ingestFile` (the drop, the file chooser and the paste all go through it) and `MoodBoardPanel.sendToCanvas`
-  both read the open document from the canvas store AFTER the picture has loaded, as the stored copy's bound does, and pass the box to `makeImageLayer` /
-  `makeReferenceLayer` (`x`, `y`: they default to 60, 60, the corner they always started at). A document that is not a size places a picture as it was before. A template's
-  own layers are untouched.
-- **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy's pixels; `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) bounds its bytes, and
-  `chooseStoredCopy` (the order) with `storedDataUrl` (`lib/boundedImage.ts`, the canvas under it) take the first copy that fits: the file as it came when it is within the
-  pixel bound; else a copy at the bound (a PNG, or a JPEG when the file is one and is opaque); then an opaque picture as a JPEG at that same bound; then the bound stepped
-  down by a quarter (`nextStoredDim`, whole pixels, never under 1 px) as a JPEG if the picture is opaque and a PNG if it is not, so transparency is never lost. A picture
-  within the pixel bound whose FILE is over the budget is re-encoded, not kept as it came. Whether the picture is opaque is read from its pixels once, and only when a copy
-  is over the budget (or a JPEG source's has to be made).
-- **The autosave offer is withdrawn by a project opened from Home (T-139 (5)).** `AutosaveRestore` reads `sessionHoldsWork()` once per mount and Open project applies
-  the project and stays on Home, so the banner went on offering Restore over what had just been opened. `useAutosaveOffer` (`components/restoreRun.ts`, beside
-  `useRestoreRun`) is the signal: `Home.handleLoad` calls `withdraw()` once the project has applied (not on a refusal), and every mounted banner drops its offer (a
-  `subscribe` listener, as for `applied`). `restore()` asks `sessionHoldsWork()` again at the press, inside its claim and before the apply, as the backstop: if the session
-  now holds work it withdraws the offer the same way and applies nothing.
-- **A button that makes a record ignores the repeat of its double-click, claims before it writes, and is off while the write is out (T-139 (9)).** "+ Log post" (the
-  posting log), "Save current" (Cleanup presets) and "+ Save preset" (Custom export presets) clear their form after the first press, so the second press of a double-click
-  found no name and raised a red "Add a clip name first" / "Name your preset first" / "Give it a name", and on a slow write the presets saved a duplicate. `isRepeatPress(e)`
-  is the first line of each click; the two preset saves run under `claimFirst(savingRef, ...)` (raised before the first await, so an Enter held in the name box is covered
-  too) and the button is `disabled={saving}` with `disabled:opacity-50` while the write is out. Welcome's "Let's go" is replaced by Home under the pointer, so the second
-  press of its double-click landed on whatever Home draws there (Stream Graphics' card at 1366x768, 1306x734, 1161x653 and 1024x640, measured; the gap between the cards at
-  1536x864 and 1632x918): the dismiss calls `swallowRepeatClicks()`, as a closing dialog does.

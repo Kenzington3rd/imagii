@@ -3989,3 +3989,97 @@ test.describe('T-139 (9): a double-click on "Save current" makes one preset and 
     }
   })
 })
+
+// ── T-140 (7), (8): the Cleanup presets' name box and "Save current" ───────────────────────────────────────────────────────────────────────
+//
+// (7) Enter in the name box saved with no check of `e.repeat`: after the first press saved and cleared the name, each auto-repeat of a HELD key ran the save again and
+// raised the red "Name your preset first" (the held-key class: T-120, T-133 (7), T-134). (8) The button was `disabled` while the write was out, and Chromium blurs a
+// focused button that becomes disabled, so a person who saved with Enter or Space lost their place (focus fell to the page); it is `aria-disabled` now, dimmed by its own
+// variant, and a press on it is still the claim, so a second one does nothing.
+test.describe('T-140 (7): a held Enter in the preset name box is one save', () => {
+  test('the first press saves, the auto-repeats after it save nothing and raise no error; a fresh press is a decision again', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-heldenter')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      const nameInput = presets.getByPlaceholder('My mic preset')
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+      const saved = (): number => (existsSync(presetDir) ? readdirSync(presetDir).filter((f) => f.endsWith('.json')).length : 0)
+
+      await nameInput.fill('Held once')
+      await nameInput.focus()
+      // The press, held: the keydown goes down and stays down.
+      await window.keyboard.down('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Held once"')
+      // The OS's repeat delay passes (the box is empty by now), and the key auto-repeats: Playwright marks a second `down` of a key already down as a repeat.
+      await window.waitForTimeout(600)
+      for (let i = 0; i < 4; i++) {
+        await window.keyboard.down('Enter')
+        await window.waitForTimeout(80)
+      }
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(800)
+      expect(saved(), 'one preset on disk').toBe(1)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => /Name your preset first/.test(t)), 'no red error from the repeats').toEqual([])
+      expect(log.filter((t) => t === 'Saved "Held once"'), 'said once').toHaveLength(1)
+
+      // The guard is on the REPEAT: a fresh press is a decision. It saves a name, and with the box empty it still says so.
+      await nameInput.fill('Held twice')
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Held twice"')
+      expect(saved(), 'a fresh Enter saves').toBe(2)
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Name your preset first')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+test.describe('T-140 (8): "Save current" keeps the keyboard\'s focus while it saves', () => {
+  test('a keyboard press under a slow write: focus stays on the button through the write and after, the button is aria-disabled and dimmed meanwhile, and a second press does nothing', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-focus')
+    const { window, app } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      const nameInput = presets.getByPlaceholder('My mic preset')
+      const save = presets.getByRole('button', { name: 'Save current' })
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+      const saved = (): number => (existsSync(presetDir) ? readdirSync(presetDir).filter((f) => f.endsWith('.json')).length : 0)
+      const opacity = (): Promise<number> => save.evaluate((el) => Number(getComputedStyle(el).opacity))
+
+      await slowPresetWrites(app, 1500)
+      await nameInput.fill('Focus once')
+      await save.focus()
+      await expect(save).toBeFocused()
+      expect(await opacity(), 'live before the press').toBe(1)
+      await window.keyboard.press('Enter')
+
+      // The write is out (held 1.5 s): the button says it is off, looks off, and still has the focus.
+      await window.waitForTimeout(700)
+      await expect(save, 'the keyboard is still on the button it pressed, halfway through the write').toBeFocused()
+      await expect(save, 'and the write IS still out: the button says it is off').toHaveAttribute('aria-disabled', 'true')
+      await expect.poll(opacity, { message: 'dimmed while it is off', timeout: 5000, intervals: [100] }).toBeLessThan(0.7)
+      // A second press (Enter, then Space) reaches the click handler of an aria-disabled button: it is the claim, and the claim is up, so nothing starts.
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Space')
+
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Focus once"')
+      await expect(save).toHaveAttribute('aria-disabled', 'false')
+      // `btn-primary` transitions all properties, so the opacity eases back rather than jumping: polled, not read once.
+      await expect.poll(opacity, { message: 'live again', timeout: 5000, intervals: [100] }).toBe(1)
+      await expect(save, 'and the focus is on the button after the write').toBeFocused()
+      await window.waitForTimeout(1200)
+      expect(saved(), 'one preset: the presses during the write started nothing').toBe(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Saved "Focus once"'), 'said once').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => /Name your preset first/.test(t)), 'no error').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

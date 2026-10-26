@@ -403,6 +403,14 @@ steps are one-time:
    path the panel shows. The **Show models folder** button opens that folder, and
    imagii makes the folder first if it is not there yet.
 
+Once both are in place the setup card goes away, and **Captions setup** stays under
+the panel, closed until you open it: it shows the same two folders and the same
+**Open folder** and **Show models folder** buttons. A transcription that fails says
+"The captions engine stopped before it finished. Open Captions setup to check its
+files and the model" and that is where it sends you. If Windows reports that the
+engine could not start because a file it needs is missing, the `.dll` files from the
+zip are not next to `whisper-cli.exe`: copy every one of them into the same folder.
+
 While it works, the panel shows the step it is on (extracting audio,
 transcribing, building captions). Transcribing has no percentage — nobody can
 know how long speech will take — so its bar slides instead of filling.
@@ -651,7 +659,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   only changes the screen, so the studio you were in is still open with your work in it, and
   no restore banner is offered. The banner
   is not shown over work you have already started in this session, so a restore
-  never lands on top of it. If the autosave file is damaged,
+  never lands on top of it; and work that arrives while you are looking at Home (a
+  sound or a converted video that finishes after you came back) takes the banner away
+  by itself, with nothing restored. If the autosave file is damaged,
   imagii says so and offers to clear it rather than loading it. An autosave from an earlier version restores too. If you open a
   different video while Restore is still loading the autosave's, Restore skips that
   video and says so; the autosave then holds what you have open, so the skipped

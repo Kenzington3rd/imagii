@@ -52,6 +52,9 @@ export function CaptionsPanel(): JSX.Element | null {
   // T-136 (4): the download is started from inside the setup card, so a panel that mounts over a download that is running opens the card - the bar and
   // its Cancel are in it, and "back to the download" must not need a click to find them.
   const [showSetup, setShowSetup] = useState(() => useModelInstallRun.getState().run !== null)
+  // T-140 (10): the same instructions are also reachable when the files exist - "Captions setup", closed until asked for. After a failed Transcribe the setup card was gone
+  // (it showed only while `!status.ready`), and with it the way back to the folders the engine and the model live in.
+  const [showReadySetup, setShowReadySetup] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE)
   const [trimToClip, setTrimToClip] = useState(false)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
@@ -298,6 +301,106 @@ export function CaptionsPanel(): JSX.Element | null {
   const percent = progress?.percent
   const determinate = typeof percent === 'number'
 
+  // T-140 (10): the setup instructions are ONE piece of markup shown in two places: the "Captions need setup" card while the engine or the model is missing, and the
+  // "Captions setup" disclosure under the panel once they are there (so a failed Transcribe can still reach the folders).
+  const setupDetails = (
+    <div className="mt-2 flex flex-col gap-1.5 text-ink-muted">
+      {/* T-89: what is manual and what is automatic, in one line, and
+          which part goes online. */}
+      <p className="text-ink-base">
+        You download the captions engine once (<code>whisper-cli.exe</code>); imagii
+        downloads the English model (~141 MB) for you — that download goes online,
+        once.
+      </p>
+      {/* T-139 (6): the releases page offers no file called whisper-cli.exe. The Windows build is a zip, listed under the newest release that has one (some are
+          marked Pre-release), and whisper.cpp's release workflow zips the folder build/bin/Release as it is, so the program and the .dll files it needs
+          beside it are inside a Release folder in the zip. */}
+      <div>
+        1. Download <code>whisper-bin-x64.zip</code> from the{' '}
+        <a
+          href="https://github.com/ggml-org/whisper.cpp/releases"
+          className="text-warn underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          whisper.cpp releases
+        </a>{' '}
+        (the newest release that lists it; some are marked Pre-release). Open the zip and copy <code>whisper-cli.exe</code> and every{' '}
+        <code>.dll</code> next to it (they are in its Release folder) into the folder below, so the engine sits exactly here:
+        <button
+          className="ml-1 text-warn underline"
+          onClick={() => window.api.captions.openBinFolder()}
+        >
+          Open folder
+        </button>
+      </div>
+      <div className="font-mono break-all">{status?.exePath}</div>
+      {/* T-102: this is imagii's own data folder, not the app's install
+          folder — the portable build unpacks to a temp folder that is
+          rebuilt on every launch, so a file placed there would vanish. */}
+      <div>This folder survives app updates, so you only set this up once.</div>
+      <div>
+        2. The English model (~141 MB). The button below downloads it for you, or
+        you can grab it from{' '}
+        <a
+          href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+          className="text-warn underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Hugging Face
+        </a>{' '}
+        yourself and save it exactly here:
+      </div>
+      <div className="font-mono break-all">{status?.modelPath}</div>
+      {/* Round 17 B9: surface the models-folder shortcut next to the
+          binaries link so a power user can drop a different .bin in
+          alongside the auto-installed one. */}
+      <button
+        className="text-warn underline self-start text-xs"
+        onClick={() => window.api.captions.openModelsFolder()}
+      >
+        Show models folder
+      </button>
+      {/* Phase 4E: in-app model auto-install. Visible whenever the
+          model is missing (regardless of whisper.exe state) so the
+          download can run while the user grabs the exe in parallel. */}
+      {!status?.modelInstalled ? (
+        <div className="flex flex-col gap-1.5 mt-1">
+          <button
+            className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50 self-start inline-flex items-center gap-1.5"
+            onClick={installModel}
+            disabled={installing}
+          >
+            {installing ? (
+              'Downloading model…'
+            ) : (
+              <>
+                <Icon name="download" size={13} /> Download model (~141 MB)
+                automatically
+              </>
+            )}
+          </button>
+          {installing && installProgress ? (
+            <div className="flex items-center gap-2 text-xs">
+              <ProgressTrack label="Downloading the caption model" percent={installProgress.percent ?? 0} />
+              <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">
+                {Math.round(installProgress.percent ?? 0)}%
+              </span>
+              <RunningCancel title="Cancel download" onClick={() => void window.api.captions.cancelInstall()} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <button
+        className="text-warn underline mt-1 self-start"
+        onClick={refreshStatus}
+      >
+        Refresh status
+      </button>
+    </div>
+  )
+
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-captions">
       <PanelHeader
@@ -330,103 +433,7 @@ export function CaptionsPanel(): JSX.Element | null {
           >
             {showSetup ? 'Hide' : 'Show'} setup instructions
           </button>
-          {showSetup ? (
-            <div className="mt-2 flex flex-col gap-1.5 text-ink-muted">
-              {/* T-89: what is manual and what is automatic, in one line, and
-                  which part goes online. */}
-              <p className="text-ink-base">
-                You download the captions engine once (<code>whisper-cli.exe</code>); imagii
-                downloads the English model (~141 MB) for you — that download goes online,
-                once.
-              </p>
-              {/* T-139 (6): the releases page offers no file called whisper-cli.exe. The Windows build is a zip, listed under the newest release that has one (some are
-                  marked Pre-release), and whisper.cpp's release workflow zips the folder build/bin/Release as it is, so the program and the .dll files it needs
-                  beside it are inside a Release folder in the zip. */}
-              <div>
-                1. Download <code>whisper-bin-x64.zip</code> from the{' '}
-                <a
-                  href="https://github.com/ggml-org/whisper.cpp/releases"
-                  className="text-warn underline"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  whisper.cpp releases
-                </a>{' '}
-                (the newest release that lists it; some are marked Pre-release). Open the zip and copy <code>whisper-cli.exe</code> and every{' '}
-                <code>.dll</code> next to it (they are in its Release folder) into the folder below, so the engine sits exactly here:
-                <button
-                  className="ml-1 text-warn underline"
-                  onClick={() => window.api.captions.openBinFolder()}
-                >
-                  Open folder
-                </button>
-              </div>
-              <div className="font-mono break-all">{status?.exePath}</div>
-              {/* T-102: this is imagii's own data folder, not the app's install
-                  folder — the portable build unpacks to a temp folder that is
-                  rebuilt on every launch, so a file placed there would vanish. */}
-              <div>This folder survives app updates, so you only set this up once.</div>
-              <div>
-                2. The English model (~141 MB). The button below downloads it for you, or
-                you can grab it from{' '}
-                <a
-                  href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-                  className="text-warn underline"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Hugging Face
-                </a>{' '}
-                yourself and save it exactly here:
-              </div>
-              <div className="font-mono break-all">{status?.modelPath}</div>
-              {/* Round 17 B9: surface the models-folder shortcut next to the
-                  binaries link so a power user can drop a different .bin in
-                  alongside the auto-installed one. */}
-              <button
-                className="text-warn underline self-start text-xs"
-                onClick={() => window.api.captions.openModelsFolder()}
-              >
-                Show models folder
-              </button>
-              {/* Phase 4E: in-app model auto-install. Visible whenever the
-                  model is missing (regardless of whisper.exe state) so the
-                  download can run while the user grabs the exe in parallel. */}
-              {!status?.modelInstalled ? (
-                <div className="flex flex-col gap-1.5 mt-1">
-                  <button
-                    className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50 self-start inline-flex items-center gap-1.5"
-                    onClick={installModel}
-                    disabled={installing}
-                  >
-                    {installing ? (
-                      'Downloading model…'
-                    ) : (
-                      <>
-                        <Icon name="download" size={13} /> Download model (~141 MB)
-                        automatically
-                      </>
-                    )}
-                  </button>
-                  {installing && installProgress ? (
-                    <div className="flex items-center gap-2 text-xs">
-                      <ProgressTrack label="Downloading the caption model" percent={installProgress.percent ?? 0} />
-                      <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">
-                        {Math.round(installProgress.percent ?? 0)}%
-                      </span>
-                      <RunningCancel title="Cancel download" onClick={() => void window.api.captions.cancelInstall()} />
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <button
-                className="text-warn underline mt-1 self-start"
-                onClick={refreshStatus}
-              >
-                Refresh status
-              </button>
-            </div>
-          ) : null}
+          {showSetup ? setupDetails : null}
         </div>
       ) : null}
 
@@ -598,6 +605,22 @@ export function CaptionsPanel(): JSX.Element | null {
         Captions are English only. Captions burn into the original video, not the platform
         exports.
       </p>
+      {/* T-140 (10): once the engine and the model are there the card above is gone, and a failed Transcribe ("The captions engine stopped ... Open Captions setup")
+          had nowhere to send the person. The same instructions, closed until asked for, in the wash the card has them in (the links on it are `text-warn`, 10.4:1 there). */}
+      {status?.ready ? (
+        <div className="text-xs">
+          <button
+            className="text-ink-muted underline"
+            aria-expanded={showReadySetup}
+            onClick={() => setShowReadySetup((v) => !v)}
+          >
+            Captions setup
+          </button>
+          {showReadySetup ? (
+            <div className="bg-ember/10 border border-ember/30 rounded px-2 pb-2 mt-1">{setupDetails}</div>
+          ) : null}
+        </div>
+      ) : null}
       {/* T-128 (3), T-110 (s): every transcription keeps its .srt in imagii's data folder for good. This is the way to empty it from
           here: the line says how many are kept, the button is off with none (and while a job runs, which may be reading one). */}
       {transcriptCount !== null ? (

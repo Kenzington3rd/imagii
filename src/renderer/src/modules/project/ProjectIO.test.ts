@@ -21,7 +21,9 @@ import {
   describeUnavailableSources,
   replacedSince,
   audioSettled,
-  sessionHoldsWork
+  sessionHoldsWork,
+  describeRestoreRefused,
+  subscribeSessionStores
 } from './ProjectIO'
 import { useVideoStore } from '../video-studio/store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
@@ -2270,5 +2272,89 @@ describe('applyProject when main refuses a second conversion (T-136 (2))', () =>
     const held = useVideoStore.getState().source
     await applyProject(projectWithConvertedVideo())
     expect(useVideoStore.getState().source).toBe(held)
+  })
+})
+
+// T-140 (6): a conversion or an extraction that lands while the person is on Home fills a studio under a banner that mounted over an empty session, and Restore
+// then vanished with nothing restored and no word. The banner now hears the stores `sessionHoldsWork` reads, and the press-time backstop, if it still fires, says
+// what is open and that nothing was restored.
+describe('subscribeSessionStores: the stores sessionHoldsWork reads, as something a banner can listen to (T-140 (6))', () => {
+  it('runs the listener for a change in each of the three stores, and the work test is already true inside it', async () => {
+    const seen: boolean[] = []
+    const off = subscribeSessionStores(() => seen.push(sessionHoldsWork()))
+    await useVideoStore.getState().loadSource(VIDEO_PATH)
+    expect(seen.length, 'the video store').toBeGreaterThan(0)
+    expect(seen.at(-1)).toBe(true)
+    wipeAllStudios()
+    seen.length = 0
+    await useAudioStore.getState().loadSource(AUDIO_PATH)
+    expect(seen.length, 'the audio store').toBeGreaterThan(0)
+    expect(seen.at(-1)).toBe(true)
+    wipeAllStudios()
+    seen.length = 0
+    useCanvasStore.getState().setDocument(DOC)
+    expect(seen.length, 'the canvas store').toBeGreaterThan(0)
+    expect(seen.at(-1)).toBe(true)
+    off()
+  })
+
+  it('stops when told to: a change after the way back is not heard', async () => {
+    let heard = 0
+    const off = subscribeSessionStores(() => (heard += 1))
+    useCanvasStore.getState().setDocument(DOC)
+    const before = heard
+    expect(before).toBeGreaterThan(0)
+    off()
+    useCanvasStore.getState().resetDocument()
+    await useAudioStore.getState().loadSource(AUDIO_PATH)
+    await useVideoStore.getState().loadSource(VIDEO_PATH)
+    expect(heard, 'nothing after off()').toBe(before)
+  })
+})
+
+describe('describeRestoreRefused: the one sentence when Restore finds the session holding work (T-140 (6))', () => {
+  const base = { schemaVersion: MAX_SCHEMA_VERSION, savedAt: 1_700_000_000_000, appVersion: '1.0.0' } as const
+  const video: NonNullable<ImagiiProject['videoStudio']> = { sourcePath: VIDEO_PATH, clips: [], selectedClipId: null, watermark: null, srtPath: null }
+  const audio: NonNullable<ImagiiProject['audioStudio']> = { sourcePath: AUDIO_PATH, chain: CHAIN }
+  const canvas: NonNullable<ImagiiProject['imageCanvas']> = { doc: DOC }
+
+  it.each([
+    ['a video', { videoStudio: video }, 'Nothing was restored: a video is open now, and restoring would replace it.'],
+    ['audio', { audioStudio: audio }, 'Nothing was restored: audio is open now, and restoring would replace it.'],
+    ['a canvas', { imageCanvas: canvas }, 'Nothing was restored: a Stream Graphics canvas is open now, and restoring would replace it.'],
+    ['a video and audio', { videoStudio: video, audioStudio: audio }, 'Nothing was restored: a video and audio are open now, and restoring would replace them.'],
+    ['a video and a canvas', { videoStudio: video, imageCanvas: canvas }, 'Nothing was restored: a video and a Stream Graphics canvas are open now, and restoring would replace them.'],
+    [
+      'all three',
+      { videoStudio: video, audioStudio: audio, imageCanvas: canvas },
+      'Nothing was restored: a video, audio and a Stream Graphics canvas are open now, and restoring would replace them.'
+    ]
+  ])('names what is open: %s', (_label, studios, sentence) => {
+    expect(describeRestoreRefused({ ...base, ...studios })).toBe(sentence)
+  })
+
+  it('is one finished line a toast shows as written: at most 240 characters, no line break, a period at the end - for every combination', () => {
+    const studios = [{ videoStudio: video }, { audioStudio: audio }, { imageCanvas: canvas }]
+    for (let mask = 1; mask < 8; mask++) {
+      const project = studios.reduce<ImagiiProject>((acc, s, i) => ((mask >> i) & 1 ? { ...acc, ...s } : acc), { ...base })
+      const sentence = describeRestoreRefused(project)
+      expect(sentence.length, sentence).toBeLessThanOrEqual(240)
+      expect(sentence).not.toContain('\n')
+      expect(sentence).toMatch(/\.$/)
+      expect(sentence.startsWith('Nothing was restored: ')).toBe(true)
+    }
+  })
+
+  it('reads the live session when it is given none: what the stores hold is what it names', async () => {
+    useCanvasStore.getState().setDocument(DOC)
+    expect(describeRestoreRefused()).toBe('Nothing was restored: a Stream Graphics canvas is open now, and restoring would replace it.')
+    await useVideoStore.getState().loadSource(VIDEO_PATH)
+    expect(describeRestoreRefused()).toBe('Nothing was restored: a video and a Stream Graphics canvas are open now, and restoring would replace them.')
+  })
+
+  it('a session that holds nothing still gets a true sentence (the backstop is only asked when it does, but the words must not say "undefined")', () => {
+    const sentence = describeRestoreRefused({ ...base })
+    expect(sentence).not.toMatch(/undefined|null/)
+    expect(sentence).toBe('Nothing was restored: your work is open now, and restoring would replace it.')
   })
 })

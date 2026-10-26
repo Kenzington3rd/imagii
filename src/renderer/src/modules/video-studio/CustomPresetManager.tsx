@@ -280,14 +280,16 @@ export function CustomPresetManager({
                   kilobits.
                 </p>
               </div>
-              {/* T-139 (9): the second press of a double-click is not a second preset, nor a "Give it a name" after the first cleared the box. */}
+              {/* T-139 (9): the second press of a double-click is not a second preset, nor a "Give it a name" after the first cleared the box.
+                  T-140 (8): `aria-disabled` and not `disabled` while the write is out - a disabled button the keyboard just pressed is blurred and focus falls to the
+                  page behind this dialog (T-120 (10)); an aria-disabled one keeps it. The press it still takes is a no-op: `save()` is the claim (`savingRef`). */}
               <button
-                className="btn-primary px-4 py-1.5 text-sm self-start disabled:opacity-50"
+                className="btn-primary px-4 py-1.5 text-sm self-start aria-disabled:opacity-50"
                 onClick={(e) => {
                   if (isRepeatPress(e)) return
                   void save()
                 }}
-                disabled={saving}
+                aria-disabled={saving}
               >
                 + Save preset
               </button>

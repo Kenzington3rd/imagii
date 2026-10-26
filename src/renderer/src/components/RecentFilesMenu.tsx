@@ -39,13 +39,28 @@ export function RecentFilesMenu({
 }: RecentFilesMenuProps): JSX.Element | null {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const toggleRef = useRef<HTMLButtonElement | null>(null)
+
+  /**
+   * T-140 (9): closing the menu with focus in it. The open list unmounts, and focus on an item (or on Clear list) goes with it - to the page, so the next Tab starts from the
+   * top of the window and a keyboard person has lost their place. Asked BEFORE it closes (the unmount is what drops focus): focus that was in the menu goes to the toggle,
+   * which stays. Focus anywhere else (a press outside on a control, a mouse that left the list) is where the person put it and is left alone.
+   */
+  function focusIsInside(): boolean {
+    return wrapperRef.current?.contains(document.activeElement) ?? false
+  }
+  function closeToToggle(): void {
+    const hadFocus = focusIsInside()
+    setOpen(false)
+    if (hadFocus) toggleRef.current?.focus()
+  }
 
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent): void {
       if (!shouldDismissMenu({ kind: 'key', key: e.key })) return
       e.preventDefault()
-      setOpen(false)
+      closeToToggle()
     }
     function onPointerDown(e: MouseEvent): void {
       const wrapper = wrapperRef.current
@@ -67,6 +82,7 @@ export function RecentFilesMenu({
   return (
     <div className="relative" ref={wrapperRef}>
       <button
+        ref={toggleRef}
         className="btn-ghost px-3 py-1.5 text-sm"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -76,7 +92,7 @@ export function RecentFilesMenu({
       {open ? (
         <div
           className="absolute right-0 top-full mt-1 z-30 bg-bg-elevated border border-ink-dim/40 rounded-md shadow-2xl min-w-[280px] max-w-[420px]"
-          onMouseLeave={() => setOpen(false)}
+          onMouseLeave={closeToToggle}
         >
           <ul className="max-h-64 overflow-y-auto py-1">
             {recent.map((path) => (
@@ -85,7 +101,9 @@ export function RecentFilesMenu({
                   className="w-full text-left px-3 py-1.5 text-sm hover:bg-bg-hover truncate"
                   title={path}
                   onClick={() => {
-                    setOpen(false)
+                    // T-140 (9): the toggle keeps the focus while the pick runs. A pick that opens a file replaces the importer with the studio (as Choose file… does), and
+                    // focus has no control left to stay on then; one that is refused, or still converting, leaves the importer up, and the toggle keeps the focus.
+                    closeToToggle()
                     onPick(path)
                   }}
                 >
@@ -100,7 +118,15 @@ export function RecentFilesMenu({
           <div className="border-t border-ink-dim/30 px-2 py-1">
             <button
               onClick={() => {
+                const hadFocus = focusIsInside()
                 setOpen(false)
+                // T-140 (9): with no entries left the whole menu unmounts, the toggle with it, so there is no toggle to hand the focus to. The control before the menu in its
+                // row (the importers' "Choose file…") takes it: the place the person was working, and the next thing they would do.
+                if (hadFocus) {
+                  const before = wrapperRef.current?.previousElementSibling
+                  if (before instanceof HTMLElement) before.focus()
+                  else toggleRef.current?.focus()
+                }
                 onClear()
               }}
               className="text-xs text-ink-dim hover:text-danger px-1"

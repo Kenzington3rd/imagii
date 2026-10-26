@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import type { ImagiiProject } from '@shared/workspace'
-import { audioSettled, currentRoute, describeApplyOutcome, sessionHoldsWork } from '../modules/project/ProjectIO'
+import { audioSettled, currentRoute, describeApplyOutcome, describeRestoreRefused, sessionHoldsWork } from '../modules/project/ProjectIO'
 import { applyProjectHeld } from '../hooks/useAutosave'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
 import { Icon } from './Icon'
-import { useAutosaveOffer, useRestoreRun } from './restoreRun'
+import { useAutosaveOffer, useRestoreRun, withdrawWhenSessionGainsWork } from './restoreRun'
 
 interface AutosaveSnapshot {
   ok: boolean
@@ -103,6 +103,12 @@ export function AutosaveRestore(): JSX.Element | null {
   // Restore over the project that had just been opened; Home says the offer is withdrawn once that project has applied.
   useEffect(() => useAutosaveOffer.subscribe(() => setDismissed(true)), [])
 
+  // T-140 (6): and when the session GAINS work while this banner is mounted. A conversion or an extraction started on another screen lands on Home's watch (the importers'
+  // runs outlive the route) and fills a studio under a banner that mounted over an empty session; Restore then withdrew at the press and said nothing. The banner listens to
+  // what `sessionHoldsWork` reads and drops its offer on the signal above, so every mounted banner hears it. Not once it is dismissed, and not over a session that held work
+  // at the mount (no offer was ever drawn): nothing is left to withdraw.
+  useEffect(() => (dismissed || holdsWork ? undefined : withdrawWhenSessionGainsWork()), [dismissed, holdsWork])
+
   if (dismissed || holdsWork || !snapshot || !snapshot.info) {
     // Round 17 B7: even when there's no restore prompt to show, surface a
     // single-line "Last autosave: 5 min ago" so the user knows imagii is
@@ -125,8 +131,11 @@ export function AutosaveRestore(): JSX.Element | null {
       // T-139 (5): asked again now, at the press. The banner's `holdsWork` was read at mount, and a session can come to hold work after it by a way that does not
       // go through Home's Open project (which says so itself): applying a snapshot of an earlier moment over it would wipe it and its undo histories (T-124 (5)).
       // The offer is withdrawn the same way Open project withdraws it, so every mounted banner hears it; nothing is applied.
+      // T-140 (6): and the press says so. The banner now withdraws itself when work lands (above), so this is the backstop for a landing it has not heard yet; it used to
+      // return in silence, and a person who pressed Restore saw the banner vanish with nothing restored and no word.
       if (sessionHoldsWork()) {
         useAutosaveOffer.getState().withdraw()
+        toast(describeRestoreRefused(), { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
         return
       }
       // T-113: autosave is held for the apply alone (see `applyProjectHeld`).

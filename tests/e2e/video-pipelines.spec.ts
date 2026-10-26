@@ -11282,3 +11282,168 @@ test.describe('T-139 (9): a double-click on a record-creating button makes one r
     }
   })
 })
+
+// ── T-140 (8): "+ Save preset" keeps the keyboard's focus while it saves ────────────────────────────────────────────────────────────────────
+//
+// The button was `disabled` while the write was out. Chromium blurs a focused button that becomes disabled, and behind this dialog (aria-modal, a focus trap) the focus
+// fell to the page, so a person who saved with Enter lost their place in the dialog (the T-120 (10) record). It is `aria-disabled` now, dimmed by its own variant, and a press
+// on it is still the claim (`savingRef`), so a second one starts nothing.
+test.describe('T-140 (8): "+ Save preset" keeps the keyboard\'s focus while it saves', () => {
+  test('a keyboard press under a slow write: focus stays on the button through the write and after, and a second press does nothing', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchWithVideo('t140-custom')
+    const { app, window, userDataDir } = studio
+    try {
+      const presetsDir = path.join(userDataDir, 'export-presets')
+      await exportCard(window).getByRole('button', { name: 'Presets' }).click()
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByText('Saved presets (0)')).toBeVisible({ timeout: 15_000 })
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      const save = modal.getByRole('button', { name: '+ Save preset' })
+      const opacity = (): Promise<number> => save.evaluate((el) => Number(getComputedStyle(el).opacity))
+
+      await slowPresetWrites(app, 1500)
+      await nameInput.fill('Focus custom')
+      await save.focus()
+      await expect(save).toBeFocused()
+      expect(await opacity(), 'live before the press').toBe(1)
+      await window.keyboard.press('Enter')
+
+      await window.waitForTimeout(700)
+      await expect(save, 'the keyboard is still on the button it pressed, halfway through the write').toBeFocused()
+      await expect(save, 'and the write IS still out: the button says it is off').toHaveAttribute('aria-disabled', 'true')
+      await expect.poll(opacity, { message: 'dimmed while it is off', timeout: 5000, intervals: [100] }).toBeLessThan(0.7)
+      await window.keyboard.press('Enter')
+      await window.keyboard.press('Space')
+
+      await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      await expect(save).toHaveAttribute('aria-disabled', 'false')
+      // `btn-primary` transitions all properties, so the opacity eases back rather than jumping: polled, not read once.
+      await expect.poll(opacity, { message: 'live again', timeout: 5000, intervals: [100] }).toBe(1)
+      await expect(save, 'and the focus is on the button after the write').toBeFocused()
+      await window.waitForTimeout(1200)
+      expect(readdirSync(presetsDir).filter((f) => f.endsWith('.json')), 'one preset: the presses during the write started nothing').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Saved "Focus custom"'), 'said once').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => /Give it a name/.test(t)), 'no error').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-140 (10): a failed transcription blames the captions engine, and the setup folders stay reachable ─────────────────────────────────────
+//
+// A whisper exit matched the runner shape and was told "imagii's video tool stopped ... check that the source file still plays and the folder has room": the wrong program
+// and the wrong advice (a missing .dll beside the exe is Windows' exit 0xC0000135, a damaged model is the engine's too). And the setup card showed only while the files were
+// missing, so after a failed Transcribe there was no way back to the folders. A stand-in engine dropped where the real resolver looks (`<userData>/bin`, the T-108 technique)
+// exits 1 through the real extraction, the real `runTranscribe`, the real error mapping and the real toast.
+test.describe('T-140 (10): a failed transcription is the captions engine\'s, with its setup in reach', () => {
+  /** An "engine" that fails the way a real one does when the model is bad: a line on stderr and exit 1. The resolver needs only that the model file is there. */
+  function installFailingEngine(userDataDir: string): void {
+    const bin = path.join(userDataDir, 'bin')
+    const models = path.join(userDataDir, 'models')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(models, { recursive: true })
+    const script = path.join(bin, 'whisper-cli.exe')
+    writeFileSync(script, "#!/bin/sh\necho 'whisper_init_from_file: failed to load the model' >&2\nexit 1\n", 'utf8')
+    chmodSync(script, 0o755)
+    writeFileSync(path.join(models, 'ggml-base.en.bin'), 'not a real model', 'utf8')
+  }
+  const ENGINE =
+    'Transcription failed. The captions engine stopped before it finished. Open Captions setup to check its files and the model, then try again.'
+  const MISSING_FILES =
+    "Transcription failed. The captions engine couldn't start because a file it needs is missing. " +
+    'Copy every .dll that came in the zip next to whisper-cli.exe (Captions setup opens that folder), then try again.'
+
+  test('an engine that exits 1: the toast names the captions engine, not the video tool, and Captions setup opens the folders', async () => {
+    test.skip(process.platform === 'win32', 'the stand-in engine is a shell script')
+    test.setTimeout(240_000)
+    const studio = await launchHome('t140-engine')
+    const { app, window, userDataDir } = studio
+    try {
+      installFailingEngine(userDataDir)
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      // The engine and the model are found, so there is no "needs setup" card - and the setup is still in reach, closed.
+      await expect(card.getByText('Captions need setup')).toHaveCount(0)
+      const setup = card.getByRole('button', { name: 'Captions setup', exact: true })
+      await expect(setup).toBeVisible()
+      await expect(setup).toHaveAttribute('aria-expanded', 'false')
+      await expect(card.getByRole('button', { name: 'Open folder', exact: true }), 'collapsed: the instructions are behind the disclosure').toHaveCount(0)
+
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectToast(window, 'Transcription failed.')
+      const failure = (await readToastLog(window)).find((t) => t.startsWith('Transcription failed.'))
+      expect(failure, 'the captions engine\'s sentence, which names where to go').toBe(ENGINE)
+      expect(failure).not.toMatch(/video tool|source file|folder has room|whisper exit|exit 1|failed to load/i)
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeEnabled({ timeout: 30_000 })
+
+      // The sentence says "Open Captions setup": it is on the panel, and it opens the instructions and both folders.
+      await setup.click()
+      await expect(setup).toHaveAttribute('aria-expanded', 'true')
+      const paths = card.locator('div.font-mono.break-all')
+      await expect(paths).toHaveCount(2)
+      expect(path.dirname((await paths.nth(0).innerText()).trim()), 'the engine\'s folder is imagii\'s own bin folder').toBe(path.join(userDataDir, 'bin'))
+      await expect(paths.nth(1)).toHaveText(/ggml-base\.en\.bin$/)
+      // The folder buttons reach the shell with the right folders (the OS window itself is the boundary, as for every reveal control).
+      await app.evaluate(({ shell }) => {
+        const g = globalThis as unknown as { __openPaths: string[] }
+        g.__openPaths = []
+        ;(shell as unknown as { openPath: unknown }).openPath = async (p: string) => {
+          g.__openPaths.push(p)
+          return ''
+        }
+      })
+      await card.getByRole('button', { name: 'Open folder', exact: true }).click()
+      await card.getByRole('button', { name: 'Show models folder', exact: true }).click()
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as unknown as { __openPaths?: string[] }).__openPaths ?? []), { timeout: 15_000, intervals: [200] })
+        .toEqual([path.join(userDataDir, 'bin'), path.join(userDataDir, 'models')])
+      // It folds away again.
+      await setup.click()
+      await expect(setup).toHaveAttribute('aria-expanded', 'false')
+      await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the exit of an engine whose .dll files are not beside it (Windows\' 0xC0000135, 3221225781) has its own sentence in the same toast', async () => {
+    test.setTimeout(240_000)
+    // A shell cannot exit with that code on any platform here (an exit status is one byte), so the engine's failure is main's own message for it, thrown from the
+    // `captions:transcribe` handler as the table in `userFacingError.test.ts` has it: the real panel, the real error mapping and the real toast.
+    const studio = await launchHome('t140-dll')
+    const { app, window } = studio
+    try {
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => ({
+          exeInstalled: true,
+          exePath: 'whisper-cli.exe',
+          modelInstalled: true,
+          modelPath: 'model.bin',
+          modelsDir: 'models',
+          ready: true
+        }))
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', () => {
+          throw new Error('whisper exit 3221225781: ')
+        })
+      })
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectToast(window, 'Transcription failed.')
+      expect((await readToastLog(window)).find((t) => t.startsWith('Transcription failed.')), 'the missing-files sentence').toBe(MISSING_FILES)
+      await expect(card.getByRole('button', { name: 'Captions setup', exact: true }), 'and the setup it names is on the panel').toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})

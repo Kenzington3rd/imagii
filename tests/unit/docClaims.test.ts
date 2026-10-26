@@ -715,9 +715,9 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     ['Open project', 'Home.tsx:101', home, 101, 101, ['onClick={handleLoad}']],
     ['Save project', 'Home.tsx:107', home, 107, 107, ['onClick={handleSave}']],
     ['NavCard x5', 'Home.tsx:117-151', home, 117, 151, ['<NavCard']],
-    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:242-262', autosave, 242, 262, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
-    // The row writes this cite in its shorthand (`:216-229`, the same file as the cite before it).
-    ['AutosaveRestore: Restore / Clear / Later', ':216-229', autosave, 216, 229, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
+    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:251-271', autosave, 251, 271, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
+    // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened.
+    ['AutosaveRestore: Restore / Clear / Later', ':225-238', autosave, 225, 238, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
   ]
 
   it('the Home table was found, with its rows (a scan that matched nothing would look like a clean table)', () => {
@@ -761,5 +761,70 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     const app = 'src/renderer/src/App.tsx'
     expect(lines(app, 84), 'App.tsx:84 is the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
     expect(lines(app, 88), 'App.tsx:88 is the double-press swallow').toContain('swallowRepeatClicks()')
+  })
+})
+
+// T-140 Track C: the guides' sentences about this round's changes, and the two documents that said what is no longer true, held to the code and the specs they describe.
+describe('T-140 Track C - the guides say what the code does', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(6) the ledger and the Home spec no longer say that no way in the UI puts work behind a banner that did not hear Home', () => {
+    const inventory = flat(read('docs/INTERACTION_COVERAGE.md'))
+    expect(inventory, 'the T-139 (5) row said the backstop was unreachable').not.toContain('no way in the UI puts work into the session behind a banner that did not hear Home')
+    expect(inventory).toContain('T-140 (6)')
+    const spec = flat(read('tests/e2e/home-chrome.spec.ts'))
+    expect(spec, 'the spec comment said the same').not.toContain('interactionWiring.test.ts: no way in the UI puts work into the session behind a banner that did not hear Home).')
+    // and what it says now is true: a spec case drives a landing on Home, and the banner listens for one
+    expect(spec).toContain('T-140 (6): the autosave banner goes when work lands on Home')
+    expect(strip(read('src/renderer/src/components/AutosaveRestore.tsx'))).toMatch(/withdrawWhenSessionGainsWork\(\)/)
+  })
+
+  it('(10) USER_GUIDE quotes the failure sentence the code says, and names the control it sends the person to', () => {
+    const guide = flat(read('docs/USER_GUIDE.md'))
+    const errors = strip(read('src/shared/userFacingError.ts'))
+    expect(errors).toContain("'The captions engine stopped before it finished. ' +")
+    expect(errors).toContain("'Open Captions setup to check its files and the model, then try again.'")
+    expect(guide).toContain('"The captions engine stopped before it finished. Open Captions setup to check its files and the model"')
+    expect(guide).toContain('**Captions setup** stays under the panel, closed until you open it')
+    const panel = strip(read('src/renderer/src/modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/aria-expanded=\{showReadySetup\}[\s\S]{0,200}Captions setup/)
+    expect(guide).toContain('the `.dll` files from the zip are not next to `whisper-cli.exe`')
+  })
+
+  it('STYLE_GUIDE: the closing section is the last, the "Round 88 additions" block is gone and its four rules sit inside the guide, wording unchanged', () => {
+    const style = read('docs/STYLE_GUIDE.md')
+    const headings = style.split('\n').filter((l) => l.startsWith('## '))
+    expect(headings.at(-1), 'the closing section closes the guide').toBe('## When this guide changes')
+    expect(style).not.toContain('Round 88 additions')
+    const end = style.indexOf('## Power of Ten')
+    expect(end).toBeGreaterThan(0)
+    for (const start of [
+      '- **A first placement is sized to where it lands (T-139 (2)).** `placementFor(picW, picH, docW, docH)`',
+      '- **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy\'s pixels;',
+      '- **The autosave offer is withdrawn by a project opened from Home (T-139 (5)).** `AutosaveRestore` reads `sessionHoldsWork()` once per mount',
+      '- **A button that makes a record ignores the repeat of its double-click, claims before it writes, and is off while the write is out (T-139 (9)).**'
+    ]) {
+      const at = style.indexOf(start)
+      expect(at, start.slice(0, 60)).toBeGreaterThan(0)
+      expect(at, `${start.slice(0, 60)} is inside the conventions, before the Power of Ten`).toBeLessThan(end)
+      expect(style.indexOf(start, at + 1), 'once').toBe(-1)
+    }
+    // the T-140 revisions follow the bullets they revise
+    expect(style.indexOf('- **The offer is withdrawn when work lands, too (T-140 (6);')).toBeGreaterThan(style.indexOf('- **The autosave offer is withdrawn by a project opened from Home (T-139 (5)).**'))
+    expect(style.indexOf('- **The button the keyboard just pressed stays focusable while it works, and a held Enter is one save (T-140 (7), (8);')).toBeGreaterThan(
+      style.indexOf('- **A button that makes a record ignores the repeat of its double-click')
+    )
+  })
+
+  it('STYLE_GUIDE qualifies the 256-sample agreement as the cuts\' only, as audio/chain.ts does (T-110 (bl))', () => {
+    const style = flat(read('docs/STYLE_GUIDE.md'))
+    const at = style.indexOf('At each cut picture and sound agree to within one 256-sample block of sound')
+    expect(at).toBeGreaterThan(0)
+    const sentence = style.slice(at, at + 900)
+    expect(sentence).toContain("That agreement is the CUTS' only: it holds for a chain without `afftdn` or the export limiter.")
+    expect(sentence).toContain('`afftdn` delays the sound by two hops (about 25 ms at any rate) and `alimiter` (latency off) by 5 ms')
+    const chain = flat(read('src/main/audio/chain.ts').replace(/^\s*\* ?/gm, ''))
+    expect(chain).toContain("That agreement is the CUTS' only: it holds for a chain without `afftdn` or the export limiter.")
+    expect(chain).toContain('`afftdn` delays the sound by two hops (about 25 ms at any rate) and `alimiter` (latency off) by 5 ms')
   })
 })

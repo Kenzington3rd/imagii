@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { createRunStore } from '../lib/runStore'
+import { sessionHoldsWork, subscribeSessionStores } from '../modules/project/ProjectIO'
 
 /**
  * The autosave Restore (T-138 (5)): the apply of the snapshot the person chose, from the press until it is over (a sound or a converted video is made again,
@@ -31,3 +32,22 @@ export const useAutosaveOffer = create<{ withdrawn: number; withdraw: () => void
   withdrawn: 0,
   withdraw: () => set((s) => ({ withdrawn: s.withdrawn + 1 }))
 }))
+
+/**
+ * The offer is withdrawn when the session GAINS work while a banner is mounted (T-140 (6)): `AutosaveRestore` reads `sessionHoldsWork()` once per mount, and a conversion
+ * or an extraction that lands while the person is on Home (the importers' runs are module stores and outlive the route) fills a studio under a banner that mounted over an
+ * empty session. Restore then did nothing at the press and said nothing. The banner listens to the stores the work test reads and withdraws, on the signal above, the
+ * moment the session holds work - and at once if it already does (a landing between the render that read it and the effect that listens).
+ *
+ * Not while a RESTORE is running: the work it puts in the stores is its own, the banner has "Restoring…" to say until the closure reports the snapshot applied, and a
+ * banner that vanished when the video landed would hide a sound that is still being extracted (T-138 (5)). The guard is the run and not a latch, so a change after the
+ * run is over is heard. Returns the way to stop listening.
+ */
+export function withdrawWhenSessionGainsWork(): () => void {
+  const check = (): void => {
+    if (useRestoreRun.getState().run !== null) return
+    if (sessionHoldsWork()) useAutosaveOffer.getState().withdraw()
+  }
+  check()
+  return subscribeSessionStores(check)
+}

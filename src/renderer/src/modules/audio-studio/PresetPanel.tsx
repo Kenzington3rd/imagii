@@ -98,18 +98,23 @@ export function PresetPanel(): JSX.Element {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
+          // T-140 (7): a held Enter is ONE save. The first press saves and clears the box; each auto-repeat after it found no name and raised the red "Name your preset
+          // first" (the held-key class: T-120, T-133 (7), T-134 - a repeat is not a new decision).
+          onKeyDown={(e) => e.key === 'Enter' && !e.repeat && save()}
           placeholder="My mic preset"
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-xs"
         />
-        {/* T-139 (9): the second press of a double-click is not a second preset (a repeat), nor a "Name your preset first" after the first cleared the box. */}
+        {/* T-139 (9): the second press of a double-click is not a second preset (a repeat), nor a "Name your preset first" after the first cleared the box.
+            T-140 (8): `aria-disabled` and not `disabled` while the write is out. A disabled button the keyboard just pressed is blurred by Chromium and focus falls to
+            the page, so a person who saved with Enter or Space lost their place; an aria-disabled one keeps focus and is still announced as off. It takes the press
+            all the same, and the press is a no-op: `save()` is the claim (`savingRef`), which is up for as long as `saving` is. */}
         <button
-          className="btn-primary px-3 py-1 text-xs disabled:opacity-50"
+          className="btn-primary px-3 py-1 text-xs aria-disabled:opacity-50"
           onClick={(e) => {
             if (isRepeatPress(e)) return
             void save()
           }}
-          disabled={saving}
+          aria-disabled={saving}
         >
           Save current
         </button>

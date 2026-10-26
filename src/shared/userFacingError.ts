@@ -131,6 +131,30 @@ const GENERIC_EXIT_CAUSE =
   "imagii's video tool stopped before it finished. " +
   'Check that the source file still plays and the folder has room, then try again.'
 
+/**
+ * T-140 (10): the speech engine's own failure. Its runner words it `whisper exit <code>: <stderr>` (`whisperManager.runTranscribe`), which has the runner shape above, so a
+ * failed transcription was told "imagii's video tool stopped ... check that the source file still plays and the folder has room": the wrong program and the wrong advice. The
+ * engine is a separate program the person installs by hand (`whisper-cli.exe` and the .dll files beside it, and the model), and the panel's "Captions setup" is where its
+ * folders are. Anchored at the START of the message, as `RUNNER_EXIT` is: a burn-in is ffmpeg's (`burn-in exit N`) and keeps the video tool's sentence, and a line of ffmpeg's
+ * that merely mentions the words is not the engine's. Tried after `KNOWN_CAUSES`, so a more specific cause wins for the engine as for every runner (a model another app holds
+ * open reads "Permission denied" at the end of a line and is the Windows-blocked sentence, a full disk is a full disk).
+ */
+const WHISPER_EXIT = /^whisper exit /
+const WHISPER_EXIT_CAUSE =
+  'The captions engine stopped before it finished. ' +
+  'Open Captions setup to check its files and the model, then try again.'
+
+/**
+ * T-140 (10): Windows' STATUS_DLL_NOT_FOUND (0xC0000135), the exit of an .exe whose .dll files are not beside it - the failure the setup card's zip step makes likely (the
+ * zip holds the program and the .dll files it needs; copying the .exe alone starts nothing). Node hands a Windows exit code over as the unsigned 32-bit value (libuv reads a
+ * DWORD), so it reads 3221225781; the signed spelling (-1073741515, what .NET and some debuggers print) is accepted too because nothing here depends on which one a runtime
+ * picks. Its own sentence: the fix is a different one (copy the .dll files, not re-download the model).
+ */
+const WHISPER_EXIT_DLL_MISSING = /^whisper exit (?:3221225781|-1073741515)\b/
+const WHISPER_EXIT_DLL_MISSING_CAUSE =
+  "The captions engine couldn't start because a file it needs is missing. " +
+  'Copy every .dll that came in the zip next to whisper-cli.exe (Captions setup opens that folder), then try again.'
+
 /** "A sentence a person wrote": one line, at most 240 characters, ending like one. */
 function isFinishedSentence(text: string): boolean {
   return text.length > 0 && text.length <= 240 && !text.includes('\n') && /[.!?]$/.test(text)
@@ -150,6 +174,8 @@ export function userFacingError(err: unknown, fallback: string): UserFacingError
   for (const [pattern, cause] of KNOWN_CAUSES) {
     if (pattern.test(raw)) return { cancelled: false, message: `${fallback} ${cause}` }
   }
+  if (WHISPER_EXIT_DLL_MISSING.test(raw)) return { cancelled: false, message: `${fallback} ${WHISPER_EXIT_DLL_MISSING_CAUSE}` }
+  if (WHISPER_EXIT.test(raw)) return { cancelled: false, message: `${fallback} ${WHISPER_EXIT_CAUSE}` }
   if (RUNNER_EXIT.test(raw)) return { cancelled: false, message: `${fallback} ${GENERIC_EXIT_CAUSE}` }
   if (isFinishedSentence(raw)) return { cancelled: false, message: raw }
   return { cancelled: false, message: fallback }

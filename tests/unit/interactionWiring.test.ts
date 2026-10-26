@@ -185,7 +185,8 @@ describe('T-18 — the recent-files popover has three dismissal paths', () => {
   const menu = read('components/RecentFilesMenu.tsx')
 
   it('keeps mouse-leave', () => {
-    expect(menu).toMatch(/onMouseLeave=\{\(\) => setOpen\(false\)\}/)
+    // T-140 (9): the same close, handing the focus to the toggle when it was inside the list (see the T-140 pins)
+    expect(menu).toMatch(/onMouseLeave=\{closeToToggle\}/)
   })
 
   it('adds Escape and click-outside', () => {
@@ -2392,16 +2393,23 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
 // is a scan now: a `<button disabled=...>` whose className has no `disabled:opacity-*` fails here, with its file and line.
 // E2E: video-pipelines.spec.ts "the video Importer's Choose file is dimmed while a file is loading" and home-chrome.spec.ts for the banner.
 describe('every disabled button looks disabled (T-133 (9))', () => {
-  /** Every `<button>` that takes a `disabled` prop: where it is, and whether its className carries a `disabled:opacity-*`. */
+  /**
+   * Every `<button>` that takes a `disabled` prop: where it is, and whether its className carries a `disabled:opacity-*`.
+   * T-140 (8): and a button that takes `aria-disabled` instead (so the keyboard's focus stays on it while it is off) must carry `aria-disabled:opacity-*`: the attribute is not
+   * `disabled`, so the scan used to be blind to it, and `disabled:opacity-*` does not dim it (Tailwind's `disabled:` is the `:disabled` pseudo-class).
+   */
   function disabledButtons(code: string, file: string): Array<{ where: string; dimmed: boolean }> {
     const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
     const found: Array<{ where: string; dimmed: boolean }> = []
     function visit(node: ts.Node): void {
       if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(sf) === 'button') {
         const attrs = node.attributes.properties.filter(ts.isJsxAttribute)
-        if (attrs.some((a) => a.name.getText(sf) === 'disabled')) {
+        const off = attrs.map((a) => a.name.getText(sf)).find((n) => n === 'disabled' || n === 'aria-disabled')
+        if (off !== undefined) {
           const className = attrs.find((a) => a.name.getText(sf) === 'className')?.initializer?.getText(sf) ?? ''
-          found.push({ where: `${file}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`, dimmed: /disabled:opacity-\d+/.test(className) })
+          // `(?<![\w-])` so that `aria-disabled:opacity-50` does not count as the `disabled:` variant of a button that is natively disabled.
+          const dims = new RegExp(`(?<![\\w-])${off}:opacity-\\d+`)
+          found.push({ where: `${file}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`, dimmed: dims.test(className) })
         }
       }
       ts.forEachChild(node, visit)
@@ -2429,6 +2437,11 @@ describe('every disabled button looks disabled (T-133 (9))', () => {
     expect(undimmed('const a = <button className="btn-ghost disabled:opacity-50" disabled={busy}>x</button>')).toEqual([])
     expect(undimmed('const a = <button className={`btn-ghost ${on ? "ring-2" : ""} disabled:opacity-40`} disabled={busy} />')).toEqual([])
     expect(undimmed('const a = <button className="btn-ghost" onClick={go}>x</button>'), 'a button that cannot be disabled is not judged').toEqual([])
+    // T-140 (8): an aria-disabled button is judged too, by its own variant
+    expect(undimmed('const a = <button className="btn-ghost" aria-disabled={busy}>x</button>')).toEqual(['x.tsx:1'])
+    expect(undimmed('const a = <button className="btn-ghost disabled:opacity-50" aria-disabled={busy}>x</button>'), '`disabled:` is the :disabled pseudo-class, which an aria-disabled button never matches').toEqual(['x.tsx:1'])
+    expect(undimmed('const a = <button className="btn-ghost aria-disabled:opacity-50" aria-disabled={busy}>x</button>')).toEqual([])
+    expect(undimmed('const a = <button className="btn-ghost aria-disabled:opacity-50" disabled={busy}>x</button>'), 'and the other way round: a natively disabled button needs `disabled:`').toEqual(['x.tsx:1'])
     expect(undimmed('const a = <div className="btn-ghost" disabled={busy} />'), 'only a <button> is').toEqual([])
   })
 })
@@ -3049,7 +3062,7 @@ describe('T-138 Track B - the twenty-fourth sweep', () => {
     expect(run).toMatch(/export const useRestoreRun = createRunStore<\{ applied: boolean \}>\(\)/)
     const banner = strip(read('components/AutosaveRestore.tsx'))
     // T-139 (5): the same module now also exports the withdrawal signal, so the import names both (re-pointed, not loosened: `useRestoreRun` is still what is imported from it).
-    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun \} from '\.\/restoreRun'/)
+    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun, withdrawWhenSessionGainsWork \} from '\.\/restoreRun'/)
     expect(banner).toMatch(/const restoring = useRestoreRun\(\(s\) => s\.run !== null\)/)
     const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
     expect(body.length, 'found restore()').toBeGreaterThan(300)
@@ -3114,11 +3127,12 @@ describe('T-139 Track B - the twenty-fifth sweep', () => {
     expect(load.indexOf('withdraw()'), 'not on the refusal path: a project that did not open withdraws nothing').toBeGreaterThan(load.indexOf('if (!result.ok)'))
     expect(home.match(/withdraw\(\)/g) ?? [], 'once').toHaveLength(1)
     const banner = strip(read('components/AutosaveRestore.tsx'))
-    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun \} from '\.\/restoreRun'/)
+    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun, withdrawWhenSessionGainsWork \} from '\.\/restoreRun'/)
     expect(banner).toMatch(/useEffect\(\(\) => useAutosaveOffer\.subscribe\(\(\) => setDismissed\(true\)\), \[\]\)/)
     // The backstop: the claim is still the second statement (T-138 (5)), the question is asked inside it, before the first await, and a "yes" gives the run back (the finally) without applying.
+    // T-140 (6): and says one sentence (what is open, that nothing was restored) between the withdrawal and the return; it used to return in silence.
     const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
-    expect(body).toMatch(/if \(!useRestoreRun\.getState\(\)\.begin\(\{ applied: false \}\)\) return\s*try \{\s*if \(sessionHoldsWork\(\)\) \{\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*return\s*\}\s*const outcome = await applyProjectHeld\(snapshot\.project\)/)
+    expect(body).toMatch(/if \(!useRestoreRun\.getState\(\)\.begin\(\{ applied: false \}\)\) return\s*try \{\s*if \(sessionHoldsWork\(\)\) \{\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*toast\(describeRestoreRefused\(\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: ERROR_TOAST_MS \}\)\s*return\s*\}\s*const outcome = await applyProjectHeld\(snapshot\.project\)/)
     expect(body.indexOf('sessionHoldsWork()'), 'before the first await').toBeLessThan(body.indexOf('await '))
     expect(body, 'and the run is still given back in a finally').toMatch(/finally \{\s*useRestoreRun\.getState\(\)\.end\(\)\s*\}/)
   })
@@ -3129,21 +3143,124 @@ describe('T-139 Track B - the twenty-fifth sweep', () => {
     expect(log).toMatch(/function add\(e: \{ detail: number \}\): void \{\s*if \(isRepeatPress\(e\)\) return\s*if \(!outputName\.trim\(\)\) \{/)
     expect(log).toMatch(/<button className="btn-primary px-3 py-1 text-xs self-start" onClick=\{add\}>\s*\+ Log post/)
     for (const [rel, label, btn] of [
-      ['modules/audio-studio/PresetPanel.tsx', 'Save current', 'btn-primary px-3 py-1 text-xs disabled:opacity-50'],
-      ['modules/video-studio/CustomPresetManager.tsx', '\\+ Save preset', 'btn-primary px-4 py-1\\.5 text-sm self-start disabled:opacity-50']
+      ['modules/audio-studio/PresetPanel.tsx', 'Save current', 'btn-primary px-3 py-1 text-xs aria-disabled:opacity-50'],
+      ['modules/video-studio/CustomPresetManager.tsx', '\\+ Save preset', 'btn-primary px-4 py-1\\.5 text-sm self-start aria-disabled:opacity-50']
     ] as const) {
       const code = strip(read(rel))
       expect(code, rel).toMatch(/const savingRef = useRef\(false\)\s*const \[saving, setSaving\] = useState\(false\)/)
       // The whole save is under the claim, raised before the first await and lowered in a finally, and the body that does the work is the one that was already there.
       expect(code, `${rel}: the whole save is under the claim, the busy flag lowered in a finally`).toMatch(/async function save\(\): Promise<void> \{\s*await claimFirst\(savingRef, async \(\) => \{\s*setSaving\(true\)\s*try \{\s*await saveOnce\(\)\s*\} finally \{\s*setSaving\(false\)\s*\}\s*\}\)\s*\}\s*async function saveOnce\(\): Promise<void> \{/)
-      expect(code, `${rel}: the button`).toMatch(new RegExp(`className="${btn}"\\s*onClick=\\{\\(e\\) => \\{\\s*if \\(isRepeatPress\\(e\\)\\) return\\s*void save\\(\\)\\s*\\}\\}\\s*disabled=\\{saving\\}\\s*>\\s*${label}`))
+      expect(code, `${rel}: the button`).toMatch(new RegExp(`className="${btn}"\\s*onClick=\\{\\(e\\) => \\{\\s*if \\(isRepeatPress\\(e\\)\\) return\\s*void save\\(\\)\\s*\\}\\}\\s*aria-disabled=\\{saving\\}\\s*>\\s*${label}`))
     }
-    expect(strip(read('modules/audio-studio/PresetPanel.tsx')), 'the Enter key reaches the same claim').toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && save\(\)\}/)
+    expect(strip(read('modules/audio-studio/PresetPanel.tsx')), 'the Enter key reaches the same claim (T-140 (7): and a repeat of it is not a press)').toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && !e\.repeat && save\(\)\}/)
   })
 
   it('(9) Welcome\'s "Let\'s go" swallows the repeat of its double-click once Home has replaced it', () => {
     const app = strip(read('App.tsx'))
     expect(app).toMatch(/import \{ swallowRepeatClicks \} from '\.\/lib\/repeatPress'/)
     expect(app).toMatch(/void persistSetting\('welcomeSeen', true\)\s*setStatus\(\{ phase: 'ready' \}\)\s*swallowRepeatClicks\(\)/)
+  })
+})
+
+// T-140 Track C: the twenty-sixth sweep's wiring, where the person reaches it. E2E per item: (6) home-chrome.spec.ts "T-140 (6)" (a conversion landing on Home takes the banner away;
+// a multi-source Restore keeps saying "Restoring…"), (7) audio.spec.ts "T-140 (7)" (a held Enter), (8) audio.spec.ts "T-140 (8)" and video-pipelines.spec.ts "T-140 (8)" (focus stays on
+// the button that was pressed), (9) home-chrome.spec.ts "T-140 (9)" (Escape, Clear list and a pick), (10) video-pipelines.spec.ts "T-140 (10)" (a fake engine that exits 1).
+// Unit: userFacingError.test.ts, restoreRun.test.ts, ProjectIO.test.ts.
+describe('T-140 Track C - the twenty-sixth sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(6) the banner listens for work that lands while it is mounted: one effect, not once it is dismissed or over a session that held work at the mount', () => {
+    const banner = strip(read('components/AutosaveRestore.tsx'))
+    expect(banner).toMatch(/import \{ useAutosaveOffer, useRestoreRun, withdrawWhenSessionGainsWork \} from '\.\/restoreRun'/)
+    expect(banner).toMatch(/useEffect\(\(\) => \(dismissed \|\| holdsWork \? undefined : withdrawWhenSessionGainsWork\(\)\), \[dismissed, holdsWork\]\)/)
+    expect(banner.match(/withdrawWhenSessionGainsWork\(\)/g) ?? [], 'one place').toHaveLength(1)
+    // the hook sits ahead of the early return: a hook after it would run on some renders and not on others
+    expect(banner.indexOf('withdrawWhenSessionGainsWork()')).toBeLessThan(banner.indexOf('if (dismissed || holdsWork || !snapshot || !snapshot.info) {'))
+  })
+
+  it('(6) withdrawWhenSessionGainsWork asks the work test, withdraws on the shared signal, skips a running Restore, and listens to the stores the work test reads', () => {
+    const run = strip(read('components/restoreRun.ts'))
+    expect(run).toMatch(/import \{ sessionHoldsWork, subscribeSessionStores \} from '\.\.\/modules\/project\/ProjectIO'/)
+    expect(run).toMatch(
+      /export function withdrawWhenSessionGainsWork\(\): \(\) => void \{\s*const check = \(\): void => \{\s*if \(useRestoreRun\.getState\(\)\.run !== null\) return\s*if \(sessionHoldsWork\(\)\) useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*\}\s*check\(\)\s*return subscribeSessionStores\(check\)\s*\}/
+    )
+    const io = strip(read('modules/project/ProjectIO.ts'))
+    expect(io).toMatch(
+      /export function subscribeSessionStores\(listener: \(\) => void\): \(\) => void \{\s*const stops = \[useVideoStore\.subscribe\(listener\), useAudioStore\.subscribe\(listener\), useCanvasStore\.subscribe\(listener\)\]\s*return \(\) => stops\.forEach\(\(stop\) => stop\(\)\)\s*\}/
+    )
+    // ...and those are the stores `captureProject` builds the three studio sections from: a section from a fourth store would be a change nobody heard.
+    const capture = io.slice(io.indexOf('export function captureProject()'), io.indexOf('export function sessionHoldsWork()'))
+    expect(capture).toMatch(/const video = useVideoStore\.getState\(\)\s*const audio = useAudioStore\.getState\(\)\s*const canvas = useCanvasStore\.getState\(\)/)
+    expect(capture.match(/use\w+Store\.getState\(\)/g) ?? [], 'the three stores the sections are built from').toHaveLength(3)
+    expect(capture).toMatch(/videoStudio: video\.source/)
+    expect(capture).toMatch(/audioStudio: audio\.source \?/)
+    expect(capture).toMatch(/imageCanvas: canvas\.doc\.layers\.length > 0/)
+  })
+
+  it('(6) the press-time backstop names what is open and that nothing was restored, as a toast with the warning icon, before it returns - and the sentence is built from the captured project', () => {
+    const banner = strip(read('components/AutosaveRestore.tsx'))
+    expect(banner).toMatch(/toast\(describeRestoreRefused\(\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: ERROR_TOAST_MS \}\)/)
+    const io = strip(read('modules/project/ProjectIO.ts'))
+    expect(io).toMatch(/export function describeRestoreRefused\(project: ImagiiProject = captureProject\(\)\): string \{/)
+    expect(io).toMatch(/Nothing was restored: \$\{names\} \$\{open\.length > 1 \? 'are' : 'is'\} open now, and restoring would replace \$\{open\.length > 1 \? 'them' : 'it'\}\./)
+  })
+
+  it('(7) a held Enter in the preset name box is one save: the repeat is ignored, the fresh press is not', () => {
+    const panel = strip(read('modules/audio-studio/PresetPanel.tsx'))
+    expect(panel).toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && !e\.repeat && save\(\)\}/)
+    expect(panel.match(/e\.repeat/g) ?? [], 'once').toHaveLength(1)
+  })
+
+  it('(8) both preset saves stay focusable while the write is out: aria-disabled and not disabled, dimmed by its own variant, and the press is still the claim', () => {
+    for (const rel of ['modules/audio-studio/PresetPanel.tsx', 'modules/video-studio/CustomPresetManager.tsx']) {
+      const code = strip(read(rel))
+      expect(code, rel).toMatch(/aria-disabled=\{saving\}/)
+      expect(code, `${rel}: no native disabled on the save button`).not.toMatch(/(?<![\w-])disabled=\{saving\}/)
+      expect(code, `${rel}: no <button> in this file takes a native disabled (the one the keyboard just pressed would be blurred)`).not.toMatch(/<button[^>]*\sdisabled=/)
+      // the press of an aria-disabled button reaches the click handler, and the handler is the claim: a second press while the write is out starts nothing
+      expect(code, rel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*void save\(\)\s*\}\}/)
+      expect(code, rel).toMatch(/await claimFirst\(savingRef, async \(\) => \{\s*setSaving\(true\)/)
+    }
+  })
+
+  it('(9) the recent-files menu hands focus to the toggle when it closes with focus inside: Escape, a pick and a mouse that left, asked BEFORE the list unmounts; Clear list hands it to the control before the menu', () => {
+    const menu = strip(read('components/RecentFilesMenu.tsx'))
+    expect(menu).toMatch(/const toggleRef = useRef<HTMLButtonElement \| null>\(null\)/)
+    expect(menu).toMatch(/<button\s+ref=\{toggleRef\}\s+className="btn-ghost px-3 py-1\.5 text-sm"/)
+    expect(menu).toMatch(/function focusIsInside\(\): boolean \{\s*return wrapperRef\.current\?\.contains\(document\.activeElement\) \?\? false\s*\}/)
+    expect(menu).toMatch(/function closeToToggle\(\): void \{\s*const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) toggleRef\.current\?\.focus\(\)\s*\}/)
+    // Escape, the pick and the mouse leaving all go through it
+    expect(menu).toMatch(/e\.preventDefault\(\)\s*closeToToggle\(\)/)
+    expect(menu).toMatch(/onMouseLeave=\{closeToToggle\}/)
+    expect(menu).toMatch(/closeToToggle\(\)\s*onPick\(path\)/)
+    // a press OUTSIDE the menu is the person's own choice of where focus goes: it only closes
+    expect(menu).toMatch(/if \(shouldDismissMenu\(\{ kind: 'pointer', inside \}\)\) setOpen\(false\)/)
+    // Clear list: the list is about to be empty and the menu unmounts with its toggle, so the control before it takes the focus (the toggle if there is none)
+    expect(menu).toMatch(
+      /const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) \{\s*const before = wrapperRef\.current\?\.previousElementSibling\s*if \(before instanceof HTMLElement\) before\.focus\(\)\s*else toggleRef\.current\?\.focus\(\)\s*\}\s*onClear\(\)/
+    )
+    // ...and in both importers that control exists: Choose file… is the sibling right before the menu
+    for (const rel of ['modules/video-studio/Importer.tsx', 'modules/audio-studio/AudioImporter.tsx']) {
+      expect(strip(read(rel)), rel).toMatch(/<button className="btn-primary disabled:opacity-50" onClick=\{onPickFile\} disabled=\{busy\}>\s*[^<]*Choose file…[^<]*<\/button>\s*<RecentFilesMenu /)
+    }
+  })
+
+  it('(10) Captions setup is reachable once the engine and the model are there: one body in both places, a collapsed disclosure that says what it is, named as the failure sentence names it', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/const \[showReadySetup, setShowReadySetup\] = useState\(false\)/)
+    expect(panel, 'the card shows the body while the files are missing').toMatch(/\{showSetup \? setupDetails : null\}/)
+    expect(panel).toMatch(
+      /\{status\?\.ready \? \(\s*<div className="text-xs">\s*<button\s+className="text-ink-muted underline"\s+aria-expanded=\{showReadySetup\}\s+onClick=\{\(\) => setShowReadySetup\(\(v\) => !v\)\}\s*>\s*Captions setup\s*<\/button>\s*\{showReadySetup \? \(\s*<div className="bg-ember\/10 border border-ember\/30 rounded px-2 pb-2 mt-1">\{setupDetails\}<\/div>\s*\) : null\}/
+    )
+    expect(panel.match(/const setupDetails = \(/g) ?? [], 'one copy of the instructions').toHaveLength(1)
+    // the button's label is the name the failure sentence sends the person to
+    const errors = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../shared/userFacingError.ts'), 'utf8'))
+    expect(errors).toMatch(/'Open Captions setup to check its files and the model, then try again\.'/)
+    expect(errors).toMatch(/\(Captions setup opens that folder\), then try again\.'/)
+    // and the engine's exit is anchored at the start and tried after the known causes and before the runner's generic sentence
+    expect(errors).toMatch(/const WHISPER_EXIT = \/\^whisper exit \//)
+    const order = ['for (const [pattern, cause] of KNOWN_CAUSES)', 'WHISPER_EXIT_DLL_MISSING.test(raw)', 'WHISPER_EXIT.test(raw)', 'RUNNER_EXIT.test(raw)'].map((m) => errors.indexOf(m, errors.indexOf('export function userFacingError')))
+    expect(order.every((i) => i > 0), 'all four are in the function').toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
 })
