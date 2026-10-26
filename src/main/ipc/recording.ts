@@ -14,6 +14,8 @@ import {
   type ConvertOwner
 } from '../ffmpeg/convert'
 import type { LatchRun } from '../ffmpeg/cancelLatch'
+import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
+import { isCancelledError } from '../../shared/cancel'
 import type {
   RecordingFinalizeSpec,
   RecordingResult,
@@ -217,19 +219,21 @@ export function recordingConvertFailureMessage(err: unknown): string {
  * ffprobe still reads the saved file's container rate as 1000/1 (the muxer writes it from the stream's
  * millisecond clock and no ffmpeg option changes that for a stream copy), which is why `probeVideo`
  * treats a rate above 240 as unknown.
+ *
+ * T-140 (1): both write a PARTIAL beside `outputPath` and swap it in when whole (`partialOutput.ts`). The Save dialog asked "replace?" and was
+ * answered, but a remux that failed used to unlink the chosen path and THEN copy, and one that was killed left neither the file that had been
+ * there nor the take: the file the person named is the old file until a whole new one is renamed over it. It answers the path the take LANDED at (beside
+ * the chosen one when that file is open in another app and the swap onto it is refused for good).
  */
-async function saveWebm(owner: ConvertOwner, tempPath: string, outputPath: string): Promise<void> {
+async function saveWebm(run: LatchRun, owner: ConvertOwner, tempPath: string, outputPath: string): Promise<string> {
+  const partial = partialPathFor(outputPath)
   try {
-    await remuxWebm(owner, tempPath, outputPath)
+    return (await finishPartial(remuxWebm(owner, tempPath, partial), { run, partial, target: outputPath, mode: 'replace' })).outputPath
   } catch (err) {
-    if (err instanceof ConvertCancelledError) throw err
+    if (isCancelledError(err)) throw err
     console.error('[recording] remux failed, saving the take as recorded:', err)
-    try {
-      await unlink(outputPath)
-    } catch {
-      /* ffmpeg never created it */
-    }
-    await copyFile(tempPath, outputPath)
+    const copy = partialPathFor(outputPath)
+    return (await finishPartial(copyFile(tempPath, copy), { run, partial: copy, target: outputPath, mode: 'replace' })).outputPath
   }
 }
 
@@ -279,23 +283,34 @@ async function promoteTempWebm(
     }
 
     const outputPath = result.filePath
+    // T-140 (1): where the take LANDED. The same path unless the file the person named is open in another app: the swap onto it is refused for good, the
+    // take is kept beside it ("name (2)"), and the result says so (below).
+    let landed = outputPath
     run = beginConvertRun(owner)
     if (spec.convertToMp4) {
+      // T-140 (1): the convert writes a PARTIAL beside the chosen path; the chosen path is replaced only by a whole mp4, so a Discard, a quit or a
+      // crash while it runs leaves the file the person named in the Save dialog as it was (the old code unlinked it first, then converted).
+      const partial = partialPathFor(outputPath)
       try {
         // T-115: the length of the take is what turns ffmpeg's position into a percent. The
         // recorder's own clock is the only length there is (a MediaRecorder webm has no duration
         // in its header); without one the bar is indeterminate rather than guessed.
         const takeSec =
           spec.durationMs !== undefined && spec.durationMs > 0 ? spec.durationMs / 1000 : undefined
-        await convertToMp4(
-          owner,
-          tempPath,
-          outputPath,
-          (info) => {
-            sendIfAlive(sender, 'recording:progress', info)
-          },
-          takeSec
-        )
+        landed = (
+          await finishPartial(
+            convertToMp4(
+              owner,
+              tempPath,
+              partial,
+              (info) => {
+                sendIfAlive(sender, 'recording:progress', info)
+              },
+              takeSec
+            ),
+            { run, partial, target: outputPath, mode: 'replace' }
+          )
+        ).outputPath
       } catch (err) {
         // T-44: "Discard recording" kills the convert child, and the kill
         // used to travel up as a rejected IPC — the user asked to throw the
@@ -308,50 +323,49 @@ async function promoteTempWebm(
         // Everything else is a real failure and still throws.
         //
         // T-59: and a crash is not a reason to keep the wreckage. ffmpeg
-        // dies with the same half-written mp4 at the same chosen path
-        // whether we asked it to stop or not — unplayable either way — so
-        // the reaping is common to both branches. What differs is the
+        // dies with the same half-written mp4 whether we asked it to stop or
+        // not — unplayable either way — so the reaping is common to both
+        // branches (T-140 (1): it is the PARTIAL that is reaped, `finishPartial`
+        // did it, and the chosen path was never touched). What differs is the
         // answer: a crash still fails, in a sentence the user can act on.
         // The raw exit code and stderr stay in the main-process log, where
         // a bug report can find them; the toast gets the plain-language
         // version (raw IPC text reaching the user is the T-30 disease).
-        try {
-          await unlink(outputPath)
-        } catch {
-          /* never created, or already gone */
-        }
-        if (err instanceof ConvertCancelledError) {
-          // A Discard throws the take away; a quit does not (T-128 (5)): the half-written mp4 above is gone either way, but the webm in
-          // userData is the only copy of what was recorded, and the person asked to close the window.
-          keepTake = err.byQuit
+        if (isCancelledError(err)) {
+          // A Discard throws the take away; a quit does not (T-128 (5)): the half-written mp4 is gone either way, but the webm in userData is the
+          // only copy of what was recorded, and the person asked to close the window. A cancel the run's latch recorded after the child had exited
+          // (T-140 (1): `finishPartial` asks the run before it swaps) does not say who asked, so it keeps the take: a leftover the launch sweep reaps
+          // is the safe side of "a take is never both gone".
+          keepTake = !(err instanceof ConvertCancelledError) || err.byQuit
           return null
         }
+        // T-140 (1): the convert was whole and the SWAP was refused (the chosen file open in another app, a full or removed drive). That is not the
+        // convert failing, and "uncheck Convert to MP4" would not help: the disk's own error goes up, for `userFacingError` to word.
+        if ((err as NodeJS.ErrnoException).syscall === 'rename') throw err
         console.error('[recording] convert failed:', err)
         throw new Error(recordingConvertFailureMessage(err))
       }
     } else {
       try {
-        await saveWebm(owner, tempPath, outputPath)
+        landed = await saveWebm(run, owner, tempPath, outputPath)
       } catch (err) {
-        // The same discard the convert honors: "Discard recording" killed the remux, and the
-        // half-written webm at the chosen name is not a take anyone can open.
-        if (err instanceof ConvertCancelledError) {
-          try {
-            await unlink(outputPath)
-          } catch {
-            /* never created, or already gone */
-          }
-          keepTake = err.byQuit
+        // The same discard the convert honors: "Discard recording" killed the remux, and a partial that was not whole is gone (the chosen path
+        // was never touched, T-140 (1)).
+        if (isCancelledError(err)) {
+          keepTake = !(err instanceof ConvertCancelledError) || err.byQuit
           return null
         }
         throw err
       }
     }
 
-    const sizeBytes = existsSync(outputPath) ? (await stat(outputPath)).size : 0
+    const sizeBytes = existsSync(landed) ? (await stat(landed)).size : 0
+    // Only when it moved: the toast says why the file is not the one the Save dialog was answered with.
+    const moved = landed === outputPath ? {} : { requestedPath: outputPath }
 
     return {
-      outputPath,
+      outputPath: landed,
+      ...moved,
       sizeBytes,
       format: spec.convertToMp4 ? 'mp4' : 'webm',
       durationMs: spec.durationMs ?? 0

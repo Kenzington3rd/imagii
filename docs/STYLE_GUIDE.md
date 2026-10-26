@@ -184,18 +184,24 @@ Repeated UI is a component, not copy-paste:
   Both remove the half-written output; only a Discard removes the raw take (`userData/recordings/<id>.webm`, the only copy), and the
   quit's sweep (`abandonAllRecordingStreams`) leaves a CLOSED session (mid-finalize) to the handler that owns it, as the reload's does
   (T-124 (3)): what the sweep owns is a take still being recorded.
-- **A job that stops removes the file it was writing (T-100).** ffmpeg opens its
-  output when it starts and writes the index (an MP4's moov atom, a GIF's trailer)
-  when it ends, so a killed run leaves a file with a real name that nothing plays,
-  in the folder whose toast says "Files already finished are in your folder". The
-  runner calls `discardPartialOutput(outputPath, spawnedAt)`
-  (`ffmpeg/partialOutput.ts`) from its failure path, after the child has exited.
-  It removes the path only if the child was actually spawned AND the file is not
-  older than the spawn: ffmpeg truncates its output when it OPENS it, which for a
-  slow input is well after the spawn, and a Cancel before that leaves last week's
-  export of the same name exactly as it was. Earlier jobs' files are never
-  touched — each job knows only its own path. T-128 (5): the import transcode (`convertForImport`) removes its partial the same way on
-  any failure or cancel.
+- **A render is written to a partial and swapped in only when whole (T-100, T-140 (1)).** ffmpeg opens its output when it starts, TRUNCATING whatever is
+  there, and writes the index (an MP4's moov atom, a GIF's trailer) when it ends. Handed the person's path, a Cancel, the quit, a crash or a full disk
+  (exit 228) left NEITHER the file being replaced NOR the new one, and a half-written file sat at the name a finished export has. So no runner hands ffmpeg
+  that path. It writes `partialPathFor(target)` (`ffmpeg/partialOutput.ts`: `<stem>.<8 hex>.partial<ext>` in the SAME folder, the extension last so ffmpeg
+  picks the muxer) and makes one call once the child has exited, `finishPartial(work, { run, partial, target, mode })`. The partial is renamed over the
+  target only if the runner's own checks passed (`wroteNoPicture`, the join's lost-part guard, `wroteOutput`) AND the run's cancel latch has not been
+  marked: a Cancel or the quit sweep that lands between the exit and the swap wins over a finished render. On any failure the partial is removed
+  (`discardPartial` refuses a name that is not a partial's, so it cannot delete a target) and the original error goes up for `userFacingError` to word;
+  the target is the old file, byte for byte. `mode` is `replace` for a file the person NAMED (the Save dialog asked "replace?") and `beside` for a name the
+  runner chose with `nextFreePath` (T-106), which is asked again at the swap because nothing holds a free name during a long encode. A rename the disk
+  refuses (EBUSY, EPERM, EACCES: a scanner, a player) is tried again for about 1.5 s. **A swap the disk keeps refusing lands beside the target under the
+  next free name, and the message says so**: in `replace` mode that means the named file is open in another app, the render took minutes, so it is kept as
+  `name (2).ext` and the old file is not touched. `finishPartial` ANSWERS the path the render landed at, every runner hands it to its caller and through
+  IPC, and the panel reports AND reveals the answer (a toast that names, or "Show in folder" that opens, the path it chose would point at the file that was
+  not replaced), adding `landedBesideNote` (`shared/landedPath.ts`) when the answer is not the path it asked for. A runner that drops the answer is a row
+  in `atomicWrites.test.ts`'s audit or a failure; a new runner is a row in that audit, a row in the table in `cancelSentinel.test.ts` and a real-media
+  case in Layer 5. Only a crash, a kill or a power loss leaves a partial (nothing sweeps the Save dialog's folder; the upgrade is a journal in userData).
+  T-128 (5): the import transcode (`convertForImport`) writes a fresh name in %TEMP% and removes it on any failure or cancel.
 - **A progress number is a measurement, or it is absent (T-89).** A progress
   event carries `percent` only when main KNOWS how far along the work is — a
   download's byte count, `done` = 100, the burn-in's encode position over the
@@ -1070,8 +1076,8 @@ If you write the same markup a third time, extract it.
   that cut a video out of a RANGE of a source (Export, Reframe and, since T-133 (4), the caption burn-in, which
   was the one left out and said "Captions burned in" over an audio-only file) close on `wroteNoPicture(sawEmptyOutput, frames)`
   (`ffmpeg/noPicture.ts`): the sticky stderr line OR the final `frame=0` of `-progress pipe:1` (`PictureFrames`, which keeps an unfinished
-  line until it is whole), reject with a finished sentence (`BURN_IN_NO_PICTURE_MESSAGE` for the burn-in), and let the existing
-  `discardPartialOutput` remove the wreckage (and the burn-in's shifted SRT goes in its `finally`). A compilation's segments are the fourth cutter and
+  line until it is whole), reject with a finished sentence (`BURN_IN_NO_PICTURE_MESSAGE` for the burn-in), and let the failure path remove
+  the partial (`finishPartial` drops it when the work rejects, and the file being replaced is never touched; the burn-in's shifted SRT goes in its `finally`). A compilation's segments are the fourth cutter and
   read the stderr line alone (`concat.ts`, T-134 (4)), which is sufficient there: a segment ends in `apad` and `-shortest`, so a range past the
   picture, even one inside a sound that runs on, is a truly streamless ~970-byte stub with the line printed at the verbosity the app runs
   (measured on both majors by three parties; the earlier text said the segments read both facts, which over-claimed). `docClaims.test.ts` lists the

@@ -10,7 +10,7 @@ import { probeVideo } from '../ffmpeg/probe'
 import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
-import { discardPartialOutput } from '../ffmpeg/partialOutput'
+import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
 import { BURN_IN_NO_PICTURE_MESSAGE, FFMPEG_EMPTY_OUTPUT, PictureFrames, wroteNoPicture } from '../ffmpeg/noPicture'
 import {
   captionsOutputDir,
@@ -433,8 +433,8 @@ export async function runBurnIn(
   // stored field is not reinterpreted: the SRT on disk (and what Save .srt
   // exports) stays source-absolute.
   const run = burnLatch.begin(req.jobId)
+  let landed = req.outputPath
   let tempSrt: string | null = null
-  let spawnedAt: number | null = null
   // Whether the written file carries any caption — false is the cue-less
   // window below. The renderer says so instead of toasting "Captions burned in"
   // over a clip with none (T-89).
@@ -493,6 +493,7 @@ export async function runBurnIn(
         ? EVEN_PICTURE
         : `${EVEN_PICTURE},subtitles=${escapeSubtitlesPath(burnSrt)}:force_style='${forceStyle}'`
 
+    const partial = partialPathFor(req.outputPath)
     const args: string[] = ['-y']
     if (range) {
       args.push('-ss', range.startSec.toFixed(3), '-to', range.endSec.toFixed(3))
@@ -524,13 +525,15 @@ export async function runBurnIn(
       '-progress',
       'pipe:1',
       '-nostats',
-      req.outputPath
+      // T-140 (1): ffmpeg writes a partial beside the file the person named in the Save dialog, and it replaces theirs only when whole.
+      partial
     )
 
-    await new Promise<void>((resolve, reject) => {
+    // The new file is swapped in only after the exit-0 checks below and a look at the run's cancel latch; a burn that stopped halfway, or one that
+    // wrote no picture (T-133 (4): an audio-only file or a stub), or a Cancel that landed after the exit, leaves the file the person had.
+    const burned = new Promise<void>((resolve, reject) => {
       run.check()
       const child = spawn(ffmpegPath, args, { windowsHide: true })
-      spawnedAt = Date.now()
       activeBurnIn.set(req.jobId, child)
       let stderr = ''
       let lastEmitted = lengthSec === null ? -1 : 0
@@ -572,11 +575,9 @@ export async function runBurnIn(
         else if (code === 0) resolve()
         else reject(cancelledOr(child, new Error(`burn-in exit ${code}: ${stderr.slice(-500)}`)))
       })
-    }).catch(async (err: unknown) => {
-      // T-100: a burn that stopped halfway is not the captioned video (T-133 (4): nor is an audio-only file or a stub).
-      await discardPartialOutput(req.outputPath, spawnedAt)
-      throw err
     })
+    // T-140 (1): the video exists where the swap landed it - `req.outputPath`, or beside it when that file is open in another app.
+    landed = (await finishPartial(burned, { run, partial, target: req.outputPath, mode: 'replace' })).outputPath
   } finally {
     run.end()
     // Success, ffmpeg failure, or cancel (SIGKILL rejects the promise above):
@@ -585,7 +586,7 @@ export async function runBurnIn(
   }
 
   onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
-  return { outputPath: req.outputPath, captioned }
+  return { outputPath: landed, captioned }
 }
 
 export async function exportSrt(srtPath: string, destPath: string): Promise<void> {

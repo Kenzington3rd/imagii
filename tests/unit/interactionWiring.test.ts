@@ -1900,12 +1900,12 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
   it('the re-attached video\'s saved toast is the shared one with "Edit in Video Studio", and the audio-only export\'s is not (20)', () => {
     const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/const editInVideoStudio = useEditInVideoStudio\("Couldn't open the cleaned video in Video Studio\."\)/)
-    // The mux branch: the saved toast with the action, on the file that was written.
+    // The mux branch: the saved toast with the action, on the file that was written (T-140 (1): the one main ANSWERED, which is not the chosen name when that file was open).
     const mux = dialog.slice(dialog.indexOf('await window.api.audio.mux('), dialog.indexOf('} else {', dialog.indexOf('await window.api.audio.mux(')))
-    expect(mux).toMatch(/toastSaved\('Cleaned audio attached to the video', outputPath, \{\s*label: 'Edit in Video Studio',\s*onClick: \(\) => \{\s*void editInVideoStudio\(outputPath\)/)
+    expect(mux).toMatch(/toastSaved\(note \? `Cleaned audio attached to the video\. \$\{note\}` : 'Cleaned audio attached to the video', saved, \{\s*label: 'Edit in Video Studio',\s*onClick: \(\) => \{\s*void editInVideoStudio\(saved\)/)
     // The audio-only branch stays a plain toast: there is no video to open.
-    const audioOnly = dialog.slice(dialog.indexOf('await window.api.audio.export('), dialog.indexOf('setJob((prev) => (prev ? { ...prev, percent: 100'))
-    expect(audioOnly).toMatch(/toast\.success\('Cleaned audio exported'\)/)
+    const audioOnly = dialog.slice(dialog.indexOf('await window.api.audio.export('), dialog.indexOf('useAudioExport.getState().done('))
+    expect(audioOnly).toMatch(/toast\.success\(note \? `Cleaned audio exported\. \$\{note\}` : 'Cleaned audio exported', note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
     expect(audioOnly).not.toMatch(/Edit in Video Studio|editInVideoStudio/)
   })
 
@@ -2967,8 +2967,9 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     const promote = recording.slice(recording.indexOf('async function promoteTempWebm('), recording.indexOf('export type RecordingProgressListener'))
     expect(promote).toMatch(/const owner = recordingOwner\(takeId\)/)
     expect(promote).toMatch(/run = beginConvertRun\(owner\)/)
-    expect(promote).toMatch(/await convertToMp4\(\s*owner,/)
-    expect(promote).toMatch(/await saveWebm\(owner, tempPath, outputPath\)/)
+    // T-140 (1): both write a partial and swap it in under the same run (`finishPartial`), so the owner is still the one thing the convert is keyed on.
+    expect(promote).toMatch(/convertToMp4\(\s*owner,/)
+    expect(promote).toMatch(/await saveWebm\(run, owner, tempPath, outputPath\)/)
     expect(recording).toMatch(/return await promoteTempWebm\(win, session\.tempPath, spec, id\)/)
     expect(recording, 'no owner-wide recording cancel is left').not.toMatch(/cancelConverts\('recording'\)/)
     expect(strip(readMain('ffmpeg/convert.ts'))).toMatch(/export type ConvertOwner = 'import' \| `recording:\$\{string\}`/)
@@ -3262,5 +3263,54 @@ describe('T-140 Track C - the twenty-sixth sweep', () => {
     const order = ['for (const [pattern, cause] of KNOWN_CAUSES)', 'WHISPER_EXIT_DLL_MISSING.test(raw)', 'WHISPER_EXIT.test(raw)', 'RUNNER_EXIT.test(raw)'].map((m) => errors.indexOf(m, errors.indexOf('export function userFacingError')))
     expect(order.every((i) => i > 0), 'all four are in the function').toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+})
+
+// ── T-140 Track A, sent back: a save that landed BESIDE the file that was chosen is reported at the file that exists ──────────────────────────────────────────
+//
+// When the file the person named is open in another app the swap onto it is refused for good, and main keeps the render at "name (2).ext" and answers that path
+// (`partialOutput.ts`). A panel that toasts and reveals the path IT chose would then say "saved" over the file that could not be replaced and open the old one.
+// The unit layer has no DOM, so what is pinned is that each place that reports one of these saves reads the ANSWER, for its words and for its buttons, and
+// says why the name moved from the one shared sentence (`landedBesideNote`). The end state is driven by `audio.spec.ts` (the Export button, a held target).
+describe('T-140 Track A - a save that landed beside the chosen file is reported at the file that exists', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('the audio export keeps what main answered: the row\'s Show in folder, the toast and Edit in Video Studio all use it, and the toast says why the name changed', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
+    expect(dialog).toMatch(/import \{ ACTION_TOAST_MS, toastSaved \} from '\.\.\/\.\.\/lib\/savedToast'/)
+    for (const call of ['await window.api.audio.mux(', 'await window.api.audio.export(']) {
+      const at = dialog.indexOf(call)
+      expect(at, call).toBeGreaterThan(0)
+      expect(dialog.slice(dialog.lastIndexOf('const result', at), at), `${call} is bound to a result`).toMatch(/const result = $/)
+    }
+    expect(dialog.match(/saved = result\.outputPath/g) ?? [], 'both branches read the answer').toHaveLength(2)
+    expect(dialog.match(/const note = landedBesideNote\(outputPath, saved, 'export'\)/g) ?? [], 'and both say why it moved').toHaveLength(2)
+    expect(dialog, 'the row that outlives the toast reveals the file that exists').toMatch(/useAudioExport\.getState\(\)\.done\(saved\)/)
+    expect(dialog, 'not the chosen name').not.toMatch(/\.done\(outputPath\)/)
+    expect(dialog, 'no toast action is aimed at the chosen name either').not.toMatch(/(?:toastSaved\([^)]*|editInVideoStudio\()outputPath\b/)
+  })
+
+  it('the burn-in toast says where the captioned video went when it moved, and keeps its two outcomes', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    const burn = panel.slice(panel.indexOf('async function burnIn()'), panel.indexOf('function updateStyle('))
+    expect(burn).toMatch(/const note = landedBesideNote\(outputPath, result\.outputPath, 'burn-in'\)/)
+    expect(burn).toMatch(/toast\.success\(note \? `\$\{burnInDoneMessage\(true\)\}\. \$\{note\}` : burnInDoneMessage\(true\), note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
+    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false\)\} \$\{note\}` : burnInDoneMessage\(false\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
+    expect(panel).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
+  })
+
+  it('Record reports the recording at the path main answered, and says why it is not the one in the Save dialog', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    expect(studio).toMatch(/const note = landedBesideNote\(result\.requestedPath, result\.outputPath, 'recording'\)/)
+    expect(studio).toMatch(/void pushRecentVideo\(result\.outputPath\)/)
+    expect(studio).toMatch(/toastSaved\([^)]*, result\.outputPath, \{\s*label: 'Edit in Video Studio',\s*onClick: \(\) => \{\s*void editInVideoStudio\(result\.outputPath\)/)
+    expect(studio).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
+  })
+
+  it('the answer travels: the recording result may carry the chosen path, and nothing else about the result changed', () => {
+    const shared = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../shared/workspace.ts'), 'utf8'))
+    const result = shared.slice(shared.indexOf('export interface RecordingResult'))
+    expect(result.slice(0, result.indexOf('}'))).toMatch(/requestedPath\?: string/)
   })
 })

@@ -34,8 +34,11 @@ let spawned: string[][] = []
 let listText = ''
 /** What the fake ffmpeg prints on its stderr before it exits 0, by command: null is silence. T-131 (1): ffmpeg says things and still exits 0. */
 let says: ((args: string[]) => string | null) | null = null
-/** The join writes its output file (as ffmpeg does) so a test can see whether the runner took it away again. */
-let joinWrites = false
+/**
+ * The join and the picture-in-picture write their output file (as ffmpeg does) so a test can see whether the runner took it away again. T-140 (1): the
+ * runner hands ffmpeg a PARTIAL beside the name it chose and swaps it in when whole, so a child that wrote nothing is a run with nothing to swap in.
+ */
+let joinWrites = true
 /** What the probe answers: the picture's length in seconds, or an Error (a recording whose header has no duration). T-131 (2). */
 let probedSec: number | Error = 60
 /** The exit code the fake ffmpeg closes with, by command: null is 0 (T-136 (15): the concat demuxer exits 254 when it cannot open its FIRST input). */
@@ -50,7 +53,8 @@ vi.mock('node:child_process', () => ({
     spawned.push(args)
     const isJoin = args.includes('concat')
     if (isJoin) listText = readFileSync(args[args.indexOf('-i') + 1] as string, 'utf8')
-    if (isJoin && joinWrites) writeFileSync(args[args.length - 1] as string, 'half a compilation')
+    const isPip = args.includes('-filter_complex')
+    if ((isJoin || isPip) && joinWrites) writeFileSync(args[args.length - 1] as string, 'half a compilation')
     setImmediate(() => {
       const text = says?.(args) ?? null
       if (text !== null) child.stderr.emit('data', text)
@@ -89,7 +93,7 @@ beforeEach(() => {
   listText = ''
   probedFps = 30
   says = null
-  joinWrites = false
+  joinWrites = true
   probedSec = 60
   exitsWith = null
   children = []

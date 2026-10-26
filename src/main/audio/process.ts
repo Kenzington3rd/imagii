@@ -3,7 +3,7 @@ import { unlink } from 'node:fs/promises'
 import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
-import { discardPartialOutput } from '../ffmpeg/partialOutput'
+import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
 import {
   aselectForCuts,
   buildChain,
@@ -78,15 +78,11 @@ async function runFfmpegJob(
   totalDuration: number,
   pass: 'measure' | 'render' | 'mux',
   onProgress: AudioProgressListener,
-  run: LatchRun,
-  /** The file this pass writes (the measure pass writes none): removed if the pass fails. */
-  outputPath?: string
+  run: LatchRun
 ): Promise<{ stderr: string }> {
-  let spawnedAt: number | null = null
   return new Promise<{ stderr: string }>((resolve, reject) => {
     run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
-    spawnedAt = Date.now()
     activeJobs.set(jobId, child)
     let stderr = ''
     let lastEmitted = 0
@@ -128,11 +124,35 @@ async function runFfmpegJob(
       if (code === 0) resolve({ stderr })
       else reject(cancelledOr(child, new Error(`FFmpeg exit ${code}: ${stderr.trim().slice(-1000)}`)))
     })
-  }).catch(async (err: unknown) => {
-    // T-100: a render that stopped halfway is not the user's audio.
-    if (outputPath !== undefined) await discardPartialOutput(outputPath, spawnedAt)
-    throw err
   })
+}
+
+/**
+ * A pass that writes a file the person will keep (the render, the mux): ffmpeg is handed a PARTIAL beside `target` (T-140 (1)), and the target is
+ * replaced by it only when the pass exited 0 and this job has not been cancelled. A render that stopped halfway, or that the person
+ * cancelled, is not their audio, and the file they were replacing is still theirs (`partialOutput.ts`). The argument list ends where the output
+ * path goes: `args` is everything before it, and the partial is added here. The target comes from the Save dialog (or is the re-attach's own
+ * scratch), so it is `replace`: the dialog asked. It answers the path the file LANDED at: `target`, or - when the file there is open in another app and the
+ * swap onto it is refused for good - the next free name beside it (`partialOutput.ts`), which the caller must hand on (the toast, "Show in folder" and the
+ * re-attach's second pass all need the file that exists).
+ */
+async function runFfmpegToFile(
+  args: string[],
+  target: string,
+  jobId: string,
+  totalDuration: number,
+  pass: 'render' | 'mux',
+  onProgress: AudioProgressListener,
+  run: LatchRun
+): Promise<string> {
+  const partial = partialPathFor(target)
+  const { outputPath } = await finishPartial(runFfmpegJob([...args, partial], jobId, totalDuration, pass, onProgress, run), {
+    run,
+    partial,
+    target,
+    mode: 'replace'
+  })
+  return outputPath
 }
 
 /**
@@ -339,21 +359,13 @@ async function exportAudio(
     const limited = !spec.chain.loudnorm && finalChain.filterPass2 !== EMPTY_CHAIN
     args.push('-af', limited ? `${finalChain.filterPass2},${MIX_LIMITER}` : finalChain.filterPass2)
   }
-  args.push(
-    ...codecArgsFor(spec.format, spec.bitrate),
-    '-ar',
-    '48000',
-    '-progress',
-    'pipe:1',
-    '-nostats',
-    spec.outputPath
-  )
-  await runFfmpegJob(args, spec.jobId, writtenSeconds, 'render', onProgress, run, spec.outputPath)
+  args.push(...codecArgsFor(spec.format, spec.bitrate), '-ar', '48000', '-progress', 'pipe:1', '-nostats')
+  const landed = await runFfmpegToFile(args, spec.outputPath, spec.jobId, writtenSeconds, 'render', onProgress, run)
   onProgress({ jobId: spec.jobId, pass: 'render', percent: 100 })
 
   return {
     jobId: spec.jobId,
-    outputPath: spec.outputPath,
+    outputPath: landed,
     durationMs: Date.now() - startedAt
   }
 }
@@ -385,8 +397,12 @@ async function exportAudio(
  * each cut they agree to within one 256-sample block of sound (5.3 ms at
  * 48 kHz: `aselectForCuts` re-chunks the sound to 256 samples before `aselect`
  * drops whole blocks, T-124 (32)), and the errors add up over several cuts
- * (T-110(i)). `-shortest` hides nothing about the desync — the
- * Layer 5 content reads (burst positions, frame luma) are what prove that.
+ * (T-110(i)). That agreement is the CUTS' only, and it holds for a chain without
+ * `afftdn` or the export limiter: `afftdn` delays the sound by two hops (about 25 ms
+ * at any rate) and `alimiter` (latency off) by 5 ms, so a denoised or limited chain's
+ * sound sits that much behind the picture whatever the cuts do (T-110 (bl); the same
+ * qualification is in chain.ts's `vselectForCuts`). `-shortest` hides nothing about
+ * the desync — the Layer 5 content reads (burst positions, frame luma) are what prove that.
  * What it still bounds is
  * a music bed LONGER than the picture, when the mix can be longer than the
  * voice at all. That depends on Duck (T-110(af), a product call still open):
@@ -533,17 +549,16 @@ async function attachAudio(
     '+faststart',
     '-progress',
     'pipe:1',
-    '-nostats',
-    outputPath
+    '-nostats'
   ]
   // A stream-copy mux is instant and needs no bar; the re-encode is minutes
   // on a long recording, and the output is as long as the (cut) picture: the
   // sound is padded or trimmed to it (T-131 (2)). A picture whose length is
   // unknown is measured against the cleaned audio, as it always was.
   const total = reencodePicture ? (pictureSec ?? (await run.guard(probeAudio(audioPath))).duration) : 0
-  await runFfmpegJob(args, jobId, total, 'mux', onProgress, run, outputPath)
+  const landed = await runFfmpegToFile(args, outputPath, jobId, total, 'mux', onProgress, run)
   onProgress({ jobId, pass: 'mux', percent: 100 })
-  return { jobId, outputPath, durationMs: Date.now() - startedAt }
+  return { jobId, outputPath: landed, durationMs: Date.now() - startedAt }
 }
 
 /**
@@ -583,8 +598,12 @@ export async function runAudioReattach(
     `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
   )
   const run = latch.begin(spec.jobId)
+  // T-140 (1): both files can land BESIDE the name asked for (that name is held open by another app), and each pass must be told where the one before
+  // it landed: the mux reads the WAV that was just written (not a stale file at `tempAudioPath`), and the answer is the video that was written.
+  let intermediate = tempAudioPath
+  let outputPath = spec.outputPath
   try {
-    await runAudioExport(
+    const rendered = await runAudioExport(
       {
         jobId: spec.jobId,
         sourcePath: spec.sourcePath,
@@ -594,19 +613,22 @@ export async function runAudioReattach(
       },
       onProgress
     )
-    await runAudioMux(
+    intermediate = rendered.outputPath
+    const muxed = await runAudioMux(
       spec.jobId,
       spec.videoPath,
-      tempAudioPath,
+      intermediate,
       spec.outputPath,
       onProgress,
       spec.chain.cutRegions
     )
+    outputPath = muxed.outputPath
   } finally {
     await unlink(tempAudioPath).catch(() => {})
+    if (intermediate !== tempAudioPath) await unlink(intermediate).catch(() => {})
     run.end()
   }
-  return { jobId: spec.jobId, outputPath: spec.outputPath, durationMs: Date.now() - startedAt }
+  return { jobId: spec.jobId, outputPath, durationMs: Date.now() - startedAt }
 }
 
 export function cancelAudioJob(jobId: string): boolean {

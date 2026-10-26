@@ -723,6 +723,17 @@ async function fileSha(file: string): Promise<string> {
   return createHash('sha256').update(await readFile(file)).digest('hex')
 }
 
+/**
+ * T-140 (1): the name of the file a running render is writing - `<stem>.<8 hex>.partial<ext>`, beside the name it will be renamed to. Spelled out here, not
+ * imported from the product: a test of the contract must not agree with the code by sharing its line.
+ */
+const PARTIAL_NAME = /\.[0-9a-f]{8}\.partial(?:\.[^./\\]*)?$/
+
+/** The partials in `folder` (optionally of one extension), by name. */
+async function partialsIn(folder: string, ext = ''): Promise<string[]> {
+  return (await readdir(folder)).filter((f) => PARTIAL_NAME.test(f) && f.endsWith(ext)).sort()
+}
+
 beforeAll(async () => {
   workDir = await mkdtemp(path.join(os.tmpdir(), 'imagii-media-'))
 
@@ -5696,11 +5707,19 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
       (err: unknown) => ({ err })
     )
 
-  /** Wait for the file the running ffmpeg opens — proof the kill lands mid-write. */
-  async function untilExists(file: string, what: string): Promise<void> {
+  /**
+   * Wait for the file the running ffmpeg opens — proof the kill lands mid-write. T-140 (1): it opens a PARTIAL beside the name the job will be
+   * renamed to, never the name itself, so this waits for one (in `folder`, of the extension `ext`) and answers its path.
+   */
+  async function untilPartial(folder: string, ext: string, what: string): Promise<string> {
     const deadline = Date.now() + 60_000
-    while (!existsSync(file) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    expect(existsSync(file), `${what}: ffmpeg opened its output`).toBe(true)
+    let found: string | undefined
+    while (found === undefined && Date.now() < deadline) {
+      found = (await partialsIn(folder, ext))[0]
+      if (found === undefined) await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(found, `${what}: ffmpeg opened its partial`).toBeDefined()
+    return path.join(folder, found as string)
   }
 
   it('a canceled export removes its half-written file and leaves the finished job beside it', async () => {
@@ -5722,12 +5741,14 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         () => {}
       )
     )
-    await untilExists(killedPath, 'export')
+    const partial = await untilPartial(workDir, '.mp4', 'export')
+    expect(existsSync(killedPath), 'ffmpeg is writing a partial, not the name').toBe(false)
     // The batch's Cancel (T-108: the per-job one had no caller and is gone).
     cancelAllExportJobs()
     expect(isCancelledError((await running).err)).toBe(true)
 
-    expect(existsSync(killedPath), 'the half-written export is gone').toBe(false)
+    expect(existsSync(partial), 'the half-written export is gone').toBe(false)
+    expect(existsSync(killedPath), 'and no file has the name of a finished one').toBe(false)
     expect(finished.outputPath).toBe(finishedPath)
     const kept = await ffprobeJson(finishedPath)
     expect(Number(kept.format.duration)).toBeGreaterThan(0.8)
@@ -5747,10 +5768,11 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         speed: 1
       })
     )
-    await untilExists(gifPath, 'GIF')
+    const partial = await untilPartial(workDir, '.gif', 'GIF')
     expect(cancelGifJob('gif-killed')).toBe(true)
     expect(isCancelledError((await running).err)).toBe(true)
-    expect(existsSync(gifPath), 'the half-written GIF is gone').toBe(false)
+    expect(existsSync(partial), 'the half-written GIF is gone').toBe(false)
+    expect(existsSync(gifPath), 'and no GIF has the name of a finished one').toBe(false)
   }, 180_000)
 
   it('a canceled reframe removes its half-written file', async () => {
@@ -5770,10 +5792,11 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         () => {}
       )
     )
-    await untilExists(out, 'reframe')
+    const partial = await untilPartial(workDir, '.mp4', 'reframe')
     expect(cancelReframeJob('reframe-killed')).toBe(true)
     expect(isCancelledError((await running).err)).toBe(true)
-    expect(existsSync(out), 'the half-written reframe is gone').toBe(false)
+    expect(existsSync(partial), 'the half-written reframe is gone').toBe(false)
+    expect(existsSync(out), 'and no file has the name of a finished one').toBe(false)
   }, 180_000)
 
   it('a canceled audio render removes its half-written file', async () => {
@@ -5785,10 +5808,11 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         () => {}
       )
     )
-    await untilExists(out, 'audio render')
+    const partial = await untilPartial(workDir, '.mp3', 'audio render')
     expect(cancelAudioJob('audio-killed')).toBe(true)
     expect(isCancelledError((await running).err)).toBe(true)
-    expect(existsSync(out), 'the half-written audio is gone').toBe(false)
+    expect(existsSync(partial), 'the half-written audio is gone').toBe(false)
+    expect(existsSync(out), 'and no file has the name of a finished one').toBe(false)
   }, 180_000)
 
   it('a canceled caption burn-in removes its half-written file', async () => {
@@ -5801,10 +5825,11 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         () => {}
       )
     )
-    await untilExists(out, 'burn-in')
+    const partial = await untilPartial(workDir, '.mp4', 'burn-in')
     expect(cancelBurnIn('burn-killed')).toBe(true)
     expect(isCancelledError((await running).err)).toBe(true)
-    expect(existsSync(out), 'the half-written burn-in is gone').toBe(false)
+    expect(existsSync(partial), 'the half-written burn-in is gone').toBe(false)
+    expect(existsSync(out), 'and no file has the name of a finished one').toBe(false)
   }, 180_000)
 
   it('a file that was already there before the job started is left alone by a Cancel that lands in the probe', async () => {
@@ -5855,10 +5880,10 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
     const exportBefore = await fileSha(exportFirst)
     const gifBefore = await fileSha(gifFirst)
 
-    /** Wait until the second job has begun writing: a new file, or (the bug) the old one rewritten. */
-    async function untilWriting(second: string, first: string, before: string): Promise<void> {
+    /** Wait until the second job has begun writing: its partial is in the folder (T-140 (1)), or (the bug) the old file was rewritten. */
+    async function untilWriting(ext: string, first: string, before: string): Promise<void> {
       const deadline = Date.now() + 60_000
-      while (Date.now() < deadline && !existsSync(second) && (await fileSha(first)) === before) {
+      while (Date.now() < deadline && (await partialsIn(dupDir, ext)).length === 0 && (await fileSha(first)) === before) {
         await new Promise((r) => setTimeout(r, 50))
       }
     }
@@ -5873,12 +5898,14 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         () => {}
       )
     )
-    await untilWriting(path.join(dupDir, 'dup (2).mp4'), exportFirst, exportBefore)
+    await untilWriting('.mp4', exportFirst, exportBefore)
+    expect(await partialsIn(dupDir, '.mp4'), 'the second job is writing a partial').toHaveLength(1)
     cancelAllExportJobs()
     expect(isCancelledError((await runningExport).err)).toBe(true)
     expect(existsSync(exportFirst), 'the earlier export is still there').toBe(true)
     expect(await fileSha(exportFirst), 'and is byte for byte what it was').toBe(exportBefore)
     expect(existsSync(path.join(dupDir, 'dup (2).mp4')), 'the canceled job\'s own file is gone').toBe(false)
+    expect(await partialsIn(dupDir, '.mp4'), 'and so is its partial').toEqual([])
 
     const runningGif = settle(
       runGifExport({
@@ -5892,11 +5919,12 @@ describe('a canceled job leaves no half-written file, and a Cancel before its ff
         speed: 1
       })
     )
-    await untilWriting(path.join(dupDir, 'cancel-long_480px_15fps (2).gif'), gifFirst, gifBefore)
+    await untilWriting('.gif', gifFirst, gifBefore)
     cancelGifJob('dup-gif-second')
     expect(isCancelledError((await runningGif).err)).toBe(true)
     expect(existsSync(gifFirst), 'the earlier GIF is still there').toBe(true)
     expect(await fileSha(gifFirst), 'and is byte for byte what it was').toBe(gifBefore)
+    expect(await partialsIn(dupDir, '.gif'), 'and the canceled GIF left no partial').toEqual([])
   }, 180_000)
 
   // ── T-98: Cancel while the real ffprobe is still running ─────────────────
@@ -10385,4 +10413,486 @@ describe('the lost-part guard reads this binary\'s own line in every platform\'s
       }
     }
   })
+})
+
+// ── T-140 (1): a render is written BESIDE its target and swapped in only when whole ───────────────────────────────────────────────────────────────────────────
+//
+// ffmpeg truncates the file it opens. Every runner handed it the final path, so a Cancel, the quit or a full disk (exit 228) 1.5 s into a render left NEITHER
+// the file the Save dialog had been told to replace NOR the new one (executed: a 100,000-byte file gone after `cancelAudioJob`, and after ENOSPC). Each runner
+// now writes `<stem>.<8 hex>.partial<ext>` in the SAME folder and renames it over the target when the child has exited 0 and the runner's own checks passed
+// (`main/ffmpeg/partialOutput.ts`). A string-shape test can say what the command looks like; only the real binary can say that the extension-last name makes it
+// choose the muxer it would have chosen, that a SIGKILL mid-write leaves the old file alone, and that the rename leaves a file ffprobe reads. Run on the bundled
+// 7.0.2 and on 6.1.1 (the shipped win32 major: the vitest.611 config in the round's scratch folder, outside the repo).
+describe('a render is written beside its target and swapped in only when whole (real ffmpeg, T-140 (1))', () => {
+  let root = ''
+  let longVideo = '' // 1080p, 60 s: an encode that is still running when Cancel lands
+  let longAudio = '' // an hour of 8 kHz mono: a noise-removal render that outlasts the test
+  let longWav = '' // 60 s of stereo sound: the re-attach's first pass is quick, its mux (the picture is re-encoded) is not
+  let longWebm = '' // 20 s of 720p VP8: a take whose convert outlasts the test (libx264 'fast' at 720p, a few seconds)
+  let srt = ''
+  const EARLIER = Buffer.from("an earlier file, somebody's, at the name the render is aimed at")
+  const names = async (folder: string): Promise<string[]> => (await readdir(folder)).sort()
+  const settle = <T>(p: Promise<T>): Promise<{ value?: T; err?: unknown }> =>
+    p.then(
+      (value) => ({ value }),
+      (err: unknown) => ({ err })
+    )
+
+  /** A folder of this test's own, so a listing of it is exactly what the render did. */
+  const fresh = (): Promise<string> => mkdtemp(path.join(root, 'case-'))
+
+  /**
+   * Wait for the running ffmpeg's partial (`ext`) to be in the folder: it opens its output when it starts, and opening is what truncates (a GIF's first byte comes only
+   * after the whole palette pass, so the file's existence is the proof, not its size). Answers the partial's path. Fails the moment the target's bytes change - a
+   * runner that handed ffmpeg the target itself, which is what the truncation looks like from here - instead of after the wait.
+   */
+  async function untilWriting(folder: string, ext: string, target: string, before: string): Promise<string> {
+    const deadline = Date.now() + 60_000
+    for (;;) {
+      expect(await fileSha(target), 'the target is untouched while ffmpeg writes').toBe(before)
+      const found = (await partialsIn(folder, ext))[0]
+      if (found !== undefined) return path.join(folder, found)
+      expect(Date.now() < deadline, `ffmpeg wrote a partial (${ext}) in the folder within a minute`).toBe(true)
+      await new Promise((r) => setTimeout(r, 25))
+    }
+  }
+
+  async function mediaOk(file: string, kind: 'video' | 'audio'): Promise<void> {
+    const probe = await ffprobeJson(file)
+    expect(probe.streams.some((st) => st.codec_type === kind), `${path.basename(file)} has a ${kind} stream ffprobe reads`).toBe(true)
+    expect(Number(probe.format.duration), `${path.basename(file)} has a duration`).toBeGreaterThan(0.2)
+  }
+
+  interface Run {
+    done: Promise<unknown>
+    cancel: () => void
+  }
+  interface RenderCase {
+    name: string
+    /** The extension of the file the person keeps (and so of its partial). */
+    ext: string
+    /** `replace`: the person named the file in the Save dialog. `beside`: the runner chose a free name, so the render lands at `name (2)`. */
+    mode: 'replace' | 'beside'
+    /** The name the render is aimed at, in `folder`. */
+    target: (folder: string) => string
+    /** A run that outlasts the polling, and the Cancel that stops it. */
+    long: (folder: string, id: string) => Run
+    /** A run that finishes in a few seconds. */
+    short: (folder: string, id: string) => Promise<unknown>
+    /** True when `outcome` is what the product says of a run the person stopped. */
+    stopped?: (outcome: { value?: unknown; err?: unknown }) => boolean
+    valid: (file: string) => Promise<void>
+  }
+
+  // The recording's save is the one runner whose IPC handler needs the electron surface: a stand-in with a Save dialog that answers with `saveTo`.
+  const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
+  let saveTo = ''
+  let cancelTake: (takeId: string) => boolean = () => false
+
+  async function finalize(convertToMp4: boolean, onTake: (id: string) => void): Promise<unknown> {
+    const begin = handlers.get('recording:begin')
+    const append = handlers.get('recording:appendChunk')
+    const fin = handlers.get('recording:finalize')
+    if (!begin || !append || !fin) throw new Error('the recording handlers are not registered')
+    const { id } = (await begin({})) as { id: string }
+    onTake(id)
+    await append({}, id, await readFile(longWebm))
+    return fin({}, id, { filename: 'take', durationMs: 20_000, convertToMp4 })
+  }
+
+  const CASES: RenderCase[] = [
+    {
+      name: 'platform export',
+      ext: '.mp4',
+      mode: 'beside',
+      target: (f) => path.join(f, 'export.mp4'),
+      long: (f, id) => ({
+        done: runExportJob({ ...makeJob(longVideo, 'youtube', makeClip({ startSec: 0, endSec: 50 }), id), outDir: f, outputFilename: 'export.mp4' }, () => {}),
+        cancel: () => cancelAllExportJobs()
+      }),
+      short: (f, id) =>
+        runExportJob({ ...makeJob(landscapeSrc, 'youtube', makeClip({ startSec: 0, endSec: 1 }), id), outDir: f, outputFilename: 'export.mp4' }, () => {}),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: 'GIF',
+      ext: '.gif',
+      mode: 'beside',
+      target: (f) => path.join(f, 'gifsrc_480px_15fps.gif'),
+      long: (f, id) => ({
+        done: runGifExport({ jobId: id, sourcePath: longVideo, outDir: f, startSec: 0, endSec: 50, width: 480, fps: 15, speed: 1, sourceName: 'gifsrc' }),
+        cancel: () => void cancelGifJob(id)
+      }),
+      short: (f, id) => runGifExport({ jobId: id, sourcePath: landscapeSrc, outDir: f, startSec: 0, endSec: 1, width: 480, fps: 15, speed: 1, sourceName: 'gifsrc' }),
+      // A GIF carries no format duration (the T-98 block counts frames for the same reason): it is a gif stream of the width asked for.
+      valid: async (file) => {
+        const v = (await ffprobeJson(file)).streams.find((st) => st.codec_type === 'video')
+        expect(v?.codec_name, `${path.basename(file)} is a GIF ffprobe reads`).toBe('gif')
+        expect(v?.width).toBe(480)
+      }
+    },
+    {
+      name: 'reframe',
+      ext: '.mp4',
+      mode: 'beside',
+      target: (f) => path.join(f, 'reframe.mp4'),
+      long: (f, id) => ({
+        done: runReframe(
+          { jobId: id, sourcePath: longVideo, outputPath: path.join(f, 'reframe.mp4'), position: 'center', startSec: 0, endSec: 50, outputWidth: 1080, outputHeight: 1920 },
+          () => {}
+        ),
+        cancel: () => void cancelReframeJob(id)
+      }),
+      short: (f, id) =>
+        runReframe({ jobId: id, sourcePath: landscapeSrc, outputPath: path.join(f, 'reframe.mp4'), position: 'center', startSec: 0, endSec: 1, outputWidth: 1080, outputHeight: 1920 }, () => {}),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      // The join copies the picture, so on its own it is over in a moment; 30 segments of 10 s make a 300 s sound for the AAC encode, which is what it takes to be
+      // caught mid-write by a poll that looks every 25 ms (the partial exists from the moment ffmpeg starts, a second or two before it ends).
+      name: 'compilation join',
+      ext: '.mp4',
+      mode: 'beside',
+      target: (f) => path.join(f, 'comp_compilation.mp4'),
+      long: (f, id) => ({
+        done: runConcat({
+          jobId: id,
+          sourcePath: rampSrc,
+          outDir: f,
+          segments: Array.from({ length: 30 }, (_, i) => ({ startSec: i % 2 === 0 ? 0 : 10, endSec: i % 2 === 0 ? 10 : 20, name: `s${i}` })),
+          fadeMs: 0,
+          width: 64,
+          height: 36,
+          sourceName: 'comp'
+        }),
+        cancel: () => void cancelConcatJob(id)
+      }),
+      short: (f, id) =>
+        runConcat({
+          jobId: id,
+          sourcePath: rampSrc,
+          outDir: f,
+          segments: [
+            { startSec: 2, endSec: 3, name: 'a' },
+            { startSec: 4, endSec: 5, name: 'b' }
+          ],
+          fadeMs: 0,
+          width: 320,
+          height: 180,
+          sourceName: 'comp'
+        }),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: 'picture-in-picture',
+      ext: '.mp4',
+      mode: 'beside',
+      target: (f) => path.join(f, 'pip.mp4'),
+      long: (f, id) => ({
+        done: runPipComposite(id, longVideo, pipOverlaySrc, path.join(f, 'pip.mp4'), { overlayWidth: 320, position: 'top-left', margin: 8 }),
+        cancel: () => void cancelConcatJob(id)
+      }),
+      short: (f, id) => runPipComposite(id, rampSrc, pipOverlaySrc, path.join(f, 'pip.mp4'), { overlayWidth: 160, position: 'top-left', margin: 8 }),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: 'audio export',
+      ext: '.mp3',
+      mode: 'replace',
+      target: (f) => path.join(f, 'cleaned.mp3'),
+      long: (f, id) => ({
+        done: runAudioExport(
+          { jobId: id, sourcePath: longAudio, outputPath: path.join(f, 'cleaned.mp3'), chain: { ...DEFAULT_CHAIN_SPEC, denoise: 'aggressive' }, format: 'mp3' },
+          () => {}
+        ),
+        cancel: () => void cancelAudioJob(id)
+      }),
+      short: (f, id) => runAudioExport({ jobId: id, sourcePath: voiceWav, outputPath: path.join(f, 'cleaned.mp3'), chain: DEFAULT_CHAIN_SPEC, format: 'mp3' }, () => {}),
+      valid: (file) => mediaOk(file, 'audio')
+    },
+    {
+      // The mux is the pass that writes the person's file (the intermediate WAV beside it is the job's scratch): a cut makes it re-encode the 1080p picture.
+      name: 're-attach to video (the mux)',
+      ext: '.mp4',
+      mode: 'replace',
+      target: (f) => path.join(f, 'with-cleaned-sound.mp4'),
+      long: (f, id) => ({
+        done: runAudioReattach(
+          { jobId: id, videoPath: longVideo, sourcePath: longWav, outputPath: path.join(f, 'with-cleaned-sound.mp4'), chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [{ startSec: 10, endSec: 12 }] } },
+          () => {}
+        ),
+        cancel: () => void cancelAudioJob(id)
+      }),
+      short: (f, id) =>
+        runAudioReattach(
+          { jobId: id, videoPath: landscapeSrc, sourcePath: voiceWav, outputPath: path.join(f, 'with-cleaned-sound.mp4'), chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [{ startSec: 2, endSec: 3 }] } },
+          () => {}
+        ),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: 'caption burn-in',
+      ext: '.mp4',
+      mode: 'replace',
+      target: (f) => path.join(f, 'captioned.mp4'),
+      long: (f, id) => ({
+        done: runBurnIn({ jobId: id, videoPath: longVideo, srtPath: srt, outputPath: path.join(f, 'captioned.mp4'), fontSizePct: 3.5 }, () => {}),
+        cancel: () => void cancelBurnIn(id)
+      }),
+      short: (f, id) => runBurnIn({ jobId: id, videoPath: landscapeSrc, srtPath: srt, outputPath: path.join(f, 'captioned.mp4'), fontSizePct: 3.5, startSec: 0, endSec: 2 }, () => {}),
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: "the recording's MP4 convert",
+      ext: '.mp4',
+      mode: 'replace',
+      target: (f) => path.join(f, 'take.mp4'),
+      long: (f) => {
+        let take = ''
+        saveTo = path.join(f, 'take.mp4')
+        return { done: finalize(true, (id) => (take = id)), cancel: () => void cancelTake(take) }
+      },
+      short: (f) => {
+        saveTo = path.join(f, 'take.mp4')
+        return finalizeShort(true)
+      },
+      // A Discard is not an error: the save answers null, which the Record screen prints as "Recording discarded."
+      stopped: (o) => o.err === undefined && o.value === null,
+      valid: (file) => mediaOk(file, 'video')
+    },
+    {
+      name: "the recording's WebM save (the remux)",
+      ext: '.webm',
+      mode: 'replace',
+      target: (f) => path.join(f, 'take.webm'),
+      long: (f) => {
+        let take = ''
+        saveTo = path.join(f, 'take.webm')
+        return { done: finalize(false, (id) => (take = id)), cancel: () => void cancelTake(take) }
+      },
+      short: (f) => {
+        saveTo = path.join(f, 'take.webm')
+        return finalizeShort(false)
+      },
+      stopped: (o) => o.err === undefined && o.value === null,
+      valid: (file) => mediaOk(file, 'video')
+    }
+  ]
+
+  /** A short take, for the completed case. */
+  let shortWebm = ''
+  async function finalizeShort(convertToMp4: boolean): Promise<unknown> {
+    const begin = handlers.get('recording:begin')
+    const append = handlers.get('recording:appendChunk')
+    const fin = handlers.get('recording:finalize')
+    if (!begin || !append || !fin) throw new Error('the recording handlers are not registered')
+    const { id } = (await begin({})) as { id: string }
+    await append({}, id, await readFile(shortWebm))
+    return fin({}, id, { filename: 'take', durationMs: 3000, convertToMp4 })
+  }
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(workDir, 't140-'))
+    longVideo = path.join(root, 'long.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30:duration=60',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=60',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-shortest', longVideo
+    ])
+    longAudio = path.join(root, 'long.mp3')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=8000:duration=3600', '-ac', '1', '-b:a', '32k', longAudio])
+    longWav = path.join(root, 'long.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000:duration=60', '-ac', '2', longWav])
+    longWebm = path.join(root, 'long.webm')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=20',
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '2M', '-c:a', 'libopus', '-shortest', longWebm
+    ])
+    shortWebm = path.join(root, 'short.webm')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3',
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '1M', '-c:a', 'libopus', '-shortest', shortWebm
+    ])
+    srt = path.join(root, 'captions.srt')
+    await writeFile(srt, '1\n00:00:00,000 --> 00:00:03,000\nhello\n', 'utf8')
+
+    vi.resetModules()
+    vi.doMock('electron', () => {
+      const win = { webContents: { isDestroyed: () => false, send: () => undefined } }
+      return {
+        ipcMain: { handle: (channel: string, fn: (e: unknown, ...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, fn) },
+        desktopCapturer: { getSources: async () => [] },
+        dialog: { showSaveDialog: async () => ({ canceled: false, filePath: saveTo }) },
+        BrowserWindow: { getFocusedWindow: () => win, getAllWindows: () => [win] },
+        app: { getPath: () => root }
+      }
+    })
+    const recording = await import('../../src/main/ipc/recording')
+    recording.registerRecordingIpc()
+    cancelTake = recording.cancelRecordingConvert
+  }, 600_000)
+
+  afterAll(() => {
+    vi.doUnmock('electron')
+  })
+
+  describe.each(CASES)('$name', (c) => {
+    const stoppedIn = (o: { value?: unknown; err?: unknown }): boolean => (c.stopped ? c.stopped(o) : isCancelledError(o.err))
+
+    it('a Cancel after ffmpeg opened its output leaves the file that was there byte for byte - while it writes, and after - and no partial', async () => {
+      const folder = await fresh()
+      const target = c.target(folder)
+      await writeFile(target, EARLIER)
+      const before = await fileSha(target)
+      const run = c.long(folder, `t140-${c.name.replace(/\W+/g, '-')}-cancel`)
+      const running = settle(run.done)
+      try {
+        const partial = await untilWriting(folder, c.ext, target, before)
+        expect(path.dirname(partial), 'beside the target').toBe(folder)
+        run.cancel()
+        expect(stoppedIn(await running), 'the run reads as the Cancel it was').toBe(true)
+        expect(await fileSha(target), 'the file that was there is byte for byte what it was').toBe(before)
+        expect(await names(folder), 'and nothing else is in the folder: no partial, no "(2)"').toEqual([path.basename(target)])
+      } finally {
+        // A failed assertion above must not leave an hour-long render running behind the next case (a second Cancel after the run ended is a no-op).
+        run.cancel()
+        await running
+      }
+    }, 240_000)
+
+    it(
+      c.mode === 'replace'
+        ? 'a run that finishes replaces it with a whole new file (ffprobe reads it, the old bytes are gone), and leaves no partial'
+        : 'a run that finishes writes a whole new file BESIDE the one that was there (ffprobe reads it), which is byte for byte what it was, and leaves no partial',
+      async () => {
+        const folder = await fresh()
+        const target = c.target(folder)
+        await writeFile(target, EARLIER)
+        const before = await fileSha(target)
+        await c.short(folder, `t140-${c.name.replace(/\W+/g, '-')}-done`)
+        if (c.mode === 'replace') {
+          expect(await fileSha(target), 'the old bytes are gone').not.toBe(before)
+          await c.valid(target)
+          expect(await names(folder)).toEqual([path.basename(target)])
+        } else {
+          expect(await fileSha(target), 'the earlier file is what it was').toBe(before)
+          const { dir, name, ext } = path.parse(target)
+          const beside = path.join(dir, `${name} (2)${ext}`)
+          await c.valid(beside)
+          expect(await names(folder)).toEqual([path.basename(target), path.basename(beside)].sort())
+        }
+      },
+      240_000
+    )
+
+    it('a run into a folder with nothing at the name writes the file there, and no partial is left', async () => {
+      const folder = await fresh()
+      await c.short(folder, `t140-${c.name.replace(/\W+/g, '-')}-fresh`)
+      const target = c.target(folder)
+      await c.valid(target)
+      expect(await names(folder)).toEqual([path.basename(target)])
+    }, 240_000)
+  })
+})
+
+// ── T-140 (1): the partial of every format a runner writes is read as that format ────────────────────────────────────────────────────────────────────────────
+//
+// The partial's extension is LAST (`<stem>.<8 hex>.partial<ext>`), which is the only thing that keeps ffmpeg choosing the muxer from the name, exactly as it
+// would have for the target. A name like `<stem>.partial.<hex>` would end in no extension at all and fail every one of these. Each row runs the REAL runner for one
+// format a person's file can have, to a target of that extension (an upper-case one too: the dialog returns what was typed), and asks ffprobe what the file the swap
+// left is: the container and the codec the target's own name would have given. Formats a runner writes to a person's path: mp4, gif, mp3, wav, flac, m4a (AAC),
+// webm (the recording's remux) and jpg (the Clip Kit's thumbnail). No runner writes mkv or ogg to a person's path (a compilation's segment is Matroska, in the job's
+// scratch folder under its id, and is not renamed).
+describe('the partial of every format a runner writes is read as that format (real ffmpeg, T-140 (1))', () => {
+  let folder = ''
+  let webmSrc = ''
+  const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
+  let saveTo = ''
+
+  const exportAudio = (format: 'mp3' | 'wav' | 'flac' | 'aac', file: string): (() => Promise<unknown>) => () =>
+    runAudioExport({ jobId: `t140-fmt-${file}`, sourcePath: voiceWav, outputPath: path.join(folder, file), chain: DEFAULT_CHAIN_SPEC, format }, () => {})
+
+  const saveWebm = async (convertToMp4: boolean): Promise<unknown> => {
+    const begin = handlers.get('recording:begin')
+    const append = handlers.get('recording:appendChunk')
+    const fin = handlers.get('recording:finalize')
+    if (!begin || !append || !fin) throw new Error('the recording handlers are not registered')
+    const { id } = (await begin({})) as { id: string }
+    await append({}, id, await readFile(webmSrc))
+    return fin({}, id, { filename: 'take', durationMs: 3000, convertToMp4 })
+  }
+
+  const ROWS: Array<{ file: string; run: () => Promise<unknown>; container: RegExp; codec: string }> = [
+    { file: 'a.mp3', run: exportAudio('mp3', 'a.mp3'), container: /^mp3$/, codec: 'mp3' },
+    { file: 'a.wav', run: exportAudio('wav', 'a.wav'), container: /^wav$/, codec: 'pcm_s16le' },
+    { file: 'a.flac', run: exportAudio('flac', 'a.flac'), container: /^flac$/, codec: 'flac' },
+    { file: 'a.m4a', run: exportAudio('aac', 'a.m4a'), container: /mp4/, codec: 'aac' },
+    { file: 'LOUD.MP3', run: exportAudio('mp3', 'LOUD.MP3'), container: /^mp3$/, codec: 'mp3' },
+    { file: 'LOUD.WAV', run: exportAudio('wav', 'LOUD.WAV'), container: /^wav$/, codec: 'pcm_s16le' },
+    {
+      file: 'clip.mp4',
+      run: () => runExportJob({ ...makeJob(landscapeSrc, 'youtube', makeClip({ startSec: 0, endSec: 1 }), 't140-fmt-mp4'), outDir: folder, outputFilename: 'clip.mp4' }, () => {}),
+      container: /mp4/,
+      codec: 'h264'
+    },
+    {
+      file: 'clip_160px_10fps.gif',
+      run: () => runGifExport({ jobId: 't140-fmt-gif', sourcePath: landscapeSrc, outDir: folder, startSec: 0, endSec: 1, width: 160, fps: 10, speed: 1, sourceName: 'clip' }),
+      container: /^gif$/,
+      codec: 'gif'
+    },
+    {
+      file: 'take.webm',
+      run: () => {
+        saveTo = path.join(folder, 'take.webm')
+        return saveWebm(false)
+      },
+      container: /webm/,
+      codec: 'vp8'
+    },
+    {
+      file: 'thumbs/thumb_1.jpg',
+      run: () => extractFrame(landscapeSrc, 1, path.join(folder, 'thumbs', 'thumb_1.jpg')),
+      container: /image2/,
+      codec: 'mjpeg'
+    }
+  ]
+
+  beforeAll(async () => {
+    folder = await mkdtemp(path.join(workDir, 't140-fmt-'))
+    webmSrc = path.join(folder, 'src.webm')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3',
+      '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '500k', '-c:a', 'libopus', '-shortest', webmSrc
+    ])
+    vi.resetModules()
+    vi.doMock('electron', () => {
+      const win = { webContents: { isDestroyed: () => false, send: () => undefined } }
+      return {
+        ipcMain: { handle: (channel: string, fn: (e: unknown, ...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, fn) },
+        desktopCapturer: { getSources: async () => [] },
+        dialog: { showSaveDialog: async () => ({ canceled: false, filePath: saveTo }) },
+        BrowserWindow: { getFocusedWindow: () => win, getAllWindows: () => [win] },
+        app: { getPath: () => folder }
+      }
+    })
+    const recording = await import('../../src/main/ipc/recording')
+    recording.registerRecordingIpc()
+  }, 120_000)
+
+  afterAll(() => {
+    vi.doUnmock('electron')
+  })
+
+  it.each(ROWS.map((r) => [r.file, r] as const))('%s: the file the swap leaves is the container and codec its name says', async (_file, row) => {
+    await row.run()
+    const target = path.join(folder, row.file)
+    const probe = await ffprobeJson(target)
+    expect(probe.format.format_name, `${row.file}: the container`).toMatch(row.container)
+    expect(probe.streams.map((s) => s.codec_name), `${row.file}: the codecs`).toContain(row.codec)
+    const left = (await readdir(path.dirname(target))).filter((f) => PARTIAL_NAME.test(f))
+    expect(left, 'no partial is left beside it').toEqual([])
+  }, 120_000)
 })

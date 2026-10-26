@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CANCELLED_MESSAGE, isCancelledError } from '../../shared/cancel'
@@ -35,9 +35,15 @@ class FakeChild extends EventEmitter {
   stderr = new FakePipe()
   exitCode: number | null = null
   signals: string[] = []
+  args: string[] = []
   kill(signal?: string): boolean {
     this.signals.push(signal ?? 'SIGTERM')
     return true
+  }
+  // T-140 (1): the runner hands ffmpeg a partial and swaps it in when the run is whole, so a child that exits 0 has written its output, as ffmpeg has.
+  emit(event: string | symbol, ...a: unknown[]): boolean {
+    if (event === 'close' && a[0] === 0 && this.args.length > 0) writeFileSync(this.args[this.args.length - 1] as string, 'a finished export')
+    return super.emit(event, ...a)
   }
 }
 let children: FakeChild[] = []
@@ -56,8 +62,9 @@ vi.mock('electron', () => ({
   app: { getPath: () => tmpdir() }
 }))
 vi.mock('node:child_process', () => ({
-  spawn: () => {
+  spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
+    child.args = args
     children.push(child)
     return child
   }

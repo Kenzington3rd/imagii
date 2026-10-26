@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { ReframeProgress } from './reframe'
@@ -35,9 +35,13 @@ let scratch = ''
 let onSpawn: (child: FakeChild) => void = () => undefined
 
 vi.mock('node:child_process', () => ({
-  spawn: () => {
+  spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
-    queueMicrotask(() => onSpawn(child))
+    // T-140 (1): ffmpeg writes its output (a partial beside the name the runner chose) before it exits; the runner swaps it in when the run is whole.
+    queueMicrotask(() => {
+      writeFileSync(args[args.length - 1] as string, 'mp4')
+      onSpawn(child)
+    })
     return child
   }
 }))

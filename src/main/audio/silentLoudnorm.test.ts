@@ -4,6 +4,15 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DEFAULT_CHAIN_SPEC } from '../../shared/audio'
 
+// T-140 (1): the runner hands ffmpeg a partial and swaps it in when whole. This file pins what is on the command line and in the progress events, with a child
+// that writes nothing and paths that are not a folder of its own, so the swap is left out of it: it is `partialOutput.test.ts`'s, `cancelSentinel.test.ts`'s
+// (every runner, a child that writes where ffmpeg writes) and Layer 5's (the real binary).
+vi.mock('../ffmpeg/partialOutput', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ffmpeg/partialOutput')>()),
+  finishPartial: async <T,>(work: Promise<T>, o: { target: string }) => ({ value: await work, outputPath: o.target })
+}))
+
+
 /**
  * T-114 - the two-pass loudness export of a SILENT input.
  *

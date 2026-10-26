@@ -36,6 +36,7 @@ import {
   setWindowSize
 } from './layout'
 import { chooserCalls, recordSlowChooser } from './chooser'
+import { partialsOnly, refusedRenameCount, refuseRenamesOnto, withEverything, withoutAtomicTmp } from './atomicTmp'
 import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { slowPresetWrites } from './slowWrites'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
@@ -663,8 +664,14 @@ async function clipRows(window: Page): Promise<Array<{ name: string; range: stri
   return out
 }
 
+/** T-140 (1): the .mp4 files a render has FINISHED in `dir` - ffmpeg writes `<stem>.<8 hex>.partial.mp4` for as long as it runs, and a poll on a count must not read it as an export. */
 function mp4sIn(dir: string): string[] {
-  return readdirSync(dir).filter((f) => f.endsWith('.mp4')).sort()
+  return withoutAtomicTmp(readdirSync(dir)).filter((f) => f.endsWith('.mp4')).sort()
+}
+
+/** The .mp4 names in `dir` as they are, partials in view: for "nothing is left" (a Cancel, a failure, a quit, a refusal). */
+function mp4sOnDisk(dir: string): string[] {
+  return withEverything(readdirSync(dir)).filter((f) => f.endsWith('.mp4')).sort()
 }
 
 // ── chat-log fixtures ────────────────────────────────────────────────────
@@ -1727,7 +1734,7 @@ test.describe('CaptionsPanel', () => {
       await expectToast(window, 'SRT saved')
       await window.waitForTimeout(800)
       expect(await app.evaluate(() => (globalThis as unknown as { __saveAsks?: number }).__saveAsks), 'one save dialog, not two').toBe(1)
-      expect(readdirSync(outDir).filter((f) => f.endsWith('.srt')), 'one file').toEqual(['once.srt'])
+      expect(withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('.srt')), 'one file').toEqual(['once.srt'])
       expect((await readToastLog(window)).filter((t) => t === 'SRT saved'), 'said once').toHaveLength(1)
       await expect(save, 'and the claim is given back').toBeEnabled()
     } finally {
@@ -2309,7 +2316,9 @@ test.describe('CaptionsPanel', () => {
 
       // ── canceled mid-burn ──
       await burn.click()
-      await expect.poll(() => existsSync(canceled), { timeout: 60_000, intervals: [250] }).toBe(true)
+      // T-140 (1): ffmpeg opens a PARTIAL beside the name the Save dialog gave, never the name itself.
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [250] }).toBe(1)
+      expect(existsSync(canceled), 'the chosen name is not touched while ffmpeg writes').toBe(false)
       await expect(row).toHaveAccessibleName('Burning in…')
       // T-112: the header button names the job that is RUNNING. It said "Transcribing…" for
       // a burn-in too (one boolean for both jobs), a job that is not happening at all.
@@ -2322,6 +2331,7 @@ test.describe('CaptionsPanel', () => {
       await expect(card.getByText('Burning in…')).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
       expect(existsSync(canceled), 'the half-written video is gone').toBe(false)
+      expect(withEverything(readdirSync(outDir)), 'and so is its partial').toEqual([])
 
       // ── failed: ffmpeg cannot open the output ──
       await burn.click()
@@ -2660,7 +2670,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await compileCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
       await expectCanceledNotFailed(window, 'Compilation canceled.')
       await expect(compileCard(window).getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({ timeout: 30_000 })
-      expect(mp4sIn(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
+      expect(mp4sOnDisk(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
     } finally {
       await app.close()
     }
@@ -2683,7 +2693,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await pipCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
       await expectCanceledNotFailed(window, 'Picture-in-picture canceled.')
       await expect(pipCard(window).getByRole('button', { name: 'Composite' })).toBeEnabled({ timeout: 30_000 })
-      expect(mp4sIn(outDir).filter((f) => f.endsWith('_pip.mp4'))).toEqual([])
+      expect(mp4sOnDisk(outDir).filter((f) => f.endsWith('_pip.mp4'))).toEqual([])
     } finally {
       await app.close()
     }
@@ -2715,7 +2725,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await expectToast(window, 'Export canceled. Files already finished are in your folder.')
       await expect(card().getByText('Canceled', { exact: true })).toBeVisible()
       await expect(card().getByRole('button', { name: /^Export 1 file/ })).toBeEnabled({ timeout: 30_000 })
-      expect(mp4sIn(outDir), 'the canceled job left nothing behind').toEqual([])
+      expect(mp4sOnDisk(outDir), 'the canceled job left nothing behind').toEqual([])
     } finally {
       await app.close()
     }
@@ -3160,7 +3170,7 @@ test.describe('ExportPanel', () => {
         await expect
           .poll(() => consoleLines.join('\n'), { timeout: 30_000 })
           .toContain("No such filter: 'drawtext'")
-        expect(mp4sIn(outDir)).toEqual([])
+        expect(mp4sOnDisk(outDir)).toEqual([])
       }
       // Either way the panel leaves its running state rather than sticking.
       await expect(card.getByRole('button', { name: /^Export/ })).toBeEnabled({ timeout: 30_000 })
@@ -3241,7 +3251,7 @@ test.describe('ExportPanel', () => {
         const toasts = (await readToastLog(window)).join(' | ')
         expect(toasts).not.toMatch(/setting imagii can't use/)
         expect(consoleLines.join('\n')).not.toMatch(/textOverlays\[0\] malformed/)
-        expect(mp4sIn(outDir)).toEqual([])
+        expect(mp4sOnDisk(outDir)).toEqual([])
       }
       await expect(card.getByRole('button', { name: /^Export/ })).toBeEnabled({ timeout: 30_000 })
     } finally {
@@ -3383,7 +3393,7 @@ test.describe('ExportPanel', () => {
       await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(card.getByText('Queue', { exact: true })).toHaveCount(0)
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
       await expect(card.getByRole('button', { name: 'Export 2' })).toBeEnabled()
 
       // ── accepted: the same batch runs ──
@@ -3472,11 +3482,11 @@ test.describe('ExportPanel', () => {
       await expect(modal, 'the question is on screen after the double-click').toBeVisible()
       await window.waitForTimeout(400)
       await expect(modal, 'and it stays: the second click did not close it').toBeVisible()
-      expect(mp4sIn(outDir), 'nothing was exported while it waited for an answer').toEqual([])
+      expect(mp4sOnDisk(outDir), 'nothing was exported while it waited for an answer').toEqual([])
       // A single click on the scrim (the corner: outside the card) is still a dismissal.
       await window.mouse.click(4, 4)
       await expect(window.getByRole('dialog')).toHaveCount(0)
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
       await expect(card.getByRole('button', { name: 'Export 2' })).toBeEnabled()
     } finally {
       await app.close()
@@ -3511,7 +3521,7 @@ test.describe('ExportPanel', () => {
       await card.getByRole('button', { name: 'Export 2 files' }).click()
       await expect(modal.locator('li > div')).toHaveText(['TikTok frame → cut down for YouTube'])
       await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
     } finally {
       await app.close()
     }
@@ -3732,7 +3742,7 @@ test.describe('ExportPanel', () => {
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
       // The batch is sequential, so killing the running job stops the rest:
       // the queue never produced three files.
-      expect(mp4sIn(outDir).length).toBeLessThan(3)
+      expect(mp4sOnDisk(outDir).length).toBeLessThan(3)
       // Show only renders for a row that reported an outputPath, so there
       // are strictly fewer of them than the three jobs that were queued.
       expect(
@@ -3750,8 +3760,8 @@ test.describe('ExportPanel', () => {
       // T-100: and what is in the folder is what finished. The job that was
       // killed mid-encode left a file with a name and no moov atom, in the
       // folder the toast says holds the finished ones.
-      expect(mp4sIn(outDir)).toHaveLength(shown)
-      for (const file of mp4sIn(outDir)) {
+      expect(mp4sOnDisk(outDir)).toHaveLength(shown)
+      for (const file of mp4sOnDisk(outDir)) {
         expect(Number((await ffprobeJson(path.join(outDir, file))).format?.duration)).toBeGreaterThan(0)
       }
       await expect(card.getByText('Canceled', { exact: true })).toHaveCount(3 - shown)
@@ -3813,7 +3823,7 @@ test.describe('ExportPanel', () => {
       // Wait out the held probe: nothing more is started, nothing more is written.
       await window.waitForTimeout(9000)
       expect(await readSpawnLog(app)).toEqual(['ffprobe', 'ffmpeg', 'ffprobe'])
-      expect(mp4sIn(outDir)).toHaveLength(1)
+      expect(mp4sOnDisk(outDir)).toHaveLength(1)
       expect((await readToastLog(window)).filter((t) => t.startsWith('Exported'))).toEqual([])
     } finally {
       await app.close()
@@ -3865,13 +3875,14 @@ test.describe('ExportPanel', () => {
       await card.getByRole('button', { name: 'Choose folder…' }).click()
       await card.getByRole('button', { name: 'Export 2' }).click()
 
-      // Quick finishes; Slow's file appears when ffmpeg opens it — mid-encode.
+      // Quick finishes; Slow's partial appears when ffmpeg opens it — mid-encode (T-140 (1): beside the name it will have, never at it).
       await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(1, {
         timeout: 240_000
       })
       await expect
-        .poll(() => mp4sIn(outDir).length, { timeout: 240_000, intervals: [250] })
-        .toBe(2)
+        .poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 240_000, intervals: [250] })
+        .toBe(1)
+      expect(mp4sIn(outDir), 'Slow has no finished-looking file while it encodes').toEqual(['long_Quick_youtube.mp4'])
 
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
       await expectCanceledNotFailed(
@@ -3882,7 +3893,7 @@ test.describe('ExportPanel', () => {
 
       // Only the finished job's file is left, and it is a real video.
       await expect
-        .poll(() => mp4sIn(outDir), { timeout: 15_000, intervals: [250] })
+        .poll(() => mp4sOnDisk(outDir), { timeout: 15_000, intervals: [250] })
         .toEqual(['long_Quick_youtube.mp4'])
       const kept = await ffprobeJson(path.join(outDir, 'long_Quick_youtube.mp4'))
       expect(Number(kept.format?.duration)).toBeGreaterThan(1.5)
@@ -3938,7 +3949,7 @@ test.describe('ExportPanel', () => {
         timeout: 30_000
       })
       await expect(card.getByText('Failed', { exact: true })).toHaveCount(1)
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
       await expect(card.getByRole('button', { name: 'Export 1' })).toBeEnabled()
 
       // ── the control: put the file back, export again — the new queue
@@ -4014,7 +4025,7 @@ test.describe('ExportPanel', () => {
       expect(refused.join(' | ')).not.toMatch(/ffmpeg|ffprobe|exit \d|Error invoking remote method|jobs\[0\]/i)
       await expect(card.getByText('Failed', { exact: true })).toBeVisible()
       await expect(card.getByRole('button', { name: 'Export 1 file' })).toBeEnabled()
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
 
       // ── T-109: the GIF and the compilation say the SAME sentence, not the generic
       //    failure line the validator's path-shaped message used to turn into ──
@@ -4036,7 +4047,7 @@ test.describe('ExportPanel', () => {
       })
       const all = (await readToastLog(window)).join(' | ')
       expect(all).not.toMatch(/GIF export failed|Compilation failed|segments\[|cropRect|Error invoking remote method/)
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
       // Back to the clip with the crop for the redraw below.
       await clipListCard(window).getByRole('button', { name: 'Select clip Damaged' }).click()
 
@@ -4180,7 +4191,7 @@ test.describe('ExportPanel', () => {
       expect(await readToastLog(window)).not.toEqual(
         expect.arrayContaining([expect.stringContaining('Choose an output folder first')])
       )
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
       await expect(card.getByRole('button', { name: 'Choose folder…' })).toBeVisible()
 
       // ── 2: the chooser is answered: the folder is taken AND the export runs, in one click ──
@@ -4663,7 +4674,7 @@ test.describe('ClipKit', () => {
 
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
       await expect
-        .poll(() => (existsSync(kitDir) ? readdirSync(kitDir).sort() : []), {
+        .poll(() => (existsSync(kitDir) ? withoutAtomicTmp(readdirSync(kitDir)).sort() : []), {
           timeout: 540_000,
           intervals: [1000]
         })
@@ -4734,7 +4745,7 @@ test.describe('ClipKit', () => {
       expect(await outcome(), 'a kit asked for on a blank-named clip').toBe('saved')
 
       const kitDir = path.join(outDir, `clip-kit-${kitStamp()}`)
-      expect(readdirSync(kitDir).sort()).toEqual([
+      expect(withEverything(readdirSync(kitDir)).sort()).toEqual([
         'clip_facebook.mp4',
         'clip_reels.mp4',
         'clip_thumb_1.jpg',
@@ -4839,7 +4850,7 @@ test.describe('ClipKit', () => {
         'Clip_1_twitter.mp4',
         'Clip_1_youtube.mp4'
       ]
-      const listing = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).sort() : [])
+      const listing = (dir: string): string[] => (existsSync(dir) ? withoutAtomicTmp(readdirSync(dir)).sort() : [])
 
       await kit.click()
       await expect.poll(() => listing(first), { timeout: 540_000, intervals: [1000] }).toEqual(FILES)
@@ -4880,7 +4891,7 @@ test.describe('ClipKit', () => {
       await kit.click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
 
       // T-112: an EMPTY kit folder is removed when the kit is canceled, so this test (about the
       // confirm, and about a folder that holds a file) holds job 2's probe: job 1 has landed
@@ -4920,7 +4931,7 @@ test.describe('ClipKit', () => {
       // passes never spawned, so nothing leaked past the kill.
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
       expect(existsSync(kitDir)).toBe(true)
-      const left = readdirSync(kitDir)
+      const left = withEverything(readdirSync(kitDir))
       expect(left.filter((f) => f.endsWith('.mp4'))).toHaveLength(1)
       expect(left.filter((f) => f.endsWith('.jpg'))).toEqual([])
     } finally {
@@ -4961,7 +4972,7 @@ test.describe('ClipKit', () => {
 
       // The five exports finished before Cancel and stay; not one thumbnail was written.
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
-      const left = readdirSync(kitDir)
+      const left = withEverything(readdirSync(kitDir))
       expect(left.filter((f) => f.endsWith('.mp4'))).toHaveLength(5)
       expect(left.filter((f) => f.endsWith('.jpg'))).toEqual([])
       expect((await readSpawnLog(app)).filter((k) => k === 'frame')).toHaveLength(1)
@@ -5071,8 +5082,8 @@ test.describe('ClipKit', () => {
       expect(toasts.join(' | ')).not.toMatch(/SRT not bundled|source SRT|not found/)
       // The captions notice is a heads-up, not a failure: the rest is saved.
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
-      expect(readdirSync(kitDir).filter((f) => f.endsWith('.mp4'))).toHaveLength(5)
-      expect(readdirSync(kitDir).filter((f) => f.endsWith('.srt'))).toEqual([])
+      expect(withEverything(readdirSync(kitDir)).filter((f) => f.endsWith('.mp4'))).toHaveLength(5)
+      expect(withEverything(readdirSync(kitDir)).filter((f) => f.endsWith('.srt'))).toEqual([])
       // The fragment went where a bug report can find it.
       expect(consoleLines.join('\n')).toMatch(/source SRT not found/)
     } finally {
@@ -5108,7 +5119,7 @@ test.describe('ClipKit', () => {
       await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
 
       // ── accepted: the kit runs. One question, asked once — no safe-zone
       //    modal follows it (T-85). ──
@@ -5195,7 +5206,7 @@ test.describe('ClipKit', () => {
       if (process.platform === 'win32') {
         // The shipping platform: five watermarked files render for real.
         await expect
-          .poll(() => (existsSync(kitDir) ? readdirSync(kitDir).filter((f) => f.endsWith('.mp4')).length : 0), {
+          .poll(() => (existsSync(kitDir) ? withoutAtomicTmp(readdirSync(kitDir)).filter((f) => f.endsWith('.mp4')).length : 0), {
             timeout: 540_000,
             intervals: [500]
           })
@@ -5213,7 +5224,7 @@ test.describe('ClipKit', () => {
           .poll(() => consoleLines.join('\n'), { timeout: 30_000 })
           .toContain("No such filter: 'drawtext'")
         expect(
-          existsSync(kitDir) ? readdirSync(kitDir).filter((f) => f.endsWith('.mp4')) : []
+          existsSync(kitDir) ? withoutAtomicTmp(readdirSync(kitDir)).filter((f) => f.endsWith('.mp4')) : []
         ).toEqual([])
       }
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
@@ -5264,7 +5275,7 @@ test.describe('ClipKit', () => {
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
       await expect
         .poll(
-          () => (existsSync(kitDir) ? readdirSync(kitDir).filter((f) => f.endsWith('.mp4')).length : 0),
+          () => (existsSync(kitDir) ? withoutAtomicTmp(readdirSync(kitDir)).filter((f) => f.endsWith('.mp4')).length : 0),
           { timeout: 540_000, intervals: [500] }
         )
         .toBe(5)
@@ -5299,7 +5310,7 @@ test.describe('PipPanel', () => {
       await expect(card.getByRole('button', { name: 'Overlay: none' })).toBeVisible()
       await card.getByRole('button', { name: 'Composite' }).click()
       await expectToast(window, 'Pick both files')
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
 
       // ── the two file pickers ──
       await card.getByRole('button', { name: 'Base: none' }).click()
@@ -5865,7 +5876,7 @@ test.describe('single-output panels', () => {
       const reframe = reframeCard(window)
       await reframe.getByRole('button', { name: 'Choose folder…' }).click()
       await reframe.getByRole('button', { name: 'Reframe to 9:16' }).click()
-      const written = (ext: string): string[] => readdirSync(outDir).filter((f) => f.endsWith(ext))
+      const written = (ext: string): string[] => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith(ext))
       await expect.poll(() => written('.mp4').length, { timeout: 540_000, intervals: [500] }).toBe(1)
       // Same contract as the graded case above: the poll fires on the first byte, the button comes back at the close (round 80).
       await expect(reframe.getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({ timeout: 60_000 })
@@ -5954,7 +5965,7 @@ test.describe('single-output panels', () => {
       await expect(pip.getByRole('button', { name: 'Composite' })).toBeEnabled({ timeout: 60_000 })
 
       expect(await openedDialogs(app), 'no folder chooser was opened (only the two file choosers)').toEqual(['file', 'file'])
-      expect(readdirSync(outDir), 'nothing went to the folder the test owns').toEqual([])
+      expect(withEverything(readdirSync(outDir)), 'nothing went to the folder the test owns').toEqual([])
       expect((readConfig(userDataDir).video as { lastOutputDir?: string } | undefined)?.lastOutputDir).toBe(seeded)
     } finally {
       await app.close()
@@ -6061,7 +6072,7 @@ test.describe('single-output panels', () => {
       await pip.getByRole('button', { name: 'Overlay: none' }).click()
       await doubleClick('Picture-in-picture', pip, 'Composite', 'pipeline_pip.mp4', true)
 
-      expect(readdirSync(seeded).sort(), 'exactly the five files, none of them a second copy').toEqual(
+      expect(withEverything(readdirSync(seeded)).sort(), 'exactly the five files, none of them a second copy').toEqual(
         ['pipeline_Clip 1_youtube.mp4', 'pipeline_Clip 2_480px_15fps.gif', 'pipeline_Clip 2_reframe-1080x1920-center.mp4', 'pipeline_compilation.mp4', 'pipeline_pip.mp4'].sort()
       )
       const toasts = await readToastLog(window)
@@ -6163,7 +6174,7 @@ test.describe('single-output panels', () => {
     await Promise.race([closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the app did not exit within 30 s of the window X')), 30_000))])
   }
 
-  test('quitting the app in the middle of an export leaves no half-written file at the final name (T-127 (3))', async () => {
+  test('quitting the app in the middle of an export leaves no half-written file, at the final name or beside it (T-127 (3), T-140 (1))', async () => {
     test.setTimeout(300_000)
     const src = path.join(root, 'source', 't127-quit.mp4')
     await ffmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=60', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p', src])
@@ -6172,12 +6183,13 @@ test.describe('single-output panels', () => {
     const { app, window } = await launchWithVideo('t127quit', src, { export: { lastOutputDir: seeded } })
     try {
       await exportCard(window).getByRole('button', { name: 'Export 1 file', exact: true }).click()
-      const sizes = (): number[] => readdirSync(seeded).map((f) => statSync(path.join(seeded, f)).size)
-      // The encode has opened its output at the final name and is writing it.
+      const sizes = (): number[] => withEverything(readdirSync(seeded)).map((f) => statSync(path.join(seeded, f)).size)
+      // The encode has opened its output and is writing it - T-140 (1): a PARTIAL beside the name the export will have, never the name itself.
       await expect.poll(() => sizes().some((n) => n > 300_000), { timeout: 120_000, intervals: [200] }).toBe(true)
-      expect(readdirSync(seeded), 'the half-written export is at its final name while the encode runs').toEqual(['t127-quit_Clip 1_youtube.mp4'])
+      expect(withoutAtomicTmp(readdirSync(seeded)), 'no file has the name of a finished export while the encode runs').toEqual([])
+      expect(partialsOnly(readdirSync(seeded)), 'the half-written export is a partial').toEqual([expect.stringMatching(/^t127-quit_Clip 1_youtube\.[0-9a-f]{8}\.partial\.mp4$/)])
       await quitByWindowX(app)
-      expect(readdirSync(seeded), 'nothing is left in the folder after the quit: Cancel deletes the half-written file, and so must a quit').toEqual([])
+      expect(withEverything(readdirSync(seeded)), 'nothing is left in the folder after the quit: Cancel deletes the half-written file, and so must a quit').toEqual([])
     } finally {
       await app.close().catch(() => undefined)
     }
@@ -6196,7 +6208,6 @@ test.describe('single-output panels', () => {
     const { app, window } = await launchHome('t127reattach')
     try {
       const output = path.join(outDir, 'result.mp4')
-      const scratch = path.join(outDir, 'result.cleaned.wav')
       // The Export panel's Re-attach is this IPC (audio:mux) with the same spec; the button needs a native save dialog, which is not the thing under test.
       void window
         .evaluate(
@@ -6205,10 +6216,11 @@ test.describe('single-output panels', () => {
           [picture, sound, output, { ...DEFAULT_CHAIN_SPEC, denoise: 'aggressive' }] as const
         )
         .catch(() => undefined)
-      // The first pass is rendering the cleaned sound to the scratch WAV.
-      await expect.poll(() => existsSync(scratch) && statSync(scratch).size > 3_000_000, { timeout: 120_000, intervals: [200] }).toBe(true)
+      // The first pass is rendering the cleaned sound to the scratch WAV (T-140 (1): to a partial beside it, which becomes `result.cleaned.wav` when the pass is whole).
+      const rendering = (): string[] => partialsOnly(readdirSync(outDir)).filter((f) => f.endsWith('.wav') && statSync(path.join(outDir, f)).size > 3_000_000)
+      await expect.poll(() => rendering().length, { timeout: 120_000, intervals: [200] }).toBe(1)
       await quitByWindowX(app)
-      expect(readdirSync(outDir), 'no .cleaned.wav and no result.mp4 after the quit').toEqual([])
+      expect(withEverything(readdirSync(outDir)), 'no .cleaned.wav and no result.mp4 after the quit').toEqual([])
     } finally {
       await app.close().catch(() => undefined)
     }
@@ -6290,8 +6302,10 @@ test.describe('single-output panels', () => {
           )
         }, url)
         .catch(() => undefined)
-      // The convert has opened its output at the name the person chose, and the raw take is in userData.
-      await expect.poll(() => existsSync(outPath) && statSync(outPath).size > 300_000, { timeout: 120_000, intervals: [200] }).toBe(true)
+      // The convert has opened its output - T-140 (1): a PARTIAL beside the name the person chose - and the raw take is in userData.
+      const converting = (): string[] => partialsOnly(readdirSync(outDir)).filter((f) => statSync(path.join(outDir, f)).size > 300_000)
+      await expect.poll(() => converting().length, { timeout: 120_000, intervals: [200] }).toBe(1)
+      expect(existsSync(outPath), 'and the chosen name is not touched while it writes').toBe(false)
       const recordings = path.join(userDataDir, 'recordings')
       const takes = readdirSync(recordings)
       expect(takes, 'the raw take is the one webm in userData/recordings while the convert runs').toHaveLength(1)
@@ -6301,6 +6315,7 @@ test.describe('single-output panels', () => {
       await quitByWindowX(app)
 
       expect(existsSync(outPath), 'no half-written mp4 at the name the person chose').toBe(false)
+      expect(withEverything(readdirSync(outDir)), 'and no partial beside it').toEqual([])
       expect(readdirSync(recordings), 'and the raw take survived the quit: a take is never both gone').toEqual(takes)
       expect(statSync(path.join(recordings, takes[0] as string)).size).toBe(rawSize)
     } finally {
@@ -6986,7 +7001,7 @@ test.describe('single-output panels', () => {
       const revealButton = window
         .locator('[data-rht-toaster]')
         .getByRole('button', { name: 'Show in folder', exact: true })
-      const gifs = (): string[] => readdirSync(outDir).filter((f) => f.endsWith('.gif')).sort()
+      const gifs = (): string[] => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('.gif')).sort()
 
       // ── GIF ──
       const gif = gifCard(window)
@@ -7035,7 +7050,7 @@ test.describe('single-output panels', () => {
       await expect.poll(() => existsSync(compSecond), { timeout: 540_000, intervals: [500] }).toBe(true)
       await expectToast(window, `Saved ${path.basename(compSecond)}`)
       await expectRevealToast(window, app, compSecond)
-      expect(readdirSync(outDir).filter((f) => f.includes('_compilation')).sort()).toEqual([
+      expect(withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.includes('_compilation')).sort()).toEqual([
         'pipeline_compilation (2).mp4',
         'pipeline_compilation.mp4'
       ])
@@ -7051,7 +7066,7 @@ test.describe('single-output panels', () => {
       await exportPanel.getByRole('button', { name: 'Export 2 files' }).click()
       const exportFirst = ['Clip 1-youtube.mp4', 'Clip 2-youtube.mp4']
       await expect
-        .poll(() => readdirSync(outDir).filter((f) => f.endsWith('-youtube.mp4')).sort(), {
+        .poll(() => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('-youtube.mp4')).sort(), {
           timeout: 540_000,
           intervals: [500]
         })
@@ -7069,7 +7084,7 @@ test.describe('single-output panels', () => {
       await exportPanel.getByRole('button', { name: 'Export 2 files' }).click()
       const exportSecond = ['Clip 1-youtube (2).mp4', 'Clip 2-youtube (2).mp4']
       await expect
-        .poll(() => readdirSync(outDir).filter((f) => f.endsWith('-youtube (2).mp4')).sort(), {
+        .poll(() => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('-youtube (2).mp4')).sort(), {
           timeout: 540_000,
           intervals: [500]
         })
@@ -7231,7 +7246,7 @@ test.describe('single-output panels', () => {
           timeout: 30_000
         })
         .toBeGreaterThanOrEqual(4)
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
     } finally {
       await app.close()
     }
@@ -7287,7 +7302,7 @@ test.describe('single-output panels', () => {
       await expect(compileCancel).toHaveCount(0)
 
       // None of the three left a finished file behind it as if it had worked.
-      expect(mp4sIn(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
+      expect(mp4sOnDisk(outDir).filter((f) => f.endsWith('_compilation.mp4'))).toEqual([])
     } finally {
       await app.close()
     }
@@ -7374,7 +7389,7 @@ test.describe('single-output panels', () => {
       // Wait out the last hold: still no encoder, still nothing written.
       await window.waitForTimeout(7000)
       expect((await readSpawnLog(app)).filter((k) => k !== 'ffprobe')).toEqual([])
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
       const shown = (await readToastLog(window)).join(' | ')
       expect(shown).not.toMatch(/Saved the|Found \d+ highlight|No standout/)
     } finally {
@@ -8058,7 +8073,7 @@ test.describe('T-112: review-gate fixes', () => {
       // folder once: a wrong file list is a red in seconds, not a poll that waits out its timeout.
       await expect(kit).not.toHaveText(/^(Exporting|Extracting)/, { timeout: 540_000 })
       const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
-      expect(existsSync(kitDir) ? readdirSync(kitDir).sort() : []).toEqual([
+      expect(existsSync(kitDir) ? withEverything(readdirSync(kitDir)).sort() : []).toEqual([
         'Clip_1_facebook.mp4',
         'Clip_1_reels.mp4',
         'Clip_1_thumb_1.jpg',
@@ -8071,7 +8086,7 @@ test.describe('T-112: review-gate fixes', () => {
       const short = videoStream(await ffprobeJson(path.join(kitDir, 'Clip_1_youtube_short.mp4')))
       expect([short.width, short.height]).toEqual([1080, 1920])
       // No landscape YouTube file beside it: the slot IS the Short.
-      expect(readdirSync(kitDir)).not.toContain('Clip_1_youtube.mp4')
+      expect(withoutAtomicTmp(readdirSync(kitDir))).not.toContain('Clip_1_youtube.mp4')
       // T-130 (t): and the three thumbnails are the clip's CROPPED picture, not the whole 640x360 frame the crop threw most of away. The 9:16
       // button draws 90% of the frame's height (182x324 of this fixture) and the red block (x 20-100) is outside it; the source frame is the
       // control that the count can see the block.
@@ -9018,9 +9033,9 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(again.getByText('Failed', { exact: true })).toHaveCount(0)
       await expect(again.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
       // ...and the refused kit started nothing: no probe, no encoder, no file, and no empty folder left behind.
-      await expect.poll(() => readdirSync(kitParent), { timeout: 15_000, intervals: [200] }).toEqual([])
+      await expect.poll(() => withEverything(readdirSync(kitParent)), { timeout: 15_000, intervals: [200] }).toEqual([])
       expect((await readSpawnLog(app)).length).toBe(spawnedBefore)
-      expect(mp4sIn(outDir)).toEqual([])
+      expect(mp4sOnDisk(outDir)).toEqual([])
     } finally {
       await app.close()
     }
@@ -9068,7 +9083,7 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(kit).toHaveText('Exporting platform version 1 of 5…', { timeout: 30_000 })
       // The folder exists now: this is the thing that used to survive.
       expect(existsSync(kitDir)).toBe(true)
-      expect(readdirSync(kitDir)).toEqual([])
+      expect(withEverything(readdirSync(kitDir))).toEqual([])
 
       await clipListCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
       await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
@@ -9079,7 +9094,7 @@ test.describe('T-112: review-gate fixes', () => {
       )
       await expect.poll(() => existsSync(kitDir), { timeout: 15_000, intervals: [100] }).toBe(false)
       // Nothing else in the chosen folder: no stray kit, no partial file.
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
     } finally {
       await app.close()
     }
@@ -9102,7 +9117,7 @@ test.describe('T-112: review-gate fixes', () => {
 
       await expectToast(window, 'Clip Kit failed.')
       await expect.poll(() => existsSync(kitDir), { timeout: 15_000, intervals: [100] }).toBe(false)
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
     } finally {
       await app.close()
     }
@@ -9129,7 +9144,7 @@ test.describe('T-112: review-gate fixes', () => {
       )
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 30_000 })
       // The finished file and its folder are where the toast says they are...
-      expect(readdirSync(kitDir)).toEqual(['Clip_1_youtube.mp4'])
+      expect(withEverything(readdirSync(kitDir))).toEqual(['Clip_1_youtube.mp4'])
       // ...and the kit never asked main to remove a folder it knew had a file in it. (The
       // handler would have refused anyway: this pins that the renderer's own bookkeeping holds.)
       await window.waitForTimeout(1000)
@@ -9208,7 +9223,7 @@ test.describe('T-113: review-gate fixes, pass 2', () => {
       await kitButton(window).click()
       await expectToast(window, 'Saved your Clip Kit')
       const kitDir = path.join(outDir, `Mid-kit-${kitStamp()}`)
-      expect(readdirSync(kitDir).filter((f) => f.endsWith('.srt'))).toEqual(['Mid_captions.srt'])
+      expect(withEverything(readdirSync(kitDir)).filter((f) => f.endsWith('.srt'))).toEqual(['Mid_captions.srt'])
       expect(readFileSync(path.join(kitDir, 'Mid_captions.srt'), 'utf8')).toBe(
         '1\n00:00:00,050 --> 00:00:00,250\nfirst\n\n2\n00:00:00,350 --> 00:00:00,700\nsecond\n'
       )
@@ -9242,8 +9257,8 @@ test.describe('T-113: review-gate fixes, pass 2', () => {
       await kitButton(window).click()
       await expectToast(window, 'Saved your Clip Kit (no captions fall inside this clip)')
       const kitDir = path.join(outDir, `Mid-kit-${kitStamp()}`)
-      expect(readdirSync(kitDir).filter((f) => f.endsWith('.srt'))).toEqual([])
-      expect(readdirSync(kitDir).filter((f) => f.endsWith('.mp4'))).toHaveLength(5)
+      expect(withEverything(readdirSync(kitDir)).filter((f) => f.endsWith('.srt'))).toEqual([])
+      expect(withEverything(readdirSync(kitDir)).filter((f) => f.endsWith('.mp4'))).toHaveLength(5)
     } finally {
       await app.close()
     }
@@ -9662,7 +9677,7 @@ test.describe('T-113: review-gate fixes, pass 2', () => {
       // Canceling the question starts nothing and makes no folder.
       await modal.getByRole('button', { name: 'Cancel' }).click()
       await expect(modal).toHaveCount(0)
-      expect(readdirSync(outDir)).toEqual([])
+      expect(withEverything(readdirSync(outDir))).toEqual([])
     } finally {
       await app.close()
     }
@@ -9700,7 +9715,7 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
       const editHere = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
       await expect(editHere, 'the saved toast carries the action').toBeVisible({ timeout: 300_000 })
-      const reframed = readdirSync(seeded).find((f) => f.endsWith('.mp4'))
+      const reframed = withoutAtomicTmp(readdirSync(seeded)).find((f) => f.endsWith('.mp4'))
       expect(reframed, 'the reframed file is in the folder').toBeDefined()
       window.on('dialog', (dialog) => void dialog.accept())
       await editHere.click()
@@ -9750,7 +9765,7 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
       const editHere = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
       await expect(editHere).toBeVisible({ timeout: 300_000 })
-      const reframed = readdirSync(seeded).find((f) => f.endsWith('.mp4')) as string
+      const reframed = withoutAtomicTmp(readdirSync(seeded)).find((f) => f.endsWith('.mp4')) as string
       window.on('dialog', (dialog) => void dialog.accept())
       await editHere.click()
       await expect(window.locator('header').getByText(reframed, { exact: true })).toBeVisible({ timeout: 30_000 })
@@ -9850,7 +9865,7 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       // Not answered: the kit runs on under the question and finishes, and the question goes with it.
       await expect(dialog, 'the question is gone with the kit').toHaveCount(0, { timeout: 540_000 })
       await expect(kitButton(window)).toBeEnabled({ timeout: 60_000 })
-      expect(readdirSync(outDir).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
+      expect(withoutAtomicTmp(readdirSync(outDir)).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
     } finally {
       await app.close()
     }
@@ -10091,7 +10106,7 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await expectToast(window, 'Saved your Clip Kit')
       await expect(kitButton(window)).toBeEnabled({ timeout: 60_000 })
       expect((await chooserCalls(app)).filter((c) => c.folder), 'one folder chooser').toHaveLength(1)
-      const kits = readdirSync(outDir).filter((f) => f.includes('-kit-'))
+      const kits = withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.includes('-kit-'))
       expect(kits, 'one kit folder, not two').toHaveLength(1)
     } finally {
       await app.close()
@@ -11064,7 +11079,7 @@ test.describe('T-138 (4): the Clip Kit\'s Cancel question is outside every live 
       // "the card is gone" no longer closes it by itself.
       await expect(dialog, 'the question is gone with the kit').toHaveCount(0, { timeout: 540_000 })
       await expect(region).toHaveText('', { timeout: 60_000 })
-      expect(readdirSync(outDir).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
+      expect(withoutAtomicTmp(readdirSync(outDir)).length, 'the kit was not canceled by an unanswered question').toBeGreaterThan(0)
     } finally {
       await app.close()
     }
@@ -11444,6 +11459,158 @@ test.describe('T-140 (10): a failed transcription is the captions engine\'s, wit
       await expect(card.getByRole('button', { name: 'Captions setup', exact: true }), 'and the setup it names is on the panel').toBeVisible()
     } finally {
       await app.close()
+    }
+  })
+})
+
+
+// ── T-140 (1): a render is the old file until the new one is whole ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ffmpeg truncates the file it opens, so a runner that handed it the final path destroyed the file it was replacing the moment the encode began; every runner now
+// writes `<stem>.<8 hex>.partial<ext>` beside the name and renames it over when whole (`ffmpeg/partialOutput.ts`). Layer 5 holds each runner on the real binary; these
+// are the two ways a person meets it in the app: a Save dialog that said "replace" (the recording's save), and the folder export run again into the folder that
+// holds its earlier export (T-106 already wrote that one BESIDE it, as "name (2)", so the earlier export was never at risk on the unchanged build - Layer 5's
+// "a canceled job beside an earlier export of the same name leaves that export alone" holds that - and this case is red there only for the partial's NAME; here it
+// pins that the partial left no hole in it: the earlier export is untouched by a Cancel, and a completed re-export lands next to it).
+test.describe('T-140 (1): the file a render replaces is whole until the new one is', () => {
+  test("a Discard in the middle of the recording's MP4 convert leaves the file the person named in the Save dialog byte for byte, and no partial", async () => {
+    test.setTimeout(300_000)
+    const dir = path.join(root, `t140take-${Date.now().toString(36)}`)
+    mkdirSync(dir, { recursive: true })
+    const webm = path.join(dir, 'take.webm')
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=20', '-c:v', 'libvpx', '-b:v', '800k', '-deadline', 'realtime', '-cpu-used', '8', '-an', webm])
+    const { app, window, userDataDir, outDir } = await launchHome('t140rec')
+    try {
+      const outPath = path.join(outDir, 'take.mp4')
+      writeFileSync(outPath, 'the earlier take, at the name the person picked again'.repeat(3000))
+      const before = sha256(outPath)
+      await stubDialogs(app, { save: [outPath] })
+      const url = await window.evaluate((p) => window.api.video.fileUrl(p), webm)
+      // The renderer's own calls (the Record studio's Stop runs exactly these): begin, the bytes in slices, then finalize with Convert on. The id is kept on `window`
+      // so the Discard below can name the take, as the Record screen's button does.
+      const finished = window
+        .evaluate(async (u) => {
+          const bytes = await (await fetch(u)).arrayBuffer()
+          const { id } = await window.api.recording.begin()
+          ;(window as unknown as { __takeId?: string }).__takeId = id
+          for (let at = 0; at < bytes.byteLength; at += 4 * 1024 * 1024) await window.api.recording.appendChunk(id, bytes.slice(at, Math.min(at + 4 * 1024 * 1024, bytes.byteLength)))
+          return window.api.recording.finalize(id, { filename: 'take', convertToMp4: true, durationMs: 20_000 }).then(
+            (r) => JSON.stringify(r),
+            (e: unknown) => `ERR ${String(e)}`
+          )
+        }, url)
+        .catch((e: unknown) => `ERR ${String(e)}`)
+      // The convert has opened its output: a partial beside the name (or - the old behavior, which this case is red on - the earlier take was rewritten).
+      await expect
+        .poll(() => partialsOnly(readdirSync(outDir)).length > 0 || sha256(outPath) !== before, { timeout: 120_000, intervals: [200] })
+        .toBe(true)
+      expect(sha256(outPath), 'the earlier take is untouched while the convert writes').toBe(before)
+
+      const takeId = await window.evaluate(() => (window as unknown as { __takeId?: string }).__takeId ?? '')
+      expect(await window.evaluate((id) => window.api.recording.cancelSave(id), takeId), 'the Discard found the convert').toBe(true)
+      expect(await finished, 'a Discard answers null: "Recording discarded."').toBe('null')
+
+      expect(sha256(outPath), 'the earlier take is byte for byte what it was').toBe(before)
+      expect(withEverything(readdirSync(outDir)), 'and no partial is left beside it').toEqual(['take.mp4'])
+      expect(readdirSync(path.join(userDataDir, 'recordings')), 'a Discard throws the raw take away, as it says it does').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('re-exporting a clip into the folder that holds its earlier export: a Cancel leaves the earlier export byte for byte with no partial, and a finished re-export lands beside it', async () => {
+    test.setTimeout(600_000)
+    const src = path.join(root, 'source', 't140-reexport.mp4')
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=20', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', src])
+    const seeded = path.join(root, `t140reexport-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t140reexport', src, { export: { lastOutputDir: seeded } })
+    try {
+      const card = exportCard(window)
+      const first = path.join(seeded, 't140-reexport_Clip 1_youtube.mp4')
+      // ── the earlier export, run to its end ──
+      // (The toast and the button, not the file's existence: the file is only whole once the run has ended.)
+      const exported = async (): Promise<number> => (await readToastLog(window)).filter((t) => t === 'Exported 1 file').length
+      await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      await expect.poll(exported, { timeout: 300_000, intervals: [500] }).toBe(1)
+      await expect(card.getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 60_000 })
+      const before = sha256(first)
+      expect(withEverything(readdirSync(seeded)), 'the earlier export, alone').toEqual(['t140-reexport_Clip 1_youtube.mp4'])
+
+      // ── the same clip again, stopped while ffmpeg writes ──
+      await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 120_000, intervals: [200] }).toBe(1)
+      expect(sha256(first), 'the earlier export is untouched while the second one writes').toBe(before)
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(card.getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 60_000 })
+      expect(sha256(first), 'and after the Cancel').toBe(before)
+      expect(withEverything(readdirSync(seeded)), 'no partial and no "(2)" is left').toEqual(['t140-reexport_Clip 1_youtube.mp4'])
+
+      // ── the same clip a third time, to its end: it lands BESIDE the first, whole ──
+      await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      const second = path.join(seeded, 't140-reexport_Clip 1_youtube (2).mp4')
+      await expect.poll(exported, { timeout: 300_000, intervals: [500] }).toBe(2)
+      await expect(card.getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 60_000 })
+      expect(sha256(first), 'the earlier export is byte for byte what it was').toBe(before)
+      expect(withEverything(readdirSync(seeded)).sort(), 'two exports and no partial').toEqual(['t140-reexport_Clip 1_youtube (2).mp4', 't140-reexport_Clip 1_youtube.mp4'])
+      const probe = await ffprobeJson(second)
+      expect(probe.streams?.some((s) => s.codec_type === 'video'), 'the new one is a real video').toBe(true)
+      expect(Number(probe.format?.duration)).toBeGreaterThan(18)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// T-140 (1), sent back: the captioned video is written over a file that is open in another app. Windows refuses the swap onto it for as long as it is held, and
+// the burn-in has run for as long as the video is long: it is kept as "name (2)", the file that was open is untouched, and the toast says which name it was saved
+// as. Burn-in is ffmpeg-only (no engine, no model), so this is the real button, the real Save-dialog answer and the real burn; only the refusal is made, in main.
+test.describe('T-140 (1), sent back: a burn-in over a file that is open in another app', () => {
+  test('is kept beside it as "name (2)", and the toast says why', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('burnheld')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'held.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:01,000\nhello\n', 'utf8')
+      const projectPath = path.join(root, `burnheld-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath }
+        }),
+        'utf8'
+      )
+      const held = path.join(outDir, 'held-captioned.mp4')
+      writeFileSync(held, 'an earlier burn, open in a player'.repeat(2000))
+      const before = sha256(held)
+      await stubDialogs(app, { open: [projectPath], save: [held] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await refuseRenamesOnto(app, held)
+
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await burn.click()
+      await expectToast(window, 'Captions burned in. held-captioned.mp4 is open in another app, so this burn-in was saved as held-captioned (2).mp4.')
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused (and tried again)').toBeGreaterThan(1)
+
+      const beside = path.join(outDir, 'held-captioned (2).mp4')
+      expect(sha256(held), 'the file that was open is byte for byte what it was').toBe(before)
+      const probe = await ffprobeJson(beside)
+      expect(probe.streams?.some((s) => s.codec_type === 'video'), 'a real video at the new name').toBe(true)
+      expect(Number(probe.format?.duration)).toBeGreaterThan(1.5)
+      expect(withEverything(readdirSync(outDir)).sort(), 'two files and no partial').toEqual(['held-captioned (2).mp4', 'held-captioned.mp4'])
+    } finally {
+      await app.close().catch(() => undefined)
     }
   })
 })

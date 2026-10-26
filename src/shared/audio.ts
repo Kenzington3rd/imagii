@@ -367,6 +367,10 @@ export interface AudioJobProgress {
 
 export interface AudioJobResult {
   jobId: string
+  /**
+   * The file that exists. It is the path the job was given unless that file was open in another app and the swap onto it was refused for good (T-140 (1)):
+   * then the render is kept beside it under the next free name, and this is that name. The panel reports and reveals THIS path.
+   */
   outputPath: string
   durationMs: number
 }

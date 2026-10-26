@@ -115,7 +115,10 @@ export interface RecordingFinalizeSpec {
 }
 
 export interface RecordingResult {
+  /** The file that exists. When the file chosen in the Save dialog was open in another app (the swap onto it is refused), this is the next free name beside it. */
   outputPath: string
+  /** T-140 (1): the path that was chosen, present only when `outputPath` is not it, so the toast can say why. */
+  requestedPath?: string
   sizeBytes: number
   format: 'webm' | 'mp4'
   durationMs: number

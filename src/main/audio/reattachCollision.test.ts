@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DEFAULT_CHAIN_SPEC } from '../../shared/audio'
@@ -47,7 +47,13 @@ vi.mock('node:child_process', () => ({
     const child = new FakeChild()
     spawned.push(args)
     if (holdSpawn === spawned.length) child.held = true
-    else setImmediate(() => child.emit('close', 0, null))
+    else {
+      setImmediate(() => {
+        // T-140 (1): a pass that exits 0 has written its output - a partial beside the file it is for - and the runner swaps it in.
+        writeFileSync(args[args.length - 1] as string, 'what ffmpeg wrote')
+        child.emit('close', 0, null)
+      })
+    }
     return child
   }
 }))
@@ -167,11 +173,14 @@ describe('a quit in the middle of a re-attach waits for the scratch WAV to go (T
     )
     for (let i = 0; i < 200 && spawned.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 5))
     const wav = path.join(dir, 'out.cleaned.wav')
-    writeFileSync(wav, 'half a render') // ffmpeg opened it
+    // ffmpeg opened its output: T-140 (1) a PARTIAL beside the scratch WAV, never the WAV's own name.
+    const partial = (spawned[0] as string[])[(spawned[0] as string[]).length - 1] as string
+    writeFileSync(partial, 'half a render')
     slowUnlinkMs = 150
     cancelAllAudioJobs()
     await expect(drainRuns(2000)).resolves.toBe('drained')
     expect(existsSync(wav)).toBe(false)
+    expect(readdirSync(dir), 'the half-written render is gone with the quit, and only the source is left').toEqual(['voice.wav'])
     expect(isCancelledError(await running)).toBe(true)
     expect(spawned.length, 'the mux pass never started').toBe(1)
   })

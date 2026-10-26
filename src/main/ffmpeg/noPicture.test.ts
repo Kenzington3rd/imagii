@@ -385,10 +385,11 @@ describe('the runners do not accuse a good run whose paths contain the phrase (T
     const outDir = path.join(scratch, FOLDER)
     mkdirSync(outDir)
     const outputPath = path.join(outDir, 'vertical.mp4')
-    onSpawn = (child) => {
-      writeFileSync(outputPath, Buffer.alloc(62_000, 1))
+    // T-140 (1): what ffmpeg writes (and echoes in its "Output #0" line) is the PARTIAL beside the name the runner chose.
+    onSpawn = (child, written) => {
+      writeFileSync(written, Buffer.alloc(62_000, 1))
       child.stdout.emit('data', 'frame=60\nout_time_us=2000000\nprogress=end\n')
-      child.stderr.emit('data', echoOf(outputPath))
+      child.stderr.emit('data', echoOf(written))
       child.emit('close', 0)
     }
     await expect(runReframe({ ...reframeJob(), outputPath }, () => undefined)).resolves.toBeDefined()

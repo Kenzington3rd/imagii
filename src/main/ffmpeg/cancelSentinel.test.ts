@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CANCELLED_MESSAGE, CancelledError, isCancelledError } from '../../shared/cancel'
@@ -101,6 +102,17 @@ vi.mock('./outputPath', async () => {
       if (nameGate) await nameGate
       return real.nextFreePath(...args)
     }
+  }
+})
+
+// T-140 (1): `fs.promises.rename` is real unless a row sets `renameHook`: a file that is open in another app on Windows refuses the swap onto it
+// (EPERM / EBUSY / EACCES), and Linux cannot be made to refuse a rename for real. Every other call goes through to the real module.
+let renameHook: ((real: typeof import('node:fs/promises').rename, from: string, to: string) => Promise<void>) | null = null
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: (from: string, to: string) => (renameHook ? renameHook(actual.rename, from, to) : actual.rename(from, to))
   }
 })
 
@@ -543,6 +555,7 @@ beforeEach(() => {
   extractGate = null
   extractCalls = 0
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-cancel-sentinel-'))
+  renameHook = null
   // Nothing in flight between cases; also proves each registry empties itself.
   cancelAllExportJobs()
   cancelAllGifJobs()
@@ -605,82 +618,220 @@ describe.each(CASES)('$name', (c) => {
     })
   }
 
-  // T-100 — the job's own half-written file goes with the job.
+  // T-100 — the job's own half-written file goes with the job. T-140 (1): and since the file ffmpeg writes is a PARTIAL beside the target, never
+  // the target, a stop (or a failure) that lands after ffmpeg opened its output touches the partial and nothing else: the file the job was to
+  // replace is the old file, byte for byte, until the whole new one is renamed over it.
   const output = c.output
   if (output) {
+    /** What the runner told ffmpeg to write: the last argument of its command. */
+    const writing = (child: FakeChild): string => child.args[child.args.length - 1] as string
+    /** The files in the scratch folder, by name (the partial would be one). */
+    const folder = (): string[] => readdirSync(scratch).sort()
+    const sha = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+
+    it('ffmpeg is never told to write the target: it writes a partial BESIDE it, with the extension last (T-140 (1))', async () => {
+      const { child, outcome } = await begin(c, 'job-1')
+      const target = output()
+      const partial = writing(child)
+      expect(partial, 'not the target').not.toBe(target)
+      expect(path.dirname(partial), 'the same folder: a rename across volumes is not atomic').toBe(path.dirname(target))
+      expect(path.extname(partial), 'the extension last, so ffmpeg picks the muxer exactly as it would for the target').toBe(path.extname(target))
+      expect(path.basename(partial)).toMatch(/\.[0-9a-f]{8}\.partial\.[^.]+$/)
+      child.emit('close', 1, null)
+      await outcome
+    })
+
     for (const [code, signal] of KILLED_EXITS) {
-      it(`a cancel (close ${code}, ${signal}) removes the half-written output`, async () => {
+      it(`a cancel (close ${code}, ${signal}) removes the half-written partial and leaves nothing else`, async () => {
         const { child, outcome } = await begin(c, 'job-1')
-        writeFileSync(output(), 'ffmpeg opened this and was killed before the moov atom')
+        writeFileSync(writing(child), 'ffmpeg opened this and was killed before the moov atom')
         c.cancels[0]?.run('job-1')
         child.emit('close', code, signal)
         await outcome
-        expect(existsSync(output())).toBe(false)
+        expect(existsSync(writing(child)), 'the partial').toBe(false)
+        expect(existsSync(output()), 'and no file appeared at the target').toBe(false)
+        expect(folder(), 'nothing is left in the folder').toEqual([])
       })
     }
 
-    it('a failure nobody asked for removes it too', async () => {
+    it('a failure nobody asked for removes the partial too', async () => {
       const { child, outcome } = await begin(c, 'job-1')
-      writeFileSync(output(), 'ffmpeg opened this and then hit an error')
+      writeFileSync(writing(child), 'ffmpeg opened this and then hit an error')
       child.emit('close', 1, null)
       await outcome
-      expect(existsSync(output())).toBe(false)
+      expect(folder()).toEqual([])
     })
 
-    if (c.choosesName === true) {
-      it('writes beside a file that is already there, never over it (T-106)', async () => {
-        const wanted = output()
-        const { dir, name, ext } = path.parse(wanted)
-        writeFileSync(wanted, "an earlier export, somebody's")
+    // The new guarantee. The target is a file somebody has: the Save dialog's "replace?" was answered yes, or the folder holds an earlier
+    // export. ffmpeg truncates what it opens, so a runner that opened the target and was stopped left NEITHER file (executed: a 100,000-byte
+    // file gone after `cancelAudioJob`, and after ENOSPC exit 228).
+    if (c.outputIsScratch !== true && c.refusesExistingOutput !== true) {
+      const EARLIER = "an earlier file, somebody's"
+      /** The file that is already at `output()` (the wanted name, for a runner that writes beside one). */
+      const seed = (): string => {
+        writeFileSync(output(), EARLIER)
+        return sha(output())
+      }
+
+      for (const [code, signal] of KILLED_EXITS) {
+        it(`a cancel (close ${code}, ${signal}) after ffmpeg opened its output leaves the file that was there byte for byte, and no partial (T-140 (1))`, async () => {
+          const before = seed()
+          const { child, outcome } = await begin(c, 'job-1')
+          writeFileSync(writing(child), 'ffmpeg opened this and was killed before the moov atom')
+          expect(sha(output()), 'the target is untouched while ffmpeg is writing').toBe(before)
+          c.cancels[0]?.run('job-1')
+          child.emit('close', code, signal)
+          await outcome
+          expect(sha(output()), 'and after the cancel').toBe(before)
+          expect(folder(), 'only the earlier file is in the folder').toEqual([path.basename(output())])
+        })
+      }
+
+      it('a failure after ffmpeg opened its output (a full disk exits 228) leaves the file that was there byte for byte, and no partial (T-140 (1))', async () => {
+        const before = seed()
         const { child, outcome } = await begin(c, 'job-1')
-        expect(child.args, 'the earlier file is not what ffmpeg is told to write').not.toContain(wanted)
-        expect(child.args[child.args.length - 1]).toBe(path.join(dir, `${name} (2)${ext}`))
+        writeFileSync(writing(child), 'ffmpeg opened this and then the disk filled')
+        child.emit('close', 228, null)
+        const err = await outcome
+        expect(isCancelledError(err)).toBe(false)
+        expect(sha(output())).toBe(before)
+        expect(folder()).toEqual([path.basename(output())])
+      })
+
+      it('a Cancel that lands after ffmpeg exited 0 and before the swap wins: the file that was there stays, the finished render is dropped (T-140 (1))', async () => {
+        const before = seed()
+        const { child, outcome } = await begin(c, 'job-1')
+        writeFileSync(writing(child), 'a whole new render')
+        // The same tick: the child has closed (the runner is about to swap), and the Cancel is recorded on its run.
         child.emit('close', 0, null)
-        await outcome
-        expect(readFileSync(wanted, 'utf8')).toBe("an earlier export, somebody's")
-      })
-
-      it('a Cancel on that job removes its own file and leaves the earlier export', async () => {
-        const wanted = output()
-        const { dir, name, ext } = path.parse(wanted)
-        const beside = path.join(dir, `${name} (2)${ext}`)
-        writeFileSync(wanted, "an earlier export, somebody's")
-        const { child, outcome } = await begin(c, 'job-1')
-        writeFileSync(beside, 'ffmpeg opened this and was killed')
         c.cancels[0]?.run('job-1')
-        child.emit('close', null, 'SIGKILL')
-        await outcome
-        expect(existsSync(beside)).toBe(false)
-        expect(readFileSync(wanted, 'utf8')).toBe("an earlier export, somebody's")
+        const err = await outcome
+        expect(isCancelledError(err), 'the run reads as the Cancel it was').toBe(true)
+        expect(sha(output())).toBe(before)
+        expect(folder()).toEqual([path.basename(output())])
       })
-    }
 
-    // T-106: the runner no longer aims at a file that is already there, so the
-    // age rule below is a second line of defense (partialOutput.test.ts holds it
-    // alone, against real files) and this row is also the proof that a job
-    // which was told to write beside an old export leaves the old export alone.
-    if (c.outputIsScratch !== true && c.refusesExistingOutput !== true) it('a file that was already there before the spawn is left alone', async () => {
-      // ffmpeg truncates its output when it OPENS it; a Cancel before that
-      // leaves last week's export exactly as it was.
-      const stale = new Date(Date.now() - 3 * 60 * 60 * 1000)
-      writeFileSync(output(), 'last week\'s finished export')
-      utimesSync(output(), stale, stale)
-      const { child, outcome } = await begin(c, 'job-1')
-      c.cancels[0]?.run('job-1')
-      child.emit('close', null, 'SIGKILL')
-      await outcome
-      expect(existsSync(output())).toBe(true)
-    })
+      if (c.choosesName === true) {
+        it('writes beside a file that is already there, never over it (T-106)', async () => {
+          const wanted = output()
+          const { dir, name, ext } = path.parse(wanted)
+          const before = seed()
+          const { child, outcome } = await begin(c, 'job-1')
+          expect(child.args, 'the earlier file is not what ffmpeg is told to write').not.toContain(wanted)
+          // T-140 (1): the NAME was chosen free (`name (2)`), and the partial is named for it.
+          expect(path.basename(writing(child))).toMatch(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(2\\)\\.[0-9a-f]{8}\\.partial${ext.replace('.', '\\.')}$`))
+          writeFileSync(writing(child), 'the second render')
+          child.emit('close', 0, null)
+          await outcome
+          expect(sha(wanted), 'the earlier export is what it was').toBe(before)
+          expect(readFileSync(path.join(dir, `${name} (2)${ext}`), 'utf8'), 'and this render landed beside it').toBe('the second render')
+          expect(folder().sort()).toEqual([path.basename(wanted), `${name} (2)${ext}`].sort())
+        })
 
-    if (c.outputIsScratch !== true) {
+        it('a name that was free when the job started and is taken when its render is whole is not replaced: the render lands beside it (T-140 (1))', async () => {
+          const wanted = output()
+          const { dir, name, ext } = path.parse(wanted)
+          const { child, outcome } = await begin(c, 'job-1')
+          writeFileSync(writing(child), 'the render')
+          // The person copied a file to that name while the encode ran; the partial held the name's place in the folder for nobody.
+          writeFileSync(wanted, "arrived while the render ran")
+          child.emit('close', 0, null)
+          await outcome
+          expect(readFileSync(wanted, 'utf8')).toBe('arrived while the render ran')
+          expect(readFileSync(path.join(dir, `${name} (2)${ext}`), 'utf8')).toBe('the render')
+        })
+      } else {
+        // T-140 (1): the swap of a file the person NAMED. When it is open in another app (Windows refuses the rename onto it for as long as it is), the render
+        // is not thrown away - the runner waited through all of it - it lands beside the file under the next free name, and the run ANSWERS that path.
+        describe('the file that was named is open in another app (the swap onto it is refused)', () => {
+          const lockOnto = (target: string, refusals = Number.POSITIVE_INFINITY): void => {
+            let refused = 0
+            renameHook = async (real, from, to) => {
+              if (to === target && refused < refusals) {
+                refused += 1
+                throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+              }
+              return real(from, to)
+            }
+          }
+          const answered = (settled: unknown): string => (settled as { resolved: { outputPath: string } }).resolved.outputPath
+
+          it('a refusal that does not lift lands the render at "name (2)", answers that path, and leaves the file that was there byte for byte (T-140 (1))', async () => {
+            const wanted = output()
+            const { dir, name, ext } = path.parse(wanted)
+            const before = seed()
+            lockOnto(wanted)
+            const { child, outcome } = await begin(c, 'job-1')
+            writeFileSync(writing(child), 'the whole new render')
+            child.emit('close', 0, null)
+            const settled = await outcome
+            expect(isCancelledError(settled)).toBe(false)
+            expect(answered(settled), 'the caller is told where the render is').toBe(path.join(dir, `${name} (2)${ext}`))
+            expect(sha(wanted), 'the file that could not be replaced').toBe(before)
+            expect(readFileSync(path.join(dir, `${name} (2)${ext}`), 'utf8')).toBe('the whole new render')
+            expect(folder().sort(), 'and no partial is left').toEqual([path.basename(wanted), `${name} (2)${ext}`].sort())
+          })
+
+          it('a refusal that lifts (a scanner let go) lands on the file that was named, with no second copy (T-140 (1))', async () => {
+            const wanted = output()
+            seed()
+            lockOnto(wanted, 2)
+            const { child, outcome } = await begin(c, 'job-1')
+            writeFileSync(writing(child), 'the whole new render')
+            child.emit('close', 0, null)
+            const settled = await outcome
+            expect(answered(settled)).toBe(wanted)
+            expect(readFileSync(wanted, 'utf8')).toBe('the whole new render')
+            expect(folder()).toEqual([path.basename(wanted)])
+          })
+        })
+
+        it('a run that finishes replaces the file that was there with the whole new one, and leaves no partial (T-140 (1))', async () => {
+          seed()
+          const { child, outcome } = await begin(c, 'job-1')
+          writeFileSync(writing(child), 'the whole new render')
+          child.emit('close', 0, null)
+          const settled = await outcome
+          expect(isCancelledError(settled)).toBe(false)
+          expect(readFileSync(output(), 'utf8'), 'the target holds the new render').toBe('the whole new render')
+          expect(folder(), 'and the partial is gone').toEqual([path.basename(output())])
+        })
+      }
+
       it('the control: a run that finishes keeps its file', async () => {
         const { child, outcome } = await begin(c, 'job-1')
-        writeFileSync(output(), 'a finished file')
+        writeFileSync(writing(child), 'a finished file')
         child.emit('close', 0, null)
         const settled = await outcome
         expect(isCancelledError(settled)).toBe(false)
-        expect(existsSync(output())).toBe(true)
+        expect(readFileSync(output(), 'utf8')).toBe('a finished file')
+        expect(folder()).toEqual([path.basename(output())])
       })
+    } else {
+      // The re-attach's intermediate WAV is the job's own scratch, removed on every path, and the kit's thumbnail is refused if anything is at its
+      // path: neither has a file of somebody's to keep, so what is owed is the stop rule for the file ffmpeg writes (a partial, never the name
+      // that is read or listed) and a finished run's swap.
+      it('a Cancel that lands after ffmpeg exited 0 and before the swap leaves nothing behind (T-140 (1))', async () => {
+        const { child, outcome } = await begin(c, 'job-1')
+        writeFileSync(writing(child), 'a whole render')
+        child.emit('close', 0, null)
+        c.cancels[0]?.run('job-1')
+        const err = await outcome
+        expect(isCancelledError(err)).toBe(true)
+        expect(folder()).toEqual([])
+      })
+
+      if (c.refusesExistingOutput === true) {
+        it('the control: a run that finishes keeps its file, and no partial', async () => {
+          const { child, outcome } = await begin(c, 'job-1')
+          writeFileSync(writing(child), 'a finished file')
+          child.emit('close', 0, null)
+          const settled = await outcome
+          expect(isCancelledError(settled)).toBe(false)
+          expect(readFileSync(output(), 'utf8')).toBe('a finished file')
+          expect(folder()).toEqual([path.basename(output())])
+        })
+      }
     }
   }
 })
@@ -1177,30 +1328,160 @@ describe('a Cancel between the compilation\'s last segment and its join', () => 
     })
   }
 
-  it('the join is written beside a compilation that is already there, never over it (T-106)', async () => {
-    const earlier = path.join(scratch, 'in_compilation.mp4')
-    writeFileSync(earlier, 'the last compilation')
-    const outcome = startCompile('job-1')
+  /** Get the compilation to the point where the join (the last child) is running; hand back that child's output path, the partial. */
+  async function toTheJoin(jobId: string): Promise<{ outcome: ReturnType<typeof startCompile>; join: FakeChild; partial: string }> {
+    const outcome = startCompile(jobId)
     await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
     children[0]?.emit('close', 0, null)
     await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 3000 })
-    expect(children[1]?.args[children[1].args.length - 1]).toBe(path.join(scratch, 'in_compilation (2).mp4'))
-    children[1]?.emit('close', 0, null)
+    const join = children[1] as FakeChild
+    return { outcome, join, partial: join.args[join.args.length - 1] as string }
+  }
+  const sha = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+
+  it('the join is written beside a compilation that is already there, never over it (T-106), and as a partial beside the name it chose (T-140 (1))', async () => {
+    const earlier = path.join(scratch, 'in_compilation.mp4')
+    writeFileSync(earlier, 'the last compilation')
+    const { outcome, join, partial } = await toTheJoin('job-1')
+    expect(partial, 'ffmpeg is not told to write a finished name').toMatch(/\/in_compilation \(2\)\.[0-9a-f]{8}\.partial\.mp4$/)
+    writeFileSync(partial, 'the second compilation')
+    join.emit('close', 0, null)
     const done = (await outcome) as { resolved: { outputPath: string } }
     expect(done.resolved.outputPath).toBe(path.join(scratch, 'in_compilation (2).mp4'))
     expect(readFileSync(earlier, 'utf8')).toBe('the last compilation')
+    expect(readFileSync(done.resolved.outputPath, 'utf8')).toBe('the second compilation')
+    expect(readdirSync(scratch).sort()).toEqual(['in_compilation (2).mp4', 'in_compilation.mp4'])
   })
 
-  it('the join\'s own half-written file goes when the join is canceled', async () => {
-    const outcome = startCompile('job-1')
-    await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
-    children[0]?.emit('close', 0, null)
-    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 3000 })
-    const joined = path.join(scratch, 'in_compilation.mp4')
-    writeFileSync(joined, 'a join that was killed before its moov atom')
+  it("the join's own half-written file goes when the join is canceled, and the compilation that was there is byte for byte what it was (T-140 (1))", async () => {
+    const earlier = path.join(scratch, 'in_compilation.mp4')
+    writeFileSync(earlier, 'the last compilation')
+    const before = sha(earlier)
+    const { outcome, partial } = await toTheJoin('job-1')
+    writeFileSync(partial, 'a join that was killed before its moov atom')
     cancelConcatJob('job-1')
     children[1]?.emit('close', null, 'SIGKILL')
     expect(isCancelledError(await outcome)).toBe(true)
-    expect(existsSync(joined)).toBe(false)
+    expect(existsSync(partial)).toBe(false)
+    expect(sha(earlier)).toBe(before)
+    expect(readdirSync(scratch)).toEqual(['in_compilation.mp4'])
+  })
+
+  it('a join that fails after ffmpeg opened its output (a full disk) leaves the compilation that was there, and no partial (T-140 (1))', async () => {
+    const earlier = path.join(scratch, 'in_compilation.mp4')
+    writeFileSync(earlier, 'the last compilation')
+    const before = sha(earlier)
+    const { outcome, join, partial } = await toTheJoin('job-1')
+    writeFileSync(partial, 'half a join')
+    join.emit('close', 228, null)
+    expect(isCancelledError(await outcome)).toBe(false)
+    expect(sha(earlier)).toBe(before)
+    expect(readdirSync(scratch)).toEqual(['in_compilation.mp4'])
+  })
+
+  it('a compilation that arrived at the join\'s name while the join was running is not replaced: the join lands beside it (T-140 (1))', async () => {
+    const { outcome, join, partial } = await toTheJoin('job-1')
+    writeFileSync(partial, 'the whole join')
+    // The person copied a compilation to that name while the encode ran: the partial held the name\'s place in the folder for nobody.
+    const arrived = path.join(scratch, 'in_compilation.mp4')
+    writeFileSync(arrived, 'arrived while the join ran')
+    join.emit('close', 0, null)
+    const done = (await outcome) as { resolved: { outputPath: string } }
+    expect(done.resolved.outputPath).toBe(path.join(scratch, 'in_compilation (2).mp4'))
+    expect(readFileSync(arrived, 'utf8')).toBe('arrived while the join ran')
+    expect(readFileSync(done.resolved.outputPath, 'utf8')).toBe('the whole join')
+    expect(readdirSync(scratch).sort()).toEqual(['in_compilation (2).mp4', 'in_compilation.mp4'])
+  })
+
+  it('a Cancel that lands after the join exited 0 and before the swap wins: nothing is saved (T-140 (1))', async () => {
+    const { outcome, join, partial } = await toTheJoin('job-1')
+    writeFileSync(partial, 'a whole join')
+    join.emit('close', 0, null)
+    cancelConcatJob('job-1')
+    expect(isCancelledError(await outcome)).toBe(true)
+    expect(readdirSync(scratch)).toEqual([])
+  })
+})
+
+// ── T-140 (1): the file that was named is open in another app ───────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The rows for the export and the burn-in are in the table above; these are the two the table cannot hold: the mux pass (a runner of its own, and the second
+// half of a re-attach) and the re-attach, which makes TWO files - the intermediate WAV and the video - and must carry the first one's landed name to the second.
+describe('a swap onto a file that is open in another app (T-140 (1)): the re-attach', () => {
+  const lockOnto = (target: string): void => {
+    renameHook = async (real, from, to) => {
+      if (to === target) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+      return real(from, to)
+    }
+  }
+  const sha = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+  const reattachSpec = (): Parameters<typeof runAudioReattach>[0] => ({
+    jobId: 'job-1',
+    videoPath: '/tmp/in.mp4',
+    sourcePath: '/tmp/in.wav',
+    outputPath: path.join(scratch, 'out.mp4'),
+    chain: PLAIN_CHAIN
+  })
+  const settle = (p: Promise<unknown>): Promise<unknown> => p.then((resolved) => ({ resolved }), (err: unknown) => err)
+  const lastArg = (child: FakeChild): string => child.args[child.args.length - 1] as string
+
+  it('the mux pass: the video lands at "out (2).mp4", the run answers it, and the file that was there is byte for byte what it was', async () => {
+    const wanted = path.join(scratch, 'mux.mp4')
+    writeFileSync(wanted, 'the earlier video')
+    const before = sha(wanted)
+    lockOnto(wanted)
+    const done = settle(runAudioMux('job-1', '/tmp/in.mp4', '/tmp/cleaned.wav', wanted, () => undefined))
+    await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
+    const child = children[0] as FakeChild
+    writeFileSync(lastArg(child), 'the whole new video')
+    child.emit('close', 0, null)
+    const settled = (await done) as { resolved: { outputPath: string } }
+    expect(settled.resolved.outputPath).toBe(path.join(scratch, 'mux (2).mp4'))
+    expect(sha(wanted)).toBe(before)
+    expect(readFileSync(settled.resolved.outputPath, 'utf8')).toBe('the whole new video')
+    expect(readdirSync(scratch).sort()).toEqual(['mux (2).mp4', 'mux.mp4'])
+  })
+
+  it('the video is the one that is open: the re-attach answers "out (2).mp4", the earlier video is untouched, and the intermediate WAV is gone', async () => {
+    const spec = reattachSpec()
+    writeFileSync(spec.outputPath, 'the earlier video')
+    const before = sha(spec.outputPath)
+    lockOnto(spec.outputPath)
+    const done = settle(runAudioReattach(spec, () => undefined))
+    await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
+    const render = children[0] as FakeChild
+    writeFileSync(lastArg(render), 'the cleaned sound')
+    render.emit('close', 0, null)
+    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 3000 })
+    const mux = children[1] as FakeChild
+    writeFileSync(lastArg(mux), 'the whole new video')
+    mux.emit('close', 0, null)
+    const settled = (await done) as { resolved: { outputPath: string } }
+    expect(settled.resolved.outputPath, 'the Export panel reveals and opens THIS file').toBe(path.join(scratch, 'out (2).mp4'))
+    expect(sha(spec.outputPath)).toBe(before)
+    expect(readFileSync(settled.resolved.outputPath, 'utf8')).toBe('the whole new video')
+    expect(readdirSync(scratch).sort(), 'no intermediate WAV, no partial').toEqual(['out (2).mp4', 'out.mp4'])
+  })
+
+  it('the intermediate WAV is the one that is held (a stale one is open): the mux is fed the WAV that was just written, not the stale file at the first name', async () => {
+    const spec = reattachSpec()
+    const staleWav = path.join(scratch, 'out.cleaned.wav')
+    writeFileSync(staleWav, 'a stale intermediate from some other run')
+    lockOnto(staleWav)
+    const done = settle(runAudioReattach(spec, () => undefined))
+    await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
+    const render = children[0] as FakeChild
+    writeFileSync(lastArg(render), 'the cleaned sound of THIS run')
+    render.emit('close', 0, null)
+    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 3000 })
+    const mux = children[1] as FakeChild
+    const wavs = mux.args.filter((a) => a.endsWith('.wav'))
+    expect(wavs, 'the second input is the intermediate this run landed').toEqual([path.join(scratch, 'out.cleaned (2).wav')])
+    writeFileSync(lastArg(mux), 'the whole new video')
+    mux.emit('close', 0, null)
+    const settled = (await done) as { resolved: { outputPath: string } }
+    expect(settled.resolved.outputPath, 'the video itself landed where it was named').toBe(spec.outputPath)
+    expect(readFileSync(spec.outputPath, 'utf8')).toBe('the whole new video')
+    expect(readdirSync(scratch), 'and the job removed its own scratch, wherever it landed').toEqual(['out.mp4'])
   })
 })

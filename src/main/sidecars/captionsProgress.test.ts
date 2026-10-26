@@ -47,7 +47,12 @@ vi.mock('node:child_process', () => ({
     const child = new FakeChild()
     spawned.push({ cmd, args })
     // Listeners are attached synchronously after spawn returns; act next tick.
-    queueMicrotask(() => onSpawn(child, cmd, args))
+    queueMicrotask(() => {
+      // T-140 (1): the burn-in's ffmpeg writes a partial beside the file the person named and the runner swaps it in when the run is whole, so a
+      // child that exits 0 has written it (the transcription's whisper writes its .srt where `-of` says, and no row here reads it).
+      if (!args.includes('-osrt')) writeFileSync(args[args.length - 1] as string, 'a burned mp4')
+      onSpawn(child, cmd, args)
+    })
     return child
   }
 }))

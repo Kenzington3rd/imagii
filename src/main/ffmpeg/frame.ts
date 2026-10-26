@@ -6,7 +6,7 @@ import { cropToFrame } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch } from './cancelLatch'
-import { discardPartialOutput, wroteOutput } from './partialOutput'
+import { finishPartial, partialPathFor, wroteOutput } from './partialOutput'
 import { FRAME_NO_PICTURE_MESSAGE } from './noPicture'
 import { nextFreePath } from './outputPath'
 import { assert, assertAlways } from '../../shared/assert'
@@ -58,12 +58,12 @@ export async function extractFrame(
   assert(typeof outputPath === 'string' && outputPath.length > 0, 'outputPath required')
 
   const run = latch.begin()
-  let spawnedAt: number | null = null
   try {
     await run.guard(mkdir(path.dirname(outputPath), { recursive: true }))
-    // T-133 (5): the thumbnail goes into a folder `makeKitDir` has just made, so nothing is at the target. That is what lets the exit-0 check
-    // below ask only whether a real file is there (no clock: a share running slow refused a good thumbnail), so it is asserted, not
-    // trusted: a file that is already there could not be told from this run's picture. Left exactly as it was; ffmpeg never starts.
+    // T-133 (5): the thumbnail goes into a folder `makeKitDir` has just made, so nothing is at the target. It is asserted, not trusted: a file that
+    // is already there is refused and left exactly as it was; ffmpeg never starts. T-140 (1): and the picture is written to a PARTIAL beside the target
+    // (`partialOutput.ts`), so even a file that appeared between this look and ffmpeg's open is not truncated by it, and the exit-0 check below asks
+    // about a name that was never there before (no clock: a share running slow refused a good thumbnail).
     const taken = await run.guard(stat(outputPath).then(() => true, () => false))
     assertAlways(!taken, `extractFrame: ${outputPath} already exists (a kit thumbnail goes into a fresh folder)`)
 
@@ -73,6 +73,7 @@ export async function extractFrame(
       crop.push('-vf', cropToFrame(cropRect, { width: probe.width, height: probe.height }, null).join(','))
     }
 
+    const partial = partialPathFor(outputPath)
     const args = [
       '-y',
       '-ss',
@@ -86,13 +87,12 @@ export async function extractFrame(
       '2',
       '-update',
       '1',
-      outputPath
+      partial
     ]
 
-    await new Promise<void>((resolve, reject) => {
+    const extracted = new Promise<void>((resolve, reject) => {
       run.check()
       const child = spawn(ffmpegPath, args, { windowsHide: true })
-      spawnedAt = Date.now()
       activeFrame = child
       let stderr = ''
       child.stderr.setEncoding('utf8')
@@ -109,7 +109,7 @@ export async function extractFrame(
         if (code === 0) {
           // T-132 (4): `-ss` past the last frame exits 0 and writes no file at all; Clip Kit then said "Saved your Clip Kit" over a missing
           // thumbnail. The file this run was to write is looked for before the job is called done (T-133 (5): by what it is, not by its clock).
-          void wroteOutput(outputPath).then((wrote) => {
+          void wroteOutput(partial).then((wrote) => {
             if (wrote) resolve()
             else reject(new Error(FRAME_NO_PICTURE_MESSAGE))
           })
@@ -120,10 +120,10 @@ export async function extractFrame(
         }
       })
     })
-  } catch (err) {
-    // T-100: half a JPEG is not a thumbnail.
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
+    // T-100: half a JPEG is not a thumbnail; it is never swapped in. T-140 (1): the answer is not kept on purpose - the name was asserted free above, in a
+    // folder made a moment ago, so there is no file at it that another app could hold open, and `commitPartial` redirects a swap only for a refused
+    // rename onto a name something is AT. A refusal here (a scanner on the partial) is the disk's own error, and the kit fails as it did.
+    await finishPartial(extracted, { run, partial, target: outputPath, mode: 'replace' })
   } finally {
     run.end()
   }
@@ -166,7 +166,7 @@ export async function makeKitDir(parentDir: string, clipName: string): Promise<s
  * file survives whatever the caller asked, and no path a renderer sends can
  * delete someone's files. Every failure (not empty, already gone, locked) is a
  * console note and nothing more — the failure the user needs to hear about is
- * the kit's own, the same rule `discardPartialOutput` follows.
+ * the kit's own, the same rule `discardPartial` follows.
  */
 export async function removeKitDir(kitDir: string): Promise<void> {
   assert(typeof kitDir === 'string' && kitDir.length > 0, 'kitDir required')

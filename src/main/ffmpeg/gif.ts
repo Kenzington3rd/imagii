@@ -5,7 +5,7 @@ import { cropToFrame, type SourceDimensions } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
-import { discardPartialOutput } from './partialOutput'
+import { finishPartial, partialPathFor } from './partialOutput'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
@@ -79,9 +79,11 @@ async function makeGif(spec: GifJobSpec, run: LatchRun): Promise<{ outputPath: s
   // beside the last one instead of over it.
   // T-125 (10): the folder is there before the name is chosen.
   await run.guard(ensureOutputDir(spec.outDir))
-  const outputPath = await run.guard(
+  const wanted = await run.guard(
     nextFreePath(path.join(spec.outDir, `${base}_${spec.width}px_${Math.round(spec.fps)}fps.gif`))
   )
+  // T-140 (1): written to a partial beside the name chosen, swapped in only when whole (`partialOutput.ts`).
+  const partial = partialPathFor(wanted)
 
   const args = [
     '-y',
@@ -95,14 +97,12 @@ async function makeGif(spec: GifJobSpec, run: LatchRun): Promise<{ outputPath: s
     filter,
     '-loop',
     '0',
-    outputPath
+    partial
   ]
 
-  let spawnedAt: number | null = null
-  await new Promise<void>((resolve, reject) => {
+  const made = new Promise<void>((resolve, reject) => {
     run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
-    spawnedAt = Date.now()
     activeJobs.set(spec.jobId, child)
     let stderr = ''
     child.stderr.setEncoding('utf8')
@@ -119,11 +119,9 @@ async function makeGif(spec: GifJobSpec, run: LatchRun): Promise<{ outputPath: s
       if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`gif exit ${code}: ${stderr.slice(-500)}`)))
     })
-  }).catch(async (err: unknown) => {
-    // T-100: a GIF with no trailer opens in nothing; it is this job's wreckage.
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
   })
+  // T-100: a GIF with no trailer opens in nothing; it is never swapped in.
+  const { outputPath } = await finishPartial(made, { run, partial, target: wanted, mode: 'beside' })
 
   return { outputPath }
 }

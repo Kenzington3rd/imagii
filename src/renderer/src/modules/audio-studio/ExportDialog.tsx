@@ -4,13 +4,14 @@ import { nanoid } from 'nanoid'
 import type { AudioOutputFormat } from '@shared/audio'
 import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
+import { landedBesideNote } from '@shared/landedPath'
 import { useAudioStore } from './state/audioStore'
 import { useAudioExport } from './state/audioExport'
 import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
-import { toastSaved } from '../../lib/savedToast'
+import { ACTION_TOAST_MS, toastSaved } from '../../lib/savedToast'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
 
 const FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'flac', 'aac']
@@ -73,23 +74,28 @@ export function ExportDialog(): JSX.Element | null {
       // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).
       const offProgress = window.api.audio.onProgress((p) => useAudioExport.getState().progress(p))
       try {
+        // T-140 (1): the file that EXISTS is the one main answers. When the chosen file is open in another app the render is kept beside it
+        // ("name (2)"), and the toast, "Show in folder" and "Edit in Video Studio" are all about that file, with the sentence that says why.
+        let saved = outputPath
         if (source.fromVideo && muxBack) {
-          await window.api.audio.mux({
+          const result = await window.api.audio.mux({
             jobId,
             videoPath: source.fromVideo.videoPath,
             sourcePath: source.filePath,
             outputPath,
             chain
           })
+          saved = result.outputPath
+          const note = landedBesideNote(outputPath, saved, 'export')
           // Only THIS output: an audio-only export has no video for Video Studio to open.
-          toastSaved('Cleaned audio attached to the video', outputPath, {
+          toastSaved(note ? `Cleaned audio attached to the video. ${note}` : 'Cleaned audio attached to the video', saved, {
             label: 'Edit in Video Studio',
             onClick: () => {
-              void editInVideoStudio(outputPath)
+              void editInVideoStudio(saved)
             }
           })
         } else {
-          await window.api.audio.export({
+          const result = await window.api.audio.export({
             jobId,
             sourcePath: source.filePath,
             outputPath,
@@ -97,9 +103,11 @@ export function ExportDialog(): JSX.Element | null {
             format,
             bitrate: format === 'mp3' || format === 'aac' ? bitrate : undefined
           })
-          toast.success('Cleaned audio exported')
+          saved = result.outputPath
+          const note = landedBesideNote(outputPath, saved, 'export')
+          toast.success(note ? `Cleaned audio exported. ${note}` : 'Cleaned audio exported', note ? { duration: ACTION_TOAST_MS } : undefined)
         }
-        useAudioExport.getState().done(outputPath)
+        useAudioExport.getState().done(saved)
       } catch (err) {
         // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
         // call — carrying the sentinel, so the neutral line is raised from ONE

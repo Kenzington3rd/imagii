@@ -25,6 +25,11 @@ import { CAPTIONS_DIR_NAME, isShiftedSrtName } from '../shared/captions'
  * the burn-in's leftover shifted copies (`*.srt.clip-<uuid>.srt`, T-81) are
  * eligible there, matched by the same helper that names them.
  *
+ * Not swept here (T-140 (1), decided): a render that a crash or a kill -9 interrupted leaves its `<stem>.<8 hex>.partial<ext>` beside the file the
+ * person chose (`ffmpeg/partialOutput.ts`). That folder is the person's, not one of the folders above, and the Save dialog's is not remembered, so a sweep
+ * by name here would clear some and miss others; the ceiling and the upgrade (a journal of in-flight partials in userData, reaped at launch) are
+ * the `// simplification:` in `partialOutput.ts`.
+ *
  * 6 hours is conservative — a concurrent imagii instance is unlikely to
  * have a session that long, and Windows Storage Sense would have reaped
  * these anyway eventually. We accelerate the cleanup at our own startup.

@@ -6,6 +6,7 @@ import {
   type Page
 } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { copyFileSync, mkdirSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -23,6 +24,7 @@ import {
   expectSelectsWhole,
   setWindowSize
 } from './layout'
+import { partialsOnly, refusedRenameCount, refuseRenamesOnto, withEverything } from './atomicTmp'
 import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { slowPresetWrites } from './slowWrites'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
@@ -2976,7 +2978,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       expect(await readSaveOptions(app), 'one save dialog, not two').toHaveLength(1)
       expect((await readToastLog(window)).filter((t) => t === 'Cleaned audio exported'), 'one "exported" toast').toHaveLength(1)
-      expect(readdirSync(studio.root).filter((f) => /\.(mp3|wav|m4a|flac)$/i.test(f)).sort(), 'one file written').toEqual(['double.mp3'])
+      expect(withEverything(readdirSync(studio.root)).filter((f) => /\.(mp3|wav|m4a|flac)$/i.test(f)).sort(), 'one file written').toEqual(['double.mp3'])
       expect((await probeFile(out)).codecs).toEqual(['mp3'])
     } finally {
       await closeStudio(studio)
@@ -3540,7 +3542,9 @@ test.describe('imagii Audio Studio', () => {
       await stubSaveDialog(app, out)
       const exportPanel = window.locator(EXPORT)
       await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
-      await expect.poll(() => existsSync(out), { timeout: 60_000, intervals: [250] }).toBe(true)
+      // T-140 (1): the render opens a PARTIAL beside the name the Save dialog gave, never the name itself.
+      await expect.poll(() => partialsOnly(readdirSync(studio.root)).length, { timeout: 60_000, intervals: [250] }).toBe(1)
+      expect(existsSync(out), 'the chosen name is not touched while ffmpeg writes').toBe(false)
       await expect(exportPanel).toContainText('Rendering…') // one pass: no steps to count
 
       await exportPanel.getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -3551,6 +3555,7 @@ test.describe('imagii Audio Studio', () => {
         timeout: 30_000
       })
       expect(existsSync(out), 'the half-written audio is gone').toBe(false)
+      expect(partialsOnly(readdirSync(studio.root)), 'and so is its partial').toEqual([])
       await expect(exportPanel.getByText('Canceled', { exact: true })).toBeVisible()
     } finally {
       await closeStudio(studio)
@@ -4078,6 +4083,162 @@ test.describe('T-140 (8): "Save current" keeps the keyboard\'s focus while it sa
       expect(saved(), 'one preset: the presses during the write started nothing').toBe(1)
       expect((await readToastLog(window)).filter((t) => t === 'Saved "Focus once"'), 'said once').toHaveLength(1)
       expect((await readToastLog(window)).filter((t) => /Name your preset first/.test(t)), 'no error').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-140 (1): an export over a file the person already has ────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The Save dialog asks "replace?" and is answered yes, and then ffmpeg opened the file and truncated it: a Cancel or a full drive 1.5 s into the render left NEITHER
+// the earlier file NOR the new one (executed: a 100,000-byte file gone after `cancelAudioJob`, and after ENOSPC exit 228). The render goes to a partial beside the
+// name now and replaces it only when whole. These run the real Export button, the real job and the real Cancel.
+test.describe('T-140 (1): an audio export is the old file until the new one is whole', () => {
+  const EARLIER = Buffer.from('an earlier export, at the name the person picked again'.repeat(2000))
+  const shaOf = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+
+  test('Cancel in the render pass leaves the file that was there byte for byte, and no partial', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t140-rerender-cancel')
+    const { app, window } = studio
+    try {
+      const long = path.join(studio.root, 'source', 'long-tone.mp3')
+      await makeLongMp3(long)
+      await dropOnImporter(window, long, 'long-tone.mp3')
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      await window.locator(CLEANUP).getByRole('button', { name: 'Aggressive', exact: true }).click()
+
+      const out = path.join(studio.root, 'again.mp3')
+      writeFileSync(out, EARLIER)
+      const before = shaOf(out)
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      // ffmpeg has OPENED its output: a partial is beside the name - or (the old behavior, which is what this case is red on) the earlier file was rewritten.
+      await expect
+        .poll(() => partialsOnly(readdirSync(studio.root)).length > 0 || shaOf(out) !== before, { timeout: 60_000, intervals: [100] })
+        .toBe(true)
+      expect(shaOf(out), 'the file that was there is untouched while the render writes').toBe(before)
+
+      await exportPanel.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(existsSync(out), 'the earlier export is still there').toBe(true)
+      expect(shaOf(out), 'and is byte for byte what it was').toBe(before)
+      expect(withEverything(readdirSync(studio.root)).filter((f) => f.endsWith('.mp3') || f.includes('.partial')), 'no partial is left beside it').toEqual(['again.mp3'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an export that finishes replaces it with the whole new file (ffprobe reads it), and leaves no partial', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-rerender-done')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const out = path.join(studio.root, 'again.mp3')
+      writeFileSync(out, EARLIER)
+      const before = shaOf(out)
+      await stubSaveDialog(app, out)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(shaOf(out), 'the old bytes are gone').not.toBe(before)
+      expect((await probeFile(out)).codecs, 'ffprobe reads a real mp3').toEqual(['mp3'])
+      expect(withEverything(readdirSync(studio.root)).filter((f) => f.endsWith('.mp3') || f.includes('.partial')), 'and no partial is left').toEqual(['again.mp3'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-140 (1), sent back: the file the person named is open in another app ──────────────────────────────────────────────────────────────────────────────────────
+//
+// Windows refuses the swap onto a file a player or an editor holds without FILE_SHARE_DELETE, for as long as it is held. Before T-140 ffmpeg's `-y` failed within a
+// second of the press; now the person has waited through the whole render, and losing it would be a worse answer. The render is kept BESIDE the file as "name (2)",
+// the panel says so, and every button after it is about the file that exists. Linux has no such file, so main's `rename` is made to refuse the destination
+// (`refuseRenamesOnto`, tests/e2e/atomicTmp.ts); the Export button, the job, the toast and the buttons are all real.
+test.describe('T-140 (1): an audio export over a file that is open in another app is kept beside it', () => {
+  const EARLIER = Buffer.from('an earlier export, open in a player'.repeat(3000))
+  const shaOf = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+
+  test('the cleaned audio lands as "name (2)": the toast says why, Show in folder reveals it, and the file that was open is untouched', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t140-held-audio')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const out = path.join(studio.root, 'held.mp3')
+      writeFileSync(out, EARLIER)
+      const before = shaOf(out)
+      await stubSaveDialog(app, out)
+      await refuseRenamesOnto(app, out)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+
+      await expect
+        .poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] })
+        .toContain('Cleaned audio exported. held.mp3 is open in another app, so this export was saved as held (2).mp3.')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused (and tried again)').toBeGreaterThan(1)
+
+      const beside = path.join(studio.root, 'held (2).mp3')
+      expect(shaOf(out), 'the file that was open is byte for byte what it was').toBe(before)
+      expect((await probeFile(beside)).codecs, 'ffprobe reads a real mp3 at the new name').toEqual(['mp3'])
+      expect(withEverything(readdirSync(studio.root)).filter((f) => f.endsWith('.mp3') || f.includes('.partial')).sort(), 'and no partial is left').toEqual(['held (2).mp3', 'held.mp3'])
+
+      // The row that outlives the toast reveals the file that exists.
+      await stubShellReveal(app)
+      await exportPanel.getByRole('button', { name: 'Show in folder' }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([beside])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the re-attached video lands as "name (2)": the toast says why, and Show in folder and Edit in Video Studio are about THAT file', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t140-held-video')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+      const toaster = window.locator('[data-rht-toaster]')
+
+      const out = path.join(studio.root, 'e2e-clip-cleaned.mp4')
+      writeFileSync(out, EARLIER)
+      const before = shaOf(out)
+      await stubRecordingSaveDialog(app, out)
+      await refuseRenamesOnto(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      const edit = toaster.getByRole('button', { name: 'Edit in Video Studio', exact: true })
+      await expect(edit, 'the saved toast carries the action').toBeVisible({ timeout: 150_000 })
+      await expect(toaster).toContainText('Cleaned audio attached to the video. e2e-clip-cleaned.mp4 is open in another app, so this export was saved as e2e-clip-cleaned (2).mp4.')
+      expect(await refusedRenameCount(app)).toBeGreaterThan(1)
+
+      const beside = path.join(studio.root, 'e2e-clip-cleaned (2).mp4')
+      expect(shaOf(out), 'the file that was open is untouched').toBe(before)
+      expect((await probeFile(beside)).codecs.sort(), 'a real video with the cleaned sound at the new name').toEqual(['aac', 'h264'])
+      expect(
+        withEverything(readdirSync(studio.root)).filter((f) => /\.(mp4|wav)$/.test(f) || f.includes('.partial')).sort(),
+        'no partial, and the intermediate WAV is gone'
+      ).toEqual(['e2e-clip-cleaned (2).mp4', 'e2e-clip-cleaned.mp4'])
+
+      await stubShellReveal(app)
+      await toaster.getByRole('button', { name: 'Show in folder', exact: true }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([beside])
+
+      await edit.click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('e2e-clip-cleaned (2).mp4', { exact: true }), 'Video Studio opened the file that exists').toBeVisible({ timeout: 30_000 })
     } finally {
       await closeStudio(studio)
     }

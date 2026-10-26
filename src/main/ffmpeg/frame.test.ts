@@ -81,7 +81,11 @@ describe('a thumbnail of a clip with no crop is the command it always was (T-130
       // T-133 (5): a thumbnail goes to a path nothing is at (the kit's folder is fresh), so each call has its own.
       const out = path.join(scratch, 'thumbs', `thumb-${i}.jpg`)
       await extractFrame('/tmp/in.mp4', 1.5, out, crop)
-      expect(spawned).toEqual([['-y', '-ss', '1.500', '-i', '/tmp/in.mp4', '-frames:v', '1', '-q:v', '2', '-update', '1', out]])
+      // T-140 (1): the output is a partial beside the thumbnail (its `.jpg` last, so the image2 muxer is the same); the rest of the argv is as it was.
+      const argv = spawned[0] as string[]
+      expect(argv.slice(0, -1)).toEqual(['-y', '-ss', '1.500', '-i', '/tmp/in.mp4', '-frames:v', '1', '-q:v', '2', '-update', '1'])
+      expect(argv[argv.length - 1]).toMatch(new RegExp(`^${path.join(scratch, 'thumbs', `thumb-${i}`).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[0-9a-f]{8}\\.partial\\.jpg$`))
+      expect(spawned).toHaveLength(1)
     }
     expect(probeCalls, 'the source was never probed: there is nothing to read its size for').toBe(0)
   })

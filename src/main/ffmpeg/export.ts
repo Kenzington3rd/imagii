@@ -6,7 +6,7 @@ import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
-import { discardPartialOutput } from './partialOutput'
+import { finishPartial, partialPathFor } from './partialOutput'
 import { FFMPEG_EMPTY_OUTPUT, PictureFrames, exportNoPictureMessage, wroteNoPicture } from './noPicture'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 import { clipSpeed } from '../../shared/clip'
@@ -82,7 +82,9 @@ async function encodeJob(
   // somebody's earlier export, and this job writes beside it, not over it.
   // T-125 (10): the folder is there before the name is chosen (a remembered one may have been deleted or live on an unplugged drive).
   await run.guard(ensureOutputDir(job.outDir))
-  const outputPath = await run.guard(nextFreePath(path.join(job.outDir, outputName)))
+  const wanted = await run.guard(nextFreePath(path.join(job.outDir, outputName)))
+  // T-140 (1): ffmpeg writes a partial beside the name chosen, and the partial is swapped in only when the encode is whole (`partialOutput.ts`).
+  const partial = partialPathFor(wanted)
 
   const audioSpeed = buildAudioSpeedFilter(speed)
 
@@ -118,17 +120,15 @@ async function encodeJob(
     '-progress',
     'pipe:1',
     '-nostats',
-    outputPath
+    partial
   )
 
   const startedAt = Date.now()
-  let spawnedAt: number | null = null
 
-  const finished = new Promise<ExportResult>((resolve, reject) => {
+  const finished = new Promise<void>((resolve, reject) => {
     // T-98: the last look before the child exists. A throw here rejects the job.
     run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
-    spawnedAt = Date.now()
     activeJobs.set(job.jobId, child)
 
     let stderrBuffer = ''
@@ -178,15 +178,10 @@ async function encodeJob(
     child.on('close', (code) => {
       activeJobs.delete(job.jobId)
       if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) {
-        // T-132 (4): exit 0 and no picture: the catch below removes the stub, like any failed job's output.
+        // T-132 (4): exit 0 and no picture: `finishPartial` (below) drops the stub, like any failed job's output.
         reject(new Error(exportNoPictureMessage(job.clip)))
       } else if (code === 0) {
-        onProgress({ jobId: job.jobId, percent: 100 })
-        resolve({
-          jobId: job.jobId,
-          outputPath,
-          durationMs: Date.now() - startedAt
-        })
+        resolve()
       } else {
         // T-84: a child the cancel functions below killed rejects with the
         // sentinel; one that died by itself keeps its exit-code error.
@@ -194,11 +189,10 @@ async function encodeJob(
       }
     })
   })
-  // T-100: the half-written file is this job's wreckage; earlier jobs' files stay.
-  return finished.catch(async (err: unknown) => {
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
-  })
+  // T-100: the half-written file is this job's wreckage; earlier jobs' files stay. The 100% and the result are announced once the file is THERE.
+  const { outputPath } = await finishPartial(finished, { run, partial, target: wanted, mode: 'beside' })
+  onProgress({ jobId: job.jobId, percent: 100 })
+  return { jobId: job.jobId, outputPath, durationMs: Date.now() - startedAt }
 }
 
 export function cancelAllExportJobs(): void {

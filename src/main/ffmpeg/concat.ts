@@ -14,7 +14,7 @@ import {
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
-import { discardPartialOutput } from './partialOutput'
+import { finishPartial, partialPathFor } from './partialOutput'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 import { assertDefined } from '../../shared/assert'
 import { clipSpeed, type ClipRecipe, type CompileSegment } from '../../shared/clip'
@@ -351,15 +351,15 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
   const base = spec.sourceName ?? path.parse(spec.sourcePath).name
   // T-106: `<source>_compilation.mp4` is the name WANTED; a compilation already
   // there is the user's, and this one is written beside it.
-  const outputPath = await run.guard(
+  const wanted = await run.guard(
     nextFreePath(path.join(spec.outDir, `${base}_compilation.mp4`))
   )
+  // T-140 (1): the join is written to a partial beside the name chosen, and swapped in only when whole (see `partialOutput.ts`).
+  const partial = partialPathFor(wanted)
 
-  let spawnedAt: number | null = null
-  await new Promise<void>((resolve, reject) => {
+  const joined = new Promise<void>((resolve, reject) => {
     // The last pre-spawn await was the choosing of the output's name.
     run.check()
-    spawnedAt = Date.now()
     const child = spawn(
       ffmpegPath,
       [
@@ -379,7 +379,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
         '192k',
         '-movflags',
         '+faststart',
-        outputPath
+        partial
       ],
       { windowsHide: true }
     )
@@ -403,8 +403,8 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
     })
     child.on('close', (code) => {
       activeJobs.delete(childKey)
-      // T-131 (1): a segment the join cannot open ends the join THERE and ffmpeg still exits 0: a shorter file, "Saved". The catch
-      // below removes it like any failed join's output.
+      // T-131 (1): a segment the join cannot open ends the join THERE and ffmpeg still exits 0: a shorter file, "Saved". `finishPartial`
+      // (below) drops that partial like any failed join's, so the shorter file is never swapped in.
       // T-136 (15): the line is the evidence, whatever the exit code. The demuxer exits 0 for a LATER input it cannot open and non-zero (254, both
       // majors) for the FIRST, which reached the person as the raw "concat exit 254" and then as a sentence about their source. A Cancel still wins:
       // `cancelledOr` answers for a join the user killed, whatever it had printed.
@@ -413,11 +413,10 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       } else if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`concat exit ${code}: ${stderr.slice(-500)}`)))
     })
-  }).catch(async (err: unknown) => {
-    // T-100: the segments go in the `finally` below; the joined file is this job's too.
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
   })
+  // The segments go in the `finally` below. The joined file is swapped in only after the lost-part guard above passed and the run was not cancelled
+  // (T-131 (1): a join that stopped at a lost segment is a shorter file that exits 0, and is dropped here like any failed join's output).
+  const { outputPath } = await finishPartial(joined, { run, partial, target: wanted, mode: 'beside' })
 
   return { outputPath }
   } finally {
@@ -493,9 +492,10 @@ async function compositePip(
   // T-131 (2): the output is the base's length (the overlay follows its frames), and the base's sound is padded to it below. A base whose
   // length cannot be read (a recording with no duration) is not padded: the output ends where its sound does, as it always did.
   const baseSec = await run.guard(probeVideo(basePath).then((p) => p.duration, () => null))
-  const outputPath = await run.guard(nextFreePath(wantedPath))
-  let spawnedAt: number | null = null
-  await new Promise<void>((resolve, reject) => {
+  const wanted = await run.guard(nextFreePath(wantedPath))
+  // T-140 (1): written to a partial beside the name chosen, swapped in only when whole (`partialOutput.ts`).
+  const partial = partialPathFor(wanted)
+  const composited = new Promise<void>((resolve, reject) => {
     run.check()
     const child = spawn(
       ffmpegPath,
@@ -535,11 +535,10 @@ async function compositePip(
         // don't stall while seeking the moov atom.
         '-movflags',
         '+faststart',
-        outputPath
+        partial
       ],
       { windowsHide: true }
     )
-    spawnedAt = Date.now()
     // M3 fix (round 15): register the child so app-quit can SIGKILL it.
     // The IPC layer now passes a real jobId (was `_jobId`).
     activeJobs.set(jobId, child)
@@ -559,10 +558,8 @@ async function compositePip(
       if (code === 0) resolve()
       else reject(cancelledOr(child, new Error(`pip exit ${code}: ${stderr.slice(-500)}`)))
     })
-  }).catch(async (err: unknown) => {
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
   })
+  const { outputPath } = await finishPartial(composited, { run, partial, target: wanted, mode: 'beside' })
 
   return { outputPath }
 }

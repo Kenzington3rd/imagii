@@ -10,6 +10,7 @@ import type { RecordingSource } from '@shared/workspace'
 import { isCancelledError } from '@shared/cancel'
 import { formatTimer } from '@shared/clockTime'
 import { localStamp } from '@shared/filename'
+import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
 import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
@@ -606,7 +607,11 @@ export function RecordStudio(): JSX.Element {
         // on from here, so this toast stays up long enough to use them.
         // T-126 (2): a take that lost its microphone says so here too, as a second sentence (two keep both periods).
         const saved = `Saved ${(result.sizeBytes / 1e6).toFixed(1)} MB`
-        toastSaved(lostLine ? `${saved}. ${lostLine}.` : saved, result.outputPath, {
+        // T-140 (1): when the file chosen in the Save dialog was open in another app the take was kept beside it ("name (2)"): `result.outputPath` is
+        // the file that exists (the toast's buttons use it), and a third sentence says why it is not the name that was chosen.
+        const note = landedBesideNote(result.requestedPath, result.outputPath, 'recording')
+        const head = lostLine ? `${saved}. ${lostLine}.` : saved
+        toastSaved(note ? `${lostLine ? head : `${head}.`} ${note}` : head, result.outputPath, {
           label: 'Edit in Video Studio',
           onClick: () => {
             void editInVideoStudio(result.outputPath)

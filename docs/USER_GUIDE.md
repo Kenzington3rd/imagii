@@ -690,6 +690,16 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   your mood boards write the new file beside the old one and swap it in only when it is whole. If the drive is full, or
   another app has the file open, imagii says so and the file you chose is exactly as it was (the emote pack writes its
   files one at a time, so one that fails leaves the files before it whole and the one it stopped on as it was).
+- **A render you stop keeps the file you had.** When you export audio, re-attach it to a video, burn captions in or save a
+  recording over a file that is already there, imagii writes the new file beside it and swaps it in only when it is
+  whole. Cancel, close imagii or run out of room part-way and the file you chose is exactly as it was. While a render
+  runs, the folder holds a file with **.partial** in its name: that is the render in progress, and it is removed when
+  the render ends, however it ends. Video, GIF, compilation, reframe and picture-in-picture exports do the same into
+  the **name (2)** they were already going to. If imagii itself crashes in the middle of a render (not a Cancel and not
+  a close), that one file can stay behind: it is safe to delete.
+  If the file you chose is open in another app when the render finishes (a player or an editor can hold it so
+  it cannot be replaced), imagii keeps the render instead of throwing it away: it is saved next to that file as
+  **name (2)**, the file that was open is left as it was, and the message says which name it was saved as.
 - **The window remembers its size and position** between launches, and
   re-centers itself if the display it was on is no longer connected. That
   happens whatever you choose in the restore banner.

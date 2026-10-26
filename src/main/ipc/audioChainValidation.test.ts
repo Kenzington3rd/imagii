@@ -6,6 +6,15 @@ import { DEFAULT_CHAIN_SPEC, DEFAULT_DUCK_PARAMS } from '../../shared/audio'
 import type { ChainSpec } from '../../shared/audio'
 import { userFacingError } from '../../shared/userFacingError'
 
+// T-140 (1): the runner hands ffmpeg a partial and swaps it in when whole. This file pins what is on the command line and in the progress events, with a child
+// that writes nothing and paths that are not a folder of its own, so the swap is left out of it: it is `partialOutput.test.ts`'s, `cancelSentinel.test.ts`'s
+// (every runner, a child that writes where ffmpeg writes) and Layer 5's (the real binary).
+vi.mock('../ffmpeg/partialOutput', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ffmpeg/partialOutput')>()),
+  finishPartial: async <T,>(work: Promise<T>, o: { target: string }) => ({ value: await work, outputPath: o.target })
+}))
+
+
 /**
  * T-111 — the numbers of a chain that reach the filter graph.
  *

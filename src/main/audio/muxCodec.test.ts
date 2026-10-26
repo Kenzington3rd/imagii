@@ -3,6 +3,15 @@ import { EventEmitter } from 'node:events'
 import { isCancelledError } from '../../shared/cancel'
 import type { AudioJobProgress } from '../../shared/audio'
 
+// T-140 (1): the runner hands ffmpeg a partial and swaps it in when whole. This file pins what is on the command line and in the progress events, with a child
+// that writes nothing and paths that are not a folder of its own, so the swap is left out of it: it is `partialOutput.test.ts`'s, `cancelSentinel.test.ts`'s
+// (every runner, a child that writes where ffmpeg writes) and Layer 5's (the real binary).
+vi.mock('../ffmpeg/partialOutput', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ffmpeg/partialOutput')>()),
+  finishPartial: async <T,>(work: Promise<T>, o: { target: string }) => ({ value: await work, outputPath: o.target })
+}))
+
+
 /**
  * T-111 — "Re-attach to video" copies the picture only when an mp4 can carry it.
  *
@@ -139,7 +148,8 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
       expect(flag(s, '-c:a')).toBe('aac')
       expect(s.args).toContain('-shortest')
       expect(flag(s, '-movflags')).toBe('+faststart')
-      expect(s.args[s.args.length - 1]).toBe('/out/video.mp4')
+      // T-140 (1): ffmpeg writes a partial beside the file the person named, `.mp4` last so the muxer is the same.
+      expect(s.args[s.args.length - 1]).toMatch(/^\/out\/video\.[0-9a-f]{8}\.partial\.mp4$/)
     }
   )
 

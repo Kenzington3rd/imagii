@@ -15,6 +15,7 @@ import {
   staleCaptionsMessage
 } from '@shared/captions'
 import { countOf } from '@shared/plural'
+import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
 import { useCaptionsProgress, useCaptionsRun, useCaptionsStatus, useModelInstallRun } from './store/runs'
@@ -24,6 +25,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { formatClock } from '@shared/clockTime'
 
 export function CaptionsPanel(): JSX.Element | null {
@@ -233,10 +235,13 @@ export function CaptionsPanel(): JSX.Element | null {
         })
         // T-89: a ranged burn over a stretch nobody speaks in still writes the
         // clip, with nothing on it. Say that, not "Captions burned in".
+        // T-140 (1): the video exists at the path main answers. When the chosen file was open in another app it was kept beside it ("name (2)"), and the
+        // toast says so (a longer sentence, so it stays up as long as a toast that carries a button does).
+        const note = landedBesideNote(outputPath, result.outputPath, 'burn-in')
         if (result.captioned) {
-          toast.success(burnInDoneMessage(true))
+          toast.success(note ? `${burnInDoneMessage(true)}. ${note}` : burnInDoneMessage(true), note ? { duration: ACTION_TOAST_MS } : undefined)
         } else {
-          toast(burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: 6000 })
+          toast(note ? `${burnInDoneMessage(false)} ${note}` : burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
         }
       } catch (err) {
         reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })

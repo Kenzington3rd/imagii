@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import ts from 'typescript'
 import { parseSource, sourceFilesUnder } from './renderedStrings'
+import { partialPathFor } from '../../src/main/ffmpeg/partialOutput'
+import { partialsOnly, withEverything, withoutAtomicTmp } from '../e2e/atomicTmp'
 
 /**
  * T-139 (1) - a file the person chose or owns is written with `writeFileAtomic`, and every other raw write in main is audited.
@@ -14,9 +16,12 @@ import { parseSource, sourceFilesUnder } from './renderedStrings'
  * is either `writeFileAtomic` or a row here, with the reason it does not need one.
  *
  * What the scan cannot see: a write made through a function it was handed, `fs.promises` reached by a name other than the ones it follows (an import
- * of `writeFile` from `node:fs` / `node:fs/promises`, aliased or not, and any `.writeFile(...)` property call), and a `spawn` that writes (ffmpeg
- * writes its own outputs; each export runs `discardPartialOutput` when it fails). The per-handler behavior is the real handlers' tests, in
- * `projectSave.test.ts`, `image.test.ts`, `captionsSaveSrt.test.ts`, `captionsWriteKitSrt.test.ts` and `moodboard.test.ts`.
+ * of `writeFile` from `node:fs` / `node:fs/promises`, aliased or not, and any `.writeFile(...)` property call), and a `spawn` that writes. The last
+ * is the second describe below (T-140 (1)): ffmpeg opens, and so truncates, the file it is handed, so a runner that handed it the person's path
+ * destroyed the file it was replacing the moment the encode began. Every runner hands it a partial beside the target now and swaps it in when whole
+ * (`main/ffmpeg/partialOutput.ts`), and that describe is the scan that keeps it so. The per-handler behavior is the real handlers' tests, in
+ * `projectSave.test.ts`, `image.test.ts`, `captionsSaveSrt.test.ts`, `captionsWriteKitSrt.test.ts` and `moodboard.test.ts`; the runners' is
+ * `cancelSentinel.test.ts` (every runner, a child that writes where ffmpeg writes), `partialOutput.test.ts`, and Layer 5.
  */
 const MAIN_ROOT = path.resolve(__dirname, '../../src/main')
 
@@ -101,7 +106,7 @@ const AUDITED_RAW_WRITES: Record<string, { writes: number; why: string }> = {
   'ffmpeg/concat.ts': { writes: 1, why: 'the concat list file in %TEMP%/imagii-concat, deleted by the runner\'s finally' },
   'ipc/recording.ts': {
     writes: 2,
-    why: 'NOT CONVERTED (outside Track A\'s files): the take\'s temp .webm stream, and saveWebm\'s fallback copyFile to the chosen path, which runs after the same function unlinked that path (nothing old to protect on that branch)'
+    why: 'the take\'s temp .webm stream (a file of imagii\'s own in userData), and saveWebm\'s fallback copyFile, which since T-140 (1) copies to a PARTIAL beside the chosen path and swaps it in with finishPartial (it used to unlink the chosen path first, then copy)'
   },
   'customPresets.ts': {
     writes: 1,
@@ -194,6 +199,136 @@ describe('the scan discriminates', () => {
 })
 
 /**
+ * T-140 (1) - an ffmpeg that writes a file a person keeps is handed a PARTIAL, and the partial is swapped in only when whole.
+ *
+ * The scan above sees the writes node makes; ffmpeg's are a `spawn` whose last argument is a path, and ffmpeg truncates what it opens. Executed: a
+ * Cancel 1.5 s into a real audio export, and ENOSPC (exit 228), each left NEITHER the 100,000-byte file the Save dialog had been told to replace NOR
+ * the new one. A runner now writes `partialPathFor(target)` and calls `finishPartial(work, ...)` once the child has exited (`main/ffmpeg/partialOutput.ts`:
+ * a failure, a Cancel or the quit removes the partial and never touches the target; the swap is made only after the runner's own checks and a look at its
+ * cancel latch). This scan is the grep that keeps it so: it counts, per file under `src/main`, the `spawn(ffmpegPath, ...)` calls and the `finishPartial(...)`
+ * calls, and requires each file's pair to be what its row below allows. A new ffmpeg runner is therefore a row here, with the reason it needs no partial
+ * (a pipe, the null muxer, a fresh scratch name in %TEMP%) or the call that gives it one.
+ *
+ * What it cannot see: a spawn through another name for the binary, and WHETHER the call is made on the path the child was handed (the runners' tests
+ * `cancelSentinel.test.ts`, `recordingCancel.test.ts` and Layer 5 hold that: the target is byte for byte what it was after a Cancel).
+ */
+interface FfmpegRow {
+  spawns: number
+  finishes: number
+  why: string
+}
+
+const FFMPEG_RUNNERS: Record<string, FfmpegRow> = {
+  'audio/process.ts': { spawns: 1, finishes: 1, why: 'runFfmpegJob is the one spawn; the measure pass (to the null muxer) needs no file, and the render and the mux go through runFfmpegToFile -> finishPartial' },
+  'sidecars/whisperManager.ts': { spawns: 1, finishes: 1, why: 'the caption burn-in (the transcription\'s spawn is the whisper program, not ffmpegPath)' },
+  'ffmpeg/concat.ts': { spawns: 3, finishes: 2, why: 'the join and the picture-in-picture swap a partial in; the segment is Matroska in %TEMP%/imagii-concat under the job\'s id, removed in the runner\'s finally' },
+  'ffmpeg/export.ts': { spawns: 1, finishes: 1, why: 'the platform export' },
+  'ffmpeg/gif.ts': { spawns: 1, finishes: 1, why: 'the GIF' },
+  'ffmpeg/reframe.ts': { spawns: 1, finishes: 1, why: 'the vertical reframe' },
+  'ffmpeg/frame.ts': { spawns: 1, finishes: 1, why: 'the Clip Kit thumbnail' },
+  'ipc/recording.ts': { spawns: 0, finishes: 3, why: 'the recording\'s save hands convertToMp4, remuxWebm and the fallback copy a partial beside the chosen path (the spawn is convert.ts\'s, below)' },
+  'ffmpeg/convert.ts': { spawns: 1, finishes: 0, why: 'runConvertChild writes the path it is GIVEN: recording.ts hands it a partial and swaps it in (above); convertForImport hands it a fresh nanoid name in %TEMP%/imagii-import that it removes on any failure' },
+  'audio/extract.ts': { spawns: 1, finishes: 0, why: 'a fresh nanoid WAV in %TEMP%/imagii-audio, removed by the call that made it on any failure or cancel' },
+  'audio/peaks.ts': { spawns: 1, finishes: 0, why: 'writes to a pipe (pipe:1), no file' },
+  'ffmpeg/highlights.ts': { spawns: 2, finishes: 0, why: 'both scans write to the null muxer (-f null -), no file' }
+}
+
+/** How many `spawn(ffmpegPath, ...)` calls `sf` makes. */
+export function ffmpegSpawns(sf: ts.SourceFile): number {
+  let n = 0
+  const visit = (c: ts.Node): void => {
+    if (ts.isCallExpression(c) && ts.isIdentifier(c.expression) && c.expression.text === 'spawn') {
+      const first = c.arguments[0]
+      if (first && ts.isIdentifier(first) && first.text === 'ffmpegPath') n += 1
+    }
+    ts.forEachChild(c, visit)
+  }
+  visit(sf)
+  return n
+}
+
+/** How many calls to `finishPartial` `sf` makes. */
+export function finishPartialCalls(sf: ts.SourceFile): number {
+  let n = 0
+  const visit = (c: ts.Node): void => {
+    if (ts.isCallExpression(c) && ts.isIdentifier(c.expression) && c.expression.text === 'finishPartial') n += 1
+    ts.forEachChild(c, visit)
+  }
+  visit(sf)
+  return n
+}
+
+/** What is wrong with the scan, given the rows: a file whose spawns or finishes differ from its row (no row: none allowed), and a row for a file with neither. */
+export function accountForRunners(
+  found: Record<string, { spawns: number; finishes: number }>,
+  table: Record<string, { spawns: number; finishes: number }>
+): { unexpected: string[]; stale: string[] } {
+  const files = new Set([...Object.keys(found), ...Object.keys(table)])
+  const unexpected: string[] = []
+  const stale: string[] = []
+  for (const file of files) {
+    const got = found[file] ?? { spawns: 0, finishes: 0 }
+    const row = table[file] ?? { spawns: 0, finishes: 0 }
+    if (got.spawns === row.spawns && got.finishes === row.finishes) {
+      if (got.spawns === 0 && got.finishes === 0 && table[file]) stale.push(file)
+      continue
+    }
+    unexpected.push(`${file}: ${got.spawns} ffmpeg spawn(s) and ${got.finishes} finishPartial call(s), the table allows ${row.spawns} and ${row.finishes}`)
+  }
+  return { unexpected, stale }
+}
+
+describe('every ffmpeg output a person keeps goes through a partial (T-140 (1))', () => {
+  const files = sourceFilesUnder(MAIN_ROOT)
+  const rel = (f: string): string => path.relative(MAIN_ROOT, f).split(path.sep).join('/')
+  const scan = (): Record<string, { spawns: number; finishes: number }> => {
+    const found: Record<string, { spawns: number; finishes: number }> = {}
+    for (const f of files) {
+      const sf = parseSource(f)
+      const spawns = ffmpegSpawns(sf)
+      const finishes = finishPartialCalls(sf)
+      if (spawns > 0 || finishes > 0) found[rel(f)] = { spawns, finishes }
+    }
+    return found
+  }
+
+  it('reads the runners it is meant to police (a scan over nothing proves nothing)', () => {
+    const found = scan()
+    for (const expected of ['audio/process.ts', 'sidecars/whisperManager.ts', 'ffmpeg/concat.ts', 'ffmpeg/export.ts', 'ffmpeg/gif.ts', 'ffmpeg/reframe.ts', 'ffmpeg/frame.ts', 'ffmpeg/convert.ts', 'ipc/recording.ts']) {
+      expect(Object.keys(found), `${expected} spawns ffmpeg or finishes a partial`).toContain(expected)
+    }
+  })
+
+  it('no ffmpeg spawn and no finishPartial outside the audited table: a new runner is a row, with its reason or its partial', () => {
+    const { unexpected, stale } = accountForRunners(scan(), FFMPEG_RUNNERS)
+    expect(unexpected, 'hand ffmpeg `partialPathFor(target)` and call `finishPartial` (main/ffmpeg/partialOutput.ts), or add a row with the reason the output is no person\'s file').toEqual([])
+    expect(stale, 'a row whose file spawns no ffmpeg and finishes no partial any more: delete it').toEqual([])
+  })
+
+  it('a spawn that is not ffmpeg\'s (the whisper program, ffprobe) is not counted', () => {
+    const count = (text: string): number => ffmpegSpawns(parseSource('probe.ts', text))
+    expect(count("spawn(ffmpegPath, args, { windowsHide: true })\nspawn(ffmpegPath, ['-i'])")).toBe(2)
+    expect(count('spawn(status.exePath, args)\nspawn(ffprobePath, args)\nspawn(bin, [])')).toBe(0)
+    expect(count("// spawn(ffmpegPath, args)\nconst s = 'spawn(ffmpegPath, a)'")).toBe(0)
+    expect(finishPartialCalls(parseSource('p.ts', 'await finishPartial(a, b)\nawait finishPartial(c, d)\nawait other(finishPartial)'))).toBe(2)
+  })
+
+  it('accountForRunners: a new spawn, a dropped finish and a stale row are each reported', () => {
+    const table = { 'a.ts': { spawns: 1, finishes: 1 }, 'b.ts': { spawns: 1, finishes: 0 } }
+    expect(accountForRunners({ 'a.ts': { spawns: 1, finishes: 1 }, 'b.ts': { spawns: 1, finishes: 0 } }, table)).toEqual({ unexpected: [], stale: [] })
+    expect(accountForRunners({ 'a.ts': { spawns: 1, finishes: 1 }, 'b.ts': { spawns: 1, finishes: 0 }, 'c.ts': { spawns: 1, finishes: 0 } }, table).unexpected).toEqual([
+      'c.ts: 1 ffmpeg spawn(s) and 0 finishPartial call(s), the table allows 0 and 0'
+    ])
+    expect(accountForRunners({ 'a.ts': { spawns: 1, finishes: 0 }, 'b.ts': { spawns: 1, finishes: 0 } }, table).unexpected).toEqual([
+      'a.ts: 1 ffmpeg spawn(s) and 0 finishPartial call(s), the table allows 1 and 1'
+    ])
+    expect(accountForRunners({ 'b.ts': { spawns: 1, finishes: 0 } }, table).unexpected).toEqual([
+      'a.ts: 0 ffmpeg spawn(s) and 0 finishPartial call(s), the table allows 1 and 1'
+    ])
+  })
+})
+
+/**
  * T-139 (1), round 88b - the specs that LIST a folder a converted site writes into must not read the writer's tmp as a saved file.
  *
  * The first landing's full Playwright run failed once on exactly this: `image.spec.ts`'s `savedNames` was a bare `readdirSync(downloadDir)` and
@@ -207,7 +342,11 @@ describe('the scan discriminates', () => {
  * be read is reported by the guard test below (a scan over nothing proves nothing), not assumed.
  */
 const E2E_ROOT = path.resolve(__dirname, '../e2e')
-const LISTED_FOLDERS = /\b(?:downloadDir|exportsDir)\b/
+// T-140 (1): and the folders the renders go to - `outDir` (the export folder every video spec owns), a Clip Kit's `kitDir` and its parent, the folder a test
+// seeded as the remembered one, the Audio Studio test root. ffmpeg writes `<stem>.<8 hex>.partial<ext>` there for as long as an encode runs.
+const LISTED_FOLDERS = /\b(?:downloadDir|exportsDir|outDir|kitDir|kitParent|seeded)\b|\bstudio\.root\b/
+/** The ways a listing says what it wants: the finished files (`withoutAtomicTmp`), what is left, tmp files and partials in view (`withEverything`), or the partials alone (`partialsOnly`). */
+const LISTING_WRAPPERS = new Set(['withoutAtomicTmp', 'withEverything', 'partialsOnly'])
 /** The only function allowed to list one raw: its name says so. */
 const RAW_LISTING_FUNCTIONS = new Set(['rawNames'])
 
@@ -217,7 +356,7 @@ export function saveFolderListings(sf: ts.SourceFile): { listings: number; unfil
   let listings = 0
   const wrapped = (n: ts.Node): boolean => {
     for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
-      if (ts.isCallExpression(p) && ts.isIdentifier(p.expression) && p.expression.text === 'withoutAtomicTmp') return true
+      if (ts.isCallExpression(p) && ts.isIdentifier(p.expression) && LISTING_WRAPPERS.has(p.expression.text)) return true
     }
     return false
   }
@@ -242,7 +381,24 @@ export function saveFolderListings(sf: ts.SourceFile): { listings: number; unfil
   return { listings, unfiltered: found }
 }
 
-describe('a spec that lists a save folder ignores the atomic writer\'s tmp (T-139 (1))', () => {
+describe('the e2e listing helpers drop exactly the names the two writers make (T-139 (1), T-140 (1))', () => {
+  const PARTIAL = path.basename(partialPathFor('/x/My Clip_youtube.mp4'))
+
+  it('withoutAtomicTmp drops a save\'s tmp AND a render\'s partial, and keeps every finished name', () => {
+    const finished = ['My Clip_youtube.mp4', 'My Clip_youtube (2).mp4', 'clip.gif', 'notes.partial.txt', 'holiday.partial.mp4', 'ggml-base.bin.partial']
+    const listing = [...finished, 'project.imagii.json.1a2b3c4d.tmp', PARTIAL, path.basename(partialPathFor('/x/a.cleaned.wav')), path.basename(partialPathFor('/x/g.gif'))]
+    expect(withoutAtomicTmp(listing)).toEqual(finished)
+  })
+
+  it('partialsOnly keeps exactly the renders still being written; withEverything keeps all', () => {
+    const wav = path.basename(partialPathFor('/x/a.cleaned.wav'))
+    const listing = ['done.mp4', PARTIAL, 'project.imagii.json.1a2b3c4d.tmp', wav]
+    expect(partialsOnly(listing)).toEqual([PARTIAL, wav])
+    expect(withEverything(listing)).toEqual(listing)
+  })
+})
+
+describe('a spec that lists a save folder ignores the atomic writer\'s tmp and a render\'s partial, or says it wants them (T-139 (1), T-140 (1))', () => {
   const specs = ['image.spec.ts', 'references.spec.ts', 'home-chrome.spec.ts', 'continuity.spec.ts', 'video-pipelines.spec.ts', 'record.spec.ts', 'audio.spec.ts', 'export.spec.ts', 'smoke.spec.ts', 'video-core.spec.ts']
   const read = (name: string): ts.SourceFile => parseSource(path.join(E2E_ROOT, name))
 
@@ -250,10 +406,16 @@ describe('a spec that lists a save folder ignores the atomic writer\'s tmp (T-13
     const count = (name: string): number => saveFolderListings(read(name)).listings
     expect(count('image.spec.ts'), 'savedNames, clearDownloads and the raw listing').toBeGreaterThanOrEqual(3)
     expect(count('references.spec.ts'), 'the Reference Export poll and its read').toBeGreaterThanOrEqual(2)
+    expect(count('video-pipelines.spec.ts'), 'the export folders, the kit folders and the seeded folders of the video specs').toBeGreaterThanOrEqual(40)
+    expect(count('audio.spec.ts'), 'the export test\'s one file').toBeGreaterThanOrEqual(2)
+    expect(count('export.spec.ts'), 'the smoke export\'s one artifact').toBeGreaterThanOrEqual(1)
   })
 
   it.each(specs)('%s: every listing of a save folder is filtered, or is the raw one', (name) => {
-    expect(saveFolderListings(read(name)).unfiltered, `${name}: wrap it in withoutAtomicTmp(...) (tests/e2e/atomicTmp.ts)`).toEqual([])
+    expect(
+      saveFolderListings(read(name)).unfiltered,
+      `${name}: wrap it in withoutAtomicTmp(...) for the finished files, or withEverything(...) for what is left (tests/e2e/atomicTmp.ts)`
+    ).toEqual([])
   })
 
   it('discriminates: a bare listing is reported, a wrapped one and the raw function are not', () => {
@@ -261,10 +423,97 @@ describe('a spec that lists a save folder ignores the atomic writer\'s tmp (T-13
     expect(lines('const a = readdirSync(studio.downloadDir).sort()')).toEqual([1])
     expect(lines('const a = readdirSync(exportsDir).length')).toEqual([1])
     expect(lines('const a = withoutAtomicTmp(readdirSync(studio.downloadDir)).sort()')).toEqual([])
+    // T-140 (1): the video specs' folders, bare, are reported; either wrapper (the finished files, or what is left) is not.
+    expect(lines('const a = readdirSync(outDir).filter((f) => f.endsWith(".mp4"))')).toEqual([1])
+    expect(lines('const a = readdirSync(kitDir)')).toEqual([1])
+    expect(lines('const a = readdirSync(seeded).sort()')).toEqual([1])
+    expect(lines('const a = readdirSync(studio.root)')).toEqual([1])
+    expect(lines('const a = withEverything(readdirSync(outDir))')).toEqual([])
+    expect(lines('const a = partialsOnly(readdirSync(studio.root))')).toEqual([])
+    expect(lines('const a = withoutAtomicTmp(readdirSync(kitDir)).filter((f) => f.endsWith(".mp4"))')).toEqual([])
+    expect(lines('const a = notAWrapper(readdirSync(outDir))')).toEqual([1])
     expect(lines('function rawNames(s: S) { return readdirSync(s.downloadDir) }')).toEqual([])
     expect(lines('function other(s: S) { return readdirSync(s.downloadDir) }')).toEqual([1])
     // A folder the converted sites do not write into is none of this scan's business.
-    expect(lines('const a = readdirSync(outDir)')).toEqual([])
+    expect(lines('const a = readdirSync(presetsDir)')).toEqual([])
   })
 })
 
+
+/**
+ * T-140 (1), sent back - a runner that swaps a render in over a file the person named must hand its caller the path the render LANDED at.
+ *
+ * When that file is open in another app the disk refuses the swap onto it for good, and `commitPartial` keeps the render beside it under the next free name
+ * (`partialOutput.ts`). The only way the person ever learns where it is, and the only way "Show in folder" or "Edit in Video Studio" opens the right file, is
+ * that the runner returns `finishPartial`'s answer. A call written as a bare statement, `await finishPartial(...)`, throws that answer away and reports the
+ * chosen name over a file that was not replaced: so every such call is listed here, with the reason its caller can do without. A new one is a row, or it keeps
+ * the answer (`const { outputPath } = await finishPartial(...)`).
+ */
+const DROPPED_LANDINGS: Record<string, { calls: number; why: string }> = {
+  'ffmpeg/frame.ts': {
+    calls: 1,
+    why: 'a Clip Kit thumbnail goes into a folder made a moment ago, and the runner refuses the name if anything is there: nothing at the target can be open in another app, so the swap is never redirected'
+  }
+}
+
+/** How many calls to `finishPartial` in `sf` stand alone as a statement (`await finishPartial(...)`), so their answer is thrown away. */
+export function droppedLandings(sf: ts.SourceFile): number {
+  let n = 0
+  const visit = (c: ts.Node): void => {
+    if (
+      ts.isExpressionStatement(c) &&
+      ts.isAwaitExpression(c.expression) &&
+      ts.isCallExpression(c.expression.expression) &&
+      ts.isIdentifier(c.expression.expression.expression) &&
+      c.expression.expression.expression.text === 'finishPartial'
+    ) {
+      n += 1
+    }
+    ts.forEachChild(c, visit)
+  }
+  visit(sf)
+  return n
+}
+
+describe('a runner that swaps a render over a named file keeps the path it landed at (T-140 (1))', () => {
+  const files = sourceFilesUnder(MAIN_ROOT)
+  const rel = (f: string): string => path.relative(MAIN_ROOT, f).split(path.sep).join('/')
+  const scan = (): Record<string, number> => {
+    const found: Record<string, number> = {}
+    for (const f of files) {
+      const n = droppedLandings(parseSource(f))
+      if (n > 0) found[rel(f)] = n
+    }
+    return found
+  }
+
+  it('no finishPartial call throws its answer away outside the audited table', () => {
+    const found = scan()
+    const unexpected = Object.entries(found)
+      .filter(([file, n]) => n !== (DROPPED_LANDINGS[file]?.calls ?? 0))
+      .map(([file, n]) => `${file}: ${n} call(s) drop the landed path, the table allows ${DROPPED_LANDINGS[file]?.calls ?? 0}`)
+    expect(unexpected, 'keep the answer: `const { outputPath } = await finishPartial(...)`, and return it to the caller').toEqual([])
+    const stale = Object.keys(DROPPED_LANDINGS).filter((file) => !(file in found))
+    expect(stale, 'a row whose file no longer drops the answer: delete it').toEqual([])
+  })
+
+  it('reads the runners it is meant to police (a scan over nothing proves nothing)', () => {
+    const keepers = ['audio/process.ts', 'sidecars/whisperManager.ts', 'ipc/recording.ts', 'ffmpeg/export.ts', 'ffmpeg/gif.ts', 'ffmpeg/reframe.ts', 'ffmpeg/concat.ts']
+    for (const file of keepers) {
+      const sf = parseSource(path.join(MAIN_ROOT, file))
+      expect(finishPartialCalls(sf), `${file} calls finishPartial`).toBeGreaterThan(0)
+      expect(droppedLandings(sf), `${file} keeps every answer`).toBe(0)
+    }
+  })
+
+  it('discriminates: a bare await is reported; a kept answer, a returned one and a mention are not', () => {
+    const count = (text: string): number => droppedLandings(parseSource('probe.ts', text))
+    expect(count('await finishPartial(work, o)')).toBe(1)
+    expect(count('async function f() {\n  await finishPartial(a, b)\n  await finishPartial(c, d)\n}')).toBe(2)
+    expect(count('const { outputPath } = await finishPartial(work, o)')).toBe(0)
+    expect(count('const done = await finishPartial(work, o)')).toBe(0)
+    expect(count('return await finishPartial(work, o)')).toBe(0)
+    expect(count('landed = (await finishPartial(work, o)).outputPath')).toBe(0)
+    expect(count('// await finishPartial(work, o)\nconst s = "await finishPartial(work, o)"')).toBe(0)
+  })
+})

@@ -15,7 +15,7 @@ import type { ReframePhase } from '../../shared/reframe'
 import { clipSpeed, type ClipRecipe } from '../../shared/clip'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
-import { discardPartialOutput } from './partialOutput'
+import { finishPartial, partialPathFor } from './partialOutput'
 import { FFMPEG_EMPTY_OUTPUT, PictureFrames, REFRAME_NO_PICTURE_MESSAGE, wroteNoPicture } from './noPicture'
 import { ensureOutputDir, nextFreePath } from './outputPath'
 
@@ -148,7 +148,9 @@ async function reframeClip(
   const probe = await run.guard(probeVideo(spec.sourcePath))
   // T-125 (10): the folder is there before the name is chosen.
   await run.guard(ensureOutputDir(path.dirname(spec.outputPath)))
-  const outputPath = await run.guard(nextFreePath(spec.outputPath))
+  const wanted = await run.guard(nextFreePath(spec.outputPath))
+  // T-140 (1): written to a partial beside the name chosen, swapped in only when whole (`partialOutput.ts`).
+  const partial = partialPathFor(wanted)
   const { filter, audioFilter } = buildReframeGraph(spec, { width: probe.width, height: probe.height, colorSpace: probe.colorSpace })
   const speed = clipSpeed(spec)
 
@@ -183,18 +185,16 @@ async function reframeClip(
     '-progress',
     'pipe:1',
     '-nostats',
-    outputPath
+    partial
   ]
 
   // The length of what is WRITTEN: the range at the clip's speed (the progress bar's denominator).
   const totalDuration = Math.max(0.1, (spec.endSec - spec.startSec) / speed)
   onProgress({ jobId: spec.jobId, phase: 'rendering', percent: 0 })
 
-  let spawnedAt: number | null = null
-  await new Promise<void>((resolve, reject) => {
+  const reframed = new Promise<void>((resolve, reject) => {
     run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
-    spawnedAt = Date.now()
     activeJobs.set(spec.jobId, child)
     let stderr = ''
     let lastEmitted = 0
@@ -237,17 +237,16 @@ async function reframeClip(
       if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) {
         reject(new Error(REFRAME_NO_PICTURE_MESSAGE))
       } else if (code === 0) {
-        onProgress({ jobId: spec.jobId, phase: 'done', percent: 100 })
         resolve()
       } else {
         reject(cancelledOr(child, new Error(`reframe exit ${code}: ${stderr.slice(-500)}`)))
       }
     })
-  }).catch(async (err: unknown) => {
-    // T-100: a vertical clip with no moov atom is this job's wreckage, not a result.
-    await discardPartialOutput(outputPath, spawnedAt)
-    throw err
   })
+  // T-100: a vertical clip with no moov atom (or none that has a picture, T-132 (4)) is never swapped in.
+  const { outputPath } = await finishPartial(reframed, { run, partial, target: wanted, mode: 'beside' })
+  // "done" is announced once the file is THERE.
+  onProgress({ jobId: spec.jobId, phase: 'done', percent: 100 })
 
   return { outputPath, durationMs: Date.now() - startedAt }
 }

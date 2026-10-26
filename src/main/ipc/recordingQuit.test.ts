@@ -108,6 +108,8 @@ async function startSave(outPath: string, convertToMp4: boolean): Promise<{ id: 
   )
   return { id, saving }
 }
+/** The file the Nth spawned ffmpeg (0-based) was told to write: since T-140 (1) a partial beside the name the person chose in the Save dialog. */
+const outputOf = (i: number): string => (spawned[i]?.args ?? []).slice(-1)[0] as string
 async function untilSpawned(n: number): Promise<void> {
   for (let i = 0; i < 400 && spawned.length < n; i++) await new Promise((resolve) => setTimeout(resolve, 5))
   expect(spawned.length, 'the ffmpeg child was started').toBeGreaterThanOrEqual(n)
@@ -135,7 +137,10 @@ describe('a quit in the middle of the MP4 convert (T-128 (5))', () => {
     const outPath = path.join(TMP, 'take.mp4')
     const { id, saving } = await startSave(outPath, true)
     await untilSpawned(1)
-    expect(existsSync(outPath), 'ffmpeg has opened its output at the chosen name').toBe(true)
+    // T-140 (1): ffmpeg opens a PARTIAL beside the chosen name; the chosen name itself is not touched while it writes.
+    const partial = outputOf(0)
+    expect(existsSync(partial), 'ffmpeg has opened its output').toBe(true)
+    expect(existsSync(outPath), 'and the chosen name is not it').toBe(false)
     expect(openRunCount(), 'the save is a run the quit can wait for').toBe(1)
     slowUnlinkMs = 150
 
@@ -143,6 +148,7 @@ describe('a quit in the middle of the MP4 convert (T-128 (5))', () => {
     cancelAllConverts()
     await expect(drainRuns(3000)).resolves.toBe('drained')
 
+    expect(existsSync(partial), 'the half-written mp4 is gone before the quit is released').toBe(false)
     expect(existsSync(outPath), 'no half-written mp4 at the final name').toBe(false)
     expect(readFileSync(tempPathFor(id), 'utf8'), 'the raw take survived the quit').toBe(TAKE)
     expect(await saving, 'and the save ended as a discard-shaped null, not an error').toBeNull()
@@ -160,6 +166,7 @@ describe('a quit in the middle of the MP4 convert (T-128 (5))', () => {
     slowUnlinkMs = 150
     cancelAllConverts()
     await expect(drainRuns(3000)).resolves.toBe('drained')
+    expect(existsSync(outputOf(0)), 'the partial webm is gone before the quit is released').toBe(false)
     expect(existsSync(outPath), 'no half-written webm at the chosen name').toBe(false)
     expect(readFileSync(tempPathFor(id), 'utf8')).toBe(TAKE)
     expect(await saving).toBeNull()
@@ -244,7 +251,7 @@ describe('a Discard cancels its own take and no other (T-137 (2))', () => {
     // The first take, which nobody discarded.
     expect(spawned[0]?.child.signals, 'its ffmpeg was not signalled').toEqual([])
     expect(spawned[1]?.child.signals).toEqual(['SIGKILL'])
-    expect(existsSync(first.out), 'its output is still being written').toBe(true)
+    expect(existsSync(outputOf(0)), 'its output is still being written (a partial beside the chosen name, T-140 (1))').toBe(true)
     expect(readFileSync(tempPathFor(first.id), 'utf8'), 'its raw take is the only copy, and it is still there').toBe(TAKE)
     expect(openRunCount(), 'its save is still a run').toBe(1)
 

@@ -225,7 +225,7 @@ export interface ImagiiApi {
   captions: {
     status(): Promise<CaptionsInstallStatus>
     transcribe(req: TranscribeRequest): Promise<TranscribeResult>
-    /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). */
+    /** `captioned` is false when a ranged burn had no cue inside its range (T-81/T-89). `outputPath` is the file that exists: beside `req.outputPath` when that one was open in another app (T-140 (1)). */
     burnIn(req: BurnInRequest): Promise<{ outputPath: string; captioned: boolean }>
     saveSrt(srtPath: string, defaultName: string): Promise<string | null>
     /** How many transcripts `<userData>/captions` holds (T-128 (3)). No argument: the folder is main's. */

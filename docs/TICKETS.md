@@ -6009,7 +6009,7 @@ IMG-PREC.
   FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** in progress (round 89: Tracks C and B landed — see their Done entries; Track A sent back once, in rework)
+- **Status:** done (round 89, three tracks — see the three Done entries)
 
 ---
 
@@ -6523,6 +6523,82 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 89, Track A — T-140 item 1 and the non-counted audio/process.ts
+comment, landed in the commit that carries this entry, merged onto
+Track B (892b528) and Track C (ed96e14). Worked by one Sonnet in a
+fresh clone of 9a5fe93 (resumed once after a container restart; its
+ledger had no mutation applied at the time). The fix: every ffmpeg
+runner renders to a partial beside its target
+(`<stem>.<8 hex>.partial<ext>`, the extension last so ffmpeg still
+picks the muxer) and swaps it in through one mechanism
+(src/main/ffmpeg/partialOutput.ts: `finishPartial` / `commitPartial`)
+only after exit 0, the runner's own checks and a look at its cancel
+latch; a failure, Cancel or quit removes only the partial
+(`discardPartial` refuses any other name), so the file the person
+chose to replace is the old file until the new one is whole.
+`discardPartialOutput` and its clock rule are gone. The Save-dialog
+writes (audio export, the re-attach mux and its intermediate WAV, the
+burn-in, the recording's MP4 convert, WebM remux and fallback copy,
+the kit frame) swap in 'replace' mode; the folder exports (export,
+GIF, reframe, both joins, PiP) in 'beside' mode, asking for a free
+name again at the swap. Correction to this ticket's item 1: the
+folder exports already took a free name ("name (2)") since T-106, so
+a re-export never replaced an earlier one - the data-loss paths were
+the Save-dialog ones (the expediter's extension in the sweep-26
+adjudication was wrong; the worker measured it). SENT BACK ONCE by
+the expediter: the first handback discarded a finished render when
+the swap stayed refused - on Windows, a re-export over a file still
+open in a player (a handle without FILE_SHARE_DELETE refuses
+MoveFileEx REPLACE_EXISTING), where ffmpeg's own open used to fail
+within a second; the fix: a rename refused with EBUSY/EPERM/EACCES is
+retried for about 1.55 s, and a swap that stays refused while a file
+is at the target lands at the next free name beside it, the runners
+return the LANDED path (AudioJobResult, the burn-in result,
+RecordingResult and its `requestedPath`), and the renderer's words
+and actions (ExportDialog, CaptionsPanel's burn-in lines,
+RecordStudio) use it with one sentence (`@shared/landedPath`: "X is
+open in another app, so this export was saved as X (2)."). The
+STYLE_GUIDE's two stale passages were rewritten with it. 71 ledger
+mutations (72 rows; one survivor in the first handback, the join's
+'replace' mode, killed after a join row was added; four e2e rows
+voided for a mangled -g pattern and re-run), all restored
+byte-identical; 24 reds, including Layer 5 on both majors (10 failed
+of 40 on each, on the unchanged tree). Expedited personally:
+integrity (no Track B or C file touched beyond the send-back's
+renderer lines; shared types in api.ts, audio.ts, workspace.ts),
+verify x2 (194/5476), test:media on 7.0.2 (410 passed | 13 skipped of
+423), the whole Layer 5 file on the distro 6.1.1 (403 passed and only
+the 7 known pins), the T-140 Layer 5 blocks on the SHIPPED win32 exe
+under Wine (39 of 40; the compilation-join Cancel case's 60 s wait for
+the partial is shorter than the Wine harness's ~3.5 min segment phase
+- with the wait raised in a byte-restored probe it passed in 223 s:
+a harness limit, not the product), FULL Playwright 478/478 (52.1 min),
+sha of every touched file identical before and after; one independent
+mutation at a seam no ledger row names (the swap retries only EBUSY,
+so a transient EPERM/EACCES - an antivirus scan - is not retried and
+an existing target sends the render to "(2)" → 13 unit cases red
+across the helper, the audio and burn-in rows and the recording's
+three paths), restored byte-identical, sha256 verified. Merged by
+structure onto 892b528 (rehearsed in a scratch clone): six shared
+files conflicted - the coverage ledger, TESTING, audio.spec,
+video-pipelines.spec (each track's appended block re-appended, the
+earlier landings' first), interactionWiring.test.ts (Track C's
+appended block and its edits to the T-139 (9) pins kept, Track A's
+middle edits merged and its block appended) and LESSONS (A's entry on
+top, newest first) - and a line-level proof over all nine files both
+sides touched showed neither lost a line; all 38 Track-A-only files
+are byte-identical to the expedited clone. The rehearsed tree
+verified at 195 files / 5595 tests, the three tracks' counts summed
+exactly; on the merged tree test:media 410 passed | 13 skipped of 423 (16m40s) and FULL
+Playwright 501/501 (57.3 min).
+Found, not fixed (the worker's list, in the IC): a crash, kill -9 or
+power loss leaves one `.partial` beside the output (not swept: the
+Save dialog's folder is not remembered; upgrade: journal in-flight
+partials in userData and reap them at launch); no fsync before the
+rename; a read-only target is refused with the same EPERM, so its
+redirect lands right but the sentence says "open in another app"; the
+burn-in toast has no button, so only its words change.
 
 Round 89, Track B — T-140 items 2-5, landed in the commit that carries
 this entry, merged onto Track C (ed96e14). Worked by one Sonnet in a

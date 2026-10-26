@@ -54,9 +54,10 @@ interface OpenRun {
  * T-127 (3): the runs open ANYWHERE in the process, counted, so the quit can wait for what the kills it issues only START.
  *
  * `cancelAll*` signals the children (SIGKILL) and marks the runs, and returns. Everything that deletes wreckage runs LATER, on the
- * event loop: the child's `close`, then the runner's failure path (`discardPartialOutput`, an intermediate's unlink), then `run.end()`
+ * event loop: the child's `close`, then the runner's failure path (`discardPartial`, an intermediate's unlink), then `run.end()`
  * in its `finally`. The window's X and `app.quit()` let the process exit before any of it ran, so a quit in the middle of an export left
- * a half-written `name.mp4` at its FINAL name (no moov atom, and the next export of the same clip landed at "(2)") and a re-attach left its
+ * a half-written `name.mp4` at its FINAL name (no moov atom, and the next export of the same clip landed at "(2)"; T-140 (1): the half-written file is a
+ * partial now, and the quit leaves the same nothing in the folder) and a re-attach left its
  * ~0.7 GB-per-hour `.cleaned.wav`: Cancel deleted them (T-100) and a quit did not. `run.end()` is the last thing every runner does, after
  * its cleanup (each is `try { return await work } finally { run.end() }`), so "every run has ended" is "the cleanup is done".
  */
