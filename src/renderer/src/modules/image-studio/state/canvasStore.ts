@@ -102,6 +102,14 @@ export function applyLayerPatch(layer: CanvasLayer, patch: Partial<CanvasLayer>)
   return retyped ? { ...next, hint: false } : next
 }
 
+/**
+ * The selection a document can keep (T-141 (8)): `id` if it names a layer there, else none. Undo and redo swap the whole document, so the layer a person had selected may
+ * not exist in the one that comes back (undo of "+ Add text" removes the word it selected), and Delete on that stale id recorded a step that changed nothing and cleared Redo.
+ */
+function selectionIn(doc: CanvasDocument, id: string | null): string | null {
+  return id !== null && doc.layers.some((l) => l.id === id) ? id : null
+}
+
 function pushHistory(history: History, prev: CanvasDocument): History {
   const past = [...history.past, prev]
   return {
@@ -145,6 +153,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   removeLayer: (id) => {
     const prev = get().doc
+    // T-141 (8): a layer that is not there is nothing to remove, and nothing to undo: a step that changes nothing would also clear Redo (`videoStore.removeClip` guards this).
+    if (!prev.layers.some((l) => l.id === id)) return
     const layers = prev.layers.filter((l) => l.id !== id)
     set({
       // T-140 (4): a document with no layers IS the blank page. The studio shows its templates-first screen for one ("Pick a template to start ... or start blank"), so
@@ -227,6 +237,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const last = history.past[history.past.length - 1]!
     set({
       doc: last,
+      selectedLayerId: selectionIn(last, get().selectedLayerId),
       history: { past: history.past.slice(0, -1), future: [doc, ...history.future] }
     })
   },
@@ -236,6 +247,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const next = history.future[0]!
     set({
       doc: next,
+      selectedLayerId: selectionIn(next, get().selectedLayerId),
       history: { past: [...history.past, doc], future: history.future.slice(1) }
     })
   },
@@ -345,22 +357,47 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
 }
 
 /**
- * A new text layer for the document that is open (T-140 (2)): sized to it, placed inside it by the rule a picture follows, and inked against its background - the near-black
- * on a white page, the light ink on a dark or transparent one (`newTextLook`, `@shared/newText`, which takes the colors from here so they stay tokens). `makeTextLayer` is
- * the layer itself and stays what it was for its other callers (a position it is given, 32 px, `BG_BASE`).
+ * A new text layer for the document that is open (T-140 (2)): sized to it, placed inside it by the rule a picture follows, and inked against what is under it - the near-black
+ * on a white page, the light ink on a dark or transparent one (`newTextLook`, `@shared/newText`, which takes the colors from here so they stay tokens). T-141 (2): "what is
+ * under it" is the document AND the shapes and words its box overlaps (`doc.layers`), so the emote's word is inked against the disc it sits on and a document with no
+ * readable corner gets its word moved to a place that is. `makeTextLayer` is the layer itself and stays what it was for its other callers (a position it is given, 32 px,
+ * `BG_BASE`).
  */
-export function textLayerFor(doc: Pick<CanvasDocument, 'width' | 'height' | 'background'>): TextLayer {
+export function textLayerFor(doc: Pick<CanvasDocument, 'width' | 'height' | 'background'> & Partial<Pick<CanvasDocument, 'layers'>>): TextLayer {
   const look = newTextLook(doc, { dark: BG_BASE, light: INK_BASE, behind: BG_BASE })
   return { ...makeTextLayer(look.x, look.y), fontSize: look.fontSize, fill: look.fill }
 }
 
 /**
  * Does a corner drag on this kind of layer keep its proportions (T-140 (3))? A picture and a word have proportions of their own (a stretched logo, stretched glyphs, and
- * the stretch is what the export carries); a rectangle's, an ellipse's and a line's width and height are the point of resizing them. Shift flips it either way (Konva's
- * Transformer; `Canvas.tsx`). The side handles stretch every layer.
+ * the stretch is what the export carries - a word keeps what is left of one in `scaleX` after its size has absorbed the height, `foldTextScale`); a rectangle's, an ellipse's
+ * and a line's width and height are the point of resizing them. Shift flips it either way (Konva's Transformer; `Canvas.tsx`). The side handles stretch every layer.
  */
 export function keepsRatioOnCornerDrag(type: LayerType): boolean {
   return type === 'image' || type === 'text'
+}
+
+/** The smallest a text layer's size can be (px): the 4 the Size field's attribute says, enforced when typing ends and when a resize ends. */
+export const FONT_SIZE_MIN = 4
+
+/** Two scales this near are one scale: a corner drag that kept its ratio (Konva's own arithmetic ends within float error of it). */
+const UNIFORM_SCALE_TOLERANCE = 0.005
+
+/**
+ * What a text layer's size and scale become when a resize ends (T-141 (6)): the scale folded into the size.
+ *
+ * The Transformer scales the node, and the store kept `scaleX` / `scaleY` while Properties shows `fontSize`: after the corner drag T-140 (3) made the natural way to size a
+ * word, "Size (px)" said 32 over a word drawn at 44, and a size typed afterwards was multiplied by the kept scale. A word is sized by its font size, so the size absorbs the
+ * height: `fontSize` becomes `fontSize * |scaleY|` to the Size field's whole pixel (never under `FONT_SIZE_MIN`), the vertical scale becomes 1 (keeping a flip's sign), and a
+ * stretch that is left stays in `scaleX` - a corner drag that kept its ratio leaves none (`scaleX` 1), a Shift-freed drag leaves the width/height ratio it made, measured
+ * against the size it landed on so the drawn width is what the person dragged to and not what the rounding left. The drawn height moves by under half a pixel (the
+ * rounding), which is the price of the Size field showing what is drawn.
+ */
+export function foldTextScale(fontSize: number, scaleX: number, scaleY: number): { fontSize: number; scaleX: number; scaleY: number } {
+  const size = Math.max(FONT_SIZE_MIN, Math.round(fontSize * Math.abs(scaleY)))
+  const uniform = Math.abs(Math.abs(scaleX) - Math.abs(scaleY)) <= UNIFORM_SCALE_TOLERANCE
+  const flipX = scaleX < 0 ? -1 : 1
+  return { fontSize: size, scaleX: uniform ? flipX : (scaleX * fontSize) / size, scaleY: scaleY < 0 ? -1 : 1 }
 }
 
 export function makeTextLayer(x: number, y: number, text = 'Text'): TextLayer {

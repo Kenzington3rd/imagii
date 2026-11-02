@@ -23,6 +23,7 @@ import {
   type TextLayer
 } from '@shared/canvas'
 import {
+  foldTextScale,
   keepsRatioOnCornerDrag,
   makeEllipseLayer,
   makeLineLayer,
@@ -329,13 +330,19 @@ export function Canvas(): JSX.Element {
       },
       onTransformEnd: (e: Konva.KonvaEventObject<Event>) => {
         const node = e.target
+        // T-141 (6): a word is sized by its font size, so a resize folds the node's scale into it (`foldTextScale`) and the node is put at the folded scale AS WELL AS the store,
+        // as the drag end does for the position: the store's scale is 1 before and after, React sees no new prop, and the node would keep the scale the Transformer gave it
+        // on top of the new font size (drawn twice as large as dragged).
+        const folded = layer.type === 'text' ? foldTextScale(layer.fontSize, node.scaleX(), node.scaleY()) : null
+        if (folded) node.scale({ x: folded.scaleX, y: folded.scaleY })
         updateLayer(layer.id, {
           x: node.x(),
           y: node.y(),
           rotation: node.rotation(),
           scaleX: node.scaleX(),
-          scaleY: node.scaleY()
-        })
+          scaleY: node.scaleY(),
+          ...(folded ? { fontSize: folded.fontSize } : {})
+        } as Partial<CanvasLayer>)
       }
     }
     switch (layer.type) {

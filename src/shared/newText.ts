@@ -5,10 +5,15 @@
  * invisible), 1.00 to 1.11:1 against every template background (#120c0c, #241614, transparent), and a speck on a 3840 px overlay. Where a layer first lands is a fact
  * about the document it lands on, as a picture's is (`placementFor`, `@shared/imageBounds`); these are the three rules, pure, and `canvasStore.textLayerFor` hands them
  * the open document and the app's own tokens (this module takes its colors from its caller, so no hex lives here).
+ *
+ * T-141 (2): "the document it lands on" is the document AND what is drawn on it. The ink was chosen against the document's background alone, and on the emotes (a transparent
+ * document, a disc that fills it) the word was inked for the dark workspace and landed on the disc: 1.33:1 on the gold one, 2.92:1 on the red one. `surfacesUnder` says what
+ * can show under a box, `inkFor` takes that list, and `newTextLook` moves the word to the first of a fixed list of places where one ink reads against all of it.
  */
 import { placementFor } from './imageBounds'
 import { resolveOverlayColor } from './overlayColors'
 import { assert } from './assert'
+import { displayOpacity, type CanvasLayer } from './canvas'
 
 /** The size a new text layer has always had (px of the document), and still has on the default blank page. */
 export const DEFAULT_TEXT_SIZE = 32
@@ -82,18 +87,156 @@ export interface TextInks {
   behind: string
 }
 
-/**
- * The ink for text on a document with this `background`: whichever of `dark` and `light` has the better WCAG contrast against what the document shows, a tie going to
- * `dark` (the long-standing default). The background is read as the overlay editor reads a color (a name, `#rgb`, `#rrggbb`, with or without the `#`); `transparent` and
- * anything else (an `rgba()`, a gradient, a hand-edited project's garbage) show `behind`, so they count as dark, which the workspace behind an overlay is and most scenes
- * an overlay sits on are. Against a white page that is the near-black at 19.4:1; against #120c0c, #241614 or transparent the light ink at 13:1 or better. Only a grey
- * between #686868 and #797979 leaves both inks under 4.5:1 (the better is 3.95 at worst), and a person cannot pick one: no control sets the background.
- */
-export function inkFor(background: string, inks: TextInks): string {
+/** The least contrast a new word is held to against everything drawn under it: WCAG AA for normal text, the bar every token pairing in the app clears. */
+export const READABLE_CONTRAST = 4.5
+
+/** A surface as `inkFor` reads it: a name, `#rgb`, `#rrggbb` (with or without the `#`); `transparent`, an `rgba()` and anything else show `behind`, so they count as dark. */
+function surfaceColor(surface: unknown, inks: TextInks): string {
   // (`typeof`: a project file is read, not made by the editor, and a canvas document with no background at all opens and draws.)
-  const surface = (typeof background === 'string' ? resolveOverlayColor(background) : null) ?? inks.behind
-  assert(HEX6.test(surface) && HEX6.test(inks.dark) && HEX6.test(inks.light), 'inkFor expects #rrggbb inks and a #rrggbb workspace color')
-  return contrastRatio(inks.dark, surface) >= contrastRatio(inks.light, surface) ? inks.dark : inks.light
+  return (typeof surface === 'string' ? resolveOverlayColor(surface) : null) ?? inks.behind
+}
+
+/** The worst (lowest) WCAG contrast `ink` has against any of `surfaces`; against no surface at all it is against `inks.behind`. */
+export function worstContrast(ink: string, surfaces: string | readonly string[], inks: TextInks): number {
+  // (a canvas document with no background at all opens and draws, so the one-surface form takes whatever it is given)
+  const list = Array.isArray(surfaces) ? (surfaces as readonly string[]) : [surfaces as string]
+  const resolved = list.length === 0 ? [inks.behind] : list.map((s) => surfaceColor(s, inks))
+  assert(HEX6.test(ink) && HEX6.test(inks.behind), 'worstContrast expects a #rrggbb ink and a #rrggbb workspace color')
+  return Math.min(...resolved.map((s) => contrastRatio(ink, s)))
+}
+
+/**
+ * The ink for text over these surfaces (T-141 (2)): whichever of `dark` and `light` has the better WORST contrast against any of them (maximin), a tie going to `dark`
+ * (the long-standing default). One surface can be given as a string, which is how the document's background alone was judged (T-140 (2)); a word that lands on several
+ * (the document, and the shapes under it) is judged against all of them, because a light ink on a gold disc is 1.3:1 however dark the document around the disc is.
+ * Each is read as the overlay editor reads a color (a name, `#rgb`, `#rrggbb`, with or without the `#`); `transparent` and anything else (an `rgba()`, a gradient, a
+ * hand-edited project's garbage) show `behind`, so they count as dark, which the workspace behind an overlay is and most scenes an overlay sits on are. Against a white
+ * page that is the near-black at 19.4:1; against #120c0c, #241614 or transparent the light ink at 13:1 or better. Only a grey between #686868 and #797979 leaves both inks
+ * under 4.5:1 (the better is 3.95 at worst), and a person cannot pick one: no control sets the background.
+ */
+export function inkFor(surfaces: string | readonly string[], inks: TextInks): string {
+  assert(HEX6.test(inks.dark) && HEX6.test(inks.light) && HEX6.test(inks.behind), 'inkFor expects #rrggbb inks and a #rrggbb workspace color')
+  return worstContrast(inks.dark, surfaces, inks) >= worstContrast(inks.light, surfaces, inks) ? inks.dark : inks.light
+}
+
+type Rgb = readonly [number, number, number]
+
+function rgbOf(hex: string): Rgb {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function hexOf(rgb: Rgb): string {
+  return `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`
+}
+
+/** `top` laid over `under` at `alpha` (0 to 1), channel by channel as the canvas mixes them. */
+function over(under: Rgb, top: Rgb, alpha: number): Rgb {
+  return [0, 1, 2].map((i) => (under[i] as number) * (1 - alpha) + (top[i] as number) * alpha) as unknown as Rgb
+}
+
+const RGBA = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*(\d*\.?\d+)\s*)?\)$/i
+
+/** What a fill draws: its color and how much of it, or null when it draws nothing (`transparent`, a gradient, a spelling nothing reads). Shapes use `rgba()` as well as hex. */
+function paintOf(fill: unknown): { rgb: Rgb; alpha: number } | null {
+  if (typeof fill !== 'string') return null
+  const rgba = RGBA.exec(fill.trim())
+  if (rgba) {
+    const alpha = rgba[4] === undefined ? 1 : Math.min(1, Number(rgba[4]))
+    return alpha > 0 ? { rgb: [1, 2, 3].map((i) => Math.min(255, Number(rgba[i]))) as unknown as Rgb, alpha } : null
+  }
+  const hex = resolveOverlayColor(fill)
+  return hex ? { rgb: rgbOf(hex), alpha: 1 } : null
+}
+
+/** A box in document px. */
+interface Box {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Does the document point (px, py) fall inside this layer's drawn area? `width` x `height` is the box of a rectangle or of a text layer's words; an ellipse uses its radii. The
+ * point is taken into the layer's own units the way Konva places a node: translate to its x, y, rotate (degrees), then scale. Built once per layer, called for every sample.
+ * (A point on a far edge is outside: a word that ends where a shape begins does not touch it.)
+ */
+function coverageOf(layer: CanvasLayer, extent: { width: number; height: number } | null): (px: number, py: number) => boolean {
+  const rad = (layer.rotation * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const ellipse = layer.type === 'ellipse' ? layer : null
+  return (px, py) => {
+    const dx = px - layer.x
+    const dy = py - layer.y
+    const lx = (dx * cos + dy * sin) / layer.scaleX
+    const ly = (-dx * sin + dy * cos) / layer.scaleY
+    if (ellipse) return (lx / ellipse.radiusX) ** 2 + (ly / ellipse.radiusY) ** 2 <= 1
+    return extent !== null && lx >= 0 && lx < extent.width && ly >= 0 && ly < extent.height
+  }
+}
+
+/** How many points of a word's box `surfacesUnder` looks at, across and down (the corners and edges included). */
+const SAMPLES_ACROSS = 17
+const SAMPLES_DOWN = 7
+
+/**
+ * Every color that can show under `box`: what the document draws there, as `#rrggbb` (T-141 (2)).
+ *
+ * The ink used to be chosen against the document's background alone, so on both emote templates (a transparent document with a disc that fills it) the light ink landed on
+ * the disc at 1.33:1, and on the Bold thumbnail it landed on the sample title. A word is read against what is DRAWN where it sits. This walks a grid of points over the box
+ * and, at each, lays the shapes' fills over the document in layer order: a rectangle or an ellipse by its own geometry (so the emote's corners outside the disc are still the
+ * document), through its `rgba()` alpha and its layer's opacity; then each text layer whose estimated box covers the point, as a second color there (glyphs are partial:
+ * both a letter and what is between the letters can show). Hidden layers draw nothing. Pure geometry: nothing is rendered or measured.
+ */
+export function surfacesUnder(doc: { background: string; layers?: readonly CanvasLayer[] }, box: Box, behind: string): string[] {
+  assert(HEX6.test(behind), 'surfacesUnder expects a #rrggbb workspace color')
+  const ground = rgbOf((typeof doc.background === 'string' ? resolveOverlayColor(doc.background) : null) ?? behind)
+  interface Drawn {
+    covers: (px: number, py: number) => boolean
+    rgb: Rgb
+    alpha: number
+  }
+  const shapes: Drawn[] = []
+  const words: Drawn[] = []
+  for (const layer of doc.layers ?? []) {
+    if (!layer.visible) continue
+    const paint = layer.type === 'rect' || layer.type === 'ellipse' || layer.type === 'text' ? paintOf(layer.fill) : null
+    // (a hint's words are drawn dimmed: `displayOpacity`, the one rule the canvas draws by)
+    const alpha = paint ? paint.alpha * displayOpacity(layer) : 0
+    if (!paint || !(alpha > 0)) continue
+    if (layer.type === 'rect') {
+      shapes.push({ covers: coverageOf(layer, layer), rgb: paint.rgb, alpha })
+    } else if (layer.type === 'ellipse') {
+      shapes.push({ covers: coverageOf(layer, null), rgb: paint.rgb, alpha })
+    } else if (layer.type === 'text' && Number.isFinite(layer.fontSize) && layer.fontSize > 0 && typeof layer.text === 'string') {
+      // Konva's line height is 1 and its width is the longest line's.
+      const lines = layer.text.split('\n')
+      const longest = lines.reduce((a, b) => ([...b].length > [...a].length ? b : a), '')
+      words.push({ covers: coverageOf(layer, { width: estimatedTextBox(longest, layer.fontSize).width, height: lines.length * layer.fontSize }), rgb: paint.rgb, alpha })
+    }
+  }
+  // simplification: the ceilings of a pure answer, each making it a little kinder than the pixels. A picture is not a surface (its pixels are not in the store: `src` is a
+  // data URL the canvas decodes, and this runs synchronously at the press); a stroke and a rectangle's rounded corner are not drawn into the fill; a closed line has no fill
+  // to draw; a gradient or an unreadable fill counts as nothing. And the box is SAMPLED, not intersected: 17 columns x 7 rows, a point every width/16 across and height/6
+  // down with both edges included. The guarantee is that a shape covering a patch of the box at least that big (width/16 by height/6) is seen wherever it sits, the
+  // interior included (an edge-only grid would miss a badge in the middle: `newText.test.ts` sweeps a patch of exactly that size across the whole box); a thinner or smaller
+  // feature (a hairline bar, a dot under a sixteenth of the word's width) can fall between two points and be missed. The upgrade is to intersect each shape's bounds with the
+  // box exactly (rectangle against rectangle, rectangle and ellipse against the box) instead of sampling, and to decode the stored copy of a picture; what covers the gap
+  // meanwhile is the Color field in Properties.
+  const seen = new Set<string>()
+  for (let i = 0; i < SAMPLES_ACROSS; i++) {
+    for (let j = 0; j < SAMPLES_DOWN; j++) {
+      const px = box.x + (box.width * i) / (SAMPLES_ACROSS - 1)
+      const py = box.y + (box.height * j) / (SAMPLES_DOWN - 1)
+      let under = ground
+      for (const shape of shapes) if (shape.covers(px, py)) under = over(under, shape.rgb, shape.alpha)
+      seen.add(hexOf(under))
+      for (const word of words) if (word.covers(px, py)) seen.add(hexOf(over(under, word.rgb, word.alpha)))
+    }
+  }
+  return [...seen]
 }
 
 /** What a new text layer starts as, on a document. */
@@ -104,14 +247,66 @@ export interface NewTextLook {
   fill: string
 }
 
+/** The most places along one side the last-resort scan tries: the grid is never more than about 60 x 60, whatever the document's size or shape. */
+const SCAN_PLACES_PER_SIDE = 60
+
+/**
+ * Where a word of this `size` is tried, in order (T-141 (2)):
+ *   1. the place a picture starts (`placementFor`: `PLACEMENT_MARGIN` in from the top-left corner, less when the document has not the room);
+ *   2. the same margin in from each of the other three corners: top-right, bottom-left, bottom-right;
+ *   3. every place on a grid anchored at (1), nearest to it first. A crowded document has no free corner (the POG emote is a disc filled by one big word: the only room is the
+ *      band under the word, 6 px wide at the disc's chord), so the corners alone cannot place a word on it; a grid at about 1/60 of the document's sides (2 px on the
+ *      emote) finds the nearest place where the word is readable, and costs at most 3,700 tries, each a few hundred point tests, only when the corners all failed.
+ * A document that is not a size (a project file the editor never made) has the first place only.
+ */
+function candidatePlaces(size: { width: number; height: number }, doc: { width: number; height: number }): Array<{ x: number; y: number }> {
+  const home = placementFor(size.width, size.height, doc.width, doc.height)
+  const isSize = Number.isFinite(doc.width) && Number.isFinite(doc.height) && doc.width > 0 && doc.height > 0
+  if (!isSize) return [home]
+  const maxX = doc.width - size.width
+  const maxY = doc.height - size.height
+  const right = maxX - home.x
+  const bottom = maxY - home.y
+  const places = [home, { x: right, y: home.y }, { x: home.x, y: bottom }, { x: right, y: bottom }]
+  const stepX = Math.max(2, Math.ceil(doc.width / SCAN_PLACES_PER_SIDE))
+  const stepY = Math.max(2, Math.ceil(doc.height / SCAN_PLACES_PER_SIDE))
+  const grid: Array<{ x: number; y: number }> = []
+  for (let y = home.y % stepY; y <= maxY; y += stepY) {
+    for (let x = home.x % stepX; x <= maxX; x += stepX) grid.push({ x, y })
+  }
+  const away = (p: { x: number; y: number }): number => Math.hypot(p.x - home.x, p.y - home.y)
+  return [...places, ...grid.sort((a, b) => away(a) - away(b))]
+}
+
 /**
  * Size, place and ink for a new text layer on `doc`: the size from `newTextSize`; the position from `placementFor` - the rule a picture follows, `PLACEMENT_MARGIN` in
  * from the corner when the document has the room and less when it does not - using the word's estimated box, so it is wholly inside; the ink from `inkFor`.
+ *
+ * T-141 (2): the ink is chosen against what is under the word (`surfacesUnder`: the document, and the shapes and words its box overlaps), not the document alone, and when
+ * neither ink reaches `READABLE_CONTRAST` against all of it the word moves, through `candidatePlaces` in order, to the first place where one does. When none does (a
+ * document with nothing but mid greys under every place), the place whose better ink is best, the first of a tie: a crowded document never leaves the word worse off than
+ * the corner it started at.
  */
-export function newTextLook(doc: { width: number; height: number; background: string }, inks: TextInks, word: string = NEW_TEXT_WORD): NewTextLook {
+export function newTextLook(
+  doc: { width: number; height: number; background: string; layers?: readonly CanvasLayer[] },
+  inks: TextInks,
+  word: string = NEW_TEXT_WORD
+): NewTextLook {
   const fontSize = newTextSize(doc.width, doc.height, word)
   assert(fontSize >= 1, `a new text layer has a size of at least 1 px, got ${fontSize}`)
-  const box = estimatedTextBox(word, fontSize)
-  const { x, y } = placementFor(box.width, box.height, doc.width, doc.height)
-  return { x, y, fontSize, fill: inkFor(doc.background, inks) }
+  const size = estimatedTextBox(word, fontSize)
+  let best: NewTextLook | null = null
+  let bestWorst = -Infinity
+  for (const at of candidatePlaces(size, doc)) {
+    const surfaces = surfacesUnder(doc, { ...at, ...size }, inks.behind)
+    const fill = inkFor(surfaces, inks)
+    const worst = worstContrast(fill, surfaces, inks)
+    if (worst >= READABLE_CONTRAST) return { x: at.x, y: at.y, fontSize, fill }
+    if (worst > bestWorst) {
+      best = { x: at.x, y: at.y, fontSize, fill }
+      bestWorst = worst
+    }
+  }
+  // (`candidatePlaces` always holds the first place, so there is a best)
+  return best as NewTextLook
 }

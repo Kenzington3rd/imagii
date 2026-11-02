@@ -567,12 +567,17 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    **+ Add text** (and **Start with text**) puts the word "Text" wholly inside the canvas, 60 px in
    from the corner (nearer the corner on a canvas too small for that). It is sized to the canvas
    (32 px on the blank page, 43 px on a 1920×1080 overlay, 86 px on a 4K one, and never under
-   20 px, so it fits the 112×112 emote) and colored to be read against it: dark on a white page,
-   light on a dark or transparent one. Change the words, size and color in **Properties**.
+   20 px, so it fits the 112×112 emote) and colored to be read against what is under it, not
+   just the page: dark on a white page or on a bright shape (the emote's disc), light on a dark
+   or transparent one. If a sample title, a bar or another word is where the word would start
+   and neither color reads against it, the word starts in the next corner that is clear, or the
+   nearest clear spot. Change the words, size and color in **Properties**.
    To resize a layer, drag a corner handle. A picture or text keeps its proportions, so a logo
    is never stretched by accident; hold **Shift** while you drag to stretch it freely. A
    rectangle or ellipse stretches, and Shift keeps its proportions instead. The handles on the
-   sides always stretch.
+   sides always stretch. A word's **Size (px)** in Properties is the size it is drawn at, also
+   after you drag a corner (a word dragged to 44 px says 44), and typing a size draws it at
+   exactly that size; a Shift-stretched word keeps its extra width, and the size takes the height.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and remove them. The **Properties** panel edits the selected layer. A picture
    you import is placed at most 800 px on its long side, and always inside the canvas

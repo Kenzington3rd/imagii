@@ -6191,7 +6191,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open
+- **Status:** in progress (round 90: Track B landed — see its Done entry; Tracks A and C in progress)
 
 ---
 
@@ -6711,6 +6711,64 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 90, Track B — T-141 items 2, 6 and 8, landed in the commit that
+carries this entry, the round's first landing, directly onto 2a6561c.
+Worked by one Sonnet in a fresh clone of 2a6561c. The fixes: "+ Add
+text" is inked against what is UNDER the word - `surfacesUnder`
+(src/shared/newText.ts) samples a 17x7 grid over the word's estimated
+box and lays the visible rect and ellipse fills (their own geometry,
+rotation, scale, rgba alpha and opacity) and other words over the
+document, and `inkFor` picks the token ink whose worst contrast is
+best; when neither reaches 4.5:1 the word moves (the other corners,
+then a nearest-first scan), so the emote takes the dark ink and POG
+places its word in the band under its own letters (measured on
+rendered pixels, all 12 templates and the blank page at 4.5:1 or
+better; emote 5.29, POG 11.61, the Bold thumbnail's word moves to the
+top-right at 13.97); a corner drag on a text layer folds its scale
+into fontSize (rounded, floor 4, a flip's sign kept, a Shift stretch
+kept in scaleX width-exact) and resets the node, so Properties' Size
+is the drawn size; `removeLayer` ignores an id no layer has and
+undo/redo clear a selection that names no layer, so Delete after an
+undo no longer wipes Redo. Deviations, accepted: text layers count as
+surfaces (the ticket named shapes; the Bold thumbnail's sample title
+and POG's own letters needed it - a second word on the blank page now
+takes the top-right corner instead of stacking); the Twitch Profile
+banner's sweep-26 2.92:1 did not reproduce on the unchanged tree
+(15.47 by the worker's pixel method). SENT BACK ONCE by the
+expediter: my independent mutation (`SAMPLES_ACROSS` 17 → 2: the box
+sampled only at its side edges) survived every unit and pixel case -
+a shape under the word's interior alone was invisible to the tests;
+the worker added an interior-disc and bar case, a sweep that pins the
+guarantee (a patch of width/16 by height/6 is seen anywhere in the
+box) and a `newTextLook` case that moves the word off a badge under
+its middle, killing 17 → 2, 17 → 9 and 7 → 3, and named the ceiling
+(a hairline under a sixteenth of the word) in a `// simplification:`
+with its upgrade (exact shape-box intersection). 57 ledger mutations
+(60 rows), all restored byte-identical; three unit survivors of a
+first pass killed after their cases were strengthened; four
+Playwright-only survivors disclosed (each killed by its unit case and
+the combined item-8 mutation by Playwright); 16 reds. Expedited
+personally: integrity (no Track A or C file touched; docClaims rows
+re-pointed and the STYLE_GUIDE new-text bullet, disclosed), verify x2
+(195/5647) and x2 again after the send-back (195/5650), test:media on
+7.0.2 (409 passed | 13 skipped of 423; the one failure a T-140 (1)
+Layer 5 case, the WebM remux's Cancel, whose poll missed the partial
+under host load ~11 because the stream copy finished first - 5/5
+standalone at load 14, a test race, sent to Track A to harden), FULL
+Playwright 507 of 508 (63.3 min under load ~15; the one failure the
+T-100 burn-in Cancel case, whose click landed after the burn had
+finished - 5/5 standalone at load 17, a test race, sent to Track C to
+harden), sha of every touched file identical before and after; the
+send-back changed no product code (one comment), so the full suite
+was not re-run. Applied onto 2a6561c byte-identical to the expedited
+clone (13 files), plus this entry and TESTING's counts.
+Found, not fixed (the worker's list, in the IC): a word can still
+start on another word whose colors read (a product call); updateLayer
+and its siblings still push a step for an id nothing has
+(unreachable after the selection fix); a picture under the word is a
+documented ceiling; 300 stacked mid-grey layers cost about 1 s in the
+full scan.
 
 Round 89, Track A — T-140 item 1 and the non-counted audio/process.ts
 comment, landed in the commit that carries this entry, merged onto

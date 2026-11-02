@@ -6,7 +6,7 @@ import {
   type RectLayer,
   type TextLayer
 } from '@shared/canvas'
-import { useCanvasStore } from './state/canvasStore'
+import { FONT_SIZE_MIN, useCanvasStore } from './state/canvasStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
@@ -192,9 +192,6 @@ function FillStrokeFields({
     </>
   )
 }
-
-/** The smallest a text layer's size can be (px): the 4 its attribute says, enforced when typing ends. */
-const FONT_SIZE_MIN = 4
 
 function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
   const updateLayer = useCanvasStore((s) => s.updateLayer)

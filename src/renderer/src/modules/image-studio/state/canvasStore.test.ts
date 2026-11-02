@@ -1,9 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { asHint, displayOpacity, type CanvasDocument, type LayerType, type TextLayer } from '@shared/canvas'
-import { applyLayerPatch, keepsRatioOnCornerDrag, makeImageLayer, makeReferenceLayer, makeTextLayer, textLayerFor, useCanvasStore } from './canvasStore'
+import {
+  FONT_SIZE_MIN,
+  applyLayerPatch,
+  foldTextScale,
+  keepsRatioOnCornerDrag,
+  makeImageLayer,
+  makeReferenceLayer,
+  makeTextLayer,
+  textLayerFor,
+  useCanvasStore
+} from './canvasStore'
 import { CANVAS_TEMPLATES } from '../templates'
 import { ASSET_CATALOG } from '../../references/assetCatalog'
-import { contrastRatio, estimatedTextBox } from '@shared/newText'
+import { contrastRatio, estimatedTextBox, surfacesUnder, worstContrast } from '@shared/newText'
 import { BG_BASE, INK_BASE } from '../../../styles/tokens'
 
 /**
@@ -141,7 +151,7 @@ describe('textLayerFor - a new text layer for the open document (T-140 (2))', ()
   })
 
   for (const [name, doc] of documents) {
-    it(`${name} (${doc.width}x${doc.height}, ${doc.background}): the text is wholly inside it and its color is 4.5:1 against what the document shows`, () => {
+    it(`${name} (${doc.width}x${doc.height}, ${doc.background}): the text is wholly inside it and its color is 4.5:1 against everything drawn under it`, () => {
       const t = textLayerFor(doc)
       const box = estimatedTextBox(t.text, t.fontSize)
       expect(t.type).toBe('text')
@@ -150,10 +160,11 @@ describe('textLayerFor - a new text layer for the open document (T-140 (2))', ()
       expect(t.y, 'top').toBeGreaterThanOrEqual(0)
       expect(t.x + box.width, 'right').toBeLessThanOrEqual(doc.width)
       expect(t.y + box.height, 'bottom').toBeLessThanOrEqual(doc.height)
-      // A transparent document is the dark workspace (and most scenes) behind it.
-      const surface = doc.background === 'transparent' ? BG_BASE : doc.background
-      expect(t.fill).not.toBe(surface)
-      expect(contrastRatio(t.fill, surface), `${t.fill} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+      // T-141 (2): not the document's background alone (T-140 (2) held it to that, which is how the emote's word was 2.9:1 on its disc) but every colour that can show under the word's
+      // box: the document, the shapes and the words it overlaps. A transparent document is the dark workspace behind it.
+      const under = surfacesUnder(doc, { x: t.x, y: t.y, ...box }, BG_BASE)
+      expect(under.length).toBeGreaterThan(0)
+      expect(worstContrast(t.fill, under, { dark: BG_BASE, light: INK_BASE, behind: BG_BASE }), `${t.fill} on ${under.join(', ')}`).toBeGreaterThanOrEqual(4.5)
       // The color is a token, never a literal of its own.
       expect([BG_BASE, INK_BASE]).toContain(t.fill)
     })
@@ -163,11 +174,13 @@ describe('textLayerFor - a new text layer for the open document (T-140 (2))', ()
     expect(textLayerFor({ width: 1200, height: 800, background: '#ffffff' })).toMatchObject({ fontSize: 32, fill: BG_BASE, x: 60, y: 60 })
   })
 
-  it('the emote and the 4K overlay take the light ink, and the 4K overlay\'s text is bigger than the 32 px speck it was', () => {
+  // T-141 (2): the emote is a transparent document with a disc that fills it, and T-140 (2) gave it the light ink for the transparent document; the word sits on the disc (see the
+  // T-141 (2) block below), so it is the dark ink now. The 4K overlay's first place is bare transparent document, and keeps the light one.
+  it('the emote takes the dark ink for its disc and the 4K overlay the light ink for its transparent document, and the 4K overlay\'s text is bigger than the 32 px speck it was', () => {
     const emote = CANVAS_TEMPLATES.find((t) => t.id === 'emote-blank-112')
     const overlay4k = CANVAS_TEMPLATES.find((t) => t.id === 'tw-overlay-streamer-4k')
     expect(emote && overlay4k).toBeTruthy()
-    expect(textLayerFor((emote as { doc: CanvasDocument }).doc).fill).toBe(INK_BASE)
+    expect(textLayerFor((emote as { doc: CanvasDocument }).doc).fill).toBe(BG_BASE)
     const big = textLayerFor((overlay4k as { doc: CanvasDocument }).doc)
     expect(big.fill).toBe(INK_BASE)
     expect(big.fontSize).toBeGreaterThan(32)
@@ -270,5 +283,222 @@ describe('keepsRatioOnCornerDrag - a picture and a word have proportions of thei
     for (const [type, keeps] of Object.entries(kinds) as Array<[LayerType, boolean]>) {
       expect(keepsRatioOnCornerDrag(type), type).toBe(keeps)
     }
+  })
+})
+
+// ── T-141 (2): the text layer for a document that has layers ──────────────────────────────────────────────────────────────────────────────
+
+describe('textLayerFor reads the layers (T-141 (2))', () => {
+  const emote = (id: string): CanvasDocument => {
+    const t = CANVAS_TEMPLATES.find((c) => c.id === id)
+    if (!t) throw new Error(`${id} is gone from templates.ts`)
+    return t.doc
+  }
+
+  it('the emote\'s word is the dark ink: it sits on the red disc, where the light ink was 2.9:1', () => {
+    const t = textLayerFor(emote('emote-blank-112'))
+    expect(t.fill).toBe(BG_BASE)
+    expect(contrastRatio(t.fill, '#ff3131')).toBeGreaterThan(5)
+    expect(contrastRatio(INK_BASE, '#ff3131')).toBeLessThan(3)
+  })
+
+  it('the POG emote\'s word is the dark ink and is not drawn on POG: it was the light ink on the gold disc, 1.33:1', () => {
+    const doc = emote('emote-text')
+    const t = textLayerFor(doc)
+    const pog = doc.layers.find((l) => l.type === 'text')
+    expect(pog).toBeTruthy()
+    expect(t.fill).toBe(BG_BASE)
+    expect(t.y, 'below the estimated box of the word POG').toBeGreaterThanOrEqual((pog as TextLayer).y + (pog as TextLayer).fontSize)
+  })
+
+  it('the Bold thumbnail\'s word is not drawn on its sample title (the title is at the first place: it moves to the next corner)', () => {
+    const doc = emote('yt-thumb-bold')
+    const t = textLayerFor(doc)
+    expect(t.x, 'not at the first place, which is the sample title\'s').toBeGreaterThan(300)
+    expect(t.y).toBe(60)
+    expect(t.fill).toBe(INK_BASE)
+  })
+
+  it('a document with no layers at all is exactly what T-140 (2) made of it', () => {
+    expect(textLayerFor({ width: 1200, height: 800, background: '#ffffff' })).toMatchObject({ fontSize: 32, fill: BG_BASE, x: 60, y: 60 })
+    expect(textLayerFor({ width: 1200, height: 800, background: '#ffffff', layers: [] })).toMatchObject({ fontSize: 32, fill: BG_BASE, x: 60, y: 60 })
+  })
+
+  it('a second word on the blank page does not land on the first: it takes the next corner', () => {
+    const first = textLayerFor({ width: 1200, height: 800, background: '#ffffff' })
+    const second = textLayerFor({ width: 1200, height: 800, background: '#ffffff', layers: [first] })
+    expect([first.x, first.y]).toEqual([60, 60])
+    expect(second.x).toBeGreaterThan(first.x + estimatedTextBox('Text', first.fontSize).width)
+    expect(second.y).toBe(60)
+    expect(second.fill).toBe(BG_BASE)
+  })
+})
+
+// ── T-141 (6): a resize folds the scale into the font size ────────────────────────────────────────────────────────────────────────────────
+
+describe('foldTextScale - the size is what is drawn (T-141 (6))', () => {
+  it('a layer that was not resized is unchanged', () => {
+    expect(foldTextScale(32, 1, 1)).toEqual({ fontSize: 32, scaleX: 1, scaleY: 1 })
+    expect(foldTextScale(86, 1, 1)).toEqual({ fontSize: 86, scaleX: 1, scaleY: 1 })
+  })
+
+  it('a corner drag that kept the ratio becomes a bigger size at scale 1, to the whole pixel', () => {
+    expect(foldTextScale(32, 1.5, 1.5)).toEqual({ fontSize: 48, scaleX: 1, scaleY: 1 })
+    expect(foldTextScale(32, 1.37, 1.37)).toEqual({ fontSize: 44, scaleX: 1, scaleY: 1 })
+    expect(foldTextScale(32, 0.5, 0.5)).toEqual({ fontSize: 16, scaleX: 1, scaleY: 1 })
+    expect(foldTextScale(20, 2.06, 2.06)).toEqual({ fontSize: 41, scaleX: 1, scaleY: 1 })
+  })
+
+  it('two scales within float error of each other are one scale (Konva keeps a ratio to its own arithmetic, not to the digit)', () => {
+    expect(foldTextScale(32, 1.5, 1.5000000000000002)).toEqual({ fontSize: 48, scaleX: 1, scaleY: 1 })
+    expect(foldTextScale(32, 0.9999999999999996, 1)).toEqual({ fontSize: 32, scaleX: 1, scaleY: 1 })
+  })
+
+  it('never under the Size field\'s smallest, 4', () => {
+    expect(FONT_SIZE_MIN).toBe(4)
+    expect(foldTextScale(8, 0.2, 0.2).fontSize).toBe(4)
+    expect(foldTextScale(4, 0.1, 0.1)).toEqual({ fontSize: 4, scaleX: 1, scaleY: 1 })
+  })
+
+  it('a Shift-freed stretch: the height goes into the size, the scale is 1 vertically, and the width ratio is what remains in scaleX', () => {
+    // Taller only: 32 px made 1.5x tall at the same drawn width: 48 px, and a squeeze of 2/3 in x.
+    const tall = foldTextScale(32, 1, 1.5)
+    expect(tall.fontSize).toBe(48)
+    expect(tall.scaleY).toBe(1)
+    expect(tall.scaleX).toBeCloseTo(32 / 48, 10)
+    // Wider only: the size stays and the width is kept as scaleX.
+    expect(foldTextScale(32, 1.8, 1)).toEqual({ fontSize: 32, scaleX: 1.8, scaleY: 1 })
+  })
+
+  it('the width as drawn is kept through the rounding: size * scaleX is the old fontSize * scaleX (the height moves by under half a pixel, the width not at all)', () => {
+    for (const [fontSize, sx, sy] of [[32, 1.2, 1.37], [20, 3, 1.7], [86, 0.8, 1.011], [47, 2.2, 0.63], [12, 1.9, 2.9]] as const) {
+      const folded = foldTextScale(fontSize, sx, sy)
+      expect(folded.fontSize * folded.scaleX, `${fontSize} x ${sx} / ${sy}`).toBeCloseTo(fontSize * sx, 8)
+      expect(Math.abs(folded.fontSize - fontSize * sy), `${fontSize} x ${sy}`).toBeLessThanOrEqual(0.5 + 1e-9)
+      expect(Number.isInteger(folded.fontSize)).toBe(true)
+      expect(folded.scaleY).toBe(1)
+    }
+  })
+
+  it('a flip keeps its sign: dragged past the opposite edge it is mirrored, at the size it was dragged to', () => {
+    expect(foldTextScale(32, -1.5, 1.5)).toEqual({ fontSize: 48, scaleX: -1, scaleY: 1 })
+    expect(foldTextScale(32, 1.5, -1.5)).toEqual({ fontSize: 48, scaleX: 1, scaleY: -1 })
+    expect(foldTextScale(32, -2, 1)).toEqual({ fontSize: 32, scaleX: -2, scaleY: 1 })
+    expect(foldTextScale(32, -1, -1)).toEqual({ fontSize: 32, scaleX: -1, scaleY: -1 })
+    // A mirrored word dragged with its ratio kept is still one scale (the rounding must not leave a stretch behind): 1.37 x 32 is 44 px.
+    expect(foldTextScale(32, -1.37, 1.37)).toEqual({ fontSize: 44, scaleX: -1, scaleY: 1 })
+    expect(foldTextScale(32, 1.37, -1.37)).toEqual({ fontSize: 44, scaleX: 1, scaleY: -1 })
+  })
+
+  it('a layer saved before this, with a scale it already carries, folds the whole of it on its next resize', () => {
+    // 32 px at 1.4 (a stored scale), dragged by a further 1.1: the node reports 1.54.
+    expect(foldTextScale(32, 1.54, 1.54)).toEqual({ fontSize: 49, scaleX: 1, scaleY: 1 })
+  })
+
+  it('folding twice is folding once: a folded layer is at scale 1 and stays', () => {
+    const once = foldTextScale(32, 1.4, 1.4)
+    expect(foldTextScale(once.fontSize, once.scaleX, once.scaleY)).toEqual(once)
+    const free = foldTextScale(32, 1.8, 1.3)
+    expect(foldTextScale(free.fontSize, free.scaleX, free.scaleY)).toEqual(free)
+  })
+})
+
+// ── T-141 (8): a layer that is not there is not removed, and Undo does not keep a selection that names none ───────────────────────────────
+
+describe('removing a layer that is not there, and a selection that outlives its layer (T-141 (8))', () => {
+  beforeEach(() => {
+    useCanvasStore.getState().resetDocument()
+  })
+
+  it('removeLayer with an id nothing has is no step: the document, the past and the Redo branch are untouched', () => {
+    const s = useCanvasStore.getState()
+    const a = makeTextLayer(10, 10, 'A')
+    const b = makeTextLayer(20, 20, 'B')
+    s.addLayer(a)
+    s.addLayer(b)
+    useCanvasStore.getState().undo() // b goes to Redo
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().removeLayer('no-such-layer')
+    const after = useCanvasStore.getState()
+    expect(after.doc).toBe(before.doc)
+    expect(after.history.past).toBe(before.history.past)
+    expect(after.history.future, 'Redo is kept').toBe(before.history.future)
+    expect(after.canRedo()).toBe(true)
+    expect(after.selectedLayerId).toBe(before.selectedLayerId)
+  })
+
+  it('removeLayer of a real layer is still a step, and clears Redo as any edit does', () => {
+    const s = useCanvasStore.getState()
+    const a = makeTextLayer(10, 10, 'A')
+    s.addLayer(a)
+    s.addLayer(makeTextLayer(20, 20, 'B'))
+    useCanvasStore.getState().undo()
+    expect(useCanvasStore.getState().canRedo()).toBe(true)
+    useCanvasStore.getState().removeLayer(a.id)
+    expect(useCanvasStore.getState().canRedo()).toBe(false)
+    expect(useCanvasStore.getState().doc.layers).toHaveLength(0)
+  })
+
+  it('Undo of "+ Add text" leaves nothing selected: the word it selected is gone, and Delete on the stale id would have recorded a step and cleared Redo', () => {
+    const s = useCanvasStore.getState()
+    const word = textLayerFor(useCanvasStore.getState().doc)
+    s.addLayer(word)
+    expect(useCanvasStore.getState().selectedLayerId).toBe(word.id)
+    useCanvasStore.getState().undo()
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
+    expect(useCanvasStore.getState().doc.layers).toHaveLength(0)
+    // What the Delete key does with the selection it has: nothing to remove, and the word is still in Redo.
+    const id = useCanvasStore.getState().selectedLayerId
+    if (id) useCanvasStore.getState().removeLayer(id)
+    expect(useCanvasStore.getState().canRedo()).toBe(true)
+    useCanvasStore.getState().redo()
+    expect(useCanvasStore.getState().doc.layers.map((l) => l.id)).toEqual([word.id])
+  })
+
+  it('Redo that takes away the selected layer leaves nothing selected', () => {
+    const s = useCanvasStore.getState()
+    const a = makeTextLayer(10, 10, 'A')
+    s.addLayer(a)
+    useCanvasStore.getState().removeLayer(a.id)
+    useCanvasStore.getState().undo() // A is back
+    useCanvasStore.getState().selectLayer(a.id)
+    expect(useCanvasStore.getState().selectedLayerId).toBe(a.id)
+    useCanvasStore.getState().redo() // the removal again: A is gone
+    expect(useCanvasStore.getState().doc.layers).toHaveLength(0)
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
+  })
+
+  it('a selection that is still a layer in the document an Undo or Redo brings back is kept', () => {
+    const s = useCanvasStore.getState()
+    const a = makeTextLayer(10, 10, 'A')
+    const b = makeTextLayer(20, 20, 'B')
+    s.addLayer(a)
+    s.addLayer(b)
+    useCanvasStore.getState().selectLayer(a.id)
+    useCanvasStore.getState().undo() // B goes: A exists in both
+    expect(useCanvasStore.getState().selectedLayerId).toBe(a.id)
+    useCanvasStore.getState().redo()
+    expect(useCanvasStore.getState().selectedLayerId).toBe(a.id)
+  })
+
+  it('no selection stays no selection', () => {
+    const s = useCanvasStore.getState()
+    s.addLayer(makeTextLayer(10, 10, 'A'))
+    useCanvasStore.getState().selectLayer(null)
+    useCanvasStore.getState().undo()
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
+    useCanvasStore.getState().redo()
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
+  })
+
+  it('Undo and Redo with nothing to undo or redo change nothing, the selection included', () => {
+    const s = useCanvasStore.getState()
+    const a = makeTextLayer(10, 10, 'A')
+    s.addLayer(a)
+    useCanvasStore.getState().redo()
+    expect(useCanvasStore.getState().selectedLayerId).toBe(a.id)
+    useCanvasStore.getState().resetDocument()
+    useCanvasStore.getState().undo()
+    expect(useCanvasStore.getState().selectedLayerId).toBeNull()
   })
 })

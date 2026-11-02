@@ -371,12 +371,17 @@ Repeated UI is a component, not copy-paste:
   both read the open document from the canvas store AFTER the picture has loaded, as the stored copy's bound does, and pass the box to `makeImageLayer` /
   `makeReferenceLayer` (`x`, `y`: they default to 60, 60, the corner they always started at). A document that is not a size places a picture as it was before. A template's
   own layers are untouched.
-- **A new text layer is sized, placed and inked for the open document (T-140 (2), (3), (5)).** `textLayerFor(doc)` (canvas store) hands
-  `newTextLook` (`@shared/newText`) the document and the three token colors (BG_BASE as the dark ink, INK_BASE as the light one, BG_BASE again as the
+- **A new text layer is sized, placed and inked for the open document (T-140 (2), (3), (5); T-141 (2), (6)).** `textLayerFor(doc)` (canvas store) hands
+  `newTextLook` (`@shared/newText`) the document, its layers and the three token colors (BG_BASE as the dark ink, INK_BASE as the light one, BG_BASE again as the
   workspace a transparent document shows): the size scales 32 px per 800 px of the shorter side (20 px floor, never wider or taller than the document),
-  the position is `placementFor`'s margin rule on the word's estimated box, and the ink is the one with the better WCAG contrast; `makeTextLayer` is
-  unchanged for its other callers. A corner drag keeps a picture's and a word's ratio (`keepsRatioOnCornerDrag`; the Transformer's `shiftBehavior` is
-  `inverted` for them, so Shift frees it, and `default` for shapes). `CANVAS_MIN_H` is both the canvas box's minimum height and the ResizeObserver's
+  the position is `placementFor`'s margin rule on the word's estimated box, and the ink is chosen against what is DRAWN under the word, not the document's
+  background alone: `surfacesUnder` lists the colours that can show under its box (the document, the rectangles' and ellipses' fills by their own geometry through
+  their alpha and opacity, the text layers' colours; a picture is a documented ceiling), `inkFor` takes the ink whose worst contrast against them is best, and
+  when neither reaches 4.5:1 (`READABLE_CONTRAST`) the word moves: the other three margin corners in a fixed order, then the nearest place on a grid out from the
+  first one. A new rule about what a word reads against changes that list, not the placement. `makeTextLayer` is unchanged for its other callers. A corner drag
+  keeps a picture's and a word's ratio (`keepsRatioOnCornerDrag`; the Transformer's `shiftBehavior` is `inverted` for them, so Shift frees it, and `default`
+  for shapes), and a resize of a word ends by folding its scale into its size (`foldTextScale`: `fontSize` takes the height to the Size field's whole pixel,
+  `scaleY` is 1, what is left of a stretch stays in `scaleX`, and the node is put at the folded scale as well as the store): "Size (px)" is what is drawn. `CANVAS_MIN_H` is both the canvas box's minimum height and the ResizeObserver's
   floor - one constant, so the Stage never outgrows its box - and the canvas column is `min-w-0`, so a wide document's fixed-pixel Stage cannot hold
   the `1fr` track open.
 - **A stored copy has a byte budget (T-139 (4)).** `storedImageMaxDim` bounds a copy's pixels; `STORED_IMAGE_MAX_BYTES` (16 MiB of data URL characters) bounds its bytes, and

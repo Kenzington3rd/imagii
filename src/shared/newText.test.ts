@@ -2,13 +2,17 @@ import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_TEXT_SIZE,
   MIN_NEW_TEXT_SIZE,
+  READABLE_CONTRAST,
   contrastRatio,
   estimatedTextBox,
   inkFor,
   newTextLook,
-  newTextSize
+  newTextSize,
+  surfacesUnder,
+  worstContrast
 } from './newText'
 import { PLACEMENT_MARGIN } from './imageBounds'
+import type { CanvasLayer, EllipseLayer, ImageLayer, LineLayer, RectLayer, TextLayer } from './canvas'
 
 /**
  * T-140 (2) - where a new "+ Add text" layer starts, how big it is, and what color.
@@ -227,5 +231,349 @@ describe('newTextLook - size, place and ink for a document', () => {
 
   it('a document that is not a size is placed as before: 60, 60 at 32 px', () => {
     expect(newTextLook({ width: NaN, height: 800, background: '#ffffff' }, INKS)).toEqual({ x: 60, y: 60, fontSize: 32, fill: '#120c0c' })
+  })
+})
+
+// ── T-141 (2): the ink is chosen against what is UNDER the word ─────────────────────────────────────────────────────────────────────────────
+//
+// `inkFor` was asked about the document's background alone. On both emote templates (a transparent document with a disc that fills it) the light ink landed on the disc: 1.33:1 on the gold POG
+// disc, 2.92:1 on the red one; on the Bold thumbnail it landed on the sample title. `surfacesUnder` says what is drawn where a box sits, `inkFor` takes the list (the ink whose WORST contrast
+// against it is best), and `newTextLook` moves the word to a place where one ink reaches 4.5:1 when its first place has none. The fixtures below are small documents with one cause each;
+// `canvasStore.test.ts` holds the same rule over every template and asset, and image.spec.ts proves it on rendered pixels.
+
+const base = { visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, id: 'l', name: 'l' } as const
+
+function rect(x: number, y: number, width: number, height: number, fill: string, extra: Partial<RectLayer> = {}): RectLayer {
+  return { ...base, type: 'rect', x, y, width, height, fill, stroke: 'transparent', strokeWidth: 0, cornerRadius: 0, ...extra }
+}
+
+function disc(cx: number, cy: number, r: number, fill: string, extra: Partial<EllipseLayer> = {}): EllipseLayer {
+  return { ...base, type: 'ellipse', x: cx, y: cy, radiusX: r, radiusY: r, fill, stroke: 'transparent', strokeWidth: 0, ...extra }
+}
+
+function words(x: number, y: number, text: string, fontSize: number, fill: string, extra: Partial<TextLayer> = {}): TextLayer {
+  return { ...base, type: 'text', x, y, text, fontSize, fontFamily: 'Inter, sans-serif', fill, ...extra }
+}
+
+const WORKSPACE = INKS.behind
+
+describe('worstContrast - the lowest ratio an ink has against any of the surfaces', () => {
+  it('is the ratio against the worst of them; one surface can be a string; against nothing it is against the workspace', () => {
+    const gold = '#fbbf24'
+    expect(worstContrast(INKS.dark, gold, INKS)).toBeCloseTo(contrastRatio(INKS.dark, gold), 5)
+    expect(worstContrast(INKS.light, [gold, '#120c0c'], INKS)).toBeCloseTo(contrastRatio(INKS.light, gold), 5)
+    expect(worstContrast(INKS.light, [], INKS)).toBeCloseTo(contrastRatio(INKS.light, WORKSPACE), 5)
+  })
+
+  it('reads a surface the way inkFor does: a name, #rgb, and what it cannot read is the workspace', () => {
+    expect(worstContrast(INKS.dark, ['white', '#fff'], INKS)).toBeGreaterThan(19)
+    expect(worstContrast(INKS.dark, ['transparent', 'rgba(1,2,3,0.5)', 'garbage'], INKS)).toBeCloseTo(1, 5)
+  })
+})
+
+describe('inkFor over a list - the ink whose WORST contrast is best (maximin)', () => {
+  it('a gold disc is the dark ink even though the document around it is dark: 12:1 against 1.3:1', () => {
+    expect(inkFor(['#fbbf24'], INKS)).toBe(INKS.dark)
+    expect(inkFor('#fbbf24', INKS), 'the string form is the same list of one').toBe(INKS.dark)
+  })
+
+  it('a dark document with a disc under part of the box is judged against both: neither ink clears the dark corner AND the gold, so it takes the one whose worst is less bad', () => {
+    const both = ['#fbbf24', '#120c0c']
+    const picked = inkFor(both, INKS)
+    const other = picked === INKS.dark ? INKS.light : INKS.dark
+    expect(worstContrast(picked, both, INKS)).toBeGreaterThanOrEqual(worstContrast(other, both, INKS))
+    expect(worstContrast(picked, both, INKS), 'and it is under 4.5: the word has to move').toBeLessThan(READABLE_CONTRAST)
+  })
+
+  it('does not depend on the order of the list, and a tie still goes to the dark ink', () => {
+    const list = ['#241614', '#711b1b', '#fbbf24']
+    expect(inkFor(list, INKS)).toBe(inkFor([...list].reverse(), INKS))
+    expect(inkFor(['#808080', '#808080'], { dark: '#AABBCC', light: '#aabbcc', behind: '#000000' })).toBe('#AABBCC')
+  })
+
+  it('an empty list is the workspace (a document with nothing to read against is the dark behind it)', () => {
+    expect(inkFor([], INKS)).toBe(INKS.light)
+  })
+
+  it('the maximin pick is never worse than either ink on every pair of greys (a sweep)', () => {
+    for (let a = 0; a < 256; a += 17) {
+      for (let b = 0; b < 256; b += 17) {
+        const list = [`#${a.toString(16).padStart(2, '0').repeat(3)}`, `#${b.toString(16).padStart(2, '0').repeat(3)}`]
+        const best = worstContrast(inkFor(list, INKS), list, INKS)
+        expect(best, list.join(' ')).toBeGreaterThanOrEqual(worstContrast(INKS.dark, list, INKS) - 1e-9)
+        expect(best, list.join(' ')).toBeGreaterThanOrEqual(worstContrast(INKS.light, list, INKS) - 1e-9)
+      }
+    }
+  })
+})
+
+describe('surfacesUnder - every colour that can show under a box', () => {
+  const box = { x: 10, y: 10, width: 40, height: 20 }
+
+  it('with no layers it is the document: a colour, a name, or the workspace for transparent and for what it cannot read', () => {
+    expect(surfacesUnder({ background: '#ffffff' }, box, WORKSPACE)).toEqual(['#ffffff'])
+    expect(surfacesUnder({ background: 'White', layers: [] }, box, WORKSPACE)).toEqual(['#ffffff'])
+    expect(surfacesUnder({ background: 'transparent', layers: [] }, box, WORKSPACE)).toEqual([WORKSPACE])
+    expect(surfacesUnder({ background: 'linear-gradient(red, blue)', layers: [] }, box, WORKSPACE)).toEqual([WORKSPACE])
+    expect(surfacesUnder({ background: undefined as unknown as string }, box, WORKSPACE)).toEqual([WORKSPACE])
+  })
+
+  it('a rectangle that covers the whole box replaces the document there; one that covers part of it adds its colour beside the document\'s', () => {
+    expect(surfacesUnder({ background: '#ffffff', layers: [rect(0, 0, 100, 100, '#ff3131')] }, box, WORKSPACE)).toEqual(['#ff3131'])
+    expect(surfacesUnder({ background: '#ffffff', layers: [rect(30, 0, 100, 100, '#ff3131')] }, box, WORKSPACE).sort()).toEqual(['#ff3131', '#ffffff'])
+    expect(surfacesUnder({ background: '#ffffff', layers: [rect(60, 60, 10, 10, '#ff3131')] }, box, WORKSPACE)).toEqual(['#ffffff'])
+  })
+
+  it('a box that only touches a rectangle\'s far edge is not on it', () => {
+    expect(surfacesUnder({ background: '#ffffff', layers: [rect(-30, 0, 40, 100, '#ff3131')] }, box, WORKSPACE)).toEqual(['#ffffff'])
+  })
+
+  it('an ellipse is its own shape, not its bounding box: the corner of the box outside the disc is still the document', () => {
+    // A disc of radius 50 centred on (56, 56) (the emote): the box (60..108, 60..80) has its right end outside it.
+    const emote = { background: 'transparent', layers: [disc(56, 56, 50, '#fbbf24')] }
+    expect(surfacesUnder(emote, { x: 60, y: 60, width: 48, height: 20 }, WORKSPACE).sort()).toEqual([WORKSPACE, '#fbbf24'].sort())
+    expect(surfacesUnder(emote, { x: 34, y: 40, width: 40, height: 20 }, WORKSPACE)).toEqual(['#fbbf24'])
+    // ...and a box in the bounding box's corner, outside the disc, sees only the document.
+    expect(surfacesUnder(emote, { x: 8, y: 8, width: 10, height: 10 }, WORKSPACE)).toEqual([WORKSPACE])
+  })
+
+  it('an ellipse with unequal radii is wide across and short down: radiusX along x, radiusY along y', () => {
+    const wide = { background: 'transparent', layers: [{ ...disc(100, 100, 50, '#fbbf24'), radiusX: 80, radiusY: 20 }] }
+    // 60 px to the side is inside a radiusX of 80 and outside a radiusX of 20; 25 px down is outside a radiusY of 20 and inside a radiusY of 80.
+    expect(surfacesUnder(wide, { x: 160, y: 99, width: 2, height: 2 }, WORKSPACE)).toEqual(['#fbbf24'])
+    expect(surfacesUnder(wide, { x: 99, y: 125, width: 2, height: 2 }, WORKSPACE)).toEqual([WORKSPACE])
+  })
+
+  it('an rgba() fill is laid over what is under it at its alpha, and so is the layer\'s own opacity', () => {
+    expect(surfacesUnder({ background: '#000000', layers: [rect(0, 0, 100, 100, 'rgba(255,49,49,0.5)')] }, box, WORKSPACE)).toEqual(['#801919'])
+    expect(surfacesUnder({ background: '#000000', layers: [rect(0, 0, 100, 100, '#ffffff', { opacity: 0.5 })] }, box, WORKSPACE)).toEqual(['#808080'])
+    // The 18% red of a template's face placeholder is nearly the document it sits on, and it is reported as that colour.
+    const [tinted] = surfacesUnder({ background: '#241614', layers: [rect(0, 0, 100, 100, 'rgba(255,49,49,0.18)')] }, box, WORKSPACE)
+    expect(contrastRatio(tinted as string, '#241614')).toBeLessThan(1.4)
+  })
+
+  it('shapes are laid in layer order: the later one is on top', () => {
+    const layers = [rect(0, 0, 100, 100, '#ff0000'), rect(0, 0, 100, 100, '#0000ff')]
+    expect(surfacesUnder({ background: '#ffffff', layers }, box, WORKSPACE)).toEqual(['#0000ff'])
+    expect(surfacesUnder({ background: '#ffffff', layers: [...layers].reverse() }, box, WORKSPACE)).toEqual(['#ff0000'])
+  })
+
+  it('a hidden layer, a transparent fill, an unreadable fill, a picture and a closed line draw nothing under the box', () => {
+    const picture: ImageLayer = { ...base, type: 'image', width: 100, height: 100, src: 'data:image/png;base64,AAAA' }
+    const polygon: LineLayer = { ...base, type: 'line', points: [0, 0, 100, 0, 100, 100, 0, 100], stroke: '#ff0000', strokeWidth: 3, closed: true }
+    const layers: CanvasLayer[] = [
+      rect(0, 0, 100, 100, '#ff0000', { visible: false }),
+      rect(0, 0, 100, 100, 'transparent'),
+      rect(0, 0, 100, 100, 'linear-gradient(red, blue)'),
+      rect(0, 0, 100, 100, 'rgba(255,0,0,0)'),
+      picture,
+      polygon
+    ]
+    expect(surfacesUnder({ background: '#ffffff', layers }, box, WORKSPACE)).toEqual(['#ffffff'])
+  })
+
+  it('a rotated or scaled shape covers where it is drawn: a bar turned a quarter, a rectangle stretched to twice its width', () => {
+    // 100 wide, 10 tall, turned 90 degrees clockwise about (50, 0): it covers x in [40, 50], y in [0, 100].
+    const bar = rect(50, 0, 100, 10, '#ff0000', { rotation: 90 })
+    expect(surfacesUnder({ background: '#ffffff', layers: [bar] }, { x: 42, y: 40, width: 6, height: 6 }, WORKSPACE)).toEqual(['#ff0000'])
+    expect(surfacesUnder({ background: '#ffffff', layers: [bar] }, { x: 60, y: 40, width: 6, height: 6 }, WORKSPACE)).toEqual(['#ffffff'])
+    const wide = rect(0, 0, 50, 50, '#ff0000', { scaleX: 2 })
+    expect(surfacesUnder({ background: '#ffffff', layers: [wide] }, { x: 70, y: 10, width: 20, height: 20 }, WORKSPACE)).toEqual(['#ff0000'])
+    expect(surfacesUnder({ background: '#ffffff', layers: [wide] }, { x: 110, y: 10, width: 10, height: 10 }, WORKSPACE)).toEqual(['#ffffff'])
+  })
+
+  it('a shape under the INTERIOR of the box, touching neither side edge, is seen: a badge in the middle of the word (the sampling is not an edge test)', () => {
+    // 40 x 20 box from (10, 10): its middle is (30, 20). A dark disc of radius 4 there is 16 px from both side edges and 6 px from top and bottom.
+    const badge = { background: '#ffffff', layers: [disc(30, 20, 4, '#000000')] }
+    expect(surfacesUnder(badge, box, WORKSPACE).sort()).toEqual(['#000000', '#ffffff'])
+    // ...and a narrow bar through the middle of it, from the top edge to the bottom, clear of both sides.
+    const bar = { background: '#ffffff', layers: [rect(29, 0, 6, 60, '#000000')] }
+    expect(surfacesUnder(bar, box, WORKSPACE).sort()).toEqual(['#000000', '#ffffff'])
+  })
+
+  it('the guarantee: a patch of the box a sixteenth of its width by a sixth of its height is seen wherever it lies, in the interior and at the edges (a sweep of its position)', () => {
+    // The sample points are width/16 = 2.5 apart across and height/6 = 3.33 down, so a patch that size always holds one. (A smaller one may fall between four points; that is the
+    // ceiling the `simplification:` in `surfacesUnder` names, and it is not pinned here.)
+    const w = box.width / 16 + 0.01
+    const h = box.height / 6 + 0.01
+    for (let dx = 0; dx <= box.width - w; dx += 0.7) {
+      for (let dy = 0; dy <= box.height - h; dy += 0.7) {
+        const patch = { background: '#ffffff', layers: [rect(box.x + dx, box.y + dy, w, h, '#000000')] }
+        expect(surfacesUnder(patch, box, WORKSPACE), `patch at +${dx.toFixed(1)}, +${dy.toFixed(1)}`).toContain('#000000')
+      }
+    }
+  })
+
+  it('a text layer adds its colour wherever its estimated box covers the box - beside what is there, because glyphs are partial; a hint\'s words are dimmed to 40%', () => {
+    // "TITLE" at 20 px is estimated 60 x 20 from (0, 0).
+    const title = words(0, 0, 'TITLE', 20, '#ffffff')
+    expect(surfacesUnder({ background: '#241614', layers: [title] }, { x: 5, y: 5, width: 10, height: 10 }, WORKSPACE).sort()).toEqual(['#241614', '#ffffff'])
+    expect(surfacesUnder({ background: '#241614', layers: [title] }, { x: 100, y: 5, width: 10, height: 10 }, WORKSPACE)).toEqual(['#241614'])
+    const hint = surfacesUnder({ background: '#241614', layers: [{ ...title, hint: true }] }, { x: 5, y: 5, width: 10, height: 10 }, WORKSPACE)
+    expect(hint).toHaveLength(2)
+    expect(hint).toContain('#241614')
+    expect(hint.find((c) => c !== '#241614')).toBe('#7c7372')
+  })
+
+  it('a text layer\'s box is its longest line wide and every line tall; a box under the last line is below it', () => {
+    const two = words(0, 0, 'ab\nlonger line', 10, '#ffffff')
+    // "longer line" is 11 characters: 66 px wide; two lines: 20 px tall.
+    expect(surfacesUnder({ background: '#000000', layers: [two] }, { x: 50, y: 12, width: 5, height: 5 }, WORKSPACE).sort()).toEqual(['#000000', '#ffffff'])
+    expect(surfacesUnder({ background: '#000000', layers: [two] }, { x: 70, y: 12, width: 5, height: 5 }, WORKSPACE)).toEqual(['#000000'])
+    expect(surfacesUnder({ background: '#000000', layers: [two] }, { x: 5, y: 20, width: 5, height: 5 }, WORKSPACE)).toEqual(['#000000'])
+  })
+
+  it('a layer from a project file with a size or a colour that is not one does not throw and draws nothing', () => {
+    const bad = [
+      words(0, 0, 'x', 0, '#ffffff'),
+      words(0, 0, 'x', NaN, '#ffffff'),
+      words(0, 0, undefined as unknown as string, 12, '#ffffff'),
+      rect(0, 0, NaN, 100, '#ff0000'),
+      disc(0, 0, 0, '#ff0000'),
+      rect(0, 0, 100, 100, undefined as unknown as string)
+    ]
+    expect(surfacesUnder({ background: '#ffffff', layers: bad }, box, WORKSPACE)).toEqual(['#ffffff'])
+  })
+
+  it('never reports a colour it was not given a reason for: every answer is a #rrggbb', () => {
+    const layers = [rect(0, 0, 100, 100, 'rgba(10, 200, 30, 0.37)', { opacity: 0.61 }), words(0, 0, 'Hello', 24, 'tomato', { hint: true })]
+    for (const c of surfacesUnder({ background: 'navy', layers }, box, WORKSPACE)) expect(c).toMatch(/^#[0-9a-f]{6}$/)
+  })
+})
+
+describe('newTextLook with layers - where the word goes when its first place cannot be read', () => {
+  const OPEN = { width: 1200, height: 800, background: '#ffffff' }
+
+  /** What the rule holds a placement to, from the module's own parts: the ink against everything under the word's estimated box. */
+  function worstAt(doc: Parameters<typeof newTextLook>[0], look: ReturnType<typeof newTextLook>): number {
+    const box = estimatedTextBox('Text', look.fontSize)
+    return worstContrast(look.fill, surfacesUnder(doc, { x: look.x, y: look.y, ...box }, WORKSPACE), INKS)
+  }
+
+  it('without layers it is exactly what it was (the blank page, a dark template, the 4K overlay)', () => {
+    expect(newTextLook({ ...OPEN, layers: [] }, INKS)).toEqual(newTextLook(OPEN, INKS))
+    expect(newTextLook({ ...OPEN, layers: [] }, INKS)).toEqual({ x: 60, y: 60, fontSize: 32, fill: '#120c0c' })
+  })
+
+  it('a layer that does not reach the first place changes nothing', () => {
+    const far = { ...OPEN, layers: [rect(600, 400, 300, 300, '#ff3131')] }
+    expect(newTextLook(far, INKS)).toEqual({ x: 60, y: 60, fontSize: 32, fill: '#120c0c' })
+  })
+
+  it('the ink follows what is under the first place, not the page: a gold plate on a dark page takes the dark ink', () => {
+    const plate = { width: 1200, height: 800, background: '#120c0c', layers: [rect(0, 0, 400, 300, '#fbbf24')] }
+    const look = newTextLook(plate, INKS)
+    expect([look.x, look.y]).toEqual([60, 60])
+    expect(look.fill).toBe(INKS.dark)
+    expect(worstAt(plate, look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+  })
+
+  it('a first place that straddles two surfaces moves to the next corner in order: top-right, then bottom-left, then bottom-right', () => {
+    // A mid grey (4.3:1 against the dark ink, 3.6 against the light: neither ink reads it) over the first place, then over more.
+    const grey = '#777777'
+    const size = estimatedTextBox('Text', 32)
+    const topRight = 1200 - size.width - 60
+    const bottom = 800 - size.height - 60
+    const doc = (layers: RectLayer[]): Parameters<typeof newTextLook>[0] => ({ ...OPEN, layers })
+    const home = rect(0, 0, 200, 200, grey)
+    expect(newTextLook(doc([home]), INKS)).toMatchObject({ x: topRight, y: 60 })
+    const homeAndRight = [home, rect(900, 0, 300, 200, grey)]
+    expect(newTextLook(doc(homeAndRight), INKS)).toMatchObject({ x: 60, y: bottom })
+    const threeCorners = [...homeAndRight, rect(0, 600, 300, 200, grey)]
+    expect(newTextLook(doc(threeCorners), INKS)).toMatchObject({ x: topRight, y: bottom })
+    for (const layers of [[home], homeAndRight, threeCorners]) {
+      const look = newTextLook(doc(layers), INKS)
+      expect(worstAt(doc(layers), look), JSON.stringify(look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+      expect(look.fontSize).toBe(32)
+    }
+  })
+
+  it('when every corner is taken it takes the nearest place on the grid where the word can be read, wholly on the document', () => {
+    const grey = '#777777'
+    const corners = [rect(0, 0, 300, 200, grey), rect(900, 0, 300, 200, grey), rect(0, 600, 300, 200, grey), rect(900, 600, 300, 200, grey)]
+    const doc = { ...OPEN, layers: corners }
+    const look = newTextLook(doc, INKS)
+    const size = estimatedTextBox('Text', look.fontSize)
+    expect(worstAt(doc, look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+    expect(look.x).toBeGreaterThanOrEqual(0)
+    expect(look.y).toBeGreaterThanOrEqual(0)
+    expect(look.x + size.width).toBeLessThanOrEqual(1200)
+    expect(look.y + size.height).toBeLessThanOrEqual(800)
+    // Nearest: it is the first free place going out from the first corner - just past the grey block, not across the page.
+    expect(Math.hypot(look.x - 60, look.y - 60), JSON.stringify(look)).toBeLessThan(300)
+  })
+
+  it('a shape under the middle of the first place moves the word, though it touches neither side: a dark badge on a white page is unreadable in either ink', () => {
+    // The first place is (60, 60), 76.8 x 32. A black disc of radius 10 at its middle (98, 76) is 38 px from both side edges: dark ink on white is 19:1 and on the disc 1.0:1, light
+    // ink the other way round, so neither reads and the word goes to the next corner. (Sampled at the two side edges alone it would stay at (60, 60), in the dark ink, on the badge.)
+    const size = estimatedTextBox('Text', 32)
+    const doc = { ...OPEN, layers: [disc(98, 76, 10, '#000000')] }
+    const look = newTextLook(doc, INKS)
+    expect([look.x, look.y]).toEqual([1200 - size.width - 60, 60])
+    expect(worstAt(doc, look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+    // The mirror image: a white badge on a dark page (light ink on the page is 15:1 and on the badge 1.2:1; dark ink the other way round).
+    const bright = { ...OPEN, background: '#120c0c', layers: [disc(98, 76, 10, '#ffffff')] }
+    const moved = newTextLook(bright, INKS)
+    expect([moved.x, moved.y]).toEqual([1200 - size.width - 60, 60])
+  })
+
+  it('the scan goes out from the first corner: a clear pocket near it wins over one that comes earlier in the document', () => {
+    // Grey everywhere, and two white windows laid over it: one in the top row at x 500 (the first the scan would reach reading the page like a book) and one just under the first corner.
+    const doc = { ...OPEN, layers: [rect(0, 0, 1200, 800, '#777777'), rect(500, 0, 200, 40, '#ffffff'), rect(60, 120, 140, 50, '#ffffff')] }
+    const look = newTextLook(doc, INKS)
+    expect(look.y, JSON.stringify(look)).toBeGreaterThanOrEqual(120)
+    expect(look.y + 32).toBeLessThanOrEqual(170)
+    expect(look.x).toBeGreaterThanOrEqual(60)
+    expect(look.x + estimatedTextBox('Text', 32).width).toBeLessThanOrEqual(200)
+    expect(worstAt(doc, look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+  })
+
+  it('the POG emote: the only room is the band under the word, and the word goes there in the dark ink', () => {
+    // The shipped template: a gold disc (r 50) centred on (56, 56) with "POG" 48 px at (22, 30), on a transparent 112x112 document.
+    const pog = {
+      width: 112,
+      height: 112,
+      background: 'transparent',
+      layers: [disc(56, 56, 50, '#fbbf24'), words(22, 30, 'POG', 48, '#120c0c')]
+    }
+    const look = newTextLook(pog, INKS)
+    const word = estimatedTextBox('POG', 48)
+    expect(look.fill).toBe(INKS.dark)
+    expect(look.y, 'below the estimated box of POG').toBeGreaterThanOrEqual(30 + word.height)
+    expect(worstAt(pog, look)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+  })
+
+  it('the emote disc alone: the dark ink, wholly inside the disc (the word cannot fit in a corner of a document a disc fills)', () => {
+    const emote = { width: 112, height: 112, background: 'transparent', layers: [disc(56, 56, 50, '#ff3131')] }
+    const look = newTextLook(emote, INKS)
+    const box = estimatedTextBox('Text', look.fontSize)
+    expect(look.fill).toBe(INKS.dark)
+    for (const [cx, cy] of [[look.x, look.y], [look.x + box.width, look.y], [look.x, look.y + box.height], [look.x + box.width, look.y + box.height]] as const) {
+      expect(Math.hypot(cx - 56, cy - 56), `the corner (${cx}, ${cy}) of the word is inside the disc`).toBeLessThanOrEqual(50)
+    }
+  })
+
+  it('when no place can be read (grey under every place) it keeps the best, the first of a tie: the corner it always started at', () => {
+    const wall = { ...OPEN, layers: [rect(0, 0, 1200, 800, '#777777')] }
+    const look = newTextLook(wall, INKS)
+    expect([look.x, look.y]).toEqual([60, 60])
+    expect(worstAt(wall, look)).toBeLessThan(READABLE_CONTRAST)
+    // ...with the better of the two inks (the dark one is 4.3:1 on this grey, the light one 3.6:1).
+    expect(look.fill).toBe(INKS.dark)
+  })
+
+  it('a document that is not a size is not scanned (a project file the editor never made): the first place, and it returns', () => {
+    for (const [w, h] of [[NaN, 800], [Infinity, 800], [1200, Infinity], [0, 0], [-5, 100]] as const) {
+      const look = newTextLook({ width: w, height: h, background: '#ffffff', layers: [rect(0, 0, 100, 100, '#777777')] }, INKS)
+      expect([look.x, look.y], `${w}x${h}`).toEqual([60, 60])
+    }
+  })
+
+  it('a document with a great many layers is placed without a pause: the scan is bounded by the document\'s size, not by its layers', () => {
+    const layers = Array.from({ length: 300 }, (_, i) => rect((i * 37) % 1100, (i * 91) % 700, 90, 60, '#777777'))
+    const started = Date.now()
+    const look = newTextLook({ ...OPEN, layers }, INKS)
+    expect(Date.now() - started, 'ms').toBeLessThan(5_000)
+    expect(look.fontSize).toBe(32)
   })
 })

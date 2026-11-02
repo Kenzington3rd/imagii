@@ -17,7 +17,7 @@ import {
   type CanvasTemplate
 } from '../../src/renderer/src/modules/image-studio/templates'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
-import { BG_BASE } from '../../src/renderer/src/styles/tokens'
+import { BG_BASE, INK_BASE } from '../../src/renderer/src/styles/tokens'
 import { dragThrough, dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
@@ -55,7 +55,7 @@ const __dirname = path.dirname(__filename)
  *
  * ── Three mechanisms worth explaining ──────────────────────────────────
  *
- * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:424) is the ledger's
+ * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:431) is the ledger's
  *    own hook. `stageShapes()` reads the document layer's children — class +
  *    attrs — which is the rendered end state of `doc.layers`: React re-renders
  *    every node from the store, so a value read back off a node is the value
@@ -63,7 +63,7 @@ const __dirname = path.dirname(__filename)
  *    eye toggle assertable at the stage.
  *
  * 2. Mouse work is in DOC coordinates. The stage is scaled to fit its
- *    container (Canvas.tsx:183-192), so every screen point is computed from the
+ *    container (Canvas.tsx:184-193), so every screen point is computed from the
  *    live `stage.scaleX()` and the canvas rect (`stageGeom`). Transformer
  *    anchors are Konva nodes, not DOM: their screen position comes from
  *    `getAbsolutePosition()`, which already includes the stage scale.
@@ -1122,7 +1122,7 @@ test.describe('Image Studio — tools and drawing', () => {
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
       expect((pencil.points as number[]).length).toBeGreaterThan(4)
-      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:331).
+      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:343).
       expect(await layerNames(window)).toEqual([
         'Line',
         'Line',
@@ -1132,7 +1132,7 @@ test.describe('Image Studio — tools and drawing', () => {
         'Text'
       ])
 
-      // ── a drag under the 4px floor commits nothing (Canvas.tsx:266) ──
+      // ── a drag under the 4px floor commits nothing (Canvas.tsx:267) ──
       await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 }, { expectPreview: false })
       await expectLayerCount(window, 6)
@@ -1178,7 +1178,7 @@ test.describe('Image Studio — tools and drawing', () => {
 
       // ── snap ON: the same gesture quantizes to multiples of 40 ──
       // Math.round(133/40)*40 = 120 and Math.round(93/40)*40 = 80
-      // (canvasStore rule read off Canvas.tsx:178-181). At the DEFAULT grid of
+      // (canvasStore rule read off Canvas.tsx:179-182). At the DEFAULT grid of
       // 20 the same gesture would land on 140/100, so this also proves the
       // grid-size field feeds the snap.
       await snap.check()
@@ -1408,7 +1408,7 @@ test.describe('Image Studio — selection', () => {
       await window.keyboard.press('Delete')
       await expectLayerCount(window, 2)
       expect(await layerNames(window)).not.toContain('Keep m')
-      // Removing the selected layer clears the selection (canvasStore.ts:154).
+      // Removing the selected layer clears the selection (canvasStore.ts:164).
       await expect(propsCard(window)).toHaveCount(0)
 
       // ── Backspace, the other binding ──
@@ -2151,7 +2151,7 @@ test.describe('Image Studio — export', () => {
       expect(calls1.save[0]?.filters).toEqual([{ name: 'PNG image', extensions: ['png'] }])
 
       // T-45: "1×" means one document pixel per exported pixel. The on-screen
-      // stage is a fit-to-container render (Canvas.tsx:183-192) and is NOT the
+      // stage is a fit-to-container render (Canvas.tsx:184-193) and is NOT the
       // document size here — asserted first, so every dimension below is a
       // claim about the export math and not an accident of this window.
       expect(geom.stageW, 'the stage is zoomed, not 1:1').not.toBe(t.doc.width)
@@ -2278,7 +2278,7 @@ test.describe('Image Studio — export', () => {
       const sizes = [28, 56, 112].map((n) => pngSize(bySize(n)))
 
       // T-45: the bytes carry the sizes the filenames and the toast promise.
-      // This doc sits at the 4x zoom cap (Canvas.tsx:192) — 112 document px
+      // This doc sits at the 4x zoom cap (Canvas.tsx:193) — 112 document px
       // are drawn as 448 screen px — which is exactly the zoom that used to
       // leak into the capture and write 112/224/448. Asserting the cap is
       // really engaged first is what makes the trio below a claim about the
@@ -3502,7 +3502,7 @@ test.describe('Image Studio — history', () => {
       await window.keyboard.press('Control+Shift+z')
       await expectLayerCount(window, 1)
 
-      // A new action after an undo drops the redo branch (canvasStore.ts:109).
+      // A new action after an undo drops the redo branch (canvasStore.ts:117).
       await window.keyboard.press('Control+z')
       await expectLayerCount(window, 2)
       await layerRow(window, 'Rectangle').getByRole('button', { name: 'Duplicate layer' }).click()
@@ -4185,7 +4185,7 @@ test.describe('Image Studio — "+ Add text" lands wholly on the document and ca
     expect.soft(box.y + box.height, `${what}: bottom edge on the document (${JSON.stringify(box)})`).toBeLessThanOrEqual(doc.height + 0.01)
   }
 
-  test('on the emote, the dark thumbnails, the banner and the 4K overlay the new word is wholly inside the document and 4.5:1 against its background', async () => {
+  test('on the emote, the dark thumbnails, the banner and the 4K overlay the new word is wholly inside the document, a token ink, and not a speck (what it is read against is held on rendered pixels by T-141 (2) below)', async () => {
     test.setTimeout(240_000)
     const studio = await openStudio('t140-text')
     const { window } = studio
@@ -4208,10 +4208,10 @@ test.describe('Image Studio — "+ Add text" lands wholly on the document and ca
         const box = await newestText(window)
         const what = `${t.name} (${t.doc.width}x${t.doc.height}, ${t.doc.background})`
         expectInsideDocument(box, t.doc, what)
-        // A transparent document is the dark workspace (and most scenes) behind it: the same surface the rule is held to.
-        const surface = t.doc.background === 'transparent' ? BG_BASE : t.doc.background
-        expect.soft(box.fill.toLowerCase(), `${what}: the ink is not the background`).not.toBe(surface.toLowerCase())
-        expect.soft(contrastOf(box.fill, surface), `${what}: ${box.fill} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+        // T-141 (2): this case held the ink to the DOCUMENT's background (a transparent one is the dark workspace behind it), which is the premise that was wrong: on the emote the word
+        // sits on a disc, and the light ink that suited the document was 2.9:1 on it. What the ink must clear is what is drawn UNDER the word, measured on rendered pixels for every
+        // template in "'+ Add text' is readable against what is drawn under it" below; here the ink is one of the two tokens the rule chooses between.
+        expect.soft([BG_BASE, INK_BASE].map((c) => c.toLowerCase()), `${what}: a token ink`).toContain(box.fill.toLowerCase())
         // Readable: not a speck beside the document (a 32 px line on 2160 px is 1.5% of its height).
         expect.soft(box.fontSize, `${what}: the size grows with the document`).toBeGreaterThanOrEqual(t.doc.height / 60)
         if (id === 'tw-overlay-streamer-4k') expect.soft(box.fontSize, `${what}: more than the 32 px it was`).toBeGreaterThan(32)
@@ -4246,7 +4246,11 @@ test.describe('Image Studio — "+ Add text" lands wholly on the document and ca
       await expectLayerCount(window, 2)
       const second = await newestText(window)
       expect(second.fill.toLowerCase()).toBe(BG_BASE.toLowerCase())
-      expect([second.x, second.y, second.fontSize]).toEqual([60, 60, 32])
+      // T-141 (2): the first word is drawn at (60, 60) and a second one exactly on it is unreadable (dark letters on dark letters), so it takes the next place the rule tries - the same margin
+      // in from the top-right corner - and is still 32 px, in the dark ink, wholly on the page.
+      expect(second.fontSize).toBe(32)
+      expect(second.x, 'beside the first word, not on it').toBeGreaterThan(first.x + first.width)
+      expectInsideDocument(second, doc, 'the second word')
     } finally {
       await closeStudio(studio)
     }
@@ -4293,12 +4297,16 @@ test.describe('Image Studio — a corner drag keeps a picture\'s and a word\'s p
     return { w: maxX - minX + 1, h: maxY - minY + 1 }
   }
 
-  /** The newest layer's scale of this Konva class, as the node has it. */
+  /**
+   * The newest layer's scale of this Konva class, as the node has it - and for a word, its DRAWN scale against the 32 px it started at: T-141 (6) folds a resize into the font size, so a
+   * word's node scale is 1 after a drag and the size is what carries it (a word dragged to 1.4x is 45 px at scale 1, and 45 / 32 is the 1.4 this case has always read).
+   */
   async function scaleOf(window: Page, cls: string): Promise<{ x: number; y: number }> {
     const shapes = (await stageShapes(window)).filter((sh) => sh.cls === cls)
     const last = shapes[shapes.length - 1]
     if (!last) throw new Error(`no ${cls} on the stage`)
-    return { x: last.scaleX, y: last.scaleY }
+    const drawnAgainstStart = cls === 'Text' ? (last.fontSize ?? 32) / 32 : 1
+    return { x: last.scaleX * drawnAgainstStart, y: last.scaleY * drawnAgainstStart }
   }
 
   /** A real drag of the bottom-right corner handle by (dx, dy) document px, with Shift held for the whole gesture when asked. */
@@ -4666,3 +4674,419 @@ test.describe('Image Studio — the Export bar and the Layers card are on screen
   })
 })
 
+
+// ── T-141 (2): "+ Add text" is inked against what it lands on ──────────────────────────────────────────────────────────────────────────────
+//
+// T-140 (2) chose the ink against the DOCUMENT's background. On both emote templates that is a transparent document with a disc filling it, so the light ink landed on the disc:
+// 1.33:1 on the gold POG disc, 2.92:1 on the red one; and on the Bold thumbnail and the Twitch Profile banner the new word's box reaches a different colour than the page around it. The
+// ink is now chosen against what is DRAWN under the word's box (the document, the shapes and the words it overlaps), and the word moves to a place where one ink reaches 4.5:1 when its
+// first place has none. The proof is on rendered pixels, never on the rule: the document drawn at 1:1 without the word and without the editor's chrome, every pixel under the word's
+// box laid over the workspace the way the canvas shows it, against the word's ink, by a luminance written out in this file.
+test.describe('Image Studio — "+ Add text" is readable against what is drawn under it, on every template (T-141 (2))', () => {
+  interface Underneath {
+    /** The lowest WCAG contrast between the word's ink and any pixel under its box. */
+    worst: number
+    /** Where in the document that pixel is. */
+    at: { x: number; y: number }
+    ink: string
+    /** The word's box as drawn (document px) and the document's size. */
+    box: { x: number; y: number; width: number; height: number }
+    doc: { width: number; height: number }
+    pixels: number
+  }
+
+  /**
+   * Hide the newest Text node and the editor's chrome layers, draw the document layer at 1:1 (the stage's zoom out of it, as an export does), and measure the pixels in the node's box
+   * against its fill. Everything is put back before it returns. A pixel's alpha is laid over `behind` (the workspace colour a transparent document shows), so a transparent corner
+   * is judged as the dark it is on screen.
+   */
+  function worstUnderNewestWord(window: Page, behind: string): Promise<Underneath> {
+    return window.evaluate((behindHex) => {
+      interface Node {
+        visible(): boolean
+        visible(v: boolean): void
+        fill(): string
+        getClientRect(o: { relativeTo: unknown }): { x: number; y: number; width: number; height: number }
+      }
+      interface Stage {
+        children: Array<{ find(sel: string): Node[] }>
+        getLayers(): Array<{ visible(): boolean; visible(v: boolean): void; hasName(n: string): boolean }>
+        scaleX(): number
+        width(): number
+        height(): number
+        scale(v: { x: number; y: number }): void
+        toCanvas(o: { x: number; y: number; width: number; height: number; pixelRatio: number }): HTMLCanvasElement
+      }
+      const stage = (window as unknown as { __imagiiStage?: Stage }).__imagiiStage
+      if (!stage) throw new Error('__imagiiStage is not set')
+      const layer = stage.children[0]
+      const words = layer ? layer.find('Text') : []
+      const word = words[words.length - 1]
+      if (!layer || !word) throw new Error('no Text node on the stage')
+      const box = word.getClientRect({ relativeTo: layer })
+      const zoom = stage.scaleX()
+      const doc = { width: Math.round(stage.width() / zoom), height: Math.round(stage.height() / zoom) }
+      const chrome = stage.getLayers().filter((l) => l.hasName('chrome'))
+      const chromeWas = chrome.map((l) => l.visible())
+      const wordWas = word.visible()
+      let canvas: HTMLCanvasElement
+      try {
+        stage.scale({ x: 1, y: 1 })
+        for (const l of chrome) l.visible(false)
+        word.visible(false)
+        canvas = stage.toCanvas({ x: 0, y: 0, width: doc.width, height: doc.height, pixelRatio: 1 })
+      } finally {
+        chrome.forEach((l, i) => l.visible(chromeWas[i] as boolean))
+        word.visible(wordWas)
+        stage.scale({ x: zoom, y: zoom })
+      }
+      const lin = (c: number): number => {
+        const v = c / 255
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+      }
+      const lum = (r: number, g: number, b: number): number => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+      const channels = (hex: string): [number, number, number] => {
+        const n = parseInt(hex.slice(1), 16)
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+      }
+      const ink = word.fill()
+      const inkL = lum(...channels(ink))
+      const back = channels(behindHex)
+      const x0 = Math.max(0, Math.floor(box.x))
+      const y0 = Math.max(0, Math.floor(box.y))
+      const x1 = Math.min(canvas.width, Math.ceil(box.x + box.width))
+      const y1 = Math.min(canvas.height, Math.ceil(box.y + box.height))
+      const w = x1 - x0
+      const data = canvas.getContext('2d')?.getImageData(x0, y0, w, y1 - y0).data
+      if (!data || w <= 0) throw new Error(`no pixels under the word's box ${JSON.stringify(box)}`)
+      let worst = Infinity
+      let at = { x: x0, y: y0 }
+      for (let i = 0; i < data.length; i += 4) {
+        const a = (data[i + 3] as number) / 255
+        const l = lum(
+          (data[i] as number) * a + back[0] * (1 - a),
+          (data[i + 1] as number) * a + back[1] * (1 - a),
+          (data[i + 2] as number) * a + back[2] * (1 - a)
+        )
+        const ratio = (Math.max(inkL, l) + 0.05) / (Math.min(inkL, l) + 0.05)
+        if (ratio < worst) {
+          worst = ratio
+          at = { x: x0 + ((i / 4) % w), y: y0 + Math.floor(i / 4 / w) }
+        }
+      }
+      return { worst, at, ink, box, doc, pixels: data.length / 4 }
+    }, behind)
+  }
+
+  function describeRow(name: string, r: Underneath): string {
+    return `${name}: ink ${r.ink}, worst ${r.worst.toFixed(2)}:1 at (${r.at.x}, ${r.at.y}), box ${JSON.stringify(r.box)} of ${r.doc.width}x${r.doc.height}`
+  }
+
+  test('on every template and the blank page, no pixel under the new word is under 4.5:1 against its ink, and the word is wholly on the document', async () => {
+    test.setTimeout(540_000)
+    const studio = await openStudio('t141-ink-pixels')
+    const { window } = studio
+    try {
+      expect(CANVAS_TEMPLATES.length, 'the twelve templates').toBeGreaterThanOrEqual(12)
+      const rows: string[] = []
+      const dialog = window.locator('[role="dialog"]')
+
+      // The blank page: "Start with text" is the first word on a white page.
+      await startBlank(window)
+      const blank = await worstUnderNewestWord(window, BG_BASE)
+      rows.push(describeRow('the blank page', blank))
+      expect.soft(blank.worst, describeRow('the blank page', blank)).toBeGreaterThanOrEqual(4.5)
+
+      for (const t of CANVAS_TEMPLATES) {
+        await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+        await dialog.locator('button.card').filter({ has: window.getByText(t.name, { exact: true }) }).click()
+        await expect(dialog).toHaveCount(0)
+        await expectTemplateApplied(window, t)
+        await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+        await expectLayerCount(window, t.doc.layers.length + 1)
+        const word = await newestTextBox(window)
+        const r = await worstUnderNewestWord(window, BG_BASE)
+        const what = describeRow(t.name, r)
+        rows.push(what)
+        expect.soft(r.worst, what).toBeGreaterThanOrEqual(4.5)
+        expect.soft(word.x, `${t.name}: left edge on the document`).toBeGreaterThanOrEqual(-0.01)
+        expect.soft(word.y, `${t.name}: top edge on the document`).toBeGreaterThanOrEqual(-0.01)
+        expect.soft(word.x + word.width, `${t.name}: right edge on the document`).toBeLessThanOrEqual(t.doc.width + 0.01)
+        expect.soft(word.y + word.height, `${t.name}: bottom edge on the document`).toBeLessThanOrEqual(t.doc.height + 0.01)
+      }
+      console.log(`T-141 (2) rows:\n${rows.join('\n')}`)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a second word on the blank page is not drawn on the first', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t141-ink-second')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 2)
+      const second = await worstUnderNewestWord(window, BG_BASE)
+      expect(second.worst, describeRow('the second word', second)).toBeGreaterThanOrEqual(4.5)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 3)
+      const third = await worstUnderNewestWord(window, BG_BASE)
+      expect(third.worst, describeRow('the third word', third)).toBeGreaterThanOrEqual(4.5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the emote and the POG emote take the dark ink: the word sits on a disc, and the light ink was 2.9:1 and 1.3:1 there', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t141-ink-discs')
+    const { window } = studio
+    try {
+      const dialog = window.locator('[role="dialog"]')
+      for (const [i, id] of ['emote-blank-112', 'emote-text'].entries()) {
+        const t = templateById(id)
+        if (i === 0) {
+          await templateCard(window, t).click()
+        } else {
+          await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+          await dialog.locator('button.card').filter({ has: window.getByText(t.name, { exact: true }) }).click()
+          await expect(dialog).toHaveCount(0)
+        }
+        await expectTemplateApplied(window, t)
+        await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+        await expectLayerCount(window, t.doc.layers.length + 1)
+        const r = await worstUnderNewestWord(window, BG_BASE)
+        expect(r.ink.toLowerCase(), describeRow(t.name, r)).toBe(BG_BASE.toLowerCase())
+        expect(r.worst, describeRow(t.name, r)).toBeGreaterThanOrEqual(4.5)
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  /** The newest Text node's box in document units (as the T-140 (2) case reads it). */
+  function newestTextBox(window: Page): Promise<{ x: number; y: number; width: number; height: number }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        children: Array<{
+          find(sel: string): Array<{ getClientRect(o: { relativeTo: unknown }): { x: number; y: number; width: number; height: number } }>
+        }>
+      }
+      const layer = stage.children[0]
+      const texts = layer ? layer.find('Text') : []
+      const t = texts[texts.length - 1]
+      if (!layer || !t) throw new Error('no Text node on the stage')
+      return t.getClientRect({ relativeTo: layer })
+    })
+  }
+})
+
+// ── T-141 (6): a text layer's "Size (px)" is what is drawn ─────────────────────────────────────────────────────────────────────────────────
+//
+// T-140 (3) made the corner drag the natural way to size a word, and it stored scaleX / scaleY on transform end while Properties shows `fontSize`: after a drag "Size (px)" said 32 over
+// a word drawn at 44, and a size typed afterwards was multiplied by the kept scale. A word is sized by its font size, so the resize folds the scale into it: the size is the drawn size, the
+// scale is 1 again, and typing a size draws at exactly that size. A Shift-freed stretch keeps what is left of it in scaleX.
+test.describe('Image Studio — a word dragged to a size says that size in Properties, and a typed size draws at exactly it (T-141 (6))', () => {
+  interface Word {
+    fontSize: number
+    scaleX: number
+    scaleY: number
+    /** The box the word is drawn in (document px): the glyph run's width by the line's height. */
+    width: number
+    height: number
+  }
+
+  function wordNow(window: Page): Promise<Word> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        children: Array<{
+          find(sel: string): Array<{
+            fontSize(): number
+            scaleX(): number
+            scaleY(): number
+            getClientRect(o: { relativeTo: unknown }): { width: number; height: number }
+          }>
+        }>
+      }
+      const layer = stage.children[0]
+      const texts = layer ? layer.find('Text') : []
+      const t = texts[texts.length - 1]
+      if (!layer || !t) throw new Error('no Text node on the stage')
+      const r = t.getClientRect({ relativeTo: layer })
+      return { fontSize: t.fontSize(), scaleX: t.scaleX(), scaleY: t.scaleY(), width: r.width, height: r.height }
+    })
+  }
+
+  /** A real drag of the bottom-right corner handle by (dx, dy) document px, Shift held through the whole gesture when asked; waits until the drawn height or width has moved. */
+  async function dragCorner(window: Page, by: Point, shift = false): Promise<void> {
+    const before = await wordNow(window)
+    const g = await stageGeom(window)
+    const anchor = await anchorPoint(window, 'bottom-right')
+    if (shift) await window.keyboard.down('Shift')
+    try {
+      await dragTo(window, anchor, { x: anchor.x + by.x * g.scale, y: anchor.y + by.y * g.scale }, {
+        extent: {
+          label: `word corner drag by ${by.x},${by.y}${shift ? ' with Shift' : ''}`,
+          read: async () => {
+            const w = await wordNow(window)
+            return Math.max(Math.abs(w.height - before.height), Math.abs(w.width - before.width))
+          },
+          settled: (moved) => moved > 2
+        }
+      })
+    } finally {
+      if (shift) await window.keyboard.up('Shift')
+    }
+  }
+
+  test('a corner drag: the size field shows the drawn size, the scale is 1 again, and a typed size draws at exactly that size', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t141-size-fold')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      await startBlank(window)
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Text'])
+      const size = field(window, 'Size (px)')
+      await expect(size).toHaveValue('32')
+      const start = await wordNow(window)
+      expect(start.height, 'a word 32 px high is drawn 32 px high').toBeCloseTo(32, 1)
+
+      // ── a corner drag far more across than down ──
+      await dragCorner(window, { x: 80, y: 4 })
+      const dragged = await wordNow(window)
+      expect(dragged.height, 'the word was made larger').toBeGreaterThan(40)
+      // The size IS the drawn size: the drawn height is the font size (a line is one em high), and the field says it.
+      expect(dragged.scaleX, 'the scale is folded into the size').toBe(1)
+      expect(dragged.scaleY).toBe(1)
+      expect(dragged.height, 'drawn at the size the node has').toBeCloseTo(dragged.fontSize, 1)
+      await expect(size, 'Properties says the size it is drawn at').toHaveValue(String(dragged.fontSize))
+      expect(Number.isInteger(dragged.fontSize), 'a whole pixel, the Size field\'s step').toBe(true)
+      // Proportions kept: the glyph run is as much wider than it is tall as it was.
+      expect(dragged.width / dragged.height, 'a corner drag does not stretch the word').toBeCloseTo(start.width / start.height, 1)
+
+      // ── a typed size draws at exactly that size (it was multiplied by the kept scale) ──
+      await retype(size, '100')
+      await leave(size)
+      await expect(size).toHaveValue('100')
+      await expect.poll(async () => (await wordNow(window)).fontSize, { timeout: 10_000 }).toBe(100)
+      const typed = await wordNow(window)
+      expect(typed.height, 'drawn exactly 100 px high').toBeCloseTo(100, 1)
+      expect(typed.scaleX).toBe(1)
+      expect(typed.width / typed.height).toBeCloseTo(start.width / start.height, 1)
+
+      // ── and a second drag works from the new size, not from the first drag's scale ──
+      await dragCorner(window, { x: -40, y: 0 })
+      const smaller = await wordNow(window)
+      expect(smaller.height).toBeLessThan(100)
+      expect(smaller.scaleX).toBe(1)
+      await expect(size).toHaveValue(String(smaller.fontSize))
+      expect(smaller.height).toBeCloseTo(smaller.fontSize, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a Shift-freed stretch folds its height into the size and keeps the remaining width ratio in scaleX; the drawn width is what was dragged', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t141-size-fold-free')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      await startBlank(window)
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Text'])
+      const size = field(window, 'Size (px)')
+      const start = await wordNow(window)
+
+      // Shift frees the ratio (T-140 (3)): a drag across alone changes the width and leaves the height, so the size stays and the width ratio is kept.
+      await dragCorner(window, { x: 70, y: 0 }, true)
+      const wide = await wordNow(window)
+      expect(wide.width, 'wider').toBeGreaterThan(start.width + 20)
+      expect(wide.fontSize, 'the height did not move, so neither did the size').toBe(32)
+      expect(wide.scaleY).toBe(1)
+      expect(wide.scaleX, 'the width stretch stays in scaleX').toBeGreaterThan(1.1)
+      await expect(size).toHaveValue('32')
+
+      // Now a drag down alone with Shift: the height is folded into the size and the width stays what it was drawn at.
+      const widthBefore = wide.width
+      await dragCorner(window, { x: 0, y: 40 }, true)
+      const tall = await wordNow(window)
+      expect(tall.fontSize, 'the height went into the size').toBeGreaterThan(40)
+      expect(tall.scaleY).toBe(1)
+      await expect(size).toHaveValue(String(tall.fontSize))
+      expect(tall.height).toBeCloseTo(tall.fontSize, 1)
+      expect(tall.width, 'the width is what it was drawn at, not what the new size would make it').toBeCloseTo(widthBefore, 0)
+      expect(tall.scaleX, 'so the stretch is now a squeeze against the bigger size').toBeLessThan(wide.scaleX)
+
+      // A typed size after a stretch is drawn at exactly that height; the width keeps its ratio.
+      await retype(size, '50')
+      await leave(size)
+      await expect.poll(async () => (await wordNow(window)).fontSize, { timeout: 10_000 }).toBe(50)
+      const typed = await wordNow(window)
+      expect(typed.height).toBeCloseTo(50, 1)
+      expect(typed.scaleX, 'the stretch is kept').toBeCloseTo(tall.scaleX, 5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-141 (8): Delete after an Undo is not a step ──────────────────────────────────────────────────────────────────────────────────────────
+//
+// `removeLayer` had no unknown-id guard and Undo kept the selection, so after Ctrl+Z took away the word it had selected, Delete recorded a step that changed nothing and cleared Redo:
+// Ctrl+Y then did nothing and the word was gone for good.
+test.describe('Image Studio — Delete after an Undo records nothing, and Redo brings the word back (T-141 (8))', () => {
+  test('Add text, Ctrl+Z, Delete, Ctrl+Y: the word is back, and Redo was never lost', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t141-delete-after-undo')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const redo = window.getByRole('button', { name: 'Redo' })
+      await expect(redo).toBeDisabled()
+
+      await window.keyboard.press('Control+z')
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+      await expect(redo, 'the word is in Redo').toBeEnabled()
+
+      // Delete with nothing selected: no layer, so no step, and the Redo branch stays.
+      await window.keyboard.press('Delete')
+      await expect(redo, 'Delete after an Undo did not clear Redo').toBeEnabled()
+      await window.keyboard.press('Backspace')
+      await expect(redo, 'nor did Backspace').toBeEnabled()
+
+      await window.keyboard.press('Control+y')
+      await expectLayerCount(window, 1)
+      await expectShapeCount(window, 1)
+      expect((await lastShape(window)).cls).toBe('Text')
+      await expect(redo).toBeDisabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the same on a template: Undo of an added word leaves nothing selected, and Delete takes no layer of the template', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t141-delete-after-undo-template')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-clean')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, t.doc.layers.length + 1)
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, t.doc.layers.length)
+      await expect(propsCard(window), 'nothing is selected: the added word was the selection').toHaveCount(0)
+      await window.keyboard.press('Delete')
+      await expectLayerCount(window, t.doc.layers.length)
+      await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
+      await window.keyboard.press('Control+y')
+      await expectLayerCount(window, t.doc.layers.length + 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
