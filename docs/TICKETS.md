@@ -6013,6 +6013,188 @@ IMG-PREC.
 
 ---
 
+## T-141 — sweep-27 fixes (round 90)
+
+- **Spec:** the twenty-seventh sweep's verified findings — each
+  confirmed by the expediter against source; the source-overwrite was
+  EXECUTED by a reviewer (the real export and mux runners over their
+  own inputs) and its pre-T-140 refusal replicated by the expediter on
+  the bundled ffmpeg; the new word's contrast was measured on rendered
+  pixels in a fresh build of the tip. Zero-finding lens: electron (the ffmpeg lens's one finding is item 1,
+  executed on all three binaries). 10 findings, written as three tracks
+  with DISJOINT source files.
+  **Track A (main process):**
+  1. **[MED] A Save-dialog output can replace the file the job reads.**
+     T-140 (1) hands ffmpeg a partial, which is never its input, so the
+     refusal ffmpeg made at its own open ("Error opening output file …
+     Invalid argument" for an output equal to an input — the source
+     untouched) is gone: a chosen output equal to the source is now
+     rendered and renamed over it (executed: runAudioExport with
+     outputPath === sourcePath and runAudioMux with outputPath ===
+     videoPath both resolved and changed the source's bytes; on 6.1.1 a
+     burn-in over its own video with a 1 s range turned the whole source
+     into a 1 s clip; ffmpeg's own refusal — "FFmpeg cannot edit existing
+     files in-place.", exit 234 — confirmed on 7.0.2, 6.1.1 and the
+     shipped win32 exe under Wine). A ranged
+     burn-in over its own VOD replaces the VOD with the captioned
+     range; a re-attach with cuts replaces the original recording; a
+     cleaned export replaces the raw take — behind one confirmed OS
+     "replace?". The code already holds the rule for its own
+     intermediate (`assertAlways(tempAudioPath !== spec.sourcePath)` in
+     runAudioReattach). Fix direction: refuse BEFORE any spawn, in one
+     finished T-84 sentence, a chosen output that resolves to any file
+     the job reads — the audio source, the second track, the
+     re-attach's video, the burn-in's video (and its .srt) — compared
+     by resolved path (realpath where the file exists; case-insensitive
+     on win32), in main (the three IPC handlers or the runners; one
+     shared helper with a unit). Unit per input kind (same path,
+     different case on win32, a symlink); Layer 5 on both majors: the
+     real export, re-attach and burn-in runners aimed at their own
+     inputs are refused before any ffmpeg runs and the inputs are
+     byte-identical; e2e: an audio export aimed at its own source is
+     refused with the sentence and the source is byte-identical.
+  5. **[LOW] A Discard that lands after the convert exited keeps the
+     raw take.** recording.ts:334-339: commitPartial's `run.check()`
+     throws a plain CancelledError, not a ConvertCancelledError, so
+     `keepTake` is true and <userData>/recordings/<id>.webm survives
+     while the renderer toasts "Recording discarded" (USER_GUIDE: Discard
+     throws it away); the launch sweep reaps it >6 h later. The cause is
+     knowable: Discard is per-take (`cancelRecordingConvert`), the quit
+     is `cancelAllConverts`. Fix direction: record the cause (a per-take
+     discard flag the save consults, or a quitting flag set by
+     cancelAllConverts) so the take is kept only for a quit; flip the
+     recordingCancel.test.ts:561-572 pin; unit for both orders.
+     Non-counted, same lines (T-110 (u) narrowed): a swap refused with
+     the target ABSENT after a whole convert (a lock outlasting the
+     retries) deletes the raw take (executed by two reviewers) — keep the
+     take when the failure is the rename (`err.syscall === 'rename'`):
+     the convert was whole and the take is the only copy; say so in the
+     sentence; update (u)'s text.
+  10. **[LOW] A failed fsync leaks the autosave tmp's handle.**
+     autosave.ts:145-151 closes the handle only after `sync()` resolves,
+     inside a swallowing catch; a rejecting sync leaks one handle per
+     autosave for the session (executed). Fix: the try/finally
+     fsAtomic.ts:31-39 uses (or one shared flush helper); unit with a
+     rejecting sync (the handle is closed).
+  Non-counted, rides with Track A: the synthetic `C:\Users\maken\…`
+  fixture paths in tests/e2e/record.spec.ts (:1113, :3302) and
+  home-chrome.spec.ts (:1456) — a username fragment in a public repo —
+  become a neutral name (e.g. `C:\Users\streamer\…`).
+  **Track B (renderer: Stream Graphics):**
+  2. **[MED] "+ Add text" is inked against the document, not what it
+     lands on.** canvasStore.ts:352-354 `textLayerFor` hands
+     `newTextLook` only the document's background, so on both Emote
+     templates (transparent document, a disc that fills it) the light
+     ink lands on the disc: measured on rendered pixels under the word,
+     POG emote 1.33:1, emote trio 2.92:1, and partial overlaps with a
+     template's red bars on the Bold thumbnail (3.69:1) and the Twitch
+     Profile banner (2.92:1). Fix direction: choose the ink against what
+     is UNDER the word's box — the document background plus every
+     visible opaque shape fill (rect, ellipse, polygon) the box
+     overlaps, picking the token ink whose WORST contrast against them is
+     best (a picture layer under the box: sample it if the stored copy
+     is at hand, else a documented ceiling); if neither ink reaches
+     4.5:1 against everything under the box, move the word to a margin
+     corner where one does (try the corners in a fixed order); the rule
+     a pure helper in src/shared with units over every template. E2E:
+     on ALL 12 templates, the rendered pixels under the word's box
+     (sampled from the stage, or the export) clear 4.5:1 against the
+     word's ink.
+  6. **[LOW] A text layer's "Size (px)" stops describing it after a
+     corner drag.** Canvas.tsx:330-339 stores scaleX/scaleY on
+     transform end while Properties shows `layer.fontSize`
+     (PropertiesPanel.tsx:214-227), and a typed size is multiplied by
+     the kept scale; T-140 (3) made the corner drag the natural way to
+     size a word. Fix direction: on transform end for a text layer,
+     fold a uniform scale into fontSize (rounded to the Size field's
+     step) and reset scale to 1; a non-uniform Shift resize folds scaleY
+     into fontSize and keeps the remaining ratio in scaleX (say so);
+     e2e: corner-drag a word, Properties shows the drawn size, a typed
+     size draws at that size.
+  8. **[LOW] Delete after an undo records a phantom step and wipes
+     Redo.** canvasStore.ts:146-157 `removeLayer` has no unknown-id
+     guard and pushes history (clearing the future) for a no-op; after
+     Ctrl+Z removes a just-added selected layer, `selectedLayerId`
+     still names it and Delete/Backspace records a step that changes
+     nothing (videoStore.removeClip guards exactly this). Fix: return
+     early when nothing matches; clear a selection that names no layer
+     after undo/redo; unit; e2e (Add text, Ctrl+Z, Delete, Ctrl+Y brings
+     the word back).
+  **Track C (renderer: Video Studio, presets, captions, mood board):**
+  3. **[MED] A clip a scan adds in a long VOD cannot be reached to
+     watch or trim.** `selectClip` (videoStore.ts:566) and `appendRange`
+     never seek (the only `requestSeek` callers are the Timeline and
+     project restore), no finder or clip row has a way to the clip's
+     start, and the Timeline's two trim handles (Timeline.tsx:220-239,
+     both `absolute w-4 -ml-2`, the end button later in the DOM) overlap
+     on any clip narrower than 16 px — a 45 s clip on a ~1 h+ VOD — so a
+     press on the clip grabs the END handle and dragging "the start"
+     drags the end toward it (:56-61). Fix direction: selecting a clip
+     (ClipList's Select, and the clip "+ Clip" just added if it is
+     selected) seeks the player to its start; each Scan VOD and Chat
+     spike row gets a "Go to" (seek to the candidate's start, no clip
+     added); the handles sit OUTSIDE the range (the start handle's right
+     edge on the start, the end handle's left edge on the end) so they
+     never overlap at any width, and a press inside the range scrubs.
+     E2E: on a short fixture with a clip narrower than 16 px, dragging
+     the start handle moves the start; Select seeks; a finder row's
+     "Go to" seeks; IC rows.
+  4. **[LOW] A held Enter on a focused preset Save button raises a
+     toast per repeat.** PresetPanel.tsx:111-120 "Save current" and
+     CustomPresetManager.tsx:287-292 "+ Save preset" have no keydown
+     guard: Enter clicks a focused button on keydown and every
+     auto-repeat is another keyboard click (detail 0, so isRepeatPress
+     lets it through); after the first save clears the name, each
+     repeat raises the red "name first" (or, after a failed write, a
+     retry and "Couldn't save"). A regression of T-140 (8): `disabled`
+     used to blur the button, aria-disabled keeps the focus. Fix: FixWizard's
+     `ignoreHeldEnter` moved to lib/repeatPress.ts and used as onKeyDown
+     on both buttons (FixWizard imports it); e2e: hold Enter on the
+     focused button in both places → one preset, no error toast.
+  7. **[LOW] The ready-state "Captions setup" promises a button that is
+     not there.** The disclosure (T-140 (10)) shows only when ready
+     (engine AND model present), and the shared setup step 2 says "The
+     button below downloads it for you" (CaptionsPanel.tsx:347-349)
+     while the button renders only when the model is missing (:373); its
+     preamble "You download the captions engine once…" is stale there
+     too (the same line in the not-ready card with the model present).
+     Fix: step 2 and the preamble say what is true in each state (the
+     model installed at its path, and how to replace it: delete it,
+     Refresh status); pins; e2e in the ready state.
+  9. **[LOW] The mood board's "Deleted — press Ctrl+Z to undo" lasts
+     2 s.** MoodBoardPanel.tsx:126 `toast.success(...)` takes
+     react-hot-toast's 2 s default, against BRANDING_GUIDE's toast rule
+     (a sentence that carries a needed fact gets ACTION_TOAST_MS) and its
+     siblings (WHOLE_VIDEO_DROPPED_MESSAGE 8000). Fix: `{ duration:
+     ACTION_TOAST_MS }`; pin.
+  Non-counted, rides with Track C (MEASURE FIRST, report either way):
+  whether Chromium resolves the captions card's link hosts
+  (github.com, huggingface.co) when the card renders — the net-log e2e
+  covers idle Home only; run the net-log case with Video Studio open on
+  a video and the engine absent; if any lookup is seen, turn DNS
+  prefetch off for the renderer (e.g. `x-dns-prefetch-control` off in
+  index.html) and keep the e2e as the pin; if none, add the case as a
+  pin anyway.
+  **Docs (ride with the owning track):** LESSONS_LEARNED entries
+  (item 1: a protection the old mechanism gave for free must be named
+  and kept when the mechanism changes; item 2: "readable against it"
+  means against what is drawn there), IC rows, TESTING paragraphs,
+  USER_GUIDE lines.
+  **Ledger:** T-110 (bo) — canvas text has no font, weight or outline
+  control in Properties (a thumbnail's Impact / outlined title is only
+  reachable through templates); a product call. (u) narrowed by item
+  5's non-counted part.
+- **Acceptance criteria:** standard bars; red-first with sha256
+  content-replace restores in a ledger; items 1-10 land with the
+  covering tests named above; new cases in NEW describe blocks appended
+  at the end of shared files; `npm run verify`, `npm run test:media`
+  and the FULL Playwright suite green before handback; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -6514,6 +6696,12 @@ IMG-PREC.
   page still says 1280x720, and a larger desktop recommendation is
   reported) - the template and its copy are advice only; owner
   hand-check at release.
+  From sweep 27 (product call, not gate-holding): (bo) canvas text has no
+  font, weight or outline control in Properties - a thumbnail's Impact or
+  outlined title is reachable only through templates; candidate: a font
+  picker over the bundled and system-safe faces, and an outline/stroke
+  field. And (u) is narrowed by T-141 (5): a swap refused after a whole
+  convert keeps the take.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
