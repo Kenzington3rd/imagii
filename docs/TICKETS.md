@@ -6301,6 +6301,80 @@ IMG-PREC.
 
 ---
 
+## T-144 — sweep-31 fixes (round 93)
+
+- **Spec:** the thirty-first sweep's verified findings (candidate clean pass #2 on aa4ae05,
+  after sweep 30 was clean on the same tree) — each confirmed by the expediter against source,
+  the layout one on the reviewer's screenshot of the built tip at 1024x640. Seven lenses clean
+  (the streamer lens's burn-in audio copy is standing T-110 (ab); the UX lens's PiP margin is the
+  round-75 ledger note — neither counted). One track (the renderer's Video Studio and References,
+  and the export job's gate in main); the non-counted items ride with it.
+  1. **[MED] Closing the video leaves every running Video Studio job but Clip Kit with no
+     progress and no Cancel.** VideoStudio.tsx:67-75 `handleClose` → `clearSource`, and the
+     panels that draw each job's row and Cancel return null with no source (ExportPanel.tsx:212,
+     ReframePanel.tsx:61, CompilationPanel.tsx:32, HighlightPanel.tsx:103, CaptionsPanel.tsx:94,
+     and the GIF and PiP panels); only `ClipKitRunning` (VideoStudio.tsx:209) draws a
+     closed-video card. The run stores still hold the job and main keeps encoding — a
+     minutes-long export batch, reframe, compile, scan or transcription — with nothing on screen
+     until it ends or another video is opened; the Close confirm says nothing about it. The class
+     T-136 (1) fixed for Clip Kit. Fix direction:
+     - a `VideoJobsRunning` card beside `ClipKitRunning` (mounted by VideoStudio AHEAD of the
+       open-or-closed conditional, an always-mounted `aria-live="polite"` wrapper that is empty
+       when there is nothing to show — the T-137 (3) shape), drawn only while no video is open
+       and at least one Video Studio run is going: the Export batch (`exportQueue`), Reframe,
+       GIF, Compile, PiP, Scan VOD and Transcribe / Burn-in (`store/runs.ts`) — one row each:
+       what is running (the clip or file it is for where the run knows it), its progress where
+       the run has a measurement, and a Cancel that calls the SAME cancel the panel's own Cancel
+       calls (move or export that function; no second copy of a cancel path), with
+       `RunningCancel`. Clean audio's extraction stays out (T-110 (bb): it has no Cancel).
+     - the Close confirm, when it is asked, adds one sentence naming what is still running and
+       that it keeps going with its Cancel on screen; Close with nothing to lose stays
+       unconfirmed (the card says it).
+     Covering tests: unit for the card's choice of rows (each run kind, none, a video open);
+     e2e (video-pipelines.spec.ts, a NEW describe appended): start an export batch long enough to
+     close on, Close the video → the card shows the export with its Cancel → Cancel → main stops
+     (no file at the target, no partial) and the card goes; and a second kind (Reframe or Scan
+     VOD) the same; the Close confirm's sentence while a job runs; red on the unchanged build.
+     IC rows.
+  2. **[LOW] The Video Studio header breaks at the 1024 px minimum with a long file name.**
+     VideoStudio.tsx:157-205: `flex items-center justify-between` with no wrap; the Clean audio
+     button has no `whitespace-nowrap`; the name span (`truncate max-w-[40ch]`) is not the item
+     that gives way, so with a realistic VOD name (~40+ characters) the h1 wraps to
+     "Video / Studio" and "Clean / audio" breaks (measured: 64 px and 54 px against 34 px) —
+     DESIGN_GUIDE "Layout" and BRANDING "Spell a corner out". Fix direction: the buttons and the
+     h1 `whitespace-nowrap`, the right group `min-w-0` and allowed to shrink, the name span
+     `min-w-0` + `truncate` (title kept) as the one item that gives way; check the other studios'
+     headers for the same pattern and say what you found. E2E (layout.ts helpers, a NEW describe):
+     at MIN_WINDOW (1024x640) with a 55-character file name open, the header is one line —
+     `expectOneLine` on the h1 and every header button — and the name is truncated with its
+     title; red on the unchanged build.
+  Non-counted, ride with the track:
+  - **PiP "Margin (px)"** (PipPanel.tsx:146-154, ledgered at round 75 as "stays a per-keystroke
+    input"): the same `DraftField` + `clampTyped(typed, 0, 200)` as Overlay width, so an
+    out-of-range typed value is refused in a sentence and never reaches main; e2e; update the
+    round-75 note's IC row.
+  - **Mood board "Create board"** (MoodBoardPanel.tsx:78-88, :171; sweep 30, probed safe at human
+    speed): `claimFirst(creatingRef, …)` like the sibling first-save create, and `!e.repeat` on
+    the name box's Enter; e2e with main's create stubbed slow (a double press makes one board).
+  - **The export job's gate** (ipc/video.ts `validateExportJob`; sweep 30): `job.outputFilename`,
+    when present, must be a plain file name (no separator, not `.`/`..`, what
+    `sanitizeFilename` would leave unchanged, ending `.mp4`) and `job.watermark`, when present,
+    a well-formed `WatermarkSpec` (text a string within the handle's cap, position one of the
+    corners, the numeric fields finite) — refused by the existing assert family; unit.
+  **Docs:** LESSONS_LEARNED entry at the top (the fix for one run kind is the fix for its class:
+  grep for every sibling that draws a job only while its screen's object exists); IC rows;
+  TESTING paragraph; USER_GUIDE line (closing the video does not stop a running job; its Cancel
+  stays on screen).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; items 1-2 and the non-counted items land with the covering tests named above; new
+  cases in NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run
+  test:media` (no ffmpeg command changes expected; a regression run) and the FULL Playwright
+  suite green before handback; no docs/TICKETS.md, package.json or lockfile edits; processes
+  stopped by explicit PID only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -6740,7 +6814,12 @@ IMG-PREC.
   DuckDuckGo `net.fetch` has no timeout, so a hung newest request
   keeps the search panel busy until a different query is sent —
   noted by two sweeps; candidate: an AbortSignal.timeout with the
-  T-30 outage sentence; (bg) the autosave banner's "Later" label
+  T-30 outage sentence (sweep 31 extends it: the mood board's
+  thumbnail cache, `cacheThumb` in main/search/moodboard.ts, is a
+  `net.fetch` with no timeout and no size cap run inside that
+  board's `withCollectionLock`, so a host that stalls its body holds
+  the one board's lock until a restart — the same timeout plus a
+  byte cap); (bg) the autosave banner's "Later" label
   over-promises — the offered snapshot survives only until the
   next session's first autosave write (USER_GUIDE documents the
   behavior; the label does not); candidate: "Not now" or a
@@ -6801,7 +6880,11 @@ IMG-PREC.
   re-checked in sweep 26 (the help page did not fetch; the Android
   page still says 1280x720, and a larger desktop recommendation is
   reported) - the template and its copy are advice only; owner
-  hand-check at release.
+  hand-check at release Sweep 30 adds to the hand-check: Clip Kit's three
+  thumbnails are JPEG `-q:v 2` at the source's own pixels
+  (ffmpeg/frame.ts), so a 1440p or 4K recording's may pass YouTube's
+  custom-thumbnail byte limit (unmeasured; nothing promises the kit's
+  thumbnails are YouTube-ready).
   From sweep 27 (product call, not gate-holding): (bo) canvas text has no
   font, weight or outline control in Properties - a thumbnail's Impact or
   outlined title is reachable only through templates; candidate: a font
