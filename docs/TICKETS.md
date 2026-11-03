@@ -1319,7 +1319,7 @@ IMG-PREC.
   `openModalCount` — `?` must stay live per T-72); E2E drives a letter
   key under an open coachmark and asserts the canvas did not change;
   existing hotkey and `?`-during-tutorial coverage green.
-- **Status:** open
+- **Status:** open — rides T-147 (round 96)
 
 ## T-76 — saving a result already on the board toasts "Saved to X" without saving
 
@@ -1336,7 +1336,7 @@ IMG-PREC.
   count, or a flag on the IPC result — pick and document); E2E drives
   the double save and asserts both toasts; the negative discriminates
   per round-21 protocol.
-- **Status:** open
+- **Status:** open — rides T-147 (round 96)
 
 ## T-77 — aria-modal is a promise the DOM does not keep: background stays in the AT tree
 
@@ -1375,7 +1375,7 @@ IMG-PREC.
   is one undo step and two consecutive drags are two; unit tests on
   both stores; E2E drives a real drag per studio and walks Undo once
   back to the pre-drag value; existing undo coverage green.
-- **Status:** open
+- **Status:** open — rides T-147 (round 96)
 
 ## T-79 — the launch-time thumbnail LRU deletes images boards still reference
 
@@ -6462,6 +6462,147 @@ IMG-PREC.
   (a regression run) and the FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 95 — see the Done entry)
+
+---
+
+## T-147 — sweep-34 fixes (round 96)
+
+- **Spec:** the thirty-fourth sweep's verified findings (candidate clean pass #1 on 3966008), each
+  confirmed by the expediter against source (item 1 also by measurement). Privacy, Electron and QA
+  clean; the streamer lens's one item is standing T-110 (ay). Also: four tickets from rounds 45-46
+  were never closed (T-75, T-76, T-77, T-78); T-76 was re-raised this sweep and counts, T-75 and
+  T-78 are still real and ride this ticket as non-counted folds so no open bug ticket sits beside a
+  certification, and T-77 stays a named backlog item. Three tracks, disjoint files.
+
+  **Track A — Audio Studio and the audio runner (items 1, 2, 6b, fold T-78 audio half).**
+  1. **[MED] The stream-copy re-attach mux shows the render's "Step N of M — rendering… 100%" for
+     the whole mux.** process.ts:567 gives the copy path `total = 0` ("A stream-copy mux is instant
+     and needs no bar", :563), so `runFfmpegJob` (:102-104) emits no `pass: 'mux'` event until the
+     final `percent: 100` (:569); the store keeps the render's last event (:371), so the dialog row
+     and the closed-sound card (T-146) both read the render at 100% while the mux runs. The comment
+     is false: the mux RE-ENCODES the sound to AAC 192k. Measured on bundled 7.0.2: a 2-minute
+     source muxes in 6.6 s (video copy + faststart 0.5 s, AAC encode 6.0 s ≈ 20x realtime), so a
+     2-hour VOD sits at "rendering… 100%" for ~6 minutes — long enough to read as a hang and be
+     canceled. ffmpeg DOES print `out_time` during the copy (13 progress blocks in 6.6 s), so a
+     real bar is available. Fix direction: the copy path measures against the same length the
+     re-encode path uses (`pictureSec ?? probeAudio(audioPath).duration` — the output is the
+     picture's length, T-131 (2)); emit `{ jobId, pass: 'mux', percent: 0 }` when the mux starts so
+     the label changes the moment the render ends (the same one-liner at the start of each pass if
+     any other pass lacks it); correct the comment. Covering tests: unit (the start event and the
+     copy path's total, with the spawn stubbed); **Layer 5** (IMG-PREC: the mux's progress is what
+     the real binary prints) — a generated source of ~60 s through the real re-attach COPY path
+     (no cuts) yields at least one `pass: 'mux'` event with 0 < percent < 100 before the final 100
+     (red on the unchanged tree: none), on 7.0.2 and on 6.1.1.
+  2. **[LOW] An audio-only export that ends after the sound was closed or replaced leaves no way to
+     the file; and another sound's Export panel draws the running export unnamed.** ExportDialog.tsx
+     raises `toast.success('Cleaned audio exported')` (default duration, no action) for the plain
+     export; "Show in folder" lives only on the dialog's row, which is drawn inside the open sound's
+     Export panel, and the T-146 card leaves when `running` clears. T-146 made the premise of
+     LESSONS_LEARNED's "(20)" note ("an audio-only export offers neither", the row carries Show in
+     folder) false. Fix direction (the T-146 rule for Video Studio's export toast): the plain
+     export's success is ALWAYS `toastSaved(sentence, saved)` — Show in folder, the saved-toast
+     duration — with no "Edit in Video Studio" (there is no video); and while the export runs under
+     a DIFFERENT open sound (`exportSource !== source.filePath`), the dialog's row names the file it
+     is for (the card's `min-w-0 truncate` name with a `title`, e.g. "Export — <sourceName>").
+     Covering tests: update the T-124 (20) e2e pin (audio-only: Show in folder present, Edit in Video
+     Studio absent); e2e: an audio-only export that ends with the sound closed raises the toast with
+     Show in folder and it reveals the written file (stubbed shell, as the suite does); e2e: with
+     sound B open while A's export runs, B's row names A; red on the unchanged build.
+  6b. **[LOW] The Fix wizard's question is not tied to its options.** FixWizard.tsx:57-59 moves focus
+     to the new step's first option, but the question `h2` (:168) is not associated with the option
+     buttons, so a screen reader says "Sounds dry, button" without the question; the summary step
+     likewise. Fix direction: each step's options in a `role="group"` `aria-labelledby` the
+     question's id (`useId`), and the summary's content tied to its focused Apply the same way
+     (group labelled by its heading, or `aria-describedby`). Covering tests: e2e asserting the
+     accessible structure at each step (the focused option's group is named by the visible
+     question; the summary's Apply carries its description).
+  Fold (non-counted) — **T-78, audio half:** `audioStore.patchChain` (audioStore.ts:194-198) pushes
+     a history step on EVERY slider `input` event (CleanupPanel ParamSlider, LevelsPanel,
+     SecondaryTrackPanel sliders), so one drag is dozens of undo steps. Give audioStore the video
+     store's coalescing (`historyKey` + `endGesture`, videoStore.ts:366-380/:712-718, ended on the
+     panel's `onPointerUp`/`onBlur` as ColorGradePanel.tsx:30-31 does, and a keyboard arrow run on a
+     focused slider as ONE step until blur or a different control). Covering tests per T-78's
+     criteria: unit (a drag is one step, two drags are two, a discrete action after a drag is its
+     own step); e2e: a real slider drag in Cleanup, then ONE Undo restores the pre-drag value.
+
+  **Track B — Video Studio's Close question, Stream Graphics, the hotkey guards (items 3, 4,
+  fold T-75, fold T-78 image half).**
+  3. **[LOW] Close on an untouched video claims there are edits to discard.**
+     `videoDiscardMessage` (videoStore.ts:271-279) returns null only for zero clips, and a loaded
+     video always has one, so Close (VideoStudio.tsx:78) and Record's "Edit in Video Studio" replace
+     (lib/editInVideoStudio.ts:26) both ask "… 1 clip and its edits will be discarded." of a video
+     nobody touched — against T-119 (3)'s own "asking nothing when there is nothing to lose", and
+     unlike Audio Studio's Close. Fix direction: one store-level test of "nothing to lose" that both
+     callers use — exactly one clip that `isPristineWholeVideoClip` (videoStore.ts:318) calls
+     pristine, AND nothing else Close drops that took the person time (read `clearSource` and list
+     what it throws away: an undo history with steps in it, a scan or chat-spike result held for
+     this source, anything else minutes-long — each counts as something to lose; a transcript
+     cached on disk does not). With nothing to lose: no question, unless a job is running, in which
+     case the jobs sentence is asked alone (the T-146 audio shape). Covering tests: unit (pristine
+     → null; each loss kind → the question; jobs only → lead + sentence); e2e: open a video, Close →
+     no dialog, the importer is back; trim, Close → the question; red on the unchanged build.
+  4. **[LOW] A transparent document exported as JPG silently comes out on black.** The overlay and
+     emote templates are `background: 'transparent'` (shown on a checkerboard); a JPG has no alpha
+     and the capture composites onto black (Canvas.tsx:459-470's T-54 note); the Export card says
+     nothing. T-54's ruling: the user expects what the canvas shows. Fix direction: with
+     `doc.background === 'transparent'` and JPG chosen, one line in the card's existing note slot
+     (beside `thumbnailSizeNote`, ExportDialog.tsx:201/:327): "JPG has no transparency: the clear
+     parts come out black. Choose PNG to keep them clear." (BRANDING voice); USER_GUIDE's export
+     step says the same. Covering tests: unit for the note's choice (pure helper beside
+     `thumbnailSizeNote`); e2e: an overlay template, JPG → the line; PNG → none; a filled document,
+     JPG → none.
+  Fold (non-counted) — **T-75:** the studio hotkey guards read `isModalOpen()` (Modal's count:
+     ImageStudio.tsx:51, RecordStudio.tsx:178, useUndoRedoHotkeys.ts:60), which deliberately
+     excludes the tutorial coachmark, so with a coachmark open the bare-letter tool keys, Delete and
+     the undo keys still act on the studio behind the scrim. Guard on the dialog CLAIM stack
+     (useFocusTrap.ts — add a reader such as `anyDialogClaim()`; every Modal and the coachmark take
+     a claim) at those sites; `?` stays live during a tutorial per T-72 (HotkeyOverlay.tsx's own
+     rule is untouched). Covering tests per T-75's criteria: unit for the reader; e2e: with the
+     Stream Graphics coachmark open, R and Delete change nothing on the canvas, and `?` still opens
+     the shortcuts.
+  Fold (non-counted) — **T-78, image half:** `canvasStore.updateLayer` pushes a step per `input`
+     event behind PropertiesPanel's opacity slider (:103), the colour inputs (:163/:173) and the name
+     field (:36). Same coalescing as the audio half (one store mechanism each, the video store's
+     shape; text fields end on blur). Covering tests: unit (store); e2e: an opacity drag, ONE Undo
+     restores the pre-drag value.
+
+  **Track C — References and the tutorial (items 5, 6a, 7).**
+  5. **[LOW] = T-76: saving a result already on the board says "Saved" and records an empty Undo
+     step.** main dedupes on `fullUrl` (moodboard.ts:221) and returns the collection unchanged, but
+     `referencesStore.addToCollection` (:202-207) always pushes history and ReferencePanel.tsx:58
+     always toasts `Saved to "X"`. Fix direction (T-76's criteria): the renderer learns the
+     difference from the call it already makes (the board's item count before/after, or a flag on
+     the IPC result — pick one, document it); a duplicate pushes no history and toasts
+     `Already on "X"`. Covering tests: unit (store: no step on a duplicate); e2e: save the same tile
+     twice → "Saved to" then "Already on", and ONE Undo removes the item (not a no-op); red on the
+     unchanged build.
+  6a. **[LOW] The tutorial's steps after the first are silent to a screen reader.** Tutorial.tsx:84-86
+     re-focuses the SAME Next button on each step (no focus change), the dialog's changed
+     `aria-label` (:264) is not re-announced, and the step's `h3`/`p` are neither described nor live.
+     Fix direction: the card is `aria-describedby` its body; an sr-only polite live region inside
+     the card says "Step N of M: <title>. <body>" when the step CHANGES (not on mount — the dialog's
+     own name covers the first step; do not double-announce). Covering tests: e2e — the region's
+     text follows Next and Back; the describedby target is the body.
+  7. **[LOW] A References search's outcome is silent to a screen reader.** ReferencePanel.tsx:128-146:
+     the error card, the notice, "No results." and the results grid mount with no live region and no
+     toast (no `role=`/`aria-live` anywhere in references/). Fix direction: an always-mounted
+     `role="status"` wrapper (the Player/GifPanel pattern) holding the error, the notice, "No
+     results." and an sr-only "N results." line for a search that returned results. Covering tests:
+     e2e (stubbed search as the suite does) — results → "N results."; none → "No results." inside the
+     status region; a failure → the error inside it.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE lines (items 1, 2, 3,
+  4, 5); LESSONS_LEARNED entry at the TOP per track — Track A: "a comment that says a pass is
+  instant is a measurement nobody took" (item 1) and the T-146 premise note on (20); Track C: "an
+  open ticket is not a disposition — T-76 sat open for fifty rounds of clean-looking sweeps"; amend
+  STYLE_GUIDE/DESIGN_GUIDE only where an item changes what they state.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; every item and fold lands with the covering tests named above; Layer 5 for item 1 on both
+  majors; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice, `npm run test:media` and the FULL Playwright suite green before handback; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only. T-75,
+  T-76 and T-78 close with this ticket; T-77 stays open (backlog).
+- **Status:** open (round 96)
 
 ---
 
