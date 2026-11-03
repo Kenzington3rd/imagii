@@ -13,7 +13,15 @@ import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/saf
 import { assertDefined } from '@shared/assert'
 import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
 import { useVideoStore } from './store/videoStore'
-import { runExportBatch, settleJobs, useExportQueue, type JobStatus } from './store/exportQueue'
+import {
+  cancelExportBatch,
+  remainingExportJobs,
+  requestExportCancel,
+  runExportBatch,
+  settleJobs,
+  useExportQueue,
+  type JobStatus
+} from './store/exportQueue'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
@@ -123,6 +131,35 @@ export function findSafeZoneIssues(
 // file's tests and its callers have always imported from here.
 export { settleJobs }
 export type { JobStatus }
+
+/**
+ * The question in front of a running batch's Cancel (INIT-I, round 16: the 20-clip mistake-click) - the Export panel's and, with the video closed,
+ * `VideoJobsRunning`'s card ask this one (T-144). A component of its own with `open` held by whoever draws the Cancel, as Clip Kit's is (`Modal` does
+ * not portal: the card keeps it OUT of its live region, T-138 (4)). It counts the jobs left when it is drawn, so it never reads "Cancel 0 running jobs".
+ */
+export function ExportCancelConfirm({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element {
+  const remaining = remainingExportJobs(useExportQueue((s) => s.jobs))
+  return (
+    <Modal open={open} onClose={onClose} title="Cancel running jobs" className="max-w-sm w-full p-5">
+      <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
+      <p className="text-sm text-ink-base mb-4">Cancel {countOf(remaining, 'running job')}?</p>
+      <div className="flex justify-end gap-2">
+        <button className="btn-ghost px-3 py-1.5 text-sm" onClick={onClose}>
+          Keep running
+        </button>
+        <button
+          className="btn-primary px-3 py-1.5 text-sm"
+          onClick={() => {
+            onClose()
+            cancelExportBatch()
+          }}
+        >
+          Cancel jobs
+        </button>
+      </div>
+    </Modal>
+  )
+}
 
 export function ExportPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -354,8 +391,6 @@ export function ExportPanel(): JSX.Element | null {
     ...customPresets.map((p) => ({ key: p.id, info: customPresetInfo(p), custom: p }))
   ]
 
-  const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
-
   return (
     <>
     <SafeZoneWarningModal
@@ -367,35 +402,7 @@ export function ExportPanel(): JSX.Element | null {
         if (outDir) void continueExport(outDir)
       }}
     />
-    {/* INIT-I (round 16): confirm before canceling a multi-job batch. */}
-    <Modal
-      open={showCancelConfirm}
-      onClose={() => setShowCancelConfirm(false)}
-      title="Cancel running jobs"
-      className="max-w-sm w-full p-5"
-    >
-      <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
-      <p className="text-sm text-ink-base mb-4">
-        Cancel {countOf(remainingJobCount, 'running job')}?
-      </p>
-      <div className="flex justify-end gap-2">
-        <button
-          className="btn-ghost px-3 py-1.5 text-sm"
-          onClick={() => setShowCancelConfirm(false)}
-        >
-          Keep running
-        </button>
-        <button
-          className="btn-primary px-3 py-1.5 text-sm"
-          onClick={() => {
-            setShowCancelConfirm(false)
-            void window.api.video.cancelAll()
-          }}
-        >
-          Cancel jobs
-        </button>
-      </div>
-    </Modal>
+    <ExportCancelConfirm open={showCancelConfirm} onClose={() => setShowCancelConfirm(false)} />
     <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
       <PanelHeader
         icon="download"
@@ -440,14 +447,7 @@ export function ExportPanel(): JSX.Element | null {
         <div className="flex justify-end">
           <RunningCancel
             title="Cancel export"
-            onClick={() => {
-              const remaining = jobs.filter((j) => j.percent < 100 && !j.error).length
-              if (remaining >= 2) {
-                setShowCancelConfirm(true)
-              } else {
-                void window.api.video.cancelAll()
-              }
-            }}
+            onClick={() => requestExportCancel(() => setShowCancelConfirm(true))}
           />
         </div>
       ) : null}

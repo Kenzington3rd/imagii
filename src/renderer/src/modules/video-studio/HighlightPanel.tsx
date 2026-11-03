@@ -13,7 +13,7 @@ import {
   useVideoStore,
   videoHasNoSound
 } from './store/videoStore'
-import { useScanRun } from './store/runs'
+import { cancelScan, useScanRun } from './store/runs'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
@@ -108,7 +108,7 @@ export function HighlightPanel(): JSX.Element | null {
     if (!source || noSound) return
     const startedFor = source.filePath
     // The claim is the store's: one scan at a time however many times this panel has been mounted (main has ONE scan slot).
-    if (!useScanRun.getState().begin({ percent: 0 })) return
+    if (!useScanRun.getState().begin({ name: source.fileName, percent: 0 })) return
     try {
       const candidates = await window.api.video.findHighlights(startedFor)
       // The result is for the video the scan started on (T-131 (3)): if it was replaced or closed while the scan ran, its candidates are for
@@ -205,7 +205,7 @@ export function HighlightPanel(): JSX.Element | null {
           <ProgressTrack label="Scanning the video for highlights" percent={progress} />
           <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
-          <RunningCancel title="Cancel scan" onClick={() => void window.api.video.cancelHighlight()} />
+          <RunningCancel title="Cancel scan" onClick={cancelScan} />
         </div>
       ) : null}
 

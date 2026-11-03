@@ -10845,7 +10845,8 @@ test.describe('T-137 (3), (4): the running Clip Kit keeps its label on one line 
     return studio
   }
   /** The studio's live region for the closed-video kit card: a direct child of the studio's column, mounted whether a video is open or not. */
-  const REGION = 'div.h-full.overflow-auto > div[aria-live="polite"]'
+  // T-144: the kit's region is the one right after the header; the jobs' region (VideoJobsRunning) follows it, and is a second direct child with the same attribute.
+  const REGION = 'div.h-full.overflow-auto > header + div[aria-live="polite"]'
 
   test('the running label is one line at the default window and at the minimum, its Cancel sits on a row of its own under it, and nothing pokes out of the clip list', async () => {
     test.setTimeout(600_000)
@@ -11017,7 +11018,8 @@ test.describe('ChatHighlightPanel - the range a row shows is the range + Clip ad
 
 test.describe('T-138 (4): the Clip Kit\'s Cancel question is outside every live region, on the closed-video card and in the clip list', () => {
   /** The studio's live region for the closed-video kit card (T-137 (3)): a direct child of the studio's column. */
-  const REGION = 'div.h-full.overflow-auto > div[aria-live="polite"]'
+  // T-144: the kit's region is the one right after the header; the jobs' region (VideoJobsRunning) follows it, and is a second direct child with the same attribute.
+  const REGION = 'div.h-full.overflow-auto > header + div[aria-live="polite"]'
 
   /** What the open dialog is inside, from the page: null when no ancestor is a live region or a status. */
   async function liveAncestorOfDialog(window: Page): Promise<string | null> {
@@ -12168,6 +12170,413 @@ test.describe('T-141 (3): Select, Go to and the trim handles', () => {
       expect(problems, 'the row holds at every size').toEqual([])
     } finally {
       await app.close()
+    }
+  })
+})
+
+// ═════════ T-144 (1): closing the video leaves every running job on screen, with its Cancel ═════════
+//
+// Closing the video unmounted every panel that drew a job's row and its Cancel (each returns null with no source) while the run stores - and main - went on: a
+// minutes-long export batch, reframe, GIF, compile, composite or scan ran with nothing on screen until it ended. Only the Clip Kit had a closed-video card (T-136 (1)).
+// `VideoJobsRunning` is that card for the rest, one row each, and each Cancel calls the function the panel's own Cancel calls. The jobs here are the 20-minute fixture's
+// (as T-135 (1)'s are), so each is still running when the person closes the video; the scan is held with SIGSTOP the moment it exists (it takes about two seconds on this
+// fixture), and the file side - "no file at the target, no partial" - is read off the disk.
+test.describe('T-144 (1): closing the video leaves the running job on screen, with its Cancel', () => {
+  /** Close the video the way a person does, answering the question with OK, and hand back the question's words. */
+  async function closeVideo(window: Page): Promise<string> {
+    let asked = ''
+    window.once('dialog', (dialog) => {
+      asked = dialog.message()
+      void dialog.accept()
+    })
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+    return asked
+  }
+  /** The card's own Cancel: the video is closed, so it is the only Cancel on the screen. */
+  const cardCancel = (window: Page): Locator => window.getByRole('button', { name: 'Cancel', exact: true })
+  const reopen = async (window: Page): Promise<void> => {
+    await dropOnVideoImporter(window, longSrc, path.basename(longSrc))
+    await expect(window.locator('video')).toHaveCount(1)
+  }
+  /** Stop every highlight scan the app starts from now on, the moment it exists, by PID (T-138 (9)'s hold). */
+  async function holdScans(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+      const g = globalThis as unknown as { __heldScans144?: number[] }
+      g.__heldScans144 = []
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => { pid?: number; kill: (signal: string) => boolean } }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const child = real(cmd, args, opts)
+        if (Array.isArray(args) && args.some((a) => typeof a === 'string' && a.startsWith('ebur128=')) && !args.includes('-ss')) {
+          g.__heldScans144?.push(child.pid ?? 0)
+          child.kill('SIGSTOP')
+        }
+        return child
+      }
+      mod.syncBuiltinESMExports()
+    })
+  }
+  const heldScans = (app: ElectronApplication): Promise<number[]> => app.evaluate(() => (globalThis as unknown as { __heldScans144?: number[] }).__heldScans144 ?? [])
+  const pidAlive = (pid: number): boolean => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)
+      return state !== 'Z' && state !== 'X'
+    } catch {
+      return false
+    }
+  }
+
+  test('an export batch: Close asks, naming the export; the card shows the file it is on with its Cancel; Keep running keeps it; Cancel stops main with no file and no partial', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t144exp-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t144export', longSrc, { export: { lastOutputDir: seeded } })
+    try {
+      const card = exportCard(window)
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click() // two clips: two files, so the Cancel asks first
+      await card.getByRole('button', { name: 'Export 2 files', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 120_000, intervals: [200] }).toBe(1)
+      await expect(window.getByText('The video is closed;'), 'with the video open the panel draws the job, not the card').toHaveCount(0)
+
+      const asked = await closeVideo(window)
+      expect(asked, 'the question names the clips AND the job that keeps going').toBe(
+        'Close this video? 2 clips and their edits will be discarded. The export that is running keeps going; its Cancel stays on screen.'
+      )
+      await expect(window.getByText(`Export — ${path.basename(longSrc)}: file 1 of 2`), 'the card says what is running and for what').toBeVisible()
+      await expect(window.getByText('The video is closed; the job keeps going until it finishes or you cancel it.')).toBeVisible()
+      await expect(cardCancel(window)).toHaveCount(1)
+      expect(partialsOnly(readdirSync(seeded)).length, 'closing the video did not stop the encode').toBe(1)
+
+      // Two files are left, so the card asks, as the panel does.
+      await cardCancel(window).click()
+      const question = window.getByRole('dialog')
+      await expect(question.getByText('Cancel 2 running jobs?')).toBeVisible()
+      await question.getByRole('button', { name: 'Keep running' }).click()
+      await expect(question).toHaveCount(0)
+      await expect(window.getByText(`Export — ${path.basename(longSrc)}: file 1 of 2`), 'Keep running keeps the job').toBeVisible()
+      expect(partialsOnly(readdirSync(seeded)).length).toBe(1)
+
+      await cardCancel(window).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(cardCancel(window), 'the card goes with the batch').toHaveCount(0, { timeout: 60_000 })
+      await expect(window.getByText('The video is closed;')).toHaveCount(0)
+      await expect.poll(() => withEverything(readdirSync(seeded)), { timeout: 30_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('a one-file export: the card\'s Cancel stops it at once, with no question', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t144exp1-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t144export1', longSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await exportCard(window).getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 120_000, intervals: [200] }).toBe(1)
+      await closeVideo(window)
+      await expect(window.getByText(`Export — ${path.basename(longSrc)}: file 1 of 1`)).toBeVisible()
+      await cardCancel(window).click()
+      await expect(window.getByRole('dialog'), 'one job left: nothing to ask').toHaveCount(0)
+      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 60_000 })
+      await expect.poll(() => withEverything(readdirSync(seeded)), { timeout: 30_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Reframe, GIF, Compile and Picture-in-picture: each shows on the card with its own Cancel after Close, and Cancel stops it with no file', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t144kinds', longSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click() // Compile needs two
+
+      // ── Reframe ──
+      await reframeCard(window).getByRole('button', { name: 'Choose folder…' }).click()
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect(reframeCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      expect(await closeVideo(window), 'the question names the reframe').toContain('The reframe that is running keeps going; its Cancel stays on screen.')
+      await expect(window.getByText('Reframe — Clip 2'), 'what is running and for which clip (the one the + Add clip selected)').toBeVisible()
+      await expect(cardCancel(window)).toHaveCount(1)
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Reframe canceled.')
+      await expect(cardCancel(window), 'the card goes with the job').toHaveCount(0, { timeout: 30_000 })
+      expect(mp4sOnDisk(outDir), 'no file, no partial').toEqual([])
+      await reopen(window)
+
+      // ── GIF ──
+      await gifCard(window).getByRole('button', { name: 'Export GIF' }).click()
+      await expect(gifCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      expect(await closeVideo(window)).toContain('The GIF export that is running keeps going')
+      await expect(window.getByText('GIF — Clip 1')).toBeVisible()
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'GIF canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(withEverything(readdirSync(outDir)), 'no GIF, no partial').toEqual([])
+      await reopen(window)
+
+      // ── Compile (the reopened video has its one clip again: a second one first) ──
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await compileCard(window).getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compileCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      expect(await closeVideo(window)).toContain('The compilation that is running keeps going')
+      await expect(window.getByText(`Compile — ${path.basename(longSrc)}`)).toBeVisible()
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Compilation canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(withEverything(readdirSync(outDir)), 'no compilation, no partial').toEqual([])
+      await reopen(window)
+
+      // ── Picture-in-picture (its own two files, so the video being open is not what it is for) ──
+      await stubDialogs(app, { open: [longSrc, longSrc, outDir] })
+      await pipCard(window).getByRole('button', { name: 'Base: none' }).click()
+      await pipCard(window).getByRole('button', { name: 'Overlay: none' }).click()
+      await pipCard(window).getByRole('button', { name: 'Composite' }).click()
+      await expect(pipCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 60_000 })
+      expect(await closeVideo(window)).toContain('The picture-in-picture composite that is running keeps going')
+      await expect(window.getByText(`Picture-in-picture — ${path.basename(longSrc)}`)).toBeVisible()
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Picture-in-picture canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(withEverything(readdirSync(outDir)), 'no composite, no partial').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Scan VOD: the card shows the scan with its percent after Close, and its Cancel ends the scan in main', async () => {
+    test.skip(process.platform !== 'linux', 'the scan is held with SIGSTOP and its end read from /proc')
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t144scan', longSrc)
+    let pids: number[] = []
+    try {
+      await holdScans(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect.poll(() => heldScans(app), { timeout: 30_000, intervals: [100] }).toHaveLength(1)
+      pids = await heldScans(app)
+      expect(await closeVideo(window)).toContain('The scan that is running keeps going; its Cancel stays on screen.')
+      await expect(window.getByText(`Scan VOD — ${path.basename(longSrc)}`)).toBeVisible()
+      await expect(window.getByText('0%', { exact: true }), 'the scan\'s measurement').toBeVisible()
+      expect(pidAlive(pids[0] as number), 'the scan is still running').toBe(true)
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Scan canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      await expect.poll(() => pidAlive(pids[0] as number), { timeout: 15_000, intervals: [200], message: 'main ended the scan' }).toBe(false)
+    } finally {
+      for (const pid of pids) {
+        if (pidAlive(pid)) {
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            /* gone in the meantime */
+          }
+        }
+      }
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Transcription: the card shows it after Close and its Cancel kills the engine (a stand-in engine; the real extraction, registry, latch and toast)', async () => {
+    test.skip(process.platform === 'win32', 'the stand-in engine is a shell script')
+    test.setTimeout(240_000)
+    const { app, window, userDataDir } = await launchHome('t144transcribe')
+    try {
+      const marker = path.join(root, `t144engine-${Date.now().toString(36)}.started`)
+      const bin = path.join(userDataDir, 'bin')
+      const models = path.join(userDataDir, 'models')
+      mkdirSync(bin, { recursive: true })
+      mkdirSync(models, { recursive: true })
+      const engine = path.join(bin, 'whisper-cli.exe')
+      writeFileSync(engine, `#!/bin/sh\necho started >> '${marker}'\necho $$ > '${marker}.pid'\nexec sleep 600\n`, 'utf8')
+      chmodSync(engine, 0o755)
+      writeFileSync(path.join(models, 'ggml-base.en.bin'), 'not a real model', 'utf8')
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect.poll(() => existsSync(marker), { timeout: 60_000, intervals: [250] }).toBe(true)
+      const pid = Number(readFileSync(`${marker}.pid`, 'utf8').trim())
+      expect(pidAlive(pid), 'the engine is running').toBe(true)
+
+      expect(await closeVideo(window)).toContain('The transcription that is running keeps going; its Cancel stays on screen.')
+      await expect(window.getByText('Transcribing \u2014 pipeline.mp4')).toBeVisible()
+      await expect(cardCancel(window)).toHaveCount(1)
+      expect(pidAlive(pid), 'closing the video did not stop the engine').toBe(true)
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Transcription canceled.')
+      await expect.poll(() => pidAlive(pid), { timeout: 15_000, intervals: [200] }).toBe(false)
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Caption burn-in: the card shows it after Close and its Cancel stops it with no video and no partial', async () => {
+    test.setTimeout(300_000)
+    const { app, window, userDataDir, outDir } = await launchHome('t144burn')
+    try {
+      // The burn of the 20-minute fixture is 2400 tiny frames, done in a second or two: its ffmpeg reads at the input's own rate (`-re`), so only Cancel ends it (T-141's hold).
+      await app.evaluate(() => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = cp.spawn
+        cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+          const argv = Array.isArray(args) ? (args as string[]) : []
+          const input = argv.indexOf('-i')
+          const burn = /ffmpeg/i.test(String(cmd)) && input >= 0 && argv.some((a, i) => argv[i - 1] === '-vf' && a.includes('subtitles='))
+          if (!burn) return real(cmd, args, opts)
+          return real(cmd, [...argv.slice(0, input), '-re', ...argv.slice(input)], opts)
+        }
+        mod.syncBuiltinESMExports()
+      })
+      const srtPath = path.join(userDataDir, 'captions', 't144.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:02,000\nhello\n', 'utf8')
+      const projectPath = path.join(root, `t144burn-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({ schemaVersion: 2, savedAt: Date.now(), appVersion: '1.0.0', videoStudio: { sourcePath: longSrc, clips: [], selectedClipId: null, watermark: null, srtPath } }),
+        'utf8'
+      )
+      const target = path.join(outDir, 't144-burn.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [target] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const burn = captionsCard(window).getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await burn.click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [250] }).toBe(1)
+
+      expect(await closeVideo(window)).toContain('The caption burn-in that is running keeps going; its Cancel stays on screen.')
+      await expect(window.getByText(`Burning in captions \u2014 ${path.basename(longSrc)}`)).toBeVisible()
+      await expect(cardCancel(window)).toHaveCount(1)
+      expect(partialsOnly(readdirSync(outDir)).length, 'closing the video did not stop the burn').toBe(1)
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Burn-in canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(existsSync(target), 'no half-written video').toBe(false)
+      await expect.poll(() => withEverything(readdirSync(outDir)), { timeout: 30_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Close with nothing running asks only what it always did, and draws no card: the region is there, empty, and takes no room', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t144idle', clipSrc)
+    try {
+      const asked = await closeVideo(window)
+      expect(asked).toBe('Close this video? 1 clip and its edits will be discarded.')
+      await expect(window.getByText('The video is closed;')).toHaveCount(0)
+      // The kit's region and the jobs' are mounted and empty, and take no room (the studio's column keeps one gap between the header and the importer).
+      const sizes = await window.evaluate(() =>
+        Array.from(document.querySelectorAll('[aria-live="polite"]'))
+          .filter((el) => el.children.length === 0 && el.parentElement?.classList.contains('overflow-auto'))
+          .map((el) => Math.round(el.getBoundingClientRect().height))
+      )
+      expect(sizes.length, 'two empty regions that are direct children of the studio').toBe(2)
+      expect(sizes.every((h) => h === 0)).toBe(true)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ═════════ T-144 (2): the Video Studio header at the 1024 px minimum with a long file name ═════════
+test.describe('T-144 (2): the header holds at the minimum window with a long file name', () => {
+  test('a 55-character name: the title and every header button are one line, and the name is what gives way - an ellipsis, with its full self as the title', async () => {
+    test.setTimeout(120_000)
+    const name = `${'Saturday stream - the long VOD with a long name '.padEnd(51, 'x')}.mp4`
+    expect(name.length).toBe(55)
+    const long = path.join(root, 'source', name)
+    copyFileSync(clipSrc, long)
+    const { app, window } = await launchWithVideo('t144header', long)
+    try {
+      await setWindowSize(app, window, MIN_WINDOW)
+      const header = window.locator('header').first()
+      await expectOneLine(header.getByRole('heading', { name: 'Video Studio' }), 'the title')
+      await expectOneLine(header.getByRole('button'), 'every header button (Undo, Redo, Clean audio, Close, the tutorial)')
+      await expectNoHorizontalOverflow(header, 'the header at 1024 px')
+      await expectEllipsized(header.locator(`span[title="${name}"]`), name, 'the file name')
+      for (const label of ['Undo', 'Redo', 'Clean audio', 'Close']) {
+        await expect(header.getByRole('button', { name: label, exact: true }), `${label} is on the screen`).toBeInViewport()
+      }
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ═════════ T-144 (a): the PiP margin is a draft box with a range, like the overlay width ═════════
+test.describe('T-144 (a): Picture-in-picture Margin takes typed digits and what leaves the box is inside 0 to 200', () => {
+  test('500 is 200 and -5 is 0 once typing ends, an emptied box changes nothing, and the composite runs with the clamped margin', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t144margin', clipSrc)
+    try {
+      const card = pipCard(window)
+      const margin = card.getByLabel('Margin (px)')
+      await expect(margin).toHaveValue('32')
+      // Digits go in one at a time: the box does not snap an emptied value to 0 under them ("200" typed over an emptied box was 0200 -> 200 either way, so it is the prefix that shows).
+      await margin.click()
+      await margin.press('Control+a')
+      await margin.press('Backspace')
+      await expect(margin, 'emptied: nothing snaps back into it').toHaveValue('')
+      await margin.press('4')
+      await expect(margin, 'a prefix is shown as typed').toHaveValue('4')
+      await margin.press('0')
+      await leave(margin)
+      await expect(margin).toHaveValue('40')
+
+      await retype(margin, '500')
+      await leave(margin)
+      await expect(margin, 'past the top: the nearest edge').toHaveValue('200')
+      await retype(margin, '-5')
+      await leave(margin)
+      await expect(margin, 'below the bottom: the nearest edge').toHaveValue('0')
+      await margin.click()
+      await margin.press('Control+a')
+      await margin.press('Backspace')
+      await leave(margin)
+      await expect(margin, 'an emptied box changes nothing').toHaveValue('0')
+
+      // What reaches ffmpeg is the box's number: record the composite's filter graph in main.
+      await retype(margin, '500')
+      await leave(margin)
+      await app.evaluate(() => {
+        const g = globalThis as unknown as { __pipArgv144?: string[][] }
+        g.__pipArgv144 = []
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = cp.spawn
+        cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+          if (Array.isArray(args) && args.includes('-filter_complex')) g.__pipArgv144?.push(args as string[])
+          return real(cmd, args, opts)
+        }
+        mod.syncBuiltinESMExports()
+      })
+      await stubDialogs(app, { open: [clipSrc, pipSrc, outDir] })
+      await card.getByRole('button', { name: 'Base: none' }).click()
+      await card.getByRole('button', { name: 'Overlay: none' }).click()
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: 'Composite' }).click()
+      await expect.poll(() => mp4sOnDisk(outDir).length, { timeout: 240_000, intervals: [500] }).toBe(1)
+      const graphs = await app.evaluate(() => (globalThis as unknown as { __pipArgv144?: string[][] }).__pipArgv144 ?? [])
+      expect(graphs, 'one composite was started').toHaveLength(1)
+      const filter = (graphs[0] as string[])[(graphs[0] as string[]).indexOf('-filter_complex') + 1] as string
+      expect(filter, 'the margin that reached ffmpeg is 200, not 500').toContain('overlay=main_w-overlay_w-200:main_h-overlay_h-200')
+    } finally {
+      await app.close().catch(() => undefined)
     }
   })
 })

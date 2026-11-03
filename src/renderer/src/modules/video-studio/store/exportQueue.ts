@@ -139,3 +139,23 @@ export async function runExportBatch(opts: {
     useExportQueue.getState().finish()
   }
 }
+
+/** The jobs of the batch that are still to finish: the number the Cancel question counts (INIT-I, round 16). */
+export function remainingExportJobs(jobs: ReadonlyArray<JobStatus>): number {
+  return jobs.filter((j) => j.percent < 100 && !j.error).length
+}
+
+/** Stop the batch: main kills the encode that is running and refuses the rest. */
+export function cancelExportBatch(): void {
+  void window.api.video.cancelAll()
+}
+
+/**
+ * The Export Cancel's one path (T-144), pressed on the Export panel's row or on the closed video's card (`VideoJobsRunning`). A batch of two or more
+ * jobs left is asked about first (INIT-I, round 16: the 20-clip mistake-click) - `ask` opens that question, which the caller draws - and one job (or
+ * none left) is stopped at once, as it always was.
+ */
+export function requestExportCancel(ask: () => void): void {
+  if (remainingExportJobs(useExportQueue.getState().jobs) >= 2) ask()
+  else cancelExportBatch()
+}

@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid'
 import { REFRAME_TARGET, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
 import { clipRecipe } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
-import { useReframeRun } from './store/runs'
+import { cancelReframe, useReframeRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
@@ -77,7 +77,7 @@ export function ReframePanel(): JSX.Element | null {
       const resolvedOutDir = await resolveOutDir()
       if (!resolvedOutDir) return
       const jobId = nanoid(10)
-      if (!useReframeRun.getState().begin({ jobId, percent: null, phase: 'starting' })) return
+      if (!useReframeRun.getState().begin({ jobId, name: clip.name, percent: null, phase: 'starting' })) return
       try {
         const result = await window.api.video.reframe({
           jobId,
@@ -112,12 +112,6 @@ export function ReframePanel(): JSX.Element | null {
     } finally {
       startingRef.current = false
     }
-  }
-
-  async function cancel(): Promise<void> {
-    const id = useReframeRun.getState().run?.jobId
-    if (!id) return
-    await window.api.video.cancelReframe(id)
   }
 
   return (
@@ -183,7 +177,7 @@ export function ReframePanel(): JSX.Element | null {
             <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           )}
           {/* Round 17 B1 */}
-          <RunningCancel title="Cancel reframe" onClick={cancel} />
+          <RunningCancel title="Cancel reframe" onClick={() => void cancelReframe()} />
         </div>
       ) : null}
     </div>

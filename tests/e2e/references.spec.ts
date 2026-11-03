@@ -2356,3 +2356,103 @@ test.describe('T-141 (9): the delete toast outlives react-hot-toast\'s 2 s defau
     }
   })
 })
+
+// T-144 (b): "Create board" cleared the name box only AFTER the awaited write, so the second press of a double-click (or a second Enter) found the same name still in
+// the box and made a second board of it, and a held Enter made one per repeat. The create is claimed before its first await (the first-save create in the Reference
+// panel has been since T-135 (8)) and the name box's Enter ignores an auto-repeat. The write is made slow in MAIN from the test (the board file's write waits 300 ms,
+// the way `slowWrites.ts` slows a preset's), so the second press is certain to land while the first create is out.
+test.describe('T-144 (b): a double press on Create board makes ONE board', () => {
+  async function slowBoardWrites(app: ElectronApplication, ms: number): Promise<void> {
+    await app.evaluate((_electron, delay) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fsp = getBuiltin('node:fs/promises') as { writeFile: (...a: unknown[]) => Promise<unknown> }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const g = globalThis as unknown as { __boardWriteReal?: (...a: unknown[]) => Promise<unknown> }
+      g.__boardWriteReal ??= fsp.writeFile
+      const real = g.__boardWriteReal
+      fsp.writeFile = async (...a: unknown[]) => {
+        if (/moodboards/.test(String(a[0]))) await new Promise((resolve) => setTimeout(resolve, delay))
+        return real(...a)
+      }
+      mod.syncBuiltinESMExports()
+    }, ms)
+  }
+
+  test('a double-click, Enter pressed twice, and a held Enter each make one board with the name that was typed', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t144-create')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await slowBoardWrites(app, 300)
+      const name = window.getByPlaceholder('New board name…')
+      const create = window.getByRole('button', { name: 'Create board' })
+      const onDisk = (): string[] => readBoardsFromDisk(fx.boardsDir).map((b) => b.name)
+
+      // ── a double-click, the second press ~120 ms after the first ──
+      await name.fill('Double')
+      const box = await create.boundingBox()
+      if (!box) throw new Error('Create board has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await window.waitForTimeout(120)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk(), 'one board file, not two').toEqual(['Double'])
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(name, 'the box is emptied when the create lands').toHaveValue('')
+
+      // ── Enter twice (two presses, not a repeat) ──
+      await name.fill('Twice')
+      await name.press('Enter')
+      await window.waitForTimeout(100)
+      await name.press('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk().sort(), 'a second Enter made nothing').toEqual(['Double', 'Twice'])
+
+      // ── a held Enter: the first down is the press, the second down is the key's auto-repeat ──
+      await name.fill('Held')
+      await name.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (3)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk().sort(), 'the repeats made nothing').toEqual(['Double', 'Held', 'Twice'])
+      expect((await readToastLog(window)).filter((t) => /Couldn't create/.test(t)), 'and no error was raised').toEqual([])
+
+      // ── a held Enter over a create main REFUSES: the name stays in the box, so each repeat would otherwise try the write again and say so again ──
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('moodboard:create')
+        ipcMain.handle('moodboard:create', () => {
+          throw new Error('the write was refused by the test')
+        })
+      })
+      await name.fill('Refused')
+      await name.focus()
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.up('Enter')
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === "Couldn't create that board.").length, { timeout: 15_000, intervals: [200] }).toBe(1)
+      expect((await readToastLog(window)).filter((t) => t === "Couldn't create that board."), 'one refusal said once, not once per repeat').toHaveLength(1)
+      await expect(name, 'and the name stays for the retry').toHaveValue('Refused')
+      expect(onDisk().sort()).toEqual(['Double', 'Held', 'Twice'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

@@ -18,7 +18,14 @@ import { countOf } from '@shared/plural'
 import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
-import { useCaptionsProgress, useCaptionsRun, useCaptionsStatus, useModelInstallRun } from './store/runs'
+import {
+  cancelCaptionsJob,
+  cancelModelInstall,
+  useCaptionsProgress,
+  useCaptionsRun,
+  useCaptionsStatus,
+  useModelInstallRun
+} from './store/runs'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -149,7 +156,7 @@ export function CaptionsPanel(): JSX.Element | null {
     // it, drop another, and the result arrived to attach itself to whatever was open.
     const startedFor = source.filePath
     const startedName = source.fileName
-    if (!useCaptionsRun.getState().begin({ job: 'transcribe' })) return
+    if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName })) return
     useCaptionsProgress.setState({ progress: null })
     try {
       const result = await window.api.captions.transcribe({
@@ -216,7 +223,7 @@ export function CaptionsPanel(): JSX.Element | null {
         toast.error('Pick a clip first to use trim-to-clip burn-in.')
         return
       }
-      if (!useCaptionsRun.getState().begin({ job: 'burn-in' })) return
+      if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName })) return
       useCaptionsProgress.setState({ progress: null })
       try {
         const result = await window.api.captions.burnIn({
@@ -416,7 +423,7 @@ export function CaptionsPanel(): JSX.Element | null {
               <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">
                 {Math.round(installProgress.percent ?? 0)}%
               </span>
-              <RunningCancel title="Cancel download" onClick={() => void window.api.captions.cancelInstall()} />
+              <RunningCancel title="Cancel download" onClick={cancelModelInstall} />
             </div>
           ) : null}
         </div>
@@ -478,9 +485,9 @@ export function CaptionsPanel(): JSX.Element | null {
               the engine run for minutes — so those two phases carry one too (the
               SRT write after them is instant, and ends the job either way). */}
           {progress.phase === 'burning-in' ? (
-            <RunningCancel title="Cancel burn-in" onClick={() => void window.api.captions.cancelBurnIn()} />
+            <RunningCancel title="Cancel burn-in" onClick={() => cancelCaptionsJob('burn-in')} />
           ) : progress.phase === 'extracting' || progress.phase === 'transcribing' ? (
-            <RunningCancel title="Cancel transcription" onClick={() => void window.api.captions.cancelTranscribe()} />
+            <RunningCancel title="Cancel transcription" onClick={() => cancelCaptionsJob('transcribe')} />
           ) : null}
         </div>
       ) : null}

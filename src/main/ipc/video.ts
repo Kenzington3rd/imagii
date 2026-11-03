@@ -43,6 +43,7 @@ import { assertSafeAbsolutePath, assertSafeId, isSafeAbsolutePath, SAFE_ID_RE } 
 import { sendIfAlive } from '../sendIfAlive'
 import { isExistingFolder } from '../ffmpeg/outputPath'
 import { safeNamePart } from '../../shared/filename'
+import { WATERMARK_MAX_LENGTH, WATERMARK_POSITIONS } from '../../shared/watermark'
 import { clipNameForSentence } from '../ffmpeg/noPicture'
 
 const REFRAME_POSITIONS = ['left', 'center', 'right'] as const
@@ -124,6 +125,28 @@ function assertUsableRecipe(clip: Record<string, unknown>, channel: string, name
   }
 }
 
+/**
+ * T-144: the file name the renderer chose for an export (`job.outputFilename`) is joined into the output folder's path, so it is checked where it
+ * crosses: ONE plain name. `safeNamePart` is the rule that leaves a name alone - it turns both separators and the rest of the characters Windows reserves
+ * into `_`, and is what Export's template and Clip Kit's names already went through; it keeps the spaces, dots and brackets a clip's name carries, which
+ * `sanitizeFilename`'s letters-and-digits-only set would have refused on every ordinary export. Then no control character, a stem with something in it
+ * (so `.` and `..` are out), within a file system's 255 characters, and the `.mp4` every export is.
+ */
+function assertPlainMp4Name(name: unknown, label: string): asserts name is string {
+  assertNonEmptyString(name, label)
+  assertAlways(!/[\u0000-\u001f]/.test(name) && safeNamePart(name) === name, `${label} must be a plain file name, with no path in it or character a file name cannot hold`)
+  assertAlways(name.length <= 255 && /\.mp4$/.test(name) && name.length > '.mp4'.length, `${label} must be a name ending in .mp4`)
+}
+
+/** T-144: a watermark crosses as drawtext text and numbers, so it is the shape `buildWatermark` makes: text within the handle's cap, a real corner, finite figures. */
+function assertWatermarkSpec(spec: unknown, label: string): void {
+  assertPlainObject(spec, label)
+  assertAlways(typeof spec.text === 'string' && spec.text.length <= WATERMARK_MAX_LENGTH, `${label}.text must be a string of at most ${WATERMARK_MAX_LENGTH} characters`)
+  assertEnum(spec.position, WATERMARK_POSITIONS, `${label}.position`)
+  assertRange(spec.opacity, 0, 1, `${label}.opacity`)
+  assertRange(spec.fontSizePct, 0, 100, `${label}.fontSizePct`)
+}
+
 function validateExportJob(job: unknown, idx: number): asserts job is ExportJobSpec {
   assertPlainObject(job, `jobs[${idx}]`)
   assertNonEmptyString(job.jobId, `jobs[${idx}].jobId`)
@@ -146,6 +169,8 @@ function validateExportJob(job: unknown, idx: number): asserts job is ExportJobS
   // crop. The crop was refused first, in its own sentence.
   assertUsableRecipe(clip, 'video:exportBatch', `jobs[${idx}].clip`)
   assertEnum(job.preset, ALL_PRESET_IDS, `jobs[${idx}].preset`)
+  if (job.outputFilename !== undefined) assertPlainMp4Name(job.outputFilename, `jobs[${idx}].outputFilename`)
+  if (job.watermark !== undefined && job.watermark !== null) assertWatermarkSpec(job.watermark, `jobs[${idx}].watermark`)
   // T-50: a custom preset overrides the encoder's geometry and bitrates, so
   // every field of it reaches ffmpeg's argv. The preset comes off disk in a
   // directory the user can edit, and arrives here through the renderer —

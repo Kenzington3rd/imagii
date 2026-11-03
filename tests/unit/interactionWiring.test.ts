@@ -1118,7 +1118,8 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
       expect(caller, rel).toContain(`useEditInVideoStudio("${sentence}")`)
       expect(caller, rel).not.toMatch(/loadSource\(|loadVideoSource|videoDiscardMessage/)
     }
-    expect(read('modules/video-studio/VideoStudio.tsx')).toMatch(/videoDiscardMessage\(clipCount\)/)
+    // T-144: and Close adds the sentence about the jobs that keep running.
+    expect(read('modules/video-studio/VideoStudio.tsx')).toMatch(/videoDiscardMessage\(clipCount, 'close', jobsKeepGoingSentence\(readVideoRunSnapshot\(\)\)\)/)
   })
 
   it('the Playhead slider hears I / O and , / . through the store calls the Player makes, and the trim handles are pointer-only (5)', () => {
@@ -1522,7 +1523,7 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     expect(strip(read('modules/audio-studio/SecondaryTrackPanel.tsx'))).toMatch(
       /<span className="font-medium truncate" title=\{`\$\{ROLE_OPTIONS\.find\(\(o\) => o\.value === secondary\.role\)\?\.label\}: \$\{secondary\.fileName\}`\}>/
     )
-    expect(strip(read('modules/video-studio/VideoStudio.tsx'))).toMatch(/<span className="truncate max-w-\[40ch\]" title=\{source\.fileName\}>\{source\.fileName\}<\/span>/)
+    expect(strip(read('modules/video-studio/VideoStudio.tsx'))).toMatch(/<span className="min-w-0 truncate max-w-\[40ch\]" title=\{source\.fileName\}>\{source\.fileName\}<\/span>/)
     expect(strip(read('modules/audio-studio/AudioStudio.tsx'))).toMatch(
       /<span className="ml-3 text-ink-muted truncate max-w-\[40ch\]" title=\{source\.fileName\}>\s*\{source\.fileName\}\s*<\/span>/
     )
@@ -2729,7 +2730,7 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(src).toMatch(/const progress: CaptionsProgress \| null = useCaptionsProgress\(\(s\) => s\.progress\)/)
     expect(src).toMatch(/window\.api\.captions\.onProgress\(\(p\) => useCaptionsProgress\.setState\(\{ progress: p \}\)\)/)
     expect(src.match(/useCaptionsProgress\.setState\(\{ progress: null \}\)/g) ?? [], 'cleared at the start and at the end of both jobs').toHaveLength(4)
-    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in' \}>\(\)/)
+    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string \}>\(\)/)
   })
 
   it('(1) the audio export dialog draws the audio export store and registers its progress listener for the length of its own export', () => {
@@ -2790,7 +2791,7 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     // mounted whether a video is open or not (its live region is the always-mounted wrapper) and draws its card only for a run with no video open.
     expect(kit).toMatch(/export function ClipKitRunning\(\): JSX\.Element \{\s*const kitRun = useKitRun\(\(s\) => s\.run\)\s*const videoOpen = useVideoStore\(\(s\) => s\.source !== null\)\s*const shown = kitRun !== null && !videoOpen/)
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
-    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*\{source \? \(/)
+    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*<VideoJobsRunning \/>\s*\{source \? \(/)
     expect(studio).toMatch(/\) : \(\s*<div data-tutorial="video-import"><Importer \/><\/div>\s*\)\}/)
     // Cancel is the shared component, behind the same question, and the question is the kit's. T-138 (4): the clip list's button asks its own KitCancel's
     // question, and the closed-video card's asks the one ClipKitRunning draws outside its live region.
@@ -2991,7 +2992,7 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     // Mounted whether a video is open or not, ahead of the conditional - not inside the branch that mounts when the video closes.
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
     expect(studio.match(/<ClipKitRunning \/>/g) ?? []).toHaveLength(1)
-    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*\{source \? \(\s*<div className="grid grid-cols-1 lg:grid-cols-/)
+    expect(studio).toMatch(/<\/header>\s*<ClipKitRunning \/>\s*<VideoJobsRunning \/>\s*\{source \? \(\s*<div className="grid grid-cols-1 lg:grid-cols-/)
   })
 
   it('(4) the running kit label is one line, and its Cancel is a row of its own under the button, not beside it', () => {
@@ -3409,5 +3410,74 @@ describe('T-141 Track C - the twenty-seventh sweep', () => {
       }
     }
     expect(bare, 'toasts that name Ctrl+Z and take the 2 s / 4 s default').toEqual([])
+  })
+})
+
+describe('T-144 — the closed video\'s jobs, the header at 1024 px, the PiP margin, the mood board create, wired where the person reaches them', () => {
+  // Behavior: VideoJobsRunning.test.tsx, store/runs.test.ts, store/exportQueue.test.ts (units) and video-pipelines.spec.ts / references.spec.ts (end states).
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) the card is mounted once, ahead of the open-or-closed conditional, beside the kit\'s; its wrapper is the one live region and the Export question is its sibling', () => {
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    expect(studio.match(/<VideoJobsRunning \/>/g) ?? []).toHaveLength(1)
+    expect(studio).toMatch(/<ClipKitRunning \/>\s*<VideoJobsRunning \/>\s*\{source \? \(/)
+    const card = strip(read('modules/video-studio/VideoJobsRunning.tsx'))
+    const component = card.slice(card.indexOf('export function VideoJobsRunning('))
+    expect(component).toMatch(/return \(\s*<>\s*<div aria-live="polite" className=\{shown \? undefined : '-mb-5'\}>/)
+    expect(component).toMatch(/<\/div>\s*<ExportCancelConfirm open=\{askingExport\} onClose=\{\(\) => setAskingExport\(false\)\} \/>\s*<\/>/)
+    expect(component.match(/aria-live/g) ?? [], 'one live region, the wrapper').toHaveLength(1)
+    expect(component.match(/\breturn \(/g) ?? [], 'the wrapper is drawn on every path').toHaveLength(1)
+  })
+
+  it('(1) the card\'s Cancel and the panel\'s Cancel are the SAME function for every job: no second copy of a cancel path', () => {
+    const card = strip(read('modules/video-studio/VideoJobsRunning.tsx'))
+    for (const fn of ['cancelReframe', 'cancelGif', 'cancelCompile', 'cancelPip', 'cancelScan', 'cancelCaptionsJob', 'cancelModelInstall', 'requestExportCancel']) {
+      expect(card, `${fn} on the card`).toMatch(new RegExp(`\\b${fn}\\(`))
+    }
+    expect(card, 'the card calls no window.api cancel of its own').not.toMatch(/window\.api/)
+    const panels: Array<[string, RegExp[]]> = [
+      ['ReframePanel.tsx', [/onClick=\{\(\) => void cancelReframe\(\)\}/]],
+      ['GifPanel.tsx', [/onClick=\{\(\) => void cancelGif\(\)\}/]],
+      ['CompilationPanel.tsx', [/onClick=\{\(\) => void cancelCompile\(\)\}/]],
+      ['PipPanel.tsx', [/onClick=\{\(\) => void cancelPip\(\)\}/]],
+      ['HighlightPanel.tsx', [/<RunningCancel title="Cancel scan" onClick=\{cancelScan\} \/>/]],
+      ['CaptionsPanel.tsx', [/title="Cancel burn-in" onClick=\{\(\) => cancelCaptionsJob\('burn-in'\)\}/, /title="Cancel transcription" onClick=\{\(\) => cancelCaptionsJob\('transcribe'\)\}/, /title="Cancel download" onClick=\{cancelModelInstall\}/]],
+      ['ExportPanel.tsx', [/onClick=\{\(\) => requestExportCancel\(\(\) => setShowCancelConfirm\(true\)\)\}/, /<ExportCancelConfirm open=\{showCancelConfirm\}/]]
+    ]
+    for (const [file, patterns] of panels) {
+      const src = strip(read(`modules/video-studio/${file}`))
+      for (const pattern of patterns) expect(src, file).toMatch(pattern)
+      expect(src, `${file} cancels through the shared function, not its own window.api call`).not.toMatch(/window\.api\.(?:video\.cancel\w+|captions\.cancel\w+)\(/)
+    }
+    // And the cancels live in one place beside the run stores.
+    const runs = strip(read('modules/video-studio/store/runs.ts'))
+    for (const call of ['cancelReframe', 'cancelGif', 'cancelConcat', 'cancelPip', 'cancelHighlight']) expect(runs, call).toMatch(new RegExp(`window\\.api\\.video\\.${call}\\(`))
+  })
+
+  it('(2) the header: the title and every button keep their width on one line and the name is the item that gives way', () => {
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    const header = studio.slice(studio.indexOf('<header'), studio.indexOf('</header>'))
+    expect(header).toMatch(/<h1 className="text-2xl font-semibold mt-1 whitespace-nowrap">Video Studio<\/h1>/)
+    expect(header).toMatch(/<div className="flex min-w-0 items-center gap-3 text-sm text-ink-muted">/)
+    expect(header).toMatch(/<span className="min-w-0 truncate max-w-\[40ch\]" title=\{source\.fileName\}>/)
+    const buttons = header.match(/<button\s[^>]*?className="[^"]*"/g) ?? []
+    expect(buttons.length, 'Undo, Redo, Clean audio and Close').toBe(4)
+    for (const button of buttons) expect(button, button).toMatch(/whitespace-nowrap shrink-0/)
+  })
+
+  it('(a) the PiP margin is a DraftField clamped to 0-200 like the width beside it, and no raw number input is left in the panel', () => {
+    const pip = strip(read('modules/video-studio/PipPanel.tsx'))
+    expect(pip).toMatch(/live=\{\(typed\) => isTypedInRange\(typed, PIP_MARGIN_MIN, PIP_MARGIN_MAX\)\}/)
+    expect(pip).toMatch(/const n = clampTyped\(typed, PIP_MARGIN_MIN, PIP_MARGIN_MAX\)\s*if \(n !== null\) setMargin\(n\)/)
+    expect(pip).toMatch(/const PIP_MARGIN_MIN = 0\s*const PIP_MARGIN_MAX = 200/)
+    expect(pip).not.toMatch(/setMargin\(Number\(/)
+    expect(pip).not.toMatch(/<input\s+type="number"/)
+  })
+
+  it('(b) the mood board\'s Create is claimed first and a held Enter is not a press', () => {
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(board).toMatch(/const creatingRef = useRef\(false\)/)
+    expect(board).toMatch(/async function onCreate\(\): Promise<void> \{\s*await claimFirst\(creatingRef, async \(\) => \{/)
+    expect(board).toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && !e\.repeat && onCreate\(\)\}/)
   })
 })

@@ -14,6 +14,47 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-03 — T-144 (round 93): closing the video took every running job's Cancel with it, and the header broke on a real file name
+
+The thirty-first pass (one track: Video Studio and References, with the export job's gate in main). Ledger: r93a/ledger.tsv (13 red rows against a build of the unchanged tree, 5145046, and 42 mutation rows over 42 mutations, 42 of 42 restores byte-identical; three mutants survived and are accounted for below).
+
+### (1) [MED] - the fix for one run kind was not the fix for its class
+
+- **Bug.** Closing the video unmounted every panel that drew a job's progress and its Cancel (each returns null with no source), while the run stores and main kept going: a minutes-long export batch, Reframe, GIF, Compile, composite, Scan VOD or transcription ran with nothing on screen until it ended. The Close question said nothing about it.
+- **Root cause.** T-136 (1) found exactly this for the Clip Kit and gave it a closed-video card (`ClipKitRunning`); the fix was written for the kind that was reported. Every other long job had the same shape - a job whose handle lives in a store, drawn only by a panel that exists while a video is open - and nobody grepped for the siblings. T-135 (1) had moved the jobs out of the panels so a trip to Home could not lose them; a Close is the other way off the panel, and it was not on the list of ways.
+- **Fix.** `VideoJobsRunning`: one card, one row per running job (the Export batch, Reframe, GIF, Compile, Picture-in-picture, Scan VOD, the transcription or burn-in, the caption model's download), built on `ClipKitRunning`'s shape (an always-mounted polite region that is empty and takes no gap, the Cancel question outside it). Each row's Cancel calls the function the panel's Cancel calls: the cancels moved out of the panels to sit beside the run stores (`store/runs.ts`, `requestExportCancel` in `store/exportQueue.ts`, `ExportCancelConfirm` exported from the panel), so there is one cancel path per job and the card cannot drift from the panel. The runs record the clip or file they are for (`name`). The Close question names what keeps going ("The export that is running keeps going; its Cancel stays on screen."); with nothing running it asks what it always did.
+- **Test.** video-pipelines.spec.ts "T-144 (1)": Close over an export batch of two files (the question's words, the card, its own Cancel question, Keep running, Cancel jobs, no file and no partial), a one-file export, Reframe / GIF / Compile / Picture-in-picture, Scan VOD (held with SIGSTOP; its end read from `/proc`), a transcription (a stand-in engine, killed by the card's Cancel) and a caption burn-in; all red on the unchanged build. Unit: `VideoJobsRunning.test.tsx`, `store/runs.test.ts`, `store/exportQueue.test.ts`, `interactionWiring.test.ts` ("T-144": one mount, one live region, every panel and the card on the same functions, no `window.api` cancel left in a panel).
+- **Lesson.** **When a fix is written for one kind of thing, grep for every sibling that has the same shape before it is called done.** Here the shape was "a job drawn only while its screen's object exists": the class is every job panel, not the one that was reported, and the way to find it is the list of `return null` with no source, not the bug report. The same goes for the ways OFF a screen: a route change was handled in T-135 (1) and the Close button, one click away, was not. And a cancel that exists twice drifts: the second place a button is needed is the moment to move the function, not copy it.
+
+### (2) [LOW] - a layout that fits the test file name and breaks on a real one
+
+- **Bug.** The Video Studio header was a flex row with no wrap rules. With a realistic VOD name (about 40 characters or more) at the 1024 px minimum the title wrapped to "Video / Studio" (64 px against 34) and "Clean audio" broke onto two lines; the name span (`truncate max-w-[40ch]`) was not the item that gave way.
+- **Root cause.** A name capped at 40 characters was assumed to fit beside four buttons, and nothing said which element yields when it does not. Every earlier header case used a short fixture name.
+- **Fix.** The title and every button are `whitespace-nowrap shrink-0`, the right group is `min-w-0`, and the name is `min-w-0 truncate` with its full self as the title: it is the only thing that gives way. The other studios' headers were measured with the same name: Audio Studio (which also shows a name) holds at 1024 px; Record, Stream Graphics and References show none.
+- **Test.** video-pipelines.spec.ts "T-144 (2)": a 55-character name at the minimum window, `expectOneLine` on the title and every header button, `expectEllipsized` on the name, `expectNoHorizontalOverflow` on the header; red on the unchanged build. The mutation that removes `whitespace-nowrap` from the title alone SURVIVED (the title's column is `shrink-0`, so either guard is enough); the combined mutant, with both removed, is killed.
+- **Lesson.** **A row that can overflow needs one named item that yields, and a fixture name as long as a real one.** Say which element gives way and give it `min-w-0 truncate`; make everything else `shrink-0`.
+
+### (a) Non-counted - the PiP margin was the last number box that stored every keystroke
+
+- **Bug / Root cause.** `Number(typed) || 0` on every keystroke: "-5" reached main (refused there as a bare "Picture-in-picture failed.") and "500" put the overlay outside the frame; an emptied box snapped to 0 under the digits typed next. It had been ledgered at round 75 as a known per-keystroke box.
+- **Fix.** A `DraftField` clamped to 0 to 200, as Overlay width is. The ticket asked for "a sentence" and "exactly as Overlay width"; the sibling box clamps and shows the clamped number, so Margin does the same (the box and the number that runs agree).
+- **Test.** video-pipelines.spec.ts "T-144 (a)" (digits one at a time, 500 is 200, -5 is 0, empty changes nothing, and the composite's `overlay=` graph carries 200); red on the unchanged build.
+
+### (b) Non-counted - Create board made a board per press
+
+- **Bug / Root cause.** The name box was cleared only after the awaited write, so the second press of a double-click (or a second Enter) found the same name and made a second board; a held Enter made one per repeat.
+- **Fix.** `claimFirst(creatingRef, ...)` as the first-save create has been since T-135 (8), and `!e.repeat` on the name box's Enter.
+- **Test.** references.spec.ts "T-144 (b)": the board file's write is held 300 ms in main; a double-click, Enter twice and a held Enter each make one board, and a held Enter over a create main refuses says so once. The first version of the case had no refused-create step, and the mutant without `!e.repeat` SURVIVED: the claim already absorbs repeats while a create is out, and a successful create empties the box. `!e.repeat` matters only when a create FAILS and the name stays, so the case now has that step and the mutant is killed.
+
+### (c) Non-counted - the export job's gate checked neither the file name nor the watermark
+
+- **Bug / Root cause.** `validateExportJob` joined `job.outputFilename` into the output folder's path and put `job.watermark` into a filter graph without looking at either; both are composed in the renderer.
+- **Fix.** The name must be one plain `.mp4` name (`safeNamePart` leaves it alone - the rule Export's template and Clip Kit's names already pass - no control character, a stem, at most 255 characters); the watermark must be a plain object with text within the handle's cap, a real corner, and a finite opacity (0 to 1) and size (0 to 100).
+- **Test.** `videoExportBatch.test.ts` "the file name and the watermark of a job (T-144)": sixteen refused names, ten refused watermarks, and the names the app makes passing. The ticket named `sanitizeFilename` as the rule; it keeps only letters, digits, `_` and `-`, so it would have refused every Export name with a space or a dot in it ("Finale_Clip 1_youtube.mp4"). The first mutant of the explicit separator check SURVIVED (`safeNamePart` already turns both separators into `_`, and "." and ".." do not end in .mp4), so the dead clause was deleted rather than kept.
+- **Lesson (b, c).** **A guard that no input can reach is dead code with a test that cannot tell, and the mutant that survives it is the finding: delete the clause or write the input that needs it.** And a ticket's mechanism is a direction, not a spec: when the named helper refuses the app's own output, check the real names first.
+
+---
+
 ## 2026-11-03 — T-143 (round 92): the kept take's 6 hours started when the recording ended, not when the sentence was read
 
 The twenty-ninth pass (one track: the main process). Ledger: r92a/ledger.tsv (2 red rows against a build of the unchanged tree, ee49a44, and 15 mutation rows over 15 mutations, 15 of 15 restores byte-identical, every mutant killed; one further row is a mutation that was a syntax error in the test's own evaluate and is not counted).

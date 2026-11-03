@@ -5,7 +5,7 @@ import { compileFps } from '@shared/compileFps'
 import { countOf } from '@shared/plural'
 import { formatFps } from '@shared/units'
 import { useVideoStore } from './store/videoStore'
-import { useCompileRun } from './store/runs'
+import { cancelCompile, useCompileRun } from './store/runs'
 import { COMPILE_SIZE, COMPILE_TARGET } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
@@ -43,7 +43,7 @@ export function CompilationPanel(): JSX.Element | null {
       const dir = await resolveOutDir()
       if (!dir) return
       const jobId = nanoid(10)
-      if (!useCompileRun.getState().begin({ jobId })) return
+      if (!useCompileRun.getState().begin({ jobId, name: source.fileName })) return
       try {
         const result = await window.api.video.concat({
           jobId,
@@ -75,12 +75,6 @@ export function CompilationPanel(): JSX.Element | null {
     } finally {
       startingRef.current = false
     }
-  }
-
-  async function cancel(): Promise<void> {
-    const id = useCompileRun.getState().run?.jobId
-    if (!id) return
-    await window.api.video.cancelConcat(id)
   }
 
   return (
@@ -177,7 +171,7 @@ export function CompilationPanel(): JSX.Element | null {
       {/* Round 17 B4 */}
       {busy ? (
         <div className="flex justify-end">
-          <RunningCancel title="Cancel compilation" onClick={cancel} />
+          <RunningCancel title="Cancel compilation" onClick={() => void cancelCompile()} />
         </div>
       ) : null}
     </div>

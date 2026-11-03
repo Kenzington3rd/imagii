@@ -15,6 +15,7 @@ import { Player } from './Player'
 import { Timeline } from './Timeline'
 import { ClipList } from './ClipList'
 import { ClipKitRunning } from './ClipKitButton'
+import { VideoJobsRunning, jobsKeepGoingSentence, readVideoRunSnapshot } from './VideoJobsRunning'
 import { ExportPanel } from './ExportPanel'
 import { TextOverlayEditor } from './TextOverlayEditor'
 import { ReframePanel } from './ReframePanel'
@@ -69,7 +70,9 @@ export function VideoStudio(): JSX.Element {
     // Confirm first whenever there is anything to lose (source load always
     // creates at least one clip, and clearSource also drops undo history,
     // so this is unrecoverable).
-    const message = videoDiscardMessage(clipCount)
+    // T-144: Close does not stop a job that is running - it takes its panel away, and the closed-video card (`VideoJobsRunning`, `ClipKitRunning`) keeps the Cancel
+    // on screen. The question says so, so a person who closes the video does not believe they stopped it.
+    const message = videoDiscardMessage(clipCount, 'close', jobsKeepGoingSentence(readVideoRunSnapshot()))
     if (message !== null && !confirm(message)) return
     clearSource()
   }
@@ -155,16 +158,19 @@ export function VideoStudio(): JSX.Element {
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
-      <header className="flex items-center justify-between">
-        <div>
+      {/* T-144 (2): at the 1024 px minimum a realistic VOD name (40+ characters) wrapped the title to "Video / Studio" and "Clean audio" onto two lines (DESIGN_GUIDE,
+          Layout). The title and every button are one line and keep their width (`whitespace-nowrap shrink-0`); the right group may shrink (`min-w-0`) and the NAME is the one item that
+          gives way - an ellipsis, with the full name as its title. */}
+      <header className="flex items-center justify-between gap-4">
+        <div className="shrink-0">
           <HomeLink />
-          <h1 className="text-2xl font-semibold mt-1">Video Studio</h1>
+          <h1 className="text-2xl font-semibold mt-1 whitespace-nowrap">Video Studio</h1>
         </div>
-        <div className="flex items-center gap-3 text-sm text-ink-muted">
+        <div className="flex min-w-0 items-center gap-3 text-sm text-ink-muted">
           {source ? (
             <>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 disabled={!canUndo}
                 onClick={undo}
                 title="Undo (Ctrl+Z)"
@@ -172,7 +178,7 @@ export function VideoStudio(): JSX.Element {
                 <Icon name="undo" size={15} /> Undo
               </button>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 disabled={!canRedo}
                 onClick={redo}
                 title="Redo (Ctrl+Y)"
@@ -181,9 +187,9 @@ export function VideoStudio(): JSX.Element {
               </button>
               {/* T-112: a video with no audio stream has nothing to clean; the button says
                   so instead of extracting an empty track. */}
-              {noSound ? <span className="text-xs text-warn">{NO_SOUND_MESSAGE}</span> : null}
+              {noSound ? <span className="text-xs text-warn whitespace-nowrap shrink-0">{NO_SOUND_MESSAGE}</span> : null}
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 onClick={cleanAudioFlow}
                 disabled={extractingAudio || noSound}
                 title={
@@ -194,19 +200,24 @@ export function VideoStudio(): JSX.Element {
               >
                 <Icon name="audio" size={15} /> Clean audio
               </button>
-              <span className="truncate max-w-[40ch]" title={source.fileName}>{source.fileName}</span>
-              <button className="btn-ghost px-3 py-1.5" onClick={handleClose}>
+              <span className="min-w-0 truncate max-w-[40ch]" title={source.fileName}>{source.fileName}</span>
+              <button className="btn-ghost px-3 py-1.5 whitespace-nowrap shrink-0" onClick={handleClose}>
                 Close
               </button>
             </>
           ) : null}
-          <TutorialButton onClick={tutorial.start} />
+          <span className="shrink-0">
+            <TutorialButton onClick={tutorial.start} />
+          </span>
         </div>
       </header>
 
       {/* T-137 (3): mounted whether a video is open or not, so its live region exists BEFORE the moment it has something to say (a kit still running when
           the video is closed). It draws its card only while a kit runs and no video is open (T-136 (1)), above the importer where it always was. */}
       <ClipKitRunning />
+      {/* T-144: and the same for the other long jobs (the export batch, Reframe, GIF, Compile, Picture-in-picture, Scan VOD, transcription and burn-in), whose panels
+          are gone with the video: one card, one row each, with the Cancel their panel has. Mounted whether a video is open or not, for the same reason. */}
+      <VideoJobsRunning />
 
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">

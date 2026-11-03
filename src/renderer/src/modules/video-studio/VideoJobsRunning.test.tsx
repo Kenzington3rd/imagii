@@ -1,0 +1,210 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { CaptionsProgress } from '@shared/captions'
+import type { JobStatus } from './store/exportQueue'
+import { jobsKeepGoingSentence, videoJobRows, VideoJobsRunning, type VideoRunSnapshot } from './VideoJobsRunning'
+import { videoDiscardMessage } from './store/videoStore'
+
+// A server render reads zustand's SERVER snapshot (a store's initial state, whatever a test set), so the stores the card reads are plain objects here, the
+// way OutputPreview.test.tsx does it. The row choice and the sentence are pure functions of a snapshot and need none of this.
+const held = vi.hoisted(() => ({ video: { source: null } as Record<string, unknown>, snap: {} as Record<string, unknown> }))
+vi.mock('./store/videoStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./store/videoStore')>()),
+  useVideoStore: <T,>(selector: (s: Record<string, unknown>) => T): T => selector(held.video)
+}))
+vi.mock('./store/exportQueue', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./store/exportQueue')>()),
+  useExportQueue: () => held.snap.exportQueue
+}))
+vi.mock('./store/runs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./store/runs')>()
+  const run = (key: string) => <T,>(selector: (s: { run: unknown }) => T): T => selector({ run: held.snap[key] ?? null })
+  return {
+    ...real,
+    useReframeRun: run('reframe'),
+    useGifRun: run('gif'),
+    useCompileRun: run('compile'),
+    usePipRun: run('pip'),
+    useScanRun: run('scan'),
+    useCaptionsRun: run('captions'),
+    useModelInstallRun: run('modelInstall'),
+    useKitRun: run('kit'),
+    useCaptionsProgress: <T,>(selector: (s: { progress: unknown }) => T): T => selector({ progress: held.snap.captionsProgress ?? null })
+  }
+})
+vi.mock('./ExportPanel', () => ({ ExportCancelConfirm: () => null }))
+
+/**
+ * T-144 - the closed video's running jobs. Closing the video took every job's row and Cancel with it (the panels return null with no source) while the
+ * runs went on in main; the card draws one row per running job, and the Close question names what keeps going.
+ */
+const IDLE: VideoRunSnapshot = {
+  exportQueue: { running: false, jobs: [], sourcePath: null },
+  reframe: null,
+  gif: null,
+  compile: null,
+  pip: null,
+  scan: null,
+  captions: null,
+  captionsProgress: null,
+  modelInstall: null,
+  kit: null
+}
+const snap = (over: Partial<VideoRunSnapshot>): VideoRunSnapshot => ({ ...IDLE, ...over })
+const job = (jobId: string, over: Partial<JobStatus> = {}): JobStatus => ({ jobId, clipName: 'Clip 1', presetLabel: 'YouTube', percent: 0, ...over })
+const kinds = (s: VideoRunSnapshot): string[] => videoJobRows(s).map((r) => r.kind)
+
+describe('videoJobRows - one row per running job (T-144)', () => {
+  it('nothing running is no row, and an export queue that only holds the last batch\'s rows is not running', () => {
+    expect(videoJobRows(IDLE)).toEqual([])
+    expect(videoJobRows(snap({ exportQueue: { running: false, jobs: [job('a', { percent: 100 })], sourcePath: '/v/stream.mp4' } }))).toEqual([])
+  })
+
+  it('an export batch reads which file of how many, for which video, with the running file\'s percent', () => {
+    const rows = videoJobRows(
+      snap({ exportQueue: { running: true, jobs: [job('a', { percent: 100 }), job('b', { percent: 42.4 }), job('c')], sourcePath: '/v/My Stream.mp4' } })
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: 'export', label: 'Export — My Stream.mp4: file 2 of 3', progress: '42%', cancelTitle: 'Cancel export' })
+  })
+
+  it('a batch whose every row is finished or failed (the moment before it ends) still reads a file number inside the total and no percent', () => {
+    const rows = videoJobRows(snap({ exportQueue: { running: true, jobs: [job('a', { percent: 100 }), job('b', { error: 'x' })], sourcePath: null } }))
+    expect(rows[0]).toMatchObject({ label: 'Export: file 2 of 2', progress: null })
+  })
+
+  it('Reframe names its clip and the phase it is in, with its figure only when main has one', () => {
+    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', percent: null, phase: 'analyzing' } }))[0]).toMatchObject({
+      kind: 'reframe',
+      label: 'Reframe — Clip 3',
+      progress: 'Checking the video…',
+      cancelTitle: 'Cancel reframe'
+    })
+    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', percent: 61.6, phase: 'rendering' } }))[0]?.progress).toBe('Rendering… 62%')
+  })
+
+  it('GIF, Compile and Picture-in-picture name what they are for and invent no progress', () => {
+    const rows = videoJobRows(
+      snap({ gif: { jobId: 'g', name: 'Clip 1' }, compile: { jobId: 'c', name: 'stream.mp4' }, pip: { jobId: 'p', name: 'cam.mp4' } })
+    )
+    expect(rows.map((r) => [r.kind, r.label, r.progress, r.cancelTitle])).toEqual([
+      ['gif', 'GIF — Clip 1', null, 'Cancel GIF export'],
+      ['compile', 'Compile — stream.mp4', null, 'Cancel compilation'],
+      ['pip', 'Picture-in-picture — cam.mp4', null, 'Cancel picture-in-picture composite']
+    ])
+  })
+
+  it('Scan VOD shows its percent', () => {
+    expect(videoJobRows(snap({ scan: { name: 'stream.mp4', percent: 41.6 } }))[0]).toMatchObject({ kind: 'scan', label: 'Scan VOD — stream.mp4', progress: '42%', cancelTitle: 'Cancel scan' })
+  })
+
+  it('a transcription and a burn-in are told apart, with the phase main last reported (a figure only where it sent one)', () => {
+    const transcribing: CaptionsProgress = { jobId: 'j', phase: 'transcribing' }
+    const burning: CaptionsProgress = { jobId: 'j', phase: 'burning-in', percent: 30 }
+    expect(videoJobRows(snap({ captions: { job: 'transcribe', name: 'stream.mp4' }, captionsProgress: transcribing }))[0]).toMatchObject({
+      kind: 'transcribe',
+      label: 'Transcribing — stream.mp4',
+      progress: 'Transcribing…',
+      cancelTitle: 'Cancel transcription'
+    })
+    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4' }, captionsProgress: burning }))[0]).toMatchObject({
+      kind: 'burn-in',
+      label: 'Burning in captions — stream.mp4',
+      progress: 'Burning in… 30%',
+      cancelTitle: 'Cancel burn-in'
+    })
+    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4' } }))[0]?.progress, 'no report yet, no words').toBeNull()
+  })
+
+  it('the caption model\'s download is a row too (its Cancel is a panel\'s that is gone with the video)', () => {
+    expect(videoJobRows(snap({ modelInstall: { progress: { phase: 'downloading', percent: 12.2 } } }))[0]).toMatchObject({
+      kind: 'model',
+      label: 'Downloading the caption model',
+      progress: '12%',
+      cancelTitle: 'Cancel download'
+    })
+  })
+
+  it('a name that was emptied is the bare job, and the Clip Kit is not a row (its own card draws it)', () => {
+    expect(videoJobRows(snap({ gif: { jobId: 'g', name: '   ' } }))[0]?.label).toBe('GIF')
+    expect(videoJobRows(snap({ kit: { clipId: 'c', clipName: 'Clip 1', phase: 'x', canceled: false } }))).toEqual([])
+  })
+
+  it('several at once come in the order the panels stand', () => {
+    expect(
+      kinds(
+        snap({
+          exportQueue: { running: true, jobs: [job('a')], sourcePath: '/v/a.mp4' },
+          scan: { name: 'a.mp4', percent: 1 },
+          reframe: { jobId: 'r', name: 'c', percent: null, phase: 'starting' },
+          pip: { jobId: 'p', name: 'x' }
+        })
+      )
+    ).toEqual(['export', 'reframe', 'pip', 'scan'])
+  })
+})
+
+describe('the Close question while a job runs (T-144)', () => {
+  const one = snap({ exportQueue: { running: true, jobs: [job('a')], sourcePath: '/v/a.mp4' } })
+
+  it('names the one job, and that its Cancel stays on screen; nothing running adds nothing', () => {
+    expect(jobsKeepGoingSentence(IDLE)).toBeNull()
+    expect(jobsKeepGoingSentence(one)).toBe('The export that is running keeps going; its Cancel stays on screen.')
+    expect(jobsKeepGoingSentence(snap({ scan: { name: 'a', percent: 0 } }))).toBe('The scan that is running keeps going; its Cancel stays on screen.')
+  })
+
+  it('counts a Clip Kit with the rest, and says "jobs" for two or more', () => {
+    expect(jobsKeepGoingSentence(snap({ kit: { clipId: 'c', clipName: 'n', phase: '', canceled: false } }))).toBe(
+      'The Clip Kit that is running keeps going; its Cancel stays on screen.'
+    )
+    expect(jobsKeepGoingSentence(snap({ gif: { jobId: 'g', name: 'a' }, kit: { clipId: 'c', clipName: 'n', phase: '', canceled: false } }))).toBe(
+      'The 2 jobs that are running keep going; their Cancel buttons stay on screen.'
+    )
+  })
+
+  it('is the second sentence of the discard question, after the clips it already names; a video with no clips still asks nothing', () => {
+    const note = jobsKeepGoingSentence(one)
+    expect(videoDiscardMessage(2, 'close', note)).toBe(
+      'Close this video? 2 clips and their edits will be discarded. The export that is running keeps going; its Cancel stays on screen.'
+    )
+    expect(videoDiscardMessage(2, 'close', null)).toBe('Close this video? 2 clips and their edits will be discarded.')
+    expect(videoDiscardMessage(2)).toBe('Close this video? 2 clips and their edits will be discarded.')
+    expect(videoDiscardMessage(0, 'close', note)).toBeNull()
+  })
+})
+
+describe('VideoJobsRunning - the card (T-144)', () => {
+  const html = (): string => renderToStaticMarkup(<VideoJobsRunning />)
+  beforeEach(() => {
+    held.video = { source: null }
+    held.snap = { ...IDLE }
+  })
+
+  it('is an always-mounted polite region, empty and taking no gap, while nothing runs', () => {
+    expect(html()).toBe('<div aria-live="polite" class="-mb-5"></div>')
+  })
+
+  it('stays empty while a video is open, whatever runs: the panels draw the job then', () => {
+    held.video = { source: { filePath: '/v/a.mp4' } }
+    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1' } }
+    expect(html()).toBe('<div aria-live="polite" class="-mb-5"></div>')
+  })
+
+  it('draws a card with the job, its Cancel (named for the job) and the one sentence, in the same region, once the video is closed', () => {
+    held.snap = { ...IDLE, reframe: { jobId: 'r', name: 'Clip 1', percent: 40, phase: 'rendering' } }
+    const out = html()
+    expect(out).toMatch(/^<div aria-live="polite">/)
+    expect(out).not.toContain('-mb-5')
+    expect(out).toContain('Reframe — Clip 1')
+    expect(out).toContain('Rendering… 40%')
+    expect(out).toMatch(/<button[^>]*title="Cancel reframe"[^>]*>Cancel<\/button>/)
+    expect(out).toContain('The video is closed; the job keeps going until it finishes or you cancel it.')
+  })
+
+  it('says "these jobs" when more than one runs, and has one Cancel each', () => {
+    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1' }, scan: { name: 'a.mp4', percent: 3 } }
+    const out = html()
+    expect(out.match(/>Cancel<\/button>/g)).toHaveLength(2)
+    expect(out).toContain('The video is closed; these jobs keep going until they finish or you cancel them.')
+  })
+})

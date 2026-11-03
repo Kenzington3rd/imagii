@@ -13,16 +13,20 @@ import { createRunStore } from '../../../lib/runStore'
  * the run) is `exportQueue.ts`; the audio export's is `audio-studio/state/audioExport.ts`.
  */
 
+/**
+ * Every run below that is a job of a VIDEO carries `name`, the words its row says it is for (T-144): the clip or the file. The panels draw their own
+ * row from the open video; `VideoJobsRunning` draws it when the video is closed, and a closed video has nobody to ask.
+ */
 /** The GIF export: its job id is what its Cancel is aimed at. */
-export const useGifRun = createRunStore<{ jobId: string }>()
+export const useGifRun = createRunStore<{ jobId: string; name: string }>()
 /** The compilation join. */
-export const useCompileRun = createRunStore<{ jobId: string }>()
+export const useCompileRun = createRunStore<{ jobId: string; name: string }>()
 /** The picture-in-picture composite. */
-export const usePipRun = createRunStore<{ jobId: string }>()
+export const usePipRun = createRunStore<{ jobId: string; name: string }>()
 /** The vertical reframe: its progress is a measurement or absent (`percent` null until main has one). */
-export const useReframeRun = createRunStore<{ jobId: string; percent: number | null; phase: ReframePhase }>()
+export const useReframeRun = createRunStore<{ jobId: string; name: string; percent: number | null; phase: ReframePhase }>()
 /** The highlight scan ("Scan VOD"): one at a time, however many times the panel is mounted. Cancel needs no id (main keeps a single slot). */
-export const useScanRun = createRunStore<{ percent: number }>()
+export const useScanRun = createRunStore<{ name: string; percent: number }>()
 /** "Clean audio": the video whose sound is being extracted. */
 export const useCleanAudioRun = createRunStore<{ videoPath: string }>()
 /**
@@ -34,7 +38,7 @@ export const useCleanAudioRun = createRunStore<{ videoPath: string }>()
  */
 export const useKitRun = createRunStore<{ clipId: string; clipName: string; phase: string; canceled: boolean }>()
 /** A transcription or a caption burn-in: which one is running. */
-export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in' }>()
+export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in'; name: string }>()
 /**
  * The progress line main last sent for that job. It is NOT a field of the run: the row draws what main reports (the T-89 case sends the events
  * itself, with no engine behind them), and the job's closure clears it when the job ends so a finished job leaves no "Done 100%" behind.
@@ -61,3 +65,40 @@ export const useModelInstallRun = createRunStore<{ progress: ModelInstallProgres
  * still going - "Transcribe" then reopened the setup for a model that was installed.
  */
 export const useCaptionsStatus = create<{ status: CaptionsInstallStatus | null }>(() => ({ status: null }))
+
+/**
+ * The Cancel of each long job (T-144). The panel's button and `VideoJobsRunning`'s card (the closed video's) call THESE, so there is one cancel path per
+ * job: a job's Cancel cannot mean one thing beside its panel and another on the card. The id a Cancel is aimed at is read off the run at the moment it is
+ * pressed, and a job that is not running is a no-op.
+ */
+export async function cancelReframe(): Promise<void> {
+  const id = useReframeRun.getState().run?.jobId
+  if (!id) return
+  await window.api.video.cancelReframe(id)
+}
+export async function cancelGif(): Promise<void> {
+  const id = useGifRun.getState().run?.jobId
+  if (!id) return
+  await window.api.video.cancelGif(id)
+}
+export async function cancelCompile(): Promise<void> {
+  const id = useCompileRun.getState().run?.jobId
+  if (!id) return
+  await window.api.video.cancelConcat(id)
+}
+export async function cancelPip(): Promise<void> {
+  const id = usePipRun.getState().run?.jobId
+  if (!id) return
+  await window.api.video.cancelPip(id)
+}
+/** Round 17 B3: single-slot cancel, no jobId needed. */
+export function cancelScan(): void {
+  void window.api.video.cancelHighlight()
+}
+/** The transcription and the burn-in are two jobs of one panel, each with its own cancel in main. */
+export function cancelCaptionsJob(job: 'transcribe' | 'burn-in'): void {
+  void (job === 'burn-in' ? window.api.captions.cancelBurnIn() : window.api.captions.cancelTranscribe())
+}
+export function cancelModelInstall(): void {
+  void window.api.captions.cancelInstall()
+}

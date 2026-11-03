@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import { useVideoStore } from './store/videoStore'
-import { useGifRun } from './store/runs'
+import { cancelGif, useGifRun } from './store/runs'
 import { outputDurationSec } from './presets'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -46,7 +46,7 @@ export function GifPanel(): JSX.Element | null {
       const dir = await resolveOutDir()
       if (!dir) return
       const jobId = nanoid(10)
-      if (!useGifRun.getState().begin({ jobId })) return
+      if (!useGifRun.getState().begin({ jobId, name: clip.name })) return
       try {
         const result = await window.api.video.exportGif({
           jobId,
@@ -75,12 +75,6 @@ export function GifPanel(): JSX.Element | null {
     } finally {
       startingRef.current = false
     }
-  }
-
-  async function cancel(): Promise<void> {
-    const id = useGifRun.getState().run?.jobId
-    if (!id) return
-    await window.api.video.cancelGif(id)
   }
 
   return (
@@ -170,7 +164,7 @@ export function GifPanel(): JSX.Element | null {
       {/* Round 17 B2 */}
       {busy ? (
         <div className="flex justify-end">
-          <RunningCancel title="Cancel GIF export" onClick={cancel} />
+          <RunningCancel title="Cancel GIF export" onClick={() => void cancelGif()} />
         </div>
       ) : null}
     </div>

@@ -75,16 +75,23 @@ export function MoodBoardPanel(): JSX.Element {
   // press looked as if it had worked. Each reports in a sentence (`reportFailure`) and leaves what the person typed where it was.
   const renamingRef = useRef(false)
 
+  // T-144: and one create at a time. The name was cleared only AFTER the awaited write, so the second press of a double-click (or a second Enter) found the same name still in the box
+  // and made a second board of it, and a held Enter made one per repeat. Claimed before the first await and given back in a finally, as the first-save create in
+  // ReferencePanel is (T-135 (8)); a press while the create is out is the same create.
+  const creatingRef = useRef(false)
+
   async function onCreate(): Promise<void> {
-    const name = newName.trim()
-    if (!name) return
-    try {
-      await createCollection(name)
-    } catch (err) {
-      reportFailure(err, { failed: "Couldn't create that board." })
-      return
-    }
-    setNewName('')
+    await claimFirst(creatingRef, async () => {
+      const name = newName.trim()
+      if (!name) return
+      try {
+        await createCollection(name)
+      } catch (err) {
+        reportFailure(err, { failed: "Couldn't create that board." })
+        return
+      }
+      setNewName('')
+    })
   }
 
   async function onRename(next: string): Promise<void> {
@@ -168,7 +175,8 @@ export function MoodBoardPanel(): JSX.Element {
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onCreate()}
+            // A held Enter is one press (T-144): its auto-repeats are not a decision to make more boards.
+            onKeyDown={(e) => e.key === 'Enter' && !e.repeat && onCreate()}
             placeholder="New board name…"
             maxLength={MAX_BOARD_NAME}
             className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-sm"

@@ -537,3 +537,91 @@ describe('video:exportBatch — a second batch while one runs (T-111)', () => {
     expect(((await next) as { resolved: unknown[] }).resolved).toHaveLength(1)
   })
 })
+
+/**
+ * T-144 - the gate on the two fields of an export job that the renderer composes and main joins into a path or a filter graph: `outputFilename`
+ * (joined onto the output folder) and `watermark` (its text reaches drawtext, its numbers the filter's geometry). Both are optional on the wire; present,
+ * they are checked before the first job's probe, and the names the app itself makes must pass: Export's template names (spaces, dots and brackets
+ * allowed) and Clip Kit's.
+ */
+describe('video:exportBatch - the file name and the watermark of a job (T-144)', () => {
+  const withField = (field: string, value: unknown): Record<string, unknown> => ({ ...job('a', 'one'), [field]: value })
+  const refused = async (j: Record<string, unknown>): Promise<Error> => {
+    const err = await runBatch([j], () => undefined)
+    expect(err).toBeInstanceOf(Error)
+    expect(probes, 'refused before any probe').toEqual([])
+    expect(children, 'and before any ffmpeg').toHaveLength(0)
+    return err as Error
+  }
+
+  const BAD_NAMES: Array<[string, unknown]> = [
+    ['a forward-slash path', 'sub/clip.mp4'],
+    ['a parent traversal', '../clip.mp4'],
+    ['a backslash path', 'sub\\clip.mp4'],
+    ['a Windows drive path', 'C:\\Windows\\clip.mp4'],
+    ['a single dot', '.'],
+    ['a double dot', '..'],
+    ['a name that is only the extension', '.mp4'],
+    ['another extension', 'clip.exe'],
+    ['no extension', 'clip'],
+    ['a reserved character', 'what?.mp4'],
+    ['a control character', 'a\nb.mp4'],
+    ['leading space', ' clip.mp4'],
+    ['an empty string', ''],
+    ['a number', 7],
+    ['null', null],
+    ['an over-long name', `${'a'.repeat(252)}.mp4`]
+  ]
+  it.each(BAD_NAMES)('refuses %s as the output file name', async (_label, name) => {
+    const err = await refused(withField('outputFilename', name))
+    expect(err.message).toMatch(/jobs\[0\]\.outputFilename/)
+  })
+
+  it('lets through the names the app makes: a template name with spaces and brackets, a Unicode one, a Clip Kit name, and no name at all', async () => {
+    const names = ['Finale_Clip 1_youtube.mp4', 'a (2).mp4', 'épico @토끼_tiktok.mp4', 'my_clip_youtube_short.mp4', 'export.mp4']
+    for (const name of names) {
+      const run = runBatch([withField('outputFilename', name)], () => undefined)
+      await finishNextChild()
+      expect(((await run) as { resolved: unknown[] }).resolved, name).toHaveLength(1)
+    }
+    const bare = { ...job('a', 'one') }
+    delete bare.outputFilename
+    const run = runBatch([bare], () => undefined)
+    await finishNextChild()
+    expect(((await run) as { resolved: unknown[] }).resolved).toHaveLength(1)
+  })
+
+  const GOOD_MARK = { text: '@yourhandle', position: 'bottom-right', opacity: 0.85, fontSizePct: 3.5 }
+  const BAD_MARKS: Array<[string, unknown, RegExp]> = [
+    ['a string', '@me', /watermark must be a plain object/],
+    ['text that is not a string', { ...GOOD_MARK, text: 5 }, /watermark\.text/],
+    ['text past the handle cap', { ...GOOD_MARK, text: 'x'.repeat(41) }, /watermark\.text/],
+    ['a corner that does not exist', { ...GOOD_MARK, position: 'middle' }, /watermark\.position/],
+    ['an infinite opacity', { ...GOOD_MARK, opacity: Number.POSITIVE_INFINITY }, /watermark\.opacity/],
+    ['NaN opacity', { ...GOOD_MARK, opacity: Number.NaN }, /watermark\.opacity/],
+    ['an opacity above 1', { ...GOOD_MARK, opacity: 4 }, /watermark\.opacity/],
+    ['a numeric-string size', { ...GOOD_MARK, fontSizePct: '3.5' }, /watermark\.fontSizePct/],
+    ['a negative size', { ...GOOD_MARK, fontSizePct: -1 }, /watermark\.fontSizePct/],
+    ['a missing size', { text: 'x', position: 'top-left', opacity: 0.5 }, /watermark\.fontSizePct/]
+  ]
+  it.each(BAD_MARKS)('refuses %s as the watermark', async (_label, mark, detail) => {
+    const err = await refused(withField('watermark', mark))
+    expect(err.message).toMatch(detail)
+  })
+
+  it('lets through a well-formed watermark, an absent one and a null one', async () => {
+    for (const mark of [GOOD_MARK, null, undefined]) {
+      const run = runBatch([withField('watermark', mark)], () => undefined)
+      await finishNextChild()
+      expect(((await run) as { resolved: unknown[] }).resolved).toHaveLength(1)
+    }
+  })
+
+  it('checks every job, not the first alone, and a refused batch does not hold the gate', async () => {
+    const second = await runBatch([job('a', 'one'), withField('outputFilename', '../x.mp4')], () => undefined)
+    expect((second as Error).message).toMatch(/jobs\[1\]\.outputFilename/)
+    const next = runBatch([job('b', 'two')], () => undefined)
+    await finishNextChild()
+    expect(((await next) as { resolved: unknown[] }).resolved).toHaveLength(1)
+  })
+})

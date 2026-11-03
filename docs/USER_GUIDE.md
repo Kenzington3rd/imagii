@@ -363,6 +363,12 @@ that names the file being converted.)
   same: its bar and its **Cancel** are there when you come back to **Auto-captions**, and the panel is ready the moment it ends.
   The scan's candidates, the chat log you pasted, the spikes found in it and
   the transcript preview stay with the open video until you open or close another.
+- **Closing the video does not stop a job either.** A render, a scan, a transcription or an export that is running when you
+  press **Close** keeps going, and a card beside the importer lists each one - what it is and which clip or file it is for, how far
+  along it is where imagii can tell, and its own **Cancel** - until it finishes or you cancel it. **Close** says so when it asks
+  ("The export that is running keeps going; its Cancel stays on screen."), and with nothing running it asks what it always did.
+  Canceling from the card is the same as canceling from the panel: an export of two or more files asks first, and nothing
+  half-written is left in your folder.
 - **When something fails,** the message says what happened and what to try, in
   plain words — and the Export row that failed is marked **Failed** with the reason
   under it, so you can still see which one, and why, after the message fades.

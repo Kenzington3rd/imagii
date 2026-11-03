@@ -355,7 +355,7 @@ describe('the sites that once hard-coded a plural all go through countOf', () =>
     ['components/AutosaveRestore.tsx', /countOf\(Math\.floor\(ms \/ 86400000\), 'day'\)/],
     ['modules/video-studio/CompilationPanel.tsx', /countOf\(clips\.length, 'clip'\)/],
     ['modules/video-studio/ExportPanel.tsx', /countOf\(totalQueued, 'file'\)/],
-    ['modules/video-studio/ExportPanel.tsx', /countOf\(remainingJobCount, 'running job'\)/]
+    ['modules/video-studio/ExportPanel.tsx', /countOf\(remaining, 'running job'\)/]
   ]
   it.each(SITES)('%s', (rel, pattern) => {
     expect(read(rel)).toMatch(pattern)

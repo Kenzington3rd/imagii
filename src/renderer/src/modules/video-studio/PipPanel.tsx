@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import toast from 'react-hot-toast'
-import { usePipRun } from './store/runs'
+import { cancelPip, usePipRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
 import { RunningCancel } from '../../components/RunningCancel'
@@ -17,6 +17,9 @@ type Position = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 /** The overlay width the box takes (px): the same 120 to 960 its attributes say, enforced when typing ends. */
 const PIP_WIDTH_MIN = 120
 const PIP_WIDTH_MAX = 960
+/** The margin from the corner (px): the same 0 to 200 its attributes say, enforced when typing ends (T-144). */
+const PIP_MARGIN_MIN = 0
+const PIP_MARGIN_MAX = 200
 
 export function PipPanel(): JSX.Element {
   const [basePath, setBasePath] = useState<string | null>(null)
@@ -56,7 +59,7 @@ export function PipPanel(): JSX.Element {
       const dir = await resolveOutDir()
       if (!dir) return
       const jobId = nanoid(10)
-      if (!usePipRun.getState().begin({ jobId })) return
+      if (!usePipRun.getState().begin({ jobId, name: nameOf(basePath) })) return
       try {
         const result = await window.api.video.pipComposite({
           jobId,
@@ -81,12 +84,6 @@ export function PipPanel(): JSX.Element {
     } finally {
       startingRef.current = false
     }
-  }
-
-  async function cancel(): Promise<void> {
-    const id = usePipRun.getState().run?.jobId
-    if (!id) return
-    await window.api.video.cancelPip(id)
   }
 
   function nameOf(path: string | null): string {
@@ -143,13 +140,21 @@ export function PipPanel(): JSX.Element {
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-ink-muted">Margin (px)</span>
-          <input
+          {/* T-144: the same box as Overlay width. `Number(typed) || 0` stored whatever was typed on every keystroke - "-5" went to main (refused there, a bare
+              "Picture-in-picture failed.") and "500" put the overlay outside the frame - and an emptied box snapped to 0 under the digits typed next. The box keeps
+              what is typed until typing ends, and what leaves it is inside the range the attributes state. */}
+          <DraftField
             type="number"
-            min={0}
-            max={200}
+            min={PIP_MARGIN_MIN}
+            max={PIP_MARGIN_MAX}
             step={4}
-            value={margin}
-            onChange={(e) => setMargin(Number(e.target.value) || 0)}
+            value={String(margin)}
+            live={(typed) => isTypedInRange(typed, PIP_MARGIN_MIN, PIP_MARGIN_MAX)}
+            commit={(typed) => {
+              const n = clampTyped(typed, PIP_MARGIN_MIN, PIP_MARGIN_MAX)
+              if (n !== null) setMargin(n)
+              return null
+            }}
             className="bg-bg-base rounded px-2 py-1"
           />
         </label>
@@ -187,7 +192,7 @@ export function PipPanel(): JSX.Element {
       {/* Round 17 B5 */}
       {busy ? (
         <div className="flex justify-end">
-          <RunningCancel title="Cancel picture-in-picture composite" onClick={cancel} />
+          <RunningCancel title="Cancel picture-in-picture composite" onClick={() => void cancelPip()} />
         </div>
       ) : null}
     </div>

@@ -265,13 +265,16 @@ function makeDefaultClip(duration: number, index: number): Clip {
  * lose. Loading a source always makes at least one clip, so "nothing loaded" is zero clips. Close asks it
  * (`'close'`, since round 18); Record's "Edit in Video Studio" asks it before it replaces the open video
  * (`'replace'`: nothing is being closed when a button on a recording loads another file, T-113's
- * lead-in for Clean audio). The same list in both so neither studio can say less than the other.
+ * lead-in for Clean audio). The same list in both so neither studio can say less than the other. `jobsNote` (T-144) is the one sentence Close adds while
+ * a long job is running; Record's replace passes none (the new video's own panels draw the running job).
  */
-export function videoDiscardMessage(clipCount: number, lead: 'close' | 'replace' = 'close'): string | null {
+export function videoDiscardMessage(clipCount: number, lead: 'close' | 'replace' = 'close', jobsNote: string | null = null): string | null {
   if (clipCount <= 0) return null
   const leadIn = lead === 'close' ? 'Close this video?' : "Replace the video you're editing?"
   // T-120: "1 clip and their edits" read wrong at one. The possessive agrees with the count, like the noun.
-  return `${leadIn} ${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits will be discarded.`
+  const base = `${leadIn} ${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits will be discarded.`
+  // T-144: Close takes the panels away and leaves the jobs running; `jobsNote` is the sentence that says so (null when nothing is running).
+  return jobsNote ? `${base} ${jobsNote}` : base
 }
 
 /** What the panels that need a sound track say when the loaded video has none (T-112). */

@@ -6371,7 +6371,7 @@ IMG-PREC.
   test:media` (no ffmpeg command changes expected; a regression run) and the FULL Playwright
   suite green before handback; no docs/TICKETS.md, package.json or lockfile edits; processes
   stopped by explicit PID only.
-- **Status:** open
+- **Status:** done (round 93 — see the Done entry)
 
 ---
 
@@ -6900,6 +6900,52 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 93 — T-144 items 1 and 2 and the three non-counted parts,
+landed in the commit that carries this entry. Worked by one Sonnet
+in a fresh clone of 5145046. The fixes: (1) a `VideoJobsRunning`
+card, mounted beside `ClipKitRunning` ahead of the open-or-closed
+conditional (an always-mounted polite region, empty and gapless
+unless no video is open and a job runs), lists every running Video
+Studio job — the Export batch, Reframe, GIF, Compile, PiP, Scan VOD,
+transcription, caption burn-in and the caption model download — with
+what it is for, its progress where the run has a measurement, and a
+Cancel that is the SAME function the panel's Cancel calls (the
+panels' cancels moved to `store/runs.ts` and `store/exportQueue.ts`;
+a wiring pin forbids a second path; the Export two-or-more question
+kept on the card); the Close question adds one sentence naming what
+keeps going; (2) the Video Studio header holds one line at 1024 with
+a long name (the title and buttons `whitespace-nowrap shrink-0`, the
+right group `min-w-0`, the name the one item that gives way; the
+other studios' headers checked). Non-counted: PiP Margin is a
+`DraftField` clamped 0-200 like Overlay width; the mood board's
+Create is claimed and its Enter ignores repeats; main's
+`validateExportJob` gates `outputFilename` (one plain `.mp4` name by
+`safeNamePart`, no control character) and `watermark` (the spec's
+shape). Deviations, accepted: the file-name rule uses `safeNamePart`
+(the brief's `sanitizeFilename` would refuse every ordinary export
+name); the PiP margin clamps like its sibling instead of a refusal
+sentence; runs gained a `name`; the model download got a row; two
+older e2e locators for the kit's region re-pointed (no assertion
+changed); IC cites moved. 42 ledger mutations, all restored
+byte-identical; three survivors of first runs resolved (a dead
+separator clause deleted, a header mutant paired, a held-Enter step
+added); 13 reds. Found not fixed: Clean audio's extraction has no
+Cancel or card row ((bb)); PiP's chosen files are panel state lost on
+Close; the card's percents are aria-hidden; Record's "Edit in Video
+Studio" replace question does not mention running jobs. Expedited
+personally: integrity (the 26 files are the ticket's ownership
+list), verify x2 (201/5823), test:media on 7.0.2 (426 passed | 13
+skipped of 439, 9m30s), FULL Playwright 537/537 (44.5 min, Layer 5
+beside it), sha of every touched file identical before and after;
+one independent mutation at a seam no ledger row names
+(`readVideoRunSnapshot`, the Close question's own snapshot, dropping
+the scan → the T-144 (1) Scan VOD e2e red: "Close this video? 1 clip
+and its edits will be discarded." without the scan's sentence; the
+unit suites survive it — they build snapshots by hand — so that
+seam is held by the e2e alone), restored byte-identical, sha256
+verified. Applied to 5145046 by `git apply` with every file
+byte-identical to the expedited clone.
 
 Round 92 — T-143 item 1, landed in the commit that carries this
 entry. Worked by one Sonnet in a fresh clone of ee49a44. The fix: a

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import toast from 'react-hot-toast'
 import type { ExportJobSpec } from '@shared/clip'
 import { CANCELLED_MESSAGE } from '@shared/cancel'
-import { runExportBatch, useExportQueue, type JobStatus } from './exportQueue'
+import { cancelExportBatch, remainingExportJobs, requestExportCancel, runExportBatch, useExportQueue, type JobStatus } from './exportQueue'
 
 /**
  * T-135 (1) - the Export queue is a module store and its batch runs outside any component.
@@ -150,5 +150,36 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
     install(() => Promise.resolve([]))
     await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4' })
     expect(useExportQueue.getState().sourcePath).toBe('/v/a.mp4')
+  })
+})
+
+describe('the Export Cancel - one path for the panel and the closed video\'s card (T-144)', () => {
+  const cancelAll = vi.fn()
+  beforeEach(() => {
+    cancelAll.mockReset()
+    vi.stubGlobal('window', { api: { video: { cancelAll } } })
+  })
+
+  it('counts the jobs still to finish: not a finished one, not a failed or canceled one', () => {
+    expect(remainingExportJobs([])).toBe(0)
+    expect(remainingExportJobs([row('a', { percent: 100 }), row('b'), row('c', { percent: 40 }), row('d', { error: 'x' }), row('e', { error: 'y', canceled: true })])).toBe(2)
+  })
+
+  it('one job left stops the batch at once, with no question', () => {
+    useExportQueue.setState({ jobs: [row('a', { percent: 100 }), row('b', { percent: 30 })], running: true, sourcePath: '/v/a.mp4' })
+    const ask = vi.fn()
+    requestExportCancel(ask)
+    expect(cancelAll).toHaveBeenCalledTimes(1)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('two or more left ask first and stop nothing until the question is answered', () => {
+    useExportQueue.setState({ jobs: [row('a'), row('b')], running: true, sourcePath: '/v/a.mp4' })
+    const ask = vi.fn()
+    requestExportCancel(ask)
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(cancelAll).not.toHaveBeenCalled()
+    cancelExportBatch()
+    expect(cancelAll).toHaveBeenCalledTimes(1)
   })
 })
