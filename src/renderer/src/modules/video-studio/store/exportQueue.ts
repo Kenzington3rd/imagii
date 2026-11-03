@@ -4,6 +4,8 @@ import type { ExportJobSpec } from '@shared/clip'
 import { countOf } from '@shared/plural'
 import { persistSetting } from '../../../lib/persistSetting'
 import { reportFailure } from '../../../lib/reportFailure'
+import { toastSaved } from '../../../lib/savedToast'
+import { useVideoStore } from './videoStore'
 
 /**
  * The Export queue (T-135 (1)): its rows, whether a batch is running, and the batch itself.
@@ -120,7 +122,12 @@ export async function runExportBatch(opts: {
     // The batch's own answer is the record of what it wrote. A job-complete event can land after the call has resolved - and by then this batch's
     // listeners are gone - so the rows take their files from here too (the panel's old always-on listener caught the late event; this one lasts one batch).
     for (const r of results) useExportQueue.getState().complete(r.jobId, r.outputPath)
-    toast.success(`Exported ${countOf(queue.length, 'file')}`)
+    const sentence = `Exported ${countOf(queue.length, 'file')}`
+    // T-145: the rows' Show in folder belong to the video, and with it gone the toast is the only way to the files: it carries the first one written
+    // (a person who closed the video has no rows). With a video open the rows beside it have the reveal for every file, and the plain toast stays.
+    const first = results.find((r) => r.outputPath)
+    if (useVideoStore.getState().source === null && first) toastSaved(sentence, first.outputPath)
+    else toast.success(sentence)
     // INIT-E (round 15): persist the choice on success so the next batch
     // defaults to the same folder.
     void persistSetting('export.lastOutputDir', dir)

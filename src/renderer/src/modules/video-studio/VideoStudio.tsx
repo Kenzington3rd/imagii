@@ -10,6 +10,7 @@ import { currentRoute, replacedSince } from '../project/ProjectIO'
 import { toastWithActions } from '../../lib/savedToast'
 import { mayLeaveLiveTake } from '../../lib/liveTake'
 import { useCleanAudioRun } from './store/runs'
+import { useVideoProgressFeeds } from './store/useVideoProgressFeeds'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
@@ -45,6 +46,8 @@ export function VideoStudio(): JSX.Element {
   const canRedo = useVideoStore((s) => s.canRedo())
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
+  // T-145: the reframe, scan and caption progress feeds belong to the studio, not to the panels a Close unmounts - the closed video's card draws them.
+  useVideoProgressFeeds()
   // T-135 (1): the extraction is a module store, not this studio's state - Clean audio's own navigation (and any trip to Home) unmounts the studio,
   // and it came back with the button enabled over an extraction still running, whose second press ran a second concurrent one.
   const extractingAudio = useCleanAudioRun((s) => s.run !== null)

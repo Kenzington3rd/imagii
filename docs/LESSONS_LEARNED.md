@@ -14,6 +14,26 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-03 — T-145 (round 94): the closed video's card showed a job's last figure and never another
+
+The thirty-second pass (one track: Video Studio's renderer). Ledger: r94a/ledger.tsv (5 red rows against a build of the unchanged tree, b159459 (one unit run covering the three unit files, four e2e cases), and 23 mutation rows over 22 mutations: 16 unit, 6 e2e, every restore byte-identical; one mutant (the effect with no dependency array) SURVIVED the first unit run and is killed by the `[]` pin added for it).
+
+### (1) [MED] - a listener that lives in a screen stops when the screen goes
+
+- **Bug.** T-144's card for the closed video showed "Scan VOD - x 12%", "Reframe - Clip 1 Rendering 12%" or "Burning in... 40%" and the figure never moved again while its sentence said the job keeps going. The person could not tell a slow job from a hung one on the one surface built for that, and might cancel a healthy one.
+- **Root cause.** The three progress subscriptions that feed the run stores were effects inside ReframePanel, HighlightPanel and CaptionsPanel, which VideoStudio mounts only while a video is open. Close removed the listeners. T-135 (1) moved the job's HANDLE into a store and T-144 gave the store a card, but a figure has two halves - the store that holds it and the listener that writes it - and only the first had moved. The Export batch (its listeners are the batch's own) and the model download (its listener is inside `installModel`) were fine, which is why the card looked right in the cases that were checked first.
+- **Fix.** `useVideoProgressFeeds` (`store/useVideoProgressFeeds.ts`), called once by `VideoStudio` ahead of the open-or-closed conditional, is the one subscriber of the three channels and does what the three effects did; the effects are deleted, so there is no second subscriber. The captions line is still its own store, written for every event main sends whether or not a run is held (T-89). A hook, not a module-scope subscription: it needs no guard for non-renderer imports, the unit layer imports `runs.ts` with no `window`, and the subscription has the studio's lifetime, which is the lifetime the card has.
+- **Test.** video-pipelines.spec.ts "T-145 (1)": Scan VOD, Reframe and a caption burn-in each slowed with `-readrate`, Close, the card's figure read and read again until it is higher, then Cancel as before; red on the unchanged build (the figure stays where Close left it). Unit: `store/useVideoProgressFeeds.test.ts`, and `interactionWiring.test.ts` "T-145" (no video-studio file but the hook subscribes the channels; the hook is `[]`-dependent; VideoStudio calls it once before its return).
+- **Lesson.** **A card that shows a job's progress must own the feed or share the feed's owner: a listener that lives in a screen stops when the screen goes.** When state moves out of a component so it can outlive it, move what WRITES it too, and grep for the writers (`on...Progress`) of every store the new surface reads, not only the stores. The test for "it keeps going" is two reads of the figure apart in time, not one read of it.
+
+### (a) Non-counted - an export that ended with the video closed left no way to its files
+
+- **Bug / Root cause.** "Exported N files" was a bare toast. The rows' Show in folder belong to the video the batch was made from, so a person who closed the video (T-144 lets the batch go on) had the sentence and no way to the files.
+- **Fix.** When the batch ends with no video open (`useVideoStore.getState().source === null` at that moment) the toast is `toastSaved` with Show in folder for the first file written, from the batch's own results. With a video open it stays the plain sentence: the rows beside the video already reveal every file, and a second reveal for the first file alone would be a worse copy of them.
+- **Test.** video-pipelines.spec.ts "T-145 (a)" (Close mid-batch, let it finish, click Show in folder, read the shell's argument; red on the unchanged build) and `store/exportQueue.test.ts`.
+
+---
+
 ## 2026-11-03 — T-144 (round 93): closing the video took every running job's Cancel with it, and the header broke on a real file name
 
 The thirty-first pass (one track: Video Studio and References, with the export job's gate in main). Ledger: r93a/ledger.tsv (13 red rows against a build of the unchanged tree, 5145046, and 42 mutation rows over 42 mutations, 42 of 42 restores byte-identical; three mutants survived and are accounted for below).

@@ -79,13 +79,6 @@ export function HighlightPanel(): JSX.Element | null {
   const [showChatInput, setShowChatInput] = useState(chatText.length > 0)
 
   useEffect(() => {
-    const off = window.api.video.onHighlightProgress((p) => {
-      useScanRun.getState().patch({ percent: p.percent })
-    })
-    return off
-  }, [])
-
-  useEffect(() => {
     const t = setTimeout(() => setDebouncedChat(chatText), CHAT_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [chatText])

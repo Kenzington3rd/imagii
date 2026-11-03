@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import { REFRAME_TARGET, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
 import { clipRecipe } from '@shared/clip'
@@ -50,13 +50,6 @@ export function ReframePanel(): JSX.Element | null {
   // T-123 (18): the same toast action Record's saved take has, through the same ask-before-replace bridge. The 9:16 file
   // is a vertical video, so opening it here is also the way into captions for it (transcribe, then burn it in).
   const editInVideoStudio = useEditInVideoStudio("Couldn't open the reframed video in Video Studio.")
-
-  useEffect(() => {
-    const off = window.api.video.onReframeProgress((p) => {
-      useReframeRun.getState().patch({ percent: p.percent ?? null, phase: p.phase })
-    })
-    return off
-  }, [])
 
   if (!source) return null
   const clip = clips.find((c) => c.id === selectedClipId)

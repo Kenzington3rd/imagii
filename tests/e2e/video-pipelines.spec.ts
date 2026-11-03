@@ -12580,3 +12580,177 @@ test.describe('T-144 (a): Picture-in-picture Margin takes typed digits and what 
     }
   })
 })
+
+// ═════════ T-145 (1): the closed video's card keeps moving - the progress channels outlive the panels ═════════
+//
+// The three progress subscriptions (reframe, highlight scan, captions) lived in effects inside the panels VideoStudio mounts only while a video is open, so Close
+// removed the listeners and T-144's card kept the last figure of a job that went on: "Scan VOD - x 12%" never moved again. `useVideoProgressFeeds` is the one
+// subscriber now, mounted with the studio. Each job here is slowed to a fraction of real time (`-readrate` ahead of its input), so it is mid-run for as long as
+// the case needs and reports a new figure every second or so; the figure is read on the card straight after Close and again until it has ADVANCED.
+test.describe('T-145 (1): the closed video\'s card shows a job that is still moving', () => {
+  async function closeVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+  const cardCancel = (window: Page): Locator => window.getByRole('button', { name: 'Cancel', exact: true })
+  /** The card's percent figures (the studio's only `font-mono` spans in an `.card` while no video is open). */
+  const figure = async (window: Page): Promise<number | null> => {
+    const text = (await window.locator('[aria-live="polite"] .card span.font-mono').allInnerTexts()).join(' ')
+    const m = /(\d+)%/.exec(text)
+    return m ? Number(m[1]) : null
+  }
+  /** Run the next ffmpeg a job spawns at `rate` times real time: the job reports as it goes and is still running for the whole case. `match` picks it by its argv. */
+  async function slowTheJob(app: ElectronApplication, match: 'scan' | 'burn' | 'render', rate: number): Promise<void> {
+    await app.evaluate(
+      (_e, arg) => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = cp.spawn
+        cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+          const argv = Array.isArray(args) ? (args as string[]) : []
+          const input = argv.indexOf('-i')
+          const ffmpegCall = /ffmpeg/i.test(String(cmd)) && input >= 0
+          const hit =
+            ffmpegCall &&
+            (arg.match === 'scan'
+              ? argv.some((a) => typeof a === 'string' && a.startsWith('ebur128='))
+              : arg.match === 'burn'
+                ? argv.some((a, i) => argv[i - 1] === '-vf' && a.includes('subtitles='))
+                : argv.includes('-progress') && !argv.some((a, i) => argv[i - 1] === '-vf' && a.includes('subtitles=')))
+          if (!hit) return real(cmd, args, opts)
+          return real(cmd, [...argv.slice(0, input), '-readrate', String(arg.rate), ...argv.slice(input)], opts)
+        }
+        mod.syncBuiltinESMExports()
+      },
+      { match, rate }
+    )
+  }
+  /** After Close: the card's figure, then the figure again until it is higher. Red where the figure stays put (the listener went with the panel). */
+  async function expectFigureAdvances(window: Page, what: string): Promise<void> {
+    await expect.poll(() => figure(window), { timeout: 20_000, intervals: [200], message: `${what}: the card has a figure` }).not.toBeNull()
+    const first = (await figure(window)) as number
+    await expect
+      .poll(async () => (await figure(window)) ?? -1, { timeout: 15_000, intervals: [250], message: `${what}: the card's figure was ${first}% after Close and must move` })
+      .toBeGreaterThan(first)
+  }
+
+  test('Scan VOD: the figure keeps moving after Close, then Cancel ends the scan as before', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t145scan', longSrc)
+    try {
+      await slowTheJob(app, 'scan', 30)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await closeVideo(window)
+      await expect(window.getByText(`Scan VOD — ${path.basename(longSrc)}`)).toBeVisible()
+      await expectFigureAdvances(window, 'Scan VOD')
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Scan canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Reframe: the figure keeps moving after Close, then Cancel stops it with no file', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t145reframe', longSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await slowTheJob(app, 'render', 30)
+      await reframeCard(window).getByRole('button', { name: 'Choose folder…' }).click()
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect(reframeCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await closeVideo(window)
+      await expect(window.getByText('Reframe — Clip 1')).toBeVisible()
+      await expectFigureAdvances(window, 'Reframe')
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Reframe canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(mp4sOnDisk(outDir), 'no file, no partial').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Caption burn-in: the figure keeps moving after Close, then Cancel stops it with no video and no partial', async () => {
+    test.setTimeout(300_000)
+    const { app, window, userDataDir, outDir } = await launchHome('t145burn')
+    try {
+      await slowTheJob(app, 'burn', 30)
+      const srtPath = path.join(userDataDir, 'captions', 't145.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:02,000\nhello\n', 'utf8')
+      const projectPath = path.join(root, `t145burn-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({ schemaVersion: 2, savedAt: Date.now(), appVersion: '1.0.0', videoStudio: { sourcePath: longSrc, clips: [], selectedClipId: null, watermark: null, srtPath } }),
+        'utf8'
+      )
+      const target = path.join(outDir, 't145-burn.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [target] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const burn = captionsCard(window).getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await burn.click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [250] }).toBe(1)
+      await closeVideo(window)
+      await expect(window.getByText(`Burning in captions — ${path.basename(longSrc)}`)).toBeVisible()
+      await expectFigureAdvances(window, 'Caption burn-in')
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Burn-in canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(existsSync(target), 'no half-written video').toBe(false)
+      await expect.poll(() => withEverything(readdirSync(outDir)), { timeout: 30_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ═════════ T-145 (a): a batch that ends with no video open still leaves the way to its first file ═════════
+test.describe('T-145 (a): the finished toast of an export that ended with the video closed carries Show in folder', () => {
+  test('two files, Close mid-batch, let it finish: "Exported 2 files" has Show in folder and it reveals the first file written', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t145exp-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t145export', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      // Each file takes a few seconds, so the video can be closed while the batch is on its first.
+      await app.evaluate(() => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = cp.spawn
+        cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+          const argv = Array.isArray(args) ? (args as string[]) : []
+          const input = argv.indexOf('-i')
+          if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+          return real(cmd, [...argv.slice(0, input), '-readrate', '0.5', ...argv.slice(input)], opts)
+        }
+        mod.syncBuiltinESMExports()
+      })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await exportCard(window).getByRole('button', { name: 'Export 2 files', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      const toast = window.getByText('Exported 2 files')
+      await expect(toast, 'the batch finished with the video closed').toBeVisible({ timeout: 120_000 })
+      const files = withoutAtomicTmp(readdirSync(seeded)).filter((f) => f.endsWith('.mp4'))
+      expect(files, 'both files were written').toHaveLength(2)
+      // The first file written is the one finished first (each takes several seconds, so the order is not in doubt).
+      const first = [...files].sort((a, b) => statSync(path.join(seeded, a)).mtimeMs - statSync(path.join(seeded, b)).mtimeMs)[0] as string
+      await window.getByRole('button', { name: 'Show in folder' }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([path.join(seeded, first)])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})

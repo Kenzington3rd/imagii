@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import toast from 'react-hot-toast'
 import type { ExportJobSpec } from '@shared/clip'
 import { CANCELLED_MESSAGE } from '@shared/cancel'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { isValidElement, type ReactNode } from 'react'
+import { useVideoStore } from './videoStore'
 import { cancelExportBatch, remainingExportJobs, requestExportCancel, runExportBatch, useExportQueue, type JobStatus } from './exportQueue'
 
 /**
@@ -181,5 +184,51 @@ describe('the Export Cancel - one path for the panel and the closed video\'s car
     expect(cancelAll).not.toHaveBeenCalled()
     cancelExportBatch()
     expect(cancelAll).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the finished toast of a batch that ends with no video open (T-145)', () => {
+  const results = [
+    { jobId: 'a', outputPath: '/out/a.mp4', durationMs: 5 },
+    { jobId: 'b', outputPath: '/out/b.mp4', durationMs: 5 }
+  ]
+  const run = async (): Promise<void> => {
+    install(() => Promise.resolve(results))
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+  }
+  /** Every <button> in the element the toast carries, with its onClick. */
+  const buttons = (node: ReactNode, found: Array<{ text: string; onClick: () => void }> = []): Array<{ text: string; onClick: () => void }> => {
+    if (Array.isArray(node)) node.forEach((n) => buttons(n, found))
+    else if (isValidElement(node)) {
+      const props = node.props as { children?: ReactNode; onClick?: () => void }
+      if (node.type === 'button' && props.onClick) found.push({ text: renderToStaticMarkup(node).replace(/<[^>]+>/g, ''), onClick: props.onClick })
+      else buttons(props.children, found)
+    }
+    return found
+  }
+
+  it('says how many files and carries Show in folder for the FIRST file written, which reveals it', async () => {
+    const reveal = vi.fn()
+    useVideoStore.setState({ source: null })
+    await run()
+    const reveal1 = (window as unknown as { api: { video: Record<string, unknown> } }).api.video
+    reveal1.revealInFolder = reveal
+    const [message, options] = vi.mocked(toast.success).mock.calls[0] as [ReactNode, { duration?: number }]
+    expect(renderToStaticMarkup(message as never)).toContain('Exported 2 files')
+    expect(options.duration, 'a toast with a button lasts long enough to use it').toBeGreaterThan(2000)
+    const found = buttons(message)
+    expect(found.map((b) => b.text)).toEqual(['Show in folder'])
+    found[0]?.onClick()
+    expect(reveal).toHaveBeenCalledWith('/out/a.mp4')
+  })
+
+  it('with a video open the toast is the plain sentence: the rows beside the video carry the Show in folder', async () => {
+    useVideoStore.setState({ source: { filePath: '/v/a.mp4' } as never })
+    try {
+      await run()
+    } finally {
+      useVideoStore.setState({ source: null })
+    }
+    expect(toast.success).toHaveBeenCalledWith('Exported 2 files')
   })
 })

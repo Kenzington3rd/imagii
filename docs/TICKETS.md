@@ -6413,7 +6413,7 @@ IMG-PREC.
   NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run test:media`
   (a regression run) and the FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open
+- **Status:** done (round 94 — see the Done entry)
 
 ---
 
@@ -6942,6 +6942,39 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 94 — T-145 item 1 and the non-counted part, landed in the
+commit that carries this entry. Worked by one Sonnet in a fresh clone
+of b159459. The fix: the three progress feeds the closed-video card
+reads (the reframe run's percent and phase, the scan run's percent,
+the captions progress line) have ONE subscriber that outlives the
+panels — `useVideoProgressFeeds()`, which VideoStudio calls once,
+unconditionally, before its early return — and the three panel
+effects are gone (a wiring pin forbids a panel subscriber); T-89's
+captions line is still stored with no run held. Non-counted: an
+Export batch that ends with no video open raises the `toastSaved`
+kind with Show in folder for the first file written (with a video
+open the rows carry the reveal and the plain toast stays). Accepted
+notes: the e2e slows each job with `-readrate` injected at main's
+spawn (the T-144 `-re` hold moves ~0.1%/s on the 20-minute fixture);
+the native-dialog IC cites moved +3; `withoutAtomicTmp` around the
+export case's readdir (the atomicWrites guard). 22 ledger mutations
+(23 rows), all restored byte-identical; one survivor of a first run
+(the effect's `[]` dependency) killed by a pin added after it; 5 reds.
+The worker's one full-run failure (home-chrome T-131 "the last step
+names the ? key") passed 5/5 standalone and in the expediter's full
+run. Found not fixed: a transcription's card row has no figure (main
+sends only a phase). Expedited personally: integrity (the 13 files
+are the ticket's ownership list), verify x2 (202/5834), test:media on
+7.0.2 (426 passed | 13 skipped of 439, 8m52s), FULL Playwright
+541/541 (44.3 min, Layer 5 beside it), sha of every touched file
+identical before and after; one independent mutation at a seam no
+ledger row names (the video-open question read at the batch's START
+instead of its end → the T-145 (a) e2e red, no Show in folder; the
+exportQueue unit cases survive it — they set the source before the
+batch — so the e2e alone holds that seam), restored byte-identical,
+sha256 verified. Applied to b159459 by `git apply` with every file
+byte-identical to the expedited clone.
 
 Round 93 — T-144 items 1 and 2 and the three non-counted parts,
 landed in the commit that carries this entry. Worked by one Sonnet

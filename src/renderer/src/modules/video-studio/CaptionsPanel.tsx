@@ -93,11 +93,6 @@ export function CaptionsPanel(): JSX.Element | null {
 
   // (The transcript preview used to be cleared HERE when the video changed, so it also cleared on every mount: it is the video store's now, and
   // `loadSource` / `clearSource` empty it with the srtPath it goes with.)
-  useEffect(() => {
-    const off = window.api.captions.onProgress((p) => useCaptionsProgress.setState({ progress: p }))
-    return off
-  }, [])
-
   if (!source) return null
   const noSound = videoHasNoSound(source)
 

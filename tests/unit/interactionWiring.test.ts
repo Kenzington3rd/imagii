@@ -2728,7 +2728,8 @@ describe('T-135 — the twenty-first sweep', () => {
   it('(1) Captions: the progress line main sends is its own store (the row draws what main reports), emptied when a job starts and when it ends', () => {
     const src = strip(read('modules/video-studio/CaptionsPanel.tsx'))
     expect(src).toMatch(/const progress: CaptionsProgress \| null = useCaptionsProgress\(\(s\) => s\.progress\)/)
-    expect(src).toMatch(/window\.api\.captions\.onProgress\(\(p\) => useCaptionsProgress\.setState\(\{ progress: p \}\)\)/)
+    // (Its listener is the studio's since T-145: see `useVideoProgressFeeds` and the T-145 describe below.)
+    expect(strip(read('modules/video-studio/store/useVideoProgressFeeds.ts'))).toMatch(/window\.api\.captions\.onProgress\(\(p\) => useCaptionsProgress\.setState\(\{ progress: p \}\)\)/)
     expect(src.match(/useCaptionsProgress\.setState\(\{ progress: null \}\)/g) ?? [], 'cleared at the start and at the end of both jobs').toHaveLength(4)
     expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string \}>\(\)/)
   })
@@ -3479,5 +3480,31 @@ describe('T-144 — the closed video\'s jobs, the header at 1024 px, the PiP mar
     expect(board).toMatch(/const creatingRef = useRef\(false\)/)
     expect(board).toMatch(/async function onCreate\(\): Promise<void> \{\s*await claimFirst\(creatingRef, async \(\) => \{/)
     expect(board).toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && !e\.repeat && onCreate\(\)\}/)
+  })
+})
+
+describe('T-145 - the progress channels that feed the run stores have one subscriber, and it is the studio\'s, not a panel\'s', () => {
+  // Behavior: store/useVideoProgressFeeds.test.ts and store/exportQueue.test.ts (units); video-pipelines.spec.ts "T-145" (the card's figure keeps moving after Close).
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const dir = path.join(RENDERER_ROOT, 'modules/video-studio')
+
+  it('no video-studio file but the hook subscribes to reframe, highlight or captions progress', () => {
+    const subscribers: string[] = []
+    for (const file of readdirSync(dir).filter((f) => /\.tsx?$/.test(f) && !/\.test\./.test(f))) {
+      if (/\bon(?:Reframe|Highlight)Progress\(|captions\.onProgress\(/.test(strip(read(`modules/video-studio/${file}`)))) subscribers.push(file)
+    }
+    for (const file of readdirSync(path.join(dir, 'store')).filter((f) => /\.tsx?$/.test(f) && !/\.test\./.test(f))) {
+      if (/\bon(?:Reframe|Highlight)Progress\(|captions\.onProgress\(/.test(strip(read(`modules/video-studio/store/${file}`)))) subscribers.push(`store/${file}`)
+    }
+    expect(subscribers).toEqual(['store/useVideoProgressFeeds.ts'])
+  })
+
+  it('the hook subscribes all three, and VideoStudio calls it once, unconditionally, before any early return', () => {
+    const hook = strip(read('modules/video-studio/store/useVideoProgressFeeds.ts'))
+    for (const channel of ['onReframeProgress(', 'onHighlightProgress(', 'captions.onProgress(']) expect(hook, channel).toContain(channel)
+    expect(hook, 'subscribed once, for the studio\'s life: an effect with no dependencies would re-subscribe on every render').toMatch(/\}, \[\]\)\s*\}\s*$/)
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    expect(studio.match(/useVideoProgressFeeds\(\)/g) ?? []).toHaveLength(1)
+    expect(studio.indexOf('useVideoProgressFeeds()'), 'a hook ahead of the studio\'s render').toBeLessThan(studio.indexOf('return ('))
   })
 })
