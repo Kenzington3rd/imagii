@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { CaptionsProgress } from '@shared/captions'
 import type { JobStatus } from './store/exportQueue'
 import { jobsKeepGoingSentence, videoJobRows, VideoJobsRunning, type VideoRunSnapshot } from './VideoJobsRunning'
-import { videoDiscardMessage } from './store/videoStore'
+import { videoDiscardMessage, type VideoSource } from './store/videoStore'
+import type { Clip } from '@shared/clip'
 
 // A server render reads zustand's SERVER snapshot (a store's initial state, whatever a test set), so the stores the card reads are plain objects here, the
 // way OutputPreview.test.tsx does it. The row choice and the sentence are pure functions of a snapshot and need none of this.
@@ -164,12 +165,26 @@ describe('the Close question while a job runs (T-144)', () => {
 
   it('is the second sentence of the discard question, after the clips it already names; a video with no clips still asks nothing', () => {
     const note = jobsKeepGoingSentence(one)
-    expect(videoDiscardMessage(2, 'close', note)).toBe(
+    // Two clips: there is something to lose, so the clips are named and the job's sentence follows.
+    const twoClips = {
+      source: { probe: { duration: 60 } } as VideoSource,
+      clips: [
+        { id: 'a', name: 'Clip 1', startSec: 0, endSec: 20, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] },
+        { id: 'b', name: 'Clip 2', startSec: 20, endSec: 40, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }
+      ] as Clip[],
+      history: { past: [], future: [] },
+      derived: { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null }
+    }
+    expect(videoDiscardMessage(twoClips, 'close', note)).toBe(
       'Close this video? 2 clips and their edits will be discarded. The export that is running keeps going; its Cancel stays on screen.'
     )
-    expect(videoDiscardMessage(2, 'close', null)).toBe('Close this video? 2 clips and their edits will be discarded.')
-    expect(videoDiscardMessage(2)).toBe('Close this video? 2 clips and their edits will be discarded.')
-    expect(videoDiscardMessage(0, 'close', note)).toBeNull()
+    expect(videoDiscardMessage(twoClips, 'close', null)).toBe('Close this video? 2 clips and their edits will be discarded.')
+    expect(videoDiscardMessage(twoClips)).toBe('Close this video? 2 clips and their edits will be discarded.')
+    expect(videoDiscardMessage({ ...twoClips, clips: [] }, 'close', note)).toBeNull()
+    // T-147 (3): an untouched video asks only about the job (the T-146 audio shape).
+    expect(videoDiscardMessage({ ...twoClips, clips: [twoClips.clips[0]!], source: { probe: { duration: 20 } } as VideoSource }, 'close', note)).toBe(
+      'Close this video? The export that is running keeps going; its Cancel stays on screen.'
+    )
   })
 })
 

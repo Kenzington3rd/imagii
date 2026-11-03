@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { isModalOpen } from '../components/Modal'
+import { anyDialogClaim } from './useFocusTrap'
 import { inputTypeOf, isTextEntryTarget } from '../lib/keyOwnership'
 
 /** The subset of a KeyboardEvent the undo/redo decision needs. */
@@ -12,7 +12,7 @@ export interface UndoRedoKey {
   tagName: string
   /** The target's `type` when it is an `<input>`: a checkbox or a slider is not a field anyone types in (T-123 (2)). */
   inputType?: string | null
-  /** Is a `<Modal>` open? A dialog is a claim over the window (T-68). */
+  /** Is a dialog open, a `<Modal>` or the tutorial coachmark (`anyDialogClaim`)? A dialog is a claim over the window (T-68, T-75). */
   modalOpen: boolean
 }
 
@@ -57,7 +57,7 @@ export function useUndoRedoHotkeys(undo: () => void, redo: () => void): void {
         shiftKey: e.shiftKey,
         tagName: (e.target as HTMLElement | null)?.tagName ?? '',
         inputType: inputTypeOf(e.target),
-        modalOpen: isModalOpen()
+        modalOpen: anyDialogClaim()
       })
       if (!intent) return
       e.preventDefault()

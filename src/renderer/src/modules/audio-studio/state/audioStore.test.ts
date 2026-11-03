@@ -328,3 +328,146 @@ describe('waveformArrived: has this file\'s waveform come, or did the studio let
     expect(await waveformArrived(held)).toBe(false)
   })
 })
+
+// T-147 (fold, T-78 audio half): one slider drag was dozens of undo steps. `patchChain` pushed a history step on EVERY `input` event, so Ctrl+Z after
+// pulling Manual gain across its range moved it half a decibel. The store has the video store's coalescing: a patch with a KEY is one step for as long as the
+// key repeats; a patch without one is its own step; `endGesture` (pointer up, blur) closes the window; every discrete action and undo/redo/load/clear reset it.
+describe('chain history coalesces a drag into one step (T-147, T-78)', () => {
+  const store = () => useAudioStore.getState()
+  const chainOf = (gain: number) => ({ ...store().chain, gainDb: gain })
+  const SECONDARY = { filePath: '/m/bed.mp3', fileName: 'bed.mp3', role: 'music' as const, gainDb: -10, duckUnderPrimary: true }
+
+  it('one drag - many patches with the same key - is ONE step, and one undo restores the value from before it', () => {
+    for (const g of [0.5, 1, 1.5, 2, 2.5, 3]) store().patchChain({ gainDb: g }, 'gain')
+    expect(store().history.past).toHaveLength(1)
+    expect(store().chain.gainDb).toBe(3)
+    store().undo()
+    expect(store().chain.gainDb, 'the pre-drag value').toBe(0)
+    expect(store().history.past).toHaveLength(0)
+    store().redo()
+    expect(store().chain.gainDb, 'and redo puts the end of the drag back in one step').toBe(3)
+  })
+
+  it('two drags separated by endGesture are two steps', () => {
+    for (const g of [1, 2, 3]) store().patchChain({ gainDb: g }, 'gain')
+    store().endGesture()
+    for (const g of [4, 5, 6]) store().patchChain({ gainDb: g }, 'gain')
+    expect(store().history.past).toHaveLength(2)
+    store().undo()
+    expect(store().chain.gainDb).toBe(3)
+    store().undo()
+    expect(store().chain.gainDb).toBe(0)
+  })
+
+  it('a different control\'s key is a new step without an endGesture between: the second slider does not ride the first', () => {
+    store().patchChain({ gainDb: 2 }, 'gain')
+    store().patchChain({ gainDb: 3 }, 'gain')
+    store().patchChain({ denoiseParams: { noiseFloorDb: -40, reductionDb: 12 } }, 'denoise.nf')
+    store().patchChain({ denoiseParams: { noiseFloorDb: -41, reductionDb: 12 } }, 'denoise.nf')
+    expect(store().history.past).toHaveLength(2)
+  })
+
+  it('a patch with no key (a checkbox, a button) is always its own step, and it closes the window of a drag before it', () => {
+    store().patchChain({ gainDb: 1 }, 'gain')
+    store().patchChain({ deEss: true })
+    store().patchChain({ gainDb: 2 }, 'gain')
+    // gain(1), deEss, gain(2): the last gain patch is a NEW window - the discrete one between reset the key.
+    expect(store().history.past).toHaveLength(3)
+    store().patchChain({ hum60: true })
+    store().patchChain({ hum60: false })
+    expect(store().history.past).toHaveLength(5)
+  })
+
+  it('a discrete action after a drag is its own step: a cut, a removed cut, a second track', () => {
+    store().patchChain({ gainDb: 1 }, 'gain')
+    store().addCutRegion({ startSec: 1, endSec: 2 })
+    expect(store().history.past).toHaveLength(2)
+    store().patchChain({ gainDb: 2 }, 'gain')
+    store().removeCutRegion(0)
+    expect(store().history.past).toHaveLength(4)
+    store().patchChain({ gainDb: 3 }, 'gain')
+    store().setSecondaryTrack(SECONDARY)
+    expect(store().history.past).toHaveLength(6)
+  })
+
+  it('cuts are discrete: two marks in a row are two steps, and so are two removals', () => {
+    store().addCutRegion({ startSec: 1, endSec: 2 })
+    store().addCutRegion({ startSec: 3, endSec: 4 })
+    expect(store().history.past).toHaveLength(2)
+    store().removeCutRegion(1)
+    store().removeCutRegion(0)
+    expect(store().history.past).toHaveLength(4)
+    store().undo()
+    expect(store().chain.cutRegions, 'the last removal is undone alone').toHaveLength(1)
+  })
+
+  it('a slider of the second track coalesces through setSecondaryTrack\'s key; the same call with no key is a step each', () => {
+    store().setSecondaryTrack(SECONDARY)
+    for (const g of [-9, -8, -7]) store().setSecondaryTrack({ ...SECONDARY, gainDb: g }, 'secondary.gain')
+    expect(store().history.past, 'the add, and one drag').toHaveLength(2)
+    store().undo()
+    expect(store().chain.secondaryTrack?.gainDb).toBe(-10)
+    for (const g of [-9, -8]) store().setSecondaryTrack({ ...SECONDARY, gainDb: g })
+    expect(store().history.past, 'the add, then one step per keyless call').toHaveLength(3)
+  })
+
+  it('undo resets the key (redo needs none: an edit clears the redo branch, so a redo never meets an open window): the drag after an undo is a new step, not folded into the old one', () => {
+    store().patchChain({ gainDb: 1 }, 'gain')
+    store().patchChain({ gainDb: 2 }, 'gain')
+    expect(store().historyKey).toBe('gain')
+    store().undo()
+    expect(store().historyKey).toBeNull()
+    store().patchChain({ gainDb: 5 }, 'gain')
+    expect(store().history.past, 'the undone drag left none; the new one pushed its own').toHaveLength(1)
+    store().undo()
+    expect(store().chain.gainDb).toBe(0)
+    store().redo()
+    expect(store().historyKey).toBeNull()
+    store().patchChain({ gainDb: 6 }, 'gain')
+    expect(store().history.past, 'the redone value is a step behind the new drag: it was not folded into it').toHaveLength(2)
+    expect(store().chain).toEqual(chainOf(6))
+    store().undo()
+    expect(store().chain.gainDb, 'back to what the redo restored').toBe(5)
+  })
+
+  it('opening or closing a file resets the key and the history', async () => {
+    store().patchChain({ gainDb: 1 }, 'gain')
+    expect(store().historyKey).toBe('gain')
+    await store().loadSource('/a/next.wav')
+    expect(store().historyKey).toBeNull()
+    expect(store().history.past).toHaveLength(0)
+    store().patchChain({ gainDb: 1 }, 'gain')
+    store().clearSource()
+    expect(store().historyKey).toBeNull()
+    store().patchChain({ gainDb: 2 }, 'gain')
+    expect(store().history.past, 'a fresh window on a fresh chain').toHaveLength(1)
+  })
+
+  it('endGesture with no window open wakes nobody (it runs on every pointer-up in three panels); with one open it closes it', () => {
+    let woken = 0
+    const off = useAudioStore.subscribe(() => {
+      woken += 1
+    })
+    try {
+      store().endGesture()
+      expect(woken, 'nothing was open').toBe(0)
+      store().patchChain({ gainDb: 1 }, 'gain')
+      woken = 0
+      store().endGesture()
+      expect(woken, 'the window was open: one write').toBe(1)
+      expect(store().historyKey).toBeNull()
+    } finally {
+      off()
+    }
+  })
+
+  it('the redo branch is dropped by the FIRST patch of a drag, and two hundred events of it are still one step', () => {
+    store().patchChain({ deEss: true })
+    store().undo()
+    expect(store().history.future).toHaveLength(1)
+    store().patchChain({ gainDb: 1 }, 'gain')
+    expect(store().history.future, 'a new edit ends the redo branch').toHaveLength(0)
+    for (let i = 0; i < 200; i++) store().patchChain({ gainDb: 1 + i / 100 }, 'gain')
+    expect(store().history.past).toHaveLength(1)
+  })
+})

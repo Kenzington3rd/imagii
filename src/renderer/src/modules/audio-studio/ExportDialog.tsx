@@ -1,5 +1,4 @@
 import { useRef, useState } from 'react'
-import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import type { AudioOutputFormat } from '@shared/audio'
 import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audio'
@@ -7,11 +6,12 @@ import { assertDefined } from '@shared/assert'
 import { landedBesideNote } from '@shared/landedPath'
 import { useAudioStore } from './state/audioStore'
 import { cancelAudioExport, useAudioExport } from './state/audioExport'
+import { audioJobRow } from './AudioJobRunning'
 import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
-import { ACTION_TOAST_MS, toastSaved } from '../../lib/savedToast'
+import { toastSaved } from '../../lib/savedToast'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
 
 const FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'flac', 'aac']
@@ -27,7 +27,10 @@ export function ExportDialog(): JSX.Element | null {
   const exportJob = useAudioExport((s) => s.job)
   const running = useAudioExport((s) => s.running)
   const exportSource = useAudioExport((s) => s.sourcePath)
+  const exportName = useAudioExport((s) => s.sourceName)
   const job = exportJob !== null && (running || exportSource === source?.filePath) ? exportJob : null
+  // T-147 (2): "Export - voice.wav", the card's own words (`audioJobRow`), for a running export that belongs to ANOTHER sound than the one open here.
+  const otherSoundLabel = running && exportSource !== source?.filePath ? (audioJobRow({ running, job: exportJob, sourceName: exportName })?.label ?? null) : null
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
   // in that gap: two save dialogs, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -105,7 +108,9 @@ export function ExportDialog(): JSX.Element | null {
           })
           saved = result.outputPath
           const note = landedBesideNote(outputPath, saved, 'export')
-          toast.success(note ? `Cleaned audio exported. ${note}` : 'Cleaned audio exported', note ? { duration: ACTION_TOAST_MS } : undefined)
+          // T-147 (2): ALWAYS the saved toast (T-146's rule for Video Studio's export): the dialog's row, and its Show in folder, are drawn only inside the OPEN sound's
+          // Export panel, so an export that ends after the sound was closed or replaced left no way to the file. No "Edit in Video Studio": there is no video.
+          toastSaved(note ? `Cleaned audio exported. ${note}` : 'Cleaned audio exported', saved)
         }
         useAudioExport.getState().done(saved)
       } catch (err) {
@@ -194,6 +199,13 @@ export function ExportDialog(): JSX.Element | null {
 
       {job ? (
         <div className="flex items-center gap-3 text-sm">
+          {/* T-147 (2): the row is drawn while an export runs even under ANOTHER sound (the store holds it), so it says which file it is for - `AudioJobRunning`'s
+              name, the same `min-w-0 flex-1 truncate` span with its whole self as the title. Under the sound the export is FOR, the panel is that sound's: no name. */}
+          {otherSoundLabel ? (
+            <span className="min-w-0 flex-1 truncate text-xs" title={otherSoundLabel}>
+              {otherSoundLabel}
+            </span>
+          ) : null}
           <span className="text-xs text-ink-muted w-56 shrink-0">
             {audioPassLabel(job.pass, job.plan)}
           </span>

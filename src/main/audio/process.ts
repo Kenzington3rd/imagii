@@ -84,6 +84,9 @@ async function runFfmpegJob(
 ): Promise<{ stderr: string }> {
   return new Promise<{ stderr: string }>((resolve, reject) => {
     run.check()
+    // T-147 (1): a pass names itself the moment it starts. The store keeps the LAST event it was sent, and a pass prints nothing until ffmpeg's first `out_time`
+    // has moved the bar by more than a point, so the row read the pass before (the render's 100% for the whole of a mux that had no total) until then.
+    onProgress({ jobId, pass, percent: 0 })
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     activeJobs.set(jobId, child)
     let stderr = ''
@@ -560,11 +563,12 @@ async function attachAudio(
     'pipe:1',
     '-nostats'
   ]
-  // A stream-copy mux is instant and needs no bar; the re-encode is minutes
-  // on a long recording, and the output is as long as the (cut) picture: the
-  // sound is padded or trimmed to it (T-131 (2)). A picture whose length is
-  // unknown is measured against the cleaned audio, as it always was.
-  const total = reencodePicture ? (pictureSec ?? (await run.guard(probeAudio(audioPath))).duration) : 0
+  // The bar is over the length of the file this pass WRITES: the (cut) picture's, because the sound is padded or trimmed to it (T-131 (2)); a picture whose
+  // length is unknown is measured against the cleaned audio, as it always was. BOTH branches have one. T-147 (1): the copy used to be given 0 under a comment that
+  // said a stream-copy mux is instant, and that was a guess nobody measured: the copy keeps the picture but still re-encodes the SOUND to AAC 192k, about 20x
+  // realtime on the bundled 7.0.2 (a 2-minute source muxes in 6.6 s, the AAC encode 6.0 of them), so a 2-hour VOD is minutes at "rendering 100%" with no bar.
+  // ffmpeg prints `out_time` for the copy throughout (13 progress blocks in those 6.6 s).
+  const total = pictureSec ?? (await run.guard(probeAudio(audioPath))).duration
   const landed = await runFfmpegToFile(args, outputPath, jobId, total, 'mux', onProgress, run)
   onProgress({ jobId, pass: 'mux', percent: 100 })
   return { jobId, outputPath: landed, durationMs: Date.now() - startedAt }

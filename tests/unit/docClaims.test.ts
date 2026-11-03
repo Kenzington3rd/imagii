@@ -214,13 +214,13 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['Canvas.tsx:267', 'src/renderer/src/modules/image-studio/Canvas.tsx', 267, 267, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
     ['Canvas.tsx:179-182', 'src/renderer/src/modules/image-studio/Canvas.tsx', 179, 182, /function snap\([\s\S]*gridSize/],
     ['Canvas.tsx:193', 'src/renderer/src/modules/image-studio/Canvas.tsx', 193, 193, /MAX_STAGE_ZOOM = 4/],
-    ['canvasStore.ts:343', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 343, 343, /'Line'/],
-    ['canvasStore.ts:164', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 164, 164, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
-    ['canvasStore.ts:117', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 117, 117, /future: \[\]/],
+    ['canvasStore.ts:370', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 370, 370, /'Line'/],
+    ['canvasStore.ts:183', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 183, 183, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
+    ['canvasStore.ts:124', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 124, 124, /future: \[\]/],
     ['ImageStudio.tsx:67-76', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 67, 76, /e\.key === 'v'[\s\S]*setTool\('pencil'\)/],
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
-    ['PropertiesPanel.tsx:47', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 47, 47, /<PositionBox value=\{layer\.x\}/],
+    ['PropertiesPanel.tsx:55', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 55, 55, /<PositionBox value=\{layer\.x\}/],
     ['ImportPanel.tsx:76', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 76, 76, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]

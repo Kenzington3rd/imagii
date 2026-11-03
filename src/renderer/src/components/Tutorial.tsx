@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { assert } from '@shared/assert'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -83,6 +83,20 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const nextBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     nextBtnRef.current?.focus()
+  }, [stepIndex])
+
+  // T-147 (6a): focus stays on the SAME Next button across steps and a dialog's changed name is not re-announced, so steps after the first were
+  // silent to a screen reader. The card is described by its body, and a polite live region says "Step N of M: title. body" when the step CHANGES.
+  // Not on mount: the dialog's own name covers step 1, and a region that arrives with its text is not reliably read (empty until the first change).
+  const bodyId = useId()
+  const [stepAnnouncement, setStepAnnouncement] = useState('')
+  const announcedStep = useRef(stepIndex)
+  useEffect(() => {
+    if (announcedStep.current === stepIndex) return
+    announcedStep.current = stepIndex
+    const s = def.steps[stepIndex]
+    if (s) setStepAnnouncement(`Step ${stepIndex + 1} of ${def.steps.length}: ${s.title}. ${s.body}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepIndex])
 
   // T-34: the geometry places a card of a known size, so measure the real
@@ -262,7 +276,11 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
         role="dialog"
         aria-modal="true"
         aria-label={`${def.title} tutorial — step ${stepIndex + 1} of ${def.steps.length}: ${step.title}`}
+        aria-describedby={bodyId}
       >
+        <div className="sr-only" aria-live="polite">
+          {stepAnnouncement}
+        </div>
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs uppercase tracking-wide text-accent font-semibold">
             {def.title} · {stepIndex + 1} of {def.steps.length}
@@ -276,7 +294,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           </button>
         </div>
         <h3 className="text-lg font-semibold mb-2">{step.title}</h3>
-        <p className="text-sm text-ink-base leading-relaxed">{step.body}</p>
+        <p id={bodyId} className="text-sm text-ink-base leading-relaxed">{step.body}</p>
         <div className="flex items-center gap-2 mt-5">
           {stepIndex > 0 ? (
             <button

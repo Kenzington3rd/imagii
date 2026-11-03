@@ -6,6 +6,7 @@ import {
   type CompressorPreset
 } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { useGestureEnd } from './state/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 
 const COMPRESSOR_OPTIONS: Array<{ value: CompressorPreset; label: string }> = [
@@ -99,9 +100,11 @@ function LoudnessTargetInput(props: {
 export function LevelsPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
   const patchChain = useAudioStore((s) => s.patchChain)
+  const gesture = useGestureEnd()
 
   return (
-    <div className="card p-4 flex flex-col gap-4">
+    // T-147 (T-78): Manual gain's drag is one undo step (its key); the card closes the window on pointer up and on blur (`useGestureEnd`), as ColorGradePanel does.
+    <div className="card p-4 flex flex-col gap-4" {...gesture}>
       <PanelHeader icon="sliders">Levels</PanelHeader>
 
       <div>
@@ -198,7 +201,7 @@ export function LevelsPanel(): JSX.Element {
           max={12}
           step={0.5}
           value={chain.gainDb}
-          onChange={(e) => patchChain({ gainDb: Number(e.target.value) })}
+          onChange={(e) => patchChain({ gainDb: Number(e.target.value) }, 'gain')}
           className="w-full"
           // M11 fix (round 15)
           aria-label="Manual gain in decibels"

@@ -1319,7 +1319,7 @@ IMG-PREC.
   `openModalCount` — `?` must stay live per T-72); E2E drives a letter
   key under an open coachmark and asserts the canvas did not change;
   existing hotkey and `?`-during-tutorial coverage green.
-- **Status:** open — rides T-147 (round 96)
+- **Status:** done (round 96, with T-147 — see its Done entry)
 
 ## T-76 — saving a result already on the board toasts "Saved to X" without saving
 
@@ -1336,7 +1336,7 @@ IMG-PREC.
   count, or a flag on the IPC result — pick and document); E2E drives
   the double save and asserts both toasts; the negative discriminates
   per round-21 protocol.
-- **Status:** open — rides T-147 (round 96)
+- **Status:** done (round 96, with T-147 — see its Done entry)
 
 ## T-77 — aria-modal is a promise the DOM does not keep: background stays in the AT tree
 
@@ -1375,7 +1375,7 @@ IMG-PREC.
   is one undo step and two consecutive drags are two; unit tests on
   both stores; E2E drives a real drag per studio and walks Undo once
   back to the pre-drag value; existing undo coverage green.
-- **Status:** open — rides T-147 (round 96)
+- **Status:** done (round 96, with T-147 — see its Done entry)
 
 ## T-79 — the launch-time thumbnail LRU deletes images boards still reference
 
@@ -6602,7 +6602,7 @@ IMG-PREC.
   twice, `npm run test:media` and the FULL Playwright suite green before handback; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only. T-75,
   T-76 and T-78 close with this ticket; T-77 stays open (backlog).
-- **Status:** open (round 96)
+- **Status:** done (round 96 — see the Done entry)
 
 ---
 
@@ -7131,6 +7131,59 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 96 — T-147, all seven counted items and the T-75 / T-78 folds,
+landed in the commit that carries this entry (T-75, T-76 and T-78 close
+with it; T-77 stays backlog). Three Sonnet workers in fresh clones of
+f4f4422, disjoint files, merged by the expediter into one tree.
+Track A (audio): the stream-copy re-attach mux measures against the
+picture's length like the re-encode (the "instant" comment was a guess;
+the copy re-encodes the sound to AAC, ~20x realtime), and every pass
+names itself with a 0% event before its spawn (`runFfmpegJob`); the
+audio-only export's success is always `toastSaved` (Show in folder, no
+Edit in Video Studio), and another sound's Export row names the file
+the running export is for; the Fix wizard's options are a group named
+by the visible question and Apply is described by the summary; T-78
+audio: `audioStore` coalesces by `historyKey` / `endGesture`, and the
+cards' `useGestureEnd` ignores the blur a press causes (the bare
+`onPointerUp` + `onBlur` pair split the first drag after a click in the
+card — red on the worker's own e2e). Track B (Video Studio, Stream
+Graphics, hotkeys): `videoSessionHasLoss` (more than one clip, a changed
+clip, undo steps, scan candidates, a pasted chat log, found spikes — not
+a transcript on disk) decides whether Close and Edit-in-Video-Studio
+ask; `jpgTransparencyNote` under the Export card; T-75: the studio
+hotkey guards read `anyDialogClaim()` (every Modal and the coachmark
+take a claim), `?` keeps the Modal count; T-78 image: `canvasStore`
+coalesces by key, the Properties panel ends on release and blur
+through `handleGestureEndPointerUp(event, end)`. Track C (References,
+the tour): a duplicate save toasts `Already on "X"` and pushes no
+step (T-76, renderer-only, by the board's item count); the tour's card
+is described by its body and a polite region says each step it moves
+to; the search's outcome sits in an always-mounted status region with
+an sr-only "N results." line. Deviations, accepted: the start event in
+`runFfmpegJob` (every pass); `useGestureEnd`; `videoDiscardMessage`
+takes the state; Stroke px and the Text box keyed too;
+`source.probe.duration`; moved docClaims cites (4 in B, 1 IC cite in
+C); "1 result." singular. Ledgers: A 17 RED / 59 mutation rows, B 11 /
+45, C 5 / 18 — every survivor disclosed and either killed after a
+strengthened test or argued equivalent; every restore byte-identical.
+Found not fixed: Video Studio's ColorGradePanel and sibling cards use
+the bare `onPointerUp` + `onBlur` pair and very likely split the first
+drag after a click in the card the same way (unmeasured); the audio
+loudness-target box commits a step per valid keystroke;
+`canvasStore.updateLayer` on a missing id pushes a no-op step;
+`Modal.isModalOpen` is now an unused export. Expedited personally:
+three independent mutations at seams no ledger row names — A: the mux
+argv without `-progress pipe:1` → Layer 5 "T-147 (1)" red ("the bar
+moved between its 0 and its 100"); B: the Text box's `'text'` key
+removed → the interactionWiring Properties pin red; C: the tour's
+announcement div without `aria-live` → e2e "T-147 (6a)" red ("one polite
+region in the card": 0) — each restored byte-identical, sha256
+verified; Track A's audio Layer 5 blocks on 6.1.1: 116 passed, and the
+one failure (the ansi-demuxer probe test's own ffprobe precondition)
+fails identically on the unchanged base; on the MERGED tree: verify x2
+(204/5914), test:media on 7.0.2 (427 passed | 13 skipped of 440, 546 s), FULL Playwright 561/561 (47.1 min, no flake). Applied to f4f4422 by
+`git apply` with every file byte-identical to the expedited merge.
 
 Round 95 — T-146 item 1 and the non-counted part, landed in the
 commit that carries this entry. Worked by one Sonnet in a fresh clone

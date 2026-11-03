@@ -260,17 +260,45 @@ function makeDefaultClip(duration: number, index: number): Clip {
   }
 }
 
+/** What `videoSessionHasLoss` and `videoDiscardMessage` read: the slice of the store that says what Close or a replace would throw away. */
+type VideoSessionView = Pick<VideoStudioState, 'source' | 'clips' | 'history' | 'derived'>
+
 /**
- * T-119: the question asked before the video being edited goes away, or null when there is nothing to
- * lose. Loading a source always makes at least one clip, so "nothing loaded" is zero clips. Close asks it
+ * T-147 (3): is there anything in the open video that Close (or a replace) would throw away and that took the person time? `clearSource` / `loadSource` empty
+ * these, so this is the list of what counts:
+ *  - clips beyond the one `loadSource` made, or that one clip changed from the whole-video clip (`isPristineWholeVideoClip`: a trim, a rename, a crop, an
+ *    overlay, a grade, speed, auto zoom, hype shake, a platform choice);
+ *  - an undo history with a step in it (`history.past`): edits made and undone back to the start are still a session, and the steps go too;
+ *  - a highlight scan's candidates (`derived.scanCandidates`, minutes of work), a chat log pasted into either finder (`highlightChat`, `spikeChat`) and the
+ *    spikes found in one (`derived.spikes`).
+ * What does NOT count: the transcript (`derived.transcript`, `srtPath`) - the file is cached on disk and opens again at once - the output preview (`previewUrl`,
+ * a render a button makes again) and the playhead. A video nobody touched has none of the above, so closing it is no loss and asks nothing (T-119 (3)'s own
+ * "asking nothing when there is nothing to lose": it was implemented as "zero clips", a state a loaded video never has).
+ */
+export function videoSessionHasLoss(state: VideoSessionView): boolean {
+  const { source, clips, history, derived } = state
+  if (source === null || clips.length === 0) return false
+  if (clips.length > 1 || !isPristineWholeVideoClip(clips[0]!, source.probe.duration)) return true
+  if (history.past.length > 0) return true
+  return derived.scanCandidates !== null || derived.spikes !== null || derived.highlightChat !== '' || derived.spikeChat !== ''
+}
+
+/**
+ * T-119: the question asked before the video being edited goes away, or null when there is nothing to ask. Close asks it
  * (`'close'`, since round 18); Record's "Edit in Video Studio" asks it before it replaces the open video
  * (`'replace'`: nothing is being closed when a button on a recording loads another file, T-113's
  * lead-in for Clean audio). The same list in both so neither studio can say less than the other. `jobsNote` (T-144) is the one sentence Close adds while
  * a long job is running; Record's replace passes none (the new video's own panels draw the running job).
+ *
+ * T-147 (3): it asks about what is lost (`videoSessionHasLoss`), not about whether a video is open: a video nobody touched has nothing to lose and Close
+ * just closes it. A running job is a question by itself then - the lead-in and the one sentence, the shape Audio Studio's Close has (T-146). No video open
+ * (no clips) is asked nothing.
  */
-export function videoDiscardMessage(clipCount: number, lead: 'close' | 'replace' = 'close', jobsNote: string | null = null): string | null {
+export function videoDiscardMessage(state: VideoSessionView, lead: 'close' | 'replace' = 'close', jobsNote: string | null = null): string | null {
+  const clipCount = state.clips.length
   if (clipCount <= 0) return null
   const leadIn = lead === 'close' ? 'Close this video?' : "Replace the video you're editing?"
+  if (!videoSessionHasLoss(state)) return jobsNote ? `${leadIn} ${jobsNote}` : null
   // T-120: "1 clip and their edits" read wrong at one. The possessive agrees with the count, like the noun.
   const base = `${leadIn} ${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits will be discarded.`
   // T-144: Close takes the panels away and leaves the jobs running; `jobsNote` is the sentence that says so (null when nothing is running).
@@ -790,14 +818,18 @@ export function endsGestureOnPointerUp(
 
 /**
  * The panel-level `onPointerUp` for every editing panel that holds text
- * fields (ClipList, TextOverlayEditor). ColorGradePanel has only sliders,
+ * fields (ClipList, TextOverlayEditor, and Stream Graphics' Properties). ColorGradePanel has only sliders,
  * checkboxes and a button, so its bare `endGesture` is already correct.
  */
-export function handleGestureEndPointerUp(event: ReactPointerEvent<HTMLElement>): void {
+export function handleGestureEndPointerUp(
+  event: ReactPointerEvent<HTMLElement>,
+  // T-147 (T-78): Stream Graphics' Properties panel has the same window on its own store and passes that store's `endGesture`; the rule is one.
+  end: () => void = () => useVideoStore.getState().endGesture()
+): void {
   const target = event.target instanceof HTMLElement ? event.target : null
   if (target !== null) {
     const type = target instanceof HTMLInputElement ? target.type : null
     if (!endsGestureOnPointerUp(target.tagName, type, target === document.activeElement)) return
   }
-  useVideoStore.getState().endGesture()
+  end()
 }

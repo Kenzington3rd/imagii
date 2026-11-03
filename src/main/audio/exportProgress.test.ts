@@ -76,8 +76,8 @@ async function progressOf(chain: Partial<typeof DEFAULT_CHAIN_SPEC>): Promise<Ev
   )
   return seen
 }
-/** The runner's own events, without the synthetic 100% every pass ends with. */
-const measured = (seen: Event[], pass: string): number[] => seen.filter((e) => e.pass === pass && e.percent < 100).map((e) => e.percent)
+/** The runner's own events, without the 0% every pass starts with (T-147 (1)) and the synthetic 100% every pass ends with. */
+const measured = (seen: Event[], pass: string): number[] => seen.filter((e) => e.pass === pass && e.percent > 0 && e.percent < 100).map((e) => e.percent)
 
 beforeEach(() => {
   spawned.length = 0
@@ -143,5 +143,45 @@ describe('the audio export\'s progress is over the length of the file it writes 
     ).rejects.toThrow('Everything is cut out. Click a mark to put a part back.')
     expect(spawned, 'nothing was spawned').toEqual([])
     expect(seen).toEqual([])
+  })
+})
+
+// T-147 (1): a pass names itself the moment it starts. The store keeps the LAST event it was sent, and a pass prints nothing until ffmpeg's first `out_time`
+// has moved the bar more than a point, so the row read the previous pass ("measuring", the render's 100%) for as long as that took. Every pass opens with one
+// event at 0 - before its child exists - and the loudness export's two passes each do.
+describe('every pass of the audio export opens with an event at 0 (T-147 (1))', () => {
+  it('the render pass: `render` at 0 first, then its movement, then the 100', async () => {
+    const seen = await progressOf({})
+    expect(seen.map((e) => `${e.pass}:${Math.round(e.percent)}`)).toEqual(['render:0', 'render:33', 'render:100'])
+  })
+
+  it('a loudness export: `measure` at 0, the measure pass, `render` at 0 (the label leaves "measuring" now), the render, the 100', async () => {
+    const seen = await progressOf({ loudnorm: true, loudnormTargetLufs: -16 })
+    expect(seen.map((e) => `${e.pass}:${Math.round(e.percent)}`)).toEqual([
+      'measure:0',
+      'measure:33',
+      'render:0',
+      'render:33',
+      'render:100'
+    ])
+  })
+
+  it('the start event goes out before the pass\'s child is spawned', async () => {
+    const before: number[] = []
+    const seen: Event[] = []
+    await runAudioExport(
+      {
+        jobId: 'order-job',
+        sourcePath: path.join(tmpdir(), 'long.wav'),
+        outputPath: path.join(tmpdir(), 'out.wav'),
+        chain: { ...DEFAULT_CHAIN_SPEC },
+        format: 'wav'
+      },
+      (p) => {
+        if (p.percent === 0) before.push(spawned.length)
+        seen.push({ pass: p.pass, percent: p.percent })
+      }
+    )
+    expect(before, 'the 0 came with nothing spawned yet').toEqual([0])
   })
 })

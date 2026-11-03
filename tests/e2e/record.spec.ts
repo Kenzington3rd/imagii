@@ -1976,13 +1976,15 @@ test.describe('T-27 Record Studio', () => {
 
   // T-119 (3): the save toast's "Edit in Video Studio" replaced whatever Video Studio held with no question,
   // while Video Studio's own Close and T-112's Clean audio both ask first. Two real takes, converted to MP4:
-  // the first goes to an empty studio (nothing to lose, nothing asked), the second finds that take open.
-  test('"Edit in Video Studio" asks before it replaces the video being edited, and asks nothing when nothing is open (T-119)', async () => {
+  // the first goes to an empty studio (nothing to lose, nothing asked), the second finds that take open. T-147 (3): the question is about what
+  // would be LOST, so a second take over an untouched first asks nothing either, and a third over an edited second asks.
+  test('"Edit in Video Studio" asks before it replaces the video being edited, and asks nothing when nothing is open or nothing was changed (T-119, T-147 (3))', async () => {
     test.setTimeout(300_000)
     const root = makeRoot('replace')
     const userDataDir = path.join(root, 'userData')
     const firstTake = path.join(root, 'first-take.mp4')
     const secondTake = path.join(root, 'second-take.mp4')
+    const thirdTake = path.join(root, 'third-take.mp4')
     mkdirSync(root, { recursive: true })
     seedUserData(userDataDir, SEED)
 
@@ -2024,25 +2026,40 @@ test.describe('T-27 Record Studio', () => {
       await window.mouse.move(2, 2)
       await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, { timeout: 15_000 })
 
-      // A second take, with the first one open: now there is a clip and its edits to lose.
+      // T-147 (3): a second take, with the first one open but UNTOUCHED (one clip nobody changed, no undo step, nothing scanned): there is
+      // nothing to lose, so it replaces it without a question - the question used to claim "1 clip and its edits" of a video nobody edited.
       await window.getByRole('link', { name: 'Home' }).click()
       await gotoRecordFromHome(window)
       await recordTake(secondTake)
       await window.getByRole('button', { name: 'Edit in Video Studio' }).click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText('second-take.mp4').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('first-take.mp4')).toHaveCount(0)
+      expect(messages, 'an untouched video has nothing to lose').toEqual([])
+      await window.mouse.move(2, 2)
+      await expect(window.locator('[data-rht-toaster] [role="status"]')).toHaveCount(0, { timeout: 15_000 })
+
+      // A third take, with the second one edited (a clip added): now there is a clip and its edits to lose.
+      await window.getByRole('button', { name: '+ Add clip' }).click()
+      await expect(window.getByRole('button', { name: 'Export 2 files' })).toBeVisible()
+      await window.getByRole('link', { name: 'Home' }).click()
+      await gotoRecordFromHome(window)
+      await recordTake(thirdTake)
+      await window.getByRole('button', { name: 'Edit in Video Studio' }).click()
       await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
-      expect(messages[0]).toBe("Replace the video you're editing? 1 clip and its edits will be discarded.")
-      // Declined: still on Record, the toast's button is still there, and the first take is still the open video.
+      expect(messages[0]).toBe("Replace the video you're editing? 2 clips and their edits will be discarded.")
+      // Declined: still on Record, the toast's button is still there, and the second take is still the open video.
       await window.waitForTimeout(800)
       await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible()
       await expect(window.locator('h1', { hasText: 'Video Studio' })).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Edit in Video Studio' })).toBeVisible()
 
-      // Accepted: the second take replaces it.
+      // Accepted: the third take replaces it.
       answer = 'accept'
       await window.getByRole('button', { name: 'Edit in Video Studio' }).click()
       await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
-      await expect(window.getByText('second-take.mp4').first()).toBeVisible({ timeout: 20_000 })
-      await expect(window.getByText('first-take.mp4')).toHaveCount(0)
+      await expect(window.getByText('third-take.mp4').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('second-take.mp4')).toHaveCount(0)
       expect(messages).toHaveLength(2)
     } finally {
       await app.close()

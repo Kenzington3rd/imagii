@@ -2941,7 +2941,7 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('close asks first — dismissing keeps the video, accepting returns the drop zone', async () => {
+  test('a trimmed video: close asks first — dismissing keeps the video, accepting returns the drop zone', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('close')
     try {
@@ -2954,6 +2954,13 @@ test.describe('Video Studio core editing surface', () => {
         if (answer === 'accept') await dialog.accept()
         else await dialog.dismiss()
       })
+
+      // T-147 (3): the video is trimmed first, since an untouched one has nothing to lose and Close asks nothing (the case below). The real
+      // sequence the guide promises: click the track, press I.
+      const at40 = await trackPointAt(window, 0.4)
+      await window.mouse.click(at40.x, at40.y)
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.5)
 
       // ── declined: everything stays ──
       await window.getByRole('button', { name: 'Close' }).click()
@@ -3051,6 +3058,30 @@ test.describe('Video Studio core editing surface', () => {
       await window.keyboard.press('Escape')
       await expect(window.getByRole('dialog')).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-147 (3): Close asks about what would be LOST. A loaded video always has one clip, so the old test of "is there a clip" asked "1 clip and its edits will be
+// discarded" of a video nobody touched, while Audio Studio's Close asks nothing of an untouched sound.
+test.describe('T-147 (3): closing a video nobody touched asks nothing', () => {
+  test('open a video, press Close: no dialog, and the importer is back', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('close-untouched')
+    try {
+      // An unhandled dialog is auto-dismissed by Playwright, which would look like a question that was declined: the event itself is what is counted.
+      const dialogs: string[] = []
+      window.on('dialog', (dialog) => {
+        dialogs.push(dialog.message())
+        void dialog.dismiss()
+      })
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await expect(window.locator('video')).toHaveCount(0)
+      expect(dialogs, 'no dialog event fired').toEqual([])
     } finally {
       await app.close()
     }

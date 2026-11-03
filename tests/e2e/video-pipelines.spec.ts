@@ -5585,8 +5585,10 @@ test.describe('single-output panels', () => {
       await expect(header.getByText(sourceName, { exact: true })).toBeVisible()
       const editHere = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Edit in Video Studio', exact: true })
       await expect(editHere, 'the saved toast carries the action').toBeVisible()
+      // T-147 (3): a reframe leaves the clip as loaded, and a video nobody edited has nothing to lose (no question). One clip added makes it a session.
+      await window.getByRole('button', { name: '+ Add clip' }).click()
       await editHere.click()
-      await expect.poll(() => asked, { timeout: 10_000 }).toEqual(["Replace the video you're editing? 1 clip and its edits will be discarded."])
+      await expect.poll(() => asked, { timeout: 10_000 }).toEqual(["Replace the video you're editing? 2 clips and their edits will be discarded."])
       // Declined: the source being reframed is still the open video, with its Reframe panel, and the toast's button is still there.
       await window.waitForTimeout(800)
       await expect(header.getByText(sourceName, { exact: true })).toBeVisible()
@@ -12472,12 +12474,13 @@ test.describe('T-144 (1): closing the video leaves the running job on screen, wi
     }
   })
 
-  test('Close with nothing running asks only what it always did, and draws no card: the region is there, empty, and takes no room', async () => {
+  test('Close with nothing running and nothing edited asks nothing, and draws no card: the region is there, empty, and takes no room', async () => {
     test.setTimeout(120_000)
     const { app, window } = await launchWithVideo('t144idle', clipSrc)
     try {
       const asked = await closeVideo(window)
-      expect(asked).toBe('Close this video? 1 clip and its edits will be discarded.')
+      // T-147 (3): an untouched video has nothing to lose, so with nothing running Close asks nothing at all.
+      expect(asked).toBe('')
       await expect(window.getByText('The video is closed;')).toHaveCount(0)
       // The kit's region and the jobs' are mounted and empty, and take no room (the studio's column keeps one gap between the header and the importer).
       const sizes = await window.evaluate(() =>

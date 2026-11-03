@@ -49,13 +49,17 @@ export function ReferencePanel(): JSX.Element {
     result: SearchResult
   ): Promise<void> {
     // T-135 (8): the save is a write main can refuse (the thumbnail's fetch, a full disk); it had no catch, so a refused Save looked like a saved one.
+    let added: boolean
     try {
-      await addToCollection(collectionId, result)
+      added = await addToCollection(collectionId, result)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't save that picture." })
       return
     }
-    toast.success(`Saved to "${boardName}"`)
+    // T-76 (T-147 (5)): main keeps one copy of a picture per board and hands the board back unchanged, so a second save is a true "already there"
+    // - not a write, so no success mark and no Undo step (the store pushes none).
+    if (added) toast.success(`Saved to "${boardName}"`)
+    else toast(`Already on "${boardName}"`)
   }
 
   function saveResult(result: SearchResult): void {
@@ -91,6 +95,10 @@ export function ReferencePanel(): JSX.Element {
     })
   }
 
+  const foundCount = response?.results.length ?? 0
+  const noResults = response !== null && foundCount === 0 && !response.notice && !loading
+  const hasOutcome = Boolean(error) || Boolean(response?.notice) || noResults
+
   return (
     <div className="flex flex-col gap-4">
       <NameDialog
@@ -125,23 +133,30 @@ export function ReferencePanel(): JSX.Element {
         </span>
       </p>
 
-      {error ? (
-        <div className="card p-3 border-danger-strong/40 text-sm text-danger-soft">{error}</div>
-      ) : null}
+      {/* T-147 (7): the outcome of a search is announced. One status region, always mounted (a live region that arrives together with its content is
+          not reliably read - the Player's and GifPanel's wrapper, T-112, T-114), holding the error, the notice, "No results." and, for a search that
+          found pictures, how many. Empty it is still a flex item with a 16 px gap on each side, so `-mb-4` takes the second gap back. */}
+      <div role="status" className={`flex flex-col gap-4${hasOutcome ? '' : ' -mb-4'}`}>
+        {error ? (
+          <div className="card p-3 border-danger-strong/40 text-sm text-danger-soft">{error}</div>
+        ) : null}
 
-      {response?.notice ? (
-        <div className="card p-3 border-ember/40 text-sm text-warn">
-          {response.notice}
-        </div>
-      ) : null}
+        {response?.notice ? (
+          <div className="card p-3 border-ember/40 text-sm text-warn">
+            {response.notice}
+          </div>
+        ) : null}
 
-      {/* "No results." is the answer to a search that RAN. A response carrying
-          a notice is a search that could not run — since T-30 that is the
-          common failure view, because a first-hop outage lands here too — and
-          printing both said the search worked and found nothing (T-66). */}
-      {response && response.results.length === 0 && !response.notice && !loading ? (
-        <p className="text-sm text-ink-dim">No results.</p>
-      ) : null}
+        {/* "No results." is the answer to a search that RAN. A response carrying
+            a notice is a search that could not run — since T-30 that is the
+            common failure view, because a first-hop outage lands here too — and
+            printing both said the search worked and found nothing (T-66). */}
+        {noResults ? <p className="text-sm text-ink-dim">No results.</p> : null}
+
+        {foundCount > 0 && !loading ? (
+          <span className="sr-only">{foundCount === 1 ? '1 result.' : `${foundCount} results.`}</span>
+        ) : null}
+      </div>
 
       {response && response.results.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

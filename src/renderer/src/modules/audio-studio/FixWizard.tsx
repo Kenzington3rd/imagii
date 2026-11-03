@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { Modal } from '../../components/Modal'
@@ -46,6 +46,11 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
   const mains = useAudioStore((s) => (s.chain.humHz === 50 ? 50 : 60))
   const [answers, setAnswers] = useState<FixAnswers>(EMPTY_ANSWERS)
   const [step, setStep] = useState(0)
+  // T-147 (6b): the visible heading's id. A step's options are a group NAMED by it and the summary's Apply is DESCRIBED by the list under it, so a screen reader that is
+  // moved onto the first option (the effect below) hears the question with it ("Is there background noise?, group, None to speak of, button"), not a bare "Sounds dry,
+  // button". Only one step is mounted at a time, so one id serves them all. Declared with the other hooks, ahead of the early return.
+  const headingId = useId()
+  const summaryId = useId()
 
   // T-119: every answer replaces the buttons the person just pressed (a different list of options, or the
   // summary), so the focused element is unmounted and keyboard focus fell to the page behind the dialog;
@@ -95,10 +100,10 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
       >
         <div onKeyDown={ignoreHeldEnter}>
         <h2 className="text-lg font-semibold mb-2">Ready to apply</h2>
-          <p className="text-sm text-ink-muted mb-4">
+          <p id={`${summaryId}-lead`} className="text-sm text-ink-muted mb-4">
             Based on your answers, imagii will set:
           </p>
-          <ul className="text-sm flex flex-col gap-1 mb-4">
+          <ul id={summaryId} className="text-sm flex flex-col gap-1 mb-4">
             {fixSummary(patch).map((line) => (
               <li key={line}>· {line}</li>
             ))}
@@ -123,6 +128,7 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           <button
             ref={focusRef}
             className="btn-primary px-4 py-2 text-sm"
+            aria-describedby={`${summaryId}-lead ${summaryId}`}
             onClick={() => {
               patchChain(patch)
               // T-125 (19): this sentence is the only place that says the cleanup waits for the export, and a success toast
@@ -165,8 +171,8 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           Close
         </button>
       </div>
-      <h2 className="text-lg font-semibold mb-4">{q.question}</h2>
-      <div className="flex flex-col gap-2">
+      <h2 id={headingId} className="text-lg font-semibold mb-4">{q.question}</h2>
+      <div role="group" aria-labelledby={headingId} className="flex flex-col gap-2">
         {q.options.map((opt, i) => (
           <button
             key={String(opt.value)}

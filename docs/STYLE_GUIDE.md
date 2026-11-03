@@ -612,9 +612,10 @@ Repeated UI is a component, not copy-paste:
   needs, the Fix Wizard's "Cleanup configured. It is applied when you export…" and the mood board's "Added to canvas as a
   reference — it won't be in your export", pass `{ duration: ACTION_TOAST_MS }` themselves) and the button the full
   name "Show in folder"; `extra` adds "Edit in Video Studio", Record's, (T-123) Reframe's and (T-124 (20)) the audio re-attach's (the MUX output
-  only: an audio-only export has no video to open), all
+  only: an audio-only export has no video to open, and its toast is the same helper with no `extra`, T-147 (2): ALWAYS, so the way to
+  the file does not depend on a panel that closing the sound removed), all
   through `useEditInVideoStudio` (`lib/editInVideoStudio.ts`): one hook that asks `videoDiscardMessage`
-  ("Replace the video you're editing?") before the load replaces the open video, loads, then navigates, with
+  ("Replace the video you're editing?", only when `videoSessionHasLoss`: T-147 (3), a video nobody touched is no loss) before the load replaces the open video, loads, then navigates, with
   the caller's own sentence for a file that will not open. A second copy of that bridge is a bug. `message`
   is a completion sentence with no trailing period ("Saved the GIF"). A panel never
   builds its own reveal button inside a toast —
@@ -668,7 +669,7 @@ Repeated UI is a component, not copy-paste:
   long as it was there (the overlay's and the hint lines' own promises). The sets are `NON_TEXT_INPUT_TYPES`, lifted out
   of `videoStore` (which still reads it for `endsGestureOnPointerUp`). Which guard asks which: Stream Graphics' tool keys
   (V R O L P, Delete), the Player's column and the Timeline's Playhead slider ask `focusOwnsKey`; the tool keys also return
-  early for `isModalOpen()` (T-68). T-124 (29): all three also return early for `hasChordModifier(e)` (Ctrl, Meta or Alt held;
+  early for any open dialog (T-68; since T-147 (T-75) that is `anyDialogClaim()` from `hooks/useFocusTrap.ts`, the claim stack that every `<Modal>` AND the tutorial coachmark take a claim on, not `isModalOpen()`, which leaves the coachmark out so that `?` can open over a tour; Ctrl+Z / Ctrl+Y and Record's Escape-to-stop ask it too, and `?` keeps `openModalCount`). T-124 (29): all three also return early for `hasChordModifier(e)` (Ctrl, Meta or Alt held;
   Shift is not one, `R` and `r` are one shortcut): a bare-letter shortcut is for the bare letter, and Ctrl+R / Ctrl+O / Ctrl+L /
   Ctrl+P (Alt+Left too) belong to the window or the browser. Stream Graphics computed `ctrl` and only `v` honored it, so four
   chords switched tools; the Timeline and the Player read no modifier at all, so Ctrl+O set an Out point and was swallowed by
@@ -676,7 +677,7 @@ Repeated UI is a component, not copy-paste:
   panels, not Modals, so the modal check never covered them (typing `p` to reach PNG switched the tool, and Delete over one
   removed the selected layer). Ctrl+Z / Ctrl+Y and `?` ask `isTextEntryTarget` alone and NOT for a select, because a select has no
   Ctrl+Z and no `?` of its own and the studio's undo and the overlay should still answer from one
-  (`useUndoRedoHotkeys.test.ts`, `HotkeyOverlay.test.ts`). `T-78` (a step per tick of a slider) is a separate, open item.
+  (`useUndoRedoHotkeys.test.ts`, `HotkeyOverlay.test.ts`). `T-78` (a step per tick of a slider), closed in T-147: Audio Studio's sliders coalesce a drag into one step (`audioStore.historyKey` / `endGesture`, the cards' `useGestureEnd`, which ignores the blur a press causes), and Stream Graphics' `canvasStore.updateLayer(id, patch, key)` coalesces the way the video store does (`historyKey`, `endGesture`; the Properties panel ends the window on `onPointerUp` through `handleGestureEndPointerUp(event, endGesture)` and on `onBlur`).
 - **The timeline's keyboard path is the Playhead slider's (T-119, T-120, T-121).** A click on the track hands the keyboard to the
   slider, the one focusable element in the track, not to the Player's column, so `Timeline.onScrubKey` hears every key the
   Player does: Space (the Player's own play / pause, through its transport), the arrows (a 0.1 s nudge), `,` / `.` (one

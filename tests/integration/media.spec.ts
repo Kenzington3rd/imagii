@@ -11233,3 +11233,51 @@ describe('the re-attach\'s scratch WAV never replaces a file the person already 
     }
   }, 120_000)
 })
+
+describe('the stream-copy re-attach reports its mux as it goes (real ffmpeg, T-147 (1))', () => {
+  // `attachAudio` gave the copy path a total of 0 ("a stream-copy mux is instant"), so no `mux` event came until the final 100: the store kept the render's last
+  // one and the dialog read "Step 1 of 2 - rendering 100%" for the whole mux. The mux is NOT instant - it re-encodes the SOUND to AAC 192k (about 20x realtime on the
+  // bundled 7.0.2: a 2 h VOD is minutes) - and ffmpeg prints `out_time` for it throughout, so the copy measures against the picture's length like the re-encode does,
+  // and a `mux` event at 0 goes out the moment the pass starts. The source is long enough that the AAC encode spans several of ffmpeg's half-second progress prints;
+  // small and ultrafast so making it is not the cost. No cuts: that is the copy path (a cut re-encodes the picture, which always had a bar).
+  const SOURCE_SEC = 120
+
+  it('a 120 s H.264 video re-attached with no cuts: the picture is copied, and the mux has events between its 0 and its 100', async () => {
+    const dir = path.join(workDir, 't147-1-mux-bar')
+    await mkdir(dir, { recursive: true })
+    const video = path.join(dir, 'long-take.mp4')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', `testsrc2=size=160x120:rate=10:duration=${SOURCE_SEC}`,
+      '-f', 'lavfi', '-i', `sine=frequency=330:duration=${SOURCE_SEC}`,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k', video
+    ])
+    const extracted = await extractAudioFromVideo(video)
+    try {
+      const out = path.join(dir, 'long-take-cleaned.mp4')
+      const events: Array<{ pass: string; percent: number }> = []
+      await runAudioReattach(
+        { jobId: 't147-1-mux-bar', videoPath: video, sourcePath: extracted.wavPath, outputPath: out, chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] } },
+        (p) => events.push({ pass: p.pass, percent: p.percent })
+      )
+
+      // It really was the copy path: the picture in the output is the source's own H.264, whole.
+      const info = await ffprobeJson(out)
+      expect(info.streams.find((s) => s.codec_type === 'video')?.codec_name).toBe('h264')
+      near(Number((info as { format?: { duration?: string } }).format?.duration), SOURCE_SEC, 0.5, 'the output is the picture\'s length')
+
+      const firstMux = events.findIndex((e) => e.pass === 'mux')
+      expect(firstMux, 'the mux announced itself').toBeGreaterThan(0)
+      expect(events[firstMux], 'and its first word is 0, before any figure').toEqual({ pass: 'mux', percent: 0 })
+      expect(events.slice(0, firstMux).every((e) => e.pass === 'render'), 'the render finished before the mux began').toBe(true)
+      const mux = events.slice(firstMux)
+      expect(mux.every((e) => e.pass === 'mux'), 'nothing but the mux after it').toBe(true)
+      expect(mux[mux.length - 1], 'it ends at 100').toEqual({ pass: 'mux', percent: 100 })
+      const between = mux.filter((e) => e.percent > 0 && e.percent < 100)
+      expect(between.length, 'the bar moved between its 0 and its 100: ffmpeg printed the AAC encode\'s progress, and it was measured against the picture').toBeGreaterThan(0)
+      expect(mux.map((e) => e.percent), 'never backwards').toEqual([...mux.map((e) => e.percent)].sort((a, b) => a - b))
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 240_000)
+})

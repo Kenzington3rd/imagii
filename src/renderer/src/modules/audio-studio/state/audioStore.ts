@@ -49,6 +49,9 @@ interface AudioStudioState {
   drawing: WaveformDrawing | null
   chain: ChainSpec
   history: History
+  /** T-147 (T-78): the key of the gesture (a slider drag, a run of arrow keys) whose first edit already pushed its step, or null. A coalescible edit with the SAME key
+   *  pushes nothing, so one drag is one undo step; discrete edits, undo / redo, load / clear and `endGesture` reset it. The video store's `historyKey`. */
+  historyKey: string | null
   currentTime: number
   loading: boolean
 
@@ -63,10 +66,15 @@ interface AudioStudioState {
   clearSource: () => void
   setCurrentTime: (t: number) => void
 
-  patchChain: (patch: Partial<ChainSpec>) => void
+  /** `key` names the control a slider belongs to ('gain', 'denoise.nf'): consecutive patches with the same key are ONE history step. No key (a checkbox, a select,
+   *  a button) is always a step of its own. */
+  patchChain: (patch: Partial<ChainSpec>, key?: string) => void
   addCutRegion: (region: CutRegion) => void
   removeCutRegion: (index: number) => void
-  setSecondaryTrack: (track: SecondaryTrack | null) => void
+  /** Always a step of its own, except for a slider of the second track, which passes the control's `key` as `patchChain` does. */
+  setSecondaryTrack: (track: SecondaryTrack | null, key?: string) => void
+  /** Close the coalescing window: the panels call it on pointer up and on blur, so the next drag (or the next run of arrow keys) is a new step. */
+  endGesture: () => void
 
   undo: () => void
   redo: () => void
@@ -122,11 +130,20 @@ async function drawWaveform(source: AudioSource, jobId: string): Promise<void> {
     setState({ waveform: answer, drawing: null })
   } catch (err) {
     if (getState().source !== source) return
-    setState({ source: null, waveform: null, drawing: null, chain: DEFAULT_CHAIN_SPEC, history: { past: [], future: [] }, currentTime: 0 })
+    setState({ source: null, waveform: null, drawing: null, chain: DEFAULT_CHAIN_SPEC, history: { past: [], future: [] }, historyKey: null, currentTime: 0 })
     reportFailure(err, { failed: "Couldn't draw the waveform." })
   } finally {
     off()
   }
+}
+
+/**
+ * The state fields to spread into an edit's `set()`: this edit's step in the history, unless it is the continuation of a gesture. `key` null is a discrete edit (always
+ * a step, and it closes any window); a key that matches `historyKey` pushes nothing, because the first event of the gesture already captured the state before it.
+ */
+function snapshot({ history, historyKey, chain }: AudioStudioState, key: string | null): Partial<AudioStudioState> {
+  if (key !== null && key === historyKey) return {}
+  return { history: pushHistory(history, chain), historyKey: key }
 }
 
 export const useAudioStore = create<AudioStudioState>((set, get) => ({
@@ -135,6 +152,7 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
   drawing: null,
   chain: DEFAULT_CHAIN_SPEC,
   history: { past: [], future: [] },
+  historyKey: null,
   currentTime: 0,
   loading: false,
 
@@ -169,6 +187,7 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
         drawing: { jobId, percent: 0 },
         chain: DEFAULT_CHAIN_SPEC,
         history: { past: [], future: [] },
+        historyKey: null,
         currentTime: 0
       })
       void drawWaveform(source, jobId)
@@ -186,38 +205,35 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
       drawing: null,
       chain: DEFAULT_CHAIN_SPEC,
       history: { past: [], future: [] },
+      historyKey: null,
       currentTime: 0
     })
   },
   setCurrentTime: (t) => set({ currentTime: t }),
 
-  patchChain: (patch) => {
+  patchChain: (patch, key) => {
     const prev = get().chain
-    const next = { ...prev, ...patch }
-    set({ chain: next, history: pushHistory(get().history, prev) })
+    set({ chain: { ...prev, ...patch }, ...snapshot(get(), key ?? null) })
   },
   addCutRegion: (region) => {
     const prev = get().chain
-    set({
-      chain: { ...prev, cutRegions: [...prev.cutRegions, region] },
-      history: pushHistory(get().history, prev)
-    })
+    set({ chain: { ...prev, cutRegions: [...prev.cutRegions, region] }, ...snapshot(get(), null) })
   },
   removeCutRegion: (index) => {
     const prev = get().chain
-    set({
-      chain: { ...prev, cutRegions: prev.cutRegions.filter((_, i) => i !== index) },
-      history: pushHistory(get().history, prev)
-    })
+    set({ chain: { ...prev, cutRegions: prev.cutRegions.filter((_, i) => i !== index) }, ...snapshot(get(), null) })
   },
-  setSecondaryTrack: (track) => {
+  setSecondaryTrack: (track, key) => {
     const prev = get().chain
-    set({
-      chain: { ...prev, secondaryTrack: track },
-      history: pushHistory(get().history, prev)
-    })
+    set({ chain: { ...prev, secondaryTrack: track }, ...snapshot(get(), key ?? null) })
+  },
+  endGesture: () => {
+    // Cheap no-op with no window open: it runs on every pointer-up in three panels, and writing the same null back would wake every subscriber for nothing.
+    if (get().historyKey === null) return
+    set({ historyKey: null })
   },
 
+  // `undo` closes the window; `redo` needs no such reset: an edit clears the redo branch, so a redo never meets an open one.
   undo: () => {
     const { history, chain } = get()
     if (history.past.length === 0) return
@@ -227,7 +243,8 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
       history: {
         past: history.past.slice(0, -1),
         future: [chain, ...history.future]
-      }
+      },
+      historyKey: null
     })
   },
   redo: () => {

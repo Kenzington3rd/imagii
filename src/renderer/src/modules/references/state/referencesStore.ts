@@ -80,7 +80,9 @@ interface ReferencesStudioState {
   deleteCollection: (id: string) => Promise<void>
   renameCollection: (id: string, name: string) => Promise<void>
   selectCollection: (id: string) => void
-  addToCollection: (collectionId: string, result: SearchResult) => Promise<void>
+  /** Resolves true when the picture was added and false when it was already on the board (main dedupes on `fullUrl` and hands the board back
+   *  unchanged). T-76/T-147 (5): the answer comes from the item count in the list this call already re-reads, so no IPC shape changed. */
+  addToCollection: (collectionId: string, result: SearchResult) => Promise<boolean>
   removeFromCollection: (collectionId: string, itemId: string) => Promise<void>
 
   undo: () => void
@@ -201,9 +203,13 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     selectCollection: (id) => set({ selectedCollectionId: id }),
     addToCollection: async (collectionId, result) => {
       const before = snapshot()
+      const count = (list: MoodBoardCollection[]): number => list.find((c) => c.id === collectionId)?.items.length ?? 0
       await window.api.moodboard.addItem(collectionId, result)
       const collections = await window.api.moodboard.list()
-      set({ collections, history: pushHistory(get().history, before) })
+      // A duplicate changed nothing on disk, so it is not a step: pushing one left an Undo that undid nothing, on top of the real steps.
+      const added = count(collections) > count(before.collections)
+      set(added ? { collections, history: pushHistory(get().history, before) } : { collections })
+      return added
     },
     removeFromCollection: async (collectionId, itemId) => {
       const before = snapshot()

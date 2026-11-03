@@ -967,7 +967,7 @@ test.describe('imagii References studio', () => {
       await input.press('Enter')
       await save.click()
       // Same fullUrl, so the store de-duplicates rather than adding a twin —
-      // but the toast still names where it went, and no dialog appears.
+      // the toast still names the board (T-147 (5): as "Already on"), and no dialog appears.
       await expect(dialog).toHaveCount(0)
       await expect
         .poll(() => readToastLog(window).then((l) => l.filter((t) => t.includes('Inspiration'))))
@@ -2450,6 +2450,170 @@ test.describe('T-144 (b): a double press on Create board makes ONE board', () =>
       expect((await readToastLog(window)).filter((t) => t === "Couldn't create that board."), 'one refusal said once, not once per repeat').toHaveLength(1)
       await expect(name, 'and the name stays for the retry').toHaveValue('Refused')
       expect(onDisk().sort()).toEqual(['Double', 'Held', 'Twice'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-76 / T-147 (5): a picture already on the board is not saved again. main dedupes on `fullUrl` and hands the board back unchanged, but the panel toasted
+// `Saved to "X"` for the no-write and the store pushed an Undo step that undid nothing. The renderer learns the difference from the item count of the
+// list it already re-reads: a duplicate says `Already on "X"` and records no step, so ONE Undo takes the real save back. Same stand-in search and
+// local thumbnail socket as the first-save case above; the board is seeded so the first Save does not ask for a name.
+test.describe('T-76 (T-147 (5)): saving a picture that is already on the board', () => {
+  test('"Saved to" then "Already on", and ONE Undo removes the item (no empty step on top of it)', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-dup-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'dupboard.json'),
+      JSON.stringify({ id: 'dupboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+      res.end(png)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      await expect(undo, 'nothing has been done yet').toBeDisabled()
+
+      await save.click()
+      await expect.poll(() => readToastLog(window)).toEqual(['Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(1)
+
+      // The same picture again: told the truth, and nothing was written.
+      await save.click()
+      await expect.poll(() => readToastLog(window)).toEqual(['Saved to "Inspiration"', 'Already on "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'still the one copy').toHaveLength(1)
+
+      // ONE Undo takes the real save back. The duplicate left no step of its own, so nothing is on top of it.
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(0)
+      await expect(undo, 'and there is no second step behind it').toBeDisabled()
+      expect(pageErrors).toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-147 (7): a search's outcome was silent to a screen reader - the error card, the notice, "No results." and the grid all mounted with no live region
+// and no toast. One always-mounted `role="status"` wrapper now holds the error, the notice, "No results." and, for a search that found pictures, an
+// sr-only "N results." line. The search answer is a stand-in handler in main (as the cases above), so everything the panel does with it is real.
+test.describe('T-147 (7): a References search says how it went', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  test('results: "N results."; none: "No results."; a notice and a failure: their own text - all inside one status region that is always mounted and takes no room while empty', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-status')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      // The panel's own region, not a toast's: react-hot-toast puts `role=status` on its messages inside [data-rht-toaster].
+      const status = window.locator('[role="status"]:not([data-rht-toaster] *)')
+      const mode = (m: string): Promise<void> =>
+        app.evaluate(({ ipcMain }, args) => {
+          const [kind, pixel] = args as [string, string]
+          ipcMain.removeHandler('search:images')
+          ipcMain.handle('search:images', async (_e, query: unknown) => {
+            if (kind === 'throw') throw new Error('the stand-in search failed')
+            const q = String(query)
+            if (kind === 'three') {
+              return {
+                query: q, provider: 'duckduckgo',
+                results: [1, 2, 3].map((n) => ({ id: `r${n}`, thumbnail: pixel, fullUrl: `${pixel}#${n}`, source: 'local', title: `tile ${n}` }))
+              }
+            }
+            if (kind === 'one' || kind === 'hold') {
+              if (kind === 'hold') await new Promise<void>((resolve) => { (globalThis as unknown as { __release: () => void }).__release = resolve })
+              return { query: q, provider: 'duckduckgo', results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: 'tile 1' }] }
+            }
+            if (kind === 'notice') {
+              return { query: q, provider: 'duckduckgo', results: [], notice: "Couldn't reach DuckDuckGo. Check your internet connection and try again. Your saved boards still work offline." }
+            }
+            return { query: q, provider: 'duckduckgo', results: [] }
+          })
+        }, [m, PIXEL])
+      const search = async (q: string): Promise<void> => {
+        await input.fill(q)
+        await input.press('Enter')
+      }
+
+      // Before any search: the region is there (a live region that arrives with its text is not reliably read), empty, and holds no space.
+      await expect(status).toHaveCount(1)
+      await expect(status).toHaveText('')
+      const box = await status.boundingBox()
+      expect(box?.height ?? -1, 'empty, it is no taller than a line of nothing').toBe(0)
+
+      // Results: the count, said once the search is answered, and the grid is drawn as before.
+      await mode('three')
+      await search('mountains')
+      await expect(window.locator('img[alt="tile 3"]')).toBeVisible()
+      await expect(status).toHaveText('3 results.')
+      await expect(status.locator('.sr-only'), 'the count is for a screen reader, not drawn').toHaveCount(1)
+      expect((await status.boundingBox())?.height ?? -1, 'and takes no room').toBeLessThanOrEqual(1)
+      const gridGap = await window.evaluate(() => {
+        const region = document.querySelector('[role="status"]:not([data-rht-toaster] *)') as HTMLElement
+        const grid = region.nextElementSibling as HTMLElement
+        const note = region.previousElementSibling as HTMLElement
+        return Math.round(grid.getBoundingClientRect().top - note.getBoundingClientRect().bottom)
+      })
+      expect(gridGap, 'the grid sits one 16 px gap under the note, as it did before the region').toBe(16)
+
+      // The next search is out (held in main) while the old grid is still on screen: the old count is not said for it; the new one is said when it answers.
+      await mode('hold')
+      await search('mountain')
+      await expect(window.getByRole('button', { name: 'Searching…' })).toBeVisible()
+      await expect(status, 'no count while the next search is out').toHaveText('')
+      await app.evaluate(() => (globalThis as unknown as { __release: () => void }).__release())
+      await expect(status).toHaveText('1 result.')
+
+      // None: the search ran and found nothing.
+      await mode('none')
+      await search('a query nothing matches')
+      await expect(status).toHaveText('No results.')
+      await expect(window.getByText('No results.')).toHaveCount(1)
+
+      // A notice: a search that could not run says so - and not "No results.".
+      await mode('notice')
+      await search('offline')
+      await expect(status).toContainText("Couldn't reach DuckDuckGo.")
+      await expect(status).not.toContainText('No results.')
+      await expect(status).not.toContainText('results.')
+
+      // A failure (a rejected call, shown as the plain sentence userFacingError makes of an unknown error): the error card is inside it.
+      await mode('throw')
+      await search('rejected')
+      await expect(status).toContainText('Search failed.')
+      await expect(window.locator('.border-danger-strong\\/40')).toHaveCount(1)
+      await expect(status.locator('.border-danger-strong\\/40'), 'the error card is the region\'s own').toHaveCount(1)
+
+      // And it empties again when the next search answers with results.
+      await mode('three')
+      await search('mountains again')
+      await expect(status).toHaveText('3 results.')
+      await expect(window.locator('.border-danger-strong\\/40')).toHaveCount(0)
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

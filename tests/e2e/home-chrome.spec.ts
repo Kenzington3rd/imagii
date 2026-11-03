@@ -2397,9 +2397,8 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
       // Back to the importer so the menu is reachable again.
       await window.getByRole('button', { name: 'Close' }).click()
       await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
-      expect(dialogMessages).toContain(
-        'Close this video? 1 clip and its edits will be discarded.'
-      )
+      // T-147 (3): the recent file was opened and not touched, so Close had nothing to lose and asked nothing.
+      expect(dialogMessages).toEqual([])
 
       // ── Clear empties the list, in the UI and on disk ──
       await toggle.click()
@@ -3626,6 +3625,61 @@ test.describe('T-140 (9): the recent-files menu keeps the keyboard\'s place', ()
       await expect(toggle, 'and the pick left the focus on the toggle').toBeFocused()
     } finally {
       await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// T-147 (6a): the coachmark re-focuses the SAME Next button on every step (no focus change), the dialog's changed `aria-label` is not re-announced, and the
+// step's heading and paragraph were neither described nor live - so steps after the first were silent to a screen reader. The card is now
+// `aria-describedby` its body, and an sr-only polite region inside it says "Step N of M: <title>. <body>" when the step CHANGES (Next, Back) and is empty
+// on open (the dialog's own name covers step 1; saying it twice would double-announce).
+test.describe('T-147 (6a): the tour announces each step it moves to', () => {
+  test('the live region is empty on open, follows Next and Back, and the card is described by its body', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tour-announce')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const total = EMPTY_VIDEO_TOUR.length
+    const sentence = (n: number): string => {
+      const step = EMPTY_VIDEO_TOUR[n - 1]!
+      return `Step ${n} of ${total}: ${step.title}. ${step.body}`
+    }
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      const card = window.locator('[role="dialog"][aria-label*="tutorial"]')
+      await expect(card).toBeVisible({ timeout: 20_000 })
+      const live = card.locator('[aria-live="polite"]')
+      await expect(live, 'one polite region in the card').toHaveCount(1)
+      const describedBody = (): Promise<string | null> =>
+        card.evaluate((el) => {
+          const id = el.getAttribute('aria-describedby')
+          return id ? (document.getElementById(id)?.textContent ?? null) : null
+        })
+
+      // Open: nothing is announced beyond the dialog's own name, and the card is described by step 1's paragraph.
+      await expect(live).toHaveText('')
+      expect(await describedBody()).toBe(EMPTY_VIDEO_TOUR[0]!.body)
+      expect(await currentStep(window)).toBe(1)
+
+      // Next: the region says step 2, in full; the description follows the paragraph.
+      await window.getByRole('button', { name: 'Next' }).click()
+      expect(await currentStep(window)).toBe(2)
+      await expect(live).toHaveText(sentence(2))
+      expect(await describedBody()).toBe(EMPTY_VIDEO_TOUR[1]!.body)
+
+      // Back: step 1 is announced this time.
+      await window.getByRole('button', { name: 'Back' }).click()
+      expect(await currentStep(window)).toBe(1)
+      await expect(live).toHaveText(sentence(1))
+      expect(await describedBody()).toBe(EMPTY_VIDEO_TOUR[0]!.body)
+    } finally {
+      await app.close()
       cleanup(root)
     }
   })

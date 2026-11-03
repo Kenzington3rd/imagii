@@ -7,6 +7,7 @@ import {
   playheadNow,
   videoDiscardMessage,
   videoHasNoSound,
+  videoSessionHasLoss,
   useVideoStore
 } from './videoStore'
 import type { VideoSource } from './videoStore'
@@ -1153,37 +1154,106 @@ describe('text overlays reach the gates as hex (T-113)', () => {
 /**
  * T-119 (3) - what the video the person is editing would lose. Close has asked since round 18; T-112's
  * "Clean audio" asks before it replaces Audio Studio's work; Record's "Edit in Video Studio" replaced a tuned
- * session with nothing said. One list, one lead-in per act, and nothing to ask when nothing is loaded.
+ * session with nothing said. One list, one lead-in per act. T-147 (3): and nothing to ask when nothing was done to
+ * the video - a loaded video always has ONE clip, so "no clips" was a state the question never met.
  */
-describe('videoDiscardMessage - the question Close and Replace both ask (T-119)', () => {
+describe('videoDiscardMessage - the question Close and Replace both ask (T-119, T-147 (3))', () => {
+  /** A session as the store holds it: a loaded video with the clips given, no history and nothing derived, unless `over` says so. */
+  function session(clips: Clip[], over: Partial<Pick<Parameters<typeof videoDiscardMessage>[0], 'history' | 'derived'>> = {}): Parameters<typeof videoDiscardMessage>[0] {
+    return {
+      source: FAKE_SOURCE,
+      clips,
+      history: { past: [], future: [] },
+      derived: { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null },
+      ...over
+    }
+  }
+  /** `n` clips, each one a trimmed clip (so the session has something to lose whatever the count). */
+  const edited = (n: number): Clip[] => Array.from({ length: n }, (_, i) => pristine({ id: `c${i}`, name: `Clip ${i + 1}`, startSec: 1 }))
+
   it('asks nothing when no clip is loaded, whichever act it is', () => {
-    expect(videoDiscardMessage(0)).toBeNull()
-    expect(videoDiscardMessage(0, 'close')).toBeNull()
-    expect(videoDiscardMessage(0, 'replace')).toBeNull()
+    expect(videoDiscardMessage(session([]))).toBeNull()
+    expect(videoDiscardMessage(session([]), 'close')).toBeNull()
+    expect(videoDiscardMessage(session([]), 'replace')).toBeNull()
+    expect(videoDiscardMessage(session([]), 'close', 'A job keeps going.')).toBeNull()
   })
 
   it('Close keeps its round-18 sentence, counting the clips', () => {
-    expect(videoDiscardMessage(1)).toBe('Close this video? 1 clip and its edits will be discarded.')
-    expect(videoDiscardMessage(4, 'close')).toBe('Close this video? 4 clips and their edits will be discarded.')
+    expect(videoDiscardMessage(session(edited(1)))).toBe('Close this video? 1 clip and its edits will be discarded.')
+    expect(videoDiscardMessage(session(edited(4)), 'close')).toBe('Close this video? 4 clips and their edits will be discarded.')
   })
 
   it("Replace names the act: nothing is being closed when a recording's button loads another video", () => {
-    expect(videoDiscardMessage(1, 'replace')).toBe(
+    expect(videoDiscardMessage(session(edited(1)), 'replace')).toBe(
       "Replace the video you're editing? 1 clip and its edits will be discarded."
     )
-    expect(videoDiscardMessage(3, 'replace')).toBe(
+    expect(videoDiscardMessage(session(edited(3)), 'replace')).toBe(
       "Replace the video you're editing? 3 clips and their edits will be discarded."
     )
   })
 
   // T-120 (12): the pronoun agrees with the count, like the noun. "1 clip and their edits" read wrong at one.
   it('the possessive follows the count: its at one, their at any other', () => {
-    expect(videoDiscardMessage(1)).toMatch(/ 1 clip and its edits /)
+    expect(videoDiscardMessage(session(edited(1)))).toMatch(/ 1 clip and its edits /)
     for (const n of [2, 3, 10, 100]) {
-      expect(videoDiscardMessage(n)).toMatch(new RegExp(` ${n} clips and their edits `))
-      expect(videoDiscardMessage(n, 'replace')).toMatch(new RegExp(` ${n} clips and their edits `))
+      expect(videoDiscardMessage(session(edited(n)))).toMatch(new RegExp(` ${n} clips and their edits `))
+      expect(videoDiscardMessage(session(edited(n)), 'replace')).toMatch(new RegExp(` ${n} clips and their edits `))
     }
-    expect(videoDiscardMessage(1)).not.toMatch(/1 clip and their/)
+    expect(videoDiscardMessage(session(edited(1)))).not.toMatch(/1 clip and their/)
+  })
+
+  // T-147 (3): the untouched video. This is the state every loaded video starts in.
+  it('a video nobody touched has nothing to lose: no question, for Close and for a replace', () => {
+    expect(videoDiscardMessage(session([pristine()]))).toBeNull()
+    expect(videoDiscardMessage(session([pristine()]), 'close')).toBeNull()
+    expect(videoDiscardMessage(session([pristine()]), 'replace')).toBeNull()
+  })
+
+  it('a running job alone is asked as the lead-in and the one sentence, with no clip count', () => {
+    const note = 'The export that is running keeps going; its Cancel stays on screen.'
+    expect(videoDiscardMessage(session([pristine()]), 'close', note)).toBe(`Close this video? ${note}`)
+    expect(videoDiscardMessage(session([pristine()]), 'replace', note)).toBe(`Replace the video you're editing? ${note}`)
+    // ...and with something to lose too, the sentence follows the clips it already names.
+    expect(videoDiscardMessage(session(edited(2)), 'close', note)).toBe(`Close this video? 2 clips and their edits will be discarded. ${note}`)
+  })
+
+  it('what the helper counts as a loss: every kind asks, an untouched session does not', () => {
+    const none = session([pristine()])
+    expect(videoSessionHasLoss(none)).toBe(false)
+    // a second clip
+    expect(videoSessionHasLoss(session([pristine(), pristine({ id: 'b', name: 'Clip 2' })]))).toBe(true)
+    // the one clip, changed (a trim is enough)
+    expect(videoSessionHasLoss(session([pristine({ endSec: DURATION - 1 })]))).toBe(true)
+    // an undo history with a step in it, even when the clip is back to the default
+    expect(videoSessionHasLoss(session([pristine()], { history: { past: [{ clips: [pristine()], selectedClipId: null }], future: [] } }))).toBe(true)
+    // a scan, a pasted log, the spikes found in one
+    const derived = none.derived
+    expect(videoSessionHasLoss(session([pristine()], { derived: { ...derived, scanCandidates: [] } }))).toBe(true)
+    expect(videoSessionHasLoss(session([pristine()], { derived: { ...derived, highlightChat: '[0:42] a: POG' } }))).toBe(true)
+    expect(videoSessionHasLoss(session([pristine()], { derived: { ...derived, spikeChat: '[0:42] a: POG' } }))).toBe(true)
+    expect(videoSessionHasLoss(session([pristine()], { derived: { ...derived, spikes: [] } }))).toBe(true)
+    // a transcript is cached on disk and opens again at once: not a loss
+    expect(videoSessionHasLoss(session([pristine()], { derived: { ...derived, transcript: [{ startSec: 0, endSec: 2, text: 'hello' }] } }))).toBe(false)
+    // an undone step leaves an empty past: nothing to lose again
+    expect(videoSessionHasLoss(session([pristine()], { history: { past: [], future: [{ clips: [pristine()], selectedClipId: null }] } }))).toBe(false)
+    // no video open
+    expect(videoSessionHasLoss({ ...none, source: null })).toBe(false)
+  })
+
+  it('the real store: a loaded video is untouched until something is done to it', async () => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    try {
+      await useVideoStore.getState().loadSource('/v/a.mp4')
+      expect(videoDiscardMessage(useVideoStore.getState())).toBeNull()
+      const id = useVideoStore.getState().clips[0]!.id
+      useVideoStore.getState().setClipRange(id, 2, 30)
+      expect(videoDiscardMessage(useVideoStore.getState())).toBe('Close this video? 1 clip and its edits will be discarded.')
+      useVideoStore.getState().clearSource()
+      expect(videoDiscardMessage(useVideoStore.getState())).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+      useVideoStore.getState().clearSource()
+    }
   })
 })
 

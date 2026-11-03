@@ -25,6 +25,9 @@ export type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'pencil'
 interface CanvasState {
   doc: CanvasDocument
   history: History
+  /** T-147 (T-78): the control whose edits the last undo step already covers, or null. A slider drag or a typed name is ONE undo step: `updateLayer(id, patch, key)`
+   *  pushes only when the key is not the one the previous edit carried. Discrete actions, undo / redo, selecting and `endGesture` reset it to null. */
+  historyKey: string | null
   selectedLayerId: string | null
   tool: Tool
   showGrid: boolean
@@ -38,7 +41,11 @@ interface CanvasState {
 
   selectLayer: (id: string | null) => void
   addLayer: (layer: CanvasLayer) => void
-  updateLayer: (id: string, patch: Partial<CanvasLayer>) => void
+  /** Patch one layer. `key` (a control's name, e.g. 'opacity') makes the edit coalescible: the first edit of a gesture records the undo step and the rest of that
+   *  gesture, on the same layer and control, record none. Without a key it is a discrete edit and always records one (T-147, T-78). */
+  updateLayer: (id: string, patch: Partial<CanvasLayer>, key?: string) => void
+  /** End the coalescing window: the next edit, even of the same control, is a new undo step. Called when a drag is released or a field loses focus. */
+  endGesture: () => void
   removeLayer: (id: string) => void
   reorderLayers: (orderedIds: string[]) => void
   toggleVisible: (id: string) => void
@@ -121,6 +128,7 @@ function pushHistory(history: History, prev: CanvasDocument): History {
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   doc: defaultDoc(),
   history: { past: [], future: [] },
+  historyKey: null,
   selectedLayerId: null,
   tool: 'select',
   showGrid: false,
@@ -132,24 +140,35 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setSnapToGrid: (snap) => set({ snapToGrid: snap }),
   setGridSize: (size) => set({ gridSize: Math.max(2, size) }),
 
-  selectLayer: (id) => set({ selectedLayerId: id }),
+  selectLayer: (id) => set({ selectedLayerId: id, historyKey: null }),
   addLayer: (layer) => {
     const prev = get().doc
     set({
       doc: { ...prev, layers: [...prev.layers, layer] },
       selectedLayerId: layer.id,
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
-  updateLayer: (id, patch) => {
+  updateLayer: (id, patch, key) => {
     const prev = get().doc
+    // The window is per layer AND per control: the same slider on another layer is another gesture.
+    const windowKey = key === undefined ? null : `${id}:${key}`
+    const continuing = windowKey !== null && windowKey === get().historyKey
     set({
       doc: {
         ...prev,
         layers: prev.layers.map((l) => (l.id === id ? applyLayerPatch(l, patch) : l))
       },
-      history: pushHistory(get().history, prev)
+      // The first edit of a gesture already captured the pre-gesture document.
+      ...(continuing ? {} : { history: pushHistory(get().history, prev) }),
+      historyKey: windowKey
     })
+  },
+  endGesture: () => {
+    // Gesture ends are frequent (every pointerup in the panel): writing the same null back would notify every subscriber for nothing.
+    if (get().historyKey === null) return
+    set({ historyKey: null })
   },
   removeLayer: (id) => {
     const prev = get().doc
@@ -162,14 +181,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       // 112x112 emote (and Export wrote the emote pack). Undo puts the template's document back whole: `prev` is what the history keeps.
       doc: layers.length === 0 ? defaultDoc() : { ...prev, layers },
       selectedLayerId: get().selectedLayerId === id ? null : get().selectedLayerId,
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
   reorderLayers: (orderedIds) => {
     const prev = get().doc
     const map = new Map(prev.layers.map((l) => [l.id, l]))
     const next = orderedIds.map((id) => map.get(id)).filter((l): l is CanvasLayer => Boolean(l))
-    set({ doc: { ...prev, layers: next }, history: pushHistory(get().history, prev) })
+    set({ doc: { ...prev, layers: next }, history: pushHistory(get().history, prev), historyKey: null })
   },
   toggleVisible: (id) => {
     const prev = get().doc
@@ -178,7 +198,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         ...prev,
         layers: prev.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l))
       },
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
   toggleLocked: (id) => {
@@ -188,7 +209,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         ...prev,
         layers: prev.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l))
       },
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
   setRotation: (id, rotation) => {
@@ -198,7 +220,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         ...prev,
         layers: prev.layers.map((l) => (l.id === id ? { ...l, rotation } : l))
       },
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
   duplicateLayer: (id) => {
@@ -215,19 +238,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       doc: { ...prev, layers: [...prev.layers, copy] },
       selectedLayerId: copy.id,
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
 
   resetDocument: (doc) => {
-    set({ doc: doc ?? defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null })
+    set({ doc: doc ?? defaultDoc(), history: { past: [], future: [] }, selectedLayerId: null, historyKey: null })
   },
   setDocument: (doc) => {
     const prev = get().doc
     set({
       doc,
       selectedLayerId: null,
-      history: pushHistory(get().history, prev)
+      history: pushHistory(get().history, prev),
+      historyKey: null
     })
   },
 
@@ -238,7 +263,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       doc: last,
       selectedLayerId: selectionIn(last, get().selectedLayerId),
-      history: { past: history.past.slice(0, -1), future: [doc, ...history.future] }
+      history: { past: history.past.slice(0, -1), future: [doc, ...history.future] },
+      historyKey: null
     })
   },
   redo: () => {
@@ -248,7 +274,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       doc: next,
       selectedLayerId: selectionIn(next, get().selectedLayerId),
-      history: { past: [...history.past, doc], future: history.future.slice(1) }
+      history: { past: [...history.past, doc], future: history.future.slice(1) },
+      historyKey: null
     })
   },
   canUndo: () => get().history.past.length > 0,

@@ -502,3 +502,110 @@ describe('removing a layer that is not there, and a selection that outlives its 
     expect(useCanvasStore.getState().selectedLayerId).toBeNull()
   })
 })
+
+/**
+ * T-78 image half (T-147): `updateLayer` pushed an undo step for every `input` event behind the Properties panel's opacity slider, colour fields and name
+ * field, so one drag was dozens of steps and Ctrl+Z moved the value one notch. The video store's shape (T-40): an edit carries a control's key, the first edit
+ * of a gesture records the step, `endGesture` (a release, a blur) closes the window, and a discrete action or an undo / redo closes it too.
+ */
+describe('updateLayer coalescing - one gesture, one undo step (T-78)', () => {
+  const stepsBack = (): number => useCanvasStore.getState().history.past.length
+  const layerNow = (id: string): TextLayer => useCanvasStore.getState().doc.layers.find((l) => l.id === id) as TextLayer
+  let id = ''
+
+  beforeEach(() => {
+    useCanvasStore.getState().resetDocument()
+    const t = makeTextLayer(10, 10, 'A')
+    id = t.id
+    useCanvasStore.getState().addLayer(t)
+  })
+
+  it('a drag (many keyed edits) is ONE step, and one Undo restores the value from before it', () => {
+    const before = stepsBack()
+    for (const o of [0.9, 0.8, 0.7, 0.6, 0.5]) useCanvasStore.getState().updateLayer(id, { opacity: o }, 'opacity')
+    expect(layerNow(id).opacity).toBe(0.5)
+    expect(stepsBack()).toBe(before + 1)
+    useCanvasStore.getState().undo()
+    expect(layerNow(id).opacity).toBe(1)
+    expect(stepsBack()).toBe(before)
+  })
+
+  it('two drags are two steps: endGesture is what tells the second one apart', () => {
+    const before = stepsBack()
+    for (const o of [0.8, 0.6]) useCanvasStore.getState().updateLayer(id, { opacity: o }, 'opacity')
+    useCanvasStore.getState().endGesture()
+    for (const o of [0.4, 0.2]) useCanvasStore.getState().updateLayer(id, { opacity: o }, 'opacity')
+    expect(stepsBack()).toBe(before + 2)
+    useCanvasStore.getState().undo()
+    expect(layerNow(id).opacity).toBe(0.6)
+    useCanvasStore.getState().undo()
+    expect(layerNow(id).opacity).toBe(1)
+  })
+
+  it('typing a name is one step until the field loses focus (endGesture), then the next typing is another', () => {
+    const before = stepsBack()
+    for (const n of ['L', 'La', 'Lay', 'Layer']) useCanvasStore.getState().updateLayer(id, { name: n }, 'name')
+    expect(stepsBack()).toBe(before + 1)
+    useCanvasStore.getState().endGesture()
+    for (const n of ['Layer 2', 'Layer 22']) useCanvasStore.getState().updateLayer(id, { name: n }, 'name')
+    expect(stepsBack()).toBe(before + 2)
+    useCanvasStore.getState().undo()
+    expect(layerNow(id).name).toBe('Layer')
+  })
+
+  it('a different control is a different gesture, and so is the same control on another layer', () => {
+    const other = makeTextLayer(50, 50, 'B')
+    useCanvasStore.getState().addLayer(other)
+    const before = stepsBack()
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.5 }, 'opacity')
+    useCanvasStore.getState().updateLayer(id, { fill: '#ff0000' }, 'fill')
+    expect(stepsBack(), 'opacity then fill: two controls, two steps').toBe(before + 2)
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.4 }, 'opacity')
+    useCanvasStore.getState().updateLayer(other.id, { opacity: 0.3 }, 'opacity')
+    expect(stepsBack(), 'opacity on a, then opacity on b: the window is per layer').toBe(before + 4)
+  })
+
+  it('a discrete action after a drag is its own step, and a keyed edit after it starts a new one', () => {
+    const before = stepsBack()
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.5 }, 'opacity')
+    useCanvasStore.getState().setRotation(id, 45)
+    expect(stepsBack()).toBe(before + 2)
+    // the rotation reset the window: the same slider again is a new step, not folded into the one before the rotation
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.4 }, 'opacity')
+    expect(stepsBack()).toBe(before + 3)
+    // an edit with no key is discrete: it always records
+    useCanvasStore.getState().updateLayer(id, { x: 99 })
+    useCanvasStore.getState().updateLayer(id, { x: 98 })
+    expect(stepsBack()).toBe(before + 5)
+  })
+
+  it('undo and redo close the window: a drag after an Undo is a new step', () => {
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.5 }, 'opacity')
+    useCanvasStore.getState().undo()
+    const before = stepsBack()
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.3 }, 'opacity')
+    expect(stepsBack()).toBe(before + 1)
+    useCanvasStore.getState().undo()
+    useCanvasStore.getState().redo()
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.2 }, 'opacity')
+    expect(stepsBack(), 'the redo reset the window').toBe(before + 2)
+  })
+
+  it('selecting another layer, adding one and opening a document close the window', () => {
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.5 }, 'opacity')
+    const afterFirst = stepsBack()
+    useCanvasStore.getState().selectLayer(null)
+    useCanvasStore.getState().selectLayer(id)
+    useCanvasStore.getState().updateLayer(id, { opacity: 0.4 }, 'opacity')
+    expect(stepsBack(), 'selecting ended the gesture').toBe(afterFirst + 1)
+    useCanvasStore.getState().resetDocument()
+    expect(useCanvasStore.getState().historyKey).toBeNull()
+  })
+
+  it('endGesture with no window open changes nothing', () => {
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().endGesture()
+    expect(useCanvasStore.getState().history).toBe(before.history)
+    expect(useCanvasStore.getState().historyKey).toBeNull()
+  })
+})

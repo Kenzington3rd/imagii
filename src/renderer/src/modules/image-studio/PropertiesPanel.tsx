@@ -8,6 +8,7 @@ import {
 } from '@shared/canvas'
 import { FONT_SIZE_MIN, useCanvasStore } from './state/canvasStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { handleGestureEndPointerUp } from '../video-studio/store/videoStore'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
@@ -20,12 +21,19 @@ export function PropertiesPanel(): JSX.Element | null {
   const selectedLayerId = useCanvasStore((s) => s.selectedLayerId)
   const updateLayer = useCanvasStore((s) => s.updateLayer)
   const setRotation = useCanvasStore((s) => s.setRotation)
+  const endGesture = useCanvasStore((s) => s.endGesture)
 
   const layer = layers.find((l) => l.id === selectedLayerId)
   if (!layer) return null
 
   return (
-    <div className="card p-3 flex flex-col gap-3 text-sm">
+    // T-147 (T-78): one drag of the opacity slider, or one run of typing in the name / colour fields, is ONE undo step (`updateLayer`'s key). Releasing any control,
+    // or a field losing focus, ends the window; a release inside the text field being typed in does not (`handleGestureEndPointerUp`, the video panels' rule).
+    <div
+      className="card p-3 flex flex-col gap-3 text-sm"
+      onPointerUp={(e) => handleGestureEndPointerUp(e, endGesture)}
+      onBlur={endGesture}
+    >
       <PanelHeader icon="gear">Properties</PanelHeader>
 
       <label className="flex items-center gap-2">
@@ -33,7 +41,7 @@ export function PropertiesPanel(): JSX.Element | null {
         <input
           type="text"
           value={layer.name}
-          onChange={(e) => updateLayer(layer.id, { name: e.target.value })}
+          onChange={(e) => updateLayer(layer.id, { name: e.target.value }, 'name')}
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1"
         />
       </label>
@@ -100,7 +108,7 @@ export function PropertiesPanel(): JSX.Element | null {
           max={1}
           step={0.05}
           value={layer.opacity}
-          onChange={(e) => updateLayer(layer.id, { opacity: Number(e.target.value) })}
+          onChange={(e) => updateLayer(layer.id, { opacity: Number(e.target.value) }, 'opacity')}
           className="flex-1 min-w-0"
           // M11 fix (round 15)
           aria-label="Layer opacity"
@@ -160,7 +168,7 @@ function FillStrokeFields({
         <input
           type="text"
           value={layer.fill}
-          onChange={(e) => updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>)}
+          onChange={(e) => updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>, 'fill')}
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />
       </label>
@@ -170,7 +178,7 @@ function FillStrokeFields({
           type="text"
           value={layer.stroke}
           onChange={(e) =>
-            updateLayer(layer.id, { stroke: e.target.value } as Partial<CanvasLayer>)
+            updateLayer(layer.id, { stroke: e.target.value } as Partial<CanvasLayer>, 'stroke')
           }
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />
@@ -184,7 +192,7 @@ function FillStrokeFields({
           onChange={(e) =>
             updateLayer(layer.id, {
               strokeWidth: Number(e.target.value) || 0
-            } as Partial<CanvasLayer>)
+            } as Partial<CanvasLayer>, 'strokeWidth')
           }
           className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
         />
@@ -202,7 +210,7 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
         <textarea
           value={layer.text}
           onChange={(e) =>
-            updateLayer(layer.id, { text: e.target.value } as Partial<CanvasLayer>)
+            updateLayer(layer.id, { text: e.target.value } as Partial<CanvasLayer>, 'text')
           }
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 min-h-[60px] resize-none"
         />
@@ -230,7 +238,7 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
           type="text"
           value={layer.fill}
           onChange={(e) =>
-            updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>)
+            updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>, 'fill')
           }
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
         />

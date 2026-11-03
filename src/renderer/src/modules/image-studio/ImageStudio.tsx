@@ -10,7 +10,7 @@ const TOOL_LABELS: Record<string, string> = {
 }
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
-import { isModalOpen } from '../../components/Modal'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { Canvas } from './Canvas'
 import { Toolbar } from './Toolbar'
 import { LayerPanel } from './LayerPanel'
@@ -45,10 +45,10 @@ export function ImageStudio(): JSX.Element {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      // T-68: a dialog is a claim over the window. Without this, Delete
-      // removed the selected layer behind the Variants/Templates scrim and
-      // R/O/L/P switched the tool on a canvas the user could not see.
-      if (isModalOpen()) return
+      // T-68: a dialog is a claim over the window: Delete removed a layer behind the Variants scrim
+      // and R/O/L/P switched the tool on a canvas the user could not see. T-147 (T-75): ANY dialog,
+      // the tutorial coachmark included (`anyDialogClaim`, the claim stack: its scrim covers it too).
+      if (anyDialogClaim()) return
       // T-119: a focused <select> owns the letters (type-ahead) as a text field does: the Export format and
       // Scale selects are inline panels, not Modals, so the check above never covered them, and typing `p`
       // to reach PNG switched the tool while Delete over one removed the selected layer.

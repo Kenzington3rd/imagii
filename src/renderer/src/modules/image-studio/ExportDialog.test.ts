@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   captureDocument,
   defaultExportScale,
+  jpgTransparencyNote,
   outputPixels,
   thumbnailSizeNote
 } from './ExportDialog'
@@ -428,5 +429,23 @@ describe('thumbnailSizeNote', () => {
 
   it('does not divide by zero', () => {
     expect(thumbnailSizeNote(0, 0, false)).toBeNull()
+  })
+})
+
+// T-147 (4): a JPG has no alpha and the capture composites it onto black; the overlay and emote templates are transparent.
+describe('jpgTransparencyNote', () => {
+  const NOTE = 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
+
+  it('speaks up for a transparent document exported as JPG', () => {
+    expect(jpgTransparencyNote('jpg', true)).toBe(NOTE)
+  })
+
+  it('stays quiet for PNG, which keeps the clear parts clear', () => {
+    expect(jpgTransparencyNote('png', true)).toBeNull()
+  })
+
+  it('stays quiet for a filled document in either format', () => {
+    expect(jpgTransparencyNote('jpg', false)).toBeNull()
+    expect(jpgTransparencyNote('png', false)).toBeNull()
   })
 })

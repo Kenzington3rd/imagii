@@ -533,3 +533,58 @@ describe('one search at a time (T-133 (8)), and the newest query is the one that
     errorSpy.mockRestore()
   })
 })
+
+// T-76 / T-147 (5): main keeps one copy of a picture per board (it dedupes on `fullUrl` and hands the board back unchanged), so the store's
+// answer to "did that add anything?" is the item count of the list it re-reads. A duplicate is not a step: pushing one left an Undo that
+// undid nothing on top of the real ones.
+describe('adding a picture that is already on the board', () => {
+  /** The bridge as main behaves: a second add of the same fullUrl changes nothing. */
+  function stubDedupingBridge(): void {
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          addItem: (collectionId: string, result: SearchResult) => {
+            const found = disk.find((c) => c.id === collectionId)
+            if (!found) return Promise.resolve(null)
+            if (!found.items.some((i) => i.fullUrl === result.fullUrl)) {
+              found.items.push({ ...makeItem(found.items.length + 1), collectionId, fullUrl: result.fullUrl, title: result.title })
+            }
+            return Promise.resolve(clone(found))
+          }
+        }
+      }
+    })
+  }
+
+  it('says true for a picture that went on, and false - with no history step - for the same picture again', async () => {
+    stubDedupingBridge()
+    await store().createCollection('Alpha')
+    const stepsAfterCreate = store().history.past.length
+
+    expect(await store().addToCollection('board-1', makeResult(1))).toBe(true)
+    expect(store().history.past).toHaveLength(stepsAfterCreate + 1)
+    const historyAfterAdd = store().history
+
+    expect(await store().addToCollection('board-1', makeResult(1))).toBe(false)
+    // Identity, not length: useGlobalUndo reads a new `history` object as a step having happened.
+    expect(store().history).toBe(historyAfterAdd)
+    expect(store().collections[0]?.items, 'the board still holds the one copy').toHaveLength(1)
+
+    // A different picture is a step again, and the one Undo takes THAT back (nothing empty sits on top of it).
+    expect(await store().addToCollection('board-1', makeResult(2))).toBe(true)
+    store().undo()
+    await settle()
+    expect(store().collections[0]?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl])
+  })
+
+  it('a refused add still throws and records nothing', async () => {
+    vi.stubGlobal('window', {
+      api: { moodboard: { ...moodboardApi, addItem: () => Promise.reject(new Error('disk full')) } }
+    })
+    disk = [board('board-1', 'Alpha')]
+    await settle()
+    await expect(store().addToCollection('board-1', makeResult(1))).rejects.toThrow('disk full')
+    expect(store().canUndo()).toBe(false)
+  })
+})

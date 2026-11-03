@@ -1,6 +1,7 @@
 import type { DenoiseParams, DenoiseStrength, MainsHz } from '@shared/audio'
 import { DEFAULT_DENOISE_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
+import { useGestureEnd } from './state/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 
 const DENOISE_OPTIONS: Array<{ value: DenoiseStrength; label: string; description: string }> = [
@@ -26,17 +27,21 @@ const MAINS_OPTIONS: Array<{ value: MainsHz; label: string }> = [
 export function CleanupPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
   const patchChain = useAudioStore((s) => s.patchChain)
+  const gesture = useGestureEnd()
 
   const params = chain.denoiseParams ?? DEFAULT_DENOISE_PARAMS
   // A chain saved before 50 Hz existed has no humHz and was always 60.
   const mains: MainsHz = chain.humHz === 50 ? 50 : 60
 
-  function updateParam(patch: Partial<DenoiseParams>): void {
-    patchChain({ denoiseParams: { ...params, ...patch } })
+  // T-147 (T-78): a slider names its control, and a drag (or a run of arrow keys) on it is ONE undo step. Both handlers sit on the card rather than on each control,
+  // as ColorGradePanel's do (T-40): pointerup and focusout bubble, so one set closes the window for the two sliders and for whatever is added to this card later
+  // (`useGestureEnd`: a blur during a press is the press moving focus, not the end of the drag).
+  function updateParam(patch: Partial<DenoiseParams>, key: string): void {
+    patchChain({ denoiseParams: { ...params, ...patch } }, key)
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-4">
+    <div className="card p-4 flex flex-col gap-4" {...gesture}>
       <PanelHeader icon="sparkle">Cleanup</PanelHeader>
 
       <div>
@@ -78,7 +83,7 @@ export function CleanupPanel(): JSX.Element {
             max={-20}
             step={1}
             value={Math.min(-20, params.noiseFloorDb)}
-            onChange={(noiseFloorDb) => updateParam({ noiseFloorDb })}
+            onChange={(noiseFloorDb) => updateParam({ noiseFloorDb }, 'denoise.nf')}
             hint="Set the level below which signal is treated as noise. -35 is the Light preset's setting."
           />
           <ParamSlider
@@ -88,7 +93,7 @@ export function CleanupPanel(): JSX.Element {
             max={50}
             step={1}
             value={Math.max(1, params.reductionDb)}
-            onChange={(reductionDb) => updateParam({ reductionDb })}
+            onChange={(reductionDb) => updateParam({ reductionDb }, 'denoise.nr')}
             hint="How much noise to actually remove. Higher = harsher but quieter result."
           />
         </div>

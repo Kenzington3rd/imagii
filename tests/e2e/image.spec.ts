@@ -1122,7 +1122,7 @@ test.describe('Image Studio — tools and drawing', () => {
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
       expect((pencil.points as number[]).length).toBeGreaterThan(4)
-      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:343).
+      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:370).
       expect(await layerNames(window)).toEqual([
         'Line',
         'Line',
@@ -1308,7 +1308,7 @@ test.describe('Image Studio — selection', () => {
       await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
       await clickDoc(window, { x: 450, y: 400 })
       const start = await lastShape(window)
-      // The number fields are the store's own readout (PropertiesPanel.tsx:47).
+      // The number fields are the store's own readout (PropertiesPanel.tsx:55).
       await expect(field(window, 'x')).toHaveValue(String(Math.round(start.x)))
       await expect(field(window, 'y')).toHaveValue(String(Math.round(start.y)))
 
@@ -1408,7 +1408,7 @@ test.describe('Image Studio — selection', () => {
       await window.keyboard.press('Delete')
       await expectLayerCount(window, 2)
       expect(await layerNames(window)).not.toContain('Keep m')
-      // Removing the selected layer clears the selection (canvasStore.ts:164).
+      // Removing the selected layer clears the selection (canvasStore.ts:183).
       await expect(propsCard(window)).toHaveCount(0)
 
       // ── Backspace, the other binding ──
@@ -3502,7 +3502,7 @@ test.describe('Image Studio — history', () => {
       await window.keyboard.press('Control+Shift+z')
       await expectLayerCount(window, 1)
 
-      // A new action after an undo drops the redo branch (canvasStore.ts:117).
+      // A new action after an undo drops the redo branch (canvasStore.ts:124).
       await window.keyboard.press('Control+z')
       await expectLayerCount(window, 2)
       await layerRow(window, 'Rectangle').getByRole('button', { name: 'Duplicate layer' }).click()
@@ -5085,6 +5085,171 @@ test.describe('Image Studio — Delete after an Undo records nothing, and Redo b
       await expect(window.getByRole('button', { name: 'Redo' })).toBeEnabled()
       await window.keyboard.press('Control+y')
       await expectLayerCount(window, t.doc.layers.length + 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-147 (4): a transparent document exported as JPG says it will come out black
+// ═══════════════════════════════════════════════════════════════════════════
+// The overlay and emote templates have no background (the canvas shows a checkerboard); a JPG has no alpha and the capture composites it onto black. The Export card
+// said nothing, so the file was not what the canvas showed. One line in the note slot beside the thumbnail-size note, and only for that pair.
+test.describe('Image Studio - JPG over a transparent document says so (T-147 (4))', () => {
+  const NOTE = 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
+
+  test('an overlay template: JPG shows the line, PNG removes it; a filled document shows none in either format', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t147-jpg-note')
+    const { window } = studio
+    try {
+      const overlay = templateById('tw-overlay-streamer')
+      expect(overlay.doc.background, 'the fixture is a transparent document').toBe('transparent')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+      const exportPanel = window.locator(EXPORT)
+      const format = exportPanel.getByRole('combobox', { name: 'Export format' })
+      await expect(format).toHaveValue('png')
+      await expect(exportPanel, 'PNG keeps the clear parts clear: nothing to say').not.toContainText('JPG has no transparency')
+      await format.selectOption('jpg')
+      await expect(exportPanel.getByText(NOTE, { exact: true })).toBeVisible()
+      // The line is one paragraph in the card's note slot, the same one the size note uses.
+      await expect(exportPanel.locator('p.basis-full').filter({ hasText: NOTE })).toHaveCount(1)
+      await format.selectOption('png')
+      await expect(exportPanel.getByText(NOTE)).toHaveCount(0)
+
+      // A filled document (the thumbnail's dark fill): the JPG is what the canvas shows, so no line.
+      const filled = templateById('yt-thumb-bold')
+      expect(filled.doc.background).not.toBe('transparent')
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await dialog.locator('button.card').filter({ has: window.getByText(filled.name, { exact: true }) }).click()
+      await expect(dialog).toHaveCount(0)
+      await expectTemplateApplied(window, filled)
+      await format.selectOption('jpg')
+      await expect(exportPanel.getByRole('slider', { name: 'JPG export quality' })).toBeVisible()
+      await expect(exportPanel.getByText(NOTE)).toHaveCount(0)
+      await expect(exportPanel).not.toContainText('JPG has no transparency')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-147 (T-75): a tutorial coachmark owns the keyboard like any other dialog
+// ═══════════════════════════════════════════════════════════════════════════
+// The studio's window-level hotkeys asked Modal's count, which leaves the coachmark out on purpose (so `?` stays pressable during a tutorial, T-72): with a
+// coachmark open, the tool letters, Delete and Ctrl+Z still acted on the canvas behind its scrim. They ask the dialog claim stack now. `?` keeps working.
+test.describe('Image Studio - hotkeys under an open tutorial coachmark (T-147, T-75)', () => {
+  test('R, Delete and Ctrl+Z change nothing behind the coachmark; ? still opens the shortcuts; closed, every key works again', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t75-coachmark')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      // A layer is selected (Start with text selects it), so Delete has something to remove.
+      await expect(propsCard(window)).toBeVisible()
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      const names = await layerNames(window)
+
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      const coachmark = window.locator('[role="dialog"]')
+      await expect(coachmark).toContainText('Welcome to Stream Graphics')
+      await expect(window.locator('[role="dialog"]')).toHaveCount(1)
+
+      // ── the bare letter and Delete reach nothing behind the scrim ──
+      await window.keyboard.press('r')
+      await window.keyboard.press('Delete')
+      await window.keyboard.press('Backspace')
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, 1)
+      expect(await layerNames(window)).toEqual(names)
+      await expect(window.getByText('Tool: Select'), 'R did not switch the tool').toBeVisible()
+      await expect(window.getByText('Tool: Rectangle')).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Redo' }), 'Ctrl+Z did not undo').toBeDisabled()
+
+      // ── `?` is the one key that stays live under a tutorial (T-72) ──
+      await window.keyboard.press('?')
+      const overlay = window.locator('[role="dialog"]').filter({ hasText: 'Press Esc or ? to close.' })
+      await expect(overlay).toHaveCount(1)
+      await expect(window.locator('[role="dialog"]')).toHaveCount(2)
+      // ...and the keys are still inert with TWO dialogs up.
+      await window.keyboard.press('o')
+      await window.keyboard.press('Delete')
+      await expectLayerCount(window, 1)
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      await window.keyboard.press('Escape')
+      await expect(overlay).toHaveCount(0)
+      await window.keyboard.press('Escape')
+      await expect(window.locator('[role="dialog"]')).toHaveCount(0)
+
+      // ── the coachmark closed: the same keys act again ──
+      await window.keyboard.press('r')
+      await expect(window.getByText('Tool: Rectangle')).toBeVisible()
+      await window.keyboard.press('v')
+      await window.keyboard.press('Delete')
+      // The last layer gone is the blank page: the templates-first screen is back (T-140 (4)).
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-147 (T-78, image half): one drag of a Properties slider, or one run of typing, is one undo step
+// ═══════════════════════════════════════════════════════════════════════════
+// `updateLayer` pushed an undo step per `input` event, so one opacity drag filled the history with dozens and Ctrl+Z moved the value one notch.
+test.describe('Image Studio - a Properties drag is one undo step (T-147, T-78)', () => {
+  test('an opacity drag, then ONE Undo restores the value from before it; a second drag is a second step; typing a name is one step', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t78-opacity-drag')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const slider = window.getByRole('slider', { name: 'Layer opacity' })
+      await expect(slider).toBeVisible()
+      expect((await lastShape(window)).opacity).toBe(1)
+
+      /** Press the thumb at `fromRatio` of the slider's width and drag through `through`, releasing at the last; the slider moves its value on every position. */
+      const drag = async (fromRatio: number, through: number[]): Promise<void> => {
+        const box = (await slider.boundingBox())!
+        const at = (r: number): { x: number; y: number } => ({ x: box.x + 8 + (box.width - 16) * r, y: box.y + box.height / 2 })
+        await dragThrough(window, at(fromRatio), through.map(at))
+      }
+
+      // ── drag 1: 100% down to about 40%, through four positions ──
+      await drag(1, [0.85, 0.7, 0.55, 0.4])
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBeLessThan(0.5)
+      const afterFirst = (await lastShape(window)).opacity
+      expect(afterFirst).toBeGreaterThan(0.3)
+      // ONE Undo: the opacity from before the drag, not one notch back.
+      await window.keyboard.press('Control+z')
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBe(1)
+      await expect(window.getByText('100%').first()).toBeVisible()
+
+      // ── two drags are two steps: the second one's Undo lands on the first one's value ──
+      await drag(1, [0.8, 0.6])
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBeLessThan(0.7)
+      const firstOfTwo = (await lastShape(window)).opacity
+      await drag(0.6, [0.45, 0.3, 0.2])
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBeLessThan(firstOfTwo)
+      await window.keyboard.press('Control+z')
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBe(firstOfTwo)
+      await window.keyboard.press('Control+z')
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBe(1)
+
+      // ── typing a name is one step: the field keeps focus through the run, and the undo button takes the whole word back ──
+      const name = field(window, 'Name')
+      await name.click()
+      await window.keyboard.press('Control+a')
+      await window.keyboard.type('Headline', { delay: 20 })
+      expect(await layerNames(window)).toEqual(['Headline'])
+      // Leave the field (the blur ends the step), then Undo by its button: one press puts the old name back whole.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      expect(await layerNames(window)).toEqual(['Text'])
     } finally {
       await closeStudio(studio)
     }

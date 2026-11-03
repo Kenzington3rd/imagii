@@ -5,6 +5,7 @@ import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_PICK_NO_SOUND_MESSAGE, isNoAudioStrea
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
+import { useGestureEnd } from './state/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 import { claimFirst } from '../../lib/claimFirst'
 
@@ -46,6 +47,7 @@ function fileNameFromPath(p: string): string {
 export function SecondaryTrackPanel(): JSX.Element {
   const secondary = useAudioStore((s) => s.chain.secondaryTrack)
   const setSecondaryTrack = useAudioStore((s) => s.setSecondaryTrack)
+  const gesture = useGestureEnd()
 
   // T-131 (5): one chooser at a time across the three role buttons. A double-click on one opened two, and the second answer silently
   // REPLACED the track the first had just added (with the second role's gain and duck defaults, if it landed on another button).
@@ -80,19 +82,21 @@ export function SecondaryTrackPanel(): JSX.Element {
     })
   }
 
-  function update(patch: Partial<NonNullable<typeof secondary>>): void {
+  // T-147 (T-78): a slider passes its control's `key` and a drag on it is ONE undo step; a checkbox passes none and is a step of its own.
+  function update(patch: Partial<NonNullable<typeof secondary>>, key?: string): void {
     if (!secondary) return
-    setSecondaryTrack({ ...secondary, ...patch })
+    setSecondaryTrack({ ...secondary, ...patch }, key)
   }
 
-  function updateDuck(patch: Partial<DuckingParams>): void {
+  function updateDuck(patch: Partial<DuckingParams>, key: string): void {
     if (!secondary) return
     const current = secondary.duckParams ?? DEFAULT_DUCK_PARAMS
-    setSecondaryTrack({ ...secondary, duckParams: { ...current, ...patch } })
+    setSecondaryTrack({ ...secondary, duckParams: { ...current, ...patch } }, key)
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music">
+    // The card closes the gesture on pointer up and on blur (`useGestureEnd`, ColorGradePanel's pair): one handler for the gain, the four ducking sliders and the checkboxes.
+    <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music" {...gesture}>
       <PanelHeader icon="audio">Add a second track</PanelHeader>
       {!secondary ? (
         <>
@@ -136,7 +140,7 @@ export function SecondaryTrackPanel(): JSX.Element {
               max={12}
               step={0.5}
               value={secondary.gainDb}
-              onChange={(e) => update({ gainDb: Number(e.target.value) })}
+              onChange={(e) => update({ gainDb: Number(e.target.value) }, 'secondary.gain')}
               className="flex-1 min-w-0"
               // M11 fix (round 15)
               aria-label="Secondary track gain in decibels"
@@ -176,7 +180,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={0}
                 step={1}
                 value={secondary.duckParams?.thresholdDb ?? DEFAULT_DUCK_PARAMS.thresholdDb}
-                onChange={(thresholdDb) => updateDuck({ thresholdDb })}
+                onChange={(thresholdDb) => updateDuck({ thresholdDb }, 'secondary.threshold')}
                 hint="How loud your voice has to be before this track starts to dip."
               />
               <DuckSlider
@@ -186,7 +190,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={20}
                 step={0.5}
                 value={secondary.duckParams?.ratio ?? DEFAULT_DUCK_PARAMS.ratio}
-                onChange={(ratio) => updateDuck({ ratio })}
+                onChange={(ratio) => updateDuck({ ratio }, 'secondary.ratio')}
                 hint="How far this track dips (8:1 is a strong dip)."
               />
               <DuckSlider
@@ -196,7 +200,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={200}
                 step={1}
                 value={secondary.duckParams?.attackMs ?? DEFAULT_DUCK_PARAMS.attackMs}
-                onChange={(attackMs) => updateDuck({ attackMs })}
+                onChange={(attackMs) => updateDuck({ attackMs }, 'secondary.attack')}
                 hint="How fast this track dips once you start talking."
               />
               <DuckSlider
@@ -206,7 +210,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={2000}
                 step={10}
                 value={secondary.duckParams?.releaseMs ?? DEFAULT_DUCK_PARAMS.releaseMs}
-                onChange={(releaseMs) => updateDuck({ releaseMs })}
+                onChange={(releaseMs) => updateDuck({ releaseMs }, 'secondary.release')}
                 hint="How fast this track comes back up once you stop talking."
               />
             </div>

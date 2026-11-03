@@ -14,6 +14,103 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-03 — T-147 (round 96), Track A: a pass called instant, a toast with no way to its file, and a drag that was dozens of undo steps
+
+The thirty-fourth pass, Track A (Audio Studio and the audio runner: items 1, 2 and 6b, and the audio half of the old T-78; Tracks B and C land beside it). Ledger: r96a/ledger.tsv (17 red rows: the unit, Layer 5 (7.0.2 and 6.1.1) and e2e cases run against a `git archive` of the unchanged tree `f4f4422`, the T-78 e2e run twice after it was restructured; and 59 mutation rows over 55 mutations, 31 unit, 5 Layer 5 (3 on 7.0.2, 2 on 6.1.1) and 19 e2e, all 59 restores byte-identical by sha256. Five runs survived and are disclosed: `redo` keeping the key (dead code, since an edit clears the redo branch - the reset was deleted, not tested), a cut as a coalescible edit, a removal of one, `endGesture` writing with no window open, and the Levels card with no handlers (each of the last four strengthened and killed). Per-control keys sharing one name were not run as e2e mutants: the release and blur handlers close the window at every change of control, so they are equivalent there, and the store's unit case holds them apart.)
+
+### (1) [MED] - a comment that says a pass is instant is a measurement nobody took
+
+- **Bug.** The stream-copy re-attach (no cuts, an H.264 picture) showed "Step 1 of 2 - rendering... 100%" for the whole of its second step, on the Export panel's row and on the closed-sound card (T-146) alike. A 2-hour VOD sat there for about six minutes, long enough to read as a hang and be canceled.
+- **Root cause.** `attachAudio` gave the copy path a total of 0 under the comment "A stream-copy mux is instant and needs no bar", so `runFfmpegJob` emitted no `mux` event until the final 100, and the store, which keeps the last event it was sent, kept the render's. The comment was a belief, and it was false: the copy keeps the PICTURE and still re-encodes the SOUND to AAC 192k. Measured on the bundled 7.0.2, a 2-minute source muxes in 6.6 s, 6.0 s of it the AAC encode (about 20x realtime), and ffmpeg prints `out_time` throughout (13 progress blocks), so a real bar was there for the asking. Nobody had run the pass on a long file and looked.
+- **Fix.** The copy measures against the same length the re-encode does (`pictureSec ?? probeAudio(audioPath).duration`: the output is the picture's length, T-131 (2)), and every pass opens with `{ pass, percent: 0 }` the moment it starts, from the one place that spawns it (`runFfmpegJob`, before the child exists), so the label leaves "rendering" when the render ends and the measure and render passes of a loudness export name themselves too. The comment now says what was measured.
+- **Test.** Layer 5 (media.spec.ts "T-147 (1)", on 7.0.2 and on 6.1.1): a generated 120 s H.264 video with sound through the real `runAudioReattach`, no cuts, collecting every event: the first `mux` event is the 0, nothing but `mux` follows it, and at least one event sits between 0 and 100 (red on the unchanged tree: the first `mux` event was the 100). Unit: `muxCodec.test.ts` (the start event precedes the child and every movement; the copy's total is the picture's length, not the sound's) and `exportProgress.test.ts` (each pass of a loudness export opens at 0).
+- **Lesson.** **A comment that says a pass is instant is a measurement nobody took.** "Instant" and "needs no bar" were the author's expectation of a stream copy, written down as a fact and then used to switch the progress off. The sound in that pass is not copied, and no test of the progress existed to say so. Before a pass is given no bar, run it on a long input and read what ffmpeg prints; and where a UI keeps "the last event", every phase must send a first one, or the label describes the phase before.
+
+### (2) [LOW] - a button that lives on a row is not a way to the file, and the premise of an older note went false without anyone noticing
+
+- **Bug.** The audio-only export raised `toast.success('Cleaned audio exported')` (two seconds, no button). "Show in folder" lived only on the dialog's row, which is drawn inside the OPEN sound's Export panel; once T-146 let an export outlive its sound, a person who closed it (or opened another) was left with a gone toast and no way to the file. And the Export panel of a DIFFERENT open sound drew that running export's bar with no name.
+- **Root cause.** The (20) note in the T-124 entry below says "an audio-only export offers neither": true when it was written (the row carried the button, and the dialog could not be left). T-146 made the export survive the dialog and fixed Video Studio's toast for it; the audio-only sibling kept the old premise.
+- **Fix.** The plain export's success is ALWAYS `toastSaved(sentence, saved)` (Show in folder, 8 s, the `landedBesideNote` sentence kept, no Edit in Video Studio: there is no video), and while an export runs under another sound the row shows `Export - <name>` (`audioJobRow`'s own label) in the card's `min-w-0 flex-1 truncate` span with a `title`.
+- **Test.** audio.spec.ts "T-147 (2)": an export that ends after Close (slowed with `-readrate`) raises the toast with Show in folder and no Edit in Video Studio, and pressing it reaches the shell with the written file; the toast is still there six seconds later; with B open over A's running export, B's panel names A's file (and under A itself the row has no name). The T-124 (20) case now asserts Show in folder present and Edit in Video Studio absent on the audio-only export; ten older cases that compared the toast text exactly now read "Cleaned audio exported Show in folder". Red on the unchanged build.
+- **Lesson.** **When a premise is written into a test or a note ("this export offers neither"), the change that falsifies it must go looking for it.** T-146 changed what the toast was FOR and the (20) pin kept asserting the old fact. A way to a finished file belongs on the thing that outlives the screen (the toast), never only on the screen that can be closed.
+
+### (6b) [LOW] - focus moved onto an option, and the question was left behind
+
+- **Bug / Fix.** The Fix wizard puts focus on each step's first option (T-119), so a screen reader said "Sounds dry, button" with no question. Each step's options are now a `role="group"` `aria-labelledby` the visible question's heading (`useId`), and the summary's Apply is `aria-describedby` the lead sentence and the list (what Apply will set is read with the button; a group around the whole summary would have said only "Ready to apply, group").
+- **Test.** audio.spec.ts "T-147 (6b)": at each question the group is named by the visible heading's text, the focused option's closest group is that one, and at the summary Apply is focused and its accessible description carries the list.
+- **Lesson.** Moving focus is half of a11y; what the reader says when it lands is the other half. Whenever focus is placed on a control for the person, ask what a screen reader reads on arrival, and tie the question to it.
+
+### Fold (non-counted) - T-78, audio half: a slider drag was dozens of undo steps, and the first drag after a click was two
+
+- **Bug.** `patchChain` pushed a history step on every `input` event of Cleanup's Custom sliders, Levels' Manual gain and the second track's sliders, so Ctrl+Z after one drag moved the slider half a decibel.
+- **Fix.** The video store's coalescing, in the same shape: `historyKey` and `endGesture` in `audioStore`, `patchChain(patch, key?)` and `setSecondaryTrack(track, key?)` (a keyless call is its own step; discrete actions, undo, load and clear reset the key), and `useGestureEnd()` on the three cards (pointer up and blur). The first version, `onPointerUp` + `onBlur={endGesture}` as ColorGradePanel has it, was red on the new e2e for a reason the unit tests could not see: a press on a slider moves focus, the browser sends the slider its first `input` event BEFORE the control that had focus (the Custom button, the last slider) loses it, and that blur closed the window mid-drag, so the first drag after any click in the card was TWO steps. A blur while the pointer is down is the press moving focus; `useGestureEnd` ignores it. (`redo` has no reset: an edit clears the redo branch, so a redo never meets an open window.)
+- **Test.** `audioStore.test.ts` (one drag is one step; two drags, a different control, a discrete action after a drag, undo, load and clear), `gestureEnd.test.ts` (the blur during a press, a release outside the card), and audio.spec.ts "T-147 (T-78)": real mouse drags in Cleanup, Levels and the second track, ONE Ctrl+Z each, and arrow keys coalescing until blur. Red on the unchanged build.
+- **Lesson.** **A coalescing window must survive the event order of the gesture that opens it, not the order the code reads in.** The unit tests drove the store in the order a person thinks (press, move, release); the browser's order has a blur inside the press. Only a real drag from a focused neighbour saw it. Video Studio's ColorGradePanel (and the other panels of its T-40 pair) use the bare `onPointerUp` + `onBlur` and so very likely split their first drag the same way (NOT measured: Video Studio is outside Track A's files); it is open for the next video pass.
+
+---
+
+## 2026-11-03 - T-147 Track C (round 96): References and the tour - an open ticket is not a disposition
+
+The thirty-fourth pass's References and tutorial items (5, 6a, 7). Ledger: r96c/ledger.tsv.
+
+### (5) [LOW] = T-76 - saving a picture already on the board said "Saved" and pushed an Undo step that undid nothing
+
+- **Bug.** A second Save of the same result toasted `Saved to "X"` for a write that never happened, and the store recorded a history step for it, so the first Undo after it did nothing visible and the real save needed a second press.
+- **Root cause.** main dedupes on `fullUrl` and returns the board unchanged (right), but `referencesStore.addToCollection` pushed history unconditionally and `ReferencePanel.saveInto` toasted unconditionally: neither asked whether anything had been added. T-76 was filed in round 46 with exactly this diagnosis and sat open through every sweep since: each sweep read the code, found it as T-76 described, and moved on because the ticket existed.
+- **Fix.** Renderer-only: `addToCollection` compares the board's item count in the list it already re-reads, before and after, resolves `added: boolean`, and pushes history only when something was added. The panel toasts `Saved to "X"` or `Already on "X"` (a neutral toast: nothing was written, nothing failed). No IPC shape changed.
+- **Test.** `referencesStore.test.ts` "adding a picture that is already on the board" (no step, the `history` object untouched); references.spec.ts "T-76 (T-147 (5))" (both toasts, then ONE Undo empties the board and the button is disabled: no empty step on top). Red on a build of the unchanged tree.
+- **Lesson.** **An open ticket is not a disposition.** T-76 was filed in round 46 and sat open through every sweep since, and a sweep that finds a bug already ticketed has nothing new to report, so the ticket's age never counted against a clean pass. The expediter now checks TICKETS.md for non-done tickets before certifying a clean pass: a ticket that is open is a finding that has not been fixed, not a finding that has been handled.
+
+### (6a) [LOW] - the tour's steps after the first were silent to a screen reader
+
+- **Bug / Root cause.** The coachmark re-focuses the same Next button on every step, so focus does not move; the dialog's changed `aria-label` is not re-announced; the step's heading and paragraph were neither described nor live.
+- **Fix.** The card is `aria-describedby` its body, and an sr-only `aria-live="polite"` region inside it says "Step N of M: title. body" when the step CHANGES (Next or Back), and is empty on open: the dialog's own name covers step 1, and saying it twice would double-announce.
+- **Test.** home-chrome.spec.ts "T-147 (6a)": empty on open, step 2's sentence after Next, step 1's after Back, and the describedby target is the body's text.
+- **Lesson.** A control that keeps focus across a change of content has to say the change out loud: focus movement is how a dialog announces itself, and a step that moves nothing needs a live region instead.
+
+### (7) [LOW] - a References search's outcome was silent to a screen reader
+
+- **Bug / Root cause.** The error card, the notice, "No results." and the grid mounted with no live region and no toast, and no `role=` anywhere in references/.
+- **Fix.** One always-mounted `role="status"` wrapper (the Player's and GifPanel's pattern; `-mb-4` takes back the gap it would otherwise hold while empty) around the error, the notice and "No results.", plus an sr-only "N results." (or "1 result.") when a search returned pictures, said once the search has answered.
+- **Test.** references.spec.ts "T-147 (7)": a stand-in search answering with three results, one, none, a notice and a rejection; the region's text each time, and the grid's 16 px gap under the note unchanged. Red on the unchanged build.
+- **Lesson.** A live region has to exist before its content does; the layout cost of an empty one is a measured number (here 0 px), not a guess.
+
+---
+
+## 2026-11-03 — T-147 (round 96), Track B: Close asked "1 clip and its edits" of a video nobody had touched
+
+The thirty-fourth pass, Track B (Video Studio's Close question, Stream Graphics' export note and Properties panel, the hotkey guards). Ledger: r96b/ledger.tsv (11 red rows against a build of the unchanged tree, f4f4422: one unit run over the six unit files and ten e2e runs; and 45 mutation rows over 45 mutations, 31 unit and 14 e2e, every restore byte-identical; two survivors, both disclosed: `redo`'s reset of the coalescing key is equivalent to the code without it (below), and the e2e mutant that calls an edited clip untouched survives because every edit made in the UI also leaves an undo step, so only the unit case, which has a changed clip and an empty history, kills it).
+
+### (3) [LOW] - a promise tested against a state the app is never in
+
+- **Bug.** Close in Video Studio, and Record's "Edit in Video Studio" over an open video, asked "Close this video? 1 clip and its edits will be discarded." of a video that had only been opened. Audio Studio's Close asked nothing of a sound nobody had touched.
+- **Root cause.** T-119 (3) promised "asking nothing when there is nothing to lose" and implemented it as "zero clips" (`videoDiscardMessage(clipCount)` returned null at 0). Loading a video always makes one clip, so a loaded video is never in the zero-clips state and the promise could never hold. The unit test drove `videoDiscardMessage(0)` and passed; the e2e cases all opened a video and read the question, so they pinned the bug as the behavior (the Close case's own comment said "source load always creates at least one clip").
+- **Fix.** `videoSessionHasLoss(state)` (`videoStore.ts`): more than one clip, the one clip changed from what `loadSource` made, an undo history with a step in it, a scan's candidates, a chat log pasted into a finder, or the spikes found in one (the doc comment lists them; a transcript is cached on disk and is not one). `videoDiscardMessage` takes the state, asks only on a loss, and with a job running over an untouched video is the lead-in and the jobs sentence alone (the T-146 audio shape). Both callers read the store when the button is pressed.
+- **Test.** Unit: each loss kind asks by itself (each loss kind has its own mutation that turns it into "not a loss"), the untouched session asks nothing, a transcript asks nothing, the real store from `loadSource` to `clearSource`. E2E: video-core.spec.ts counts dialog events on an untouched Close; the trimmed Close still asks; record.spec.ts runs three real takes (empty studio, untouched take, edited take); the three older pins that assumed the question on an untouched video were changed to make the video touched, not to loosen the assertion.
+- **Lesson.** **A promise is tested against the state the app is actually in, not against the state the function's parameter allows.** "Nothing to lose" was a zero in the signature and never a state a user reaches; the test that fed it a zero was green for twenty-seven rounds of reviews that read the promise, the function and the test and found them consistent with each other. When a test names a promise, build the input by the same path the app does (here: `loadSource`) and ask what a person has just done to get there. A related tell: an e2e case whose setup is "open the thing, then do the action" and whose assertion is the question is pinning whatever the action does today.
+
+### (4) [LOW] - the file is not what the canvas showed, and nothing said so
+
+- **Bug.** A transparent document (the overlay and emote templates) exported as JPG came out black where the canvas showed a checkerboard; the Export card said nothing.
+- **Root cause.** T-54 made exports paint the document's background; a transparent document paints nothing, a JPG has no alpha, and the capture composites onto black. T-54's ruling ("the user expects what the canvas shows") covered the fill and left this pair silent.
+- **Fix.** One line in the Export card's note slot beside the size note, only for JPG and a transparent document: "JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear." (`jpgTransparencyNote`, pure, beside `thumbnailSizeNote`.)
+- **Test.** Unit for the helper's four pairs; image.spec.ts: the overlay in JPG shows it, PNG removes it, a filled document in JPG shows none. Red on the unchanged build.
+- **Lesson.** When a format cannot carry something the canvas shows, the card for that format says so at the moment it is chosen; a ruling that fixes the common case (a fill) is not a ruling on the pair the ruling's own nuance mentions (transparent documents are the point of an emote).
+
+### (T-75, non-counted) the hotkey guards asked the wrong dialog counter
+
+- **Bug / Root cause.** The tool letters, Delete and Ctrl+Z asked `Modal`'s count, which leaves the tutorial coachmark out so that `?` can open over a tour (T-72). With a coachmark open the keys still acted on the canvas behind its scrim: the T-68 failure, through the one dialog the count ignores. The T-68 e2e drove the Variants dialog, which IS a `<Modal>`, and never saw it.
+- **Fix.** `anyDialogClaim()` (`useFocusTrap.ts`) reads the claim stack that every `<Modal>` and the coachmark take a claim on; ImageStudio's keys, `useUndoRedoHotkeys` (so Video and Audio Studio too) and Record's Escape-to-stop ask it. `?` keeps `openModalCount`.
+- **Test.** image.spec.ts "hotkeys under an open tutorial coachmark" (red on the unchanged build; the same keys act again after the tour closes, so "the hotkeys are off for good" cannot pass); unit for the reader; wiring pins.
+- **Lesson.** **A guard is tested under every kind of the thing it guards against, not under the kind the last bug was.** T-68 tested one dialog, T-72 carved the coachmark out for one key, and nobody asked what else the carve-out let through.
+
+### (T-78 image half, non-counted) one drag, one Undo step
+
+- **Bug / Fix.** `canvasStore.updateLayer` pushed an undo step per `input` event behind Properties' opacity slider, colour fields and name field. `updateLayer(id, patch, key?)` now coalesces (`historyKey`, `endGesture`, the video store's shape; a key is per layer and control); the panel ends the window on `onPointerUp` (the video panels' `handleGestureEndPointerUp`, which now takes the store's `endGesture` so there is one rule) and `onBlur`.
+- **Test.** Unit: a drag is one step, two drags two, a name is one step until blur, a different control or layer is another gesture, discrete actions and Undo / Redo close the window. E2E: a real drag of the slider through four positions, ONE Ctrl+Z restores 100% (0.55 on the unchanged build), a second drag is a second step. One survivor: `redo` resetting the key is unreachable (a redo needs a non-empty future, which only an undo makes, and an undo already closes the window), kept for parity with the video store.
+
+---
+
 ## 2026-11-03 — T-146 (round 95): Audio Studio's Close hid the running export, the hole T-144 closed in Video Studio
 
 The thirty-third pass (one track: Audio Studio's renderer, with the Export toast's reach as a non-counted fold). Ledger: r95a/ledger.tsv (7 red rows against a build of the unchanged tree, 4cb9185: two unit runs and five e2e cases; and 31 mutation rows over 31 mutations, 24 unit and 7 e2e, every restore byte-identical, no survivors).
@@ -1466,7 +1563,7 @@ The thirteenth pass (nine reviewers, then the sweep's executed probes; every ite
 ### (20) [MED] - the re-attach toast was a dead end
 
 - **Fix.** `toastSaved('Cleaned audio attached to the video', outputPath, { label: 'Edit in Video Studio', ... })` through `useEditInVideoStudio` on the MUX output only (an audio-only export has no video to open), and one USER_GUIDE sentence on the order the toast makes natural: clean the sound first, then clip.
-- **Test.** One E2E case (Show in folder reaches the shell with the file; Edit in Video Studio lands on the route with the file in the header and the player mounted; an audio-only export offers neither). **Red-first:** `the saved toast carries the action ... element(s) not found`; with the action also on the audio-only toast, `Received array: [..., "Cleaned audio exported Show in folder Edit in Video Studio"]`.
+- **Test.** One E2E case (Show in folder reaches the shell with the file; Edit in Video Studio lands on the route with the file in the header and the player mounted; an audio-only export offers neither). **Superseded (T-146, T-147 (2)):** the premise "an audio-only export offers neither" went false when T-146 let an export outlive its sound: the audio-only toast is `toastSaved` too, with Show in folder and still no Edit in Video Studio, and the case asserts exactly that now. **Red-first:** `the saved toast carries the action ... element(s) not found`; with the action also on the audio-only toast, `Received array: [..., "Cleaned audio exported Show in folder Edit in Video Studio"]`.
 
 ### (21) [MED] - GIF, Compile, Reframe and Picture-in-picture asked for a folder every time the studio opened
 

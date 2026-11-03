@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
 import { chooserCalls, recordSlowChooser } from './chooser'
-import { dragTo } from './drag'
+import { dragThrough, dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
   MIN_WINDOW,
@@ -1974,7 +1974,7 @@ test.describe('imagii Audio Studio', () => {
       await stubSaveDialog(app, out)
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       await exportButton.click()
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       const probed = await probeFile(out)
       expect(probed.codecs, 'an audio file: no video stream').toEqual(['mp3'])
@@ -2891,7 +2891,7 @@ test.describe('imagii Audio Studio', () => {
       await cutChips(window).first().click()
       await expect(cutChips(window)).toHaveCount(0)
       await exportButton.click()
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       expect(existsSync(out)).toBe(true)
     } finally {
       await closeStudio(studio)
@@ -2974,10 +2974,10 @@ test.describe('imagii Audio Studio', () => {
       const exportPanel = window.locator(EXPORT)
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       await exportButton.dblclick()
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       expect(await readSaveOptions(app), 'one save dialog, not two').toHaveLength(1)
-      expect((await readToastLog(window)).filter((t) => t === 'Cleaned audio exported'), 'one "exported" toast').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t === 'Cleaned audio exported Show in folder'), 'one "exported" toast').toHaveLength(1)
       expect(withEverything(readdirSync(studio.root)).filter((f) => /\.(mp3|wav|m4a|flac)$/i.test(f)).sort(), 'one file written').toEqual(['double.mp3'])
       expect((await probeFile(out)).codecs).toEqual(['mp3'])
     } finally {
@@ -3027,7 +3027,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(exportButton).toBeEnabled({ timeout: 30_000 })
       await expect(cancel).toHaveCount(0)
       expect(existsSync(out)).toBe(false)
-      expect(entries.map((e) => e.text)).not.toContain('Cleaned audio exported')
+      expect(entries.some((e) => e.text.includes('Cleaned audio exported')), 'no success was claimed').toBe(false)
     } finally {
       await closeStudio(studio)
     }
@@ -3091,7 +3091,7 @@ test.describe('imagii Audio Studio', () => {
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
       // It ends while nobody is looking at the dialog: the file lands and the toast says so.
       await expect.poll(() => existsSync(out), { timeout: 90_000, intervals: [250] }).toBe(true)
-      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       await window.locator('a', { hasText: 'Audio Studio' }).first().click()
       await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
       await expect(exportPanel.getByRole('button', { name: 'Export', exact: true }), 'idle again').toBeEnabled()
@@ -3121,7 +3121,7 @@ test.describe('imagii Audio Studio', () => {
       await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
       await expect
         .poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] })
-        .toContain('Cleaned audio exported')
+        .toContain('Cleaned audio exported Show in folder')
 
       // The save dialog was opened for .m4a — name, extension filter, all of it.
       const [opts] = await readSaveOptions(app)
@@ -3238,7 +3238,7 @@ test.describe('imagii Audio Studio', () => {
   // (Record's take, Reframe's 9:16 file); this one said "Cleaned audio attached to the video" and left the person to find the .mp4
   // in a folder and drag it into Video Studio by hand - the very next step of the order the guide recommends (clean the sound,
   // THEN clip). The new button is on the re-attached video only: an audio-only export has nothing for Video Studio to open.
-  test('the re-attach toast names the file, shows it in its folder, and opens it in Video Studio; an audio-only export offers no video to open (T-124 (20))', async () => {
+  test('the re-attach toast names the file, shows it in its folder, and opens it in Video Studio; an audio-only export shows its file and offers no video to open (T-124 (20), T-147 (2))', async () => {
     test.setTimeout(300_000)
     const studio = await openStudio('reattach-next')
     const { app, window } = studio
@@ -3250,17 +3250,20 @@ test.describe('imagii Audio Studio', () => {
       const exportPanel = window.locator(EXPORT)
       const toaster = window.locator('[data-rht-toaster]')
 
-      // ── the audio-only export first: no video to open, so the toast has no such button ──
+      // ── the audio-only export first: no video to open, so the toast has no such button - but it has the way to its file (T-147 (2): it had neither) ──
       await exportPanel.getByRole('checkbox').uncheck()
       await exportPanel.getByRole('combobox').first().selectOption('wav')
       const wav = path.join(studio.root, 'e2e-clip-cleaned.wav')
       await stubRecordingSaveDialog(app, wav)
+      await stubShellReveal(app)
       await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
-      // (`toContain` on the log is an EXACT entry: the sentence and nothing after it, so no button text rides along.)
+      // (`toContain` on the log is an EXACT entry: the sentence and then the one button's name, and no "Edit in Video Studio" after it.)
       await expect
         .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
-        .toContain('Cleaned audio exported')
+        .toContain('Cleaned audio exported Show in folder')
       await expect(toaster.getByRole('button', { name: 'Edit in Video Studio' })).toHaveCount(0)
+      await toaster.getByRole('button', { name: 'Show in folder', exact: true }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([wav])
 
       // ── the re-attach: the same two buttons Record's saved take has ──
       await expect(toaster).toHaveCount(1)
@@ -3273,9 +3276,13 @@ test.describe('imagii Audio Studio', () => {
       await expect(edit, 'the saved toast carries the action').toBeVisible({ timeout: 120_000 })
       await expect(toaster.getByText('Cleaned audio attached to the video')).toBeVisible()
 
-      // Show in folder reaches the shell with the file that was written.
+      // Show in folder reaches the shell with the file that was written. (Scoped to this toast: the audio-only export's may still be on screen.)
       await stubShellReveal(app)
-      await toaster.getByRole('button', { name: 'Show in folder', exact: true }).click()
+      await toaster
+        .locator('[role="status"]')
+        .filter({ hasText: 'Cleaned audio attached to the video' })
+        .getByRole('button', { name: 'Show in folder', exact: true })
+        .click()
       await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([out])
 
       // Edit in Video Studio opens THAT file there: the route, the header and the player.
@@ -4145,7 +4152,7 @@ test.describe('T-140 (1): an audio export is the old file until the new one is w
       await stubSaveDialog(app, out)
       const exportPanel = window.locator(EXPORT)
       await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
-      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
       expect(shaOf(out), 'the old bytes are gone').not.toBe(before)
       expect((await probeFile(out)).codecs, 'ffprobe reads a real mp3').toEqual(['mp3'])
@@ -4183,7 +4190,7 @@ test.describe('T-140 (1): an audio export over a file that is open in another ap
 
       await expect
         .poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] })
-        .toContain('Cleaned audio exported. held.mp3 is open in another app, so this export was saved as held (2).mp3.')
+        .toContain('Cleaned audio exported. held.mp3 is open in another app, so this export was saved as held (2).mp3. Show in folder')
       await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
       expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused (and tried again)').toBeGreaterThan(1)
 
@@ -4287,7 +4294,7 @@ test.describe('T-141 (1): an export aimed at a file the job reads is refused, an
       const out = path.join(studio.root, 'e2e-tone-cleaned.wav')
       await stubSaveDialog(app, out)
       await exportButton.click()
-      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       expect((await probeFile(out)).codecs, 'ffprobe reads the wav').toEqual(['pcm_s16le'])
       expect(shaOf(studio.fixture), 'the source is still what it was').toBe(before)
     } finally {
@@ -4519,7 +4526,7 @@ test.describe('T-146 (1): the closed sound shows the export that is still runnin
       await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
       await closeButton(window).click()
       await expect(card(window)).toBeVisible({ timeout: 10_000 })
-      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
       await expect(card(window), 'the card is gone once the export has ended').toHaveCount(0, { timeout: 30_000 })
       expect((await probeFile(target)).codecs, 'ffprobe reads a real mp3').toEqual(['mp3'])
       expect(withEverything(readdirSync(outDir))).toEqual(['t146-done.mp3'])
@@ -4539,6 +4546,325 @@ test.describe('T-146 (1): the closed sound shows the export that is still runnin
       expect(studio.dialogs.messages, 'no question').toEqual([])
       await expect(card(window)).toHaveCount(0)
       expect(await window.locator('div[aria-live="polite"].-mb-5').evaluate((el) => (el as HTMLElement).offsetHeight), 'the empty region takes no room').toBe(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-147 (2): the audio-only export's finished toast always has the way to the file; another sound's panel names the export it draws ───────────────────────────
+//
+// The plain export raised `toast.success('Cleaned audio exported')`: two seconds, no button. "Show in folder" lived only on the dialog's row, which is drawn inside the
+// OPEN sound's Export panel, so an export that ended with the sound closed (T-146 keeps it running) or replaced left nothing to press. And the row of a DIFFERENT
+// open sound drew that export with no name. The render is slowed (`-readrate` in main's `spawn`, as T-145 / T-146 do) so it is mid-run while the person closes the sound.
+test.describe('T-147 (2): the audio-only export\'s toast and the row under another sound', () => {
+  const closeButton = (window: Page) => window.locator('header').getByRole('button', { name: 'Close', exact: true })
+  const toaster = (window: Page) => window.locator('[data-rht-toaster]')
+
+  async function slowEveryRender(app: ElectronApplication, rate: number): Promise<void> {
+    await app.evaluate((_e, r) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        const input = argv.indexOf('-i')
+        if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+        return real(cmd, [...argv.slice(0, input), '-readrate', String(r), ...argv.slice(input)], opts)
+      }
+      mod.syncBuiltinESMExports()
+    }, rate)
+  }
+
+  test('an audio-only export that ends after the sound was CLOSED raises the toast with Show in folder (no Edit in Video Studio), and pressing it reveals the written file', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t147-toast-closed')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't147-cleaned.mp3')
+      await stubSaveDialog(app, target)
+      await stubShellReveal(app)
+      await slowEveryRender(app, 0.5)
+      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      await expect(window.locator(EXPORT), 'the Export panel (and its row) went with the sound').toHaveCount(0)
+
+      const saved = toaster(window).locator('[role="status"]').filter({ hasText: 'Cleaned audio exported' })
+      await expect(saved, 'the export finished with nothing of it on screen but the toast').toBeVisible({ timeout: 90_000 })
+      expect(await readToastLog(window)).toContain('Cleaned audio exported Show in folder')
+      await expect(saved.getByRole('button', { name: 'Edit in Video Studio' }), 'there is no video').toHaveCount(0)
+      expect((await probeFile(target)).codecs, 'ffprobe reads a real mp3 at the target').toEqual(['mp3'])
+      await saved.getByRole('button', { name: 'Show in folder', exact: true }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([target])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the toast outlasts the default two seconds: the button is still there six seconds after the export ended', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-toast-duration')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const target = path.join(studio.root, 't147-long-lived.mp3')
+      await stubSaveDialog(app, target)
+      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      const saved = toaster(window).locator('[role="status"]').filter({ hasText: 'Cleaned audio exported' })
+      await expect(saved).toBeVisible({ timeout: 60_000 })
+      await window.waitForTimeout(6_000)
+      await expect(saved.getByRole('button', { name: 'Show in folder', exact: true }), 'react-hot-toast\'s own success toast is gone by now').toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('another sound open while A\'s export runs: its Export row names A\'s file; under A itself the row has no name', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t147-row-names')
+    const { app, window } = studio
+    try {
+      const second = path.join(studio.root, 'source', 'second-tone.wav')
+      await makeFixtureWav(second)
+      await dropAndWaitReady(studio)
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't147-a-cleaned.mp3')
+      await stubSaveDialog(app, target)
+      await slowEveryRender(app, 0.25)
+      const panel = window.locator(EXPORT)
+      await panel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+      await expect(panel, 'the row is drawn for A under A').toContainText('Rendering')
+      await expect(panel.getByText(/^Export — /), 'and says nothing about whose it is: it is this sound\'s').toHaveCount(0)
+
+      // Close A (the export goes on), open B: B's Export panel draws the running export - and says it is A's.
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnImporter(window, second, 'second-tone.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('second-tone.wav', { exact: true })).toBeVisible()
+      const name = panel.getByText('Export — e2e-tone.wav', { exact: true })
+      await expect(name, 'B\'s row names the file the export is for').toBeVisible()
+      await expect(name).toHaveAttribute('title', 'Export — e2e-tone.wav')
+      await expect(name).toHaveClass(/\bmin-w-0\b/)
+      await expect(name).toHaveClass(/\btruncate\b/)
+      await expect(panel.getByRole('button', { name: 'Exporting…' }), 'B cannot start a second export while A\'s runs').toBeDisabled()
+      await expect(panel).toContainText('Rendering')
+
+      // Cancel it from B's panel (the one Cancel path): the row, the name and the file go.
+      await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(name, 'the name goes with the running export').toHaveCount(0)
+      expect(existsSync(target), 'no file at the target').toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-147 (fold, T-78 audio half): one slider drag is ONE undo step ──────────────────────────────────────────────────────────────────────────────────────────────
+//
+// `patchChain` pushed a history step on every `input` event, so a drag was dozens of Ctrl+Z presses. Real mouse down / move / up on the real sliders, then ONE Ctrl+Z.
+test.describe('T-147 (T-78): a slider drag is one undo step', () => {
+  /** A drag across a range input, from one fraction of its width to another, through several stops (each is an `input` event). */
+  async function dragSlider(window: Page, slider: ReturnType<Page['locator']>, fromFrac: number, throughFracs: number[]): Promise<void> {
+    const box = await slider.boundingBox()
+    if (!box) throw new Error('the slider has no box')
+    const at = (f: number) => ({ x: box.x + 8 + (box.width - 16) * f, y: box.y + box.height / 2 })
+    await dragThrough(window, at(fromFrac), throughFracs.map(at))
+  }
+
+  test('Cleanup: a drag of the Custom noise floor, then ONE Ctrl+Z puts the pre-drag readout back, and the next undoes the Custom button', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-undo-cleanup')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      await cleanup.getByRole('button', { name: 'Custom', exact: true }).click()
+      const slider = cleanup.getByRole('slider', { name: 'Noise floor' })
+      const readout = cleanup.locator('label', { hasText: 'Noise floor' })
+      await expect(readout).toContainText('-25 dB')
+      await dragSlider(window, slider, 0.2, [0.3, 0.4, 0.5, 0.6, 0.7])
+      await expect(readout, 'the drag moved it').not.toContainText('-25 dB')
+      const after = (await readout.textContent()) ?? ''
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'ONE undo is back to where the drag began').toContainText('-25 dB')
+      await window.keyboard.press('Control+y')
+      await expect(readout, 'and ONE redo is the end of the drag').toHaveText(after)
+      await window.keyboard.press('Control+z')
+      await expect(readout).toContainText('-25 dB')
+      // Nothing of the drag is left in the history: the next step back is the Custom button.
+      await window.keyboard.press('Control+z')
+      await expect(cleanup.getByRole('slider'), 'the second undo is Custom, not another slice of the drag').toHaveCount(0)
+      await expectSelected(cleanup.getByRole('button', { name: 'Off', exact: true }))
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Cleanup: two drags are two steps; arrow keys on a focused slider are one step until it loses focus', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-undo-keys')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      await cleanup.getByRole('button', { name: 'Custom', exact: true }).click()
+      const slider = cleanup.getByRole('slider', { name: 'Noise floor' })
+      const readout = cleanup.locator('label', { hasText: 'Noise floor' })
+      await dragSlider(window, slider, 0.2, [0.3, 0.4, 0.5])
+      const first = (await readout.textContent()) ?? ''
+      await dragSlider(window, slider, 0.5, [0.6, 0.7, 0.8])
+      const second = (await readout.textContent()) ?? ''
+      expect(second).not.toBe(first)
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'the second drag is one step').toHaveText(first)
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'and the first drag is another').toContainText('-25 dB')
+
+      // Arrow keys: a run on one focused slider is one step; leaving the control ends it, and the next run is its own.
+      await slider.focus()
+      for (let i = 0; i < 3; i++) await window.keyboard.press('ArrowRight')
+      await expect(readout).toContainText('-22 dB')
+      await slider.blur()
+      await slider.focus()
+      for (let i = 0; i < 2; i++) await window.keyboard.press('ArrowRight')
+      await expect(readout).toContainText('-20 dB')
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'the second run of arrows is one step').toContainText('-22 dB')
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'and the first run is another').toContainText('-25 dB')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Levels: a drag of Manual gain, then ONE Ctrl+Z, is back at +0.0 dB; a second drag right after it is a step of its own, and so is a checkbox', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-undo-levels')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const levels = window.locator(LEVELS)
+      const gain = levels.getByRole('slider', { name: 'Manual gain in decibels' })
+      const readout = levels.locator('div', { hasText: /^Manual gain/ }).first()
+      await expect(readout).toContainText('+0.0 dB')
+      await dragSlider(window, gain, 0.5, [0.6, 0.7, 0.8, 0.9])
+      await expect(readout).not.toContainText('+0.0 dB')
+      const first = (await readout.textContent()) ?? ''
+
+      // A second drag of the SAME slider, straight after the first: the pointer going up closed the first one's window.
+      await dragSlider(window, gain, 0.9, [0.8, 0.7, 0.6])
+      const second = (await readout.textContent()) ?? ''
+      expect(second).not.toBe(first)
+      await levels.getByLabel(/^Even volume/).check()
+      await window.keyboard.press('Control+z')
+      await expect(levels.getByLabel(/^Even volume/), 'the checkbox is a step of its own').not.toBeChecked()
+      await expect(readout).toHaveText(second)
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'the second drag is one step').toHaveText(first)
+      await window.keyboard.press('Control+z')
+      await expect(readout, 'and the first drag is another').toContainText('+0.0 dB')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Second track: a drag of its gain, then ONE Ctrl+Z, is back at -10.0 dB; a second gain drag and a Threshold drag are steps of their own', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-undo-second')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(studio.app, studio.fixture)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      const gain = panel.getByRole('slider', { name: 'Secondary track gain in decibels' })
+      const threshold = panel.getByRole('slider', { name: 'Threshold' })
+      await expect(panel).toContainText('-10.0 dB')
+      await dragSlider(window, gain, 0.4, [0.5, 0.6, 0.7, 0.8])
+      await expect(panel).not.toContainText('-10.0 dB')
+      const firstGain = await gain.inputValue()
+      await dragSlider(window, gain, 0.8, [0.7, 0.6, 0.5])
+      const secondGain = await gain.inputValue()
+      expect(secondGain).not.toBe(firstGain)
+      await dragSlider(window, threshold, 0.3, [0.4, 0.5, 0.6])
+      expect(await threshold.inputValue()).not.toBe('-26')
+      await window.keyboard.press('Control+z')
+      await expect(threshold, 'one undo: the threshold drag').toHaveValue('-26')
+      expect(await gain.inputValue(), 'the gain drag is untouched').toBe(secondGain)
+      await window.keyboard.press('Control+z')
+      await expect(gain, 'one more: the second gain drag').toHaveValue(firstGain)
+      await window.keyboard.press('Control+z')
+      await expect(gain, 'and the first').toHaveValue('-10')
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+
+// ── T-147 (6b): the Fix wizard's question is tied to its options ─────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// Focus moves to the new step's first option, so a screen reader says "Sounds dry, button" - and the question, an `h2` beside the buttons, was not read with it. Each
+// step's options are a `role="group"` named by the visible question; the summary's Apply is described by what it will set.
+test.describe('T-147 (6b): the Fix wizard\'s options are grouped under their question', () => {
+  test('at each question the focused option is in a group named by the visible question, and the summary\'s Apply is described by its list', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t147-wizard-a11y')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await window.locator(FIXWIZARD).getByRole('button', { name: 'Help me fix this' }).click()
+      const dialog = window.getByRole('dialog')
+      const steps = [
+        { question: 'Is there background noise (HVAC, fan, traffic)?', first: 'None to speak of', options: 3 },
+        { question: 'Does the room sound echoy or hollow?', first: 'Sounds dry', options: 2 },
+        { question: 'What is this clip mostly?', first: 'Talking / voice', options: 3 }
+      ]
+      for (const [i, step] of steps.entries()) {
+        await expect(dialog).toContainText(`Quick fix · ${i + 1} of 3`)
+        // The visible question, as the heading the group is named by.
+        const heading = dialog.locator('h2:not(.sr-only)')
+        await expect(heading).toHaveText(step.question)
+        const group = dialog.getByRole('group', { name: step.question, exact: true })
+        await expect(group, `step ${i + 1}: one group, named by the question`).toHaveCount(1)
+        expect(await group.getAttribute('aria-labelledby'), 'by reference to the visible heading, not a copy of its words').toBe(await heading.getAttribute('id'))
+        await expect(group.getByRole('button'), `the options are in it`).toHaveCount(step.options)
+        // Focus is on the first option, and that option's closest group is the one the question names.
+        const first = group.getByRole('button', { name: step.first, exact: true })
+        await expect(first).toBeFocused()
+        expect(
+          await window.evaluate(() => {
+            const group = document.activeElement?.closest('[role="group"]')
+            const label = group?.getAttribute('aria-labelledby')
+            return label ? (document.getElementById(label)?.textContent ?? null) : null
+          }),
+          'the focused option\'s group is named by the question text'
+        ).toBe(step.question)
+        await first.click()
+      }
+
+      // The summary: Apply is focused and described by the list of what it will set.
+      await expect(dialog).toContainText('Ready to apply')
+      const apply = dialog.getByRole('button', { name: 'Apply', exact: true })
+      await expect(apply).toBeFocused()
+      await expect(apply).toHaveAccessibleDescription(/Based on your answers, imagii will set:/)
+      await expect(apply).toHaveAccessibleDescription(/Quieter background: off/)
+      await expect(apply).toHaveAccessibleDescription(/Low rumble removal: on/)
+      await expect(apply).toHaveAccessibleDescription(/Even volume: on \(target −16\)/)
     } finally {
       await closeStudio(studio)
     }

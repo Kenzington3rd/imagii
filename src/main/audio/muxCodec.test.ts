@@ -205,7 +205,7 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
     expect(videoProbes).toEqual(['/in/original.wmv'])
   })
 
-  it('a re-encoded picture has a bar that measures (against the length of the cleaned audio); a copy has none', async () => {
+  it('a re-encoded picture has a bar that measures (against the picture\'s length); a copy has one too (T-147 (1))', async () => {
     codec = 'wmv2'
     onSpawn = (s) => {
       s.child.stdout.emit('data', 'out_time=00:00:05.000000\nprogress=continue\n')
@@ -220,7 +220,10 @@ describe('runAudioMux — stream-copy only what an mp4 can carry (T-111)', () =>
     spawned = []
     const copied: AudioJobProgress[] = []
     await mux([], (p) => copied.push(p))
-    expect(copied.map((p) => p.percent)).toEqual([100])
+    // T-147 (1): the copy re-encodes the SOUND (AAC), which is minutes on a long recording, so it has a bar of its own: the start, 5 s of the
+    // picture's 10 s, the end. It was `[100]`: no event between the render's last one and the end.
+    expect(copied.map((p) => p.percent)).toEqual([0, 50, 100])
+    expect(copied.every((p) => p.pass === 'mux')).toBe(true)
   })
 
   it('a Cancel in the probe ends the wait at once: the job is refused and nothing is spawned', async () => {
@@ -312,5 +315,68 @@ describe('runAudioMux — the sound reaches the picture\'s length, and -shortest
     const fallback: AudioJobProgress[] = []
     await mux([], (p) => fallback.push(p))
     expect(fallback.filter(half), '2.5 s of the 5 s cleaned sound').toHaveLength(1)
+  })
+})
+
+// T-147 (1): the stream-copy re-attach shows the render's "Step 1 of 2 - rendering 100%" for the WHOLE mux. The copy path was given a total of 0 ("a copy is
+// instant"), so no `mux` event came until the final 100, and the pass the store held was the render's last. The copy is not instant - it re-encodes the sound to
+// AAC (about 20x realtime on the bundled 7.0.2, so a 2 h VOD is minutes) - so it measures against the same length the re-encode path does (the picture's:
+// the output is that long, T-131 (2)), and a `mux` event at 0 goes out the moment the pass starts, so the label leaves "rendering" when the render ends.
+// Layer 5 (media.spec.ts, T-147 (1)) proves what the real binary prints during the copy.
+describe('runAudioMux — the copy path has a bar and the pass announces its start (T-147 (1))', () => {
+  const printsOutTime = (sec: number) => (s: Spawned): void => {
+    s.child.stdout.emit('data', `out_time=00:00:${String(sec).padStart(2, '0')}.000000\nprogress=continue\n`)
+    finish(s)
+  }
+
+  it('the first event of the pass is `mux` at 0, and it is out BEFORE the child is spawned', async () => {
+    const order: string[] = []
+    onSpawn = (s) => {
+      order.push('spawn')
+      finish(s)
+    }
+    const seen: AudioJobProgress[] = []
+    await mux([], (p) => {
+      order.push(`${p.pass}:${p.percent}`)
+      seen.push(p)
+    })
+    expect(order).toEqual(['mux:0', 'spawn', 'mux:100'])
+    expect(seen[0]).toEqual({ jobId: 'mux1', pass: 'mux', percent: 0 })
+  })
+
+  it('the start event precedes every movement of the bar, on the copy path and on the re-encode path', async () => {
+    for (const c of ['h264', 'wmv2']) {
+      codec = c
+      spawned = []
+      onSpawn = printsOutTime(5)
+      const seen: AudioJobProgress[] = []
+      await mux([], (p) => seen.push(p))
+      expect(seen.map((p) => p.percent), c).toEqual([0, 50, 100])
+    }
+  })
+
+  it('a copy measures against the PICTURE\'s length, not the sound\'s: 6 s of a 12 s picture is 50% even when the sound is 5 s (T-131 (2))', async () => {
+    codec = 'h264'
+    pictureSec = 12
+    soundSec = 5
+    onSpawn = printsOutTime(6)
+    const seen: AudioJobProgress[] = []
+    await mux([], (p) => seen.push(p))
+    expect(seen.filter((p) => p.percent > 0 && p.percent < 100).map((p) => p.percent)).toEqual([50])
+  })
+
+  it('a long copy reports as it goes: five prints are five rising figures, all `mux`', async () => {
+    codec = 'h264'
+    pictureSec = 100
+    onSpawn = (s) => {
+      for (const sec of [10, 30, 55, 80, 99]) s.child.stdout.emit('data', `out_time=00:${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}.000000\n`)
+      finish(s)
+    }
+    const seen: AudioJobProgress[] = []
+    await mux([], (p) => seen.push(p))
+    const middle = seen.slice(1, -1).map((p) => p.percent)
+    expect(middle.length).toBeGreaterThan(2)
+    expect([...middle].sort((a, b) => a - b), 'never backwards').toEqual(middle)
+    expect(seen.every((p) => p.pass === 'mux')).toBe(true)
   })
 })

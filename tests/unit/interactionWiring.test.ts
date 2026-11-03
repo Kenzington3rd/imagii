@@ -1103,8 +1103,8 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     const lib = read('lib/editInVideoStudio.ts')
     const code = lib.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     const handler = code.slice(code.indexOf('return async function editInVideoStudio'))
-    // The count is read when the button is pressed, from the store, not from a render's closure.
-    expect(handler).toMatch(/videoDiscardMessage\(useVideoStore\.getState\(\)\.clips\.length, 'replace'\)/)
+    // The state is read when the button is pressed, from the store, not from a render's closure.
+    expect(handler).toMatch(/videoDiscardMessage\(useVideoStore\.getState\(\), 'replace'\)/)
     // ...and the question comes before the load, and a "no" leaves before any of it.
     expect(handler).toMatch(/if \(message !== null && !confirm\(message\)\) return/)
     expect(handler.indexOf('confirm(message)')).toBeGreaterThan(0)
@@ -1119,7 +1119,7 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
       expect(caller, rel).not.toMatch(/loadSource\(|loadVideoSource|videoDiscardMessage/)
     }
     // T-144: and Close adds the sentence about the jobs that keep running.
-    expect(read('modules/video-studio/VideoStudio.tsx')).toMatch(/videoDiscardMessage\(clipCount, 'close', jobsKeepGoingSentence\(readVideoRunSnapshot\(\)\)\)/)
+    expect(read('modules/video-studio/VideoStudio.tsx')).toMatch(/videoDiscardMessage\(useVideoStore\.getState\(\), 'close', jobsKeepGoingSentence\(readVideoRunSnapshot\(\)\)\)/)
   })
 
   it('the Playhead slider hears I / O and , / . through the store calls the Player makes, and the trim handles are pointer-only (5)', () => {
@@ -1902,16 +1902,18 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(main('store.ts')).toMatch(/'video\.lastOutputDir'\?: string/)
   })
 
-  it('the re-attached video\'s saved toast is the shared one with "Edit in Video Studio", and the audio-only export\'s is not (20)', () => {
+  it('the re-attached video\'s saved toast is the shared one with "Edit in Video Studio", and the audio-only export\'s is the shared one without it (20, T-147 (2))', () => {
     const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/const editInVideoStudio = useEditInVideoStudio\("Couldn't open the cleaned video in Video Studio\."\)/)
     // The mux branch: the saved toast with the action, on the file that was written (T-140 (1): the one main ANSWERED, which is not the chosen name when that file was open).
     const mux = dialog.slice(dialog.indexOf('await window.api.audio.mux('), dialog.indexOf('} else {', dialog.indexOf('await window.api.audio.mux(')))
     expect(mux).toMatch(/toastSaved\(note \? `Cleaned audio attached to the video\. \$\{note\}` : 'Cleaned audio attached to the video', saved, \{\s*label: 'Edit in Video Studio',\s*onClick: \(\) => \{\s*void editInVideoStudio\(saved\)/)
-    // The audio-only branch stays a plain toast: there is no video to open.
+    // The audio-only branch is the saved toast too (T-147 (2): ALWAYS, with the written file's Show in folder - the row that carries it is drawn only under the open sound),
+    // and has no action of its own: there is no video to open.
     const audioOnly = dialog.slice(dialog.indexOf('await window.api.audio.export('), dialog.indexOf('useAudioExport.getState().done('))
-    expect(audioOnly).toMatch(/toast\.success\(note \? `Cleaned audio exported\. \$\{note\}` : 'Cleaned audio exported', note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
-    expect(audioOnly).not.toMatch(/Edit in Video Studio|editInVideoStudio/)
+    expect(audioOnly).toMatch(/toastSaved\(note \? `Cleaned audio exported\. \$\{note\}` : 'Cleaned audio exported', saved\)/)
+    expect(audioOnly).not.toMatch(/toast\.success|Edit in Video Studio|editInVideoStudio/)
+    expect(dialog, 'no plain toast is left in the dialog').not.toMatch(/toast\.success|from 'react-hot-toast'/)
   })
 
   it('a control with no live preview says so where it is: Speed, the overlay card, the Audio side column and the Fix Wizard\'s toast (19), and the overlay\'s window is flagged against the clip (18)', () => {
@@ -3285,7 +3287,7 @@ describe('T-140 Track A - a save that landed beside the chosen file is reported 
   it('the audio export keeps what main answered: the row\'s Show in folder, the toast and Edit in Video Studio all use it, and the toast says why the name changed', () => {
     const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
-    expect(dialog).toMatch(/import \{ ACTION_TOAST_MS, toastSaved \} from '\.\.\/\.\.\/lib\/savedToast'/)
+    expect(dialog).toMatch(/import \{ toastSaved \} from '\.\.\/\.\.\/lib\/savedToast'/)
     for (const call of ['await window.api.audio.mux(', 'await window.api.audio.export(']) {
       const at = dialog.indexOf(call)
       expect(at, call).toBeGreaterThan(0)
@@ -3537,5 +3539,95 @@ describe('T-146 - the closed sound\'s export card is mounted ahead of the condit
     expect(strip(card)).toMatch(/<span className="text-xs text-ink-muted font-mono whitespace-nowrap" aria-hidden="true">\s*\{row\.percent\}/)
     expect(strip(card), 'a card has no listener of its own').not.toMatch(/onProgress\(|useEffect/)
     expect(strip(read('modules/audio-studio/ExportDialog.tsx'))).toMatch(/const offProgress = window\.api\.audio\.onProgress\(\(p\) => useAudioExport\.getState\(\)\.progress\(p\)\)/)
+  })
+})
+
+describe('T-147 - Audio Studio: the sliders name their undo step, the cards close the gesture, the wizard groups its options', () => {
+  // Behavior: state/audioStore.test.ts (the coalescing), audio.spec.ts "T-147 (T-78)" (a real drag, ONE Ctrl+Z) and "T-147 (6b)" (the wizard's accessible structure).
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('Cleanup, Levels and the second track each close the gesture on the card: pointer up AND blur (useGestureEnd, which keeps a press\'s own blur from ending it)', () => {
+    for (const file of ['CleanupPanel', 'LevelsPanel', 'SecondaryTrackPanel']) {
+      const code = strip(read(`modules/audio-studio/${file}.tsx`))
+      expect(code, file).toMatch(/const gesture = useGestureEnd\(\)/)
+      expect(code, `${file}: one set on the card`).toMatch(/className="card [^"]*"(?: data-tutorial="audio-music")? \{\.\.\.gesture\}>/)
+    }
+  })
+
+  it('useGestureEnd hands the card pointer down, pointer up and blur, and the blur ignores a press', () => {
+    const hook = strip(read('modules/audio-studio/state/gestureEnd.ts'))
+    expect(hook).toMatch(/onPointerDown: \(\) => \{\s*pressed = true/)
+    expect(hook).toMatch(/onPointerUp: \(\) => \{\s*pressed = false\s*endGesture\(\)/)
+    expect(hook).toMatch(/onBlur: \(\) => \{\s*if \(!pressed\) endGesture\(\)/)
+    expect(hook, 'the release is heard wherever it lands').toMatch(/addEventListener\('pointerup', listener, \{ once: true, capture: true \}\)/)
+  })
+
+  it('every slider passes the key of its own control, and no checkbox, select or button passes one', () => {
+    const cleanup = strip(read('modules/audio-studio/CleanupPanel.tsx'))
+    expect(cleanup).toMatch(/updateParam\(\{ noiseFloorDb \}, 'denoise\.nf'\)/)
+    expect(cleanup).toMatch(/updateParam\(\{ reductionDb \}, 'denoise\.nr'\)/)
+    expect(cleanup).not.toMatch(/patchChain\([^)]*\}, '/)
+    const levels = strip(read('modules/audio-studio/LevelsPanel.tsx'))
+    expect(levels).toMatch(/patchChain\(\{ gainDb: Number\(e\.target\.value\) \}, 'gain'\)/)
+    expect(levels.match(/patchChain\([^;\n]*, '[a-z.]+'\)/g) ?? [], 'only the gain slider carries a key').toHaveLength(1)
+    const second = strip(read('modules/audio-studio/SecondaryTrackPanel.tsx'))
+    for (const key of ['secondary.gain', 'secondary.threshold', 'secondary.ratio', 'secondary.attack', 'secondary.release']) {
+      expect(second, key).toContain(`'${key}')`)
+    }
+    expect(second, 'the checkboxes and Remove are steps of their own').toMatch(/update\(\{ matchLoudness: e\.target\.checked \}\)/)
+    expect(second).toMatch(/update\(\{ duckUnderPrimary: e\.target\.checked \}\)/)
+    expect(second).toMatch(/onClick=\{\(\) => setSecondaryTrack\(null\)\}/)
+  })
+
+  it('the Fix wizard names each question\'s options by the visible heading and describes Apply by the list', () => {
+    const wizard = strip(read('modules/audio-studio/FixWizard.tsx'))
+    expect(wizard).toMatch(/<h2 id=\{headingId\} className="text-lg font-semibold mb-4">\{q\.question\}<\/h2>/)
+    expect(wizard).toMatch(/<div role="group" aria-labelledby=\{headingId\}/)
+    expect(wizard).toMatch(/<ul id=\{summaryId\}/)
+    expect(wizard).toMatch(/aria-describedby=\{`\$\{summaryId\}-lead \$\{summaryId\}`\}/)
+  })
+
+  it('the Export dialog\'s row names a running export that is another sound\'s, by the card\'s own words', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/import \{ audioJobRow \} from '\.\/AudioJobRunning'/)
+    expect(dialog).toMatch(/running && exportSource !== source\?\.filePath \? \(audioJobRow\(\{ running, job: exportJob, sourceName: exportName \}\)\?\.label \?\? null\) : null/)
+    expect(dialog).toMatch(/<span className="min-w-0 flex-1 truncate text-xs" title=\{otherSoundLabel\}>/)
+  })
+})
+
+describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Properties edits coalesce', () => {
+  // E2E: image.spec.ts "T-75" (the coachmark over Stream Graphics) and "T-78" (an opacity drag, one Undo).
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  it('the three window-level guards read the dialog claim stack, not Modal\'s count (the coachmark is not a <Modal>)', () => {
+    for (const rel of ['modules/image-studio/ImageStudio.tsx', 'modules/record-studio/RecordStudio.tsx']) {
+      const code = strip(read(rel))
+      expect(code, rel).toMatch(/if \(anyDialogClaim\(\)\) return/)
+      expect(code, rel).not.toMatch(/isModalOpen/)
+    }
+    const hook = strip(read('hooks/useUndoRedoHotkeys.ts'))
+    expect(hook).toMatch(/modalOpen: anyDialogClaim\(\)/)
+    expect(hook).not.toMatch(/isModalOpen/)
+    // `?` keeps its own rule: it asks Modal's count so it stays pressable during a tutorial.
+    expect(strip(read('components/HotkeyOverlay.tsx'))).toMatch(/openModals: openModalCount\(\)/)
+  })
+
+  it('every dialog takes a claim through useFocusTrap: the Modal and the tutorial coachmark', () => {
+    expect(strip(read('components/Modal.tsx'))).toMatch(/useFocusTrap\(open, contentRef\)/)
+    expect(strip(read('components/Tutorial.tsx'))).toMatch(/useFocusTrap\(true, cardRef\)/)
+  })
+
+  it('the Properties panel gives its slider and text fields a key and ends the window on release and blur', () => {
+    const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+    expect(panel).toMatch(/onPointerUp=\{\(e\) => handleGestureEndPointerUp\(e, endGesture\)\}/)
+    expect(panel).toMatch(/onBlur=\{endGesture\}/)
+    for (const key of ['name', 'opacity', 'fill', 'stroke', 'strokeWidth', 'text']) {
+      expect(panel, key).toMatch(new RegExp(`'${key}'\\)`))
+    }
+  })
+
+  it('the transparent-document note sits in the Export card\'s note slot, beside the size note', () => {
+    const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/jpgTransparencyNote\(format, doc\.background === 'transparent'\)/)
+    expect(dialog).toMatch(/\{jpgNote \? <p className="basis-full text-xs text-ink-muted">\{jpgNote\}<\/p> : null\}/)
   })
 })

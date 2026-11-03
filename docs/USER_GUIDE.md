@@ -90,6 +90,9 @@ you are typing in a text box or while another dialog is open. The single-letter
 shortcuts (the Stream Graphics tool keys, and `I` and `O` in Video Studio) are for
 the letter on its own: with **Ctrl**, **Alt** or **Cmd** held, the key belongs to
 your computer or the window (**Ctrl+R**, **Ctrl+O**, **Alt+←**), and imagii leaves it alone.
+While a tour or any dialog is open the studio's own keys (the tool letters, **Delete**,
+**Ctrl+Z**) wait for it, because the canvas behind is covered; **`?`** still opens the
+shortcuts over a tour.
 
 ---
 
@@ -156,7 +159,8 @@ press **Esc** or click **Stop**. Recordings are written at up to 8 Mbps
 When the file is saved, the toast offers **Show in folder** and **Edit in Video
 Studio**. **Edit in Video Studio** loads the recording into Video Studio; if you
 are already editing a video there it asks first, because loading replaces that video
-and its clips and edits (it asks nothing when Video Studio is empty). The toast stays up
+and its clips and edits (it asks nothing when Video Studio is empty, or holds a video you
+have only opened: one clip you have not changed, no undo steps, nothing scanned). The toast stays up
 for 8 seconds, and a new take can already be running under it: while a take is running,
 every way off the Record screen (the **Home** link, and the toasts' **Edit in Video Studio**
 and **Open Audio Studio**) asks "A recording is in progress. Stop and save it before
@@ -368,7 +372,11 @@ that names the file being converted.)
 - **Closing the video does not stop a job either.** A render, a scan, a transcription or an export that is running when you
   press **Close** keeps going, and a card beside the importer lists each one - what it is and which clip or file it is for, how far
   along it is where imagii can tell, and its own **Cancel** - until it finishes or you cancel it. **Close** says so when it asks
-  ("The export that is running keeps going; its Cancel stays on screen."), and with nothing running it asks what it always did.
+  ("The export that is running keeps going; its Cancel stays on screen.").
+  **Close** asks only when it would throw something away that took you time: more than one clip, a changed
+  clip, anything you can still undo, a scan's moments, a chat log you pasted or the spikes found in it. A video
+  you have only opened closes with no question (and with nothing running, nothing is asked at all); a
+  transcript is not on that list, because imagii keeps it on disk and reads it back at once.
   Canceling from the card is the same as canceling from the panel: an export of two or more files asks first, and nothing
   half-written is left in your folder.
 - **When something fails,** the message says what happened and what to try, in
@@ -547,7 +555,9 @@ never called loaded.
   work, and **Cancel** keeps it.
 - Drag across the waveform to mark a part to remove. It comes out when you
   export; click a mark to put it back. `Ctrl+Z` / `Ctrl+Y` step back and
-  forward through the cleanup chain.
+  forward through the cleanup chain. One drag of a slider is one step, and so is a
+  run of arrow keys on one slider, so one `Ctrl+Z` puts the slider back where it
+  was before you took hold of it.
 - **Export** to MP3, WAV, FLAC, or AAC. AAC is saved as an `.m4a` file. From a
   video with a picture, **Re-attach to video** writes an `.mp4` (a `.mkv` or `.mp4`
   that holds sound alone, a podcast for example, opens as sound: there is no
@@ -555,7 +565,10 @@ never called loaded.
   video is in a format an MP4 cannot hold as it is (a `.wmv`, for example), the
   picture is re-encoded, which takes longer. While it works the row
   says which step it is on — "Step 1 of 2 — measuring loudness", then "Step 2
-  of 2 — rendering" — because each step has its own progress bar. If you cancel
+  of 2 — rendering" — because each step has its own progress bar. A re-attach with
+  no parts removed keeps the picture exactly as it is, but it still converts the sound
+  to AAC for the `.mp4`, which takes minutes on a long recording, so its last step
+  (**Step 2 of 2 — attaching to video**) shows a bar from the moment it starts. If you cancel
   or it fails, the row says **Canceled** or **Failed** and no half-written file
   is left.
 - **Closing the sound does not stop an export that is running.** An export or a
@@ -569,8 +582,11 @@ never called loaded.
 - The toast for a re-attached video says **Cleaned audio attached to the
   video** and carries **Show in folder** and **Edit in Video Studio**, which
   opens that new `.mp4` there (it asks before it replaces the video you're
-  editing). An audio-only export has no video to open, so its toast has neither
-  button. Clean the sound first, then clip: clips and edits made in Video
+  editing). An audio-only export has no video to open, so its toast says **Cleaned
+  audio exported** and carries **Show in folder** alone. It stays for eight seconds and
+  it comes even if you closed the sound or opened another one while the export ran; with
+  another sound open, the Export panel's row names the file the running export is for
+  (**Export — voice.wav**). Clean the sound first, then clip: clips and edits made in Video
   Studio on the original video do not carry over to the re-attached file, so
   open that file and cut your clips from it.
 
@@ -612,7 +628,8 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    after you drag a corner (a word dragged to 44 px says 44), and typing a size draws it at
    exactly that size; a Shift-stretched word keeps its extra width, and the size takes the height.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
-   and remove them. The **Properties** panel edits the selected layer. A picture
+   and remove them. The **Properties** panel edits the selected layer; one drag of its
+   **Opacity** slider, or one run of typing in a name, text or color field, is one **Undo**. A picture
    you import is placed at most 800 px on its long side, and always inside the canvas
    (a small canvas such as the 112×112 emote makes it smaller to fit, and it starts
    60 px in from the corner when there is room for that), whether you drop it, pick
@@ -633,7 +650,9 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    your window, so 1× is the size you laid out. The scale starts at 2× on a
    high-DPI screen (3× on the densest ones) and at 1× otherwise. JPG adds a
    quality setting. An emote canvas exported as PNG writes the three-file Twitch
-   pack, at 28, 56, and 112 px.
+   pack, at 28, 56, and 112 px. A JPG has no transparency: for a transparent design
+   (the stream overlays and the emote) choosing JPG shows "JPG has no transparency:
+   the clear parts come out black. Choose PNG to keep them clear."
    Export opens a Save dialog (`imagii-<timestamp>.png` or `.jpg` is the
    suggested name), and imagii says "saved" only after the file is written; if
    you cancel the dialog, nothing is saved and nothing is announced. The emote
@@ -655,8 +674,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   Change the words and press Enter or click **Search** and the new search goes out at once; its results are the ones you
   see, even if the first search answers later. The box always says which search the results on screen
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
-  mood board you have selected. If you have no board yet, imagii asks you to
-  name one first.
+  mood board you have selected; the notice names the board. A picture that is already on that board is not
+  added twice: the notice says **Already on "the board"** and there is nothing new to undo. If you have no board yet, imagii asks you to
+  name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
 - **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first; the notice
   that follows says **Ctrl+Z** brings the board back, and it stays on screen for 8 seconds. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer

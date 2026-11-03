@@ -76,6 +76,17 @@ export function thumbnailSizeNote(
 }
 
 /**
+ * T-147 (4): the note under the Export row when a transparent document is exported as JPG, or null. The overlay and emote templates have no background (the
+ * canvas shows a checkerboard), a JPG has no alpha channel, and the capture composites it onto black (Canvas.tsx's T-54 note): the file is not what the canvas
+ * showed, and nothing said so. PNG keeps the clear parts clear, so the note says to choose it. A filled document has nothing to lose in a JPG.
+ */
+export function jpgTransparencyNote(format: 'png' | 'jpg', transparent: boolean): string | null {
+  return format === 'jpg' && transparent
+    ? 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
+    : null
+}
+
+/**
  * The Konva name Canvas.tsx tags its editor-only stage layers with — the grid
  * overlay and the selection/draw-preview overlay that carries the Transformer.
  * `captureDocument` switches every layer carrying it off for the capture.
@@ -199,6 +210,7 @@ export function ExportDialog(): JSX.Element {
   const emotePack = doc.width === 112 && doc.height === 112 && format === 'png'
   const out = outputPixels(doc.width, doc.height, scale)
   const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
+  const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
 
   async function exportImage(): Promise<void> {
     setBusy(true)
@@ -327,6 +339,7 @@ export function ExportDialog(): JSX.Element {
         {busy ? 'Exporting…' : 'Export'}
       </button>
       {sizeNote ? <p className="basis-full text-xs text-ink-muted">{sizeNote}</p> : null}
+      {jpgNote ? <p className="basis-full text-xs text-ink-muted">{jpgNote}</p> : null}
       <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
     </div>
   )

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
-import { isModalOpen } from '../../components/Modal'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
@@ -175,7 +175,7 @@ export function RecordStudio(): JSX.Element {
     if (phase !== 'recording') return
     function onKey(e: KeyboardEvent): void {
       if (e.key !== 'Escape') return
-      if (isModalOpen()) return
+      if (anyDialogClaim()) return
       e.preventDefault()
       stopRecording()
     }

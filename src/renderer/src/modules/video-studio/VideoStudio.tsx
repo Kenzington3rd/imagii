@@ -38,7 +38,6 @@ import { videoTutorial } from '../../tutorials/videoTutorial'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
-  const clipCount = useVideoStore((s) => s.clips.length)
   const clearSource = useVideoStore((s) => s.clearSource)
   const undo = useVideoStore((s) => s.undo)
   const redo = useVideoStore((s) => s.redo)
@@ -70,12 +69,13 @@ export function VideoStudio(): JSX.Element {
 
   function handleClose(): void {
     // UX round 18: clearSource() silently wiped every clip and its edits.
-    // Confirm first whenever there is anything to lose (source load always
-    // creates at least one clip, and clearSource also drops undo history,
-    // so this is unrecoverable).
+    // Confirm first whenever there is anything to lose, and not otherwise (T-147 (3): a video
+    // nobody touched has one pristine clip and nothing else, `videoSessionHasLoss`; clearSource also
+    // drops the undo history, so this is unrecoverable). The state is read here, when Close is
+    // pressed, not from a render's closure.
     // T-144: Close does not stop a job that is running - it takes its panel away, and the closed-video card (`VideoJobsRunning`, `ClipKitRunning`) keeps the Cancel
     // on screen. The question says so, so a person who closes the video does not believe they stopped it.
-    const message = videoDiscardMessage(clipCount, 'close', jobsKeepGoingSentence(readVideoRunSnapshot()))
+    const message = videoDiscardMessage(useVideoStore.getState(), 'close', jobsKeepGoingSentence(readVideoRunSnapshot()))
     if (message !== null && !confirm(message)) return
     clearSource()
   }
