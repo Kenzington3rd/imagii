@@ -6606,6 +6606,47 @@ IMG-PREC.
 
 ---
 
+## T-148 — the first drag after another control is two undo steps, in every studio but Audio (round 97)
+
+- **Spec:** expediter-found after T-147 landed, MEASURED on the landed tree (ef080a0) — not a
+  sweep count; fixed before sweep 35 so no known defect sits under a certifying sweep. Track A of
+  T-147 found that a press on a slider moves focus and Chromium sends the slider its FIRST `input`
+  event BEFORE the previously focused control's `blur`; a card that ends its undo window on
+  `onBlur` therefore closes it mid-drag, and the drag's second event starts a second step. Audio
+  Studio got `useGestureEnd` (audio-studio/state/gestureEnd.ts: a blur while the pointer is down
+  is not an end). Every other coalescing card still has the bare pair: Video Studio's
+  ColorGradePanel.tsx:30-31 (`onPointerUp={endGesture}` + `onBlur={endGesture}`), ClipList.tsx:37-38
+  and TextOverlayEditor.tsx:56-57 (`handleGestureEndPointerUp` + `onBlur`), and Stream Graphics'
+  PropertiesPanel.tsx:34-35 (T-147's own image half). Measured by an e2e probe on ef080a0 (real mouse
+  down / six moves / up): drag Brightness, then drag Contrast 1.00 → 1.46; ONE Undo leaves Contrast
+  at 0.77 (the value at the press), a second Undo reaches 1.00. Same class as T-78, which T-147
+  closed for Audio Studio only in practice.
+  1. **One shared gesture-end rule for every coalescing card.** Move Track A's `createGestureEnd`
+     to one shared place (e.g. `src/renderer/src/lib/gestureEnd.ts`), parameterised by the store's
+     `endGesture`, and fold in the text-field rule (`endsGestureOnPointerUp`: a release inside the
+     focused text field being typed in is not an end, T-80) so ONE hook serves slider cards and
+     cards with text fields: `onPointerDown` (sets the pressed flag, one-shot window `pointerup`
+     clears it), `onPointerUp(event)` (ends unless the T-80 text rule says not), `onBlur` (ends
+     unless pressed). Use it on Audio's three cards (replacing state/gestureEnd.ts, or that file
+     re-exports it — no second copy), ColorGradePanel, ClipList, TextOverlayEditor and
+     PropertiesPanel. `endsGestureOnPointerUp` / `handleGestureEndPointerUp` keep their tests (move
+     them with the code or leave a re-export; no dead copy).
+  Covering tests: unit for the shared helper (a blur during a press is not an end; the release is;
+  the T-80 text rule; the one-shot listener; two cards do not share a flag); e2e, red on ef080a0:
+  Video — drag Brightness, then drag Contrast, ONE Undo puts Contrast back to 1.00 (the probe
+  above, as a test); Video ClipList — the speed slider dragged right after clicking the rename field
+  is one step; Stream Graphics — click the layer name field (or a colour), then drag Opacity, ONE
+  Undo restores the pre-drag opacity; the T-80 caret-click case and the T-40 / T-147 cases stay
+  green. **Docs:** LESSONS (the T-147 Track A entry's "very likely, not measured" becomes measured
+  and fixed), STYLE_GUIDE's T-78 sentence names the one hook, IC rows, TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; the e2e above red on a build of ef080a0; `npm run verify` twice and the FULL Playwright
+  suite green before handback (no ffmpeg command changes: no Layer 5 needed); no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 97)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
