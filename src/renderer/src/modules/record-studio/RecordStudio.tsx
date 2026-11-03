@@ -11,11 +11,11 @@ import { isCancelledError } from '@shared/cancel'
 import { formatTimer } from '@shared/clockTime'
 import { localStamp } from '@shared/filename'
 import { landedBesideNote } from '@shared/landedPath'
-import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
+import { ERROR_TOAST_MS, isRecordingKeptMessage, userFacingError } from '@shared/userFacingError'
 import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
-import { toastSaved } from '../../lib/savedToast'
+import { toastKeptTake, toastSaved } from '../../lib/savedToast'
 import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
 import { micLostLine, saveCard, SAVE_RUNNING_MESSAGE } from './saveCard'
@@ -628,21 +628,20 @@ export function RecordStudio(): JSX.Element {
         // reading "imagii:cancelled".
         announceDiscarded()
       } else {
-        // T-59: main names the convert crash in the studio's own words (a finished sentence
-        // `userFacingError` lets stand). T-117: every OTHER cause used to reach the toast raw, the
-        // envelope stripped and nothing more - a copyfile EPERM with both full paths, an ENOSPC from
-        // the write stream mid-take, "recording:finalize recording is empty". They go through the
-        // same helper as every other failure: this sentence, plus the plain cause where the shape is
-        // known (disk full, a file Windows would not let us touch), shown for 8 s (T-115).
-        // Which branch says what: only the convert sentence tells the person the take is gone
-        // ("Nothing was saved"). With Convert off, the failure is the copy to the chosen place (the
-        // WebM save is a remux that falls back to a plain copy, T-120), and
-        // its ENOSPC / EPERM causes advise "free up some space and try again" / "close any app using
-        // it" - but `promoteTempWebm`'s `finally` has already unlinked the temp webm on that branch
-        // too, so there is nothing left to retry. That advice is wrong for the take, and it is a
-        // product call, not a wording one: T-110(u) (keep the webm when the save fails, then revisit
-        // the retry wording with it).
-        reportFailure(err, { failed: 'Saving the recording failed.' })
+        // Which branch says what (T-59, T-117, T-110 (u) narrowed by T-141 (5) and T-142 (1)). Main words the two take-specific failures as finished
+        // sentences `userFacingError` lets stand; every OTHER cause used to reach the toast raw, and goes through the same helper as every other
+        // failure: this sentence, plus the plain cause where the shape is known (disk full, a file Windows would not let us touch), 8 s (T-115).
+        //  - A failed convert says "Nothing was saved" and names the one setting that gets a file anyway: the half-written mp4 is reaped and the
+        //    take is deleted with it, so that is true.
+        //  - A swap onto the chosen name that was refused AFTER a whole convert, remux or copy keeps the raw take (the only copy of a finished
+        //    recording): main's sentence says where. That one is raised by `toastKeptTake`, with "Show in folder" and "Close", and stays until
+        //    closed, because the way to the file lives in that toast and nowhere else once the screen drops to idle (T-142 (1)).
+        //  - Any other failure of the save (the write stream, an empty take, an unreadable folder) is a plain `reportFailure` toast. Its take is
+        //    gone: `promoteTempWebm` reaped it before it threw, so there is nothing to retry or point at, and the retry advice some causes carry
+        //    ("free up some space and try again") is the generic one - whether to keep the webm on THOSE failures too is T-110 (u)'s open product call.
+        const { message } = userFacingError(err, 'Saving the recording failed.')
+        if (sessionId && isRecordingKeptMessage(message)) toastKeptTake(message, sessionId)
+        else reportFailure(err, { failed: 'Saving the recording failed.' })
       }
       // Failure path: reap the partial temp file. Reached when an append
       // failed mid-recording or finalize itself threw; in the latter case

@@ -67,3 +67,37 @@ export function toastSaved(message: string, outputPath: string, extra?: ToastAct
     ...(extra ? [extra] : [])
   ])
 }
+
+/** The product's one dismiss word (BRANDING_GUIDE, "Dismissing a dialog"). */
+const CLOSE = 'Close'
+
+/**
+ * T-142 (1): the toast for a take imagii KEPT because the file could not be put where the person asked (Record's refused swap, T-141 (5)). The raw take
+ * in the data folder is then the only copy of a finished recording, and the sentence that says so names a hidden folder nobody can type, so the toast
+ * carries the way there and stays: a person who looked away for 8 s must still find it. `message` is the finished sentence from main, `takeId` the
+ * take's session id (main builds the path from it; the renderer never names a path).
+ *
+ * "Show in folder" does NOT dismiss: the person may need it twice (the window it opened can be closed, or lost behind another). "Close" is the only
+ * way off, and the toast is the red error kind, as every failure is.
+ */
+export function toastKeptTake(message: string, takeId: string): void {
+  const id = `kept-take-${takeId}`
+  toast.error(
+    <span>
+      {message}{' '}
+      {/* Click-through card: see toastWithActions. */}
+      <button
+        className="underline pointer-events-auto"
+        onClick={() => {
+          void window.api.recording.revealTake(takeId)
+        }}
+      >
+        {SHOW_IN_FOLDER}
+      </button>{' '}
+      <button className="underline pointer-events-auto" onClick={() => toast.dismiss(id)}>
+        {CLOSE}
+      </button>
+    </span>,
+    { duration: Infinity, id }
+  )
+}

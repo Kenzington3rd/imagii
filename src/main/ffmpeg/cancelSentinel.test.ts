@@ -1463,13 +1463,16 @@ describe('a swap onto a file that is open in another app (T-140 (1)): the re-att
     expect(readdirSync(scratch).sort(), 'no intermediate WAV, no partial').toEqual(['out (2).mp4', 'out.mp4'])
   })
 
-  it('the intermediate WAV is the one that is held (a stale one is open): the mux is fed the WAV that was just written, not the stale file at the first name', async () => {
+  it('the intermediate WAV is the one that is held (a file turns up at its name while it renders and is open): the mux is fed the WAV that was just written, not the file at the first name', async () => {
     const spec = reattachSpec()
+    // T-142: the scratch WAV takes a name nothing is at when the job starts, so a file at a name BEFORE the run never reaches the swap. What still reaches it
+    // is a file that turns up at the chosen name while the render runs (here "out.cleaned.wav" is the free name, and something takes it): the redirect is the
+    // answer for that, as for every other output.
     const staleWav = path.join(scratch, 'out.cleaned.wav')
-    writeFileSync(staleWav, 'a stale intermediate from some other run')
     lockOnto(staleWav)
     const done = settle(runAudioReattach(spec, () => undefined))
     await vi.waitFor(() => expect(children).toHaveLength(1), { timeout: 3000 })
+    writeFileSync(staleWav, 'a file that turned up at the name while the render ran')
     const render = children[0] as FakeChild
     writeFileSync(lastArg(render), 'the cleaned sound of THIS run')
     render.emit('close', 0, null)
@@ -1482,6 +1485,7 @@ describe('a swap onto a file that is open in another app (T-140 (1)): the re-att
     const settled = (await done) as { resolved: { outputPath: string } }
     expect(settled.resolved.outputPath, 'the video itself landed where it was named').toBe(spec.outputPath)
     expect(readFileSync(spec.outputPath, 'utf8')).toBe('the whole new video')
-    expect(readdirSync(scratch), 'and the job removed its own scratch, wherever it landed').toEqual(['out.mp4'])
+    expect(readdirSync(scratch).sort(), 'and the job removed its own scratch, wherever it landed - and left the file that was not its own').toEqual(['out.cleaned.wav', 'out.mp4'])
+    expect(readFileSync(staleWav, 'utf8')).toBe('a file that turned up at the name while the render ran')
   })
 })

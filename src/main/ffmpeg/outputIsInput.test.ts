@@ -268,17 +268,19 @@ describe('Re-attach to video (runAudioReattach)', () => {
     )
   })
 
-  it("the scratch WAV the job makes AND DELETES is the second track: refused, and the second track is not deleted (the cleanup's unlink must never run)", async () => {
+  it("the second track sits at the scratch WAV's usual name (T-142): the scratch takes a free name, the second track is read and never deleted, the job succeeds", async () => {
     const source = mine('voice.wav')
     const video = mine('vod.mp4')
-    // `<output>.cleaned.wav` is where the intermediate goes; the person's music happens to be named that.
+    // `<output>.cleaned.wav` is where the intermediate used to go (and be deleted from); the person's music happens to be named that. The scratch WAV takes
+    // a name nothing is at now, so there is nothing to refuse: the music is an input of the first pass, and the scratch is "out.cleaned (2).wav".
     const music = mine('out.cleaned.wav')
-    await expectRefused(
-      () => runAudioReattach(spec({ sourcePath: source, videoPath: video, outputPath: path.join(scratch, 'out.mp4'), secondTrack: music }), noProgress),
-      [source, video, music],
-      listing()
-    )
-    expect(existsSync(music), 'the person\'s music is still there').toBe(true)
+    const before = listing()
+    const musicSha = sha(music)
+    const out = path.join(scratch, 'out.mp4')
+    expect((await runAudioReattach(spec({ sourcePath: source, videoPath: video, outputPath: out, secondTrack: music }), noProgress)).outputPath).toBe(out)
+    expect(spawned.length, 'the render and the mux').toBe(2)
+    expect(sha(music), 'the person\'s music is byte for byte what it was').toBe(musicSha)
+    expect(listing(), 'and the scratch WAV went with the job: only the output is new').toEqual([...before, 'out.mp4'].sort())
   })
 
   it('the control: a different name runs both passes and leaves the inputs alone, with only the output new', async () => {

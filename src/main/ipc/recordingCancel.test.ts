@@ -803,3 +803,17 @@ describe('a swap the disk keeps refusing keeps the raw take and says so (T-141 (
     expect(folder()).toEqual([])
   })
 })
+
+// T-142 (1): the renderer recognises the kept-take sentence by the lead main and it share (`RECORDING_KEPT_LEAD`); both forms of the sentence (the folder named,
+// and the words a path too long for one line falls back to) must open with it, or the Record screen shows the plain 8 s toast for a take only that toast could point at.
+describe('the kept-take sentence opens with the lead the renderer recognises (T-142 (1))', () => {
+  it.each([
+    ['a short folder', '/data/recordings'],
+    ['a folder too long for one finished line (the fallback in words)', `D:\\${'a-very-long-folder-name\\'.repeat(12)}recordings`]
+  ])('%s', async (_label, dir) => {
+    const { RECORDING_KEPT_LEAD, isRecordingKeptMessage } = await import('../../shared/userFacingError')
+    const sentence = recordingKeptMessage(dir)
+    expect(sentence.startsWith(`${RECORDING_KEPT_LEAD} in `)).toBe(true)
+    expect(isRecordingKeptMessage(userFacingError(new Error(sentence), 'Saving the recording failed.').message), 'and userFacingError shows it as written').toBe(true)
+  })
+})

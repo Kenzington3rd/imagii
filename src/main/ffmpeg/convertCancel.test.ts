@@ -585,3 +585,74 @@ describe('a cancel that lands on a save\'s run says who asked (T-141 (5))', () =
     expect((second as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(true)
   })
 })
+
+// T-142: the same rule on a LIVE child. The latch's `mark()` (above) already said "the name wins in either order" for a cancel that lands after the child
+// exited; `cancelWhere` stamped `byQuit` on every cancel and dropped the entry, so a Discard that landed after the quit's sweep found nothing to correct and the
+// convert rejected as the quit's: the take the person threw away was kept. The entry now stays until the child closes, and `byQuit` stays true only when every
+// cancel was the sweep's.
+describe('both cancels land on one live convert: the person\'s Discard wins, in either order (T-142)', () => {
+  const byQuitOf = async (promise: Promise<void>): Promise<boolean> => {
+    const err = await promise.catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ConvertCancelledError)
+    return (err as InstanceType<typeof ConvertCancelledError>).byQuit
+  }
+
+  it('the quit, then a Discard: not the quit\'s (the take is thrown away)', async () => {
+    const { promise, child } = startConvert()
+    expect(cancelAllConverts(), 'the sweep killed the child').toBe(true)
+    expect(cancelConverts(TAKE), 'the child is already on its way out: nothing new to kill').toBe(false)
+    expect(child.signals, 'killed once').toEqual(['SIGKILL'])
+    child.emit('close', null, 'SIGKILL')
+    expect(await byQuitOf(promise)).toBe(false)
+  })
+
+  it('a Discard, then the quit: not the quit\'s', async () => {
+    const { promise, child } = startConvert()
+    expect(cancelConverts(TAKE)).toBe(true)
+    expect(cancelAllConverts(), 'nothing new to kill').toBe(false)
+    expect(child.signals).toEqual(['SIGKILL'])
+    child.emit('close', null, 'SIGKILL')
+    expect(await byQuitOf(promise)).toBe(false)
+  })
+
+  it('the quit alone, and the sweep twice: the quit\'s', async () => {
+    const { promise, child } = startConvert()
+    cancelAllConverts()
+    cancelAllConverts()
+    child.emit('close', null, 'SIGKILL')
+    expect(await byQuitOf(promise)).toBe(true)
+  })
+
+  it('a Discard alone: not the quit\'s', async () => {
+    const { promise, child } = startConvert()
+    cancelConverts(TAKE)
+    child.emit('close', null, 'SIGKILL')
+    expect(await byQuitOf(promise)).toBe(false)
+  })
+
+  it('the rule holds through the child\'s error event too, and a Discard aimed at ANOTHER take does not take the quit back', async () => {
+    const a = startConvert(TAKE)
+    cancelAllConverts()
+    cancelConverts(recordingOwner('take-b'))
+    a.child.emit('error', new Error('kill EPERM'))
+    expect(await byQuitOf(a.promise), 'another take\'s Discard is none of this take\'s business').toBe(true)
+
+    const b = startConvert(TAKE)
+    cancelAllConverts()
+    cancelConverts(TAKE)
+    b.child.emit('error', new Error('kill EPERM'))
+    expect(await byQuitOf(b.promise)).toBe(false)
+  })
+
+  it('the entry is gone once the child has closed: a later cancel finds nothing, and the next convert starts clean', async () => {
+    const first = startConvert()
+    cancelAllConverts()
+    first.child.emit('close', null, 'SIGKILL')
+    await byQuitOf(first.promise)
+    expect(cancelConverts(TAKE)).toBe(false)
+    const second = startConvert()
+    cancelConverts(TAKE)
+    second.child.emit('close', null, 'SIGKILL')
+    expect(await byQuitOf(second.promise)).toBe(false)
+  })
+})

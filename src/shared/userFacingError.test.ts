@@ -4,7 +4,9 @@ import {
   userFacingError,
   isMissingFileError,
   ERROR_TOAST_MS,
-  CANCEL_TOAST_MS
+  CANCEL_TOAST_MS,
+  RECORDING_KEPT_LEAD,
+  isRecordingKeptMessage
 } from './userFacingError'
 
 // T-84: the helper every renderer catch goes through. The inputs below are
@@ -507,5 +509,32 @@ describe('a whisper exit is the captions engine\'s failure, not the video tool\'
     it('a missing-DLL exit with a locked-file line is the locked file (the stderr is read first), and nothing else changes for the code', () => {
       expect(userFacingError(new Error('whisper exit 3221225781: C:\\x\\a.dll: Permission denied'), CTX).message).toBe(BLOCKED)
     })
+  })
+})
+
+// T-142 (1): Record's kept-take sentence is recognised by its fixed lead, which main and the renderer share.
+describe('the kept-take sentence (T-142 (1))', () => {
+  const SENTENCE = `${RECORDING_KEPT_LEAD} in C:\\Users\\x\\AppData\\Roaming\\imagii\\recordings. Copy it out within 6 hours; after that imagii may delete it.`
+
+  it('the lead is the words the sentence has always opened with', () => {
+    expect(RECORDING_KEPT_LEAD).toBe("The recording couldn't be saved to that location, so imagii kept your take")
+  })
+
+  it('userFacingError lets main\'s sentence stand, wrapped as Electron wraps it, and the classifier recognises what it shows', () => {
+    const shown = userFacingError(wrap('recording:finalize', SENTENCE), 'Saving the recording failed.').message
+    expect(shown).toBe(SENTENCE)
+    expect(isRecordingKeptMessage(shown)).toBe(true)
+  })
+
+  it('every other save failure is not the kept take: the convert\'s sentence, an empty take, a bare error, a disk-full cause', () => {
+    for (const err of [
+      new Error('Converting the recording to MP4 failed (ffmpeg exit code 1). Nothing was saved — try again, or uncheck "Convert to MP4 after recording" to keep the WebM.'),
+      new Error('Nothing was recorded, so there is nothing to save. Start the recording again.'),
+      new Error('EPERM: operation not permitted'),
+      new Error('ENOSPC: no space left on device')
+    ]) {
+      expect(isRecordingKeptMessage(userFacingError(err, 'Saving the recording failed.').message), err.message).toBe(false)
+    }
+    expect(isRecordingKeptMessage('')).toBe(false)
   })
 })

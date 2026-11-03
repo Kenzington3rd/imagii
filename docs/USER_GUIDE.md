@@ -136,7 +136,8 @@ never costs you the take; **Discard recording** is the way to throw it away, and
 whenever you press it, including the instant after the conversion has finished. If the finished recording
 cannot be put where you saved it (the drive went away, another app is blocking the name), imagii says so in
 one sentence that names the `recordings` folder, and keeps the raw take there for at least 6 hours so you can
-copy it out. If the window or screen
+copy it out. That message stays on screen until you close it, and has **Show in folder**
+(it opens the take in File Explorer; press it as often as you need) and **Close**. If the window or screen
 you are capturing goes away (you close it), the take ends on its own, with your
 microphone and webcam on or off, and saves the same way, with the saving card on
 screen instead of a live **REC**. If your microphone goes away mid-take (a headset

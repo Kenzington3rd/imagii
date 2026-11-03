@@ -41,6 +41,8 @@ class FakeChild extends EventEmitter {
 const spawned: string[][] = []
 /** T-127 (3): when set, removing the scratch WAV takes this long (a slow disk, an antivirus scan). */
 let slowUnlinkMs = 0
+/** T-142: when set, looking at a path (`lstat`, which `nextFreePath` asks) takes this long - a folder on a slow network share. */
+let slowLstatMs = 0
 
 vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
@@ -61,6 +63,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...real,
+    lstat: (async (file: Parameters<typeof real.lstat>[0], ...rest: unknown[]) => {
+      if (slowLstatMs > 0) await new Promise((resolve) => setTimeout(resolve, slowLstatMs))
+      return (real.lstat as (f: unknown, ...r: unknown[]) => unknown)(file, ...rest)
+    }) as typeof real.lstat,
     unlink: async (file: Parameters<typeof real.unlink>[0]) => {
       if (slowUnlinkMs > 0 && String(file).endsWith('.cleaned.wav')) await new Promise((resolve) => setTimeout(resolve, slowUnlinkMs))
       return real.unlink(file)
@@ -85,6 +91,7 @@ beforeEach(() => {
   spawned.length = 0
   holdSpawn = null
   slowUnlinkMs = 0
+  slowLstatMs = 0
   process.env.NODE_ENV = 'production'
 })
 afterEach(() => {
@@ -100,32 +107,29 @@ describe('runAudioReattach never deletes a file it reads, whatever NODE_ENV is (
     ...over
   })
 
-  it('the sound being cleaned sits where the scratch WAV would go: refused, file intact, nothing run', async () => {
+  it('the sound being cleaned sits where the scratch WAV used to go (T-142): the scratch takes a free name, the source is read and never deleted, the job succeeds', async () => {
     const wav = path.join(dir, 'out.cleaned.wav')
     writeFileSync(wav, PRECIOUS)
-    await expect(
-      runAudioReattach(spec({ sourcePath: wav, videoPath: path.join(dir, 'video.mp4') }), () => undefined)
-    ).rejects.toThrow(/would overwrite a file this job reads/)
-    expect(existsSync(wav), 'the file is still there').toBe(true)
-    expect(readFileSync(wav, 'utf8')).toBe(PRECIOUS)
-    expect(spawned, 'ffmpeg was never started').toEqual([])
+    await runAudioReattach(spec({ sourcePath: wav, videoPath: path.join(dir, 'video.mp4') }), () => undefined)
+    expect(spawned.length, 'export pass + mux pass').toBe(2)
+    expect((spawned[0] as string[])[(spawned[0] as string[]).length - 1], 'the export pass was told to write beside it, under a free name').toMatch(/out\.cleaned \(2\)\.[0-9a-f]{8}\.partial\.wav$/)
+    expect(readFileSync(wav, 'utf8'), 'the source is intact').toBe(PRECIOUS)
+    expect(readdirSync(dir).sort(), 'and the job removed only its own scratch').toEqual(['out.cleaned.wav', 'out.mp4'])
   })
 
-  it('the video sits where the scratch WAV would go: refused, file intact, nothing run', async () => {
+  it('the video sits where the scratch WAV used to go (T-142): the same, the video is never deleted', async () => {
     const wav = path.join(dir, 'out.cleaned.wav')
     writeFileSync(wav, PRECIOUS)
-    await expect(
-      runAudioReattach(spec({ sourcePath: path.join(dir, 'voice.wav'), videoPath: wav }), () => undefined)
-    ).rejects.toThrow(/would overwrite a file this job reads/)
+    await runAudioReattach(spec({ sourcePath: path.join(dir, 'voice.wav'), videoPath: wav }), () => undefined)
+    expect(spawned.length).toBe(2)
     expect(readFileSync(wav, 'utf8')).toBe(PRECIOUS)
-    expect(spawned).toEqual([])
+    expect(readdirSync(dir).sort()).toEqual(['out.cleaned.wav', 'out.mp4'])
   })
 
   it('the control: no collision runs both passes and removes only its own scratch WAV', async () => {
     const wav = path.join(dir, 'out.cleaned.wav')
     const voice = path.join(dir, 'voice.wav')
     writeFileSync(voice, PRECIOUS)
-    writeFileSync(wav, 'scratch from this job') // the fake export "wrote" it
     await runAudioReattach(spec({ sourcePath: voice, videoPath: path.join(dir, 'video.mp4') }), () => undefined)
     expect(spawned.length, 'export pass + mux pass').toBe(2)
     expect(existsSync(wav), 'the scratch WAV went').toBe(false)
@@ -138,7 +142,6 @@ describe('a quit in the middle of a re-attach waits for the scratch WAV to go (T
     const wav = path.join(dir, 'out.cleaned.wav')
     const voice = path.join(dir, 'voice.wav')
     writeFileSync(voice, PRECIOUS)
-    writeFileSync(wav, 'scratch from the export pass') // the fake export pass "wrote" it
     holdSpawn = 2 // the mux pass: running until it is killed
     slowUnlinkMs = 150
     const running = runAudioReattach(
@@ -183,5 +186,29 @@ describe('a quit in the middle of a re-attach waits for the scratch WAV to go (T
     expect(readdirSync(dir), 'the half-written render is gone with the quit, and only the source is left').toEqual(['voice.wav'])
     expect(isCancelledError(await running)).toBe(true)
     expect(spawned.length, 'the mux pass never started').toBe(1)
+  })
+})
+
+describe('a Cancel while the scratch WAV\'s name is being chosen ends the job at once (T-142, T-98)', () => {
+  it('the folder listing takes 800 ms; the Cancel is answered long before it, nothing is spawned, and nothing is left', async () => {
+    const voice = path.join(dir, 'voice.wav')
+    writeFileSync(voice, PRECIOUS)
+    slowLstatMs = 800
+    const startedAt = Date.now()
+    const running = runAudioReattach(
+      { jobId: 'reattach-cancel-naming', outputPath: path.join(dir, 'out.mp4'), sourcePath: voice, videoPath: path.join(dir, 'video.mp4'), chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] } },
+      () => undefined
+    ).then(
+      () => null,
+      (err: unknown) => err
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    cancelAllAudioJobs()
+    const err = await running
+    expect(isCancelledError(err), 'the job ended as a cancel').toBe(true)
+    expect(Date.now() - startedAt, 'and did not wait out the slow listing').toBeLessThan(500)
+    expect(spawned, 'nothing was started').toEqual([])
+    expect(readdirSync(dir)).toEqual(['voice.wav'])
+    await expect(drainRuns(2000)).resolves.toBe('drained')
   })
 })

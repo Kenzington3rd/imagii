@@ -2,11 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
 
 const success = vi.fn()
+const error = vi.fn()
+const dismiss = vi.fn()
 vi.mock('react-hot-toast', () => ({
-  default: { success: (...args: unknown[]) => success(...args) }
+  default: {
+    success: (...args: unknown[]) => success(...args),
+    error: (...args: unknown[]) => error(...args),
+    dismiss: (...args: unknown[]) => dismiss(...args)
+  }
 }))
 
-import { ACTION_TOAST_MS, SHOW_IN_FOLDER, toastSaved, toastWithActions } from './savedToast'
+import { ACTION_TOAST_MS, SHOW_IN_FOLDER, toastKeptTake, toastSaved, toastWithActions } from './savedToast'
 
 /**
  * T-92: a toast that carries the only way to do something lasts long enough to
@@ -49,12 +55,16 @@ function read(node: ReactNode, seen: Seen = { texts: [], buttons: [] }): Seen {
 }
 
 const reveal = vi.fn()
+const revealTake = vi.fn()
 
 beforeEach(() => {
   success.mockClear()
+  error.mockClear()
+  dismiss.mockClear()
   reveal.mockClear()
+  revealTake.mockClear()
   ;(globalThis as unknown as { window: unknown }).window = {
-    api: { video: { revealInFolder: reveal } }
+    api: { video: { revealInFolder: reveal }, recording: { revealTake } }
   }
 })
 
@@ -117,5 +127,52 @@ describe('toastWithActions', () => {
   it('uses the same long duration for any action toast', () => {
     toastWithActions('Done something', [{ label: 'Undo', onClick: () => {} }])
     expect((success.mock.calls[0]?.[1] as { duration: number }).duration).toBe(ACTION_TOAST_MS)
+  })
+})
+
+// T-142 (1): the toast for a take imagii kept. The sentence names a hidden folder, so the toast carries the way there and stays until it is closed.
+describe('toastKeptTake', () => {
+  const SENTENCE = "The recording couldn't be saved to that location, so imagii kept your take in C:/data/recordings. Copy it out within 6 hours; after that imagii may delete it."
+  const raise = (): { seen: Seen; options: { duration: number; id: string } } => {
+    toastKeptTake(SENTENCE, 'take_abc')
+    expect(error, 'a failure: the red kind').toHaveBeenCalledTimes(1)
+    expect(success).not.toHaveBeenCalled()
+    return { seen: read(error.mock.calls[0]?.[0] as ReactNode), options: error.mock.calls[0]?.[1] as { duration: number; id: string } }
+  }
+
+  it('says the sentence as written and offers exactly "Show in folder" and "Close", in that order', () => {
+    const { seen } = raise()
+    expect(seen.texts.join('').replace(/\s+/g, ' ').trim()).toBe(SENTENCE)
+    expect(seen.buttons.map((b) => b.label)).toEqual(['Show in folder', 'Close'])
+  })
+
+  it('stays until it is closed: the only copy of a recording is at stake, so it never times out', () => {
+    const { options } = raise()
+    expect(options.duration).toBe(Infinity)
+    expect(typeof options.id, 'a stable id of its own, so Close can reach it').toBe('string')
+    expect(options.id).toContain('take_abc')
+  })
+
+  it('Show in folder reveals THIS take by its session id, and does not dismiss the toast (it may be needed twice)', () => {
+    const { seen } = raise()
+    seen.buttons[0]?.click()
+    seen.buttons[0]?.click()
+    expect(revealTake).toHaveBeenCalledTimes(2)
+    expect(revealTake).toHaveBeenCalledWith('take_abc')
+    expect(dismiss).not.toHaveBeenCalled()
+    expect(reveal, 'not the saved-file reveal, which takes a path').not.toHaveBeenCalled()
+  })
+
+  it('Close dismisses exactly this toast and reveals nothing', () => {
+    const { seen, options } = raise()
+    seen.buttons[1]?.click()
+    expect(dismiss).toHaveBeenCalledTimes(1)
+    expect(dismiss).toHaveBeenCalledWith(options.id)
+    expect(revealTake).not.toHaveBeenCalled()
+  })
+
+  it('both buttons opt back in to the pointer, because the toast card is click-through', () => {
+    const { seen } = raise()
+    for (const b of seen.buttons) expect(b.className, b.label).toMatch(/\bpointer-events-auto\b/)
   })
 })

@@ -275,16 +275,21 @@ function cancelWhere(match: (active: ActiveConvert) => boolean, byQuit = false):
   let killed = false
   for (const active of activeConverts) {
     if (!match(active)) continue
+    // T-142: the entry STAYS until the child closes (its close/error handler deletes it), so a second cancel finds it and says who asked, as the
+    // latch's `mark()` does (cancelLatch.ts): the quit's sweep alone makes a cancel the quit's, and a Discard before or after it takes that back -
+    // the name wins in either order. This used to stamp `byQuit` and delete the entry, so a Discard that landed after the sweep found nothing and
+    // the take it threw away was kept. Only the FIRST cancel kills and answers true: a second finds a child already on its way out.
+    const first = !active.cancelled
+    active.byQuit = first ? byQuit : active.byQuit && byQuit
     // Flag first, kill second: the close handler reads the flag, and a
     // SIGKILL mid-encode is indistinguishable from a crash without it.
     active.cancelled = true
-    active.byQuit = byQuit
+    if (!first) continue
     try {
       active.child.kill('SIGKILL')
     } catch {
       /* already gone */
     }
-    activeConverts.delete(active)
     killed = true
   }
   return killed

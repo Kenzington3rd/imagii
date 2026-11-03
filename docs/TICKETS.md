@@ -6256,7 +6256,7 @@ IMG-PREC.
   (Layer 5's recording handlers touch convert.ts) and the FULL Playwright suite green before
   handback; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID
   only.
-- **Status:** open
+- **Status:** done (round 91 — see the Done entry)
 
 ---
 
@@ -6776,6 +6776,50 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 91 — T-142 item 1 and the three non-counted parts, landed in
+the commit that carries this entry. Worked by one Sonnet in a fresh
+clone of e3034d5. The fix: a take imagii KEPT because the swap onto
+the chosen name was refused after a whole convert now raises
+`toastKeptTake` — the same red sentence, with "Show in folder" and
+"Close", that stays until closed. Show in folder calls the new
+`recording:revealTake(id)`: main validates the id (`SAFE_ID_RE`),
+builds `<userData>/recordings/<id>.webm` itself (the renderer never
+names a path) and reveals the file, or opens the folder if the take
+has been moved; it does not dismiss, so it works twice. The
+sentence's lead is one shared constant (`RECORDING_KEPT_LEAD`) that
+main words and the renderer recognises on `userFacingError`'s
+message; every other save failure is the plain `reportFailure` toast
+it was. Non-counted: convert.ts `cancelWhere` merges the quit flag
+as the latch does (a Discard after the quit's sweep throws the take
+away) and keeps the entry until the child closes, only the first
+cancel killing and answering true; the re-attach's scratch WAV takes
+a free name (`nextFreePath`, inside the run) and the cleanup deletes
+the file the export LANDED (it also deleted the chosen name when the
+render went beside it — a name something else is at); the Record
+failure-branch comment says which branch says what. Deviations,
+accepted: six existing unit/Layer 5 cases that pinned the fixed
+scratch name or its refusal rewritten to the new end state (red on
+the base); the T-141 (5) e2e now asserts the sentence plus the two
+buttons; one IC cite moved a line; STYLE_GUIDE gained the helper's
+sentence on the expediter's request. 43 ledger mutations (44 rows),
+all restored byte-identical; one survivor of a first run (the run
+guard on the folder listing) strengthened and killed; two survivors
+by design disclosed (the refusal and the assert over a free name,
+kept as belts); 14 reds. Found not fixed: `shell.openPath`'s error
+string is ignored (Show in folder is silent only if imagii's whole
+recordings folder is gone). Expedited personally: integrity (the
+24 files are the ticket's ownership list), verify x2 (199/5757),
+test:media on 7.0.2 (426 passed | 13 skipped of 439, 9m59s), the
+touched Layer 5 blocks on 6.1.1 (69/69) and on the shipped win32
+exe under Wine (16/16), FULL Playwright 526/526 (44.4 min,
+with Layer 5 running beside it), sha of every
+touched file identical before and after; one independent mutation at
+a seam no ledger row names (the preload bridge's
+`revealTake` invoking `recording:abandon` → both T-142 (1) e2e red at
+the reveal the OS never got, `Received []`), restored byte-identical,
+sha256 verified. Applied to e3034d5 by `git apply` with every file
+byte-identical to the expedited clone.
 
 Round 90, Track C — T-141 items 3, 4, 7 and 9 and the non-counted
 parts (the net-log measurement, the burn-in Cancel race), landed in

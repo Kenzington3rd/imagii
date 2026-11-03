@@ -5,6 +5,7 @@ import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
 import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
+import { nextFreePath } from '../ffmpeg/outputPath'
 import {
   aselectForCuts,
   buildChain,
@@ -594,23 +595,28 @@ export async function runAudioReattach(
   onProgress: AudioProgressListener
 ): Promise<AudioJobResult> {
   const startedAt = Date.now()
-  const tempAudioPath = `${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`
-  // The delete below is unconditional, so it must never be aimed at a file
-  // the job did not make. spec.outputPath cannot collide by construction
-  // (the suffix differs); the two inputs can, if a file already sits there.
-  // T-114: assertAlways - as assert() this logged and CONTINUED under
-  // NODE_ENV=production and the `finally` below deleted the person's source
-  // (proven by execution; `reattachCollision.test.ts` forces production on).
-  assertAlways(
-    tempAudioPath !== spec.sourcePath && tempAudioPath !== spec.videoPath,
-    `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
-  )
+  // T-142: the scratch WAV is deleted unconditionally in the `finally` below, so it takes a name NOTHING is at (`nextFreePath`: `<output>.cleaned.wav`,
+  // or `<output>.cleaned (2).wav` and on when a file is there). It used to be that one fixed name: an unrelated file the person kept at exactly
+  // `<output>.cleaned.wav` was replaced by the export pass and then deleted with the job. A free name also cannot be one of the job's inputs, so the two
+  // refusals below can no longer be reached by a name collision; they stay as the belt for the one thing the free-name check cannot see (the job's own
+  // `outputPath` aimed at an input, and a path the OS resolves to the same file).
   const run = latch.begin(spec.jobId)
-  // T-141 (1): and the same question for everything this job writes - the video, AND the scratch WAV that the `finally` below deletes unconditionally (it was
-  // asked of the source and the video only, by exact string; the second track at `<output>.cleaned.wav` was deleted with the job, and a case variant or a symlink
-  // of an input got past the string compare). It is asked in the run, so a Cancel that lands while the paths resolve is a Cancel (T-98), and BEFORE the `try` whose
-  // `finally` deletes the scratch WAV: nothing has been written, so nothing is cleaned up, and a refusal only has to end the run.
+  let tempAudioPath: string
   try {
+    // In the run, so a Cancel that lands while the folder is listed is a Cancel (T-98).
+    tempAudioPath = await run.guard(nextFreePath(`${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`))
+    // The delete below is unconditional, so it must never be aimed at a file
+    // the job did not make. T-114: assertAlways - as assert() this logged and CONTINUED under
+    // NODE_ENV=production and the `finally` below deleted the person's source
+    // (proven by execution; `reattachCollision.test.ts` forces production on).
+    assertAlways(
+      tempAudioPath !== spec.sourcePath && tempAudioPath !== spec.videoPath,
+      `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
+    )
+    // T-141 (1): and the same question for everything this job writes - the video, AND the scratch WAV that the `finally` below deletes unconditionally (it was
+    // asked of the source and the video only, by exact string; the second track at `<output>.cleaned.wav` was deleted with the job, and a case variant or a symlink
+    // of an input got past the string compare). It is asked in the run, so a Cancel that lands while the paths resolve is a Cancel (T-98), and BEFORE the `try` whose
+    // `finally` deletes the scratch WAV: nothing has been written, so nothing is cleaned up, and a refusal only has to end the run.
     await run.guard(refuseOutputOverInputs([spec.outputPath, tempAudioPath], [spec.sourcePath, spec.videoPath, spec.chain.secondaryTrack?.filePath]))
   } catch (err) {
     run.end()
@@ -642,8 +648,9 @@ export async function runAudioReattach(
     )
     outputPath = muxed.outputPath
   } finally {
-    await unlink(tempAudioPath).catch(() => {})
-    if (intermediate !== tempAudioPath) await unlink(intermediate).catch(() => {})
+    // T-142: the file the export pass LANDED (`intermediate` starts as the chosen name and becomes the landed one), never the chosen name when the render
+    // went beside it: something else is at that name (it is why the render went beside), and it is not this job's to delete.
+    await unlink(intermediate).catch(() => {})
     run.end()
   }
   return { jobId: spec.jobId, outputPath, durationMs: Date.now() - startedAt }

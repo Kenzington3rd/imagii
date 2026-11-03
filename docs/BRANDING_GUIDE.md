@@ -179,6 +179,11 @@ SAME verb, and the toast that follows uses its past tense.
   sentence is the only place a needed fact is said (T-125): "Cleanup configured. It is
   applied when you export…" and "Added to canvas as a reference — it won't be in your
   export" would be gone before a person looking at the screen they just changed read them.
+- **A toast that guards the only copy of a file stays until closed** (T-142): the
+  kept-take toast ("...imagii kept your take in <folder>...") has `duration: Infinity`,
+  "Show in folder" (it does not dismiss, so it works twice) and "Close", the product's one
+  dismiss word. A path in an 8 s toast you cannot select is not a way to the file.
+  `toastKeptTake` in `lib/savedToast.tsx` is the one helper.
 - A canceled job is neutral ("Export canceled.") and says what survived; it is
   never a red error toast.
 

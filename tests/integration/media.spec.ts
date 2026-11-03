@@ -4848,11 +4848,10 @@ describe('audio cuts re-attached to video (real ffmpeg, T-82)', () => {
     expect(await readdir(dir)).toEqual([])
   }, 120_000)
 
-  it('refuses to clobber a file that sits where the intermediate WAV would go', async () => {
-    // An output named X.mp4 stages its audio at X.cleaned.wav and deletes it
-    // afterwards. If that path is the very file the job reads from, writing
-    // and then deleting it would destroy the user's source: the job has to
-    // stop before touching anything.
+  it('does not clobber a file that sits where the intermediate WAV would go (T-142: the scratch takes a free name instead of refusing)', async () => {
+    // An output named X.mp4 used to stage its audio at X.cleaned.wav and delete it afterwards. If that path was the very file the job reads from, writing
+    // and then deleting it would have destroyed the user's source, so the job stopped before touching anything (T-114). The scratch now takes a name
+    // nothing is at ("X.cleaned (2).wav"), so the source at the usual name is simply read, the job completes, and the source is byte for byte what it was.
     const dir = path.join(outDir, 'collide')
     await mkdir(dir, { recursive: true })
     const extracted = await extractAudioFromVideo(rampSrc)
@@ -4860,21 +4859,20 @@ describe('audio cuts re-attached to video (real ffmpeg, T-82)', () => {
     try {
       await copyFile(extracted.wavPath, source)
       const before = await readFile(source)
-      await expect(
-        runAudioReattach(
-          {
-            jobId: 'reattach-collide',
-            videoPath: rampSrc,
-            sourcePath: source,
-            outputPath: path.join(dir, 'collide.mp4'),
-            chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [CUT] }
-          },
-          () => {}
-        )
-      ).rejects.toThrow(/^Assertion failed: .*intermediate/)
+      await runAudioReattach(
+        {
+          jobId: 'reattach-collide',
+          videoPath: rampSrc,
+          sourcePath: source,
+          outputPath: path.join(dir, 'collide.mp4'),
+          chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [CUT] }
+        },
+        () => {}
+      )
       expect(existsSync(source)).toBe(true)
       expect((await readFile(source)).equals(before)).toBe(true)
-      expect(existsSync(path.join(dir, 'collide.mp4'))).toBe(false)
+      expect(existsSync(path.join(dir, 'collide.mp4'))).toBe(true)
+      expect((await readdir(dir)).sort(), 'and the scratch WAV went with the job').toEqual(['collide.cleaned.wav', 'collide.mp4'])
     } finally {
       await extracted.cleanup()
     }
@@ -11157,15 +11155,19 @@ describe('a Save-dialog output that is a file the job reads is refused before an
       await expectRefused(c, [c.voice, c.video, c.music], () => audio.runAudioReattach(spec(c, c.music, c.music), () => {}))
     })
 
-    it('the scratch WAV it makes and deletes is the second track: refused, and the music is NOT deleted', async () => {
+    it('the second track sits at the scratch WAV\'s usual name (T-142): the scratch takes a free name, the music is read and NOT deleted, the job succeeds', async () => {
       const c = await fresh()
-      // `<output>.cleaned.wav` is where the first pass writes and the cleanup unlinks; here it is the person's music.
+      // `<output>.cleaned.wav` is where the first pass used to write and the cleanup to unlink; here it is the person's music. T-141 (1) refused this; the scratch
+      // takes a name nothing is at now (`out.cleaned (2).wav`), so there is nothing to refuse and the music is simply an input.
       const out = path.join(c.folder, 'out.mp4')
       const music = path.join(c.folder, 'out.cleaned.wav')
       await copyFile(musicWav, music)
-      await expectRefused(c, [c.voice, c.video, music], () => audio.runAudioReattach(spec(c, out, music), () => {}))
-      expect(existsSync(music), 'the music is still there').toBe(true)
-    })
+      const before = await Promise.all([c.voice, c.video, music].map(mine))
+      expect((await audio.runAudioReattach(spec(c, out, music), () => {})).outputPath).toBe(out)
+      expect(await Promise.all([c.voice, c.video, music].map(mine)), 'the inputs are byte for byte what they were').toEqual(before)
+      expect((await readdir(c.folder)).sort(), 'and the scratch WAV went with the job: only the output is new').toEqual(['music.wav', 'out.cleaned.wav', 'out.mp4', 'vod.mp4', 'vod.srt', 'voice.wav'])
+      expect((await ffprobeJson(out)).streams.map((st) => st.codec_type).sort()).toEqual(['audio', 'video'])
+    }, 120_000)
   })
 
   describe('the caption burn-in', () => {
@@ -11196,4 +11198,38 @@ describe('a Save-dialog output that is a file the job reads is refused before an
       expect(await Promise.all([mine(c.video), mine(c.srt)])).toEqual(before)
     }, 120_000)
   })
+})
+
+describe('the re-attach\'s scratch WAV never replaces a file the person already has (real ffmpeg, T-142)', () => {
+  // The scratch WAV was written at `<output>.cleaned.wav` and deleted with the job, so an UNRELATED file the person kept at exactly that name was
+  // overwritten by the export pass and then deleted. The scratch takes a name nothing is at now (`nextFreePath`).
+  it('an unrelated file at <output>.cleaned.wav is byte for byte what it was, the job succeeds, and the output is a real mp4 with sound', async () => {
+    const dir = path.join(workDir, 't142-scratch')
+    await mkdir(dir, { recursive: true })
+    const extracted = await extractAudioFromVideo(rampSrc)
+    try {
+      const outputPath = path.join(dir, 'out.mp4')
+      const theirs = path.join(dir, 'out.cleaned.wav')
+      const theirBytes = Buffer.from('a file that belongs to the streamer, not a WAV imagii made')
+      await writeFile(theirs, theirBytes)
+      const result = await runAudioReattach(
+        {
+          jobId: 'reattach-t142-scratch',
+          videoPath: rampSrc,
+          sourcePath: extracted.wavPath,
+          outputPath,
+          chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] }
+        },
+        () => {}
+      )
+      expect(result.outputPath).toBe(outputPath)
+      expect((await readFile(theirs)).equals(theirBytes), 'their file was neither replaced nor deleted').toBe(true)
+      expect((await readdir(dir)).sort(), 'and the job\'s own scratch is gone').toEqual(['out.cleaned.wav', 'out.mp4'])
+      const probe = await ffprobeJson(outputPath)
+      expect(probe.streams.some((st) => st.codec_type === 'video')).toBe(true)
+      expect(probe.streams.some((st) => st.codec_type === 'audio')).toBe(true)
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
 })

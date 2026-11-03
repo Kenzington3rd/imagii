@@ -1,4 +1,4 @@
-import { ipcMain, desktopCapturer, dialog, BrowserWindow, app } from 'electron'
+import { ipcMain, desktopCapturer, dialog, BrowserWindow, app, shell } from 'electron'
 import { copyFile, mkdir, stat, unlink } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
@@ -28,6 +28,7 @@ import {
 } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
 import { SAFE_ID_RE } from '../../shared/pathSafety'
+import { RECORDING_KEPT_LEAD } from '../../shared/userFacingError'
 import { sendIfAlive } from '../sendIfAlive'
 
 function recordingsDir(): string {
@@ -219,8 +220,8 @@ export function recordingConvertFailureMessage(err: unknown): string {
  */
 export function recordingKeptMessage(dir: string = recordingsDir()): string {
   const tail = 'Copy it out within 6 hours; after that imagii may delete it.'
-  const named = `The recording couldn't be saved to that location, so imagii kept your take in ${dir}. ${tail}`
-  return named.length <= 240 ? named : `The recording couldn't be saved to that location, so imagii kept your take in the recordings folder inside its data folder. ${tail}`
+  const named = `${RECORDING_KEPT_LEAD} in ${dir}. ${tail}`
+  return named.length <= 240 ? named : `${RECORDING_KEPT_LEAD} in the recordings folder inside its data folder. ${tail}`
 }
 
 /** True for the failure of the swap itself (`finishPartial`'s rename): the convert, remux or copy before it was whole. */
@@ -597,6 +598,20 @@ export function registerRecordingIpc(): void {
     assertNonEmptyString(id, 'recording:abandon id')
     assertAlways(SAFE_ID_RE.test(id), 'recording:abandon id malformed')
     return abandonSession(id)
+  })
+
+  // T-142 (1): the way to a kept take. The sentence names a folder in a hidden AppData path a person cannot type, so the toast carries a button, and this
+  // is what it calls. The renderer names the take (its session id); the PATH is built here, never taken from the renderer. A take that has been moved or
+  // reaped since is not an error: opening the folder it was kept in is the honest answer.
+  ipcMain.handle('recording:revealTake', async (_e, id: string): Promise<void> => {
+    assertNonEmptyString(id, 'recording:revealTake id')
+    assertAlways(SAFE_ID_RE.test(id), 'recording:revealTake id malformed')
+    const take = path.join(recordingsDir(), `${id}.webm`)
+    if (existsSync(take)) {
+      shell.showItemInFolder(take)
+    } else {
+      await shell.openPath(recordingsDir())
+    }
   })
 
   // M6 fix (round 15): renderer-callable cancel for the save phase. T-137 (2): aimed at one take - a Discard with no id, or an id that is not a

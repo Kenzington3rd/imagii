@@ -316,6 +316,8 @@ export interface ImagiiApi {
     appendChunk(id: string, chunk: ArrayBuffer): Promise<void>
     finalize(id: string, spec: RecordingFinalizeSpec): Promise<RecordingResult | null>
     abandon(id: string): Promise<boolean>
+    // T-142 (1): show a kept take (`<recordings>/<id>.webm`, built in main from the session id) in the file manager, or open the folder if it is gone.
+    revealTake(id: string): Promise<void>
     // M6 fix (round 15): expose conversion progress + cancel to the renderer. T-137 (2): the cancel is aimed at ONE take, the session id `begin` answered.
     cancelSave(id: string): Promise<boolean>
     // T-115: `percent` is absent while the convert has no measurement (indeterminate bar).

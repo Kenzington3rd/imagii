@@ -3739,8 +3739,10 @@ test.describe('T-141 (5): a swap the disk keeps refusing keeps the raw take', ()
         .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 90_000, intervals: [200] })
         .toContain(kept)
       const entries = await readToastEntries(window)
-      expect(entries.filter((e) => e.text === kept), 'one red toast, the sentence alone').toHaveLength(1)
-      expect(entries.find((e) => e.text === kept)?.hasIcon, 'a failure, not the calm discard').toBe(true)
+      // T-142 (1): the sentence is followed by the toast's two buttons (their words are the block below's); the sentence itself is as it was.
+      expect(entries.filter((e) => e.text === `${kept} Show in folder Close`), 'one red toast: the sentence, then Show in folder and Close').toHaveLength(1)
+      expect(entries.filter((e) => e.text.startsWith(kept)), 'and no other toast carries the sentence').toHaveLength(1)
+      expect(entries.find((e) => e.text.startsWith(kept))?.hasIcon, 'a failure, not the calm discard').toBe(true)
       expect(entries.map((e) => e.text).join(' | ')).not.toMatch(/Recording discarded|Windows blocked|EPERM|rename/)
       expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused, and tried again').toBeGreaterThan(1)
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 30_000 })
@@ -3765,5 +3767,102 @@ test.describe('T-141 (5): a swap the disk keeps refusing keeps the raw take', ()
 
   test('Convert off: the remux is whole and its swap is refused; the take is kept and the toast says where', async () => {
     await refusedSave('keep-webm', false)
+  })
+})
+
+// ── T-142 (1): the kept take's toast carries the way to it, and stays until it is closed ────────────────────────────────────────────────────────────────────────
+//
+// T-141 (5) keeps the raw take when the swap onto the chosen name is refused for good, and said where in an 8 s red toast with no action: the folder is a hidden
+// AppData path nobody can type (the toast's text cannot be selected either), the screen drops to idle, and the launch sweep reaps the take after 6 h - so a person
+// who looked away lost the only copy of a finished recording. The toast now has "Show in folder" and "Close" and lasts until closed. The same setup as the block
+// above (`refuseRenamesOnto`; the recorder, the convert or remux, the Save dialog's answer, the swap, the toast and the take on disk are real); the one stub added is
+// main's `shell.showItemInFolder` (`stubShellReveal`), the OS file manager being the boundary no test crosses.
+test.describe('T-142 (1): the toast for a kept take has the way to it and stays until closed', () => {
+  test.describe.configure({ timeout: 300_000 })
+
+  // ACTION_TOAST_MS (lib/savedToast.tsx, 8 s) is the longest any other toast in the app stays up with its buttons; the kept take's outlives it by 2 s and more.
+  const ACTION_TOAST_MS = 8000
+
+  async function keptTakeToast(label: string, convertToMp4: boolean): Promise<void> {
+    ensureScreenshots()
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, convertToMp4 ? 'refused.mp4' : 'refused.webm')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await stubShellReveal(app)
+      await refuseRenamesOnto(app, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      if (!convertToMp4) await window.getByRole('checkbox').nth(2).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      const toastEl = window.locator('[data-rht-toaster] [role="status"]').filter({ hasText: 'imagii kept your take' })
+      const showInFolder = toastEl.getByRole('button', { name: 'Show in folder' })
+      const close = toastEl.getByRole('button', { name: 'Close' })
+
+      // The sentence is unchanged (the block above pins its words); what is new is that it carries both buttons, and that it is the red kind.
+      await expect(toastEl).toBeVisible({ timeout: 90_000 })
+      await expect(showInFolder).toBeVisible()
+      await expect(close).toBeVisible()
+      await expect(toastEl.getByRole('button')).toHaveCount(2)
+      expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused').toBeGreaterThan(1)
+      const entry = (await readToastEntries(window)).find((e) => e.text.includes('imagii kept your take'))
+      expect(entry?.hasIcon, 'a failure, not the calm discard').toBe(true)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 30_000 })
+
+      // It is still there after the longest toast in the app has gone (8 s) and two seconds more: nothing times it out.
+      await window.waitForTimeout(ACTION_TOAST_MS + 2000)
+      await expect(toastEl, 'the toast outlives ACTION_TOAST_MS + 2 s').toBeVisible()
+      await expect(showInFolder).toBeVisible()
+
+      // The take on disk, whole, and abandon (which the failure branch calls) did not take it.
+      const takes = leftoverTemps(userDataDir)
+      expect(takes, 'the raw take survived the failure branch, 10 s on').toHaveLength(1)
+      const take = path.join(recordingsDir(userDataDir), takes[0] as string)
+      expect(statSync(take).size, 'a whole recording, not a stub').toBeGreaterThan(1000)
+
+      // Show in folder reaches the OS with exactly <userData>/recordings/<id>.webm, which exists and is the real webm - and it does not dismiss the toast.
+      await showInFolder.click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 10_000 }).toEqual([take])
+      await expect(toastEl, 'Show in folder leaves the toast up').toBeVisible()
+      await showInFolder.click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 10_000 }).toEqual([take, take])
+      expect(path.basename(take)).toMatch(/^[A-Za-z0-9_-]+\.webm$/)
+      const probed = await probeFile(take)
+      expect(probed.streams?.some((st) => st.codec_type === 'video'), 'ffprobe reads a picture in the file it was pointed at').toBe(true)
+      expect(probed.format?.format_name ?? '', 'and it is the webm container').toMatch(/matroska|webm/)
+
+      // Close takes the toast away and nothing else: the take is still on disk.
+      await close.click()
+      await expect(toastEl).toBeHidden({ timeout: 10_000 })
+      expect(existsSync(take), 'Close dismisses the toast; it does not delete the take').toBe(true)
+      expect(statSync(take).size).toBeGreaterThan(1000)
+      expect(await readRevealCalls(app), 'and reveals nothing').toEqual([take, take])
+      expect(existsSync(outPath), 'nothing at the chosen name').toBe(false)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  }
+
+  test('Convert to MP4: the toast has Show in folder and Close, outlives ACTION_TOAST_MS + 2 s, points at the real take, and Close leaves the take', async () => {
+    await keptTakeToast('kept-toast-mp4', true)
+  })
+
+  test('Convert off: the same toast for the remux whose swap is refused', async () => {
+    await keptTakeToast('kept-toast-webm', false)
   })
 })

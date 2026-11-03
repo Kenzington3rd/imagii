@@ -39,6 +39,18 @@ export const ERROR_TOAST_MS = 8000
  *  your folder."), so it outlives a plain toast too. */
 export const CANCEL_TOAST_MS = 6000
 
+/**
+ * T-142 (1): the fixed lead of the sentence Record shows when the swap onto the chosen name was refused for good and the raw take was kept
+ * (`recordingKeptMessage`, main/ipc/recording.ts). One constant, so main (which words the sentence) and the renderer (which recognises it, to raise the
+ * toast that carries the way to the take instead of a plain 8 s error) cannot drift apart.
+ */
+export const RECORDING_KEPT_LEAD = "The recording couldn't be saved to that location, so imagii kept your take"
+
+/** True when `message` (what `userFacingError` decided to show) is the kept-take sentence. */
+export function isRecordingKeptMessage(message: string): boolean {
+  return message.startsWith(RECORDING_KEPT_LEAD)
+}
+
 export interface UserFacingError {
   /** The user stopped the job. `message` is a neutral default; the caller's
    *  own cancel copy replaces it. */

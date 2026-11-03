@@ -619,7 +619,10 @@ Repeated UI is a component, not copy-paste:
   is a completion sentence with no trailing period ("Saved the GIF"). A panel never
   builds its own reveal button inside a toast —
   `tests/unit/copyConventions.test.ts` fails on a bare "Show" button and pins the
-  panels to the helper. The wording rules (verbs, names, toast punctuation) are
+  panels to the helper. `toastKeptTake(message, takeId)` (T-142 (1)) is the red sibling for a
+  take imagii kept because the swap onto the chosen name was refused: "Show in folder" (main builds the
+  path from the take id, the renderer never names one; it does not dismiss) and "Close", and it stays
+  until closed (`duration: Infinity`) because it guards the only copy of a file. The wording rules (verbs, names, toast punctuation) are
   `BRANDING_GUIDE.md`, "Copy conventions". A runner that numbers its output (`nextFreePath`, T-106) hands the
   panel the path it really wrote, and the GIF, Compile, Reframe and picture-in-picture toasts say it —
   `Saved ${basename(result.outputPath)}` — so "name (2).gif" is never a surprise in the folder (T-112); the Export
