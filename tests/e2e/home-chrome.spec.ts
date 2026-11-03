@@ -1453,7 +1453,7 @@ test.describe('T-21 Home, Welcome, and shared chrome', () => {
           "Couldn't clear the autosave. It's still on disk. Windows blocked access to a file. " +
             'Close any app using it, or check your antivirus.'
         )
-      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EBUSY|maken|AppData|autosave\.json|unlink/)
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EBUSY|streamer|AppData|autosave\.json|unlink/)
       await expect(banner).toBeVisible()
 
       // Discrimination: the SAME button, with a clear that works. What is

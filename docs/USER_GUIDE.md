@@ -132,7 +132,11 @@ and webcam if you want them. Game and desktop sound are not captured.
 while the take is being saved, the half-written file is removed and the raw
 recording stays in a `recordings` folder inside imagii's own data folder (imagii
 deletes what is older than 6 hours the next time it starts), so closing a window
-never costs you the take; **Discard recording** is the way to throw it away. If the window or screen
+never costs you the take; **Discard recording** is the way to throw it away, and it does throw it away
+whenever you press it, including the instant after the conversion has finished. If the finished recording
+cannot be put where you saved it (the drive went away, another app is blocking the name), imagii says so in
+one sentence that names the `recordings` folder, and keeps the raw take there for at least 6 hours so you can
+copy it out. If the window or screen
 you are capturing goes away (you close it), the take ends on its own, with your
 microphone and webcam on or off, and saves the same way, with the saving card on
 screen instead of a live **REC**. If your microphone goes away mid-take (a headset
@@ -705,6 +709,11 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   If the file you chose is open in another app when the render finishes (a player or an editor can hold it so
   it cannot be replaced), imagii keeps the render instead of throwing it away: it is saved next to that file as
   **name (2)**, the file that was open is left as it was, and the message says which name it was saved as.
+- **imagii will not save over a file it is reading.** If the name you pick in the Save dialog is a file the job
+  uses (the sound you are cleaning, a second track you mixed in, the video you are re-attaching sound to, or the video
+  or the subtitle file you are burning captions into), imagii stops before it starts and says "That is the file imagii
+  is reading from, so it can't be replaced by the new one. Pick a different name, then try again." Nothing is written and
+  the file is exactly as it was. A different name works as usual.
 - **The window remembers its size and position** between launches, and
   re-centers itself if the display it was on is no longer connected. That
   happens whatever you choose in the restore banner.

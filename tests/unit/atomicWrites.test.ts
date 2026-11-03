@@ -517,3 +517,116 @@ describe('a runner that swaps a render over a named file keeps the path it lande
     expect(count('// await finishPartial(work, o)\nconst s = "await finishPartial(work, o)"')).toBe(0)
   })
 })
+
+/**
+ * T-141 (1) - a runner that swaps a render over a file the person NAMED asks first whether that name is a file it READS.
+ *
+ * ffmpeg refused an output equal to an input at its own open ("FFmpeg cannot edit existing files in-place"); handed a partial instead (above), nothing opens the
+ * chosen name, and the swap renamed a finished render over the source (executed: the audio export over its source, the mux over its video, a ranged burn-in over its
+ * VOD). Every runner that finishes a partial in `replace` mode (the person named the file in the Save dialog) therefore asks `refuseOutputOverInputs` first
+ * (`main/ffmpeg/sameFile.ts`), inside its run (a Cancel is a latch, T-98) and before its first probe. This scan counts, per file under `src/main`, the `finishPartial(...)` calls whose options say `mode: 'replace'` and the calls to
+ * `refuseOutputOverInputs`, and requires each file's pair to be what its row allows: a new replace-mode runner is a row here, with the check it makes or the reason
+ * its input cannot be a name the Save dialog offers. `beside` runners need none (`nextFreePath` only returns a name nothing is at).
+ *
+ * What it cannot see: WHICH inputs a call lists (`outputIsInput.test.ts` and Layer 5 hold every one, runner by runner), and a check made through another name.
+ */
+interface ReplaceRow {
+  replaces: number
+  refusals: number
+  why: string
+}
+
+const REPLACE_RUNNERS: Record<string, ReplaceRow> = {
+  'audio/process.ts': { replaces: 1, refusals: 3, why: 'runFfmpegToFile is the one replace-mode finish (the export and the mux pass); the export, the mux and the re-attach each ask inside their run, before their first probe' },
+  'sidecars/whisperManager.ts': { replaces: 1, refusals: 1, why: 'the caption burn-in asks first thing inside its run, before the shifted .srt is written' },
+  'ffmpeg/frame.ts': {
+    replaces: 1,
+    refusals: 0,
+    why: 'the Clip Kit thumbnail: extractFrame refuses a target that already exists before ffmpeg starts and writes into a folder made a moment ago, so its output is a name nothing is at and cannot be an input'
+  },
+  'ipc/recording.ts': {
+    replaces: 3,
+    refusals: 0,
+    why: 'the recording\'s save reads the take\'s own temp .webm in userData/recordings, a nanoid name no Save dialog offers (found, not fixed: T-141 Track A); its swap refusal keeps the take'
+  }
+}
+
+/** How many `finishPartial(...)` calls in `sf` pass an options object literal with `mode: 'replace'`. */
+export function replaceFinishes(sf: ts.SourceFile): number {
+  let n = 0
+  const visit = (c: ts.Node): void => {
+    if (ts.isCallExpression(c) && ts.isIdentifier(c.expression) && c.expression.text === 'finishPartial') {
+      const options = c.arguments[1]
+      if (
+        options &&
+        ts.isObjectLiteralExpression(options) &&
+        options.properties.some(
+          (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'mode' && ts.isStringLiteral(p.initializer) && p.initializer.text === 'replace'
+        )
+      ) {
+        n += 1
+      }
+    }
+    ts.forEachChild(c, visit)
+  }
+  visit(sf)
+  return n
+}
+
+/** How many calls to `refuseOutputOverInputs` `sf` makes. */
+export function refusalCalls(sf: ts.SourceFile): number {
+  let n = 0
+  const visit = (c: ts.Node): void => {
+    if (ts.isCallExpression(c) && ts.isIdentifier(c.expression) && c.expression.text === 'refuseOutputOverInputs') n += 1
+    ts.forEachChild(c, visit)
+  }
+  visit(sf)
+  return n
+}
+
+describe('a runner that replaces a file the person named asks whether it is a file the job reads (T-141 (1))', () => {
+  const files = sourceFilesUnder(MAIN_ROOT)
+  const rel = (f: string): string => path.relative(MAIN_ROOT, f).split(path.sep).join('/')
+  const scan = (): Record<string, { replaces: number; refusals: number }> => {
+    const found: Record<string, { replaces: number; refusals: number }> = {}
+    for (const f of files) {
+      const sf = parseSource(f)
+      const replaces = replaceFinishes(sf)
+      const refusals = refusalCalls(sf)
+      if (replaces > 0 || refusals > 0) found[rel(f)] = { replaces, refusals }
+    }
+    return found
+  }
+
+  it('reads the runners it is meant to police (a scan over nothing proves nothing)', () => {
+    const found = scan()
+    for (const file of ['audio/process.ts', 'sidecars/whisperManager.ts', 'ipc/recording.ts']) {
+      expect(found[file]?.replaces, `${file} finishes a partial in replace mode`).toBeGreaterThan(0)
+    }
+  })
+
+  it('every replace-mode runner is in the table with the checks it makes; no file asks more or less than its row', () => {
+    const found = scan()
+    const unexpected = Object.entries(found)
+      .filter(([file, got]) => got.replaces !== (REPLACE_RUNNERS[file]?.replaces ?? 0) || got.refusals !== (REPLACE_RUNNERS[file]?.refusals ?? 0))
+      .map(([file, got]) => `${file}: ${got.replaces} replace-mode finish(es) and ${got.refusals} refuseOutputOverInputs call(s), the table allows ${REPLACE_RUNNERS[file]?.replaces ?? 0} and ${REPLACE_RUNNERS[file]?.refusals ?? 0}`)
+    expect(unexpected, 'ask `refuseOutputOverInputs(outputs, inputs)` (main/ffmpeg/sameFile.ts) inside the run and before the first probe, or add a row with the reason the input cannot be a name the Save dialog offers').toEqual([])
+    expect(Object.keys(REPLACE_RUNNERS).filter((file) => !(file in found)), 'a row whose file no longer has either: delete it').toEqual([])
+    for (const [file, row] of Object.entries(REPLACE_RUNNERS)) {
+      if (row.refusals === 0) expect(row.why.length, `${file} is exempt, so its row says why`).toBeGreaterThan(40)
+    }
+  })
+
+  it('discriminates: a replace-mode finish and a check are counted; a beside-mode one, a variable mode, a mention and a comment are not', () => {
+    const replaces = (text: string): number => replaceFinishes(parseSource('probe.ts', text))
+    const refusals = (text: string): number => refusalCalls(parseSource('probe.ts', text))
+    expect(replaces("await finishPartial(w, { run, partial, target, mode: 'replace' })")).toBe(1)
+    expect(replaces("await finishPartial(a, { mode: 'replace' }); await finishPartial(b, { mode: 'replace' })")).toBe(2)
+    expect(replaces("await finishPartial(w, { run, partial, target, mode: 'beside' })")).toBe(0)
+    expect(replaces("await finishPartial(w, { run, partial, target, mode })")).toBe(0)
+    expect(replaces("await finishPartial(w, o)")).toBe(0)
+    expect(replaces("// finishPartial(w, { mode: 'replace' })\nconst s = \"finishPartial(w, { mode: 'replace' })\"")).toBe(0)
+    expect(refusals('await refuseOutputOverInputs([a], [b])\nawait refuseOutputOverInputs([c], [d])')).toBe(2)
+    expect(refusals("// refuseOutputOverInputs([a], [b])\nconst s = 'refuseOutputOverInputs(x)'\nimport { refuseOutputOverInputs } from './x'")).toBe(0)
+  })
+})

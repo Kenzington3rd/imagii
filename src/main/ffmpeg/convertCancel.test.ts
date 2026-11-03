@@ -37,6 +37,7 @@ vi.mock('node:child_process', () => ({
 }))
 
 const {
+  beginConvertRun,
   convertToMp4,
   remuxWebm,
   cancelConverts,
@@ -509,5 +510,78 @@ describe('cancelConverts is scoped to the TAKE that asked (T-137 (2))', () => {
     child.emit('close', null, 'SIGKILL')
     const err = await promise.catch((e: unknown) => e)
     expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
+  })
+})
+
+// T-141 (5): a save is a RUN (`beginConvertRun`) from the chosen name until the temp take is dealt with, and the swap asks the run, not the child, whether a cancel
+// landed (T-140 (1)). A cancel that lands AFTER the child exited therefore has no child to reject with `ConvertCancelledError(byQuit)`, and the run threw a plain
+// `CancelledError` that did not say who asked: the save kept the raw take for a Discard (the person threw it away, and the toast said so) as for a quit. The
+// convert's latch is told what to throw, and a name (a Discard) and the sweep (the quit) are told apart where they are made.
+describe('a cancel that lands on a save\'s run says who asked (T-141 (5))', () => {
+  const thrownBy = (run: { check: () => void }): unknown => {
+    try {
+      run.check()
+    } catch (err) {
+      return err
+    }
+    return null
+  }
+
+  it('a Discard aimed at the take is a ConvertCancelledError that is not the quit\'s - with no child running at all', () => {
+    const run = beginConvertRun(TAKE)
+    expect(cancelConverts(TAKE), 'nothing was running to kill: the child had exited').toBe(false)
+    const err = thrownBy(run)
+    expect(err).toBeInstanceOf(ConvertCancelledError)
+    expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
+    run.end()
+  })
+
+  it('the quit sweep is a ConvertCancelledError that IS the quit\'s, also with no child running', () => {
+    const run = beginConvertRun(TAKE)
+    cancelAllConverts()
+    const err = thrownBy(run)
+    expect(err).toBeInstanceOf(ConvertCancelledError)
+    expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(true)
+    run.end()
+  })
+
+  it.each([
+    ['a Discard, then the quit', (): void => { cancelConverts(TAKE); cancelAllConverts() }],
+    ['the quit, then a Discard', (): void => { cancelAllConverts(); cancelConverts(TAKE) }]
+  ])('both land on one run (%s): the person\'s Discard wins, in either order', (_label, land) => {
+    const run = beginConvertRun(TAKE)
+    land()
+    expect((thrownBy(run) as InstanceType<typeof ConvertCancelledError>).byQuit, 'the person asked for the take to go').toBe(false)
+    run.end()
+  })
+
+  it('a Discard aimed at ANOTHER take does not touch this take\'s run', () => {
+    const run = beginConvertRun(TAKE)
+    cancelConverts(recordingOwner('take-b'))
+    expect(thrownBy(run), 'not cancelled').toBeNull()
+    run.end()
+  })
+
+  it('a run begun after a cancel starts clean: a stale Discard or quit never reaches the next save', () => {
+    cancelConverts(TAKE)
+    cancelAllConverts()
+    const run = beginConvertRun(TAKE)
+    expect(thrownBy(run)).toBeNull()
+    run.end()
+  })
+
+  it('the child path is unchanged: a live convert killed by a Discard rejects as the Discard, and by the quit as the quit', async () => {
+    const discarded = startConvert()
+    cancelConverts(TAKE)
+    discarded.child.emit('close', null, 'SIGKILL')
+    const first = await discarded.promise.catch((e: unknown) => e)
+    expect(first).toBeInstanceOf(ConvertCancelledError)
+    expect((first as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
+
+    const quit = startConvert()
+    cancelAllConverts()
+    quit.child.emit('close', null, 'SIGKILL')
+    const second = await quit.promise.catch((e: unknown) => e)
+    expect((second as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(true)
   })
 })

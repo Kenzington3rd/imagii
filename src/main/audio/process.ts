@@ -4,6 +4,7 @@ import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
+import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
 import {
   aselectForCuts,
   buildChain,
@@ -176,6 +177,11 @@ export async function runAudioExport(
 ): Promise<AudioJobResult> {
   const run = latch.begin(spec.jobId)
   try {
+    // T-141 (1): the render is swapped over the Save dialog's name, so a name that is a file this export READS - the source, the second track mixed in - would
+    // replace it (ffmpeg's own refusal went with T-140 (1): it is handed a partial now). Asked first: before the probe, before any spawn. Inside the run, so a
+    // Cancel that lands while the paths resolve is a Cancel (T-98: it is a latch, and the run opens in the call's first synchronous step); the `finally` ends the run
+    // on a refusal, which the quit would otherwise wait on.
+    await run.guard(refuseOutputOverInputs([spec.outputPath], [spec.sourcePath, spec.chain.secondaryTrack?.filePath]))
     return await exportAudio(spec, onProgress, run)
   } finally {
     run.end()
@@ -434,6 +440,8 @@ export async function runAudioMux(
 ): Promise<AudioJobResult> {
   const run = latch.begin(jobId)
   try {
+    // T-141 (1): the video it puts the sound on, and the sound, are read; the output replaces whatever is at its name. Inside the run, as the export's (above).
+    await run.guard(refuseOutputOverInputs([outputPath], [videoPath, audioPath]))
     return await attachAudio(jobId, videoPath, audioPath, outputPath, onProgress, cutRegions, run)
   } finally {
     run.end()
@@ -598,6 +606,16 @@ export async function runAudioReattach(
     `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
   )
   const run = latch.begin(spec.jobId)
+  // T-141 (1): and the same question for everything this job writes - the video, AND the scratch WAV that the `finally` below deletes unconditionally (it was
+  // asked of the source and the video only, by exact string; the second track at `<output>.cleaned.wav` was deleted with the job, and a case variant or a symlink
+  // of an input got past the string compare). It is asked in the run, so a Cancel that lands while the paths resolve is a Cancel (T-98), and BEFORE the `try` whose
+  // `finally` deletes the scratch WAV: nothing has been written, so nothing is cleaned up, and a refusal only has to end the run.
+  try {
+    await run.guard(refuseOutputOverInputs([spec.outputPath, tempAudioPath], [spec.sourcePath, spec.videoPath, spec.chain.secondaryTrack?.filePath]))
+  } catch (err) {
+    run.end()
+    throw err
+  }
   // T-140 (1): both files can land BESIDE the name asked for (that name is held open by another app), and each pass must be told where the one before
   // it landed: the mux reads the WAV that was just written (not a stale file at `tempAudioPath`), and the answer is the video that was written.
   let intermediate = tempAudioPath

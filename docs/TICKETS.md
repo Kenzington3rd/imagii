@@ -6191,7 +6191,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** in progress (round 90: Track B landed — see its Done entry; Tracks A and C in progress)
+- **Status:** in progress (round 90: Tracks B and A landed — see their Done entries; Track C in expedite)
 
 ---
 
@@ -6711,6 +6711,69 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 90, Track A — T-141 items 1, 5 and 10 and the non-counted parts
+(the refused-swap keep, the fixture-path rename, the remux-Cancel
+race), landed in the commit that carries this entry, merged onto
+Track B (0e29488). Worked by one Sonnet in a fresh clone of 2a6561c
+(resumed once after a container restart; the audit found no file at a
+mutant's sha). The fixes: a Save-dialog output that resolves to a file
+the job reads is refused before any ffmpeg runs, in one sentence
+("That is the file imagii is reading from, so it can't be replaced by
+the new one. Pick a different name, then try again.") - one helper
+(src/main/ffmpeg/sameFile.ts: realpath where the file exists, case
+folded on win32) asked inside the run by the audio export (source,
+second track), the mux (video, sound), the re-attach (source, video,
+second track and its own scratch WAV) and the burn-in (video, .srt);
+the cancel latch records whether a run was marked by its own name (a
+Discard) or only by the quit sweep, the name winning in either order,
+so a Discard that lands after the convert exited throws the raw take
+away and a quit keeps it; a swap the disk refuses after a whole
+convert, remux or copy keeps the take and says where it is (T-110 (u)
+narrowed: a failed convert or copy still deletes it); one
+`flushToDisk` (fsAtomic.ts) closes its handle in a finally, used by
+the atomic writer and autosave. Non-counted: the `C:\Users\maken\`
+fixtures are `C:\Users\streamer\` (other `maken` fragments in unit
+fixtures listed in the IC, untouched); the T-140 (1) remux-Cancel
+Layer 5 case, whose poll could miss a fast stream copy under load
+(the expediter saw it once in Track B's run), now holds the real remux
+at its exit and has an exact-instant companion case - green 5/5 on
+both majors under load and red when the remux is handed the target or
+the swap ignores its run. Deviations, accepted: the guard runs inside
+the run (a first placement before the latch let a same-tick Cancel
+mark nothing - caught by the worker's own media run); the cause lives
+on the latch run rather than a module flag (which would never reset);
+a whole remux whose swap is refused is not copied and swapped again;
+an atomicWrites audit row per replace-mode caller. 79 ledger
+mutations (124 rows), all restored byte-identical; three survivors of
+first runs strengthened and killed; 17 reds, Layer 5 on both majors.
+Expedited personally: integrity (no Track B or C file touched beyond
+the shared docs and the appended spec blocks), verify x2 (198/5668),
+test:media on 7.0.2 (425 passed | 13 skipped of 438), the whole Layer
+5 file on the distro 6.1.1 (418 passed and only the 7 known pins), the
+T-141 (1) block and the remux cases on the SHIPPED win32 exe under
+Wine (17/17), FULL Playwright 505/505 (53.0 min), sha of every touched
+file identical before and after; one independent mutation at a seam
+no ledger row names (a swap refusal recognized by its code, EPERM,
+instead of its syscall, rename → the "a swap the disk refuses is not
+blamed on the convert" case red), restored byte-identical, sha256
+verified. Merged by structure onto 0e29488 (rehearsed in a scratch
+clone): LESSONS (A's entry on top), TESTING and the coverage ledger
+(each track's appended block, B's first) conflicted, and a line-level
+proof over the five docs both tracks touched showed neither lost a
+line; all 19 Track-A-only files are byte-identical to the expedited
+clone. The merged tree verified at 198 files / 5723 tests, the two
+tracks' counts summed exactly; its full Playwright and media runs are
+deferred to the round's final merged tree (A and B touch disjoint
+source: main versus Stream Graphics), recorded in the last landing's
+entry.
+Found, not fixed (the worker's list, in the IC): the recording save
+reads its own temp take with no output check (a nanoid no dialog
+offers); RecordStudio.tsx's comment still describes (u) un-narrowed;
+a Discard after the swap succeeded gets the saved result; an exact
+scratch-name collision in the re-attach still throws its developer
+sentence; Windows realpath behavior is held by the platform parameter,
+not run on Windows.
 
 Round 90, Track B — T-141 items 2, 6 and 8, landed in the commit that
 carries this entry, the round's first landing, directly onto 2a6561c.

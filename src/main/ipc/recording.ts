@@ -210,6 +210,31 @@ export function recordingConvertFailureMessage(err: unknown): string {
 }
 
 /**
+ * T-141 (5), the non-counted part of the ticket (T-110 (u) narrowed): the swap onto the name the person chose was refused for good AFTER a whole convert (or remux,
+ * or copy) - a lock that outlasted the retries on a name nothing is at, a folder that went away, a drive that turned read-only. That is neither the convert failing
+ * ("Nothing was saved" would be false: the file was made) nor a take the person threw away: the raw take in userData is then the ONLY copy of a finished recording,
+ * so it is kept, and this is the sentence the person reads: what happened, where the take is, and for how long (the launch sweep reaps `recordings/` files older
+ * than 6 hours, `tempCleanup.ts`). The folder is named so it can be opened; a path too long for one finished line falls back to words. A finished sentence, so
+ * `userFacingError` shows it as written; the disk's own error is the thrown error's `cause`, and goes to the console.
+ */
+export function recordingKeptMessage(dir: string = recordingsDir()): string {
+  const tail = 'Copy it out within 6 hours; after that imagii may delete it.'
+  const named = `The recording couldn't be saved to that location, so imagii kept your take in ${dir}. ${tail}`
+  return named.length <= 240 ? named : `The recording couldn't be saved to that location, so imagii kept your take in the recordings folder inside its data folder. ${tail}`
+}
+
+/** True for the failure of the swap itself (`finishPartial`'s rename): the convert, remux or copy before it was whole. */
+function isSwapRefusal(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.syscall === 'rename'
+}
+
+/** What a refused swap throws: the sentence above, with the disk's own error as its cause and in the console. */
+function keptTakeError(err: unknown): Error {
+  console.error('[recording] the swap onto the chosen name was refused; the raw take is kept:', err)
+  return new Error(recordingKeptMessage(), { cause: err })
+}
+
+/**
  * T-120: write the take to `outputPath` as a WebM that opens in Video Studio. MediaRecorder streams its
  * webm, so the file it wrote has no duration in its header and `probeVideo` refuses it (a take saved with
  * Convert off could only be reopened by re-exporting it as MP4 from some other program). A packet copy
@@ -230,7 +255,8 @@ async function saveWebm(run: LatchRun, owner: ConvertOwner, tempPath: string, ou
   try {
     return (await finishPartial(remuxWebm(owner, tempPath, partial), { run, partial, target: outputPath, mode: 'replace' })).outputPath
   } catch (err) {
-    if (isCancelledError(err)) throw err
+    // T-141 (5): a remux that was WHOLE and whose swap was refused is not a failed remux - the copy would be swapped onto the same name, and refused the same way.
+    if (isCancelledError(err) || isSwapRefusal(err)) throw err
     console.error('[recording] remux failed, saving the take as recorded:', err)
     const copy = partialPathFor(outputPath)
     return (await finishPartial(copyFile(tempPath, copy), { run, partial: copy, target: outputPath, mode: 'replace' })).outputPath
@@ -260,7 +286,8 @@ async function promoteTempWebm(
   // convert and then waits for every run to end) waits for the reaping below. Opened AFTER the Save dialog: a dialog nobody has answered
   // is not work, and a quit with one open should not wait on it.
   let run: LatchRun | undefined
-  // T-128 (5): true when the save ended because the APP is quitting - the raw take is then kept (see the catches below).
+  // T-128 (5): true when the save ended because the APP is quitting - the raw take is then kept (see the catches below). T-141 (5): and when the swap was refused
+  // after a whole convert: the take is then the only copy of a finished recording.
   let keepTake = false
   try {
     const baseName = spec.filename.replace(/\.(webm|mp4)$/i, '')
@@ -333,15 +360,20 @@ async function promoteTempWebm(
         // version (raw IPC text reaching the user is the T-30 disease).
         if (isCancelledError(err)) {
           // A Discard throws the take away; a quit does not (T-128 (5)): the half-written mp4 is gone either way, but the webm in userData is the
-          // only copy of what was recorded, and the person asked to close the window. A cancel the run's latch recorded after the child had exited
-          // (T-140 (1): `finishPartial` asks the run before it swaps) does not say who asked, so it keeps the take: a leftover the launch sweep reaps
-          // is the safe side of "a take is never both gone".
+          // only copy of what was recorded, and the person asked to close the window. T-141 (5): who asked is on the error - `ConvertCancelledError.byQuit`,
+          // whether the child was killed or (T-140 (1)) the cancel landed on the save's run after the child had exited and `finishPartial` asked the run
+          // (the convert's latch is told what to throw). A Discard is a Discard on either side of the exit: the raw take goes, as the toast says. A cancel that
+          // is not the convert's at all names nobody, and a take is never both gone and unexplained: it is kept.
           keepTake = !(err instanceof ConvertCancelledError) || err.byQuit
           return null
         }
         // T-140 (1): the convert was whole and the SWAP was refused (the chosen file open in another app, a full or removed drive). That is not the
-        // convert failing, and "uncheck Convert to MP4" would not help: the disk's own error goes up, for `userFacingError` to word.
-        if ((err as NodeJS.ErrnoException).syscall === 'rename') throw err
+        // convert failing, and "uncheck Convert to MP4" would not help. T-141 (5): and the raw take is then the only copy of a finished recording, so it is kept
+        // and the sentence says so (it was the disk's own error, and the finally below deleted the take under it).
+        if (isSwapRefusal(err)) {
+          keepTake = true
+          throw keptTakeError(err)
+        }
         console.error('[recording] convert failed:', err)
         throw new Error(recordingConvertFailureMessage(err))
       }
@@ -354,6 +386,11 @@ async function promoteTempWebm(
         if (isCancelledError(err)) {
           keepTake = !(err instanceof ConvertCancelledError) || err.byQuit
           return null
+        }
+        // T-141 (5): the same keep as the convert's, for the remux's swap and the fallback copy's.
+        if (isSwapRefusal(err)) {
+          keepTake = true
+          throw keptTakeError(err)
         }
         throw err
       }

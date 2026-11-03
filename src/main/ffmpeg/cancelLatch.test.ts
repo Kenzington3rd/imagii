@@ -359,3 +359,71 @@ describe('every runner ends its run after its work (the premise of drainRuns) (T
     expect(runTries('async function f() { try { return work() } finally { cleanup() } }'), 'a finally that does not end a run is not a runner').toEqual([])
   })
 })
+
+// T-141 (5): the latch is told what to throw, and whether the run was marked by a NAME (a per-job cancel: a Discard) or by the SWEEP (`cancelAll`: the quit).
+describe('CancelLatch - what check() throws, and who asked (T-141 (5))', () => {
+  class Named extends CancelledError {
+    constructor(readonly byAll: boolean) {
+      super()
+    }
+  }
+  const make = (): CancelLatch => new CancelLatch((byAll) => new Named(byAll))
+  const asked = (run: { check: () => void }): boolean | null => {
+    try {
+      run.check()
+    } catch (err) {
+      return (err as Named).byAll
+    }
+    return null
+  }
+
+  it('without a factory it throws the plain sentinel, as before', () => {
+    const latch = new CancelLatch()
+    const run = latch.begin('a')
+    latch.cancel('a')
+    expect(() => run.check()).toThrow(CANCELLED_MESSAGE)
+    try {
+      run.check()
+    } catch (err) {
+      expect(err).toBeInstanceOf(CancelledError)
+      expect((err as object).constructor).toBe(CancelledError)
+    }
+    run.end()
+  })
+
+  it('a name marks the run as not the sweep\'s, and cancelAll marks it as the sweep\'s', () => {
+    const latch = make()
+    const byName = latch.begin('a')
+    const bySweep = latch.begin('b')
+    latch.cancel('a')
+    latch.cancelAll()
+    expect(asked(byName), 'a name, then the sweep: the name stays').toBe(false)
+    expect(asked(bySweep), 'the sweep alone').toBe(true)
+    byName.end()
+    bySweep.end()
+  })
+
+  it('the name wins in either order, and a run nobody cancelled throws nothing', () => {
+    const latch = make()
+    const first = latch.begin('a')
+    latch.cancelAll()
+    latch.cancel('a')
+    expect(asked(first), 'the sweep, then a name').toBe(false)
+    const idle = latch.begin('c')
+    expect(asked(idle)).toBeNull()
+    first.end()
+    idle.end()
+  })
+
+  it('guard() gives way to a cancel with the same error check() throws', async () => {
+    const latch = make()
+    const run = latch.begin('a')
+    const slow = new Promise<never>(() => undefined)
+    const waiting = run.guard(slow).catch((e: unknown) => e as Named)
+    latch.cancelAll()
+    const err = await waiting
+    expect(err).toBeInstanceOf(Named)
+    expect(err.byAll).toBe(true)
+    run.end()
+  })
+})

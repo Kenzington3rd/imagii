@@ -7,12 +7,12 @@ import {
   rename,
   unlink,
   stat,
-  copyFile,
-  open
+  copyFile
 } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
+import { flushToDisk } from './fsAtomic'
 import { isSafeToAutosave, validateProjectJsonString } from '../shared/projectValidation'
 import type { ImagiiProject } from '../shared/workspace'
 
@@ -141,14 +141,8 @@ async function writeAutosaveNow(
     tmp = path.join(autosaveDir(), `autosave.${randomBytes(4).toString('hex')}.tmp`)
     await writeFile(tmp, raw, 'utf8')
 
-    // fsync to ensure data hits disk before the rename
-    try {
-      const fh = await open(tmp, 'r+')
-      await fh.sync()
-      await fh.close()
-    } catch {
-      // fsync failures are not fatal — proceed with rename
-    }
+    // fsync to ensure data hits disk before the rename (T-141 (10): not fatal, and the handle is closed whatever the sync does)
+    await flushToDisk(tmp)
 
     // Save the previous autosave as a backup before overwriting
     const current = autosavePath()

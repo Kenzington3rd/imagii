@@ -33,6 +33,15 @@ import { CancelledError } from '../../shared/cancel'
  * The sentinel is `CancelledError`, the same one `cancelledOr(child, …)`
  * rejects with after a kill (cancelMark.ts), so the renderer's neutral-cancel
  * path (`reportFailure`) needs no new case.
+ *
+ * T-141 (5): and WHO asked is knowable here, where the two cancels are made apart:
+ * `cancel(id)` is somebody's own (a Discard), `cancelAll()` is the sweep (the
+ * quit). A latch built with a `sentinel` factory throws what the factory makes
+ * from that one fact (`byAll`), so a runner whose cleanup depends on it (the
+ * recording's save: a Discard throws the raw take away, a quit keeps it) can read
+ * it off the error even when the cancel landed after the child had exited and
+ * there was no child to reject with it. When both land on one run the name wins:
+ * a person who asked for something to go is not overruled by the app closing.
  */
 export interface LatchRun {
   /** Throws the cancel sentinel when a cancel has landed on this run. */
@@ -46,6 +55,8 @@ export interface LatchRun {
 interface OpenRun {
   readonly id: string
   cancelled: boolean
+  /** True only while every cancel that has landed on this run was `cancelAll`'s (the sweep). */
+  byAll: boolean
   /** Settles `stopped` — the thing `guard` races its work against. */
   stop(): void
 }
@@ -92,6 +103,9 @@ export function drainRuns(timeoutMs: number = QUIT_DRAIN_TIMEOUT_MS): Promise<'d
 export class CancelLatch {
   private readonly open = new Set<OpenRun>()
 
+  /** `sentinel` makes what `check()` throws; `byAll` says the run was marked by `cancelAll` alone. The default is the plain T-84 sentinel. */
+  constructor(private readonly sentinel: (byAll: boolean) => CancelledError = () => new CancelledError()) {}
+
   /**
    * Open a run. `id` is what a per-job cancel names (a job id); a run nobody
    * cancels by name (a whole batch, a frame extract) passes none and is only
@@ -105,11 +119,11 @@ export class CancelLatch {
     // `stopped` is raced, not awaited: a run nobody ever cancels must not
     // leave a rejected promise behind it.
     stopped.catch(() => undefined)
-    const run: OpenRun = { id, cancelled: false, stop }
+    const run: OpenRun = { id, cancelled: false, byAll: false, stop }
     this.open.add(run)
     openRuns += 1
     const check = (): void => {
-      if (run.cancelled) throw new CancelledError()
+      if (run.cancelled) throw this.sentinel(run.byAll)
     }
     return {
       check,
@@ -137,7 +151,7 @@ export class CancelLatch {
   cancel(id: string): boolean {
     let hit = false
     for (const run of this.open) {
-      if (run.id === id && id !== '') hit = mark(run) || hit
+      if (run.id === id && id !== '') hit = mark(run, false) || hit
     }
     return hit
   }
@@ -145,12 +159,14 @@ export class CancelLatch {
   /** Mark every open run. True when there was one. */
   cancelAll(): boolean {
     let hit = false
-    for (const run of this.open) hit = mark(run) || hit
+    for (const run of this.open) hit = mark(run, true) || hit
     return hit
   }
 }
 
-function mark(run: OpenRun): boolean {
+function mark(run: OpenRun, byAll: boolean): boolean {
+  // The sweep alone makes a run the sweep's: a name, before or after it, takes that back.
+  run.byAll = run.cancelled ? run.byAll && byAll : byAll
   run.cancelled = true
   run.stop()
   return true

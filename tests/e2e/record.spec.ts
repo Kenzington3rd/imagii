@@ -10,6 +10,7 @@ import { installSpawnStall, readSpawnLog } from './mainSpawn'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { readRevealCalls, stubShellReveal } from './shellReveal'
 import { localDay, skewTimeZone, utcDay } from './skewedClock'
+import { refusedRenameCount, refuseRenamesOnto, withEverything } from './atomicTmp'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -1110,7 +1111,7 @@ test.describe('T-27 Record Studio', () => {
       // A cause the helper knows is named in plain words, and the path it came with is not shown.
       await stubFailingSources(
         app,
-        "EPERM: operation not permitted, open 'C:\\Users\\maken\\AppData\\Roaming\\imagii\\sources.json'"
+        "EPERM: operation not permitted, open 'C:\\Users\\streamer\\AppData\\Roaming\\imagii\\sources.json'"
       )
       await window.getByRole('button', { name: 'Refresh sources' }).click()
       await expect
@@ -1119,7 +1120,7 @@ test.describe('T-27 Record Studio', () => {
           intervals: [200]
         })
         .toContain(`${LIST_FAILED} Windows blocked access to a file. Close any app using it, or check your antivirus.`)
-      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EPERM|maken|AppData|sources\.json/)
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/EPERM|streamer|AppData|sources\.json/)
       await expect(searching).toHaveCount(0)
       await expect(warning).toBeVisible()
       await expect(pick).toBeEnabled()
@@ -3299,7 +3300,7 @@ test.describe('T-27 Record Studio', () => {
       const window = await app.firstWindow()
       await app.evaluate(({ ipcMain }) => {
         const failures = [
-          "EPERM: operation not permitted, copyfile 'C:\\Users\\maken\\AppData\\Roaming\\imagii\\recordings\\V1StGXR8_Z.webm' -> 'D:\\Videos\\Stream take.webm'",
+          "EPERM: operation not permitted, copyfile 'C:\\Users\\streamer\\AppData\\Roaming\\imagii\\recordings\\V1StGXR8_Z.webm' -> 'D:\\Videos\\Stream take.webm'",
           'ENOSPC: no space left on device, write'
         ]
         ipcMain.removeHandler('recording:finalize')
@@ -3342,7 +3343,7 @@ test.describe('T-27 Record Studio', () => {
       expect(entries.filter((e) => e.text === eperm || e.text === enospc).every((e) => e.hasIcon)).toBe(true)
       // None of what used to arrive instead: the paths, the errno, the channel, the old fallback.
       const all = shown.join(' | ')
-      expect(all).not.toMatch(/EPERM|ENOSPC|copyfile|maken|AppData|Videos|V1StGXR8_Z|\.webm|D:|C:/)
+      expect(all).not.toMatch(/EPERM|ENOSPC|copyfile|streamer|AppData|Videos|V1StGXR8_Z|\.webm|D:|C:/)
       expect(all).not.toMatch(/Error invoking remote method|recording:finalize/)
       expect(all).not.toContain('Save failed')
       // And it is a failure, not the calm discard.
@@ -3691,5 +3692,78 @@ test.describe('T-138 (5): a Restore that is still running when the person comes 
       await app.close().catch(() => undefined)
       cleanup(root)
     }
+  })
+})
+
+// ── T-141 (5), the non-counted part (T-110 (u) narrowed): a swap the disk keeps refusing keeps the raw take, and the sentence says where it is ────────────────────
+//
+// The convert (or the remux) finishes and the finished file is renamed onto the name chosen in the Save dialog. When that rename is refused for good - a lock that
+// outlasts the retries on a name nothing is at, a folder that went away - the raw take in <userData>/recordings is the only copy of a whole recording, and
+// `promoteTempWebm` deleted it in its finally (executed by two reviewers). It is kept now, and the toast is one sentence that says so and where. Linux has no file
+// Windows would hold, so main's `rename` is made to refuse the chosen name (`refuseRenamesOnto`, which counts the refusals so a patch that never took cannot
+// pass); the recorder, the convert or remux, the Save dialog's answer, the swap, the toast and the temp file on disk are all real.
+test.describe('T-141 (5): a swap the disk keeps refusing keeps the raw take', () => {
+  test.describe.configure({ timeout: 240_000 })
+
+  async function refusedSave(label: string, convertToMp4: boolean): Promise<void> {
+    ensureScreenshots()
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, convertToMp4 ? 'refused.mp4' : 'refused.webm')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await refuseRenamesOnto(app, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      if (!convertToMp4) await window.getByRole('checkbox').nth(2).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // Spelled out here, not imported: main's module needs electron, and a test of the contract must not agree with the code by sharing its line.
+      const kept =
+        `The recording couldn't be saved to that location, so imagii kept your take in ${recordingsDir(userDataDir)}. ` +
+        'Copy it out within 6 hours; after that imagii may delete it.'
+      expect(kept.length, 'the sentence names the folder only while it fits one finished line (a long temp path would fall back to words)').toBeLessThanOrEqual(240)
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 90_000, intervals: [200] })
+        .toContain(kept)
+      const entries = await readToastEntries(window)
+      expect(entries.filter((e) => e.text === kept), 'one red toast, the sentence alone').toHaveLength(1)
+      expect(entries.find((e) => e.text === kept)?.hasIcon, 'a failure, not the calm discard').toBe(true)
+      expect(entries.map((e) => e.text).join(' | ')).not.toMatch(/Recording discarded|Windows blocked|EPERM|rename/)
+      expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused, and tried again').toBeGreaterThan(1)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 30_000 })
+
+      // The end state, on disk: the take is there and whole, and nothing is at the chosen name or beside it.
+      const takes = leftoverTemps(userDataDir)
+      expect(takes, 'the raw take survived: the launch sweep (6 h) is what reaps it').toHaveLength(1)
+      const take = path.join(recordingsDir(userDataDir), takes[0] as string)
+      expect(statSync(take).size, 'a whole recording, not a stub').toBeGreaterThan(1000)
+      expect((await probeFile(take)).streams?.some((st) => st.codec_type === 'video'), 'ffprobe reads a picture in it').toBe(true)
+      expect(existsSync(outPath), 'nothing at the chosen name').toBe(false)
+      expect(withEverything(readdirSync(root)), 'and no partial beside it').toEqual(['userData'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  }
+
+  test('Convert to MP4: the finished mp4 cannot be put at the chosen name; the take is kept and the toast says where', async () => {
+    await refusedSave('keep-mp4', true)
+  })
+
+  test('Convert off: the remux is whole and its swap is refused; the take is kept and the toast says where', async () => {
+    await refusedSave('keep-webm', false)
   })
 })

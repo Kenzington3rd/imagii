@@ -11,6 +11,7 @@ import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
+import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
 import { BURN_IN_NO_PICTURE_MESSAGE, FFMPEG_EMPTY_OUTPUT, PictureFrames, wroteNoPicture } from '../ffmpeg/noPicture'
 import {
   captionsOutputDir,
@@ -440,6 +441,10 @@ export async function runBurnIn(
   // over a clip with none (T-89).
   let captioned = true
   try {
+    // T-141 (1): the burn reads the video and the .srt and swaps its output over the Save dialog's name (ffmpeg's own refusal of an output equal to an input went with
+    // T-140 (1): it is handed a partial now). A ranged burn over its own VOD replaced the VOD with the captioned range. Asked before the shifted copy of the .srt is
+    // written and before any spawn, in the run so that a Cancel that lands while the paths resolve is a Cancel (T-98).
+    await run.guard(refuseOutputOverInputs([req.outputPath], [req.videoPath, req.srtPath]))
     // The SRT the `subtitles` stage reads; null = no subtitle stage.
     let burnSrt: string | null = range ? null : req.srtPath
     if (range) {

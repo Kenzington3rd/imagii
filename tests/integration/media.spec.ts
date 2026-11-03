@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { existsSync, unlinkSync, watch } from 'node:fs'
+import { existsSync, symlinkSync, unlinkSync, watch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -10665,10 +10665,21 @@ describe('a render is written beside its target and swapped in only when whole (
       ext: '.webm',
       mode: 'replace',
       target: (f) => path.join(f, 'take.webm'),
+      // T-141 (non-counted): the remux is a stream COPY, over in milliseconds whatever the take's length, so no source is "long enough": under load ffmpeg
+      // exited and the partial was swapped over the target before the 25 ms poll below ever saw it (the target "changed while it wrote", and on 6.1.1 the run came back
+      // saved and not cancelled). The remux is held at its exit instead, with its finished partial on disk and the save's run still open - the instant a Cancel
+      // beats a finished render - and released by the Cancel (or by the case's `finally`, so a failed assertion cannot leave it waiting).
       long: (f) => {
         let take = ''
         saveTo = path.join(f, 'take.webm')
-        return { done: finalize(false, (id) => (take = id)), cancel: () => void cancelTake(take) }
+        holdRemux()
+        return {
+          done: finalize(false, (id) => (take = id)),
+          cancel: () => {
+            void cancelTake(take)
+            releaseRemux()
+          }
+        }
       },
       short: (f) => {
         saveTo = path.join(f, 'take.webm')
@@ -10678,6 +10689,16 @@ describe('a render is written beside its target and swapped in only when whole (
       valid: (file) => mediaOk(file, 'video')
     }
   ]
+
+  // T-141 (non-counted): the recording's remux, held at its exit for the Cancel case (see the row above). Nothing is held unless the case asks.
+  let remuxGate: Promise<void> = Promise.resolve()
+  let releaseRemux: () => void = () => undefined
+  /** True once the real remux has EXITED and is waiting at the gate: the child is gone, its partial is whole, the swap has not been asked yet. */
+  let remuxAtGate = false
+  const holdRemux = (): void => {
+    remuxAtGate = false
+    remuxGate = new Promise<void>((resolve) => (releaseRemux = resolve))
+  }
 
   /** A short take, for the completed case. */
   let shortWebm = ''
@@ -10729,13 +10750,28 @@ describe('a render is written beside its target and swapped in only when whole (
         app: { getPath: () => root }
       }
     })
+    // The real convert module, with one change: the REAL remux (the real ffmpeg, the real partial) does not resolve until `remuxGate` does. With no gate held it is the
+    // real thing, one resolved promise later.
+    vi.doMock('../../src/main/ffmpeg/convert', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../src/main/ffmpeg/convert')>()
+      return {
+        ...actual,
+        remuxWebm: async (...args: Parameters<typeof actual.remuxWebm>): Promise<void> => {
+          await actual.remuxWebm(...args)
+          remuxAtGate = true
+          await remuxGate
+        }
+      }
+    })
     const recording = await import('../../src/main/ipc/recording')
     recording.registerRecordingIpc()
     cancelTake = recording.cancelRecordingConvert
   }, 600_000)
 
   afterAll(() => {
+    releaseRemux()
     vi.doUnmock('electron')
+    vi.doUnmock('../../src/main/ffmpeg/convert')
   })
 
   describe.each(CASES)('$name', (c) => {
@@ -10795,6 +10831,38 @@ describe('a render is written beside its target and swapped in only when whole (
       expect(await names(folder)).toEqual([path.basename(target)])
     }, 240_000)
   })
+
+  // T-141 (non-counted), and T-141 (5) on the real binary: the instant the case above cannot reach by timing. The real remux has EXITED 0 and left a whole partial, the save's
+  // run is still open, and a Discard lands before the swap is asked: the Discard wins (the earlier file stays, the finished partial goes) and, since it is a Discard and not
+  // the quit, so does the raw take. The gate makes the instant exact, so the case is the same under any load.
+  it("the recording's WebM save: a Discard after the remux exited and before the swap wins - the earlier file stays, the partial goes, and so does the raw take", async () => {
+    const folder = await fresh()
+    const target = path.join(folder, 'take.webm')
+    saveTo = target
+    await writeFile(target, EARLIER)
+    const before = await fileSha(target)
+    holdRemux()
+    let take = ''
+    const running = settle(finalize(false, (id) => (take = id)))
+    try {
+      for (let i = 0; i < 2400 && !remuxAtGate; i++) await new Promise((r) => setTimeout(r, 25))
+      expect(remuxAtGate, 'the remux exited and is waiting at the gate').toBe(true)
+      expect(await fileSha(target), 'the swap has not been asked: the earlier file is what it was').toBe(before)
+      expect(await partialsIn(folder, '.webm'), 'and the finished partial is beside it').toHaveLength(1)
+      expect(existsSync(path.join(root, 'recordings', `${take}.webm`)), 'the raw take is on disk until the save ends').toBe(true)
+      void cancelTake(take)
+      releaseRemux()
+      const outcome = await running
+      expect(outcome.err, 'a Discard is not a failure').toBeUndefined()
+      expect(outcome.value, 'the save answers the discard (null)').toBeNull()
+      expect(await fileSha(target), 'the file that was there is byte for byte what it was').toBe(before)
+      expect(await names(folder), 'no partial, no "(2)"').toEqual(['take.webm'])
+      expect(existsSync(path.join(root, 'recordings', `${take}.webm`)), 'the person threw the take away, and it is gone').toBe(false)
+    } finally {
+      releaseRemux()
+      await running
+    }
+  }, 240_000)
 })
 
 // ── T-140 (1): the partial of every format a runner writes is read as that format ────────────────────────────────────────────────────────────────────────────
@@ -10895,4 +10963,237 @@ describe('the partial of every format a runner writes is read as that format (re
     const left = (await readdir(path.dirname(target))).filter((f) => PARTIAL_NAME.test(f))
     expect(left, 'no partial is left beside it').toEqual([])
   }, 120_000)
+})
+
+// ── T-141 (1): a Save-dialog output that is a file the job READS is refused before any ffmpeg runs ──────────────────────────────────────────────────────────────
+//
+// ffmpeg used to refuse this itself: handed an output equal to an input it exits 234, "FFmpeg cannot edit existing files in-place" (executed on 7.0.2, 6.1.1 and
+// the shipped win32 exe), the source untouched. T-140 (1) hands it a partial, which is never its input, so that refusal stopped happening and a chosen output equal to
+// the source was rendered and renamed OVER it: runAudioExport with outputPath === sourcePath and runAudioMux with outputPath === videoPath both resolved and changed the
+// source's bytes, and on 6.1.1 a burn-in over its own video with a 1 s range turned the whole source into a 1 s clip. Each runner now asks `refuseOutputOverInputs` before
+// its first probe. The REAL runners run here on real media; what is counted is the child process itself - `spawn` is wrapped to count and still starts the real thing,
+// so the control rows (a different name still exports, mixes, attaches and burns) are what prove the counter can count.
+describe('a Save-dialog output that is a file the job reads is refused before any ffmpeg runs (real runners, T-141 (1))', () => {
+  let root = ''
+  let spawns = 0
+  let audio: typeof import('../../src/main/audio/process')
+  let captions: typeof import('../../src/main/sidecars/whisperManager')
+  let sentence = ''
+  const mine = fileSha
+  const canLink = ((): boolean => {
+    const probe = path.join(os.tmpdir(), `imagii-t141-link-${process.pid}`)
+    try {
+      symlinkSync(os.tmpdir(), probe, 'dir')
+      unlinkSync(probe)
+      return true
+    } catch {
+      return false
+    }
+  })()
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(workDir, 't141-'))
+    vi.resetModules()
+    vi.doMock('node:child_process', async () => {
+      const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+      return {
+        ...actual,
+        spawn: (...args: unknown[]) => {
+          spawns += 1
+          return (actual.spawn as (...a: unknown[]) => unknown)(...args)
+        }
+      }
+    })
+    audio = await import('../../src/main/audio/process')
+    captions = await import('../../src/main/sidecars/whisperManager')
+    sentence = (await import('../../src/main/ffmpeg/sameFile')).OUTPUT_IS_AN_INPUT_MESSAGE
+  }, 120_000)
+
+  afterAll(() => {
+    vi.doUnmock('node:child_process')
+    vi.resetModules()
+  })
+
+  interface Case {
+    folder: string
+    voice: string
+    music: string
+    video: string
+    srt: string
+  }
+  /** A folder of this test's own with copies of the real fixtures in it: what a person has on disk. */
+  async function fresh(): Promise<Case> {
+    const folder = await mkdtemp(path.join(root, 'case-'))
+    const c = {
+      folder,
+      voice: path.join(folder, 'voice.wav'),
+      music: path.join(folder, 'music.wav'),
+      video: path.join(folder, 'vod.mp4'),
+      srt: path.join(folder, 'vod.srt')
+    }
+    await copyFile(voiceWav, c.voice)
+    await copyFile(musicWav, c.music)
+    await copyFile(landscapeSrc, c.video)
+    await writeFile(c.srt, '1\n00:00:00,200 --> 00:00:01,500\nA CUE\n', 'utf8')
+    return c
+  }
+
+  /** Run `run`, and require: refused in the sentence, nothing spawned (not even a probe), every input byte for byte, and the folder as it was. */
+  async function expectRefused(c: Case, inputs: string[], run: () => Promise<unknown>): Promise<void> {
+    const before = await Promise.all(inputs.map(mine))
+    const names = await readdir(c.folder)
+    const counted = spawns
+    const outcome = await run().then(
+      () => null,
+      (e: unknown) => e as Error
+    )
+    expect(outcome, 'refused').not.toBeNull()
+    expect(outcome?.message).toBe(sentence)
+    expect(spawns - counted, 'no child process was started').toBe(0)
+    expect(await Promise.all(inputs.map(mine)), 'the inputs are byte for byte what they were').toEqual(before)
+    expect(await readdir(c.folder), 'and the folder holds exactly what it held').toEqual(names)
+  }
+
+  const chainWith = (music?: string): ChainSpec => ({
+    ...DEFAULT_CHAIN_SPEC,
+    cutRegions: [],
+    ...(music ? { secondaryTrack: { filePath: music, fileName: path.basename(music), role: 'music' as const, gainDb: -12, duckUnderPrimary: false } } : {})
+  })
+  const burnReq = (c: Case, outputPath: string, range = false) => ({
+    jobId: 't141-burn',
+    videoPath: c.video,
+    srtPath: c.srt,
+    outputPath,
+    fontSizePct: 4,
+    ...(range ? { startSec: 1, endSec: 2 } : {})
+  })
+
+  describe('the audio export', () => {
+    it('over its source: refused, the source is byte for byte what it was', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.voice], () =>
+        audio.runAudioExport({ jobId: 't141-export', sourcePath: c.voice, outputPath: c.voice, chain: chainWith(), format: 'wav' }, () => {})
+      )
+    })
+
+    it('over its source through a detour in the path, and through a symlink to it', async () => {
+      const c = await fresh()
+      await mkdir(path.join(c.folder, 'detour'))
+      const detour = `${c.folder}${path.sep}detour${path.sep}..${path.sep}voice.wav`
+      await expectRefused(c, [c.voice], () =>
+        audio.runAudioExport({ jobId: 't141-export', sourcePath: c.voice, outputPath: detour, chain: chainWith(), format: 'wav' }, () => {})
+      )
+      if (!canLink) return
+      const link = path.join(c.folder, 'link.wav')
+      symlinkSync(c.voice, link)
+      await expectRefused(c, [c.voice], () =>
+        audio.runAudioExport({ jobId: 't141-export', sourcePath: c.voice, outputPath: link, chain: chainWith(), format: 'wav' }, () => {})
+      )
+    })
+
+    it('over the second track it mixes in: refused, the music is byte for byte what it was', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.voice, c.music], () =>
+        audio.runAudioExport({ jobId: 't141-export', sourcePath: c.voice, outputPath: c.music, chain: chainWith(c.music), format: 'wav' }, () => {})
+      )
+    })
+
+    it('control: a different name exports (ffprobe reads the wav), the source stays, and the counter counts', async () => {
+      const c = await fresh()
+      const before = await mine(c.voice)
+      const counted = spawns
+      const out = path.join(c.folder, 'voice-cleaned.wav')
+      const result = await audio.runAudioExport({ jobId: 't141-export-ok', sourcePath: c.voice, outputPath: out, chain: chainWith(c.music), format: 'wav' }, () => {})
+      expect(result.outputPath).toBe(out)
+      expect(spawns - counted, 'the real children ran, and were counted').toBeGreaterThan(0)
+      expect((await ffprobeJson(out)).streams.map((s) => s.codec_name)).toEqual(['pcm_s16le'])
+      expect(await mine(c.voice)).toBe(before)
+    }, 120_000)
+  })
+
+  describe('the picture mux', () => {
+    it('over its video, and over the sound it attaches: refused, both byte for byte', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.video, c.voice], () => audio.runAudioMux('t141-mux', c.video, c.voice, c.video, () => {}))
+      await expectRefused(c, [c.video, c.voice], () => audio.runAudioMux('t141-mux', c.video, c.voice, c.voice, () => {}))
+    })
+
+    it('over its video through a detour in the path', async () => {
+      const c = await fresh()
+      await mkdir(path.join(c.folder, 'detour'))
+      const detour = `${c.folder}${path.sep}detour${path.sep}..${path.sep}vod.mp4`
+      await expectRefused(c, [c.video, c.voice], () => audio.runAudioMux('t141-mux', c.video, c.voice, detour, () => {}))
+    })
+
+    it('control: a different name attaches (h264 and aac), the video stays', async () => {
+      const c = await fresh()
+      const before = await mine(c.video)
+      const counted = spawns
+      const out = path.join(c.folder, 'vod-cleaned.mp4')
+      expect((await audio.runAudioMux('t141-mux-ok', c.video, c.voice, out, () => {})).outputPath).toBe(out)
+      expect(spawns - counted).toBeGreaterThan(0)
+      expect((await ffprobeJson(out)).streams.map((s) => s.codec_name).sort()).toEqual(['aac', 'h264'])
+      expect(await mine(c.video)).toBe(before)
+    }, 120_000)
+  })
+
+  describe('Re-attach to video', () => {
+    const spec = (c: Case, outputPath: string, music?: string): Parameters<typeof audio.runAudioReattach>[0] => ({
+      jobId: 't141-reattach',
+      sourcePath: c.voice,
+      videoPath: c.video,
+      outputPath,
+      chain: chainWith(music)
+    })
+
+    it('over its video: refused before the first pass, so no scratch WAV was ever made', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.voice, c.video], () => audio.runAudioReattach(spec(c, c.video), () => {}))
+    })
+
+    it('over its source sound, and over the second track', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.voice, c.video], () => audio.runAudioReattach(spec(c, c.voice), () => {}))
+      await expectRefused(c, [c.voice, c.video, c.music], () => audio.runAudioReattach(spec(c, c.music, c.music), () => {}))
+    })
+
+    it('the scratch WAV it makes and deletes is the second track: refused, and the music is NOT deleted', async () => {
+      const c = await fresh()
+      // `<output>.cleaned.wav` is where the first pass writes and the cleanup unlinks; here it is the person's music.
+      const out = path.join(c.folder, 'out.mp4')
+      const music = path.join(c.folder, 'out.cleaned.wav')
+      await copyFile(musicWav, music)
+      await expectRefused(c, [c.voice, c.video, music], () => audio.runAudioReattach(spec(c, out, music), () => {}))
+      expect(existsSync(music), 'the music is still there').toBe(true)
+    })
+  })
+
+  describe('the caption burn-in', () => {
+    it.each([
+      ['the whole video', false],
+      ['a range of it (the burn that replaced a whole VOD with its captioned range)', true]
+    ])('over its own video, %s: refused, the video is byte for byte what it was', async (_name, range) => {
+      const c = await fresh()
+      await expectRefused(c, [c.video, c.srt], () => captions.runBurnIn(burnReq(c, c.video, range), () => {}))
+    })
+
+    it('over its own .srt, and over its video through a detour', async () => {
+      const c = await fresh()
+      await expectRefused(c, [c.video, c.srt], () => captions.runBurnIn(burnReq(c, c.srt, true), () => {}))
+      await mkdir(path.join(c.folder, 'detour'))
+      const detour = `${c.folder}${path.sep}detour${path.sep}..${path.sep}vod.mp4`
+      await expectRefused(c, [c.video, c.srt], () => captions.runBurnIn(burnReq(c, detour), () => {}))
+    })
+
+    it('control: a different name burns a ranged clip (a picture ffprobe reads), and the video and the .srt stay', async () => {
+      const c = await fresh()
+      const before = await Promise.all([mine(c.video), mine(c.srt)])
+      const counted = spawns
+      const out = path.join(c.folder, 'vod-captioned.mp4')
+      expect((await captions.runBurnIn(burnReq(c, out, true), () => {})).outputPath).toBe(out)
+      expect(spawns - counted).toBeGreaterThan(0)
+      expect((await ffprobeJson(out)).streams.some((s) => s.codec_type === 'video')).toBe(true)
+      expect(await Promise.all([mine(c.video), mine(c.srt)])).toEqual(before)
+    }, 120_000)
+  })
 })

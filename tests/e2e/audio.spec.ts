@@ -4244,3 +4244,85 @@ test.describe('T-140 (1): an audio export over a file that is open in another ap
     }
   })
 })
+
+// ── T-141 (1): a Save-dialog output that is a file the job reads ───────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ffmpeg used to refuse an output equal to an input itself ("FFmpeg cannot edit existing files in-place", exit 234). T-140 (1) hands it a partial instead, so the
+// refusal went with the open, and an Export aimed at the file being exported was rendered and renamed over it behind one confirmed OS "replace?" (executed: the
+// source's bytes changed). Main refuses it now, before any ffmpeg, in one sentence. The Save dialog is stubbed (the OS chooser stays hand-tested); the Export button,
+// `audio:export` / `audio:mux`, the refusal, the toast and the panel's recovery are real, and the file is read back byte for byte.
+test.describe('T-141 (1): an export aimed at a file the job reads is refused, and the file is untouched', () => {
+  const SENTENCE = "That is the file imagii is reading from, so it can't be replaced by the new one. Pick a different name, then try again."
+  const shaOf = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+
+  test('an audio export aimed at its own source: the sentence, a Failed row, the source byte for byte, and a different name still exports', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t141-own-source')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      await exportPanel.getByRole('combobox').first().selectOption('wav')
+      const sourceDir = path.dirname(studio.fixture)
+      const before = shaOf(studio.fixture)
+      const names = readdirSync(sourceDir)
+
+      // The person types the name of the file they are exporting from into the Save dialog and confirms "replace?". Every process main starts from here is logged:
+      // the refusal is "before any ffmpeg", and a file that merely ended up unchanged would satisfy the bytes below on its own.
+      await installSpawnStall(app, [])
+      await stubSaveDialog(app, studio.fixture)
+      await exportButton.click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(SENTENCE)
+      expect(await readSpawnLog(app), 'main started no process at all - not ffmpeg, not even a probe').toEqual([])
+      expect((await readToastEntries(window)).find((e) => e.text === SENTENCE)?.hasIcon, 'it is a failure toast').toBe(true)
+      expect((await readToastLog(window)).some((t) => t.includes('Cleaned audio exported')), 'no success was claimed').toBe(false)
+      await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      await expect(exportPanel.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+      expect(shaOf(studio.fixture), 'the source is byte for byte what it was').toBe(before)
+      expect(withEverything(readdirSync(sourceDir)), 'and nothing was written beside it, not even a partial').toEqual(names)
+
+      // The way out the sentence names: another name exports, in the same session.
+      const out = path.join(studio.root, 'e2e-tone-cleaned.wav')
+      await stubSaveDialog(app, out)
+      await exportButton.click()
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      expect((await probeFile(out)).codecs, 'ffprobe reads the wav').toEqual(['pcm_s16le'])
+      expect(shaOf(studio.fixture), 'the source is still what it was').toBe(before)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Re-attach to video aimed at its own video: the sentence, no scratch WAV, and the recording is byte for byte what it was', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t141-own-video')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+      const sourceDir = path.dirname(video)
+      const before = shaOf(video)
+      const names = readdirSync(sourceDir)
+
+      await installSpawnStall(app, [])
+      await stubRecordingSaveDialog(app, video)
+      await exportButton.click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(SENTENCE)
+      expect(await readSpawnLog(app), 'refused before the FIRST pass: main started no process (the mux would refuse the same name, but only after the render pass had run)').toEqual([])
+      expect((await readToastLog(window)).some((t) => t.includes('Cleaned audio attached')), 'no success was claimed').toBe(false)
+      await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(exportButton).toBeEnabled({ timeout: 30_000 })
+      expect(shaOf(video), 'the recording is byte for byte what it was').toBe(before)
+      expect(withEverything(readdirSync(sourceDir)), 'no scratch WAV, no partial').toEqual(names)
+      expect(withEverything(readdirSync(studio.root)).filter((f) => f.endsWith('.wav') || f.includes('.partial')), 'nor anywhere else in the studio\'s folder').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

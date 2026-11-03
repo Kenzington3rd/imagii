@@ -202,6 +202,22 @@ Repeated UI is a component, not copy-paste:
   in `atomicWrites.test.ts`'s audit or a failure; a new runner is a row in that audit, a row in the table in `cancelSentinel.test.ts` and a real-media
   case in Layer 5. Only a crash, a kill or a power loss leaves a partial (nothing sweeps the Save dialog's folder; the upgrade is a journal in userData).
   T-128 (5): the import transcode (`convertForImport`) writes a fresh name in %TEMP% and removes it on any failure or cancel.
+- **A job never writes over a file it reads (T-141 (1)).** ffmpeg refused an output equal to an input at its own open ("FFmpeg cannot edit existing files
+  in-place", exit 234); once the runner hands it a partial (above) nothing opens the chosen name, and the swap would rename a finished render over the source.
+  So every runner that writes a file a person keeps asks `refuseOutputOverInputs(outputs, inputs)` (`ffmpeg/sameFile.ts`) FIRST - before its first probe, before any
+  spawn, and INSIDE its run (`run.guard(...)`: a Cancel is a latch, T-98, and the paths take a few milliseconds to resolve; asked ahead of `latch.begin` a Cancel in that
+  window found no run and the job started anyway, which Layer 5's "a Cancel in the probe writes nothing" caught): the audio export (the source, the second track), the mux (the video, the sound), the re-attach (the source, the video, the
+  second track, and the scratch WAV it writes and deletes) and the burn-in (the video, the .srt). "The same file" is the resolved path (`realpath` where the file
+  exists, `path.resolve` where it does not, case-folded on win32), and the refusal is one finished line, `OUTPUT_IS_AN_INPUT_MESSAGE`, that `userFacingError` shows as
+  written. A hard link is deliberately not the same file (the swap replaces the target's directory entry only). A new runner that writes a person's file is a row
+  in `outputIsInput.test.ts` and in Layer 5's "a Save-dialog output that is a file the job reads is refused before any ffmpeg runs". The runners that take a name from
+  `nextFreePath` need no check: a name that is free is no input's.
+- **A cancel says who asked, where it is made (T-141 (5)).** `CancelLatch` takes a factory for what `check()` throws and tells it whether the run was marked by a NAME
+  (`cancel(id)`, a Discard) or only by the SWEEP (`cancelAll()`, the quit); the convert's latch throws `ConvertCancelledError(byQuit)`. A cancel that lands after the
+  child has exited (the swap asks the run) therefore carries its cause like a kill does, and the recording's save keeps the raw take for the quit and throws it away for a
+  Discard. When both land on one run the name wins. A runner whose cleanup depends on WHO stopped it reads it off the error; it never guesses from a plain cancel.
+- **A flush closes what it opens (T-141 (10)).** `flushToDisk(file)` (`fsAtomic.ts`) is the one best-effort fsync: open, sync, close in a `finally`, every failure
+  swallowed. `writeFileAtomic` and the autosave both use it; a second hand-written copy is how a rejecting `sync` once left a descriptor open per autosave.
 - **A progress number is a measurement, or it is absent (T-89).** A progress
   event carries `percent` only when main KNOWS how far along the work is — a
   download's byte count, `done` = 100, the burn-in's encode position over the

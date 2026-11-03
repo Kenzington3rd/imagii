@@ -117,7 +117,9 @@ const activeConverts = new Set<ActiveConvert>()
  * (`beginConvertRun` for the recording's save, `convertForImport` for itself) and ends it AFTER that cleanup; the cancel functions below mark
  * the runs they are aimed at, by owner. The child registry above still does the killing.
  */
-const convertLatch = new CancelLatch()
+// T-141 (5): the latch throws the convert's own sentinel, told whether the sweep alone cancelled the run. A cancel that lands after the child has exited (the swap
+// asks the run, T-140 (1)) has no child to reject with `ConvertCancelledError(byQuit)`, and the plain sentinel it threw instead did not say who asked.
+const convertLatch = new CancelLatch((byAll) => new ConvertCancelledError(byAll))
 
 /** A run for the recording's save (`promoteTempWebm`): from the chosen output name until the temp take is removed. */
 export function beginConvertRun(owner: ConvertOwner): LatchRun {
