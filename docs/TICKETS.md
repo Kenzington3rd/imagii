@@ -6417,6 +6417,54 @@ IMG-PREC.
 
 ---
 
+## T-146 — sweep-33 fix (round 95)
+
+- **Spec:** the thirty-third sweep's verified finding (candidate clean pass #1 on 047e355) —
+  confirmed by the expediter against source. The other lenses clean. One track (Audio Studio's
+  renderer, plus the Export toast's reach as a non-counted fold).
+  1. **[MED] Closing the sound mid-export hides the audio export's progress and Cancel.** Audio
+     Studio's Close (AudioStudio.tsx:43-48 → `confirmAudioClose`, which asks only about chain edits,
+     then `clearSource`, audioStore.ts:180-191, which stops only the waveform draw) unmounts
+     `ExportDialog` (drawn only with a source: AudioStudio.tsx:86-102; ExportDialog.tsx:40), so a
+     running audio export or re-attach mux keeps rendering in main with no progress and no Cancel
+     on screen until another sound is opened. The class T-144 fixed for Video Studio; `useAudioExport`
+     was not covered. Fix direction (the T-144 shape, and the T-145 lesson): an always-mounted
+     card (e.g. `AudioJobRunning`) that AudioStudio mounts AHEAD of its open-or-closed conditional —
+     an `aria-live="polite"` wrapper, empty and gapless unless no sound is open and the audio export
+     runs — drawing the export (the file it is for, its pass and percent as the dialog shows them; the
+     progress listener is already the export's own, ExportDialog.tsx:73-74, so the figure keeps
+     moving — keep it so) and a Cancel that is the SAME function the dialog's Cancel calls (move it
+     into state/audioExport.ts; no second copy of a cancel path); Close with an export running asks,
+     with one sentence naming it ("The export that is running keeps going; its Cancel stays on
+     screen." — the T-144 sentence's voice), and Close with nothing to lose and nothing running stays
+     unconfirmed. Covering tests: unit (the card's choice: running / not / a sound open; the Close
+     question); e2e (audio.spec.ts, a NEW describe appended): start a slow export (the suite's slowing
+     patterns — `-readrate` at main's spawn, as T-145's cases do), Close the sound → the card with its
+     figure ADVANCING and its Cancel → Cancel → no file at the target, no partial, the card gone; the
+     Close question's sentence; red on the unchanged build. IC rows.
+  Non-counted, rides with the track (raised by the streamer, QA and UX lenses; the sweep-32
+  initiative class): the Video Studio "Exported N files" toast carries Show in folder only when no
+  video is open (store/exportQueue.ts:127-130), so a batch that ends while the person is on another
+  route, or after another video was opened (ExportPanel.tsx:180 then hides its rows), leaves the
+  plain toast. Make it the `toastSaved` kind with Show in folder for the first file written ALWAYS,
+  as GIF, Compile, PiP and Reframe already do (GifPanel.tsx:68, CompilationPanel.tsx:68,
+  PipPanel.tsx:74, ReframePanel.tsx:94) — one rule, harmless beside visible rows; update the T-145
+  unit and e2e pins that asserted the plain toast with a video open; e2e: a batch that ends while the
+  person is on Home has Show in folder.
+  **Docs:** LESSONS_LEARNED entry at the top (a class fixed in one studio is open in its sibling
+  until someone greps for it: T-144 fixed Video Studio, Audio Studio had the same Close); IC rows;
+  TESTING paragraph; USER_GUIDE line (closing the sound does not stop a running export; its Cancel
+  stays on screen); DESIGN_GUIDE's RunningCancel placement list (DESIGN_GUIDE.md:219-231) names the
+  closed-video card (T-144) and the new closed-sound card beside the Clip Kit card (design lens).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; item 1 and the non-counted item land with the covering tests named above; new cases in
+  NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run test:media`
+  (a regression run) and the FULL Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
