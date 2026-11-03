@@ -6375,6 +6375,48 @@ IMG-PREC.
 
 ---
 
+## T-145 — sweep-32 fix (round 94)
+
+- **Spec:** the thirty-second sweep's verified finding (candidate clean pass #1 on fe7eacf),
+  found independently by the UX and Electron lenses and confirmed by the expediter against
+  source. The other lenses clean. One track (Video Studio's renderer).
+  1. **[MED] The closed-video card's progress figure freezes for Reframe, Scan VOD and the
+     caption jobs.** The three progress subscriptions that feed the run stores live in effects
+     inside panels VideoStudio mounts only while a video is open — ReframePanel.tsx:54-59
+     (`onReframeProgress` → `useReframeRun.patch`), HighlightPanel.tsx:81-86
+     (`onHighlightProgress` → `useScanRun.patch`), CaptionsPanel.tsx:96-99
+     (`captions.onProgress` → `useCaptionsProgress`) — and nothing else subscribes (grep). Close
+     unmounts the panels and removes the listeners, so T-144's card shows "Scan VOD — x 12%",
+     "Reframe — Clip 1 Rendering 12%" or "Burning in… 40%" and the figure never moves again
+     while its sentence says the job keeps going; the person cannot tell a slow job from a hung
+     one on the one surface built for that, and may cancel a healthy job. The Export batch
+     (batch-scoped listeners) and the model download (its listener inside `installModel`) keep
+     updating. Fix direction: ONE subscription per channel, owned by something that outlives the
+     panels — a hook (e.g. `useVideoProgressFeeds`) that VideoStudio mounts ahead of the
+     open-or-closed conditional (beside the two cards), or a module-scope subscription in
+     store/runs.ts guarded for non-renderer environments — and the three panel effects removed
+     (no second subscriber). Keep the T-89 behaviour (the captions progress line is its own
+     store: events main sends are shown whether or not a run is held). Covering tests: unit (the
+     feed writes the stores; no panel subscribes — a wiring pin); e2e (video-pipelines.spec.ts, a
+     NEW describe appended): close the video mid-Scan VOD and mid-Reframe (and mid-burn-in) and
+     assert the card's figure ADVANCES after Close (two reads apart), then Cancel as before; red on
+     the unchanged build; the T-89 and T-135/T-144 cases stay green.
+  Non-counted, rides with the track: an Export batch that finishes while no video is open leaves
+  only the "Exported N files" toast, without the rows' Show in folder (streamer lens; the rows
+  belong to the closed video) — when the batch ends with no video open, the finished toast is the
+  `toastSaved` kind with Show in folder for the first file written; e2e.
+  **Docs:** LESSONS_LEARNED entry at the top (a card that shows a job's progress must own the
+  feed or share the feed's owner: a listener that lives in a screen stops when the screen goes);
+  IC rows; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; item 1 and the non-counted item land with the covering tests named above; new cases in
+  NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run test:media`
+  (a regression run) and the FULL Playwright suite green before handback; no docs/TICKETS.md,
+  package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
