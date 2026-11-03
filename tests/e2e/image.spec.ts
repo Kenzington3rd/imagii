@@ -1308,7 +1308,7 @@ test.describe('Image Studio — selection', () => {
       await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
       await clickDoc(window, { x: 450, y: 400 })
       const start = await lastShape(window)
-      // The number fields are the store's own readout (PropertiesPanel.tsx:55).
+      // The number fields are the store's own readout (PropertiesPanel.tsx:51).
       await expect(field(window, 'x')).toHaveValue(String(Math.round(start.x)))
       await expect(field(window, 'y')).toHaveValue(String(Math.round(start.y)))
 
@@ -5250,6 +5250,41 @@ test.describe('Image Studio - a Properties drag is one undo step (T-147, T-78)',
       // Leave the field (the blur ends the step), then Undo by its button: one press puts the old name back whole.
       await window.getByRole('button', { name: 'Undo' }).click()
       expect(await layerNames(window)).toEqual(['Text'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-148: the first Properties drag after clicking another field is one undo step
+// ═══════════════════════════════════════════════════════════════════════════
+// A press on the slider moves focus, and Chromium sends the slider its first `input` event BEFORE the focused field's `blur`; a panel that ended its undo window on every
+// blur closed it mid-drag, so the drag's second event began a second step and ONE Undo stopped at the press value.
+test.describe('Image Studio - a drag right after clicking another field is one undo step (T-148)', () => {
+  test('click the Name field, then drag Opacity: ONE Undo restores 100%', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t148-opacity-after-field')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const slider = window.getByRole('slider', { name: 'Layer opacity' })
+      await expect(slider).toBeVisible()
+      expect((await lastShape(window)).opacity).toBe(1)
+
+      await field(window, 'Name').click()
+      await expect(field(window, 'Name')).toBeFocused()
+
+      await slider.scrollIntoViewIfNeeded()
+      const box = (await slider.boundingBox())!
+      const at = (r: number): { x: number; y: number } => ({ x: box.x + 8 + (box.width - 16) * r, y: box.y + box.height / 2 })
+      // The press itself lands off the thumb (at 90%), so the slider's FIRST `input` event is the press: that is the one that arrives before the Name field's blur.
+      await dragThrough(window, at(0.9), [0.75, 0.6, 0.45, 0.3].map(at))
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBeLessThan(0.5)
+
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBe(1)
+      await expect(window.getByText('100%').first()).toBeVisible()
     } finally {
       await closeStudio(studio)
     }

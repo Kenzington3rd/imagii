@@ -1,10 +1,11 @@
 import { clipSpeed } from '@shared/clip'
 import { hookWindow } from '@shared/highlights'
-import { handleGestureEndPointerUp, useVideoStore, videoHasNoSound } from './store/videoStore'
+import { useVideoStore, videoHasNoSound } from './store/videoStore'
 import { ClipKitButton } from './ClipKitButton'
 import { HookIndicator } from './HookIndicator'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { formatClock } from '@shared/clockTime'
 
 export function ClipList(): JSX.Element {
@@ -16,7 +17,7 @@ export function ClipList(): JSX.Element {
   const removeClip = useVideoStore((s) => s.removeClip)
   const renameClip = useVideoStore((s) => s.renameClip)
   const setClipSpeed = useVideoStore((s) => s.setClipSpeed)
-  const endGesture = useVideoStore((s) => s.endGesture)
+  const gesture = useGestureEnd(useVideoStore((s) => s.endGesture))
   const source = useVideoStore((s) => s.source)
   const selected = clips.find((c) => c.id === selectedClipId)
   const selectedSpeed = selected ? clipSpeed(selected) : 1
@@ -29,14 +30,11 @@ export function ClipList(): JSX.Element {
     // here closes the window for the slider, its Reset button and every
     // rename input in the list.
     // T-80: every pointerup — including the click that moves the caret inside
-    // a rename field mid-edit. `handleGestureEndPointerUp` lets that one
-    // through; a text field's gesture ends on blur, which is the other half
-    // of this pair.
-    <div
-      className="card p-4 flex flex-col gap-3"
-      onPointerUp={handleGestureEndPointerUp}
-      onBlur={endGesture}
-    >
+    // a rename field mid-edit. The shared rule lets that one through; a text
+    // field's gesture ends on blur, which is the other half of the pair.
+    // T-148: and a blur while the pointer is down is a press moving focus, not
+    // the end of a drag (`useGestureEnd`, one hook for every coalescing card).
+    <div className="card p-4 flex flex-col gap-3" {...gesture}>
       <PanelHeader
         icon="film"
         actions={

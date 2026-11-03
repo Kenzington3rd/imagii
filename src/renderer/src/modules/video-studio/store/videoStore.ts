@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { VideoProbe } from '@shared/api'
 import { DEFAULT_COLOR_GRADE, clipSpeed } from '@shared/clip'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
@@ -9,7 +8,6 @@ import type { CaptionSegment } from '@shared/captions'
 import type { ChatPeak } from '@shared/chatPeaks'
 import type { AudioCandidate } from '@shared/highlights'
 import { countOf } from '@shared/plural'
-import { NON_TEXT_INPUT_TYPES } from '../../../lib/keyOwnership'
 
 export interface VideoSource {
   /** The file the app plays and ffmpeg reads — for a converted import, the mp4 working copy. */
@@ -777,59 +775,3 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     canRedo: () => get().history.future.length > 0
   }
 })
-
-// The input types whose RELEASE is the end of a gesture (a slider let go, a box ticked, a colour picked) are
-// `NON_TEXT_INPUT_TYPES`; anything else - and anything unrecognized, which is also what the DOM reports for a
-// missing `type` - is text entry, where the release is a caret being placed and the edit is still going. The
-// list lives in `lib/keyOwnership` since T-123 (2): the shortcuts' guards ask the same question.
-
-/**
- * T-80 — does this pointerup end the coalescing window?
- *
- * T-40 put one `onPointerUp` on each editing panel so that releasing ANY
- * control in it closes the window (the alternative was a prop on every
- * control, and a control added later would have been missed). pointerup
- * bubbles, though, and a click inside a text field you are already typing in
- * bubbles exactly the same event: repositioning the caret mid-caption, or
- * double-clicking a word to replace it, ended the edit and split one rename
- * into several undo steps. For a text field the gesture ends on BLUR — the
- * panels keep `onBlur={endGesture}` — so a release inside the focused one is
- * not an end at all.
- *
- * Focus is half the question: only the field the user is typing in is
- * mid-edit. A release over a text input that is NOT focused (a slider drag
- * that happens to finish over one) still ends the gesture it belongs to.
- *
- * Pure and DOM-free on purpose — the three things the decision needs are
- * strings and a boolean, so it is unit-testable under the node vitest config
- * while `handleGestureEndPointerUp` keeps the one line that touches the DOM.
- */
-export function endsGestureOnPointerUp(
-  tagName: string,
-  inputType: string | null,
-  isActiveElement: boolean
-): boolean {
-  if (!isActiveElement) return true
-  const tag = tagName.toUpperCase()
-  if (tag === 'TEXTAREA') return false
-  if (tag !== 'INPUT') return true
-  return NON_TEXT_INPUT_TYPES.has((inputType ?? 'text').toLowerCase())
-}
-
-/**
- * The panel-level `onPointerUp` for every editing panel that holds text
- * fields (ClipList, TextOverlayEditor, and Stream Graphics' Properties). ColorGradePanel has only sliders,
- * checkboxes and a button, so its bare `endGesture` is already correct.
- */
-export function handleGestureEndPointerUp(
-  event: ReactPointerEvent<HTMLElement>,
-  // T-147 (T-78): Stream Graphics' Properties panel has the same window on its own store and passes that store's `endGesture`; the rule is one.
-  end: () => void = () => useVideoStore.getState().endGesture()
-): void {
-  const target = event.target instanceof HTMLElement ? event.target : null
-  if (target !== null) {
-    const type = target instanceof HTMLInputElement ? target.type : null
-    if (!endsGestureOnPointerUp(target.tagName, type, target === document.activeElement)) return
-  }
-  end()
-}

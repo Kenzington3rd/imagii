@@ -8,7 +8,7 @@ import {
 } from '@shared/canvas'
 import { FONT_SIZE_MIN, useCanvasStore } from './state/canvasStore'
 import { PanelHeader } from '../../components/PanelHeader'
-import { handleGestureEndPointerUp } from '../video-studio/store/videoStore'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
@@ -21,19 +21,15 @@ export function PropertiesPanel(): JSX.Element | null {
   const selectedLayerId = useCanvasStore((s) => s.selectedLayerId)
   const updateLayer = useCanvasStore((s) => s.updateLayer)
   const setRotation = useCanvasStore((s) => s.setRotation)
-  const endGesture = useCanvasStore((s) => s.endGesture)
+  const gesture = useGestureEnd(useCanvasStore((s) => s.endGesture))
 
   const layer = layers.find((l) => l.id === selectedLayerId)
   if (!layer) return null
 
   return (
     // T-147 (T-78): one drag of the opacity slider, or one run of typing in the name / colour fields, is ONE undo step (`updateLayer`'s key). Releasing any control,
-    // or a field losing focus, ends the window; a release inside the text field being typed in does not (`handleGestureEndPointerUp`, the video panels' rule).
-    <div
-      className="card p-3 flex flex-col gap-3 text-sm"
-      onPointerUp={(e) => handleGestureEndPointerUp(e, endGesture)}
-      onBlur={endGesture}
-    >
+    // or a field losing focus, ends the window; a release inside the text field being typed in does not, and a blur during a press (the slider moving focus) is not an end (T-148: `useGestureEnd`, the one hook every coalescing card spreads).
+    <div className="card p-3 flex flex-col gap-3 text-sm" {...gesture}>
       <PanelHeader icon="gear">Properties</PanelHeader>
 
       <label className="flex items-center gap-2">

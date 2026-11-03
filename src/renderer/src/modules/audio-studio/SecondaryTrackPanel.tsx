@@ -5,7 +5,7 @@ import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_PICK_NO_SOUND_MESSAGE, isNoAudioStrea
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
-import { useGestureEnd } from './state/gestureEnd'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 import { claimFirst } from '../../lib/claimFirst'
 
@@ -47,7 +47,7 @@ function fileNameFromPath(p: string): string {
 export function SecondaryTrackPanel(): JSX.Element {
   const secondary = useAudioStore((s) => s.chain.secondaryTrack)
   const setSecondaryTrack = useAudioStore((s) => s.setSecondaryTrack)
-  const gesture = useGestureEnd()
+  const gesture = useGestureEnd(useAudioStore((s) => s.endGesture))
 
   // T-131 (5): one chooser at a time across the three role buttons. A double-click on one opened two, and the second answer silently
   // REPLACED the track the first had just added (with the second role's gain and duck defaults, if it landed on another button).

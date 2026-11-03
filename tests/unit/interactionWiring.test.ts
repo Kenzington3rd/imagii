@@ -3549,15 +3549,15 @@ describe('T-147 - Audio Studio: the sliders name their undo step, the cards clos
   it('Cleanup, Levels and the second track each close the gesture on the card: pointer up AND blur (useGestureEnd, which keeps a press\'s own blur from ending it)', () => {
     for (const file of ['CleanupPanel', 'LevelsPanel', 'SecondaryTrackPanel']) {
       const code = strip(read(`modules/audio-studio/${file}.tsx`))
-      expect(code, file).toMatch(/const gesture = useGestureEnd\(\)/)
+      expect(code, file).toMatch(/const gesture = useGestureEnd\(useAudioStore\(\(s\) => s\.endGesture\)\)/)
       expect(code, `${file}: one set on the card`).toMatch(/className="card [^"]*"(?: data-tutorial="audio-music")? \{\.\.\.gesture\}>/)
     }
   })
 
   it('useGestureEnd hands the card pointer down, pointer up and blur, and the blur ignores a press', () => {
-    const hook = strip(read('modules/audio-studio/state/gestureEnd.ts'))
+    const hook = strip(read('lib/gestureEnd.ts'))
     expect(hook).toMatch(/onPointerDown: \(\) => \{\s*pressed = true/)
-    expect(hook).toMatch(/onPointerUp: \(\) => \{\s*pressed = false\s*endGesture\(\)/)
+    expect(hook).toMatch(/onPointerUp: \(event\) => \{\s*pressed = false/)
     expect(hook).toMatch(/onBlur: \(\) => \{\s*if \(!pressed\) endGesture\(\)/)
     expect(hook, 'the release is heard wherever it lands').toMatch(/addEventListener\('pointerup', listener, \{ once: true, capture: true \}\)/)
   })
@@ -3618,8 +3618,8 @@ describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Propert
 
   it('the Properties panel gives its slider and text fields a key and ends the window on release and blur', () => {
     const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
-    expect(panel).toMatch(/onPointerUp=\{\(e\) => handleGestureEndPointerUp\(e, endGesture\)\}/)
-    expect(panel).toMatch(/onBlur=\{endGesture\}/)
+    expect(panel).toMatch(/const gesture = useGestureEnd\(useCanvasStore\(\(s\) => s\.endGesture\)\)/)
+    expect(panel).toMatch(/className="card [^"]*" \{\.\.\.gesture\}>/)
     for (const key of ['name', 'opacity', 'fill', 'stroke', 'strokeWidth', 'text']) {
       expect(panel, key).toMatch(new RegExp(`'${key}'\\)`))
     }
@@ -3629,5 +3629,39 @@ describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Propert
     const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/jpgTransparencyNote\(format, doc\.background === 'transparent'\)/)
     expect(dialog).toMatch(/\{jpgNote \? <p className="basis-full text-xs text-ink-muted">\{jpgNote\}<\/p> : null\}/)
+  })
+})
+
+describe('T-148 - every coalescing card spreads the one shared gesture-end hook', () => {
+  // Behavior: lib/gestureEnd.test.ts (the rule), video-core.spec.ts and image.spec.ts "T-148" (a real drag right after another control, ONE Undo), audio.spec.ts "T-147 (T-78)".
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+  const CARDS: Array<[string, string]> = [
+    ['modules/video-studio/ColorGradePanel.tsx', 'useVideoStore'],
+    ['modules/video-studio/ClipList.tsx', 'useVideoStore'],
+    ['modules/video-studio/TextOverlayEditor.tsx', 'useVideoStore'],
+    ['modules/image-studio/PropertiesPanel.tsx', 'useCanvasStore'],
+    ['modules/audio-studio/CleanupPanel.tsx', 'useAudioStore'],
+    ['modules/audio-studio/LevelsPanel.tsx', 'useAudioStore'],
+    ['modules/audio-studio/SecondaryTrackPanel.tsx', 'useAudioStore']
+  ]
+
+  it('each card gets its handlers from useGestureEnd(its store\'s endGesture) from lib/gestureEnd, and spreads them on the card', () => {
+    for (const [file, store] of CARDS) {
+      const code = strip(read(file))
+      expect(code, file).toMatch(/from '\.\.\/\.\.\/lib\/gestureEnd'/)
+      expect(code, file).toContain(`const gesture = useGestureEnd(${store}((s) => s.endGesture))`)
+      expect(code, file).toMatch(/\{\.\.\.gesture\}/)
+    }
+  })
+
+  it('no card keeps the bare pointer-up / blur pair, and there is no second copy of the rule', () => {
+    for (const [file] of CARDS) {
+      const code = strip(read(file))
+      expect(code, file).not.toMatch(/onBlur=\{endGesture\}/)
+      expect(code, file).not.toMatch(/onPointerUp=\{[^}]*ndGesture/)
+      expect(code, file).not.toMatch(/handleGestureEndPointerUp/)
+    }
+    expect(strip(read('modules/video-studio/store/videoStore.ts'))).not.toMatch(/endsGestureOnPointerUp|handleGestureEndPointerUp/)
+    expect(strip(read('lib/gestureEnd.ts'))).toMatch(/export function endsGestureOnPointerUp/)
   })
 })

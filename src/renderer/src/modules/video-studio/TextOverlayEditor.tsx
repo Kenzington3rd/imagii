@@ -10,8 +10,9 @@ import {
 } from '@shared/textOverlay'
 import { parseClock } from '@shared/clockTime'
 import { resolveOverlayColor } from '@shared/overlayColors'
-import { handleGestureEndPointerUp, useVideoStore } from './store/videoStore'
+import { useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
@@ -28,7 +29,7 @@ export function TextOverlayEditor(): JSX.Element | null {
   const addTextOverlay = useVideoStore((s) => s.addTextOverlay)
   const updateTextOverlay = useVideoStore((s) => s.updateTextOverlay)
   const removeTextOverlay = useVideoStore((s) => s.removeTextOverlay)
-  const endGesture = useVideoStore((s) => s.endGesture)
+  const gesture = useGestureEnd(useVideoStore((s) => s.endGesture))
 
   const clip = useMemo(
     () => clips.find((c) => c.id === selectedClipId) ?? null,
@@ -48,14 +49,10 @@ export function TextOverlayEditor(): JSX.Element | null {
     // field (focusout) or releasing a control ends that edit; both bubble, so
     // one pair here covers every input in every overlay row.
     // T-80: a click INSIDE the caption or a number field being edited bubbles
-    // that same pointerup — `handleGestureEndPointerUp` lets it through, so
-    // moving the caret mid-caption no longer starts a new undo step. Leaving
+    // that same pointerup — the shared rule (`useGestureEnd`) lets it through,
+    // so moving the caret mid-caption no longer starts a new undo step. Leaving
     // the field still ends the edit.
-    <div
-      className="card p-4 flex flex-col gap-3"
-      onPointerUp={handleGestureEndPointerUp}
-      onBlur={endGesture}
-    >
+    <div className="card p-4 flex flex-col gap-3" {...gesture}>
       <PanelHeader
         icon="text"
         actions={

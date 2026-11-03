@@ -3087,3 +3087,70 @@ test.describe('T-147 (3): closing a video nobody touched asks nothing', () => {
     }
   })
 })
+
+// T-148: the first drag after another control is ONE undo step in Video Studio too. A press on a slider moves focus, and Chromium sends the slider its FIRST `input`
+// event BEFORE the control that had focus blurs; a card that closed its undo window on every blur closed it mid-drag, and the drag's second event began a second step.
+// Measured on the unchanged tree (real mouse down / moves / up): Contrast 1.00 -> 1.46 right after a Brightness drag took TWO Undos, with 0.77 (the press value) between.
+test.describe('T-148: a drag right after another control is one undo step (Video Studio)', () => {
+  /** Press at `fromFrac` of the slider's width and drag through `throughFracs`, releasing at the last; every stop is an `input` event. */
+  async function dragSlider(window: Page, slider: Locator, fromFrac: number, throughFracs: number[]): Promise<void> {
+    await slider.scrollIntoViewIfNeeded()
+    const box = await slider.boundingBox()
+    if (!box) throw new Error('the slider has no box')
+    const at = (f: number): { x: number; y: number } => ({ x: box.x + 8 + (box.width - 16) * f, y: box.y + box.height / 2 })
+    await dragThrough(window, at(fromFrac), throughFracs.map(at))
+  }
+
+  test('Color & motion: drag Brightness, then drag Contrast: ONE Undo puts Contrast back to 1.00 and the second Undo puts Brightness back', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t148-grade')
+    try {
+      const gradeCard = window.locator('.card').filter({ hasText: 'Color & motion' })
+      const readouts = gradeCard.locator('span.font-mono.w-12')
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(readouts).toHaveText(['0.00', '1.00', '1.00', '+0.00'])
+
+      await dragSlider(window, gradeCard.getByRole('slider', { name: 'Brightness' }), 0.2, [0.4, 0.6, 0.7])
+      await expect(readouts.nth(0), 'the Brightness drag moved it').not.toHaveText('0.00')
+      const brightness = (await readouts.nth(0).textContent()) ?? ''
+
+      // The press on Contrast is what moves focus off Brightness: the case that used to be two steps.
+      await dragSlider(window, gradeCard.getByRole('slider', { name: 'Contrast' }), 0.3, [0.5, 0.7, 0.9])
+      await expect(readouts.nth(1), 'the Contrast drag moved it').not.toHaveText('1.00')
+      await expect(readouts.nth(0), 'and left Brightness where it was').toHaveText(brightness)
+
+      await undo.click()
+      await expect(readouts.nth(1), 'ONE Undo is back to where the Contrast drag began (not its press value)').toHaveText('1.00')
+      await expect(readouts.nth(0), 'Brightness is untouched by that Undo').toHaveText(brightness)
+      await undo.click()
+      await expect(readouts, 'the second Undo is the Brightness drag').toHaveText(['0.00', '1.00', '1.00', '+0.00'])
+      await expect(undo, 'and nothing of either drag is left in the history').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Clip list: click the rename field, then drag the Speed slider: ONE Undo restores the speed from before the drag', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t148-speed')
+    try {
+      const clipCard = clipListCard(window)
+      const speedReadout = clipCard.locator('span.font-mono.w-10')
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(speedReadout).toHaveText('1.00×')
+      await expect(undo).toBeDisabled()
+
+      // Focus the rename field (a click, no edit), so the press on the slider moves focus off a text field.
+      await clipCard.locator('li').first().getByRole('textbox').click()
+      await expect(clipCard.locator('li').first().getByRole('textbox')).toBeFocused()
+      await dragSlider(window, window.getByRole('slider', { name: 'Clip playback speed' }), 0.3, [0.5, 0.7, 0.9])
+      await expect(speedReadout, 'the drag moved it').not.toHaveText('1.00×')
+
+      await undo.click()
+      await expect(speedReadout, 'ONE Undo is the speed from before the drag').toHaveText('1.00×')
+      await expect(undo, 'nothing of the drag is left').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+})

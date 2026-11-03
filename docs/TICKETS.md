@@ -6643,7 +6643,7 @@ IMG-PREC.
   ledger; the e2e above red on a build of ef080a0; `npm run verify` twice and the FULL Playwright
   suite green before handback (no ffmpeg command changes: no Layer 5 needed); no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 97)
+- **Status:** done (round 97 — see the Done entry)
 
 ---
 
@@ -7172,6 +7172,38 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 97 — T-148, landed in the commit that carries this entry.
+Expediter-found after T-147 landed (measured on ef080a0: Contrast
+1.00 → 1.46 took two Undos, 0.77 between), fixed before sweep 35 so no
+known defect sits under a certifying sweep. Worked by one Sonnet in a
+fresh clone of 663d3c5. The fix: ONE shared hook,
+`lib/gestureEnd.ts` (`createGestureEnd`, `useGestureEnd`, and the T-80
+`endsGestureOnPointerUp` rule moved into it): the undo window ends on
+the release (unless it lands inside the focused text field being
+typed in) and on blur, but NOT on the blur a press itself causes
+(Chromium sends the slider its first `input` before the previous
+control's `blur`); one flag per mount, cleared by a one-shot window
+`pointerup`. Spread on all seven coalescing cards: Audio's Cleanup,
+Levels and Second track, Video's Color & motion, clip list and text
+overlays, and Stream Graphics' Properties; the three older copies
+(audio-studio/state/gestureEnd.ts, videoStore's
+`endsGestureOnPointerUp` / `handleGestureEndPointerUp`) are deleted
+and every caller moved. Deviations, accepted: three cite-only moves
+(docClaims' PropertiesPanel :55→:51 with its image.spec comment, the
+IC ClipList confirm row :162→:160); TextOverlayEditor has no slider
+and so no e2e of its own (wiring pin + the unit rule); the first Image
+e2e pressed Opacity where it already was (no `input` before the blur)
+and passed on the old tree — re-aimed at 90% and re-run red. Ledger:
+4 RED, 21 mutations (16 unit, 5 e2e), no survivor, every restore
+byte-identical. Expedited personally: one independent mutation at a
+seam no ledger row names (Audio's Second-track card back on the bare
+pair — blur always ends — the T-147 (T-78) e2e "Second track…" red,
+one Undo leaving Threshold at -42, not -26), restored byte-identical,
+sha256 verified; verify x2 (204/5921); FULL Playwright 564/564 (44.5 min, no flake); the
+worker's test:media 427 passed | 13 skipped of 440 (no ffmpeg change).
+Applied to 663d3c5 by `git apply` with every file byte-identical to
+the expedited clone.
 
 Round 96 — T-147, all seven counted items and the T-75 / T-78 folds,
 landed in the commit that carries this entry (T-75, T-76 and T-78 close

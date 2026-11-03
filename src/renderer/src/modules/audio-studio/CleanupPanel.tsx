@@ -1,7 +1,7 @@
 import type { DenoiseParams, DenoiseStrength, MainsHz } from '@shared/audio'
 import { DEFAULT_DENOISE_PARAMS } from '@shared/audio'
 import { useAudioStore } from './state/audioStore'
-import { useGestureEnd } from './state/gestureEnd'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 
 const DENOISE_OPTIONS: Array<{ value: DenoiseStrength; label: string; description: string }> = [
@@ -27,7 +27,7 @@ const MAINS_OPTIONS: Array<{ value: MainsHz; label: string }> = [
 export function CleanupPanel(): JSX.Element {
   const chain = useAudioStore((s) => s.chain)
   const patchChain = useAudioStore((s) => s.patchChain)
-  const gesture = useGestureEnd()
+  const gesture = useGestureEnd(useAudioStore((s) => s.endGesture))
 
   const params = chain.denoiseParams ?? DEFAULT_DENOISE_PARAMS
   // A chain saved before 50 Hz existed has no humHz and was always 60.
