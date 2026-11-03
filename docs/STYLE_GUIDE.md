@@ -812,7 +812,11 @@ Repeated UI is a component, not copy-paste:
   `interactionWiring.test.ts` reads `aria-disabled` too). A press on an aria-disabled button still reaches its handler, and the handler is the claim
   (`claimFirst(savingRef, ...)`, up for as long as `saving` is), so a second press while the write is out starts nothing. The Enter in the Cleanup presets' name box
   ignores `e.repeat`, as the Player's Space and the markers do (the held-key bullet above): the first press saved and cleared the box, and each auto-repeat after it
-  found no name and raised the red "Name your preset first".
+  found no name and raised the red "Name your preset first". **And the Save BUTTONS take the same rule (T-141 (4)):** keeping the focus on the button is what lets a held
+  Enter's auto-repeats arrive at it as keyboard clicks (`detail` 0, so `isRepeatPress` lets them through), and each one raised "Name your preset first" / "Give it a name" after
+  the first save cleared the box, or (after a refused write, when the name stays) tried the write again and said "Couldn't save that preset." once more. `ignoreHeldEnter(e)`
+  (`lib/repeatPress.ts`, moved there from the Fix wizard, which imports it) cancels the default action of an Enter whose `e.repeat` is true and leaves a fresh press alone; it is
+  `onKeyDown` on both buttons. A button that makes a record and keeps the focus while it works takes it.
 - **A popover that closes with focus inside it gives the focus to its toggle (T-140 (9)).** `RecentFilesMenu`'s list unmounts on Escape, on a pick and on Clear list, and
   focus on an entry went with it - to the page, so the next Tab started at the top of the window. `closeToToggle()` asks whether focus is inside the menu BEFORE it closes
   (the unmount is what drops it) and hands it to the toggle (a `ref`), for Escape, a pick and a mouse that left the list; focus that was somewhere else (a press outside, or

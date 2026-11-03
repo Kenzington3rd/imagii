@@ -60,6 +60,7 @@ const CHAT_DEBOUNCE_MS = 300
 export function HighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const addScannedClip = useVideoStore((s) => s.addScannedClip)
+  const requestSeek = useVideoStore((s) => s.requestSeek)
   // T-135 (1), (4): the scan (its progress, and whether one is running) is a module store, and its candidates and the pasted chat log are the open
   // video's own results in the video store. Leaving the studio unmounted all of it when it was this panel's state: the panel came back with "Scan
   // VOD" enabled over a scan main was still running (a second press overwrote main's single scan slot, orphaning the first from Cancel and from the
@@ -212,8 +213,14 @@ export function HighlightPanel(): JSX.Element | null {
         <ul className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
           {scored.map((h, i) => (
             <li key={i} className="flex flex-col gap-1 px-2 py-1.5 bg-bg-hover rounded text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-mono">
+              {/* T-141 (3): the row's first line is what the person acts on and is not squeezed: the range, the score and the pair of buttons (Go to, + Clip), the pair at the right. In the
+                  258 px a row has in the 300 px column (every window up to about 1900 px gets it; measured in the built app) a three-hour range ("2:41:12 -> 2:41:35", 17 characters)
+                  takes 123, the score 36 and the pair 72, so it fits on one line; the widest range (ten hours or more, 19 characters, 137 px) is 260 with its gaps, 2 px over, and the
+                  pair drops under it, right-aligned, rather than hang past the row (`flex-wrap`, as the chat row's does). The reasons - the "why" the panel promises - had shared this
+                  line, and with "Go to" beside "+ Clip" they were left four letters: they have the line under it, whole, cut with an ellipsis (and the whole of it as the title) only
+                  when it is longer than the card. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-mono whitespace-nowrap">
                   {formatClock(h.startSec)} → {formatClock(h.endSec)}
                 </span>
                 {/* T-112: ink on the wash, accent border for the identity. accent text on a
@@ -224,15 +231,27 @@ export function HighlightPanel(): JSX.Element | null {
                 >
                   {Math.round(h.combinedScore * 100)}
                 </span>
-                <span className="text-ink-dim flex-1 truncate" title={h.reasons.join(' · ')}>
-                  {h.reasons.join(' · ')}
-                </span>
-                <button
-                  className="text-accent hover:underline"
-                  onClick={() => addAsClip(h, i)}
-                >
-                  + Clip
-                </button>
+                {/* "Go to" shows the moment in the player and adds nothing: a person who wants to see a candidate before they keep it (the finder's whole job is to be checked) had no way
+                    to its start except scrubbing a long VOD by eye. "+ Clip" does not move the player: adding several in a row must not make the playhead jump each time, and "Go to"
+                    is the preview. The accessible name carries the time the row shows (its visible words, "Go to", are the start of it). */}
+                <div className="ml-auto flex items-center gap-2 whitespace-nowrap">
+                  <button
+                    className="text-accent hover:underline"
+                    onClick={() => requestSeek(h.startSec)}
+                    aria-label={`Go to ${formatClock(h.startSec)}`}
+                  >
+                    Go to
+                  </button>
+                  <button
+                    className="text-accent hover:underline"
+                    onClick={() => addAsClip(h, i)}
+                  >
+                    + Clip
+                  </button>
+                </div>
+              </div>
+              <div className="text-ink-dim truncate" title={h.reasons.join(' · ')}>
+                {h.reasons.join(' · ')}
               </div>
               <div className="grid grid-cols-3 gap-2 mt-0.5">
                 <SignalBar label="Audio" value={h.signals.audioScore} color={ACCENT} />

@@ -6191,7 +6191,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** in progress (round 90: Tracks B and A landed — see their Done entries; Track C in expedite)
+- **Status:** done (round 90, three tracks — see the three Done entries)
 
 ---
 
@@ -6711,6 +6711,65 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 90, Track C — T-141 items 3, 4, 7 and 9 and the non-counted
+parts (the net-log measurement, the burn-in Cancel race), landed in
+the commit that carries this entry, merged onto Track A (3db8f52) and
+Track B (0e29488). Worked by one Sonnet in a fresh clone of 2a6561c
+(resumed once after a container restart; the audit found no file at
+a mutant's sha). The fixes: selecting a clip seeks the player to its
+start, and each Scan VOD and Chat spike row has a "Go to" that seeks
+to the start the row shows without adding a clip ("+ Clip" does not
+seek, so adding several highlights does not jump the playhead); the
+Timeline's trim handles stand OUTSIDE the range (12 px each, the
+start anchored by its right edge, the end by its left, a grab offset
+so the edge does not jump on the first move), so they never overlap
+at any clip width and a press inside the range scrubs; FixWizard's
+`ignoreHeldEnter` lives in lib/repeatPress.ts and guards both preset
+Save buttons; the Captions setup says what is true per state (the
+model installed at its path and how to replace it; the download
+promise and its link only where the Download button is drawn); the
+mood board's undo toast is ACTION_TOAST_MS, with a scan of literal
+toasts that name Ctrl+Z. Non-counted: the net-log case with the
+Captions setup card on screen found NO lookup on the unchanged build
+(a positive control of its own; an injected dns-prefetch hint for
+github.com turns it red) - no product change, the case stays as the
+pin; the T-100 burn-in Cancel e2e (a click race under load the
+expediter saw in Track B's run) holds the burn with `-re` on the
+subtitles ffmpeg so only the product's Cancel ends it, red when the
+Cancel is broken in the renderer or in main. Deviations, accepted:
+continuity.spec.ts (on nobody's list) re-parks the playhead after its
+T-47 case's selection, because Select now seeks; the scan row's
+reasons moved to their own line; four wiring pins re-pointed. 45
+ledger mutations (52 rows), all restored byte-identical; one survivor
+of a first run strengthened and killed; six void rows (a `-g` pattern
+that matched nothing) disclosed and re-run; 25 reds. Expedited
+personally: integrity (no Track A or B file touched beyond the shared
+docs, the appended audio.spec block and continuity.spec), verify x2
+(195/5603), test:media on 7.0.2 (410 passed | 13 skipped of 423; no
+ffmpeg command changed), FULL Playwright 513/513 (50.2 min), sha of
+every touched file identical before and after; one independent
+mutation at a seam no ledger row names (the setup's model path shows
+the ENGINE's path → the T-141 (7) e2e red on the path it reads),
+restored byte-identical, sha256 verified. Merged by structure onto
+3db8f52 (rehearsed in a scratch clone): LESSONS (C's entry on top),
+TESTING, the coverage ledger and audio.spec (each track's appended
+block, the earlier landings' first; audio.spec, whose two appended
+describes shared their closing lines, re-merged by the base's last
+lines) conflicted, and a line-level proof over the six files both
+sides touched showed neither lost a line; all 16 Track-C-only files
+are byte-identical to the expedited clone. The round's final merged
+tree verified at 198 files / 5731 tests (the three tracks' counts
+summed exactly) and lists 524 Playwright tests; test:media
+425 passed | 13 skipped of 438 (13m45s) and FULL Playwright 524/524 on it (503 in a run a container restart cut, the remaining 21 on the same build after) (these also are
+Track A's deferred merged-tree runs).
+Found, not fixed (the worker's list, in the IC): after "+ Clip" the
+new clip is selected while the playhead stays elsewhere, so I / O
+rewrite its range at the playhead; the T-127 (1) net-log case's
+lookup half has no control of its own; other needed-fact toasts not
+naming Ctrl+Z may still take the default duration; the captions
+setup's step 1 still reads as an instruction when the engine is
+installed; tests/unit and tests/e2e are outside both tsconfigs.
 
 Round 90, Track A — T-141 items 1, 5 and 10 and the non-counted parts
 (the refused-swap keep, the fixture-path rename, the remux-Cancel

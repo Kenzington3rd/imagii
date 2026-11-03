@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { Modal } from '../../components/Modal'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { EMPTY_ANSWERS, fixPatch, fixSummary, type FixAnswers } from './fixWizard'
 
 const QUESTIONS = [
@@ -38,17 +38,6 @@ const QUESTIONS = [
 interface FixWizardProps {
   open: boolean
   onClose: () => void
-}
-
-/**
- * T-120: a HELD Enter must not walk the whole wizard. Enter on a focused button clicks it on keydown, and
- * the key auto-repeats while it is held; the step swap above puts focus on the next question's first option
- * inside the same event (React flushes a discrete event's effects at its end), so each repeat landed on the
- * next step's button and the held key answered all three questions and pressed Apply. A repeat is not a new
- * decision: its default action (the click) is canceled. A fresh press is untouched.
- */
-function ignoreHeldEnter(e: KeyboardEvent<HTMLElement>): void {
-  if (e.key === 'Enter' && e.repeat) e.preventDefault()
 }
 
 export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null {

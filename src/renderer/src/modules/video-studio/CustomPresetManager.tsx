@@ -9,7 +9,7 @@ import { Modal } from '../../components/Modal'
 import { DraftField } from '../../components/DraftField'
 import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface CustomPresetManagerProps {
@@ -289,6 +289,9 @@ export function CustomPresetManager({
                   if (isRepeatPress(e)) return
                   void save()
                 }}
+                // T-141 (4): a HELD Enter is one press: the focus stays here (aria-disabled), and each auto-repeat is a keyboard click that raised "Give it a name" after the first
+                // save cleared the box (or, after a failed write, started a retry).
+                onKeyDown={ignoreHeldEnter}
                 aria-disabled={saving}
               >
                 + Save preset

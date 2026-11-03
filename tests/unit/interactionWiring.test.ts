@@ -149,7 +149,8 @@ describe('T-17 — the restructured rows keep their behavior', () => {
   // that the restructure did not drop a control. E2E: T-22.
   it('ClipList still selects on the row and renames in place', () => {
     const list = read('modules/video-studio/ClipList.tsx')
-    expect(list).toMatch(/onClick=\{\(\) => selectClip\(clip\.id\)\}/)
+    // T-141 (3): and picking a clip also puts the player at its start (the same press, the same click handler).
+    expect(list).toMatch(/onClick=\{\(\) => \{\s*selectClip\(clip\.id\)\s*requestSeek\(clip\.startSec\)\s*\}\}/)
     expect(list).toMatch(/onChange=\{\(e\) => renameClip\(clip\.id, e\.target\.value\)\}/)
     // Both controls carry their own accessible name now that neither wraps
     // the other.
@@ -1581,7 +1582,10 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
 
   it('the Fix wizard ignores a held Enter in both of its bodies, and Variants focuses Save all on the previews\' identity (10)', () => {
     const wizard = strip(read('modules/audio-studio/FixWizard.tsx'))
-    expect(wizard).toMatch(/function ignoreHeldEnter\(e: KeyboardEvent<HTMLElement>\): void \{\s*if \(e\.key === 'Enter' && e\.repeat\) e\.preventDefault\(\)\s*\}/)
+    // T-141 (4): the rule lives in lib/repeatPress.ts (the two preset Save buttons use it too); the wizard imports it and has no copy of its own.
+    expect(wizard).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(wizard, 'no local copy of the rule').not.toMatch(/function ignoreHeldEnter/)
+    expect(strip(read('lib/repeatPress.ts'))).toMatch(/export function ignoreHeldEnter\(e: \{ key: string; repeat: boolean; preventDefault: \(\) => void \}\): void \{\s*if \(e\.key === 'Enter' && e\.repeat\) e\.preventDefault\(\)\s*\}/)
     expect(wizard.match(/<div onKeyDown=\{ignoreHeldEnter\}>/g) ?? []).toHaveLength(2)
     const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
     expect(variants).toMatch(/useEffect\(\(\) => \{\s*if \(items\.length > 0\) saveAllRef\.current\?\.focus\(\)\s*\}, \[items\]\)/)
@@ -2212,7 +2216,7 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
 
   it('(4) every Fix wizard answer ignores the second press of a double-click', () => {
     const wizard = strip(read('modules/audio-studio/FixWizard.tsx'))
-    expect(wizard).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(wizard).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
     const answers = wizard.slice(wizard.indexOf('{q.options.map'), wizard.indexOf('{opt.label}'))
     expect(answers).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*if \(q\.id === 'noise'\)/)
   })
@@ -3151,7 +3155,8 @@ describe('T-139 Track B - the twenty-fifth sweep', () => {
       expect(code, rel).toMatch(/const savingRef = useRef\(false\)\s*const \[saving, setSaving\] = useState\(false\)/)
       // The whole save is under the claim, raised before the first await and lowered in a finally, and the body that does the work is the one that was already there.
       expect(code, `${rel}: the whole save is under the claim, the busy flag lowered in a finally`).toMatch(/async function save\(\): Promise<void> \{\s*await claimFirst\(savingRef, async \(\) => \{\s*setSaving\(true\)\s*try \{\s*await saveOnce\(\)\s*\} finally \{\s*setSaving\(false\)\s*\}\s*\}\)\s*\}\s*async function saveOnce\(\): Promise<void> \{/)
-      expect(code, `${rel}: the button`).toMatch(new RegExp(`className="${btn}"\\s*onClick=\\{\\(e\\) => \\{\\s*if \\(isRepeatPress\\(e\\)\\) return\\s*void save\\(\\)\\s*\\}\\}\\s*aria-disabled=\\{saving\\}\\s*>\\s*${label}`))
+      // T-141 (4): and a held Enter on it is one press (`onKeyDown={ignoreHeldEnter}`, between the click and the busy flag).
+      expect(code, `${rel}: the button`).toMatch(new RegExp(`className="${btn}"\\s*onClick=\\{\\(e\\) => \\{\\s*if \\(isRepeatPress\\(e\\)\\) return\\s*void save\\(\\)\\s*\\}\\}\\s*onKeyDown=\\{ignoreHeldEnter\\}\\s*aria-disabled=\\{saving\\}\\s*>\\s*${label}`))
     }
     expect(strip(read('modules/audio-studio/PresetPanel.tsx')), 'the Enter key reaches the same claim (T-140 (7): and a repeat of it is not a press)').toMatch(/onKeyDown=\{\(e\) => e\.key === 'Enter' && !e\.repeat && save\(\)\}/)
   })
@@ -3312,5 +3317,97 @@ describe('T-140 Track A - a save that landed beside the chosen file is reported 
     const shared = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../shared/workspace.ts'), 'utf8'))
     const result = shared.slice(shared.indexOf('export interface RecordingResult'))
     expect(result.slice(0, result.indexOf('}'))).toMatch(/requestedPath\?: string/)
+  })
+})
+
+// ── T-141 Track C: the twenty-seventh sweep's wiring, where the person reaches it ────────────────────────────────────────────────────────────────────────────
+//
+// E2E per item: (3) video-pipelines.spec.ts "T-141 (3)" (Select, the narrow clip's handles, both finders' Go to, the rows' layout at three windows), (4) audio.spec.ts and
+// video-pipelines.spec.ts "T-141 (4)" (a held Enter on the focused Save button), (7) video-pipelines.spec.ts "T-141 (7)" (the four states of the captions setup),
+// (9) references.spec.ts "T-141 (9)" (the delete toast, 4.5 s later). Unit: repeatPress.test.ts. The unit layer has no DOM, so what is pinned is the wiring those cases drive.
+describe('T-141 Track C - the twenty-seventh sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(3) picking a clip puts the player at its start, and each finder row has a Go to that seeks and adds nothing; no add button seeks', () => {
+    const list = strip(read('modules/video-studio/ClipList.tsx'))
+    expect(list).toMatch(/const requestSeek = useVideoStore\(\(s\) => s\.requestSeek\)/)
+    expect(list.match(/requestSeek\(/g) ?? [], 'one seek in the list: the Select button').toHaveLength(1)
+    const scan = strip(read('modules/video-studio/HighlightPanel.tsx'))
+    expect(scan).toMatch(/<button\s+className="text-accent hover:underline"\s+onClick=\{\(\) => requestSeek\(h\.startSec\)\}\s+aria-label=\{`Go to \$\{formatClock\(h\.startSec\)\}`\}\s*>\s*Go to\s*<\/button>/)
+    const chat = strip(read('modules/video-studio/ChatHighlightPanel.tsx'))
+    expect(chat, 'the start the row SHOWS (held to the video), the range + Clip adds').toMatch(/<button\s+className="text-accent hover:underline"\s+onClick=\{\(\) => requestSeek\(shown\.start\)\}\s+aria-label=\{`Go to \$\{formatClock\(shown\.start\)\}`\}\s*>\s*Go to\s*<\/button>/)
+    // "+ Clip" adds a clip and does not move the player (several in a row must not make the playhead jump): neither add function, nor the store's add and select actions, seek.
+    for (const [name, code, from, to] of [
+      ['HighlightPanel addAsClip', scan, 'function addAsClip(', 'return (\n    <div className="card'],
+      ['ChatHighlightPanel addPeak', chat, 'function addPeak(', 'return (\n    <div className="card']
+    ] as const) {
+      const body = code.slice(code.indexOf(from), code.indexOf(to, code.indexOf(from)))
+      expect(body.length, `${name} was found`).toBeGreaterThan(100)
+      expect(body, name).not.toMatch(/requestSeek/)
+    }
+    const store = strip(read('modules/video-studio/store/videoStore.ts'))
+    for (const action of ['addClip: () => {', 'selectClip: (id) =>', 'function appendRange(']) {
+      const at = store.indexOf(action)
+      expect(at, action).toBeGreaterThan(0)
+      expect(store.slice(at, at + 900).split(/\n    (?:addScannedClip|removeClip|renameClip|return \{)/)[0], `${action} does not seek (project restore selects through it and parks the playhead by its own record)`).not.toMatch(/requestSeek|seekRequest:/)
+    }
+  })
+
+  it('(3) the trim handles stand outside the range, are anchored by the edge they stand for, and keep where the pointer took hold; they stay pointer-only', () => {
+    const timeline = strip(read('modules/video-studio/Timeline.tsx'))
+    expect(timeline).toMatch(/className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-accent rounded-l hover:bg-accent-muted"\s*style=\{\{ right: `\$\{100 - startPct\}%` \}\}/)
+    expect(timeline).toMatch(/className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-accent rounded-r hover:bg-accent-muted"\s*style=\{\{ left: `\$\{endPct\}%` \}\}/)
+    expect(timeline, 'no handle is centered on its edge any more (`-ml-2`)').not.toMatch(/-ml-2/)
+    // The grab offset: taken from the handle's own rect at the press, measured against the edge it stands for, used by every move, and zero for a scrub.
+    expect(timeline).toMatch(/grabPxRef\.current = e\.clientX - e\.currentTarget\.getBoundingClientRect\(\)\.right\s*setDrag\('start'\)/)
+    expect(timeline).toMatch(/grabPxRef\.current = e\.clientX - e\.currentTarget\.getBoundingClientRect\(\)\.left\s*setDrag\('end'\)/)
+    expect(timeline).toMatch(/const t = positionToSeconds\(e\.clientX - grabPxRef\.current\)/)
+    expect(timeline).toMatch(/grabPxRef\.current = 0\s*setDrag\('scrub'\)/)
+    // T-119 stays: pointer-only, hidden from assistive tech, no tab stop.
+    expect(timeline.match(/tabIndex=\{-1\}\s*aria-hidden="true"/g) ?? [], 'both handles').toHaveLength(2)
+  })
+
+  it('(4) the held-Enter rule is one function in lib/repeatPress.ts, and the two preset Save buttons use it with the wizard', () => {
+    const rule = strip(read('lib/repeatPress.ts'))
+    expect(rule.match(/export function ignoreHeldEnter/g) ?? [], 'defined once, exported').toHaveLength(1)
+    for (const rel of ['modules/audio-studio/PresetPanel.tsx', 'modules/video-studio/CustomPresetManager.tsx', 'modules/audio-studio/FixWizard.tsx']) {
+      const code = strip(read(rel))
+      expect(code, rel).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+      expect(code, `${rel}: no local copy of the rule`).not.toMatch(/function ignoreHeldEnter/)
+    }
+    for (const rel of ['modules/audio-studio/PresetPanel.tsx', 'modules/video-studio/CustomPresetManager.tsx']) {
+      expect(strip(read(rel)).match(/onKeyDown=\{ignoreHeldEnter\}/g) ?? [], `${rel}: the Save button`).toHaveLength(1)
+    }
+  })
+
+  it('(7) the captions setup says what is true for the files that are there: the preamble and step 2 read the status, and only the empty install promises a download', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/const engineIn = status\?\.exeInstalled === true\s*const modelIn = status\?\.modelInstalled === true/)
+    const setup = panel.slice(panel.indexOf('const setupDetails = ('), panel.indexOf('return (\n    <div className="card p-3 flex flex-col gap-3 text-sm" data-tutorial="video-captions">'))
+    expect(setup.length).toBeGreaterThan(500)
+    // Four preambles, one per state; the ready state's tells nobody to download anything.
+    expect(setup).toMatch(/\{engineIn && modelIn \? \(\s*'The captions engine and the English model are both installed\. This is where they live, if you ever need to replace one\.'\s*\) : engineIn \? \(\s*'The captions engine is installed\. imagii downloads the English model \(~141 MB\) for you — that download goes online, once\.'\s*\) : modelIn \? \(/)
+    expect(setup, 'the empty install keeps its words').toMatch(/You download the captions engine once \(<code>whisper-cli\.exe<\/code>\); imagii\s+downloads the English model \(~141 MB\) for you — that download goes online,\s+once\./)
+    // Step 2: installed says where and how to replace; the promise of a button lives only in the branch where the button is drawn.
+    expect(setup).toMatch(/\{modelIn \? \(\s*<div>2\. The English model \(~141 MB\) is installed here:<\/div>\s*\) : \(\s*<div>\s*2\. The English model \(~141 MB\)\. The button below downloads it for you/)
+    expect(setup.match(/The button below downloads it for you/g) ?? [], 'said once, in the not-installed branch').toHaveLength(1)
+    expect(setup).toMatch(/\{modelIn \? \(\s*<div>To replace it, delete that file \(Show models folder opens its folder\), then press Refresh status\.<\/div>\s*\) : null\}/)
+    expect(setup, 'and the button it promises is drawn when the model is not installed').toMatch(/\{!status\?\.modelInstalled \? \(\s*<div className="flex flex-col gap-1\.5 mt-1">\s*<button[^>]*onClick=\{installModel\}/)
+  })
+
+  it('(9) the mood board\'s delete toast carries the only way back, so it lasts as long as an action toast; no other toast that names Ctrl+Z is left on the default', () => {
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(board).toMatch(/toast\.success\('Deleted — press Ctrl\+Z to undo', \{ duration: ACTION_TOAST_MS \}\)/)
+    expect(board).toMatch(/import \{ ACTION_TOAST_MS \} from '\.\.\/\.\.\/lib\/savedToast'/)
+    // The class: a toast written as a literal that tells the person to press Ctrl+Z names a duration (the constant-named ones are held by the pins on their own constants).
+    const bare: string[] = []
+    for (const file of sourceFilesUnder(RENDERER_ROOT)) {
+      if (/\.test\./.test(file)) continue
+      const code = strip(readFileSync(file, 'utf8'))
+      for (const call of code.matchAll(/toast(?:\.success|\.error)?\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*Ctrl\+Z(?:(?!\1)[^\\]|\\.)*)\1\s*(\)|,[^)]*\))/g)) {
+        if (!/duration/.test(call[3] ?? '')) bare.push(`${path.relative(RENDERER_ROOT, file)}: ${call[2]}`)
+      }
+    }
+    expect(bare, 'toasts that name Ctrl+Z and take the 2 s / 4 s default').toEqual([])
   })
 })

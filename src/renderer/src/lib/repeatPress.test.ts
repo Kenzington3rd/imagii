@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { REPEAT_SWALLOW_MS, createHeldKeyGuard, isRepeatPress, isSwallowedRepeat } from './repeatPress'
+import { REPEAT_SWALLOW_MS, createHeldKeyGuard, ignoreHeldEnter, isRepeatPress, isSwallowedRepeat } from './repeatPress'
 
 // T-131 (4), (6), (8): the rule is the click COUNT. The e2e specs (a real double-click on the Fix wizard, the tour, a closing dialog) are
 // the proof it reaches the person; this is the rule they depend on, with its edges.
@@ -104,5 +104,35 @@ describe('createHeldKeyGuard - a key held through a closing dialog does not act 
     guard.keyUp({ key: 'Enter' })
     guard.dialogClosed()
     expect(guard.keyDown(press('Enter', true))).toBe(false)
+  })
+})
+
+// T-141 (4): the Fix wizard's rule (T-120), now shared with the two preset Save buttons. The e2e specs hold the press itself (a held Enter on the focused
+// button saves once, in Audio Studio and in the Custom export presets dialog, and the wizard's own case); this is the rule they depend on, with its edges.
+describe('ignoreHeldEnter - a held Enter is one press (T-120, T-141 (4))', () => {
+  /** A keyboard event stand-in that says whether its default action (the click) was canceled. */
+  const press = (key: string, repeat: boolean): { key: string; repeat: boolean; preventDefault: () => void; canceled: boolean } => {
+    const e = { key, repeat, canceled: false, preventDefault: () => { e.canceled = true } }
+    return e
+  }
+
+  it('the auto-repeat of Enter has its default action (the click) canceled', () => {
+    const e = press('Enter', true)
+    ignoreHeldEnter(e)
+    expect(e.canceled).toBe(true)
+  })
+
+  it('a fresh Enter is a decision: its default action is left alone', () => {
+    const e = press('Enter', false)
+    ignoreHeldEnter(e)
+    expect(e.canceled).toBe(false)
+  })
+
+  it('only Enter is guarded: a repeat of any other key (a nudge, Space, a letter) keeps its default action', () => {
+    for (const key of [' ', 'ArrowRight', 'a', 'Tab', 'Escape']) {
+      const e = press(key, true)
+      ignoreHeldEnter(e)
+      expect(e.canceled, key).toBe(false)
+    }
   })
 })

@@ -191,7 +191,9 @@ that names the file being converted.)
 
 - **Trim** with the timeline. Drag the two handles, or click the track to put the
   playhead where you want it and press `I` and `O` to set the in and out points
-  there. `,` and `.` step one frame, `Space` plays and pauses, and `←` / `→` nudge 0.1 seconds.
+  there. The handles stand just outside the clip's range (the start handle ends where the clip
+  begins, the end handle starts where it ends), so on a short clip in a long video the two never
+  overlap and each moves its own end; a click inside the range moves the playhead. `,` and `.` step one frame, `Space` plays and pauses, and `←` / `→` nudge 0.1 seconds.
   The two handles are for the mouse; the keyboard's way to the same trim is `I` and `O`,
   and pressed while the video plays they mark the frame you are looking at. Holding the key marks once, and one
   Undo takes the mark back.
@@ -207,7 +209,9 @@ that names the file being converted.)
   instead of calling a black box a live one.
 - **Clips.** Loading a video starts you with **Clip 1**, which spans all of it.
   **+ Add clip** adds another clip that spans the whole video; trim it with the
-  handles. Each clip has its own name, crop, platforms and text.
+  handles. Each clip has its own name, crop, platforms and text. Click a clip's
+  times in the list to select it: the player goes to its start, so a clip a scan
+  added hours into a long recording is one click from being on screen.
 - **Crop** — check **Crop** above the player and draw a box. A clip that already
   has a crop (one you drew, or one a project brings back) opens with the box
   checked and the rectangle on the picture, and unchecking it removes the crop.
@@ -292,7 +296,10 @@ that names the file being converted.)
 - **Smart highlight finder** — **Scan VOD** scans the audio for loud, exciting
   moments and suggests clips. The first highlight you add replaces the
   untouched whole-video **Clip 1**, so Export doesn't re-encode your whole VOD
-  beside your excerpts. **Ctrl+Z** brings it back.
+  beside your excerpts. **Ctrl+Z** brings it back. **Go to** on a highlight puts the
+  player at its start so you can look at it before you keep it, and adds nothing;
+  **+ Clip** adds it and leaves the player where it is, so adding several in a row
+  does not make the playhead jump.
 - **Reframe to 9:16** — cuts a vertical 9:16 strip (1080×1920)
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action. It cuts the strip from the crop you drew for the clip
@@ -382,7 +389,8 @@ is not a surprise. **+ Clip** on a
 moment adds exactly that range as a clip named **Chat spike N**, with **Extra
 seconds around each clip** (0 to 60; a number outside that is brought into it when you
 leave the box) on either side. Like the Smart highlight finder, the first one you
-add replaces the untouched whole-video **Clip 1**. When nothing in the log
+add replaces the untouched whole-video **Clip 1**. **Go to** on a moment puts the
+player at the start its row shows, without adding anything. When nothing in the log
 qualifies, the panel says so under the button and repeats the rule above, and keeps
 saying it when you come back to the video.
 
@@ -409,7 +417,11 @@ steps are one-time:
 
 Once both are in place the setup card goes away, and **Captions setup** stays under
 the panel, closed until you open it: it shows the same two folders and the same
-**Open folder** and **Show models folder** buttons. A transcription that fails says
+**Open folder** and **Show models folder** buttons. It says what is true of the files
+that are there: with the model installed, step 2 says it is installed at the path shown
+(and, with the engine still missing, the card asks only for the engine); to replace the model,
+delete that file (**Show models folder** opens its folder) and press **Refresh status**,
+and the download is offered again. A transcription that fails says
 "The captions engine stopped before it finished. Open Captions setup to check its
 files and the model" and that is where it sends you. If Windows reports that the
 engine could not start because a file it needs is missing, the `.dll` files from the
@@ -628,7 +640,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
   mood board you have selected. If you have no board yet, imagii asks you to
   name one first.
-- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). Hover an item and click **→ Canvas**
+- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first; the notice
+  that follows says **Ctrl+Z** brings the board back, and it stays on screen for 8 seconds. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
   carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail
   cache**, and in a saved project); if the picture takes a

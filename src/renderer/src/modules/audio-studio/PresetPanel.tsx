@@ -7,7 +7,7 @@ import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 
 /**
  * What Apply puts on the recording in front of the user (T-90): the preset's
@@ -114,6 +114,9 @@ export function PresetPanel(): JSX.Element {
             if (isRepeatPress(e)) return
             void save()
           }}
+          // T-141 (4): and a HELD Enter is one press. `aria-disabled` keeps the focus on this button (T-140 (8)), so the key's auto-repeats are keyboard clicks on it (`detail` 0,
+          // which `isRepeatPress` lets through); after the first save cleared the name each one raised the red "Name your preset first". A repeat is not a decision.
+          onKeyDown={ignoreHeldEnter}
           aria-disabled={saving}
         >
           Save current

@@ -1,10 +1,12 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdirSync, writeFileSync, existsSync, rmSync, readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import http from 'node:http'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
+import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -391,6 +393,108 @@ test.describe('imagii Electron smoke', () => {
       await app.close()
       try {
         rmSync(userDataDir, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+})
+
+// ── T-141 (non-counted): the net-log case again, with the captions setup card on screen ─────────────────────────────────────────────────────────
+//
+// The T-127 (1) case above watches an idle HOME. The "Captions need setup" card draws two links to other people's hosts (github.com and huggingface.co) in anchors Chromium
+// could resolve as soon as they are in the page (DNS prefetch is a platform behavior no source scan sees). This opens Video Studio on a real video with the captions engine ABSENT,
+// opens the instructions so both links are rendered, moves the pointer over each, leaves it idle past the first DNS probes, and reads what the network stack did: no http(s) / ws /
+// ftp request but the loopback control, and no lookup of any host but this machine.
+test.describe('imagii Electron network log with the captions setup card', () => {
+  test('Video Studio open on a video with the captions engine absent, its setup links on screen and hovered, resolves no remote host (T-141)', async () => {
+    test.setTimeout(120_000)
+    const root = path.join(os.tmpdir(), `imagii-e2e-netlog-captions-${Date.now().toString(36)}`)
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(userDataDir, { recursive: true })
+    writeFileSync(
+      path.join(userDataDir, 'config.json'),
+      JSON.stringify({ welcomeSeen: true, tutorialSeen: { video: true, audio: true, image: true, ai: true } }),
+      'utf8'
+    )
+    const video = path.join(root, 'netlog-fixture.mp4')
+    execFileSync(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=10:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', video], { stdio: 'ignore' })
+    const logFile = path.join(userDataDir, 'net.json')
+    const server = http.createServer((_req, res) => res.end('control'))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const control = `http://127.0.0.1:${(server.address() as { port: number }).port}/net-log-control`
+    const app = await electron.launch({
+      args: [path.resolve(__dirname, '../../out/main/index.js'), `--user-data-dir=${userDataDir}`, `--log-net-log=${logFile}`, '--net-log-capture-mode=Everything'],
+      env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1' }
+    })
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      // The synthetic drop the other specs use (the importer reads `file.path`, which Electron adds to a real dropped file).
+      await window.evaluate(
+        ({ filePath, fileName }) => {
+          const zone = document.querySelector('[data-tutorial="video-import"] .card')
+          if (!zone) throw new Error('Video Studio drop zone not found')
+          const file = new File([new Uint8Array([0])], fileName, { type: '' })
+          Object.defineProperty(file, 'path', { value: filePath })
+          const event = new Event('drop', { bubbles: true, cancelable: true })
+          Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+          zone.dispatchEvent(event)
+        },
+        { filePath: video, fileName: path.basename(video) }
+      )
+      const captions = window.locator('[data-tutorial="video-captions"]')
+      await expect(captions.getByText('Captions need setup')).toBeVisible({ timeout: 60_000 })
+      await captions.getByRole('button', { name: 'Show setup instructions' }).click()
+      // Both links the card offers are in the page, with the hosts the question is about.
+      const releases = captions.getByRole('link', { name: 'whisper.cpp releases' })
+      const models = captions.getByRole('link', { name: 'Hugging Face' })
+      await expect(releases).toHaveAttribute('href', /^https:\/\/github\.com\//)
+      await expect(models).toHaveAttribute('href', /^https:\/\/huggingface\.co\//)
+      await releases.hover()
+      await models.hover()
+      await window.waitForTimeout(8_000)
+      // The controls: a request the network stack certainly makes, and a lookup it certainly makes (the resolver is asked for a name that does not exist, from main, with no request
+      // behind it). Without the second, a log that records no lookups at all would pass "none seen"; a `<link rel="dns-prefetch">` hint IS recorded as a lookup (measured), which is
+      // what makes "none" a finding about the setup card's anchors and not a blind spot of the log.
+      const body = await app.evaluate(async ({ net }, url) => (await net.fetch(url)).text(), control)
+      expect(body).toBe('control')
+      await app.evaluate(async ({ session }) => {
+        await session.defaultSession.resolveHost('dns-control.invalid').catch(() => null)
+      })
+    } finally {
+      await app.close()
+      server.close()
+    }
+    try {
+      const log = JSON.parse(readFileSync(logFile, 'utf8')) as {
+        constants: { logEventTypes: Record<string, number> }
+        events: Array<{ type: number; phase: number; params?: { url?: string; host?: string } }>
+      }
+      const typeId = (name: string): number => {
+        const id = log.constants.logEventTypes[name]
+        expect(id, `the log knows an event type ${name}`).toBeDefined()
+        return id as number
+      }
+      const startJob = typeId('URL_REQUEST_START_JOB')
+      const resolverRequest = typeId('HOST_RESOLVER_MANAGER_REQUEST')
+      const requested = log.events.filter((e) => e.type === startJob && e.params?.url).map((e) => (e.params?.url as string).split('?')[0] as string)
+      const network = requested.filter((u) => /^(?:https?|wss?|ftps?):\/\//i.test(u))
+      expect(network, 'every http(s) / ws / ftp request the app began (only the loopback control is allowed)').toEqual([control])
+      const lookedUp = log.events
+        .filter((e) => e.type === resolverRequest && e.phase === 1 && e.params?.host)
+        .map((e) => (e.params?.host as string).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, ''))
+      // Exactly the control: the log sees a lookup, and the card's two links (github.com, huggingface.co) caused none.
+      expect(
+        lookedUp.filter((h) => !['127.0.0.1', 'localhost', '::1'].includes(h.toLowerCase())),
+        'hosts the resolver was asked for, other than this machine (only the control\'s; github.com or huggingface.co here is the finding)'
+      ).toEqual(['dns-control.invalid'])
+    } finally {
+      try {
+        rmSync(root, { recursive: true, force: true })
       } catch {
         /* ignore */
       }

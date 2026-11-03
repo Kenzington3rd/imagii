@@ -122,8 +122,9 @@ export function MoodBoardPanel(): JSX.Element {
     // T-66: reversible since T-58, and the toast is the only place the user is
     // looking when it happens. The header's Undo button says the same thing,
     // but a board that just vanished is exactly when nobody is reading a
-    // toolbar.
-    toast.success('Deleted — press Ctrl+Z to undo')
+    // toolbar. T-141 (9): and it carries the one fact that brings the board back, so it lasts as long as an action toast
+    // (BRANDING_GUIDE: react-hot-toast's 2 s default is gone before a person who looked away reads it).
+    toast.success('Deleted — press Ctrl+Z to undo', { duration: ACTION_TOAST_MS })
   }
 
   // T-136 (12): the two writes beside them that had no catch. A refused clear used to be an unhandled rejection with a button that did nothing, and the

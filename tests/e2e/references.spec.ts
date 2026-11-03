@@ -2320,3 +2320,39 @@ test.describe('References - → Canvas places the picture wholly on a small canv
     }
   })
 })
+
+// ── T-141 (9): the board's "Deleted - press Ctrl+Z to undo" lasts as long as an action toast ─────────────────────────────────────────────────
+//
+// The toast is the ONLY place a person is told that Ctrl+Z brings the board back (the board has just vanished from the list they were looking at), and `toast.success(...)` with no
+// duration takes react-hot-toast's 2 s: gone before a person who looked away read it. BRANDING_GUIDE: a sentence that carries a needed fact lasts `ACTION_TOAST_MS` (8 s), as
+// its siblings do. react-hot-toast keeps nothing readable about a duration, so the case waits past the default and finds the sentence still on screen: the one place in this
+// file where a fixed wait IS the assertion (`expectRevealToast` in video-pipelines.spec.ts is the same). The wait is past the 2 s default AND its 1 s exit animation.
+test.describe('T-141 (9): the delete toast outlives react-hot-toast\'s 2 s default', () => {
+  test('after the board is deleted its toast is still on screen 4.5 s later, with the way back in it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t141-toast')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const nameInput = window.getByPlaceholder('New board name', { exact: false })
+      await nameInput.fill('Short lived')
+      await nameInput.press('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+
+      window.once('dialog', (d) => void d.accept())
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      const toast = window.locator('[data-rht-toaster]').getByText(DELETED_TOAST, { exact: true })
+      await expect(toast, 'the toast is up when the board goes').toBeVisible()
+      await window.waitForTimeout(4500)
+      await expect(toast, 'and is still up 4.5 s later: it carries the only way back, so it is not the 2 s default').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === DELETED_TOAST), 'said once').toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

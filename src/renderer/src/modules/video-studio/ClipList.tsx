@@ -11,6 +11,7 @@ export function ClipList(): JSX.Element {
   const clips = useVideoStore((s) => s.clips)
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const selectClip = useVideoStore((s) => s.selectClip)
+  const requestSeek = useVideoStore((s) => s.requestSeek)
   const addClip = useVideoStore((s) => s.addClip)
   const removeClip = useVideoStore((s) => s.removeClip)
   const renameClip = useVideoStore((s) => s.renameClip)
@@ -137,7 +138,12 @@ export function ClipList(): JSX.Element {
                 aria-label={`Rename clip ${clip.name}`}
               />
               <button
-                onClick={() => selectClip(clip.id)}
+                // T-141 (3): picking a clip shows it. A clip a scan added far into a long VOD could not otherwise be reached to watch or trim: the playhead stayed where it was, and the
+                // Timeline drew the clip's range nowhere near it. (Project restore selects through the store and parks the playhead by its own record; the add buttons do not seek.)
+                onClick={() => {
+                  selectClip(clip.id)
+                  requestSeek(clip.startSec)
+                }}
                 className="text-left flex items-center gap-3 text-xs text-ink-muted font-mono hover:text-ink-base"
                 title="Select clip"
                 aria-current={isSelected ? 'true' : undefined}

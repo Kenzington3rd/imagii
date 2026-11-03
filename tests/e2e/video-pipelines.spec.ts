@@ -2251,16 +2251,43 @@ test.describe('CaptionsPanel', () => {
     }
   })
 
+  /**
+   * T-141 (non-counted): hold a caption burn-in open until the test lets it go. The burn of the 20-minute fixture (64x48, 2 fps) is 2400 tiny frames: on an idle box ffmpeg is done in a
+   * second or two, so a case that reaches its Cancel after a few assertions (a partial to wait for, a name to read, a button to see off) is racing the end of the job, and under load - when
+   * every step is slow - it lost: the Cancel was gone ("element was detached from the DOM, retrying") because the burn had finished first. The test tells the burn's ffmpeg, in main, to read its
+   * input at the input's own rate (`-re`, an input option, placed before `-i`), the way `mainSpawn.ts` widens a window (nothing in `src/` changes): a 20-minute source then cannot finish in
+   * less than 20 minutes at ANY load, and what ends it is the product's own Cancel. Only the burn's ffmpeg is touched (the one whose filter chain has the `subtitles=` stage); every other
+   * spawn goes through as it was.
+   */
+  async function holdCaptionBurn(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        const input = argv.indexOf('-i')
+        const burn = /ffmpeg/i.test(String(cmd)) && input >= 0 && argv.some((a, i) => argv[i - 1] === '-vf' && a.includes('subtitles='))
+        if (!burn) return real(cmd, args, opts)
+        return real(cmd, [...argv.slice(0, input), '-re', ...argv.slice(input)], opts)
+      }
+      mod.syncBuiltinESMExports()
+    })
+  }
+
   test('a canceled or failed burn-in puts the progress row back and leaves no half-written video (T-100)', async () => {
     test.setTimeout(600_000)
     // The row under the header shows a job that is running. After a burn that was
     // canceled or failed it froze at "Burning in… 5%" with a Cancel button for a
     // job that no longer existed, and the half-written .mp4 stayed where the
     // Save dialog pointed. The 20-minute source keeps the burn running when
-    // Cancel is clicked.
+    // Cancel is clicked - and (T-141) `holdCaptionBurn` makes that true at any load: the burn
+    // of 2400 tiny frames was done in a second or two, and a click that arrived after it found no Cancel.
     const studio = await launchHome('burnrow')
     const { app, window, userDataDir, outDir } = studio
     try {
+      await holdCaptionBurn(app)
       const srtPath = path.join(userDataDir, 'captions', 'row.srt')
       mkdirSync(path.dirname(srtPath), { recursive: true })
       writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:02,000\nhello\n', 'utf8')
@@ -9526,10 +9553,10 @@ test.describe('T-113: review-gate fixes, pass 2', () => {
         x: trackBox.x + trackBox.width * (sec / duration),
         y: trackBox.y + trackBox.height / 2
       })
-      /** Where the handle IS, in source seconds - what the trimmed clip's start is. */
+      /** Where the handle IS, in source seconds - what the trimmed clip's start is. (T-141 (3): the handle stands outside the range, so it is its RIGHT edge that is the start; its centre was.) */
       const startOfHandle = async (): Promise<number> => {
         const box = (await handle.boundingBox())!
-        return ((box.x + box.width / 2 - trackBox.x) / trackBox.width) * duration
+        return ((box.x + box.width - trackBox.x) / trackBox.width) * duration
       }
 
       // ── a drag through 0.10, 0.20, 0.30, 0.40 s: four moves, ONE ask, for where the handle stopped ──
@@ -11611,6 +11638,536 @@ test.describe('T-140 (1), sent back: a burn-in over a file that is open in anoth
       expect(withEverything(readdirSync(outDir)).sort(), 'two files and no partial').toEqual(['held-captioned (2).mp4', 'held-captioned.mp4'])
     } finally {
       await app.close().catch(() => undefined)
+    }
+  })
+})
+
+
+// ── T-141 (4): a held Enter on the focused "+ Save preset" is one save ────────────────────────────────────────────────────────────────────────
+//
+// T-140 (8) left the button focusable while the write is out (`aria-disabled`), and a focused button keeps receiving the held key's auto-repeats: each one is a keyboard
+// click (`detail` 0, so `isRepeatPress` lets it through). After the first save cleared the name every repeat raised the red "Give it a name"; after a REFUSED write the name
+// stays in the box and every repeat tried the write again and said "Couldn't save that preset." once more. `ignoreHeldEnter` (lib/repeatPress.ts) is the button's `onKeyDown`.
+test.describe('T-141 (4): a held Enter on "+ Save preset" is one save', () => {
+  /** Open the dialog on a fresh studio and hand back what the cases need. */
+  async function openPresets(label: string): Promise<Studio & { presetsDir: string }> {
+    const studio = await launchWithVideo(label)
+    await exportCard(studio.window).getByRole('button', { name: 'Presets' }).click()
+    await expect(studio.window.getByRole('dialog').getByText('Saved presets (0)')).toBeVisible({ timeout: 15_000 })
+    return { ...studio, presetsDir: path.join(studio.userDataDir, 'export-presets') }
+  }
+
+  test('the first press saves, the auto-repeats after it save nothing and raise no "Give it a name"; a fresh press is a decision again', async () => {
+    test.setTimeout(180_000)
+    const studio = await openPresets('t141-heldsave')
+    const { app, window, presetsDir } = studio
+    try {
+      const modal = window.getByRole('dialog')
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      const save = modal.getByRole('button', { name: '+ Save preset' })
+
+      await nameInput.fill('Held custom')
+      await save.focus()
+      await expect(save).toBeFocused()
+      // The press, held: the keydown goes down and stays down. It clicks the focused button once.
+      await window.keyboard.down('Enter')
+      await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      await expect(nameInput, 'the save emptied the box').toHaveValue('')
+      await expect(save, 'and the keyboard is still on the button (what makes the next repeat a click on it)').toBeFocused()
+      // The OS's repeat delay passes and the key auto-repeats: Playwright marks a second `down` of a key already down as a repeat.
+      await window.waitForTimeout(600)
+      for (let i = 0; i < 4; i++) {
+        await window.keyboard.down('Enter')
+        await window.waitForTimeout(80)
+      }
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(800)
+      expect(readdirSync(presetsDir).filter((f) => f.endsWith('.json')), 'one preset on disk').toHaveLength(1)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => /Give it a name/.test(t)), 'no red error from the repeats').toEqual([])
+      expect(log.filter((t) => t === 'Saved "Held custom"'), 'said once').toHaveLength(1)
+
+      // The guard is on the REPEAT: a fresh press is a decision. With a name it saves, and with the box empty it still says so.
+      await nameInput.fill('Held again')
+      await save.focus()
+      await window.keyboard.press('Enter')
+      await expect(modal.getByText('Saved presets (2)')).toBeVisible({ timeout: 15_000 })
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Give it a name')
+      expect(readdirSync(presetsDir).filter((f) => f.endsWith('.json')), 'a fresh Enter saved the second one and nothing else').toHaveLength(2)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('after a refused write the name stays in the box, and a held Enter tries the write ONCE: one "Couldn\'t save that preset.", not one per repeat', async () => {
+    test.setTimeout(180_000)
+    const studio = await openPresets('t141-heldrefused')
+    const { app, window, presetsDir } = studio
+    try {
+      const modal = window.getByRole('dialog')
+      const nameInput = modal.getByRole('textbox', { name: 'Custom preset name' })
+      const save = modal.getByRole('button', { name: '+ Save preset' })
+      const refusals = async (): Promise<number> => (await readToastLog(window)).filter((t) => t === "Couldn't save that preset.").length
+
+      // The folder (the dialog's own read made it) is replaced by a file: every write of a preset fails.
+      rmSync(presetsDir, { recursive: true, force: true })
+      writeFileSync(presetsDir, 'not a folder', 'utf8')
+      await nameInput.fill('Held refused')
+      await save.focus()
+      await window.keyboard.down('Enter')
+      await expect.poll(refusals, { timeout: 15_000, intervals: [100] }).toBe(1)
+      await expect(nameInput, 'the name is still in the box for the retry').toHaveValue('Held refused')
+      await window.waitForTimeout(600)
+      for (let i = 0; i < 4; i++) {
+        await window.keyboard.down('Enter')
+        await window.waitForTimeout(80)
+      }
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(800)
+      expect(await refusals(), 'the repeats of a held key are not retries').toBe(1)
+
+      // A fresh press IS a retry: the folder comes back and the same form saves.
+      rmSync(presetsDir, { force: true })
+      await save.focus()
+      await window.keyboard.press('Enter')
+      await expect(modal.getByText('Saved presets (1)')).toBeVisible({ timeout: 15_000 })
+      await expect(nameInput).toHaveValue('')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+
+// ── T-141 (7): the captions setup says what is true for the files that are there ──────────────────────────────────────────────────────────────
+//
+// T-140 (10) shows the SAME instructions in a second place - the "Captions setup" disclosure under the panel once the engine and the model are there - and the markup was written
+// for the empty install: its step 2 promised "The button below downloads it for you" over a button that is not drawn once the model is installed, and its preamble told a person who
+// had both files to download the engine. Each state says what is true in it now, and the model, once installed, says where it is and how to replace it. The stand-in files are the
+// ones T-140 (10) drops where the real resolver looks (`<userData>/bin`, `<userData>/models`); status is existence only, so nothing here runs the engine. The case walks the four
+// states with the real Refresh status button - which is also the proof that "delete that file, then press Refresh status" does what the sentence says.
+test.describe('T-141 (7): the captions setup says what is true for the files that are there', () => {
+  const PREAMBLE_EMPTY =
+    'You download the captions engine once (whisper-cli.exe); imagii downloads the English model (~141 MB) for you — that download goes online, once.'
+  const PREAMBLE_MODEL_ONLY = 'You download the captions engine once (whisper-cli.exe). The English model is already installed.'
+  const PREAMBLE_ENGINE_ONLY = 'The captions engine is installed. imagii downloads the English model (~141 MB) for you — that download goes online, once.'
+  const PREAMBLE_BOTH = 'The captions engine and the English model are both installed. This is where they live, if you ever need to replace one.'
+  const STEP_2_MISSING = 'The button below downloads it for you, or you can grab it from'
+  const STEP_2_INSTALLED = '2. The English model (~141 MB) is installed here:'
+  const REPLACE = 'To replace it, delete that file (Show models folder opens its folder), then press Refresh status.'
+
+  test('nothing, the model only, both, and the engine only: each state says what is true in it, and the replace sentence works', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchWithVideo('t141-captions')
+    const { app, window, userDataDir } = studio
+    try {
+      const card = captionsCard(window)
+      const modelFile = path.join(userDataDir, 'models', 'ggml-base.en.bin')
+      const engineFile = path.join(userDataDir, 'bin', 'whisper-cli.exe')
+      const setupCard = card.getByText('Captions need setup')
+      const disclosure = card.getByRole('button', { name: 'Captions setup', exact: true })
+      const download = card.getByRole('button', { name: /Download model \(~141 MB\) automatically/ })
+      const refresh = card.getByRole('button', { name: 'Refresh status', exact: true })
+      const huggingFace = card.getByRole('link', { name: 'Hugging Face' })
+
+      // ── 1. nothing installed: the empty install's words, as they were ──
+      await expect(setupCard).toBeVisible()
+      await card.getByRole('button', { name: 'Show setup instructions' }).click()
+      await expect(card.getByText(PREAMBLE_EMPTY)).toBeVisible()
+      await expect(card.getByText(STEP_2_MISSING)).toBeVisible()
+      await expect(huggingFace).toBeVisible()
+      await expect(download, 'the offer is where the sentence says it is').toBeVisible()
+      await expect(card.getByText(STEP_2_INSTALLED)).toHaveCount(0)
+      await expect(card.getByText(REPLACE)).toHaveCount(0)
+
+      // ── 2. the model only (the card is still up: the engine is missing) ──
+      mkdirSync(path.dirname(modelFile), { recursive: true })
+      writeFileSync(modelFile, 'not a real model', 'utf8')
+      await refresh.click()
+      await expect(card.getByText(PREAMBLE_MODEL_ONLY), 'the engine is the one thing left to download').toBeVisible()
+      await expect(card.getByText(STEP_2_INSTALLED)).toBeVisible()
+      await expect(card.locator('div.font-mono.break-all').nth(1), 'and it says where').toHaveText(modelFile)
+      await expect(card.getByText(REPLACE)).toBeVisible()
+      await expect(card.getByText(STEP_2_MISSING), 'no promise of a button that is not there').toHaveCount(0)
+      await expect(download).toHaveCount(0)
+      await expect(card.getByText(/imagii downloads the English model/)).toHaveCount(0)
+      await expect(setupCard, 'still not ready: the engine is missing').toBeVisible()
+
+      // ── 3. both: the card is gone, the disclosure is there, and nothing in it promises a download of anything ──
+      mkdirSync(path.dirname(engineFile), { recursive: true })
+      writeFileSync(engineFile, 'not a real engine', 'utf8')
+      await refresh.click()
+      await expect(setupCard).toHaveCount(0)
+      await expect(disclosure).toBeVisible()
+      await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+      await disclosure.click()
+      await expect(card.getByText(PREAMBLE_BOTH), 'a person who has everything is not told to download it').toBeVisible()
+      await expect(card.getByText(STEP_2_INSTALLED)).toBeVisible()
+      await expect(card.getByText(REPLACE)).toBeVisible()
+      await expect(card.getByText(STEP_2_MISSING)).toHaveCount(0)
+      await expect(card.getByText(/You download|imagii downloads|downloads it for you/), 'no download promise anywhere in the ready state').toHaveCount(0)
+      await expect(download).toHaveCount(0)
+      await expect(huggingFace, 'the model is here, so the link to fetch it is not offered').toHaveCount(0)
+      // The folder shortcuts the sentence names are right there.
+      await expect(card.getByRole('button', { name: 'Show models folder', exact: true })).toBeVisible()
+
+      // ── 4. "delete that file, then press Refresh status": the model goes, the card is back, and the download is offered again ──
+      rmSync(modelFile)
+      await refresh.click()
+      await expect(setupCard).toBeVisible()
+      await expect(card.getByText(PREAMBLE_ENGINE_ONLY), 'the engine stays installed; only the model is offered').toBeVisible()
+      await expect(card.getByText(STEP_2_MISSING)).toBeVisible()
+      await expect(download).toBeVisible()
+      await expect(card.getByText(REPLACE)).toHaveCount(0)
+      await expect(card.getByText(STEP_2_INSTALLED)).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+
+// ═════════ T-141 (3): a clip a scan adds in a long VOD can be reached to watch and to trim ═════════
+//
+// `selectClip` and `appendRange` never seek, no finder or clip row had a way to the clip's start, and the Timeline's two trim handles were 16 px wide and centered on the clip's edges: on
+// a clip narrower than 16 px of track (a 45 s clip in a VOD of an hour or more) they overlapped, the end button (later in the DOM) took every press, and dragging "the start" dragged
+// the end toward it. Now: Select seeks to the clip's start; each Scan VOD and Chat spike row has a "Go to" (seek, no clip added; "+ Clip" does not move the player, so several in a row
+// do not make the playhead jump); the handles stand outside the range so they cannot meet at any width and a press inside it scrubs. A late import on purpose, as above.
+import { dragTo } from './drag'
+import { expectNoOverlap } from './layout'
+
+test.describe('T-141 (3): Select, Go to and the trim handles', () => {
+  /** The media element's position once it has stopped seeking. */
+  async function landedAt(window: Page): Promise<number> {
+    await expect
+      .poll(() => window.evaluate(() => (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl.seeking), { timeout: 10_000 })
+      .toBe(false)
+    return window.evaluate(() => (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl.currentTime)
+  }
+  /** Wait for the playhead to settle on `want` (a seek is mouse -> store -> element; the first read can still show the old place). */
+  async function expectPlayheadAt(window: Page, want: number, tolerance: number, what: string): Promise<void> {
+    let last = Number.NaN
+    await expect
+      .poll(async () => (last = await landedAt(window)), { timeout: 15_000, intervals: [100], message: `${what}: the playhead never reached ${want} s` })
+      .toBeGreaterThan(want - tolerance)
+    expect(Math.abs(last - want), `${what}: wanted ${want} s, landed ${last} s`).toBeLessThanOrEqual(tolerance)
+  }
+  const timelineTrack = (window: Page): Locator => window.locator('[data-tutorial="video-timeline"] .relative.h-12')
+  /** The clip range the Timeline draws (its accent wash), as a box. */
+  const rangeBox = async (window: Page): Promise<{ x: number; y: number; width: number; height: number }> =>
+    (await window.locator('[data-tutorial="video-timeline"] .border-x-2').boundingBox()) as { x: number; y: number; width: number; height: number }
+  /** In, Length and Out from the Timeline's readouts ("m:ss.t"), in seconds. */
+  async function readouts(window: Page): Promise<[number, number, number]> {
+    const texts = await window.locator('[data-tutorial="video-timeline"] span.font-mono').allInnerTexts()
+    const sec = (t: string): number => {
+      const m = /^(\d+):(\d\d)\.(\d)$/.exec(t.trim())
+      if (!m) throw new Error(`unparseable timeline readout: ${JSON.stringify(t)}`)
+      return Number(m[1]) * 60 + Number(m[2]) + Number(m[3]) / 10
+    }
+    return [sec(texts[0] ?? ''), sec(texts[1] ?? ''), sec(texts[2] ?? '')]
+  }
+  /** Click the track at `ratio` of its width: a scrub (and the keyboard focus for I and O). */
+  async function clickTrack(window: Page, ratio: number): Promise<void> {
+    // The studio is one scrolling column: a finder's textarea or button pressed a moment ago may have scrolled the Timeline out of the window, and a mouse press at a point outside it lands on nothing.
+    await timelineTrack(window).scrollIntoViewIfNeeded()
+    const box = (await timelineTrack(window).boundingBox()) as { x: number; y: number; width: number; height: number }
+    await window.mouse.click(box.x + box.width * ratio, box.y + box.height / 2)
+  }
+
+  test('Select puts the player at the clip\'s start, on whichever clip is picked and on the one that already is', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t141-select', burstSrc)
+    try {
+      // Clip 1 becomes 7.0 s to 8.4 s: the playhead put there by the track and marked with I and O (the keyboard's way to a trim, T-119).
+      await clickTrack(window, 0.5)
+      await window.keyboard.press('i')
+      await clickTrack(window, 0.6)
+      await window.keyboard.press('o')
+      const [inSec, , outSec] = await readouts(window)
+      expect(inSec, 'the clip starts well into the video').toBeGreaterThan(6.5)
+      expect(outSec).toBeGreaterThan(inSec + 1)
+      // A second clip spans the whole video; it is the selected one, and the playhead is at the end of the first.
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (2)')
+      const whole = await readouts(window)
+      expect(whole[0], 'Clip 2 is selected: the Timeline draws the whole video').toBe(0)
+      expect(whole[2]).toBeGreaterThan(13.8)
+
+      // ── Select Clip 1: the Timeline shows it, and the player is at its start ──
+      await clipListCard(window).getByRole('button', { name: /^Select clip Clip 1,/ }).click()
+      expect((await readouts(window))[0], 'the Timeline is on Clip 1').toBe(inSec)
+      await expectPlayheadAt(window, inSec, 0.15, 'Select clip Clip 1')
+
+      // ── the playhead is moved away, and Select on the clip that is ALREADY selected brings it back ──
+      await clickTrack(window, 0.2)
+      await expectPlayheadAt(window, 14 * 0.2, 0.3, 'scrubbed to 20%')
+      await clipListCard(window).getByRole('button', { name: /^Select clip Clip 1,/ }).click()
+      await expectPlayheadAt(window, inSec, 0.15, 'Select on the selected clip')
+
+      // ── and the whole-video clip is at 0 ──
+      await clipListCard(window).getByRole('button', { name: /^Select clip Clip 2,/ }).click()
+      await expectPlayheadAt(window, 0, 0.1, 'Select clip Clip 2')
+      expect(await readouts(window), 'the Timeline is on Clip 2').toEqual(whole)
+      // The add buttons do not seek: "+ Add clip" while the playhead is parked leaves it there.
+      await clickTrack(window, 0.8)
+      const parked = await landedAt(window)
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (3)')
+      await window.waitForTimeout(500)
+      expect(Math.abs((await landedAt(window)) - parked), '+ Add clip does not move the player').toBeLessThan(0.05)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a clip narrower than 16 px of track: the handles do not overlap, the start handle moves the start and not the end, the end handle the end, and a press inside the range scrubs', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t141-narrow', burstSrc)
+    try {
+      // Clip 1 is 7.0 s to 7.1 s of 14: 0.7% of the track.
+      await clickTrack(window, 0.5)
+      await window.keyboard.press('i')
+      await window.keyboard.press('ArrowRight')
+      await window.keyboard.press('o')
+      const [in0, len0, out0] = await readouts(window)
+      expect(len0, 'a 0.1 s clip').toBeLessThan(0.25)
+      const handles = window.locator('[data-tutorial="video-timeline"] button[aria-hidden="true"]')
+      await expect(handles).toHaveCount(2)
+      const range0 = await rangeBox(window)
+      const trackBox = (await timelineTrack(window).boundingBox()) as { x: number; y: number; width: number; height: number }
+      expect(range0.width, 'the case is meaningless if the clip is wider than a handle: it must be narrower than 16 px').toBeLessThan(16)
+
+      // ── the handles stand outside the range and cannot meet ──
+      const startHandle = (await handles.first().boundingBox()) as { x: number; y: number; width: number; height: number }
+      const endHandle = (await handles.last().boundingBox()) as { x: number; y: number; width: number; height: number }
+      expect(startHandle.x + startHandle.width, 'the start handle\'s right edge is on the start').toBeCloseTo(range0.x, 0)
+      expect(endHandle.x, 'the end handle\'s left edge is on the end').toBeCloseTo(range0.x + range0.width, 0)
+      expect(startHandle.x + startHandle.width, 'the handles do not overlap').toBeLessThanOrEqual(endHandle.x + 0.5)
+
+      // ── a press inside the range reaches the scrub surface: it moves the playhead and trims nothing ──
+      await clickTrack(window, 0.2)
+      await expectPlayheadAt(window, 14 * 0.2, 0.3, 'scrubbed to 20%')
+      await window.mouse.click(range0.x + range0.width / 2, range0.y + range0.height / 2)
+      await expectPlayheadAt(window, (((range0.x + range0.width / 2) - trackBox.x) / trackBox.width) * 14, 0.2, 'a press inside the range')
+      expect(await readouts(window), 'and the clip is as it was').toEqual([in0, len0, out0])
+
+      // ── the START handle: dragged 48 px left, the start moves 48 px left and the end does not move ──
+      const handleCentre = (b: { x: number; y: number; width: number; height: number }): { x: number; y: number } => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+      const from = handleCentre(startHandle)
+      await dragTo(window, from, { x: from.x - 48, y: from.y }, {
+        extent: {
+          label: 'start handle 48 px left',
+          read: async () => (await rangeBox(window)).x,
+          settled: (x) => x < range0.x - 40
+        }
+      })
+      const range1 = await rangeBox(window)
+      expect(range1.x + range1.width, 'the END did not move').toBeCloseTo(range0.x + range0.width, 0)
+      // The edge went where the pointer went, from where it was grabbed: no jump to the pointer on the first move (the handle was taken at its centre, 6 px from the edge).
+      expect(Math.abs(range1.x - (range0.x - 48)), 'the start moved by what the pointer moved').toBeLessThanOrEqual(1.5)
+      const [in1, , out1] = await readouts(window)
+      expect(in1, 'the start is earlier').toBeLessThan(in0 - 0.5)
+      expect(out1, 'the end is where it was').toBe(out0)
+
+      // ── the END handle: dragged 48 px right, the end moves 48 px right and the start does not move ──
+      const endNow = (await handles.last().boundingBox()) as { x: number; y: number; width: number; height: number }
+      const grab = handleCentre(endNow)
+      await dragTo(window, grab, { x: grab.x + 48, y: grab.y }, {
+        extent: {
+          label: 'end handle 48 px right',
+          read: async () => {
+            const r = await rangeBox(window)
+            return r.x + r.width
+          },
+          settled: (right) => right > range1.x + range1.width + 40
+        }
+      })
+      const range2 = await rangeBox(window)
+      expect(range2.x, 'the start did not move').toBeCloseTo(range1.x, 0)
+      expect(Math.abs(range2.x + range2.width - (range1.x + range1.width + 48)), 'the end moved by what the pointer moved').toBeLessThanOrEqual(1.5)
+      const [in2, , out2] = await readouts(window)
+      expect(in2).toBe(in1)
+      expect(out2, 'the end is later').toBeGreaterThan(out1 + 0.5)
+
+      // ── and the next DRAG on the track is a scrub again, exactly where the pointer is: the offset a handle was taken at (6 px here, 0.09 s) does not follow it (a bare click never moves, so
+      //    only a drag shows a stale offset) ──
+      const duration = await window.evaluate(() => (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl.duration)
+      const trackNow = (await timelineTrack(window).boundingBox()) as { x: number; y: number; width: number; height: number }
+      const y = trackNow.y + trackNow.height / 2
+      const releaseAt = trackNow.x + trackNow.width * 0.35
+      await dragThrough(window, { x: trackNow.x + trackNow.width * 0.3, y }, [{ x: releaseAt, y }], async () =>
+        expectPlayheadAt(window, ((releaseAt - trackNow.x) / trackNow.width) * duration, 0.04, 'a scrub drag after the handle drags')
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Scan VOD: a row\'s Go to puts the player at the candidate\'s start and adds no clip; + Clip adds one and leaves the player where it was', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t141-scango', burstSrc)
+    try {
+      const card = highlightCard(window)
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
+      const row = card.locator('li').first()
+      // The playhead is far from the candidate (which starts at about 1.3 s of 14).
+      await clickTrack(window, 0.9)
+      await expectPlayheadAt(window, 14 * 0.9, 0.3, 'scrubbed to 90%')
+
+      const goTo = row.getByRole('button', { name: 'Go to 0:01', exact: true })
+      await expect(goTo, 'named for the time the row shows').toBeVisible()
+      await expect(goTo).toHaveText('Go to')
+      await goTo.click()
+      await expect.poll(() => landedAt(window), { timeout: 15_000, intervals: [100], message: 'Go to never reached the candidate' }).toBeLessThan(2)
+      const at = await landedAt(window)
+      expect(at, 'the candidate\'s start: the row says 0:01 (about 1.3 s of 14)').toBeGreaterThan(1)
+      expect(await clipRows(window), 'Go to adds nothing: Clip 1 is still the whole video').toEqual([{ name: 'Clip 1', range: '0:00 → 0:14' }])
+
+      // ── "+ Clip" adds the clip the row said and does not move the player ──
+      await clickTrack(window, 0.9)
+      await expectPlayheadAt(window, 14 * 0.9, 0.3, 'scrubbed to 90% again')
+      const parked = await landedAt(window)
+      await row.getByRole('button', { name: '+ Clip', exact: true }).click()
+      await expectToast(window, 'Clip added — see the Clips list')
+      expect(await clipRows(window)).toEqual([{ name: 'Highlight 1', range: '0:01 → 0:12' }])
+      await window.waitForTimeout(500)
+      expect(Math.abs((await landedAt(window)) - parked), '+ Clip leaves the playhead where it was: several in a row must not make it jump').toBeLessThan(0.05)
+      // …and the clip it added starts where Go to went.
+      expect(Math.abs((await readouts(window))[0] - at), 'the clip starts where the row\'s Go to went').toBeLessThan(0.2)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Chat spike finder: a row\'s Go to puts the player at the start the row shows and adds no clip; + Clip adds one and leaves the player where it was', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t141-chatgo', longSrc)
+    try {
+      const card = chatCard(window)
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      const row = card.locator('li').first()
+      await expect(row.locator('span.font-mono')).toHaveText('0:15 → 0:55')
+      // The playhead is far from the spike: halfway through a 20-minute video.
+      await clickTrack(window, 0.5)
+      await expectPlayheadAt(window, longSeconds * 0.5, 2, 'scrubbed to 50%')
+
+      const clipsBefore = await clipRows(window)
+      expect(clipsBefore.map((c) => c.name), 'the whole-video clip').toEqual(['Clip 1'])
+      const goTo = row.getByRole('button', { name: 'Go to 0:15', exact: true })
+      await expect(goTo, 'named for the start the row shows').toBeVisible()
+      await goTo.click()
+      await expectPlayheadAt(window, 15, 0.3, 'Go to on the spike row')
+      expect(await clipRows(window), 'Go to adds nothing: Clip 1 is still the whole video').toEqual(clipsBefore)
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+
+      // ── "+ Clip" adds the clip the row said and does not move the player ──
+      await clickTrack(window, 0.5)
+      await expectPlayheadAt(window, longSeconds * 0.5, 2, 'scrubbed to 50% again')
+      const parked = await landedAt(window)
+      await row.getByRole('button', { name: '+ Clip', exact: true }).click()
+      await expectToast(window, 'Clip added')
+      expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '0:15 → 0:55' }])
+      await window.waitForTimeout(500)
+      expect(Math.abs((await landedAt(window)) - parked), '+ Clip leaves the playhead where it was').toBeLessThan(0.05)
+    } finally {
+      await app.close()
+    }
+  })
+
+  /** Everything a finder row (the first in `card`) must hold at the window it is in: whole controls on their lines, inside the card, the pair at the row's right edge. */
+  async function rowHolds(card: Locator, name: string, where: string, check: (run: () => Promise<void>) => Promise<void>): Promise<void> {
+    const row = card.locator('li').first()
+    const goTo = row.getByRole('button', { name: /^Go to / })
+    const clip = row.getByRole('button', { name: '+ Clip', exact: true })
+    await check(() => expectNoHorizontalOverflow(card, `the ${name} at ${where}`))
+    await check(() => expectNoHorizontalOverflow(card.locator('ul'), `the ${name}'s list at ${where}`))
+    await check(() => expectControlsWhole(row, row.getByRole('button', { name: /^Go to |^\+ Clip$/ }), `the ${name}'s Go to and + Clip at ${where}`))
+    await check(() => expectOneLine(goTo, `the ${name}'s Go to at ${where}`))
+    await check(() => expectOneLine(clip, `the ${name}'s + Clip at ${where}`))
+    await check(() => expectOneLine(row.locator('span.font-mono').first(), `the ${name}'s range at ${where}`))
+    await check(() => expectSameRow([{ name: 'Go to', locator: goTo }, { name: '+ Clip', locator: clip }], `the ${name}'s two buttons at ${where}`))
+    await check(() => expectNoOverlap(row.locator('span.font-mono, button'), `the ${name}'s row at ${where}`))
+    // The pair ends at the row's right edge, whether it shares the first line or the range left it no room.
+    await check(async () => {
+      const fromEdge = await clip.evaluate((el) => {
+        const li = el.closest('li') as HTMLElement
+        return Math.round(li.getBoundingClientRect().right - parseFloat(getComputedStyle(li).paddingRight) - el.getBoundingClientRect().right)
+      })
+      expect(Math.abs(fromEdge), `the ${name}'s + Clip ends ${fromEdge} px from the row's right edge at ${where}`).toBeLessThanOrEqual(1)
+    })
+    // Go to is the left one of the pair.
+    await check(async () => {
+      const [g, c] = await Promise.all([goTo.boundingBox(), clip.boundingBox()])
+      expect((g?.x ?? 0) + (g?.width ?? 0), `the ${name}'s Go to is left of its + Clip at ${where}`).toBeLessThanOrEqual((c?.x ?? 0) + 0.5)
+    })
+  }
+  const WINDOWS = [
+    [MIN_WINDOW, 'the 1024 px minimum'],
+    [DEFAULT_WINDOW, 'the default 1632 px window'],
+    [{ width: 1920, height: 1080 }, '1920 px']
+  ] as const
+  function collect(): { problems: string[]; check: (run: () => Promise<void>) => Promise<void> } {
+    const problems: string[] = []
+    return {
+      problems,
+      check: async (run) => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+    }
+  }
+
+  test('the Smart highlight finder\'s widest row (a ten-hour range, a score, a reason) keeps its words whole, on its lines and inside the card with Go to beside + Clip, at the 1024 px minimum, the default window and 1920 px', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t141-scanlayout', longSrc)
+    try {
+      // The scan is answered by main with a candidate ten hours in ("10:01:25 -> 10:05:15"): a real scan of a ten-hour file is not what is under test, and everything the row draws is the real panel.
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('video:findHighlights')
+        ipcMain.handle('video:findHighlights', () => [{ startSec: 36085, endSec: 36315, peakDb: -4, reason: 'sustained-loud' }])
+      })
+      const scan = highlightCard(window)
+      await scan.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(scan.locator('li')).toHaveCount(1, { timeout: 30_000 })
+      await expect(scan.locator('li span.font-mono').first(), 'the widest range the panel draws').toHaveText('10:01:25 → 10:05:15')
+      const { problems, check } = collect()
+      for (const [size, where] of WINDOWS) {
+        await setWindowSize(app, window, size)
+        await rowHolds(scan, 'Smart highlight finder', where, check)
+      }
+      expect(problems, 'the row holds at every size').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the Chat spike finder\'s widest row (a ten-hour range, a four-digit count) keeps its words whole, on its lines and inside the card with Go to beside + Clip, at the 1024 px minimum, the default window and 1920 px', async () => {
+    test.setTimeout(240_000)
+    // The existing T-136 (9) fixture: a ten-hour-and-six-minute picture at 1 fps, 64x48, black (half a megabyte, two seconds to make).
+    const marathon = path.join(root, 'source', 'marathon-t141.mp4')
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=black:s=64x48:r=1:d=36400', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '600', '-pix_fmt', 'yuv420p', marathon])
+    const { app, window } = await launchWithVideo('t141-chatlayout', marathon)
+    try {
+      const chat = chatCard(window)
+      await chat.locator('textarea').fill(chatLogWithLongRun(36000, 60))
+      await chat.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(chat.locator('li')).toHaveCount(1)
+      await expect(chat.locator('li span.font-mono'), 'the widest range the panel draws').toHaveText('10:01:25 → 10:05:15')
+      await expect(chat.locator('li').getByText('1200 messages'), 'and the biggest count').toBeVisible()
+      const { problems, check } = collect()
+      for (const [size, where] of WINDOWS) {
+        await setWindowSize(app, window, size)
+        await rowHolds(chat, 'Chat spike finder', where, check)
+      }
+      expect(problems, 'the row holds at every size').toEqual([])
+    } finally {
+      await app.close()
     }
   })
 })

@@ -4326,3 +4326,57 @@ test.describe('T-141 (1): an export aimed at a file the job reads is refused, an
     }
   })
 })
+
+
+// ── T-141 (4): a held Enter on the focused "Save current" is one save ─────────────────────────────────────────────────────────────────────────
+//
+// T-140 (8) made the button `aria-disabled` so the keyboard keeps its place while a write is out, and a focused button keeps receiving the held key's auto-repeats: each one is a
+// keyboard click (`detail` 0, so `isRepeatPress` lets it through), and after the first save cleared the name every repeat raised the red "Name your preset first". The name BOX had
+// the guard since T-140 (7); the button had none. `ignoreHeldEnter` (lib/repeatPress.ts, the Fix wizard's rule) is its `onKeyDown` now.
+test.describe('T-141 (4): a held Enter on "Save current" is one save', () => {
+  test('the first press saves, the auto-repeats after it save nothing and raise no error; a fresh press is a decision again', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t141-heldsave')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const presets = window.locator('.card').filter({ hasText: 'Cleanup presets' })
+      const nameInput = presets.getByPlaceholder('My mic preset')
+      const save = presets.getByRole('button', { name: 'Save current' })
+      const presetDir = path.join(studio.userDataDir, 'audio-presets')
+      const saved = (): number => (existsSync(presetDir) ? readdirSync(presetDir).filter((f) => f.endsWith('.json')).length : 0)
+
+      await nameInput.fill('Held button')
+      await save.focus()
+      await expect(save).toBeFocused()
+      // The press, held: the keydown goes down and stays down. It clicks the focused button once.
+      await window.keyboard.down('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Held button"')
+      await expect(nameInput, 'the save emptied the box').toHaveValue('')
+      await expect(save, 'and the keyboard is still on the button (what makes the next repeat a click on it)').toBeFocused()
+      // The OS's repeat delay passes and the key auto-repeats: Playwright marks a second `down` of a key already down as a repeat.
+      await window.waitForTimeout(600)
+      for (let i = 0; i < 4; i++) {
+        await window.keyboard.down('Enter')
+        await window.waitForTimeout(80)
+      }
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(800)
+      expect(saved(), 'one preset on disk').toBe(1)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => /Name your preset first/.test(t)), 'no red error from the repeats').toEqual([])
+      expect(log.filter((t) => t === 'Saved "Held button"'), 'said once').toHaveLength(1)
+
+      // The guard is on the REPEAT: a fresh press is a decision. With a name it saves, and with the box empty it still says so.
+      await nameInput.fill('Held again')
+      await save.focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Saved "Held again"')
+      expect(saved(), 'a fresh Enter on the button saves').toBe(2)
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [100] }).toContain('Name your preset first')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

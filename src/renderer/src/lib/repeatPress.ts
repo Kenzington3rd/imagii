@@ -10,6 +10,18 @@ export function isRepeatPress(e: { detail: number }): boolean {
   return e.detail > 1
 }
 
+/**
+ * T-120, T-141 (4): a HELD Enter must not repeat a decision. Enter on a focused button clicks it on keydown, and the key auto-repeats while it is held; each
+ * repeat is another keyboard click (`detail` 0, so `isRepeatPress` lets it through). In the Fix wizard the step swap puts focus on the next question's first
+ * option inside the same event, so the held key answered all three questions and pressed Apply (T-120); on a preset's Save button the first press saves and
+ * clears the name, and each repeat after it found no name and raised the red "name first" (T-141 (4), a regression of T-140 (8): `disabled` used to blur the
+ * button, and `aria-disabled` keeps the focus). A repeat is not a new decision: its default action (the click) is canceled. A fresh press is untouched.
+ * Structural on purpose (the one field read from the event, the one call made on it), so a `<div>`'s and a `<button>`'s keyboard event both fit and the rule is a unit test.
+ */
+export function ignoreHeldEnter(e: { key: string; repeat: boolean; preventDefault: () => void }): void {
+  if (e.key === 'Enter' && e.repeat) e.preventDefault()
+}
+
 /** How long after a dialog goes away its double-click's second press is dropped (a person's second press lands within ~100-300 ms). */
 export const REPEAT_SWALLOW_MS = 500
 

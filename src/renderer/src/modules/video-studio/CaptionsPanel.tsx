@@ -308,14 +308,31 @@ export function CaptionsPanel(): JSX.Element | null {
 
   // T-140 (10): the setup instructions are ONE piece of markup shown in two places: the "Captions need setup" card while the engine or the model is missing, and the
   // "Captions setup" disclosure under the panel once they are there (so a failed Transcribe can still reach the folders).
+  // T-141 (7): it is also shown when the files are THERE (the "Captions setup" disclosure) and when only one of them is, so what it promises is read off `status`, not written for the
+  // empty install: it told a person who had both to download them ("You download the captions engine once", "The button below downloads it for you" over a button that is not drawn
+  // once the model is installed). Each state says what is true in it; the model, once installed, says where it is and how to replace it.
+  const engineIn = status?.exeInstalled === true
+  const modelIn = status?.modelInstalled === true
   const setupDetails = (
     <div className="mt-2 flex flex-col gap-1.5 text-ink-muted">
       {/* T-89: what is manual and what is automatic, in one line, and
-          which part goes online. */}
+          which part goes online. T-141 (7): in the words of the files that are there. */}
       <p className="text-ink-base">
-        You download the captions engine once (<code>whisper-cli.exe</code>); imagii
-        downloads the English model (~141 MB) for you — that download goes online,
-        once.
+        {engineIn && modelIn ? (
+          'The captions engine and the English model are both installed. This is where they live, if you ever need to replace one.'
+        ) : engineIn ? (
+          'The captions engine is installed. imagii downloads the English model (~141 MB) for you — that download goes online, once.'
+        ) : modelIn ? (
+          <>
+            You download the captions engine once (<code>whisper-cli.exe</code>). The English model is already installed.
+          </>
+        ) : (
+          <>
+            You download the captions engine once (<code>whisper-cli.exe</code>); imagii
+            downloads the English model (~141 MB) for you — that download goes online,
+            once.
+          </>
+        )}
       </p>
       {/* T-139 (6): the releases page offers no file called whisper-cli.exe. The Windows build is a zip, listed under the newest release that has one (some are
           marked Pre-release), and whisper.cpp's release workflow zips the folder build/bin/Release as it is, so the program and the .dll files it needs
@@ -344,20 +361,27 @@ export function CaptionsPanel(): JSX.Element | null {
           folder — the portable build unpacks to a temp folder that is
           rebuilt on every launch, so a file placed there would vanish. */}
       <div>This folder survives app updates, so you only set this up once.</div>
-      <div>
-        2. The English model (~141 MB). The button below downloads it for you, or
-        you can grab it from{' '}
-        <a
-          href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
-          className="text-warn underline"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Hugging Face
-        </a>{' '}
-        yourself and save it exactly here:
-      </div>
+      {modelIn ? (
+        <div>2. The English model (~141 MB) is installed here:</div>
+      ) : (
+        <div>
+          2. The English model (~141 MB). The button below downloads it for you, or
+          you can grab it from{' '}
+          <a
+            href="https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+            className="text-warn underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Hugging Face
+          </a>{' '}
+          yourself and save it exactly here:
+        </div>
+      )}
       <div className="font-mono break-all">{status?.modelPath}</div>
+      {modelIn ? (
+        <div>To replace it, delete that file (Show models folder opens its folder), then press Refresh status.</div>
+      ) : null}
       {/* Round 17 B9: surface the models-folder shortcut next to the
           binaries link so a power user can drop a different .bin in
           alongside the auto-installed one. */}

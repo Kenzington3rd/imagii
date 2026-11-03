@@ -347,6 +347,13 @@ test.describe('T-47 session continuity', () => {
       await expect(window.getByRole('heading', { name: 'Clips (3)', exact: true })).toBeVisible()
       await window.getByRole('button', { name: 'Select clip Clip 1' }).click()
       await expect(selectedClipRow(window).getByLabel('Rename clip Clip 1')).toBeVisible()
+      // T-141 (3): Select puts the player at the clip's start (Clip 1 is the whole video: 0), so the playhead is parked again AFTER the selection - the place the quit has to carry is
+      // the selection and a playhead somewhere other than the start.
+      await track.scrollIntoViewIfNeeded()
+      const again = await track.boundingBox()
+      if (!again) throw new Error('timeline track has no box')
+      await window.mouse.click(again.x + again.width * 0.5, again.y + again.height / 2)
+      await expect.poll(() => playhead(window), { timeout: 15_000 }).toBeGreaterThan(0.5)
       parkedAt = await playhead(window)
       expect(parkedAt).toBeGreaterThan(0.5)
 

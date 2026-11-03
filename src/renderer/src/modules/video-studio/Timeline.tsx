@@ -20,6 +20,10 @@ export function Timeline(): JSX.Element | null {
   const fps = useVideoStore((s) => (s.source && s.source.probe.fps > 0 ? s.source.probe.fps : 30))
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragMode>(null)
+  // T-141 (3): how far from the edge it stands for the pointer took hold of a trim handle (px; 0 for a scrub). The handles stand OUTSIDE the range, so a press anywhere on one is up to its
+  // width from the edge, and measuring the edge from the pointer's own position moved it by that much on the first move: the start (or end) jumped up to a handle's width of the track,
+  // a minute of a long VOD, before the drag had begun. The offset keeps the edge where it was under the pointer.
+  const grabPxRef = useRef(0)
 
   // T-56: the track's coordinate space is what the video really PLAYS, not
   // what ffprobe rounded the container to. They differ by up to a frame, and
@@ -49,7 +53,7 @@ export function Timeline(): JSX.Element | null {
     if (!drag) return
 
     function onMove(e: MouseEvent): void {
-      const t = positionToSeconds(e.clientX)
+      const t = positionToSeconds(e.clientX - grabPxRef.current)
       if (drag === 'scrub') {
         requestSeek(t)
         return
@@ -83,6 +87,7 @@ export function Timeline(): JSX.Element | null {
     // No preventDefault: the surface is a focusable slider, and mousedown is
     // how a pointer user hands it the keyboard. The track is `select-none`,
     // so nothing is dragged into a text selection either.
+    grabPxRef.current = 0
     setDrag('scrub')
     requestSeek(positionToSeconds(e.clientX))
   }
@@ -216,25 +221,31 @@ export function Timeline(): JSX.Element | null {
         {/* T-119: the two trim handles are pointer affordances. They take no keyboard focus and are hidden
             from assistive tech, because pressing Enter or Space on one did nothing: they were dead tab stops
             that announced themselves as buttons. The keyboard's way to the same trim is I / O on the
-            Playhead slider above, said in the line under the track. */}
+            Playhead slider above, said in the line under the track.
+            T-141 (3): and they stand OUTSIDE the range - the start handle's right edge on the start, the end handle's left edge on the end. They were both 16 px wide and centered on their
+            edges, so on a clip narrower than 16 px of track (a 45 s clip in a VOD of an hour or more) they overlapped, the end button (later in the DOM) took every press, and
+            "dragging the start" dragged the end toward it; the whole range was handle, so there was nowhere to scrub inside it. Now they cannot meet at any width (the range's own
+            width is between them), and a press inside the range reaches the scrub surface. The start handle is anchored by its RIGHT edge (`right`), the end handle by its left. */}
         <button
           tabIndex={-1}
           aria-hidden="true"
           onMouseDown={(e) => {
             e.preventDefault()
+            grabPxRef.current = e.clientX - e.currentTarget.getBoundingClientRect().right
             setDrag('start')
           }}
-          className="absolute top-0 bottom-0 w-4 -ml-2 cursor-ew-resize bg-accent rounded-l hover:bg-accent-muted"
-          style={{ left: `${startPct}%` }}
+          className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-accent rounded-l hover:bg-accent-muted"
+          style={{ right: `${100 - startPct}%` }}
         />
         <button
           tabIndex={-1}
           aria-hidden="true"
           onMouseDown={(e) => {
             e.preventDefault()
+            grabPxRef.current = e.clientX - e.currentTarget.getBoundingClientRect().left
             setDrag('end')
           }}
-          className="absolute top-0 bottom-0 w-4 -ml-2 cursor-ew-resize bg-accent rounded-r hover:bg-accent-muted"
+          className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-accent rounded-r hover:bg-accent-muted"
           style={{ left: `${endPct}%` }}
         />
       </div>

@@ -26,6 +26,7 @@ export function peakRange(p: Pick<ChatPeak, 'startSec' | 'endSec'>, duration: nu
 export function ChatHighlightPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
   const addScannedClip = useVideoStore((s) => s.addScannedClip)
+  const requestSeek = useVideoStore((s) => s.requestSeek)
   // T-135 (4): the pasted log and the spikes found in it are the open video's own results in the video store (they were this panel's state, lost
   // with every visit). T-131 (3)'s reason holds as before: they are for the video they were pasted against, and `loadSource` / `clearSource` empty
   // them, so a replaced video (Reframe's "Edit in Video Studio") never shows the old one's "+ Clip" rows. The spike window and the extra seconds are
@@ -156,12 +157,23 @@ export function ChatHighlightPanel(): JSX.Element | null {
                     {formatClock(shown.start)} → {formatClock(shown.end)}
                   </span>
                   <span className="flex-1 text-ink-dim whitespace-nowrap">{countOf(p.count, 'message')}</span>
-                  <button
-                    className="text-accent hover:underline ml-auto"
-                    onClick={() => addPeak(p, i)}
-                  >
-                    + Clip
-                  </button>
+                  {/* T-141 (3): "Go to" seeks to the start the row SHOWS (`shown.start`, the range "+ Clip" adds), and adds nothing; "+ Clip" does not move the player. The two wrap as
+                      one pair and stay at the right edge (`ml-auto`), as "+ Clip" alone did. */}
+                  <div className="ml-auto flex items-center gap-2 whitespace-nowrap">
+                    <button
+                      className="text-accent hover:underline"
+                      onClick={() => requestSeek(shown.start)}
+                      aria-label={`Go to ${formatClock(shown.start)}`}
+                    >
+                      Go to
+                    </button>
+                    <button
+                      className="text-accent hover:underline"
+                      onClick={() => addPeak(p, i)}
+                    >
+                      + Clip
+                    </button>
+                  </div>
                 </div>
                 <div className="truncate text-ink-muted" title={p.topMessages.join(' · ')}>{p.topMessages.join(' · ')}</div>
               </li>
