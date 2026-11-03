@@ -6647,6 +6647,95 @@ IMG-PREC.
 
 ---
 
+## T-149 — sweep-35 fixes (round 98)
+
+- **Spec:** the thirty-fifth sweep's verified findings (candidate clean pass #1 on cfa2bcf), each
+  confirmed by the expediter against source (ffmpeg (2) also replicated on bundled 7.0.2). Privacy,
+  streamer, audio and Electron clean; a11y's one item is T-110 (l) "repeated names" (the letter is
+  extended below), design's one item is polish (folded). Two tracks, disjoint files.
+
+  **Track A — the highlight scan and Picture-in-picture (items 1, 2, 3).**
+  1. **[MED] The VOD highlight scan stretches a short loud moment across following digital silence.**
+     highlights.ts:155 drops every sample at or below -70 LUFS (and non-finite ones) BEFORE the peak
+     loop (:171-194), so a loud moment whose decay jumps from above the threshold straight under -70
+     (ebur128's momentary falls to about -160 on exact zeros within a few hops) never sees a
+     below-threshold sample: the peak stays open through the whole silence and closes at the next
+     audible sample, or at the file's end (:195-204). Reviewer-executed through the product's
+     `findHighlights` on 7.0.2, 6.1.1 and the shipped win32 exe: 40 s noise, a 2.5 s tone, 120 s of
+     exact zeros, 40 s noise → one "sustained-loud" candidate 35.1-167.6 s (the right range is about
+     35-47.5 s); 3 of 5 tone fixtures reproduce. A streamer's loud sign-off before a muted BRB screen
+     becomes a two-minute "highlight" of dead air. Fix direction: the threshold statistics (median,
+     p90) keep using the meaningful samples, but the peak loop walks EVERY sample in time order and
+     treats `m <= -70` or non-finite as below the threshold (closing the peak at that sample's `t`).
+     Covering tests: unit (the loop on a synthetic series: loud, loud, -161, -161 … closes at the first
+     silent sample; a nan line closes it too); **Layer 5** (IMG-PREC) — a generated burst followed by
+     digital silence (`anullsrc` / `volume=0` zeros) through the real `findHighlights`: the candidate
+     ends within a few seconds of the burst, red on the unchanged tree; on 7.0.2 and 6.1.1.
+  2. **[LOW] Picture-in-picture over a base with no sound runs to the overlay's length, the base frozen.**
+     concat.ts:485-538: the `overlay` filter defaults to `eof_action=repeat` / `shortest=0`, and
+     `-shortest` ends the output at the base only when a base SOUND exists (`-map 0:a?` maps none for a
+     silent base), against :531's own comment and T-131 (2)'s "the output is the base's length".
+     Reviewer-executed on all three binaries, replicated by the expediter on 7.0.2 (6 s video-only base
+     + 8 s overlay → 8.000 s). Fix direction: `-t <baseSec>` when `baseSec` is known (NOT
+     `overlay=shortest=1`, which would cut the output at a SHORTER overlay); correct the comment.
+     Covering tests: **Layer 5** — a video-only base shorter than the overlay through the real
+     `runPipComposite`: output length = base length (±1 frame), red on the unchanged tree; the
+     with-sound control unchanged; on 7.0.2 and 6.1.1; unit pin for the argv.
+  3. **[LOW] A Scan VOD that finds nothing leaves only a ~4 s toast.** HighlightPanel.tsx:119-121 raises
+     "No standout moments detected" and the list renders only for `scored.length > 0` (:205), so the
+     panel looks like a scan that never ran once the toast fades — the class sweep 22 counted in the
+     sibling ChatHighlightPanel and fixed with an inline line. Fix direction: when the scan for this
+     video returned `[]`, an inline line in the panel ("No standout moments found in this video.", the
+     chat panel's voice), gone on a re-scan that finds some, reset with the video like the list.
+     Covering tests: e2e (a stubbed or generated silent-bed source: the line after the scan, still
+     there after the toast's duration; a scan that finds candidates shows no line).
+
+  **Track B — References, the shared gesture-end hook, the audio Export row (items 4, 5, fold).**
+  4. **[LOW] A double-click on a search result's Save reports "Saved" twice and records an empty Undo
+     step.** ReferencePanel.tsx's Save (:185-188) has no repeat guard and `saveInto` is not
+     single-flight; main's `addToCollection` awaits `cacheThumb` (a network fetch) inside its lock, so
+     two quick presses both snapshot N items, both re-list N+1, both toast `Saved to "X"` and both push
+     a step (reviewer-executed: true, true, 2 steps). T-147 (5)'s count compares a stale pre-call
+     snapshot. Fix direction: main answers whether IT added (decided under its lock: `addItem` returns
+     `{ added: boolean }` beside what it returns now — the preload type and the IPC handler follow;
+     validate nothing new from the renderer), the store pushes a step and the panel says "Saved" only
+     on `added`, and the Save button swallows the repeat press of a double-click (`isRepeatPress`, the
+     T-131 (4) mechanism) so one double-click is one save and one toast. Covering tests: unit (the
+     store trusts main's answer; two concurrent adds with a deduping stub → true then false, one
+     step); main unit (the flag under the lock); e2e: a real double-click on Save → ONE "Saved to"
+     toast, one item, ONE Undo empties the board; red on the unchanged build.
+  5. **[LOW] (a T-148 regression) A mouse click from one Text overlay field into another merges the two
+     edits into one undo step.** lib/gestureEnd.ts: `onPointerDown` sets `pressed`, so the first
+     field's blur is ignored, and the release lands in the NEWLY focused text input, which the T-80
+     rule reads as a caret click (`endsGestureOnPointerUp('INPUT','text',true)` → false); every field of
+     one overlay shares the key `overlay:${clipId}:${overlayId}` (videoStore.ts:715), so the colour edit
+     joins the caption's step and one Undo reverts both — what T-40/T-80 had fixed
+     (TextOverlayEditor.tsx:47-50). Fix direction: a press that MOVES focus ends the gesture — record
+     the focused element at pointerdown; on pointerup, end unless the release is inside the SAME text
+     field that was focused when the press began (a caret click); the press-caused blur is still
+     ignored. Covering tests: unit (focus moved by the press → end; caret click in the same field → no
+     end; slider drag after another control → still one step); e2e (video-core): type a caption,
+     MOUSE-click the Color box, type a colour, leave; ONE Undo reverts only the colour, a second the
+     caption; red on cfa2bcf; every T-80 / T-148 / T-147 slider case stays green.
+  Fold (non-counted, design polish) — the T-147 (2) other-sound Export row (ExportDialog.tsx:204-211):
+     at 1024 px the name is cut to ~20 characters beside a fixed `w-56` pass slot holding ~70 px of
+     text. Size the pass slot to its text when the name is shown (or put the name on its own line above
+     the bar) so the name gets the room; fix AudioJobRunning.tsx's stale "Export - voice.wav" comment
+     (the label is an em dash). Covering test: e2e at 1024x640 — a long name shows more than its shared
+     prefix (measured width), nothing overflows.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE lines (items 1, 2, 3, 4);
+  LESSONS_LEARNED entry at the TOP per track (Track B: "a fix to a shared rule needs the cases the OLD
+  rule protected, not only the new one — T-148 traded the text-field case for the slider case").
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; Layer 5 for items 1 and 2 on both majors; new cases in NEW describe blocks appended at the
+  end of shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green
+  before handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
+  lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 98)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -6720,13 +6809,13 @@ IMG-PREC.
   canceled batch re-encodes finished files as "(2)" duplicates —
   "Export remaining" is the upgrade; (l) a11y backlog: hover-only
   failure cause, placeholder-only inputs (Watermark/Filename/chat
-  log), repeated names ("Frame", "+ Clip", the cut chip), safe-zone
+  log), repeated names ("Frame", "+ Clip", the cut chip; sweep 35: the pressed-state option sets with a plain-text caption and no `role="group"` — Cleanup's denoise strength and Levels' compressor, both with an "Off", Crop's ratios, Reframe's Left / Center / Right, PostChecklist's platforms; `role="group"` + `aria-labelledby` the caption is the upgrade, the Fix wizard's T-147 (6b) shape), safe-zone
   label halo, pointer-only canvases (waveform drag, crop Rnd), and
   the Record studio's Start/Stop/"Finishing up" phase changes
   announce nothing to AT (the progressbar + result toast carry the
   state — the Captions panel's accepted idiom; an always-mounted
   polite live region is the upgrade), the Reference Search
-  outcomes are silent to AT (sweep 11: the results grid, "No
+  outcomes were silent to AT (FIXED in T-147 (7), round 96: an always-mounted status region; kept here as history) (sweep 11: the results grid, "No
   results.", the error card and the offline notice mount with no
   status or alert role and no toast — the ONE inline-only async
   outcome in the renderer, so no accepted idiom covers it; a
