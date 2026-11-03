@@ -6260,6 +6260,47 @@ IMG-PREC.
 
 ---
 
+## T-143 — sweep-29 fix (round 92)
+
+- **Spec:** the twenty-ninth sweep's one verified finding (candidate clean pass #1 on d9c8c11) —
+  confirmed by the expediter against source. Eight lenses clean (the a11y lens's LOW is standing
+  T-110 (l) and the streamer lens's MED is standing (ax); neither counted). One track (main).
+  1. **[LOW] The kept take's "6 hours" start when the recording ended, not when the sentence is
+     shown.** `recordingKeptMessage` (src/main/ipc/recording.ts:219-224) tells the person "Copy it
+     out within 6 hours; after that imagii may delete it", and USER_GUIDE says the take is kept
+     "for at least 6 hours so you can copy it out". The launch sweep (src/main/tempCleanup.ts:38,
+     :90-92) ages `recordings/<id>.webm` by its mtime, and nothing touches the take after the
+     recording's last write (no `utimes` in src/main): the MP4 convert (libx264 `-preset fast`,
+     convert.ts:164-165 — tens of minutes for a long take) and the swap's retries all run BEFORE the
+     refusal, so the real window from the sentence is 6 h minus the convert. A person who relaunches
+     imagii inside that gap loses the only copy of a finished recording earlier than the app said.
+     Fix direction: when the take is kept because the swap was refused (both `isSwapRefusal`
+     branches — the convert's and `saveWebm`'s), set the take's atime/mtime to now
+     (`fs/promises` `utimes(tempPath, now, now)`) BEFORE the kept-take error is thrown, so the
+     6 hours start at the sentence; a failure to touch is logged to the console and never masks the
+     kept-take sentence (the take is still kept). The quit-kept take (T-128 (5)) is unchanged (no
+     sentence promises it a window). Covering tests: unit in `recordingCancel.test.ts` (the real
+     save path with a refused swap: the take's mtime backdated 7 h before the refusal is "now" after
+     it, and `pruneStaleTempFiles` with the userData seam keeps it at now + 5 h 59 min and removes it
+     at now + 6 h 1 min; a `utimes` that rejects still throws the kept-take sentence and keeps the
+     take); e2e: a NEW describe appended to tests/e2e/record.spec.ts reusing the T-142 setup —
+     inside main's refused-rename patch, the first refusal backdates every file in
+     `<userData>/recordings` by 7 h (standing in for a long convert); after the kept-take toast, the
+     app is closed and RELAUNCHED on the same userData (the real launch sweep runs) and the take is
+     still there, byte for byte; red on the unchanged build (the sweep reaps it).
+  **Docs:** LESSONS_LEARNED entry at the top (a deadline in a sentence is counted from when the
+  person reads it; the clock the code keeps must start there too); the T-141 (5) / T-142 IC rows
+  (the window starts at the sentence); a TESTING paragraph; USER_GUIDE's "at least 6 hours" stays
+  true (check the wording).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; item 1 lands with the covering tests named above; new cases in NEW describe blocks
+  appended at the end of shared files; `npm run verify` and the FULL Playwright suite green before
+  handback (no ffmpeg command changes, so `npm run test:media` once on 7.0.2 as a regression
+  check); no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
