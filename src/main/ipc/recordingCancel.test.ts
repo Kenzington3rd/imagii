@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -107,12 +107,15 @@ vi.mock('../ffmpeg/convert', async (importOriginal) => {
 let copyHook: ((real: typeof import('node:fs/promises'), src: string, dst: string) => Promise<void>) | null = null
 // T-140 (1): and the swap onto the chosen path can be refused the way Windows refuses it while the file is open in another app (Linux cannot be made to).
 let renameHook: ((real: typeof import('node:fs/promises'), from: string, to: string) => Promise<void>) | null = null
+// T-143 (1): and the touch that restarts the kept take's 6 hours can be made to fail (a take whose folder went read-only is the case it stands for).
+let utimesHook: ((real: typeof import('node:fs/promises'), file: string, atime: Date, mtime: Date) => Promise<void>) | null = null
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...real,
     copyFile: async (src: string, dst: string) => (copyHook ? copyHook(real, src, dst) : real.copyFile(src, dst)),
-    rename: async (from: string, to: string) => (renameHook ? renameHook(real, from, to) : real.rename(from, to))
+    rename: async (from: string, to: string) => (renameHook ? renameHook(real, from, to) : real.rename(from, to)),
+    utimes: async (file: string, atime: Date, mtime: Date) => (utimesHook ? utimesHook(real, file, atime, mtime) : real.utimes(file, atime, mtime))
   }
 })
 
@@ -120,6 +123,7 @@ const { cancelRecordingConvert, registerRecordingIpc, recordingConvertFailureMes
   await import('./recording')
 const { userFacingError } = await import('../../shared/userFacingError')
 const { ConvertFailedError } = await import('../ffmpeg/convert')
+const { pruneStaleTempFiles, __testing__ } = await import('../tempCleanup')
 registerRecordingIpc()
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -167,6 +171,7 @@ beforeEach(() => {
   remuxOutcome = 'ok'
   copyHook = null
   renameHook = null
+  utimesHook = null
   remuxCalls = []
   lastConvert = null
   saveDialogResult = { canceled: true }
@@ -816,4 +821,97 @@ describe('the kept-take sentence opens with the lead the renderer recognises (T-
     expect(sentence.startsWith(`${RECORDING_KEPT_LEAD} in `)).toBe(true)
     expect(isRecordingKeptMessage(userFacingError(new Error(sentence), 'Saving the recording failed.').message), 'and userFacingError shows it as written').toBe(true)
   })
+})
+
+// T-143 (1): the "6 hours" in the kept-take sentence start when the person READS it. The launch sweep ages `recordings/<id>.webm` by its mtime, and nothing had
+// touched the take since the recording's last write - so the convert's whole run (tens of minutes for a long take) came out of the 6 hours the sentence promised.
+// A refused swap now sets the take's atime/mtime to now before the sentence is thrown. The convert is a mock here, so "a long convert" is the rename hook backdating
+// the take 7 h just before the refusal, which is what the real wait does to its mtime relative to the sentence.
+describe('the kept take\'s 6 hours start at the sentence, not at the end of the recording (T-143 (1))', () => {
+  const HOUR = 60 * 60 * 1000
+  let osTmp = ''
+  let savedTmpdir: string | undefined
+
+  beforeEach(() => {
+    // The sweep also scans %TEMP%/imagii-*: pointed at an empty folder of its own, it cannot touch the host's.
+    osTmp = path.join(TMP, 'os-tmp')
+    mkdirSync(osTmp, { recursive: true })
+    savedTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = osTmp
+    __testing__.setUserDataDirForTest(TMP)
+  })
+  afterEach(() => {
+    __testing__.setUserDataDirForTest(null)
+    if (savedTmpdir === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = savedTmpdir
+  })
+
+  /** A swap refused for good, after a convert that took "7 hours": the take's mtime is that old when the refusal lands. */
+  const refuseAfterALongConvert = (): void => {
+    renameHook = async (real, from, to) => {
+      const old = new Date(Date.now() - 7 * HOUR)
+      for (const f of readdirSync(path.join(TMP, 'recordings'))) await real.utimes(path.join(TMP, 'recordings', f), old, old)
+      throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+    }
+  }
+  async function save(outPath: string, mp4: boolean): Promise<{ id: string; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      await invoke('recording:finalize', id, { filename: mp4 ? 'take.mp4' : 'take.webm', durationMs: 5000, convertToMp4: mp4 })
+      return { id, error: null }
+    } catch (err) {
+      return { id, error: err as Error }
+    }
+  }
+
+  it.each([
+    ['the MP4 convert', true, 'ok'],
+    ['the WebM remux', false, 'ok'],
+    ['the WebM fallback copy (the remux failed)', false, 'crash']
+  ] as const)('%s: the take is "now" after the refusal, the sweep keeps it for 5 h 59 min and reaps it at 6 h 1 min', async (_label, mp4, remux) => {
+    remuxOutcome = remux
+    refuseAfterALongConvert()
+    const before = Date.now()
+    const { id, error } = await save(path.join(TMP, mp4 ? 'out.mp4' : 'out.webm'), mp4)
+    const after = Date.now()
+    expect(error?.message, 'the kept-take sentence, as before').toBe(recordingKeptMessage(path.join(TMP, 'recordings')))
+    const take = tempPathFor(id)
+    const mtime = statSync(take).mtimeMs
+    expect(mtime, 'the 7-hours-old take was touched: its clock starts at the sentence').toBeGreaterThanOrEqual(before - 2000)
+    expect(mtime).toBeLessThanOrEqual(after + 2000)
+    expect(statSync(take).atimeMs, 'atime too').toBeGreaterThanOrEqual(before - 2000)
+
+    const swept = await pruneStaleTempFiles(mtime + 6 * HOUR - 60_000)
+    expect(swept.removed, 'the person reads the sentence and relaunches 5 h 59 min later: the take is there').toBe(0)
+    expect(readFileSync(take, 'utf8')).toBe('streamed webm')
+    const late = await pruneStaleTempFiles(mtime + 6 * HOUR + 60_000)
+    expect(late.removed, 'and the sweep after the 6 hours the sentence promised reaps it, as the sentence says it may').toBe(1)
+    expect(existsSync(take)).toBe(false)
+  }, 20_000)
+
+  it('a touch that fails never masks the sentence: the same kept-take error is thrown, the failure goes to the console, and the take stays on disk', async () => {
+    refuseAfterALongConvert()
+    utimesHook = async () => {
+      throw Object.assign(new Error('EACCES: permission denied, utime'), { code: 'EACCES', syscall: 'utime' })
+    }
+    const { id, error } = await save(path.join(TMP, 'out.mp4'), true)
+    expect(error?.message).toBe(recordingKeptMessage(path.join(TMP, 'recordings')))
+    expect((error?.cause as NodeJS.ErrnoException).syscall, 'the cause is still the disk\'s refusal of the swap, not the failed touch').toBe('rename')
+    expect(readFileSync(tempPathFor(id), 'utf8'), 'the take is still kept').toBe('streamed webm')
+    expect(mainLog.mock.calls.flat().join(' '), 'the touch\'s failure was logged').toContain('EACCES')
+  }, 20_000)
+
+  it('the controls: a quit-kept take (T-128 (5)) is not touched - no sentence promises it a window', async () => {
+    convertOutcome = 'quit-after-exit'
+    const old = Date.now() - 7 * HOUR
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    utimesSync(tempPathFor(id), new Date(old), new Date(old))
+    saveDialogResult = { canceled: false, filePath: path.join(TMP, 'quit.mp4') }
+    expect(await invoke('recording:finalize', id, { filename: 'quit.mp4', durationMs: 5000, convertToMp4: true }), 'a quit is not an error').toBeNull()
+    expect(readFileSync(tempPathFor(id), 'utf8'), 'the take is kept').toBe('streamed webm')
+    expect(Math.abs(statSync(tempPathFor(id)).mtimeMs - old), 'and left as the recording left it').toBeLessThan(2000)
+  }, 20_000)
 })

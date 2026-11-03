@@ -1,5 +1,5 @@
 import { ipcMain, desktopCapturer, dialog, BrowserWindow, app, shell } from 'electron'
-import { copyFile, mkdir, stat, unlink } from 'node:fs/promises'
+import { copyFile, mkdir, stat, unlink, utimes } from 'node:fs/promises'
 import { existsSync, createWriteStream, unlinkSync, type WriteStream } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
@@ -236,6 +236,22 @@ function keptTakeError(err: unknown): Error {
 }
 
 /**
+ * T-143 (1): the one keep both refused-swap branches use. The "6 hours" in the sentence start when the person READS it, and the launch sweep ages
+ * `recordings/<id>.webm` by its mtime - which is the recording's last write, before a convert (tens of minutes for a long take) and the swap's retries that
+ * ran since. So the take's atime/mtime are set to now before the sentence is thrown, and the window the sentence promises is the window there is. A touch that
+ * fails is logged and never masks the sentence: the take is kept either way, only its clock is the older one.
+ */
+async function keepRefusedTake(tempPath: string, err: unknown): Promise<Error> {
+  try {
+    const now = new Date()
+    await utimes(tempPath, now, now)
+  } catch (touchErr) {
+    console.error('[recording] could not restart the kept take\'s 6 hours (it is kept, on its older clock):', touchErr)
+  }
+  return keptTakeError(err)
+}
+
+/**
  * T-120: write the take to `outputPath` as a WebM that opens in Video Studio. MediaRecorder streams its
  * webm, so the file it wrote has no duration in its header and `probeVideo` refuses it (a take saved with
  * Convert off could only be reopened by re-exporting it as MP4 from some other program). A packet copy
@@ -373,7 +389,7 @@ async function promoteTempWebm(
         // and the sentence says so (it was the disk's own error, and the finally below deleted the take under it).
         if (isSwapRefusal(err)) {
           keepTake = true
-          throw keptTakeError(err)
+          throw await keepRefusedTake(tempPath, err)
         }
         console.error('[recording] convert failed:', err)
         throw new Error(recordingConvertFailureMessage(err))
@@ -391,7 +407,7 @@ async function promoteTempWebm(
         // T-141 (5): the same keep as the convert's, for the remux's swap and the fallback copy's.
         if (isSwapRefusal(err)) {
           keepTake = true
-          throw keptTakeError(err)
+          throw await keepRefusedTake(tempPath, err)
         }
         throw err
       }

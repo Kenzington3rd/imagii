@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -3864,5 +3864,112 @@ test.describe('T-142 (1): the toast for a kept take has the way to it and stays 
 
   test('Convert off: the same toast for the remux whose swap is refused', async () => {
     await keptTakeToast('kept-toast-webm', false)
+  })
+})
+
+// ── T-143 (1): the kept take's 6 hours start at the sentence, not at the end of the recording ───────────────────────────────────────────────────────────────────
+//
+// The sentence says "Copy it out within 6 hours; after that imagii may delete it", and the launch sweep ages `recordings/<id>.webm` by its mtime - the recording's
+// last write, before the convert (tens of minutes for a long take) and the swap's retries. A person who relaunched inside that gap lost the only copy of a finished
+// recording earlier than the app said. A refused swap now sets the take's clock to now before the sentence is thrown. A long convert cannot be waited for here, so
+// main's refused-rename patch (T-141 (5)'s `refuseRenamesOnto`) is wrapped once more: its FIRST refusal sets every file in <userData>/recordings back 7 h, which is
+// what the wait does to the take's mtime relative to the moment the sentence is shown. Everything else is real: the recorder, the convert, the refusal, the toast,
+// the app closing, the NEXT launch on the same userData and the launch sweep it runs. The sweep is proved to have finished by a decoy it must reap AFTER the
+// recordings folder (a shifted-SRT copy in captions/, which `pruneStaleTempFiles` sweeps last) and to discriminate by a second decoy in recordings/ that is as old as
+// the take was made to look. One variant (Convert to MP4) is enough: both variants end in the same `keepRefusedTake`, and the WebM remux's swap is the unit
+// suite's (recordingCancel.test.ts, all three paths).
+test.describe('T-143 (1): a kept take survives the launch sweep for the 6 hours the sentence promised', () => {
+  test.describe.configure({ timeout: 300_000 })
+
+  /** Wrap main's refused-rename patch: the first refusal sets every file in `dir` back 7 h before it is thrown. */
+  async function backdateOnFirstRefusal(app: ElectronApplication, held: string, dir: string): Promise<void> {
+    await app.evaluate((_electron, { target, folder }) => {
+      const g = globalThis as unknown as { __backdatedOnRefusal?: string[] }
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fsp = getBuiltin('node:fs/promises') as { rename: (from: string, to: string) => Promise<void> }
+      const fs = getBuiltin('node:fs') as { readdirSync: (d: string) => string[]; utimesSync: (f: string, a: Date, m: Date) => void }
+      const pathMod = getBuiltin('node:path') as { join: (...p: string[]) => string }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const prior = fsp.rename
+      g.__backdatedOnRefusal = []
+      fsp.rename = async (from: string, to: string): Promise<void> => {
+        if (String(to) === target && (g.__backdatedOnRefusal?.length ?? 0) === 0) {
+          const old = new Date(Date.now() - 7 * 60 * 60 * 1000)
+          for (const f of fs.readdirSync(folder)) {
+            fs.utimesSync(pathMod.join(folder, f), old, old)
+            g.__backdatedOnRefusal?.push(f)
+          }
+        }
+        return prior(from, to)
+      }
+      mod.syncBuiltinESMExports()
+    }, { target: held, folder: dir })
+  }
+
+  test('Convert to MP4: the take a long convert aged by 7 h is still there, byte for byte, after a relaunch runs the launch sweep', async () => {
+    ensureScreenshots()
+    const root = makeRoot('kept-sweep')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'refused.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    let app2: ElectronApplication | undefined
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      await refuseRenamesOnto(app, outPath)
+      await backdateOnFirstRefusal(app, outPath, recordingsDir(userDataDir))
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 90_000, intervals: [200] })
+        .toContain('imagii kept your take')
+      expect(await refusedRenameCount(app), 'the swap onto the chosen name really was refused').toBeGreaterThan(1)
+      const backdated = await app.evaluate(() => (globalThis as unknown as { __backdatedOnRefusal?: string[] }).__backdatedOnRefusal ?? [])
+      expect(backdated, 'the stand-in for a long convert took: the first refusal aged the take').toHaveLength(1)
+      const takes = leftoverTemps(userDataDir)
+      expect(takes, 'the raw take is on disk when the sentence is shown').toEqual(backdated)
+      const take = path.join(recordingsDir(userDataDir), takes[0] as string)
+      const bytesBefore = readFileSync(take)
+      expect(bytesBefore.length, 'a whole recording, not a stub').toBeGreaterThan(1000)
+      await app.close()
+
+      // The person reads the sentence and relaunches. A decoy as old as the take was made to look must be reaped (it makes the case discriminate and bounds the wait);
+      // the shifted-SRT decoy in captions/ is swept after recordings/, so its going means the sweep has been through the take.
+      const decoy = path.join(recordingsDir(userDataDir), 'decoy-reaped-by-the-launch-sweep.webm')
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      const sweepEnd = path.join(captionsDir, 'last.srt.clip-0f8c1a52-3b7d-4e19-9a64-2c5d7e8f1b30.srt')
+      writeFileSync(decoy, 'an abandoned stub, older than 6 h')
+      writeFileSync(sweepEnd, '1\n00:00:00,000 --> 00:00:01,000\nx\n')
+      const old = new Date(Date.now() - 7 * 60 * 60 * 1000)
+      utimesSync(decoy, old, old)
+      utimesSync(sweepEnd, old, old)
+
+      app2 = await launchApp(userDataDir)
+      await expect
+        .poll(() => existsSync(sweepEnd), { timeout: 60_000, intervals: [200], message: 'the launch sweep ran to its end (captions/ is swept after recordings/)' })
+        .toBe(false)
+      expect(existsSync(decoy), 'the sweep reaped what was over 6 h old in recordings/').toBe(false)
+      expect(existsSync(take), 'and kept the take: its 6 hours began at the sentence, not at the end of the recording').toBe(true)
+      expect(readFileSync(take).equals(bytesBefore), 'byte for byte').toBe(true)
+      expect(Date.now() - statSync(take).mtimeMs, 'its clock is the sentence\'s, not the 7 h the convert stood in for').toBeLessThan(10 * 60 * 1000)
+      expect(existsSync(outPath), 'nothing at the chosen name').toBe(false)
+    } finally {
+      await app.close().catch(() => undefined)
+      await app2?.close().catch(() => undefined)
+      cleanup(root)
+    }
   })
 })

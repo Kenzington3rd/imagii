@@ -6297,7 +6297,7 @@ IMG-PREC.
   appended at the end of shared files; `npm run verify` and the FULL Playwright suite green before
   handback (no ffmpeg command changes, so `npm run test:media` once on 7.0.2 as a regression
   check); no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open
+- **Status:** done (round 92 — see the Done entry)
 
 ---
 
@@ -6817,6 +6817,34 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 92 — T-143 item 1, landed in the commit that carries this
+entry. Worked by one Sonnet in a fresh clone of ee49a44. The fix: a
+take kept because the swap onto the chosen name was refused has its
+atime/mtime set to now (`keepRefusedTake`, used by both refused-swap
+branches) before the kept-take sentence is thrown, so the "6 hours"
+the sentence promises start when the person reads it — the launch
+sweep ages `recordings/` by mtime, which was the recording's end, and
+a long convert spent part of the window before the sentence; a touch
+that fails is logged and never masks the sentence; the quit-kept take
+is unchanged. USER_GUIDE now says "at least 6 hours from that
+message". 15 ledger mutations (9 unit, 6 e2e incl. three test-side),
+all killed, all restored byte-identical; one invalid first mutant (a
+syntax error in the test's evaluate) disclosed and replaced; 2 reds
+(unit and e2e on the unchanged base). Worker's one Playwright failure
+(audio.spec "the re-attached video lands as name (2)", a click timeout
+at openStudio under load) passed 5/5 standalone and passed in the
+expediter's full run. Expedited personally: integrity (the 7 files are
+the ticket's ownership list), verify x2 (199/5762), test:media on 7.0.2
+(426 passed | 13 skipped of 439, 9m37s), FULL Playwright 527/527
+(45.0 min, Layer 5 beside it; the new relaunch case runs the real
+launch sweep), sha of every touched file identical before and after;
+one independent mutation at a seam no ledger row names (the time
+handed to `utimes` in milliseconds, which Node reads as seconds →
+the three T-143 unit cases red), restored byte-identical, sha256
+verified; the e2e build predates the mutant (built 08:22:01, mutant
+08:22:23; the bundle reads `new Date()`). Applied to ee49a44 by
+`git apply` with every file byte-identical to the expedited clone.
 
 Round 91 — T-142 item 1 and the three non-counted parts, landed in
 the commit that carries this entry. Worked by one Sonnet in a fresh

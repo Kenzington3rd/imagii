@@ -14,6 +14,20 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-03 — T-143 (round 92): the kept take's 6 hours started when the recording ended, not when the sentence was read
+
+The twenty-ninth pass (one track: the main process). Ledger: r92a/ledger.tsv (2 red rows against a build of the unchanged tree, ee49a44, and 15 mutation rows over 15 mutations, 15 of 15 restores byte-identical, every mutant killed; one further row is a mutation that was a syntax error in the test's own evaluate and is not counted).
+
+### (1) [LOW] - "Copy it out within 6 hours" counted from the wrong moment
+
+- **Bug.** When the swap onto the chosen name is refused for good, the raw take is kept and the toast says "Copy it out within 6 hours; after that imagii may delete it" (USER_GUIDE: "for at least 6 hours"). The launch sweep ages `recordings/<id>.webm` by its mtime, which is the recording's last write; the MP4 convert (tens of minutes for a long take) and the swap's retries ran after that. A person who relaunched imagii inside that gap lost the only copy of a finished recording earlier than the sentence said.
+- **Root cause.** A deadline was written into a sentence, and the clock the code keeps for it was started by an unrelated event (the last write of the file). The T-141 (5) tests pinned the words and that the take was on disk; none asked what the sweep would decide about it a few hours later.
+- **Fix.** `keepRefusedTake` (`recording.ts`): both refused-swap branches (the convert's and `saveWebm`'s) set the take's atime/mtime to now before the kept-take error is thrown, so the 6 hours start at the sentence. A touch that fails is logged and never masks the sentence (the take is kept either way). The take a quit keeps (T-128 (5)) is unchanged: no sentence promises it a window.
+- **Test.** `recordingCancel.test.ts` "the kept take's 6 hours start at the sentence" (the MP4 convert, the WebM remux and the fallback copy, the take backdated 7 h before the refusal: its mtime is now after it, `pruneStaleTempFiles` through the userData seam keeps it at +5 h 59 min and reaps it at +6 h 1 min; a rejecting `utimes` still throws the exact sentence and the take stays; the quit-kept control is untouched) and record.spec.ts "T-143 (1)" (the real recorder, the real convert, the refusal aging the take 7 h as the stand-in for a long convert, the app closed and relaunched on the same userData so the real launch sweep runs, the take still there byte for byte; red on the unchanged build: the sweep reaped it).
+- **Lesson.** **A deadline stated in a sentence is counted from when the person reads it, and the clock the code keeps must start there too. When a message promises "for N hours", find what actually ages the thing (here an mtime the recording's last write set) and ask which event started it; if it is not the event the sentence is spoken at, set the clock at the sentence. A test of such a promise has to age the thing and let the real reaper decide (the launch sweep on a relaunch), not only assert the words and the file's presence.** The e2e needs a way to know the sweep has finished: a decoy the sweep reaps AFTER the folder under test (the sweep order is the clock) gives the wait an end and the case a second discriminator.
+
+---
+
 ## 2026-11-03 — T-142 (round 91): the way to the only copy of a take, a Discard that lost to the quit, and a scratch file that could be someone else's
 
 The twenty-eighth pass (one track: the main process and the Record screen). Ledger: r91a/ledger.tsv (14 red rows against a build of the unchanged tree, e3034d5, and 44 mutation rows over 43 mutations, 44 of 44 restores byte-identical; three rows exit 0: one was the run-guard mutant, killed by a test added after its first run (the cancel during the folder listing), and two are guards over the scratch name that a free name can no longer reach, kept because the ticket keeps them and disclosed as equivalent mutants).
