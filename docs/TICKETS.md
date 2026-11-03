@@ -6195,6 +6195,71 @@ IMG-PREC.
 
 ---
 
+## T-142 — sweep-28 fixes (round 91)
+
+- **Spec:** the twenty-eighth sweep's verified findings (candidate clean pass #1 on 416a914) —
+  each confirmed by the expediter against source. Eight lenses clean; the UX lens's one finding
+  is item 1. One track (main process + the Record screen); the non-counted items ride with it.
+  1. **[LOW] The only copy of a kept take is out of reach.** T-141 (5) keeps the raw take when the
+     swap onto the chosen name is refused after a whole convert, and `recordingKeptMessage`
+     (src/main/ipc/recording.ts:219-224) names its folder "so it can be opened" — but the sentence
+     reaches the person only as a `reportFailure` error toast (RecordStudio.tsx:645;
+     ERROR_TOAST_MS, 8 s) with no action; the toast text cannot be selected or copied
+     (styles/index.css body `user-select: none`); the Record screen then drops to idle (:661) and
+     never shows it again; the file is `<id>.webm` in a hidden AppData folder the sentence names
+     only as a folder (or, past 240 characters, in words); and the launch sweep reaps it after 6 h.
+     A person who looked away for 8 s, or cannot hand-type an AppData path, loses the only copy of
+     a finished take. Fix direction:
+     - main gets `recording:revealTake(id)`: the id validated with the existing `SAFE_ID_RE`; the
+       path BUILT in main as `recordingsDir()/<id>.webm` (no renderer-supplied path); when the
+       file exists, `shell.showItemInFolder` on it, else `shell.openPath(recordingsDir())`; preload
+       + types.
+     - the kept-take sentence's lead is a shared constant (src/shared) both main's
+       `recordingKeptMessage` and the renderer use; RecordStudio's failure branch recognises it
+       (on `userFacingError`'s message) and, instead of the plain `reportFailure` toast, raises a
+       red toast built on `toastWithActions`' button pattern with "Show in folder" (calls
+       `recording:revealTake` with the take's session id, which RecordStudio holds) and "Close"
+       (the product's one dismiss word, BRANDING_GUIDE "Dismissing a dialog"),
+       that STAYS until dismissed (duration Infinity — the only copy of a recording is at stake,
+       so it must not time out); one helper in lib/ (beside savedToast), no hand-written one-off.
+     - every other failure keeps `reportFailure` exactly as today.
+     Covering tests: unit for the handler (bad id refused, existing file → showItemInFolder with
+     the built path, missing file → openPath of the folder) and the helper; e2e: extend
+     record.spec.ts "T-141 (5)" in a NEW describe block — with `refuseRenamesOnto`, the toast has
+     both buttons, it is still on screen after ACTION_TOAST_MS + 2 s, Show in folder calls the
+     (stubbed, in main) `shell.showItemInFolder` with `<userData>/recordings/<id>.webm` that
+     exists and is the real webm, Close removes the toast and the take stays; red on the unchanged build. IC rows
+     (the two buttons; revise the T-141 (5) row).
+  Non-counted, same files:
+  - **convert.ts `cancelWhere` (:274-289) sets `active.byQuit` unconditionally and deletes the
+    entry**, so a Discard that lands after the quit sweep finds nothing and the take is kept,
+    against the latch's "the name wins in either order" (electron + QA lenses; unreachable in
+    practice, safe side). Merge like `mark()` (`byQuit` stays true only when every cancel was the
+    sweep's — keep the entry until the child closes so a later per-take cancel can clear it);
+    unit for both orders on a live child.
+  - **The re-attach's scratch WAV can replace a file the person already has**
+    (ffmpeg lens; contrived — needs a file at exactly that name — not counted):
+    `runAudioReattach` (src/main/audio/process.ts:597) writes `<output>.cleaned.wav` and
+    deletes it after, so an unrelated file at that exact name is overwritten and then deleted.
+    Take a name nothing is at (the existing `nextFreePath`, or a partial-style name) and keep the
+    output-is-input refusal over it; Layer 5 (both majors): a re-attach with a file already at
+    `<output>.cleaned.wav` leaves it byte-identical and the job still succeeds.
+  - **RecordStudio.tsx:635-644's comment still describes T-110 (u) un-narrowed** (disclosed in
+    round 90): rewrite it to say which branch says what after T-141 (5) and item 1.
+  **Docs:** LESSONS_LEARNED entry (a sentence that names where the only copy is must carry the
+  way there and outlive a glance — a path in an unselectable 8 s toast is not a way); IC rows;
+  TESTING paragraph; USER_GUIDE line for the Record save failure; BRANDING_GUIDE Toasts line (a
+  toast that guards the only copy of a file stays until closed).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; item 1 and the non-counted items land with the covering tests named above; new cases in
+  NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run test:media`
+  (Layer 5's recording handlers touch convert.ts) and the FULL Playwright suite green before
+  handback; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID
+  only.
+- **Status:** open
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
