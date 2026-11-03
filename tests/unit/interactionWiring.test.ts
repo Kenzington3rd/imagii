@@ -210,7 +210,7 @@ describe('T-19 — Audio Studio Close asks first', () => {
     const studio = read('modules/audio-studio/AudioStudio.tsx')
     expect(studio).toMatch(/onClick=\{handleClose\}/)
     expect(studio).not.toMatch(/onClick=\{clearSource\}/)
-    expect(studio).toMatch(/if \(!confirmAudioClose\(chain, \(message\) => confirm\(message\)\)\) return/)
+    expect(studio).toMatch(/if \(!confirmAudioClose\(chain, \(message\) => confirm\(message\), 'close', keepsGoing\)\) return/)
   })
 })
 
@@ -3506,5 +3506,36 @@ describe('T-145 - the progress channels that feed the run stores have one subscr
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
     expect(studio.match(/useVideoProgressFeeds\(\)/g) ?? []).toHaveLength(1)
     expect(studio.indexOf('useVideoProgressFeeds()'), 'a hook ahead of the studio\'s render').toBeLessThan(studio.indexOf('return ('))
+  })
+})
+
+describe('T-146 - the closed sound\'s export card is mounted ahead of the conditional, and the dialog and the card share one Cancel', () => {
+  // Behavior: AudioJobRunning.test.tsx, state/audioExport.test.ts and AudioStudio.test.ts (units); audio.spec.ts "T-146 (1)" (Close, the card's moving figure, Cancel).
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('AudioStudio mounts the card once, before its open-or-closed conditional, and Close reads the running flag when it is pressed', () => {
+    const studio = strip(read('modules/audio-studio/AudioStudio.tsx'))
+    expect(studio.match(/<AudioJobRunning \/>/g) ?? []).toHaveLength(1)
+    expect(studio.indexOf('<AudioJobRunning />'), 'ahead of the conditional').toBeLessThan(studio.search(/\{source \? \(\s*<div className="grid/))
+    expect(studio.indexOf('<AudioJobRunning />'), 'after the header').toBeGreaterThan(studio.indexOf('</header>'))
+    expect(studio).toMatch(/const keepsGoing = exportKeepsGoingSentence\(useAudioExport\.getState\(\)\.running\)/)
+  })
+
+  it('the Export dialog\'s Cancel and the card\'s are the SAME function, and main is asked in one place only', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+    const card = strip(read('modules/audio-studio/AudioJobRunning.tsx'))
+    expect(dialog).toMatch(/<RunningCancel title="Cancel export" onClick=\{\(\) => void cancelAudioExport\(\)\} \/>/)
+    expect(card).toMatch(/<RunningCancel title=\{row\.cancelTitle\} onClick=\{\(\) => void cancelAudioExport\(\)\} \/>/)
+    expect(dialog, 'no second copy of the cancel path').not.toMatch(/audio\.cancel\(/)
+    expect(card).not.toMatch(/audio\.cancel\(/)
+    expect(strip(read('modules/audio-studio/state/audioExport.ts')).match(/window\.api\.audio\.cancel\(/g) ?? []).toHaveLength(1)
+  })
+
+  it('the card is an always-mounted polite region, its percent is aria-hidden, and the progress listener stays the export\'s own (the figure moves after Close)', () => {
+    const card = read('modules/audio-studio/AudioJobRunning.tsx')
+    expect(strip(card)).toMatch(/<div aria-live="polite" className=\{row \? undefined : '-mb-5'\}>/)
+    expect(strip(card)).toMatch(/<span className="text-xs text-ink-muted font-mono whitespace-nowrap" aria-hidden="true">\s*\{row\.percent\}/)
+    expect(strip(card), 'a card has no listener of its own').not.toMatch(/onProgress\(|useEffect/)
+    expect(strip(read('modules/audio-studio/ExportDialog.tsx'))).toMatch(/const offProgress = window\.api\.audio\.onProgress\(\(p\) => useAudioExport\.getState\(\)\.progress\(p\)\)/)
   })
 })

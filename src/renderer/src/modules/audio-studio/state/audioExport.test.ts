@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useAudioExport } from './audioExport'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { cancelAudioExport, useAudioExport } from './audioExport'
 
 /**
  * T-135 (1) - the audio export's row and its running flag are a module store.
@@ -9,17 +9,18 @@ import { useAudioExport } from './audioExport'
  */
 describe('useAudioExport - an export the dialog does not have to be mounted for (T-135 (1))', () => {
   beforeEach(() => {
-    useAudioExport.setState({ job: null, running: false, sourcePath: null })
+    useAudioExport.setState({ job: null, running: false, sourcePath: null, sourceName: null })
   })
 
   const start = (jobId = 'a'): boolean =>
-    useAudioExport.getState().begin({ jobId, pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav')
+    useAudioExport.getState().begin({ jobId, pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
 
   it('begin shows the row as running and remembers the file it was made for', () => {
     expect(start()).toBe(true)
     expect(useAudioExport.getState().running).toBe(true)
     expect(useAudioExport.getState().job).toEqual({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 })
     expect(useAudioExport.getState().sourcePath).toBe('/s/voice.wav')
+    expect(useAudioExport.getState().sourceName, 'and the name the person knows it by, for the closed-sound card').toBe('voice.wav')
   })
 
   it('is single-flight: a second export while one runs is refused and does not touch the row', () => {
@@ -78,5 +79,45 @@ describe('useAudioExport - an export the dialog does not have to be mounted for 
     useAudioExport.getState().fail({ error: 'a different sentence', canceled: false })
     expect(useAudioExport.getState().job, 'the Canceled row is as the export left it').toBe(left)
     expect(useAudioExport.getState().job?.outputPath).toBeUndefined()
+  })
+})
+
+describe('cancelAudioExport - the one Cancel the dialog and the closed-sound card share (T-146)', () => {
+  const cancel = vi.fn()
+  beforeEach(() => {
+    useAudioExport.setState({ job: null, running: false, sourcePath: null, sourceName: null })
+    cancel.mockReset()
+    cancel.mockResolvedValue(undefined)
+    vi.stubGlobal('window', { api: { audio: { cancel } } })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('asks main to stop the job that is running, by the id the store holds when it is pressed', async () => {
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
+    await cancelAudioExport()
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledWith('a')
+  })
+
+  it('reads the id at press time: the next export is the one it stops', async () => {
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
+    useAudioExport.getState().finish()
+    useAudioExport.getState().begin({ jobId: 'b', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
+    await cancelAudioExport()
+    expect(cancel).toHaveBeenCalledWith('b')
+  })
+
+  it('does nothing with no export running, and a row left over from a finished one is not a job to stop', async () => {
+    await cancelAudioExport()
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
+    useAudioExport.getState().finish()
+    await cancelAudioExport()
+    expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('a refusal from main is swallowed: the export call rejecting on the kill is the signal', async () => {
+    cancel.mockRejectedValue(new Error('no such job'))
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
+    await expect(cancelAudioExport()).resolves.toBeUndefined()
   })
 })

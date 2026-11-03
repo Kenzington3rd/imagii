@@ -227,7 +227,7 @@ loaded, the same at 1632 and 1024 px wide), Compile's is the same since T-131 (1
 part held a moment ago, so a double-click's second press canceled the job it had just started (T-126 (20); measured, the idle button spans 1093-1205 and Cancel
 1147-1205). And a label that is a sentence wraps beside a Cancel: the kit's running label, "Exporting platform version 2 of 5...", was 197 x 42 px at the default
 and the minimum window (T-137 (4)), so it is `whitespace-nowrap` and the kit's column is the caption, the button, the Cancel; (3) on the caption row beside the job's name when there is no
-primary to press (the Clip Kit card that outlives its closed video, `ClipKitRunning`); and (4) beside the primary in Audio Studio's export row, the one place it
+primary to press (the cards that outlive a closed studio document: the Clip Kit card, `ClipKitRunning`; the closed video's jobs, one row each, `VideoJobsRunning` (T-144); and the closed sound's export, `AudioJobRunning` (T-146)); and (4) beside the primary in Audio Studio's export row, the one place it
 is (the primary is `ml-auto` on a `flex-wrap` row and Cancel follows it, drawn only while a job exists, after the Save dialog has been answered: the second press
 of a double-click meets the dialog, not the strip). A new running-job Cancel takes the first placement that applies, decided in this order: a progress row if
 the job has one of its own (a row with no primary on it that exists only while the job runs and holds its bar; a bar that stays after the job as its result, like

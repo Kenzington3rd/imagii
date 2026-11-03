@@ -355,7 +355,9 @@ that names the file being converted.)
 - **Leaving a studio does not stop a job.** A render, a scan, a transcription or an export keeps running
   when you go to Home or another studio. When you come back the panel shows it as running — its button
   reads "Exporting…", "Scanning…" or the like and is off, the progress bar is there, and so is **Cancel**
-  — and a batch that finished while you were away shows its finished rows with **Show in folder**. Clip Kit
+  — and a batch that finished while you were away shows its finished rows with **Show in folder**. The
+  "Exported 2 files" message carries **Show in folder** too, for the first file written, wherever you are when
+  the batch ends (on Home, in another studio, or beside another video). Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
   names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
   running label stays on one line), and no second kit starts until it ends. If you remove that clip the kit keeps running and stays cancelable; if you close the video,
@@ -556,6 +558,14 @@ never called loaded.
   of 2 — rendering" — because each step has its own progress bar. If you cancel
   or it fails, the row says **Canceled** or **Failed** and no half-written file
   is left.
+- **Closing the sound does not stop an export that is running.** An export or a
+  re-attach to the video keeps going when you press **Close**, and a card beside the
+  importer shows it - the file it is for, the step it is on, how far along it is - with its
+  own **Cancel**, until it finishes or you cancel it. **Close** says so when it asks
+  ("The export that is running keeps going; its Cancel stays on screen."), even when
+  you have nothing to lose in the sound itself; with nothing running and nothing to lose
+  it asks nothing. The card's **Cancel** is the Export panel's: no file and no half-written
+  copy is left in your folder.
 - The toast for a re-attached video says **Cleaned audio attached to the
   video** and carries **Show in folder** and **Edit in Video Studio**, which
   opens that new `.mp4` there (it asks before it replaces the video you're

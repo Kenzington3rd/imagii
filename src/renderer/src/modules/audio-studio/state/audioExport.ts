@@ -28,8 +28,10 @@ interface AudioExportState {
   running: boolean
   /** The file the export was made from: the row is drawn for that file (or while it runs), not under another one. */
   sourcePath: string | null
+  /** That file as the person knows it (the studio header's name: a video's own, never the scratch copy the sound is read from); the closed-sound card names it (T-146). */
+  sourceName: string | null
   /** Claim the export with its first row. False, and nothing changes, if one is already running. */
-  begin: (job: AudioExportJob, sourcePath: string) => boolean
+  begin: (job: AudioExportJob, sourcePath: string, sourceName: string) => boolean
   progress: (p: AudioJobProgress) => void
   done: (outputPath: string) => void
   fail: (end: { error: string; canceled: boolean }) => void
@@ -40,9 +42,10 @@ export const useAudioExport = create<AudioExportState>((set, get) => ({
   job: null,
   running: false,
   sourcePath: null,
-  begin: (job, sourcePath) => {
+  sourceName: null,
+  begin: (job, sourcePath, sourceName) => {
     if (get().running) return false
-    set({ job, running: true, sourcePath })
+    set({ job, running: true, sourcePath, sourceName })
     return true
   },
   progress: (p) => {
@@ -59,3 +62,18 @@ export const useAudioExport = create<AudioExportState>((set, get) => ({
   },
   finish: () => set({ running: false })
 }))
+
+/**
+ * The audio export's Cancel, the ONE path (T-146): the dialog's button beside Export and the closed sound's card (`AudioJobRunning`) both call it. The job
+ * id is read when the button is PRESSED, not when a component last rendered, so a card that outlives the dialog stops the export that is running now.
+ * Nothing is raised here: the killed ffmpeg rejects the export call, and `startExport`'s catch is the one place that says "Audio export canceled." (T-84).
+ */
+export async function cancelAudioExport(): Promise<void> {
+  const { job, running } = useAudioExport.getState()
+  if (!running || !job) return
+  try {
+    await window.api.audio.cancel(job.jobId)
+  } catch {
+    /* the export call rejecting on the kill is the signal; nothing to add */
+  }
+}

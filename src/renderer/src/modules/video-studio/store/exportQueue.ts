@@ -5,7 +5,6 @@ import { countOf } from '@shared/plural'
 import { persistSetting } from '../../../lib/persistSetting'
 import { reportFailure } from '../../../lib/reportFailure'
 import { toastSaved } from '../../../lib/savedToast'
-import { useVideoStore } from './videoStore'
 
 /**
  * The Export queue (T-135 (1)): its rows, whether a batch is running, and the batch itself.
@@ -123,10 +122,11 @@ export async function runExportBatch(opts: {
     // listeners are gone - so the rows take their files from here too (the panel's old always-on listener caught the late event; this one lasts one batch).
     for (const r of results) useExportQueue.getState().complete(r.jobId, r.outputPath)
     const sentence = `Exported ${countOf(queue.length, 'file')}`
-    // T-145: the rows' Show in folder belong to the video, and with it gone the toast is the only way to the files: it carries the first one written
-    // (a person who closed the video has no rows). With a video open the rows beside it have the reveal for every file, and the plain toast stays.
+    // T-146: Show in folder for the FIRST file written, always - as the GIF, Compile, PiP and Reframe toasts have it. T-145 gave it only to a person with
+    // no video open, but a batch also ends while the person is on another route, or after another video was opened (the panel's rows are then not
+    // for this batch), and the plain toast left them with no way to the files. Beside visible rows the extra button is harmless.
     const first = results.find((r) => r.outputPath)
-    if (useVideoStore.getState().source === null && first) toastSaved(sentence, first.outputPath)
+    if (first) toastSaved(sentence, first.outputPath)
     else toast.success(sentence)
     // INIT-E (round 15): persist the choice on success so the next batch
     // defaults to the same folder.

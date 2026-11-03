@@ -27,14 +27,16 @@ function joinList(parts: readonly string[]): string {
  * resets the chain and the history the same way — and T-113 gave that its own lead-in
  * (`'replace'`): nothing is being closed when you press a button on a video.
  */
-export function audioCloseMessage(chain: ChainSpec, lead: AudioDiscardLead = 'close'): string | null {
+export function audioCloseMessage(chain: ChainSpec, lead: AudioDiscardLead = 'close', jobsNote: string | null = null): string | null {
   const cuts = chain.cutRegions.length
   // `!= null`, not `!== null`: the field is optional (`secondaryTrack?:`), and a chain saved before the second
   // track existed has no key at all - `undefined !== null` said "The second track will be discarded" about a
   // track that was never there (T-121).
   const hasSecondary = chain.secondaryTrack != null
   const chainEdited = chainDiffersFromDefault(chain)
-  if (!cuts && !hasSecondary && !chainEdited) return null
+  // T-146: a sound is always loaded when this is asked, so a running export is a question by itself: nothing to discard, but the person is told the export is
+  // not what Close stops (the same lead-in, then the one sentence).
+  if (!cuts && !hasSecondary && !chainEdited) return jobsNote ? `${LEAD_IN[lead]} ${jobsNote}` : null
   const parts: string[] = []
   if (chainEdited) parts.push('your cleanup settings')
   if (cuts > 0) parts.push(countOf(cuts, 'cut'))
@@ -42,7 +44,16 @@ export function audioCloseMessage(chain: ChainSpec, lead: AudioDiscardLead = 'cl
   // Mirrors VideoStudio.tsx's confirm copy: name what is lost, then say it
   // is discarded. T-113: a list reads "A and B", not "A, B".
   const list = joinList(parts)
-  return `${LEAD_IN[lead]} ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
+  const base = `${LEAD_IN[lead]} ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
+  return jobsNote ? `${base} ${jobsNote}` : base
+}
+
+/**
+ * T-146: the sentence Close adds while the audio export runs, or null when none does. Close takes the Export panel (its bar and its Cancel) away and leaves
+ * the export going; the closed-sound card (`AudioJobRunning`) keeps the Cancel on screen. Video Studio's Close says the same of its jobs (T-144).
+ */
+export function exportKeepsGoingSentence(exportRunning: boolean): string | null {
+  return exportRunning ? 'The export that is running keeps going; its Cancel stays on screen.' : null
 }
 
 /**
@@ -67,9 +78,10 @@ function chainDiffersFromDefault(chain: ChainSpec): boolean {
 export function confirmAudioClose(
   chain: ChainSpec,
   ask: (message: string) => boolean,
-  lead: AudioDiscardLead = 'close'
+  lead: AudioDiscardLead = 'close',
+  jobsNote: string | null = null
 ): boolean {
-  const message = audioCloseMessage(chain, lead)
+  const message = audioCloseMessage(chain, lead, jobsNote)
   if (message === null) return true
   return ask(message)
 }

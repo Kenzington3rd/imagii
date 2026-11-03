@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
-import { confirmAudioClose } from './audioClose'
+import { useAudioExport } from './state/audioExport'
+import { AudioJobRunning } from './AudioJobRunning'
+import { confirmAudioClose, exportKeepsGoingSentence } from './audioClose'
 import { AudioImporter } from './AudioImporter'
 import { WaveformView } from './WaveformView'
 import { CleanupPanel } from './CleanupPanel'
@@ -43,7 +45,10 @@ export function AudioStudio(): JSX.Element {
   function handleClose(): void {
     // The button only renders with a source loaded, so "a source is loaded"
     // is already true here.
-    if (!confirmAudioClose(chain, (message) => confirm(message))) return
+    // T-146: Close does not stop an export that is running - it takes the Export panel away, and the closed-sound card (`AudioJobRunning`) keeps the Cancel on
+    // screen. The question says so (even with no edits to lose), so a person who closes the sound does not believe they stopped it. Read when Close is pressed.
+    const keepsGoing = exportKeepsGoingSentence(useAudioExport.getState().running)
+    if (!confirmAudioClose(chain, (message) => confirm(message), 'close', keepsGoing)) return
     clearSource()
   }
 
@@ -82,6 +87,8 @@ export function AudioStudio(): JSX.Element {
           <TutorialButton onClick={tutorial.start} />
         </div>
       </header>
+
+      <AudioJobRunning />
 
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">

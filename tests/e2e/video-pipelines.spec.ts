@@ -6144,7 +6144,8 @@ test.describe('single-output panels', () => {
       expect(mp4sIn(seeded), 'one file, and it is the export').toEqual(['pipeline_Clip 1_youtube.mp4'])
       const toasts = await readToastLog(window)
       expect(toasts, 'the second press did not cancel the export').not.toContain('Export canceled. Files already finished are in your folder.')
-      expect(toasts.filter((t) => t === 'Exported 1 file'), 'and it said it exported').toHaveLength(1)
+      // T-146: the toast carries Show in folder now, so its text is the sentence and then the button's name.
+      expect(toasts.filter((t) => t.startsWith('Exported 1 file')), 'and it said it exported').toHaveLength(1)
     } finally {
       await app.close()
     }
@@ -6172,7 +6173,7 @@ test.describe('single-output panels', () => {
       await expect.poll(() => existsSync(output), { timeout: 120_000, intervals: [250] }).toBe(true)
       await expect(card.getByRole('button', { name: 'Export 1 file', exact: true }), 'free again once it has finished').toBeEnabled({ timeout: 60_000 })
       const toasts = await readToastLog(window)
-      expect(toasts, 'it said it exported').toContain('Exported 1 file')
+      expect(toasts, 'it said it exported').toEqual(expect.arrayContaining([expect.stringContaining('Exported 1 file')]))
       expect(toasts, 'and that the preferences were not saved, in one plain sentence').toContain("Couldn't save your settings.")
       // T-132 (13): ONE card, not one per refused write (this press makes two or more: the handle and its corner are each their own
       // write, and the template is a third). A fixed toast id makes the repeats replace the live card instead of stacking under it.
@@ -11559,7 +11560,7 @@ test.describe('T-140 (1): the file a render replaces is whole until the new one 
       const first = path.join(seeded, 't140-reexport_Clip 1_youtube.mp4')
       // ── the earlier export, run to its end ──
       // (The toast and the button, not the file's existence: the file is only whole once the run has ended.)
-      const exported = async (): Promise<number> => (await readToastLog(window)).filter((t) => t === 'Exported 1 file').length
+      const exported = async (): Promise<number> => (await readToastLog(window)).filter((t) => t.startsWith('Exported 1 file')).length
       await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
       await expect.poll(exported, { timeout: 300_000, intervals: [500] }).toBe(1)
       await expect(card.getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 60_000 })
@@ -12746,6 +12747,50 @@ test.describe('T-145 (a): the finished toast of an export that ended with the vi
       const files = withoutAtomicTmp(readdirSync(seeded)).filter((f) => f.endsWith('.mp4'))
       expect(files, 'both files were written').toHaveLength(2)
       // The first file written is the one finished first (each takes several seconds, so the order is not in doubt).
+      const first = [...files].sort((a, b) => statSync(path.join(seeded, a)).mtimeMs - statSync(path.join(seeded, b)).mtimeMs)[0] as string
+      await window.getByRole('button', { name: 'Show in folder' }).click()
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([path.join(seeded, first)])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ═════════ T-146 (non-counted): the finished toast has Show in folder whenever a file was written ═════════
+// T-145 gave it only to a person with NO video open. A batch also ends while the person is on another route (the video stays open in the store, so the
+// toast was the plain one) and the panel's rows are not on screen: Home has neither the rows nor a way to the files.
+test.describe('T-146: the finished toast of an export that ended on another route carries Show in folder', () => {
+  test('two files, leave for Home mid-batch, let it finish: "Exported 2 files" has Show in folder and it reveals the first file written', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t146exp-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t146export', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      // Each file takes a few seconds, so the person can leave while the batch is on its first.
+      await app.evaluate(() => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = cp.spawn
+        cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+          const argv = Array.isArray(args) ? (args as string[]) : []
+          const input = argv.indexOf('-i')
+          if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+          return real(cmd, [...argv.slice(0, input), '-readrate', '0.5', ...argv.slice(input)], opts)
+        }
+        mod.syncBuiltinESMExports()
+      })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await exportCard(window).getByRole('button', { name: 'Export 2 files', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 10_000 })
+      await expect(window.locator('h1', { hasText: 'Video Studio' }), 'the person is on Home, not in the studio').toHaveCount(0)
+      const toast = window.getByText('Exported 2 files')
+      await expect(toast, 'the batch finished while the person was on Home').toBeVisible({ timeout: 120_000 })
+      const files = withoutAtomicTmp(readdirSync(seeded)).filter((f) => f.endsWith('.mp4'))
+      expect(files, 'both files were written').toHaveLength(2)
       const first = [...files].sort((a, b) => statSync(path.join(seeded, a)).mtimeMs - statSync(path.join(seeded, b)).mtimeMs)[0] as string
       await window.getByRole('button', { name: 'Show in folder' }).click()
       await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([path.join(seeded, first)])

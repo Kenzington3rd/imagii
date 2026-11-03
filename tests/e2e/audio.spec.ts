@@ -4380,3 +4380,167 @@ test.describe('T-141 (4): a held Enter on "Save current" is one save', () => {
     }
   })
 })
+
+
+// ── T-146 (1): closing the sound does not hide the export that is running ───────────────────────────────────────────────────────────────────────────────────────
+//
+// Close unmounted the Export panel (drawn only with a sound), which held the export's bar and its Cancel, while main went on rendering: minutes with nothing on
+// screen. `AudioJobRunning` is the closed sound's card (T-144's shape), Close says the export keeps going, and the card's Cancel is the panel's own function.
+// The render is slowed to a fraction of real time (`-readrate` ahead of its input, added in main's `spawn`, as T-145's cases do) so it is mid-run for the whole case
+// and reports a new figure every second or so.
+test.describe('T-146 (1): the closed sound shows the export that is still running', () => {
+  const CLOSE_QUESTION = 'Close this audio? The export that is running keeps going; its Cancel stays on screen.'
+  const closeButton = (window: Page) => window.locator('header').getByRole('button', { name: 'Close', exact: true })
+  /** The card: the polite region that holds the closed-sound sentence. */
+  const card = (window: Page) => window.locator('[aria-live="polite"]').filter({ hasText: 'The sound is closed; the export keeps going' })
+  const cardCancel = (window: Page) => card(window).getByRole('button', { name: 'Cancel', exact: true })
+  const reading = async (window: Page): Promise<{ pass: string; percent: number | null }> => {
+    const pass = (await card(window).locator('span.whitespace-nowrap:not(.font-mono)').first().innerText()).trim()
+    const m = /(\d+)%/.exec(await card(window).locator('span.font-mono').first().innerText())
+    return { pass, percent: m ? Number(m[1]) : null }
+  }
+
+  /** Run every progress-reporting ffmpeg the app spawns from now at `rate` times real time. */
+  async function slowEveryRender(app: ElectronApplication, rate: number): Promise<void> {
+    await app.evaluate((_e, r) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        const input = argv.indexOf('-i')
+        if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+        return real(cmd, [...argv.slice(0, input), '-readrate', String(r), ...argv.slice(input)], opts)
+      }
+      mod.syncBuiltinESMExports()
+    }, rate)
+  }
+
+  /**
+   * After Close: the card's reading, then the reading again until it has MOVED - a higher percent in the same pass, or a later pass (a re-attach goes from
+   * "Step 1 of 2" to "Step 2 of 2", and its percent starts again). Red where the figure stays put.
+   */
+  async function expectCardAdvances(window: Page): Promise<void> {
+    await expect.poll(async () => (await reading(window)).percent, { timeout: 30_000, intervals: [200], message: 'the card has a figure' }).not.toBeNull()
+    const first = await reading(window)
+    await expect
+      .poll(
+        async () => {
+          const now = await reading(window)
+          return now.pass !== first.pass || (now.percent ?? -1) > (first.percent ?? 0)
+        },
+        { timeout: 20_000, intervals: [250], message: `the card read ${first.pass} ${first.percent}% after Close and must move` }
+      )
+      .toBe(true)
+  }
+
+  test('Close asks with the export\'s sentence, the card keeps its figure moving, and Cancel leaves no file and no partial', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t146-cancel')
+    const { app, window } = studio
+    try {
+      const long = path.join(studio.root, 'source', 'long-tone.mp3')
+      await makeLongMp3(long)
+      await dropOnImporter(window, long, 'long-tone.mp3')
+      await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't146-cleaned.mp3')
+      await stubSaveDialog(app, target)
+      await slowEveryRender(app, 40)
+      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+
+      // Nothing to lose in the chain, and Close still asks: it does not stop the export, and the question says so.
+      await expect(card(window), 'no card while the sound is open: the panel draws the export').toHaveCount(0)
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      expect(studio.dialogs.messages).toEqual([CLOSE_QUESTION])
+
+      await expect(card(window)).toBeVisible()
+      await expect(card(window)).toContainText('Export — long-tone.mp3')
+      await expectCardAdvances(window)
+      await cardCancel(window).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(card(window), 'the card goes with the export').toHaveCount(0, { timeout: 30_000 })
+      expect(existsSync(target), 'no file at the target').toBe(false)
+      expect(withEverything(readdirSync(outDir)), 'and no partial beside it').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a re-attach to the video the same: Close asks, the card follows the passes, Cancel leaves no video and no scratch file', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t146-reattach')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 'e2e-clip-cleaned.mp4')
+      await stubSaveDialog(app, target)
+      await slowEveryRender(app, 0.25)
+      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      await expect(window.locator(EXPORT)).toContainText('Step 1 of 2', { timeout: 30_000 })
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      expect(studio.dialogs.messages).toEqual([CLOSE_QUESTION])
+
+      await expect(card(window)).toContainText('Export — e2e-clip.mp4')
+      await expect(card(window)).toContainText('Step ')
+      await expectCardAdvances(window)
+      await cardCancel(window).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(card(window)).toHaveCount(0, { timeout: 30_000 })
+      expect(existsSync(target), 'no video at the target').toBe(false)
+      await expect.poll(() => withEverything(readdirSync(outDir)), { timeout: 30_000, intervals: [200], message: 'no partial and no scratch WAV beside it' }).toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an export left to finish with the sound closed ends the card, says so, and writes the whole file', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t146-finish')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't146-done.mp3')
+      await stubSaveDialog(app, target)
+      await slowEveryRender(app, 0.5)
+      await window.locator(EXPORT).getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+      await closeButton(window).click()
+      await expect(card(window)).toBeVisible({ timeout: 10_000 })
+      await expect.poll(() => readToastLog(window), { timeout: 90_000, intervals: [250] }).toContain('Cleaned audio exported')
+      await expect(card(window), 'the card is gone once the export has ended').toHaveCount(0, { timeout: 30_000 })
+      expect((await probeFile(target)).codecs, 'ffprobe reads a real mp3').toEqual(['mp3'])
+      expect(withEverything(readdirSync(outDir))).toEqual(['t146-done.mp3'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Close with nothing running and nothing to lose still asks nothing', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t146-quiet')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      expect(studio.dialogs.messages, 'no question').toEqual([])
+      await expect(card(window)).toHaveCount(0)
+      expect(await window.locator('div[aria-live="polite"].-mb-5').evaluate((el) => (el as HTMLElement).offsetHeight), 'the empty region takes no room').toBe(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type { ChainSpec } from '@shared/audio'
 import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
 import { audioCloseMessage, confirmAudioClose } from './AudioStudio'
-import { confirmReplaceAfterWait } from './audioClose'
+import { confirmReplaceAfterWait, exportKeepsGoingSentence } from './audioClose'
 
 /**
  * T-19 regression: Video Studio has confirmed its Close since round 18;
@@ -232,5 +232,41 @@ describe('confirmReplaceAfterWait - what was tuned while the extraction ran is a
     const ask = vi.fn(() => false)
     expect(confirmReplaceAfterWait(tuned, { ...DEFAULT_CHAIN_SPEC }, ask)).toBe(true)
     expect(ask).not.toHaveBeenCalled()
+  })
+})
+
+// T-146: closing the sound does not stop an export that is running. Close takes the Export panel (its bar and Cancel) away and the closed-sound card keeps the
+// Cancel on screen; the question says so, even with nothing else to lose, so a person who closes the sound does not believe they stopped it.
+describe('the Close question while an export runs (T-146)', () => {
+  const note = exportKeepsGoingSentence(true)
+
+  it('the sentence is the video studio\'s voice, and is null with no export running', () => {
+    expect(note).toBe('The export that is running keeps going; its Cancel stays on screen.')
+    expect(exportKeepsGoingSentence(false)).toBeNull()
+  })
+
+  it('asks even when there is nothing to discard, with the one sentence', () => {
+    expect(audioCloseMessage(DEFAULT_CHAIN_SPEC, 'close', note)).toBe('Close this audio? The export that is running keeps going; its Cancel stays on screen.')
+    const ask = vi.fn(() => true)
+    expect(confirmAudioClose(DEFAULT_CHAIN_SPEC, ask, 'close', note)).toBe(true)
+    expect(ask).toHaveBeenCalledWith('Close this audio? The export that is running keeps going; its Cancel stays on screen.')
+  })
+
+  it('is the second sentence of the discard question when there is work to lose', () => {
+    expect(audioCloseMessage(edited({ deEss: true }), 'close', note)).toBe(
+      'Close this audio? Your cleanup settings will be discarded. The export that is running keeps going; its Cancel stays on screen.'
+    )
+  })
+
+  it('declining still refuses to close', () => {
+    const ask = vi.fn(() => false)
+    expect(confirmAudioClose(DEFAULT_CHAIN_SPEC, ask, 'close', note)).toBe(false)
+  })
+
+  it('with nothing to lose and nothing running, Close stays unconfirmed', () => {
+    const ask = vi.fn(() => true)
+    expect(confirmAudioClose(DEFAULT_CHAIN_SPEC, ask, 'close', exportKeepsGoingSentence(false))).toBe(true)
+    expect(ask).not.toHaveBeenCalled()
+    expect(audioCloseMessage(DEFAULT_CHAIN_SPEC, 'close', null)).toBeNull()
   })
 })

@@ -6,7 +6,7 @@ import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audi
 import { assertDefined } from '@shared/assert'
 import { landedBesideNote } from '@shared/landedPath'
 import { useAudioStore } from './state/audioStore'
-import { useAudioExport } from './state/audioExport'
+import { cancelAudioExport, useAudioExport } from './state/audioExport'
 import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
@@ -70,7 +70,7 @@ export function ExportDialog(): JSX.Element | null {
         loudnorm: chain.loudnorm,
         reattach: Boolean(source.fromVideo && muxBack)
       })
-      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, source.filePath)) return
+      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, source.filePath, source.fileName)) return
       // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).
       const offProgress = window.api.audio.onProgress((p) => useAudioExport.getState().progress(p))
       try {
@@ -111,7 +111,7 @@ export function ExportDialog(): JSX.Element | null {
       } catch (err) {
         // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
         // call — carrying the sentinel, so the neutral line is raised from ONE
-        // place (cancelExport below only asks main to stop).
+        // place (`cancelAudioExport` only asks main to stop).
         const { cancelled, message } = reportFailure(err, {
           failed: 'Export failed.',
           canceled: 'Audio export canceled.'
@@ -124,19 +124,6 @@ export function ExportDialog(): JSX.Element | null {
       }
     } finally {
       startingRef.current = false
-    }
-  }
-
-  // B10 fix (round 16): audio export+mux passes can run for minutes on a
-  // long source. Round 15 wired Cancel into video export / ClipKit /
-  // RecordStudio but the audio dialog was missed. Backend cancelAudioJob
-  // already exists.
-  async function cancelExport(): Promise<void> {
-    if (!job) return
-    try {
-      await window.api.audio.cancel(job.jobId)
-    } catch {
-      /* the export call rejecting on the kill is the signal; nothing to add */
     }
   }
 
@@ -201,7 +188,7 @@ export function ExportDialog(): JSX.Element | null {
           {running ? 'Exporting…' : 'Export'}
         </button>
         {running && job ? (
-          <RunningCancel title="Cancel export" onClick={cancelExport} />
+          <RunningCancel title="Cancel export" onClick={() => void cancelAudioExport()} />
         ) : null}
       </div>
 

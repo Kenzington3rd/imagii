@@ -187,7 +187,7 @@ describe('the Export Cancel - one path for the panel and the closed video\'s car
   })
 })
 
-describe('the finished toast of a batch that ends with no video open (T-145)', () => {
+describe('the finished toast of a batch always carries the way to its first file (T-145, T-146)', () => {
   const results = [
     { jobId: 'a', outputPath: '/out/a.mp4', durationMs: 5 },
     { jobId: 'b', outputPath: '/out/b.mp4', durationMs: 5 }
@@ -222,13 +222,31 @@ describe('the finished toast of a batch that ends with no video open (T-145)', (
     expect(reveal).toHaveBeenCalledWith('/out/a.mp4')
   })
 
-  it('with a video open the toast is the plain sentence: the rows beside the video carry the Show in folder', async () => {
-    useVideoStore.setState({ source: { filePath: '/v/a.mp4' } as never })
+  it('carries it with a video open too: a batch also ends on another route or beside another video, where the panel\'s rows are not for it (T-146)', async () => {
+    useVideoStore.setState({ source: { filePath: '/v/other.mp4' } as never })
     try {
       await run()
     } finally {
       useVideoStore.setState({ source: null })
     }
+    const [message] = vi.mocked(toast.success).mock.calls[0] as [ReactNode]
+    expect(renderToStaticMarkup(message as never)).toContain('Exported 2 files')
+    expect(buttons(message).map((b) => b.text)).toEqual(['Show in folder'])
+  })
+
+  it('reveals the first file that WAS written, skipping a result with no path', async () => {
+    const reveal = vi.fn()
+    install(() => Promise.resolve([{ jobId: 'a', outputPath: '', durationMs: 1 }, { jobId: 'b', outputPath: '/out/b.mp4', durationMs: 1 }]))
+    ;(window as unknown as { api: { video: Record<string, unknown> } }).api.video.revealInFolder = reveal
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const [message] = vi.mocked(toast.success).mock.calls[0] as [ReactNode]
+    buttons(message)[0]?.onClick()
+    expect(reveal).toHaveBeenCalledWith('/out/b.mp4')
+  })
+
+  it('a batch that wrote no file says the plain sentence and offers nothing to reveal', async () => {
+    install(() => Promise.resolve([]))
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
     expect(toast.success).toHaveBeenCalledWith('Exported 2 files')
   })
 })

@@ -6461,7 +6461,7 @@ IMG-PREC.
   NEW describe blocks appended at the end of shared files; `npm run verify`, `npm run test:media`
   (a regression run) and the FULL Playwright suite green before handback; no docs/TICKETS.md,
   package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open
+- **Status:** done (round 95 — see the Done entry)
 
 ---
 
@@ -6990,6 +6990,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 95 — T-146 item 1 and the non-counted part, landed in the
+commit that carries this entry. Worked by one Sonnet in a fresh clone
+of 4cb9185. The fix: `AudioJobRunning`, mounted by AudioStudio ahead
+of its open-or-closed conditional (an always-mounted polite region,
+empty and gapless unless no sound is open and the audio export runs),
+draws the export — the person's file name (`sourceName`, never the
+scratch WAV a video's sound is read from), the pass label and the
+aria-hidden percent, which keep moving because the progress listener
+is the export's own — with a Cancel that is the SAME
+`cancelAudioExport()` the dialog's Cancel now calls; Close asks while
+the export runs, with the T-144 sentence, and stays unconfirmed with
+nothing to lose and nothing running. Non-counted: the Video Studio
+"Exported N files" toast is always the `toastSaved` kind with Show in
+folder for the first file written (the sibling panels' rule).
+DESIGN_GUIDE's RunningCancel placement names the three closed-object
+cards; USER_GUIDE says closing the sound does not stop an export.
+Deviations, accepted: export.spec.ts edited (outside the list) to
+scope a Show in folder locator the new toast made ambiguous and one
+exact toast pin; `begin` takes a third argument (`sourceName`); the
+pass label stays announced, only the percent hidden. 31 ledger
+mutations, all killed, all restored byte-identical; 7 reds. Found not
+fixed: the other studios' long jobs not audited for the same Close
+shape (Record and Stream Graphics have no long cancellable job behind a
+Close). Expedited personally: integrity (the 19 files), verify x2
+(203/5860), test:media on 7.0.2 (426 passed | 13 skipped of 439,
+8m42s), FULL Playwright 546/546 — a container restart cut the full
+run at 358 (no failure); the remaining 188 ran on the same build
+(22.8 min) — sha of every touched file identical before and after;
+one independent mutation at a seam no ledger row names (the dialog
+handing the store `source.filePath` instead of `source.fileName` →
+both T-146 (1) audio cases red, the re-attach one showing the scratch
+WAV's path, the leak T-125 forbids), restored byte-identical, sha256
+verified. Applied to 4cb9185 by `git apply` with every file
+byte-identical to the expedited clone.
 
 Round 94 — T-145 item 1 and the non-counted part, landed in the
 commit that carries this entry. Worked by one Sonnet in a fresh clone
