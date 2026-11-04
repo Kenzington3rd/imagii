@@ -7393,6 +7393,63 @@ IMG-PREC.
 
 ---
 
+## T-158 — sweep-44 fixes (round 107)
+
+- **Spec:** the forty-fourth sweep's three verified findings (candidate clean pass #1 on d6c3c2a),
+  confirmed by the expediter against source. Privacy, Electron, a11y, UX, streamer, ffmpeg (a 300-encode filter-graph sweep on both majors) and the QA
+  renderer half clean on their whole lens; QA read all 214 non-test files (two readers). Not counted: the
+  four-corner label table existing three times (RecordStudio, ExportPanel, PipPanel — identical output,
+  drift risk only); the tutorial coachmark covering 17-27% of the importer card at the 1024x640 floor
+  (Tutorial.tsx documents the clamp); an export row at 100% after a cancel landing between the encode and
+  the swap (narrow; the toast says canceled); a crashed OBS MKV with no header duration (unconfirmed); the
+  home-chrome T-131 load flake (judged harness timing: the swallow deadline is stamped synchronously in the
+  first click's flush). One track.
+
+  **Track A — a finished sound starts over, a Discard that lands says so, a tour that says what the screen says (items 1-3).**
+  1. **[LOW] After a full listen, coming back to Audio Studio parks the playhead 16 ms before the end**
+     (a T-157 (1) consequence; WaveformView.tsx:83-90, :99-102, :120). The restore seeks to the store's
+     `currentTime` when it is `< waveform.duration`; the store is written only by `audioprocess` /
+     `seeking`, and wavesurfer's `ended` handler emits `timeupdate(duration)` and `finish` but not
+     `audioprocess` (wavesurfer.js:144-146), so after a sound plays to the end the store holds the last
+     ~16 ms timer tick. Leave and come back: the fresh player is parked at ~0:19.98 / 0:20.00, not in the
+     ended state, and Play plays ~16 ms and finishes — a Play that seems dead, where Play after the end
+     (before leaving, and before T-157) restarted at 0:00. Fix direction: the `finish` handler also sets
+     the store's position to 0 (`setCurrentTime(0)`) — a finished sound's place is its start; the restore
+     and its guard stay as they are.
+  2. **[LOW] "Discard recording" pressed while the save has no ffmpeg child alive gives the button back,
+     then deletes the take** (a T-137 (2) latch consequence; convert.ts:411-414, recording.ts:462,
+     RecordStudio.tsx:683-687). `cancelConverts(owner)` calls `convertLatch.cancel(owner)` and DROPS its
+     answer, returning only whether a live child was killed; in saveWebm's fallback copy after a failed
+     remux (seconds on a multi-GB take), the swap's rename retries (~1.55 s under antivirus) or the instant
+     after the convert exits, the run is still MARKED — so the save ends as a discard (no file, raw take
+     deleted, "Recording discarded") — but `recording:cancelSave` answers false and the renderer clears
+     "Discarding…" and brings the button back as if the click did nothing. Every sibling cancel returns its
+     latch result. Fix direction: `const marked = convertLatch.cancel(owner); return cancelWhere((active)
+     => active.owner === owner) || marked`; correct the renderer comment's premise; update any unit that
+     pins the old answer.
+  3. **[LOW] The Video Studio tour's Crop step names the shapes "free, 16:9, …"** (a T-157 (4)
+     consequence; videoTutorial.ts:47) while the row now reads "Free" — BRANDING_GUIDE:79 "A tutorial step
+     names a control exactly as the screen does". Fix: "Free, 16:9, 9:16, 1:1, or 4:5".
+  Covering tests: e2e (NEW describe in audio.spec.ts): a short fixture sound played to the end, Home and
+  back -> the readout reads 0:00 and a Play press advances the media element past 0.5 s (red on d6c3c2a).
+  Unit (convert / cancel tests): a convert run open with no child, `cancelConverts(owner)` -> true, and
+  `run.check()` throws the discard (red on d6c3c2a); the existing sentinel rows unchanged. e2e or unit for
+  item 2's renderer end state: with `recording.cancelSave` answering true and no convert child, the save
+  card keeps "Discarding…" until the save ends (a record.spec case if the existing save-stall helpers reach
+  it; otherwise an interactionWiring pin on the renderer branch and a disposition naming the OS boundary).
+  Unit pin (copyConventions or tutorial-copy test): the crop step names "Free".
+
+  **Docs:** IC rows; TESTING paragraph; LESSONS entry at the TOP; USER_GUIDE only where a sentence about
+  these behaviours is now wrong.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 107)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
