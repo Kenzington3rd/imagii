@@ -2620,3 +2620,62 @@ test.describe('T-147 (7): a References search says how it went', () => {
     }
   })
 })
+
+// T-149 (4): a REAL double-click on a result's Save is one save. The second press began while the first was still in main (the thumbnail fetch runs inside the board's
+// lock), so both snapshotted N items, both re-listed N+1, both toasted `Saved to "X"` and both pushed an Undo step - the second an empty one. Main now answers whether IT
+// added the picture, the store trusts that, and the Save button drops the repeat press of a double-click. The thumbnail socket answers after 300 ms so the second press
+// is certainly in flight (on the unchanged build: two toasts, two steps).
+test.describe('T-149 (4): a double-click on Save is one save', () => {
+  test('dblclick on Save: ONE "Saved to" toast, no "Already on", one item on the board, and ONE Undo empties it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-dblclick-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'dblboard.json'),
+      JSON.stringify({ id: 'dblboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }, 300)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      await expect(undo, 'nothing has been done yet').toBeDisabled()
+
+      await save.dblclick()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toEqual(['Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(1)
+      // Let anything the second press started finish, then look again: still one toast, still one item.
+      await window.waitForTimeout(1500)
+      expect(await readToastLog(window), 'one double-click is one save and one toast, never an "Already on"').toEqual(['Saved to "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'one copy on the board').toHaveLength(1)
+
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(0)
+      await expect(undo, 'ONE Undo emptied it: no empty step was left behind').toBeDisabled()
+      expect(pageErrors).toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

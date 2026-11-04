@@ -6732,7 +6732,7 @@ IMG-PREC.
   end of shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green
   before handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
   lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 98)
+- **Status:** done (round 98 — see the Done entry)
 
 ---
 
@@ -7261,6 +7261,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 98 — T-149, all five counted items and the design fold, landed
+in the commit that carries this entry. Two Sonnet workers in fresh
+clones of 906a4f2, disjoint files, merged by the expediter into one
+tree. Track A: the highlight scan's peak loop walks EVERY sample and
+reads a silent one (<= -70 LUFS, or nan/inf, which the ebur128 parser
+now keeps as a non-finite sample instead of skipping the line) as
+below the threshold, so a loud moment before digital silence closes
+there (the statistics still read only the audible samples); PiP gets
+`-t <baseSec>` beside the apad when the base's length is known, so a
+silent base ends the composite at the base (not `overlay=shortest=1`,
+which would cut at a shorter overlay); a Scan VOD that finds nothing
+says "No standout moments found in this video." in the panel (hidden
+while a scan runs). Track B: main decides `added` under the board lock
+and returns `{ collection, added }`; the store trusts it and the panel
+says "Saved" only then; Save swallows the repeat press of a
+double-click; the shared gesture-end hook records the focused element
+at the press and exempts a release only inside the SAME text field (a
+caret click) — a press that moves focus ends the step, the T-148
+slider rule unchanged; the other-sound Export row's pass label sizes to
+its text so the file name gets the room, and two stale "Export -
+voice.wav" comments use the em dash. Deviations, accepted: the empty
+line hidden during a scan; `src/shared/api.ts` carries the addItem
+type; the fold's comment moved to fit the docClaims 400-character pin.
+Ledgers: A 6 RED / 20 mutations, B 5 RED / 26 rows over 18 mutants —
+every survivor (two vacuous checks in B) strengthened and killed, every
+restore byte-identical. Found not fixed: main's added flag is reached
+by a keyboard repeat (detail 0) and is covered at unit only (the Save
+guard swallows a mouse double-click); the T-149 (3) e2e's "gone with
+the video" step goes through Close — the direct-replace reset is held
+by the videoStore unit case. Expedited personally: two independent
+mutations at seams no ledger row names — A: `loadSource` keeping
+`scanCandidates` → the T-149 (3) e2e passed (its Close path resets on
+its own) and the unit suite killed it (videoStore "loading another
+video starts its results empty" + the T-131 (3) pin); B: the panel
+toasting "Saved" whatever main answers → e2e "T-76 (T-147 (5))" red —
+each restored byte-identical, sha256 verified; on the MERGED tree:
+verify x2 (205/5945), test:media on 7.0.2 (435 passed | 13 skipped of 448, 513 s), the T-149 Layer 5 blocks on 6.1.1
+(8/8), FULL Playwright 569/569 (44.6 min, no flake). Applied to 906a4f2 by `git apply`
+with every file byte-identical to the expedited merge.
 
 Round 97 — T-148, landed in the commit that carries this entry.
 Expediter-found after T-147 landed (measured on ef080a0: Contrast

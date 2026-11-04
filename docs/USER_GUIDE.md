@@ -304,7 +304,11 @@ that names the file being converted.)
   beside your excerpts. **Ctrl+Z** brings it back. **Go to** on a highlight puts the
   player at its start so you can look at it before you keep it, and adds nothing;
   **+ Clip** adds it and leaves the player where it is, so adding several in a row
-  does not make the playhead jump.
+  does not make the playhead jump. A scan ends a loud moment where the sound
+  stops, so a loud sign-off before a muted stretch is not stretched across the
+  silence. A scan that finds nothing leaves the line **No standout moments found
+  in this video.** in the panel (the toast fades; the line stays until you scan
+  again or open another video).
 - **Reframe to 9:16** — cuts a vertical 9:16 strip (1080×1920)
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action. It cuts the strip from the crop you drew for the clip
@@ -340,7 +344,8 @@ that names the file being converted.)
   warning, and clearing again after you close the program takes the rest. You can also delete
   them in that folder whenever you like.
 - **Color & motion**, **Export as GIF**, **Compile clips**, and
-  **Picture-in-picture composite** are the other panels. The player does not
+  **Picture-in-picture composite** are the other panels (the composite is as long as
+  the video it goes over, with or without sound, even if the webcam clip is longer). The player does not
   show color changes — they appear in the exported file. **Temperature** warms
   or cools the whole picture, dark and light parts alike, and **Auto-zoom**
   pulses about the middle of the frame. **Compile clips** is always there; with
@@ -675,7 +680,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   see, even if the first search answers later. The box always says which search the results on screen
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
   mood board you have selected; the notice names the board. A picture that is already on that board is not
-  added twice: the notice says **Already on "the board"** and there is nothing new to undo. If you have no board yet, imagii asks you to
+  added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
+  saves once, with one notice, and one **Undo** takes it back. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
 - **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first; the notice
   that follows says **Ctrl+Z** brings the board back, and it stays on screen for 8 seconds. Hover an item and click **→ Canvas**

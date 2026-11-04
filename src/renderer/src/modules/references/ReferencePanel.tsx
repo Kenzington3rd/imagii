@@ -6,6 +6,7 @@ import { Icon } from '../../components/Icon'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 export function ReferencePanel(): JSX.Element {
   const search = useReferencesStore((s) => s.search)
@@ -56,8 +57,8 @@ export function ReferencePanel(): JSX.Element {
       reportFailure(err, { failed: "Couldn't save that picture." })
       return
     }
-    // T-76 (T-147 (5)): main keeps one copy of a picture per board and hands the board back unchanged, so a second save is a true "already there"
-    // - not a write, so no success mark and no Undo step (the store pushes none).
+    // T-76 (T-147 (5), T-149 (4)): main keeps one copy of a picture per board and says whether IT added this one (under its lock), so a second save is a
+    // true "already there" - not a write, so no success mark and no Undo step (the store pushes none).
     if (added) toast.success(`Saved to "${boardName}"`)
     else toast(`Already on "${boardName}"`)
   }
@@ -184,7 +185,11 @@ export function ReferencePanel(): JSX.Element {
                     unreachable, and hid the fact that it was broken. */}
                 <button
                   className="btn-primary px-3 py-1 text-xs inline-flex items-center gap-1.5"
-                  onClick={() => saveResult(result)}
+                  onClick={(e) => {
+                    // T-149 (4): the second press of a double-click is the same decision as the first (one save, one toast).
+                    if (isRepeatPress(e)) return
+                    saveResult(result)
+                  }}
                 >
                   <Icon name="star" size={13} /> Save
                 </button>

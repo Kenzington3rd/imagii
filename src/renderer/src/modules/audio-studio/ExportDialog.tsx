@@ -29,7 +29,9 @@ export function ExportDialog(): JSX.Element | null {
   const exportSource = useAudioExport((s) => s.sourcePath)
   const exportName = useAudioExport((s) => s.sourceName)
   const job = exportJob !== null && (running || exportSource === source?.filePath) ? exportJob : null
-  // T-147 (2): "Export - voice.wav", the card's own words (`audioJobRow`), for a running export that belongs to ANOTHER sound than the one open here.
+  // T-147 (2): "Export — voice.wav", the card's own words (`audioJobRow`), for a running export that belongs to ANOTHER sound than the one open here.
+  // T-149 (fold): while this name is drawn, the pass label beside it sizes to its text (the fixed `w-56` slot only keeps the bar in one place when there is no name):
+  // at 1024 px the name was cut to ~146 px beside a 224 px slot holding ~70 px of text.
   const otherSoundLabel = running && exportSource !== source?.filePath ? (audioJobRow({ running, job: exportJob, sourceName: exportName })?.label ?? null) : null
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
@@ -206,9 +208,7 @@ export function ExportDialog(): JSX.Element | null {
               {otherSoundLabel}
             </span>
           ) : null}
-          <span className="text-xs text-ink-muted w-56 shrink-0">
-            {audioPassLabel(job.pass, job.plan)}
-          </span>
+          <span className={`text-xs text-ink-muted shrink-0 whitespace-nowrap ${otherSoundLabel ? '' : 'w-56'}`}>{audioPassLabel(job.pass, job.plan)}</span>
           {/* T-112: a bar is a progressbar to a screen reader, named by the pass it is in
               ("Step 2 of 2 — rendering") like the Captions and Reframe rows. */}
           <ProgressTrack

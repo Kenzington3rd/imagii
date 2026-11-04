@@ -3154,3 +3154,46 @@ test.describe('T-148: a drag right after another control is one undo step (Video
     }
   })
 })
+
+// T-149 (5): a MOUSE click from the Text overlay's caption into its Color box is a new edit. T-148 made the press's own blur ignored, so the release landed in the
+// newly focused text box and the T-80 "caret click" rule kept the caption's undo window open: the colour joined the caption's step (every field of one overlay shares
+// a key) and ONE Undo reverted both. A press that MOVES focus now ends the gesture; a caret click in the field that already had focus (T-80, above) still does not.
+test.describe('T-149 (5): a click from one Text overlay field into another is its own undo step', () => {
+  test('type a caption, MOUSE-click the Color box, type a colour, Tab away: ONE Undo reverts only the colour, a second the caption', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t149-fields')
+    try {
+      const card = overlayCard(window)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const caption = row.getByPlaceholder('Caption')
+      const color = row.getByPlaceholder('white or #ffcc00')
+      await expect(caption).toHaveValue('Your text here')
+      const defaultColor = await color.inputValue()
+
+      // The caption, focused and typed the way a person does it (a real click, then keys).
+      await caption.click()
+      await caption.press('Control+a')
+      await caption.pressSequentially('FIRST BLOOD')
+      await expect(caption).toHaveValue('FIRST BLOOD')
+
+      // A REAL mouse press and release on the Color box: the press moves focus off the caption, the release lands in the newly focused text box.
+      await color.click()
+      await expect(color).toBeFocused()
+      await color.fill('#ff0000')
+      await color.press('Tab')
+      await expect(color).toHaveValue('#ff0000')
+      await expect(color, 'the box was left, so the colour was committed').not.toBeFocused()
+
+      await undo.click()
+      await expect(color, 'ONE Undo reverts only the colour').toHaveValue(defaultColor)
+      await expect(caption, 'and leaves the caption as typed').toHaveValue('FIRST BLOOD')
+      await undo.click()
+      await expect(caption, 'the second Undo is the caption').toHaveValue('Your text here')
+      await expect(color).toHaveValue(defaultColor)
+    } finally {
+      await app.close()
+    }
+  })
+})

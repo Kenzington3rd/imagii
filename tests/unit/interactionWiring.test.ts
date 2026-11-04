@@ -3665,3 +3665,41 @@ describe('T-148 - every coalescing card spreads the one shared gesture-end hook'
     expect(strip(read('lib/gestureEnd.ts'))).toMatch(/export function endsGestureOnPointerUp/)
   })
 })
+
+// T-149 (4), (5), fold: the wiring the behavior tests stand on. Behavior: moodboard.test.ts and referencesStore.test.ts (the flag), gestureEnd.test.ts (the rule),
+// references.spec.ts / video-core.spec.ts / audio.spec.ts "T-149" (a real double-click, a real click between fields, the row measured at 1024 px).
+describe('T-149 - a double-click on Save is one save; a press that moves focus ends the gesture; the row under another sound', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+  const readMain = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../main', rel), 'utf8')
+  const readShared = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../shared', rel), 'utf8')
+
+  it('main decides `added` under the board lock and the IPC hands it back whole', () => {
+    const main = strip(readMain('search/moodboard.ts'))
+    expect(main).toMatch(/if \(collection\.items\.some\(\(i\) => i\.fullUrl === result\.fullUrl\)\) return \{ collection, added: false \}/)
+    expect(main).toMatch(/return \{ collection, added: true \}/)
+    expect(strip(readMain('ipc/search.ts'))).toMatch(/return addToCollection\(collectionId, safe\)/)
+    expect(strip(readShared('api.ts'))).toMatch(/addItem\(collectionId: string, result: SearchResult\): Promise<\{ collection: MoodBoardCollection \| null; added: boolean \}>/)
+  })
+
+  it('the store trusts main\'s `added` (no item-count compare) and the Save button drops the repeat press', () => {
+    const store = strip(read('modules/references/state/referencesStore.ts'))
+    expect(store).toMatch(/const \{ added \} = await window\.api\.moodboard\.addItem\(collectionId, result\)/)
+    expect(store).not.toMatch(/count\(collections\)/)
+    const panel = strip(read('modules/references/ReferencePanel.tsx'))
+    expect(panel).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*saveResult\(result\)\s*\}\}/)
+  })
+
+  it('the gesture-end hook records the focused element at the press and exempts a release only inside THAT field', () => {
+    const hook = strip(read('lib/gestureEnd.ts'))
+    expect(hook).toMatch(/onPointerDown: \(\) => \{\s*pressed = true\s*focusedAtPress = activeElement\(\)/)
+    expect(hook).toMatch(/target === activeElement\(\) && target === focusedAtPress/)
+  })
+
+  it('the Export row drops the fixed pass slot only while another sound\'s name is drawn, and keeps the pass label on one line', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+    expect(dialog).toContain("shrink-0 whitespace-nowrap ${otherSoundLabel ? '' : 'w-56'}")
+    expect(dialog).toMatch(/<span className="min-w-0 flex-1 truncate text-xs" title=\{otherSoundLabel\}>/)
+    expect(read('modules/audio-studio/AudioJobRunning.tsx')).not.toContain('Export - voice.wav')
+  })
+})

@@ -6,8 +6,10 @@ import { NON_TEXT_INPUT_TYPES } from './keyOwnership'
  * step, and only a gesture END tells that stream from the next one. The card that holds the controls spreads these three handlers, and the rule is here once:
  *
  * - `onPointerDown` marks a press (and a one-shot window listener clears the mark wherever the release lands, so it cannot stick);
+ * - `onPointerDown` also records which element had focus when the press began (T-149 (5));
  * - `onPointerUp(event)` ends the gesture, except a release inside the text field being typed in: that is a caret being placed and the edit goes on (T-80), so a text
- *   field's gesture ends on blur;
+ *   field's gesture ends on blur. "Being typed in" means the field that ALREADY had focus when the press began: a press that moved focus into a text field (a click
+ *   from the caption into the colour box) is a new edit, and the press-caused blur was ignored, so the release is where the earlier edit's gesture has to end;
  * - `onBlur` ends the gesture unless a press is down. A press on a slider moves focus, and Chromium sends the slider its FIRST `input` event BEFORE the control that had focus
  *   (another slider, a text field, a button) loses it. That blur arrives mid-drag, would close the window, and the drag's second event would start a second step: the first
  *   drag after a click on anything else was two undo steps (T-147 found it in Audio Studio, T-148 measured it in Video Studio and Stream Graphics). A keyboard move between
@@ -47,9 +49,11 @@ export function createGestureEnd(
   activeElement: () => unknown = () => document.activeElement
 ): GestureEndHandlers {
   let pressed = false
+  let focusedAtPress: unknown = null
   return {
     onPointerDown: () => {
       pressed = true
+      focusedAtPress = activeElement()
       onNextPointerUp(() => {
         pressed = false
       })
@@ -59,7 +63,7 @@ export function createGestureEnd(
       const target = event.target as { tagName?: unknown; type?: unknown } | null
       if (target !== null && typeof target.tagName === 'string') {
         const type = typeof target.type === 'string' ? target.type : null
-        if (!endsGestureOnPointerUp(target.tagName, type, target === activeElement())) return
+        if (!endsGestureOnPointerUp(target.tagName, type, target === activeElement() && target === focusedAtPress)) return
       }
       endGesture()
     },

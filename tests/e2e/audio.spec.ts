@@ -4870,3 +4870,80 @@ test.describe('T-147 (6b): the Fix wizard\'s options are grouped under their que
     }
   })
 })
+
+
+// ── T-149 (fold): the other-sound Export row gives the file's name the room ─────────────────────────────────────────────────────────────────────────────────────
+//
+// T-147 (2) draws A's running export under B with A's name (`min-w-0 flex-1 truncate`), but the pass label beside it kept its fixed `w-56` slot: at the 1024 px
+// minimum the name was cut to about 146 px (~20 characters) next to ~70 px of text in a 224 px slot. With the name shown the pass label sizes to its text.
+test.describe('T-149 (fold): the row under another sound at the 1024 px minimum', () => {
+  const closeButton = (window: Page) => window.locator('header').getByRole('button', { name: 'Close', exact: true })
+  /** What the name's span measured at 1024x640 before the fix (the shared prefix and a few characters of the file). */
+  const OLD_NAME_WIDTH = 146
+
+  async function slowEveryRender(app: ElectronApplication, rate: number): Promise<void> {
+    await app.evaluate((_e, r) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        const input = argv.indexOf('-i')
+        if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+        return real(cmd, [...argv.slice(0, input), '-readrate', String(r), ...argv.slice(input)], opts)
+      }
+      mod.syncBuiltinESMExports()
+    }, rate)
+  }
+
+  test('a long file name under another sound shows more than the old 146 px of it, the pass label is whole, and nothing overflows', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t149-row-width')
+    const { app, window } = studio
+    try {
+      const longName = 'saturday-stream-vod-highlight-reel-final-cut-v2.wav'
+      const long = path.join(studio.root, 'source', longName)
+      const second = path.join(studio.root, 'source', 'second-tone.wav')
+      copyFileSync(studio.fixture, long)
+      await makeFixtureWav(second)
+      await dropOnImporter(window, long, longName)
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      await stubSaveDialog(app, path.join(outDir, 't149-cleaned.mp3'))
+      await slowEveryRender(app, 0.25)
+      const panel = window.locator(EXPORT)
+      await panel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => partialsOnly(readdirSync(outDir)).length, { timeout: 60_000, intervals: [100] }).toBe(1)
+
+      await closeButton(window).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnImporter(window, second, 'second-tone.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await setWindowSize(app, window, MIN_WINDOW)
+
+      const name = panel.getByText(`Export — ${longName}`, { exact: true })
+      await expect(name, 'B\'s row names the file A is exporting').toBeVisible()
+      await expect(panel).toContainText('Rendering')
+      const width = await name.evaluate((el) => el.getBoundingClientRect().width)
+      expect(width, `the name's span is wider than the ${OLD_NAME_WIDTH} px a fixed pass slot left it`).toBeGreaterThan(OLD_NAME_WIDTH + 40)
+      // The pass label is drawn whole (a clipped or wrapped label would hide the step), on one line.
+      const pass = panel.getByText(/^(Step \d of \d — )?Rendering/).first()
+      expect(await pass.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().height < 24)).toBe(true)
+      // ...and its slot is its text (a fixed slot, wide or narrow, is the defect: the room goes to the name).
+      const slack = await pass.evaluate((el) => {
+        const text = document.createRange()
+        text.selectNodeContents(el)
+        return Math.abs(el.getBoundingClientRect().width - text.getBoundingClientRect().width)
+      })
+      expect(slack, 'the pass slot is sized to its text').toBeLessThanOrEqual(2)
+      await expectNoHorizontalOverflow(panel, 'the Export panel with another sound\'s export drawn at 1024 px')
+
+      await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

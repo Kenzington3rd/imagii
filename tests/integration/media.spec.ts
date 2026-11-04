@@ -11281,3 +11281,118 @@ describe('the stream-copy re-attach reports its mux as it goes (real ffmpeg, T-1
     }
   }, 240_000)
 })
+
+describe('the highlight scan closes a loud moment at the digital silence after it (real ffmpeg, T-149 (1))', () => {
+  // `findHighlights` kept only the samples above -70 LUFS BEFORE it walked for peaks, so a decay that jumped from above the threshold straight under -70
+  // (ebur128's momentary falls to about -160 on exact zeros within a few hops) never showed the loop a below-threshold sample: the peak stayed open through the
+  // whole silence and closed at the next audible sample. A streamer's loud sign-off before a muted BRB screen became a "highlight" of dead air. Whether a fixture
+  // reproduces depends on the tone's level (the tail of the last partial window sits at a fixed distance under the tone: -69.8 LUFS for a 0.5 tone is read, and
+  // above -70; -77.7 for a 0.2 tone is dropped). So the tone is made at several levels and the case is held for each. Pink noise bed (-54.6 LUFS) 20 s, the tone
+  // 2.5 s, EXACT digital silence 60 s (`anullsrc`), the bed 20 s again; a 5 fps black picture so the file probes like a VOD.
+  const TONE_START = 20
+  const TONE_SEC = 2.5
+  const SILENCE_SEC = 60
+  const PAD_SEC = 5
+  const LEVELS = [0.2, 0.15, 0.1]
+
+  async function fixture(name: string, level: number): Promise<string> {
+    const file = path.join(workDir, `t149-1-${name}.mp4`)
+    const bed = (): string[] => ['-f', 'lavfi', '-i', 'anoisesrc=d=20:c=pink:a=0.01:r=48000']
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', `color=c=black:s=64x64:r=5:d=${TONE_START * 2 + TONE_SEC + SILENCE_SEC}`,
+      ...bed(),
+      '-f', 'lavfi', '-i', `sine=f=1000:d=${TONE_SEC}:r=48000,volume=${level}`,
+      '-f', 'lavfi', '-i', `anullsrc=r=48000:cl=mono:d=${SILENCE_SEC}`,
+      ...bed(),
+      '-filter_complex',
+      '[1]aformat=channel_layouts=mono[a];[2]aformat=channel_layouts=mono[t];[3]aformat=channel_layouts=mono[s];[4]aformat=channel_layouts=mono[d];[a][t][s][d]concat=n=4:v=0:a=1[o]',
+      '-map', '0:v', '-map', '[o]', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-shortest', file
+    ])
+    return file
+  }
+
+  it('the fixtures are what they say: exact zeros for 60 s after the tone, the bed either side', async () => {
+    const file = await fixture('probe', 0.2)
+    const during = await momentaryLoudness(file, TONE_START + 0.2, 2)
+    const silent = await momentaryLoudness(file, TONE_START + TONE_SEC + 2, SILENCE_SEC - 4)
+    const bed = await momentaryLoudness(file, 2, 10)
+    expect(Math.max(...during), 'the tone is well above the bed').toBeGreaterThan(Math.max(...bed) + 10)
+    expect(Math.max(...silent), 'the silence is digital zeros, under the -70 floor').toBeLessThan(-100)
+    expect(Math.max(...bed), 'the bed is audible').toBeGreaterThan(-60)
+  }, 120_000)
+
+  for (const level of LEVELS) {
+    it(`a ${TONE_SEC} s tone (volume ${level}) then ${SILENCE_SEC} s of zeros: the candidate ends within the pad of the tone, not at the next sound`, async () => {
+      const file = await fixture(`tone-${level}`, level)
+      const found = await findHighlights(`t149-1-${level}`, file, () => {})
+      const toneEnd = TONE_START + TONE_SEC
+      const hit = found.find((c) => c.startSec <= TONE_START && c.endSec >= toneEnd)
+      expect(hit, `the tone is found: ${JSON.stringify(found)}`).toBeTruthy()
+      for (const c of found) {
+        expect(c.endSec, `no candidate runs on through the silence (tone ends ${toneEnd} s): ${JSON.stringify(found)}`).toBeLessThanOrEqual(toneEnd + PAD_SEC + 3)
+      }
+      expect(hit?.startSec).toBeGreaterThanOrEqual(TONE_START - PAD_SEC - 1)
+    }, 180_000)
+  }
+})
+
+describe('Picture-in-picture ends at the base\'s length, with or without sound under it (real ffmpeg, T-149 (2))', () => {
+  // The `overlay` filter repeats the overlay's last frame once the BASE ends (`eof_action=repeat`) and `-shortest` ends an output at its shortest mapped stream. With a base
+  // that has sound, the sound (padded to the base's length) is that shortest stream. A base with NO sound maps nothing for `-map 0:a?`, the picture is the only stream,
+  // and the output ran to the OVERLAY's length with the base frozen on its last frame (6 s base + 8 s overlay -> 8.000 s). `-t <base length>` ends it at the base in both cases.
+  const BASE_SEC = 6
+  const OVERLAY_SEC = 8
+  const FPS = 25
+  const files = { silentBase: '', soundBase: '', overlay: '', shortOverlay: '' }
+
+  beforeAll(async () => {
+    const dir = path.join(workDir, 't149-2')
+    await mkdir(dir, { recursive: true })
+    const picture = (sec: number, rate: number, size: string): string[] => ['-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=${rate}:duration=${sec}`]
+    const h264 = ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']
+    files.silentBase = path.join(dir, 'base-video-only-6s.mp4')
+    await ff(['-y', ...picture(BASE_SEC, FPS, '320x180'), ...h264, files.silentBase])
+    files.soundBase = path.join(dir, 'base-with-sound-6s.mp4')
+    await ff(['-y', ...picture(BASE_SEC, FPS, '320x180'), '-f', 'lavfi', '-i', `sine=frequency=440:duration=${BASE_SEC}`, ...h264, '-c:a', 'aac', '-shortest', files.soundBase])
+    files.overlay = path.join(dir, 'overlay-8s.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', `color=c=0x1edf4a:s=160x90:r=10:d=${OVERLAY_SEC}`, ...h264, files.overlay])
+    files.shortOverlay = path.join(dir, 'overlay-3s.mp4')
+    await ff(['-y', '-f', 'lavfi', '-i', 'color=c=0x1edf4a:s=160x90:r=10:d=3', ...h264, files.shortOverlay])
+  }, 120_000)
+
+  const FRAME = 1 / FPS
+  const opts = { overlayWidth: 80, position: 'top-left', margin: 8 } as const
+  const containerSec = async (file: string): Promise<number> => Number(((await ffprobeJson(file)) as { format?: { duration?: string } }).format?.duration)
+
+  it('the sources are what they say: a 6 s base with no sound, a 6 s base with sound, an 8 s overlay and a 3 s one', async () => {
+    expect((await ffprobeJson(files.silentBase)).streams.some((x) => x.codec_type === 'audio'), 'no sound under the silent base').toBe(false)
+    expect((await ffprobeJson(files.soundBase)).streams.some((x) => x.codec_type === 'audio')).toBe(true)
+    near(await containerSec(files.silentBase), BASE_SEC, 0.1, 'the silent base')
+    near(await containerSec(files.overlay), OVERLAY_SEC, 0.1, 'the overlay')
+    near(await containerSec(files.shortOverlay), 3, 0.1, 'the short overlay')
+  }, 60_000)
+
+  it('a base with NO sound, 6 s, under an 8 s overlay: the output is 6 s (within a frame), not the overlay\'s 8, and no sound appears', async () => {
+    const out = path.join(workDir, 't149-2-silent.mp4')
+    await runPipComposite('t149-2-silent', files.silentBase, files.overlay, out, opts)
+    near(await containerSec(out), BASE_SEC, FRAME + 0.01, 'the container')
+    near(await packetsEnd(out, 'v:0'), BASE_SEC, FRAME + 0.01, 'the last picture')
+    expect((await ffprobeJson(out)).streams.filter((x) => x.codec_type === 'audio'), 'a silent base stays silent').toHaveLength(0)
+  }, 120_000)
+
+  it('the control: a base WITH sound, 6 s, under the same 8 s overlay: 6 s, the sound whole', async () => {
+    const out = path.join(workDir, 't149-2-sound.mp4')
+    await runPipComposite('t149-2-sound', files.soundBase, files.overlay, out, opts)
+    near(await containerSec(out), BASE_SEC, FRAME + 0.1, 'the container')
+    near(await packetsEnd(out, 'v:0'), BASE_SEC, FRAME + 0.01, 'the last picture')
+    near(await packetsEnd(out, 'a:0'), BASE_SEC, 0.1, 'the sound reaches the end of the picture')
+  }, 120_000)
+
+  it('a SHORTER overlay (3 s) over the silent 6 s base: the output is still the base\'s 6 s (the overlay\'s last frame holds; shortest=1 would have cut it at 3)', async () => {
+    const out = path.join(workDir, 't149-2-short-overlay.mp4')
+    await runPipComposite('t149-2-short-overlay', files.silentBase, files.shortOverlay, out, opts)
+    near(await containerSec(out), BASE_SEC, FRAME + 0.01, 'the container')
+    near(await packetsEnd(out, 'v:0'), BASE_SEC, FRAME + 0.01, 'the last picture')
+  }, 120_000)
+})

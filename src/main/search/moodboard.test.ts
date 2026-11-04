@@ -77,8 +77,8 @@ describe('moodboard concurrent mutation safety (round 18)', () => {
       m.addToCollection(board.id, makeResult(1)),
       m.addToCollection(board.id, makeResult(2))
     ])
-    expect(a).not.toBeNull()
-    expect(b).not.toBeNull()
+    expect(a.collection).not.toBeNull()
+    expect(b.collection).not.toBeNull()
     const collections = await m.listCollections()
     const saved = collections.find((c) => c.id === board.id)
     expect(saved?.items.length).toBe(2)
@@ -99,7 +99,7 @@ describe('moodboard concurrent mutation safety (round 18)', () => {
     const m = await import('./moodboard')
     const board = await m.createCollection('Mixed')
     const withOne = await m.addToCollection(board.id, makeResult(1))
-    const firstId = withOne?.items[0]?.id
+    const firstId = withOne.collection?.items[0]?.id
     expect(firstId).toBeTruthy()
     await Promise.all([
       m.addToCollection(board.id, makeResult(2)),
@@ -415,7 +415,7 @@ describe('a board write that fails leaves the board as it was (T-139 (1))', () =
     const m = await import('./moodboard')
     const board = await m.createCollection('Keepers')
     const withOne = await m.addToCollection(board.id, makeResult(1))
-    expect(withOne?.items).toHaveLength(1)
+    expect(withOne.collection?.items).toHaveLength(1)
     return { m, id: board.id, before: onDisk(board.id) }
   }
 
@@ -438,7 +438,7 @@ describe('a board write that fails leaves the board as it was (T-139 (1))', () =
     expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
     faults.failWhen = null
     const retried = await m.addToCollection(id, makeResult(2))
-    expect(retried?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl, makeResult(2).fullUrl])
+    expect(retried.collection?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl, makeResult(2).fullUrl])
   })
 
   it('remove: the item stays, byte-identical board, no tmp', async () => {
@@ -501,3 +501,38 @@ describe('a board write that fails leaves the board as it was (T-139 (1))', () =
   })
 })
 
+
+// T-149 (4): main decides, under the board's lock, whether IT added the picture. The renderer used to infer that from an item-count compare of two re-reads, which a
+// double-click on Save defeated (both presses snapshot N, both re-listed N+1: "Saved" twice and an empty Undo step on top of the real one).
+describe('addToCollection says whether it added the picture (T-149 (4))', () => {
+  it('a new picture is added: true, and the board it hands back holds it', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Fresh')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl])
+  })
+
+  it('the same picture again is a duplicate: false, the board unchanged', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Twice')
+    await m.addToCollection(board.id, makeResult(1))
+    const again = await m.addToCollection(board.id, makeResult(1))
+    expect(again.added).toBe(false)
+    expect(again.collection?.items).toHaveLength(1)
+  })
+
+  it('two presses in flight at once: the lock serialises them, so exactly ONE says true', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Double')
+    const answers = await Promise.all([m.addToCollection(board.id, makeResult(1)), m.addToCollection(board.id, makeResult(1))])
+    expect(answers.map((a) => a.added).sort()).toEqual([false, true])
+    expect((await m.listCollections()).find((c) => c.id === board.id)?.items).toHaveLength(1)
+  })
+
+  it('a board that is not there is nothing added: false, and no board', async () => {
+    const m = await import('./moodboard')
+    const answer = await m.addToCollection('missingboard', makeResult(1))
+    expect(answer).toEqual({ collection: null, added: false })
+  })
+})

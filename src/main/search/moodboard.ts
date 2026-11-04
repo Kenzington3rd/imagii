@@ -208,17 +208,26 @@ async function cacheThumb(thumbnailUrl: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * T-149 (4): `added` is decided HERE, under the board's lock - true only when this call pushed a new item (false for a duplicate or a board that is not there).
+ * The renderer used to infer it from an item-count compare of two re-reads, which two presses in flight (a double-click) both passed.
+ */
+export interface AddToCollectionResult {
+  collection: MoodBoardCollection | null
+  added: boolean
+}
+
 export async function addToCollection(
   collectionId: string,
   result: SearchResult
-): Promise<MoodBoardCollection | null> {
+): Promise<AddToCollectionResult> {
   assertSafeId(collectionId, 'addToCollection collectionId')
   return withCollectionLock(collectionId, async () => {
     const file = path.join(moodboardsDir(), `${collectionId}.json`)
-    if (!existsSync(file)) return null
+    if (!existsSync(file)) return { collection: null, added: false }
     const collection = await readCollection(file)
-    if (!collection) return null
-    if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return collection
+    if (!collection) return { collection: null, added: false }
+    if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return { collection, added: false }
     const cachedThumbPath = await cacheThumb(result.thumbnail)
     const item: MoodBoardItem = {
       id: nanoid(10),
@@ -232,7 +241,7 @@ export async function addToCollection(
     }
     collection.items.push(item)
     await writeFileAtomic(file, JSON.stringify(collection, null, 2))
-    return collection
+    return { collection, added: true }
   })
 }
 

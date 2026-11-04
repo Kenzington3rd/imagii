@@ -14,7 +14,7 @@ import { cancelAudioExport, useAudioExport, type AudioExportJob } from './state/
 
 /** What the card says. Plain data, so the choice and the words are unit-testable without a DOM. */
 export interface AudioJobRow {
-  /** What is running and for which file ("Export - voice.wav"). */
+  /** What is running and for which file ("Export — voice.wav"). */
   label: string
   /** The pass as the Export panel names it ("Step 2 of 2 - attaching to video"). Not a moving figure: announced when it changes. */
   pass: string

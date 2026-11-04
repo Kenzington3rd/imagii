@@ -14,6 +14,47 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-03 - T-149 (round 98), Track A: a filter that runs before the loop hides the one sample the loop needs
+
+The thirty-fifth sweep, Track A (the highlight scan, Picture-in-picture and the empty scan; Track B lands beside it). Ledger: r98a/ledger.tsv (6 red rows: the unit files, the Layer 5 cases on 7.0.2 and the e2e case, run against a `git archive` of the unchanged tree `906a4f2`; the 6.1.1 runs are held by two of the mutation rows instead; and 20 mutation rows, 10 unit, 5 Layer 5 (3 on 7.0.2, 2 on 6.1.1) and 5 e2e, all 20 restores byte-identical by sha256; no survivors).
+
+### (1) [MED] - the sample that would close the peak was filtered out before the loop
+
+- **Bug.** A loud moment followed by exact digital silence (a loud sign-off, then a muted BRB screen) became one "sustained-loud" candidate that ran through the whole silence: 15.1-87.6 s for a tone at 20-22.5 s and 60 s of zeros, then more bed.
+- **Root cause.** `findHighlights` dropped every sample at or under -70 LUFS (and every non-finite one) into `meaningful` BEFORE the peak loop, and the loop walked `meaningful`. The decay after a tone passes -70 on the way down only when its last partial window lands above it: ebur128's momentary jumps from the loud window straight to about -160 on zeros, so no below-threshold sample ever reached the loop and the peak stayed open to the next audible sample. A line printed `M: nan` was worse: the parser's pattern could not read it, so the line vanished.
+- **Fix.** `meaningful` feeds the threshold statistics only (median, 90th percentile: a muted stretch must not drag them down); the peak loop walks EVERY sample in time order, and a silent one (at or under -70, or non-finite) is below the threshold and closes the peak at its time. The parser keeps a `nan` / `inf` reading as a non-finite sample instead of skipping its line.
+- **Test.** Layer 5 (media.spec.ts "T-149 (1)", 7.0.2 and 6.1.1): 20 s pink-noise bed, a 2.5 s tone at volume 0.2, 0.15 and 0.1, 60 s of `anullsrc` zeros, 20 s of bed, through the real `findHighlights`; the tone is found and no candidate ends later than its end plus the pad (red on the unchanged tree for all three). A 0.5 tone is NOT a reproduction (its last window reads -69.8, above the floor) and a 0.05 tone is under the threshold: the fixture was found by trying levels. Unit: `highlightsSilence.test.ts` (loud, loud, -161 x N closes at the first silent sample; a nan series closes it; the statistics ignore the silence; the end of the file) and `highlights.test.ts` (a nan / -nan / -inf reading is a non-finite sample).
+- **Lesson.** **A filter placed before a loop decides what the loop can ever see; when the loop needs the "bad" sample as its signal, filter for the statistics and not for the walk.** `meaningful` was right for the median and wrong for the state machine, and one name served both. Ask of every pre-filter what the consumer does with what it removes: here, silence was the terminator.
+
+### (2) [LOW] - `-shortest` is a statement about two streams, and a silent base has one
+
+- **Bug.** Picture-in-picture over a base with no sound ran to the overlay's length, the base frozen on its last frame (a 6 s video-only base under an 8 s overlay: 8.000 s), against the code's own comment and T-131 (2)'s "the output is the base's length".
+- **Root cause.** The overlay filter repeats its last frame when the base ends, and `-shortest` ended the output at the base only through the base's SOUND (padded to the base's length by T-131 (2)); `-map 0:a?` maps nothing for a silent base, so the picture was the only stream and `-shortest` had nothing to compare. Every T-131 (2) case had a base with sound, or a silent base under an overlay of the same length.
+- **Fix.** `-t <base length>` (three decimals, an output option) beside the pad and `-shortest`, when the base's length is known; the comment says what ends the output in each case. Not `overlay=shortest=1`: that cuts the output at a SHORTER overlay.
+- **Test.** Layer 5 (media.spec.ts "T-149 (2)", both majors): the silent 6 s base under an 8 s overlay is 6 s within a frame (7.96 s on the unchanged tree), the same base WITH sound is the control, and a 3 s overlay over the silent base still gives 6 s (mutation M20, `shortest=1`, cuts it at 3). Unit: `concatRunner.test.ts` (the argv shape, and no `-t` for a base of unknown length).
+- **Lesson.** **A flag that "ends at the shorter stream" only works when both streams exist; test the case where one of them does not.** The fix for a sound shorter than the picture proved itself on bases with sound and left the base without any untested.
+
+### (3) [LOW] - a result that is "nothing" needs a place in the panel, not only a toast
+
+- **Bug.** A Scan VOD that found nothing raised a toast of about 4 s and left no trace, so the panel looked like a scan that never ran.
+- **Fix.** `HighlightPanel` draws `No standout moments found in this video.` where the list would be when this video's scan returned `[]` (`null` is "never scanned"), hidden while a scan runs, with the list's reset rules (it lives in the open video's results). The sibling chat panel had the same line since sweep 22.
+- **Test.** video-pipelines.spec.ts "T-149 (3)": a generated steady tone scans to nothing; the line is there after the scan, after the toast has gone, through a stalled re-scan (hidden while it runs, back after), a trip to Home and a different video (gone); a burst source shows the list and no line. Red on the unchanged build.
+- **Lesson.** **When one panel of a pair gets an inline state for an empty result, grep the sibling for the same toast-only shape.** Sweep 22 fixed the chat panel and left the audio one with the identical gap.
+
+---
+
+## 2026-11-03 - T-149 (round 98), Track B: T-148 traded the text-field case for the slider case
+
+One ticket track, three items (the References double-click, the shared gesture end, the other-sound Export row). Ledger: r98b/ledger.tsv (red rows against a `git archive` of the unchanged tree `906a4f2`, whose product code is `cfa2bcf`'s, and the mutation rows; every restore sha256-verified).
+
+- **Bug.** (5) A mouse click from one Text overlay field into another (the caption, then the Color box) merged the two edits into one undo step: ONE Undo reverted both. (4) A double-click on a search result's Save toasted `Saved to "X"` twice and pushed an empty Undo step.
+- **Root cause.** (5) T-148 made the blur of a press ignored (so a slider drag after another control is one step), which left the release as the only gesture end; the release landed in the NEWLY focused text box, and the T-80 rule "a release inside the focused text field is a caret click" read it as one. Every field of an overlay shares a key, so the colour joined the caption's step: what T-40 and T-80 had fixed. (4) `addToCollection`'s `added` was inferred from the item counts of two lists re-read around the call; two presses in flight both snapshotted N and both re-read N+1.
+- **Fix.** (5) `onPointerDown` records the focused element and the exemption applies only when the release is inside that SAME field; a press that moves focus ends the gesture. (4) Main decides `added` under the board's lock and the IPC returns `{ collection, added }`; the store trusts it and pushes a step only on true; the Save button drops the repeat press of a double-click (`isRepeatPress`). Fold: the Export row's pass label sizes to its text while another sound's name is drawn, so the name keeps more than 146 px at 1024 px.
+- **Test.** video-core.spec.ts "T-149 (5)" (a real click on the Color box; ONE Undo reverts only the colour) and `gestureEnd.test.ts` (the four cases); references.spec.ts "T-149 (4)" (a real `dblclick`: one toast, one item, ONE Undo) with `moodboard.test.ts` and `referencesStore.test.ts`; audio.spec.ts "T-149 (fold)" (the name wider than 146 px, measured at 1024x640).
+- **Lesson.** **A fix to a shared rule needs the cases the OLD rule protected, not only the new one: T-148 traded the text-field case for the slider case.** T-148's tests covered the slider drag it was fixing and the T-80 caret click that already existed, but not the press that moves focus into a text field, the one case the removed blur used to close. When a rule is changed, list what the old rule did on each path (here: blur closed the caption on the way to the Color box) and keep a test for each, not just for the path that was broken. And a count compare of two reads is not an answer to "did I do it?": ask the code that did it, under the lock that decided it.
+
+---
+
 ## 2026-11-03 - T-148 (round 97): the first drag after another control was two undo steps in every studio but Audio
 
 One ticket, one change. Ledger: r97a/ledger.tsv (4 red rows: the unit file, the two Video e2e cases and the Image e2e case, run against a `git archive` of the unchanged tree `663d3c5`; and 21 mutation rows, 16 unit and 5 e2e, all 21 restores byte-identical by sha256; no survivors).

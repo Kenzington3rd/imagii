@@ -74,7 +74,7 @@ const moodboardApi = {
     const found = disk.find((c) => c.id === collectionId)
     if (!found) return Promise.resolve(null)
     found.items.push({ ...makeItem(found.items.length + 1), collectionId, title: result.title })
-    return Promise.resolve(clone(found))
+    return Promise.resolve({ collection: clone(found), added: true })
   },
   removeItem: (collectionId: string, itemId: string) => {
     const found = disk.find((c) => c.id === collectionId)
@@ -535,7 +535,7 @@ describe('one search at a time (T-133 (8)), and the newest query is the one that
 })
 
 // T-76 / T-147 (5): main keeps one copy of a picture per board (it dedupes on `fullUrl` and hands the board back unchanged), so the store's
-// answer to "did that add anything?" is the item count of the list it re-reads. A duplicate is not a step: pushing one left an Undo that
+// answer to "did that add anything?" is main's (T-149 (4): decided under main's lock and handed back, no longer an item-count compare of two re-reads). A duplicate is not a step: pushing one left an Undo that
 // undid nothing on top of the real ones.
 describe('adding a picture that is already on the board', () => {
   /** The bridge as main behaves: a second add of the same fullUrl changes nothing. */
@@ -546,11 +546,10 @@ describe('adding a picture that is already on the board', () => {
           ...moodboardApi,
           addItem: (collectionId: string, result: SearchResult) => {
             const found = disk.find((c) => c.id === collectionId)
-            if (!found) return Promise.resolve(null)
-            if (!found.items.some((i) => i.fullUrl === result.fullUrl)) {
-              found.items.push({ ...makeItem(found.items.length + 1), collectionId, fullUrl: result.fullUrl, title: result.title })
-            }
-            return Promise.resolve(clone(found))
+            if (!found) return Promise.resolve({ collection: null, added: false })
+            const added = !found.items.some((i) => i.fullUrl === result.fullUrl)
+            if (added) found.items.push({ ...makeItem(found.items.length + 1), collectionId, fullUrl: result.fullUrl, title: result.title })
+            return Promise.resolve({ collection: clone(found), added })
           }
         }
       }
@@ -586,5 +585,55 @@ describe('adding a picture that is already on the board', () => {
     await settle()
     await expect(store().addToCollection('board-1', makeResult(1))).rejects.toThrow('disk full')
     expect(store().canUndo()).toBe(false)
+  })
+})
+
+// T-149 (4): the store trusts main's answer. A double-click's two presses were both in flight against the same snapshot: each re-listed N+1 items and each
+// pushed a step. Main decides `added` under its lock, so the second press hears false and records nothing.
+describe('the store trusts main\'s answer to "did that add anything?" (T-149 (4))', () => {
+  function stubDedupingBridge(): void {
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          addItem: async (collectionId: string, result: SearchResult) => {
+            const found = disk.find((c) => c.id === collectionId)
+            if (!found) return { collection: null, added: false }
+            await Promise.resolve() // the thumbnail fetch main awaits inside its lock
+            const added = !found.items.some((i) => i.fullUrl === result.fullUrl)
+            if (added) found.items.push({ ...makeItem(found.items.length + 1), collectionId, fullUrl: result.fullUrl, title: result.title })
+            return { collection: clone(found), added }
+          }
+        }
+      }
+    })
+  }
+
+  it('two concurrent adds of one picture: true then false, ONE history step, one item', async () => {
+    stubDedupingBridge()
+    await store().createCollection('Alpha')
+    const stepsAfterCreate = store().history.past.length
+    const [first, second] = await Promise.all([
+      store().addToCollection('board-1', makeResult(1)),
+      store().addToCollection('board-1', makeResult(1))
+    ])
+    expect([first, second]).toEqual([true, false])
+    expect(store().history.past, 'the duplicate recorded no step').toHaveLength(stepsAfterCreate + 1)
+    expect(store().collections[0]?.items).toHaveLength(1)
+  })
+
+  it('believes main over the item counts: a true answer is a step even when the re-read count did not move', async () => {
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          addItem: () => Promise.resolve({ collection: null, added: true })
+        }
+      }
+    })
+    await store().createCollection('Alpha')
+    const steps = store().history.past.length
+    expect(await store().addToCollection('board-1', makeResult(1))).toBe(true)
+    expect(store().history.past).toHaveLength(steps + 1)
   })
 })

@@ -579,3 +579,43 @@ describe('a join that cannot open a segment is a lost clip on the Windows binary
     await expect(runConcat(spec(['Intro', 'Boss fight']))).resolves.toBeDefined()
   })
 })
+
+// T-149 (2): `-shortest` ends the composite at the base only when the base has SOUND (`-map 0:a?` maps nothing for a silent base, so the overlay's frames were
+// the only stream left and the output ran to the overlay's length, the base frozen on its last frame). `-t <base length>` is what ends the output at the base in
+// every case; `overlay=shortest=1` would instead cut it at a SHORTER overlay, which is not wanted. Layer 5 (T-149 (2)) holds the lengths on real files.
+describe('picture-in-picture ends at the base\'s length whether or not the base has sound (T-149 (2))', () => {
+  const pip = (): Promise<{ outputPath: string }> =>
+    runPipComposite('pip-t', '/tmp/base.mp4', '/tmp/overlay.mp4', path.join(scratch, 'pip.mp4'), {
+      overlayWidth: 360,
+      position: 'bottom-right',
+      margin: 32
+    })
+
+  it('-t <the base\'s length, three decimals> is an output option: after both inputs, ahead of the output path', async () => {
+    probedSec = 6
+    await pip()
+    const args = spawned[0] as string[]
+    expect(after(args, '-t')).toBe('6.000')
+    expect(args.filter((a) => a === '-t'), 'one cap').toHaveLength(1)
+    expect(args.indexOf('-t'), 'an output option, after the last -i').toBeGreaterThan(args.lastIndexOf('-i'))
+    expect(args.indexOf('-t'), 'ahead of the output path').toBeLessThan(args.length - 1)
+    expect(args[args.length - 1], 'the output path is last').toMatch(/pip/)
+  })
+
+  it('the length is the probe\'s to the millisecond, and -shortest and the sound pad stay beside it', async () => {
+    probedSec = 12.0449
+    await pip()
+    const args = spawned[0] as string[]
+    expect(after(args, '-t')).toBe('12.045')
+    expect(args).toContain('-shortest')
+    expect(after(args, '-af')).toBe('apad=whole_dur=12.045')
+  })
+
+  it('a base whose length cannot be read is not capped (the output ends where its streams do, as it always did)', async () => {
+    probedSec = new Error('ffprobe returned no usable duration for the video')
+    await pip()
+    const args = spawned[0] as string[]
+    expect(args).not.toContain('-t')
+    expect(args).toContain('-shortest')
+  })
+})

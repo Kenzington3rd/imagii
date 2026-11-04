@@ -202,6 +202,12 @@ export function HighlightPanel(): JSX.Element | null {
         </div>
       ) : null}
 
+      {/* T-149 (3): a scan of THIS video that found nothing (`[]`; null is "never scanned") says so where the list would be - the toast fades in about 4 s and the panel
+          looked like a scan that never ran. It goes with the list's reset rules (the open video's own results) and gives way to the progress bar during a re-scan. */}
+      {!scanning && audioCandidates !== null && audioCandidates.length === 0 ? (
+        <p className="text-xs text-ink-dim">No standout moments found in this video.</p>
+      ) : null}
+
       {scored.length > 0 ? (
         <ul className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
           {scored.map((h, i) => (

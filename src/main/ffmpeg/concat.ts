@@ -526,10 +526,12 @@ async function compositePip(
         'aac',
         '-b:a',
         '192k',
-        // T-131 (2): `-shortest` ended the output where a SHORTER base sound did (a Record take whose microphone dropped at 5 s of 12 came
-        // out 5.0 s long). The sound is padded with silence to the base's length (finite: a bare `apad` hangs), so `-shortest` ends at the
-        // picture whichever stream is shorter. It stays: it is also what ends the output when the overlay outlasts the base.
-        ...(baseSec === null ? [] : ['-af', `apad=whole_dur=${baseSec.toFixed(3)}`]),
+        // What ends the output (T-131 (2), T-149 (2)). A base WITH sound: the sound is padded with silence to the base's length (finite: a bare
+        // `apad` hangs), so `-shortest` ends at the picture whichever stream is shorter, and also when the overlay outlasts the base. A base
+        // with NO sound maps no audio (`0:a?`), so `-shortest` had only the picture to go on and the output ran to the OVERLAY's length with the
+        // base frozen: `-t <base length>` ends it at the base in every case. (Not `overlay=shortest=1`: that would cut the output at a SHORTER
+        // overlay.) A base whose length cannot be read gets neither the pad nor the cap and ends where its streams do, as it always did.
+        ...(baseSec === null ? [] : ['-af', `apad=whole_dur=${baseSec.toFixed(3)}`, '-t', baseSec.toFixed(3)]),
         '-shortest',
         // B5 fix (round 15): PiP composite MP4 needs faststart so web players
         // don't stall while seeking the moov atom.

@@ -168,3 +168,85 @@ describe('endsGestureOnPointerUp - a caret click is not a gesture end (T-80)', (
     expect(endsGestureOnPointerUp('textarea', null, FOCUSED)).toBe(false)
   })
 })
+
+// T-149 (5): T-148 made the press's own blur ignored, so a MOUSE click from one text field into another reached pointerup with the new field focused, and the T-80
+// rule read it as a caret click: the two fields' edits shared one undo step again (T-40 / T-80 had fixed exactly that). The caret-click exemption now needs the
+// release to land in the SAME field that was focused when the press began. `moveFocus` is what the browser does between pointerdown and pointerup.
+describe('createGestureEnd: a press that moves focus ends the gesture (T-149 (5))', () => {
+  const moveFocus = (to: unknown): void => {
+    focused = to
+  }
+
+  it('(a) a caret click inside the field that already had focus is still not an end', () => {
+    const g = make()
+    const caption = field('INPUT', 'text')
+    focused = caption
+    g.onPointerDown()
+    g.onPointerUp({ target: caption })
+    expect(ended).toBe(0)
+  })
+
+  it('(b) a press in a DIFFERENT text field (focus moved to it) ends the gesture, and the press-caused blur still does not', () => {
+    const g = make()
+    const caption = field('INPUT', 'text')
+    const color = field('INPUT', 'text')
+    focused = caption
+    g.onPointerDown()
+    moveFocus(color)
+    g.onBlur() // the caption lost focus mid-press
+    expect(ended, 'the blur of a press is ignored').toBe(0)
+    g.onPointerUp({ target: color })
+    expect(ended, 'the caption edit is closed; the colour edit is its own step').toBe(1)
+  })
+
+  it('(b2) a press in a text field from nothing focused (or from a button) ends it too', () => {
+    const g = make()
+    const color = field('INPUT', 'text')
+    focused = null
+    g.onPointerDown()
+    moveFocus(color)
+    g.onPointerUp({ target: color })
+    expect(ended).toBe(1)
+    focused = field('BUTTON')
+    g.onPointerDown()
+    moveFocus(color)
+    g.onPointerUp({ target: color })
+    expect(ended).toBe(2)
+  })
+
+  it('(c) a slider drag that began after another control is one end, with the first blur ignored (T-148 unchanged)', () => {
+    const g = make()
+    const button = field('BUTTON')
+    const slider = field('INPUT', 'range')
+    focused = button
+    g.onPointerDown()
+    moveFocus(slider)
+    g.onBlur()
+    expect(ended, 'mid-drag').toBe(0)
+    g.onPointerUp({ target: slider })
+    expect(ended).toBe(1)
+  })
+
+  it('(d) a press in the focused text field that is released somewhere else is an end', () => {
+    const g = make()
+    const caption = field('INPUT', 'text')
+    focused = caption
+    g.onPointerDown()
+    g.onPointerUp({ target: field('DIV') })
+    expect(ended).toBe(1)
+  })
+
+  it('the second caret click in a field is a caret click again: the record is per press, not per instance', () => {
+    const g = make()
+    const caption = field('INPUT', 'text')
+    const color = field('INPUT', 'text')
+    focused = caption
+    g.onPointerDown()
+    g.onPointerUp({ target: caption })
+    expect(ended).toBe(0)
+    focused = color
+    g.onPointerDown() // now color is the focused one when this press begins
+    g.onPointerUp({ target: color })
+    expect(ended, 'a caret click in the field that is focused at this press').toBe(0)
+  })
+})

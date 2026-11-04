@@ -12802,3 +12802,78 @@ test.describe('T-146: the finished toast of an export that ended on another rout
     }
   })
 })
+
+// T-149 (3): a Scan VOD that found nothing left only a ~4 s toast, so once it faded the panel looked like a scan that never ran. The panel now says so inline, the way the
+// chat panel's "no spikes" line does (sweep 22).
+test.describe('T-149 (3): a Scan VOD that finds nothing says so in the panel, not only in a toast', () => {
+  const EMPTY_LINE = 'No standout moments found in this video.'
+  let flatSrc = ''
+
+  test.beforeAll(async () => {
+    // A flat bed: one steady tone for 8 s has no moment louder than the rest, so the scan returns [].
+    flatSrc = path.join(root, 'source', 'flat-bed.mp4')
+    await ffmpeg([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=15:duration=8',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=8',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-ac', '1', '-shortest',
+      flatSrc
+    ])
+  })
+
+  test('the line is there after the scan, still there after the toast has faded, through a re-scan, a trip to Home, and gone with the video', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t149-3-flat', flatSrc)
+    try {
+      const card = highlightCard(window)
+      const line = card.getByText(EMPTY_LINE, { exact: true })
+      await expect(line, 'a video that was never scanned says nothing of the kind').toHaveCount(0)
+
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      await expectToast(window, 'No standout moments detected')
+      await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible({ timeout: 60_000 })
+      await expect(line).toBeVisible()
+      await expect(card.locator('li'), 'there is no list').toHaveCount(0)
+
+      // The toast (about 4 s) is gone and the line is not.
+      await expect(window.getByText('No standout moments detected', { exact: true }), 'the toast faded').toHaveCount(0, { timeout: 15_000 })
+      await window.waitForTimeout(1_000)
+      await expect(line, 'the line outlives the toast').toBeVisible()
+
+      // A re-scan: the line gives way to the progress bar and comes back with the result (this video still has nothing).
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 4_000 }])
+      await card.getByRole('button', { name: 'Re-scan' }).click()
+      await expect(card.getByRole('progressbar', { name: 'Scanning the video for highlights' })).toBeVisible()
+      await expect(line, 'not "found nothing" while a scan is running').toHaveCount(0)
+      await expect(line).toBeVisible({ timeout: 60_000 })
+
+      // It belongs to this video's results: a trip to Home and back keeps it, a different video starts clean.
+      await leaveAndReturn(window)
+      await expect(line, 'kept across a visit').toBeVisible()
+      await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible()
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(line, 'a different video starts clean').toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Scan VOD' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a scan that finds candidates shows the list and no line; the line is gone when the candidates come', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t149-3-burst', burstSrc)
+    try {
+      const card = highlightCard(window)
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
+      await expect(card.getByText(EMPTY_LINE, { exact: true })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})

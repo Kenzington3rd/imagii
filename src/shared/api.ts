@@ -260,7 +260,8 @@ export interface ImagiiApi {
     create(name: string): Promise<MoodBoardCollection>
     delete(id: string): Promise<void>
     rename(id: string, name: string): Promise<MoodBoardCollection | null>
-    addItem(collectionId: string, result: SearchResult): Promise<MoodBoardCollection | null>
+    /** T-149 (4): `added` is main's own answer, decided under its lock - false for a picture already on the board or a board that is gone. */
+    addItem(collectionId: string, result: SearchResult): Promise<{ collection: MoodBoardCollection | null; added: boolean }>
     removeItem(collectionId: string, itemId: string): Promise<MoodBoardCollection | null>
     /** T-58 — make the boards on disk match this list exactly. The inverse
      *  the references undo history steps through; see restoreCollections. */

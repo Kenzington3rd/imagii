@@ -203,11 +203,11 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     selectCollection: (id) => set({ selectedCollectionId: id }),
     addToCollection: async (collectionId, result) => {
       const before = snapshot()
-      const count = (list: MoodBoardCollection[]): number => list.find((c) => c.id === collectionId)?.items.length ?? 0
-      await window.api.moodboard.addItem(collectionId, result)
+      // T-149 (4): main says whether IT added the picture (decided under its lock). A count compare of two re-reads could not tell two presses in flight apart:
+      // both snapshots held N, both re-reads held N+1, both pushed a step.
+      const { added } = await window.api.moodboard.addItem(collectionId, result)
       const collections = await window.api.moodboard.list()
       // A duplicate changed nothing on disk, so it is not a step: pushing one left an Undo that undid nothing, on top of the real steps.
-      const added = count(collections) > count(before.collections)
       set(added ? { collections, history: pushHistory(get().history, before) } : { collections })
       return added
     },

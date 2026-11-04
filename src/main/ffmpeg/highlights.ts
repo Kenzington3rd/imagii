@@ -29,9 +29,14 @@ interface LoudnessSample {
 // loudly rather than spin forever (Power of Ten rule 2).
 const PARSE_EBUR128_MAX_ITERATIONS = 2_000_000
 
+/**
+ * T-149 (1): a line whose momentary loudness ffmpeg printed as `nan` / `-nan` / `inf` / `-inf` is a sample with a NON-FINITE `m`, not a line
+ * the pattern skips: the peak loop reads such a sample as below the threshold (silence), so it must be there to be read. (A non-finite `t`
+ * still drops the line: a sample with no time cannot close anything.)
+ */
 function parseEbur128(stderr: string): LoudnessSample[] {
   const samples: LoudnessSample[] = []
-  const re = /t:\s*([\d.]+).*?M:\s*(-?[\d.]+)/g
+  const re = /t:\s*([\d.]+).*?M:\s*(-?(?:[\d.]+|nan|inf))/gi
   let m: RegExpExecArray | null
   let iterations = 0
   while ((m = re.exec(stderr)) !== null) {
@@ -42,8 +47,9 @@ function parseEbur128(stderr: string): LoudnessSample[] {
       )
     }
     const t = Number(m[1])
-    const lufs = Number(m[2])
-    if (Number.isFinite(t) && Number.isFinite(lufs)) {
+    const word = /[a-z]/i.test(m[2] as string)
+    const lufs = word ? Number.NaN : Number(m[2])
+    if (Number.isFinite(t) && (word || Number.isFinite(lufs))) {
       samples.push({ t, m: lufs })
     }
   }
@@ -152,6 +158,9 @@ async function scanSource(
     return []
   }
 
+  // T-149 (1): the threshold statistics (median, p90) read the meaningful samples only - a muted stretch must not drag them down - but the peak loop
+  // below walks EVERY sample: a decay that jumps from above the threshold straight under -70 (ebur128 falls to about -160 on exact zeros within a few
+  // hops) would otherwise never show it a below-threshold sample, and the peak would stay open through the whole silence.
   const meaningful = samples.filter((s) => Number.isFinite(s.m) && s.m > -70)
   if (meaningful.length === 0) {
     onProgress({ jobId, phase: 'done', percent: 100 })
@@ -168,7 +177,8 @@ async function scanSource(
   let peakStart = 0
   let peakMax = -100
 
-  for (const s of meaningful) {
+  for (const s of samples) {
+    // A silent sample (<= -70, or nan) is below the threshold, which is always above -64 (median + 6 of samples above -70): it closes an open peak here.
     if (s.m >= threshold) {
       if (!inPeak) {
         inPeak = true

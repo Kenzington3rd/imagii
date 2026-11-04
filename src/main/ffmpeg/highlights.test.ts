@@ -22,6 +22,20 @@ describe('parseEbur128', () => {
     expect(samples).toHaveLength(0)
   })
 
+  it('keeps a line whose M: ffmpeg printed as nan / -nan / -inf as a NON-FINITE sample, not a missing one (T-149 (1))', () => {
+    const stderr = [
+      '[Parsed_ebur128_0 @ 0x1] t:  0.100 TARGET:-23 LUFS    M: -27.4 S: -27.4',
+      '[Parsed_ebur128_0 @ 0x1] t:  0.200 TARGET:-23 LUFS    M: nan S: -27.4',
+      '[Parsed_ebur128_0 @ 0x1] t:  0.300 TARGET:-23 LUFS    M:-nan S: -27.4',
+      '[Parsed_ebur128_0 @ 0x1] t:  0.400 TARGET:-23 LUFS    M:-inf S: -27.4',
+      '[Parsed_ebur128_0 @ 0x1] t:  0.500 TARGET:-23 LUFS    M:-163.3 S: -27.4'
+    ].join('\n')
+    const samples = parseEbur128(stderr)
+    expect(samples.map((x) => x.t)).toEqual([0.1, 0.2, 0.3, 0.4, 0.5])
+    expect(samples.map((x) => Number.isFinite(x.m))).toEqual([true, false, false, false, true])
+    expect(samples[4]).toEqual({ t: 0.5, m: -163.3 })
+  })
+
   it('handles a 1 MB realistic input within reasonable time', () => {
     const line = '[Parsed_ebur128_0 @ 0x1] t:  0.100 TARGET:-23 LUFS    M: -27.4 S: -27.4\n'
     const big = line.repeat(15_000) // ~1 MB of valid samples
