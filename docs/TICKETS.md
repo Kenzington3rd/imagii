@@ -6993,6 +6993,99 @@ IMG-PREC.
 
 ---
 
+## T-153 — sweep-39 fixes (round 102)
+
+- **Spec:** the thirty-ninth sweep's verified findings (candidate clean pass #1 on 489370b), confirmed
+  by the expediter against source (item 6 measured in Node). Privacy, Electron, audio, a11y and
+  streamer clean on their whole lens (every reviewer named the files it read — the new COVERAGE rule);
+  not counted: UX's "Export again re-renders finished files as (2)" (= T-110 (k) verbatim), a11y's
+  silent inline notes (= T-110 (l), extended by name, folded below), QA's bytes-vs-characters size
+  rule (contrived band, folded below), streamer's 1080p60 rating on a 30 fps source (advisory) and
+  Clip Kit's hard-limit question (T-85/T-113 design). Two tracks, disjoint files.
+
+  **Track A — Stream Graphics, navigation, labels (items 1-7; fold a11y-image).**
+  1. **[LOW] Stroke (px) pushes an undo step per keystroke (a T-152 (5) regression).** The DraftField
+     commits live on each in-range keystroke and `updateLayer(id, { strokeWidth })` passes no key, so
+     typing "12" is two undo steps; the old raw input passed 'strokeWidth' and coalesced. Size (px),
+     x / y and Rotation have the same shape (T-110 (n)'s canvas half: "canvas undo pushes a step per
+     keystroke"). Fix direction: every canvas DraftField's commits pass a per-control key —
+     `'strokeWidth'`, `'fontSize'`, `'x'`, `'y'`, and Rotation through `updateLayer(id, { rotation },
+     'rotation')` (or a key parameter on `setRotation`; the rotation preset buttons stay one step each).
+     The panel already spreads `useGestureEnd(endGesture)`, so leaving the box ends the window. Tests:
+     unit (canvasStore: "1" then "12" with the key = one step; a second burst after `endGesture` = a
+     second step); e2e (image.spec NEW describe): type "12" in Stroke (px), leave, one Ctrl+Z → the
+     previous width; the same for Size (px) and x. Red on 489370b. T-110 (n)'s canvas half closes
+     (say so in the Done entry).
+  2. **[LOW] The shortcuts dialog's key chip wraps ("Save / project").** HotkeyOverlay.tsx:165's `kbd`
+     gains `whitespace-nowrap shrink-0`. E2E: every route's `?` dialog, every chip one line
+     (`expectOneLine`) at 1024x640; red on 489370b (Home's "Save project").
+  3. **[MED] The second click of a double-click lands in the studio the first click opened.** NavCard
+     (and HomeLink) are bare `<Link>`s; a double-click on Home's "Stream Graphics" card navigates and
+     the second click applies whichever template is under the pointer on the empty canvas's one-click
+     grid. Welcome's "Let's go" already swallows it (T-139 (9), App.tsx:88). Fix direction, at the root:
+     App swallows the repeat click on EVERY route change (`swallowRepeatClicks()` in an effect keyed on
+     the location), which covers NavCard, HomeLink, the Asset Library card, the mood board's → Canvas,
+     Clean audio, Edit in Video Studio and the autosave Restore without touching each; Welcome's own
+     call can stay. E2E: a double-click on the Stream Graphics card of an empty session → Stream
+     Graphics with no layer; a double-click on a studio's Home link → still on Home; red on 489370b.
+  4. **[LOW] The posting log's numbers are labelled with raw keys ("views", "likes", "comments").**
+     PostChecklist.tsx:320-322: a label map, "Views" / "Likes" / "Comments" (BRANDING sentence case).
+  5. **[LOW] The volume meter's middle band uses the text-only `warn` as a mark.** VolumeMeter.tsx:102
+     `bg-warn` → `bg-ember` (DESIGN_GUIDE: warn is text; warning marks use ember; no warn-strong).
+  6. **[LOW] "vertical YouTube shorts".** CustomPresetManager.tsx:182 → "YouTube Shorts".
+  7. **[LOW] Stream Graphics' bare "x" / "y" labels.** PropertiesPanel.tsx:50,54 → "X (px)" / "Y (px)"
+     (BRANDING "a bare number is not a value"; the "(px)" convention beside Size (px) and Stroke (px));
+     accessible names follow; update every locator and pin.
+  Fold (a11y, T-110 (l) class extended by name): the image Export dialog's size note and JPG note sit in
+     ONE always-mounted `role="status"` wrapper (the GifPanel:90 shape, with its empty-gap correction);
+     update the interactionWiring pin; the e2e asserts the note arrives inside a status region that
+     existed before the format change.
+
+  **Track B — clips, clocks, the recorder, one size rule (items 8-10; folds).**
+  8. **[LOW] A zero-length clip from a saved project or autosave restores as is.** ProjectIO's restore
+     sets `video.clips` unchanged; validation checks finiteness only; a v1.6.0 file (same I / O keys,
+     same `applyRange`) can carry [0,0] or [D,D], and every output then says only "Export failed.".
+     Fix direction: ONE pure helper in src/shared (`clip.ts`): the range floor `applyRange` holds
+     (0.1 s when the source is at least that long); `applyRange` calls it, and the restore maps each
+     restored clip through it once the source's duration is known (after `loadSource`). Tests: unit
+     beside the helper; e2e (video-core NEW describe): a project file carrying [0,0] and [D,D] opens
+     with [0, 0.1] / [D − 0.1, D] and Export writes a file; red on 489370b.
+  9. **[MED] Every tenths / hundredths readout truncates float error into a whole digit.**
+     shared/clockTime.ts:19 `Math.floor((safe - whole) * 10 ** places)`: formatClock(1.2, 1) is
+     "0:01.1", 4.1 → "0:04.0", 19.9 → "0:19.8" (152 of the 400 tenths 0.0-39.9 wrong, measured), and I
+     at the end of a 10 s video (start 9.9, end 10) reads "Length 0:00.0" — T-152 (4)'s own symptom.
+     Timeline In / Length / Out and its slider valuetext, Player and Waveform readouts. Fix direction:
+     truncate on an integer count that is rounded first, e.g. hundredths = `Math.round(safe * 1000)`
+     then floor-divide to the places (state the exact expression and why it truncates, not rounds, a
+     value like 1.49 → "0:01.4"). Tests: unit (1.2, 4.1, 19.9, 59.9, 10 − 9.9, 0.1, 1.49, 65.999, an
+     hour value, every tenth 0.0-39.9 exact); e2e: extend T-152 (4)'s I-at-the-end case so Length reads
+     0:00.1 on the fixture; red on 489370b.
+  10. **[LOW] A window source resized mid-take records the rest of the take stretched (webcam on).**
+     record-studio/compositor.ts reads the canvas size once and `drawFrame` draws the screen frame into
+     it with `drawImage(screen, 0, 0, canvasW, canvasH)`. Fix direction: fit each frame by the screen
+     video's CURRENT `videoWidth / videoHeight` into the fixed canvas, centred, black bars (contain);
+     the camera corner math unchanged. Tests: unit (compositor's frame rect for a source that changes
+     aspect mid-take: the same aspect, letterboxed); the deepest layer that reaches a real resize is the
+     unit (screen capture is an OS boundary — IC disposition row).
+  Fold (contrived, not counted — QA's sweep-39 bytes-vs-characters): Open's stat guard refuses unread
+     only past `3 × MAX_PROJECT_BYTES` (a UTF-16 unit is at most 3 UTF-8 bytes, so only such a file must
+     exceed the character rule Save and autosave measure; name the constant in projectValidation.ts);
+     below it the file is read and measured in characters, so every file Save writes opens. Update the
+     T-152 (3) unit (a MAX + 1 byte file is now read and refused by the character rule; the 600 MB file
+     is still never read).
+  Fold (a11y, T-110 (l) class): ExportPanel's NOTHING_QUEUED line in an always-mounted `role="status"`.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE lines where copy or
+  behaviour the person sees changes; LESSONS entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice, `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with
+  an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped
+  by explicit PID only.
+- **Status:** open (round 102)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
