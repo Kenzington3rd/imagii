@@ -6823,6 +6823,67 @@ IMG-PREC.
 
 ---
 
+## T-151 — sweep-37 fixes (round 100)
+
+- **Spec:** the thirty-seventh sweep's two verified findings (candidate clean pass #1 on cd1e917), both
+  consequences of T-150, confirmed by the expediter against source. Privacy, Electron, audio, design
+  and ffmpeg clean; a11y's and UX's items are T-110 (l) verbatim, the sanctioned focus ring, and (bg)'s
+  safe-side class (extended below). Two tracks, disjoint files.
+
+  **Track A — the Text overlay's position (item 1).**
+  1. **[LOW-MED] "50 and 50 is the centre" over a top-left anchor; a caption can run off the frame.**
+     drawTextFilter (src/main/ffmpeg/filters.ts:386-393) emits `x=round(overlay.x*W):y=round(overlay.y*H)`
+     — the text's TOP-LEFT corner — while T-150 (4) wrote in USER_GUIDE.md:293-294 "(50 and 50 is the
+     centre)". A caption typed at 50 / 85 starts at the frame centre, and a 25-character caption at the
+     default 48 px runs off the right edge of the 1080-wide vertical files; nothing previews it and
+     nothing warns. Fix direction: keep the top-left anchor (a centre anchor would move every saved
+     project's overlays); the drawtext position CLAMPS the text inside the frame —
+     `x='min(max(0,X),w-tw)'`, `y='min(max(0,Y),h-th)'` (escaped for the filter graph the way the other
+     drawtext arguments are) — so no caption is cut off whatever the box says; the copy (USER_GUIDE, the
+     refusal sentence if it says otherwise, the card's existing hint line) says the boxes place the
+     text's TOP-LEFT corner, drops "is the centre", and says a caption that would leave the frame is kept
+     inside it. Covering tests: unit (the exact drawtext string for an in-frame and an out-of-frame
+     position; the copy pins); **Layer 5** (IMG-PREC): the bundled Linux 7.0.2 has no drawtext and Wine
+     has no fonts, so run the case on the distro 6.1.1 (the 611 config) with a system font file
+     substituted for the Windows font path ONLY in the test (say how), and assert from decoded pixels
+     that a long white caption at x = 0.9 on a black 1080x1920 frame ends inside the frame (the last
+     white column < 1080 and its width unchanged), red on the unchanged tree (cut at the edge); a
+     win32-gated twin beside the existing T-51 drawtext cases for the release run.
+  Ledger: (br) a "Centre across" choice for a caption is a product initiative (T-110), not this item.
+
+  **Track B — the mood board's thumbnail fetch (item 2, fold).**
+  2. **[LOW] One stalled thumbnail host now stalls every board edit and every Undo.** cacheThumb
+     (src/main/search/moodboard.ts:~197-205) is a `net.fetch` with no timeout and no size cap, run inside
+     `addToCollection` under the board lock (the ledgered (bf)); T-150's single References chain makes
+     every later board edit and Undo (deferred while `mutating > 0`) wait behind it with no feedback —
+     before T-150 the stall held one board's lock. Fix direction: `cacheThumb` fetches with
+     `AbortSignal.timeout(10_000)` and a byte cap (e.g. 8 MB, reading the body with a running count and
+     aborting past it); on a timeout, an abort or the cap it returns `undefined` and the item is saved
+     WITHOUT a cached thumbnail (the tile already falls back to the source URL — confirm in
+     MoodBoardPanel and say so); (bf)'s mood-board half is closed by this (note it in T-110 via the Done
+     entry). Covering tests: unit (main: a fetch that never answers → undefined after the timeout, with
+     fake timers or an injectable fetch; an oversize body → undefined; a normal body → the cached path);
+     e2e (references.spec, NEW describe): a thumbnail socket that accepts and never answers, Save → the
+     item lands within ~12 s with no cached thumbnail, a second board edit right after it completes, and
+     Ctrl+Z works; red on cd1e917 (the save never lands within the window).
+  Fold (non-counted): `isNotFoundError` (src/shared/importDiagnostics.ts:88-100) reads `spawn …
+     ENOENT` — the app's own ffprobe/ffmpeg missing — as "the file is gone", so T-150's Recent prune
+     would drop a valid entry; exclude a spawn ENOENT (the `spawn ` prefix ffmpeg's runner errors carry)
+     from the not-found test, and wrap `useRecentFiles.remove`'s settings read so a refused read cannot
+     skip the toast. Covering test: unit.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE lines; LESSONS entry at
+  the TOP per track (Track A: "a sentence that explains a number is a spec for the pixels — read the
+  filter that draws it").
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; Layer 5 for item 1 as described; new cases in NEW describe blocks appended at the end of
+  shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
+  handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
+  lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 100)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7271,7 +7332,12 @@ IMG-PREC.
   over-promises — the offered snapshot survives only until the
   next session's first autosave write (USER_GUIDE documents the
   behavior; the label does not); candidate: "Not now" or a
-  USER_GUIDE-matching tooltip; (bh) ffmpeg 7.x measures `-to` per
+  USER_GUIDE-matching tooltip (sweep 37, the same banner, safe-side: a
+  Close the person confirmed leaves the last autosave — main refuses an
+  empty project and nothing clears it — so Home offers the discarded
+  session back, and so does the next launch; nothing is lost and the
+  banner has Clear; the upgrade: clear the autosave once when a confirmed
+  Close or the last-layer removal leaves every studio empty); (bh) ffmpeg 7.x measures `-to` per
   stream (measured: audio ending 5.234 s on a 5 s range when the
   stream starts at 0.256 s; 6.1.1 cuts at 5.000 s) — invisible
   today because the shipped win32 binary is 6.1.1, but a tripwire
@@ -7354,6 +7420,9 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 37 (product call, not gate-holding): (br) a "Centre across"
+  choice for a Text overlay (drawtext `x=(w-tw)/2`): the boxes place the
+  text's top-left corner, and with no preview a centred caption is a guess.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
