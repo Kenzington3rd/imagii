@@ -6884,6 +6884,103 @@ IMG-PREC.
 
 ---
 
+## T-152 — sweep-38 fixes (round 101)
+
+- **Spec:** the thirty-eighth sweep's four verified findings (candidate clean pass #1 on 21c4eef),
+  confirmed by the expediter against source (item 1 also measured on the distro 6.1.1). Privacy, a11y,
+  audio and design clean; ffmpeg's, streamer's, QA's and UX's item 1 are one finding (collapsed);
+  UX's "Compile shows only Stitching…" is T-110 (c) (sweep 13) verbatim, not counted. Two tracks,
+  disjoint files.
+
+  **Track A — a caption wider than the frame (item 1).**
+  1. **[MED] The T-151 clamp cuts the START of a caption wider than the frame, while the card says it
+     is kept inside.** drawTextFilter (src/main/ffmpeg/filters.ts:388-389) emits
+     `x='min(max(0,X),w-tw)'`: when the text is wider than the frame `w-tw` is negative and wins the
+     outer `min`, so the text's END sits on the right edge and its first words are off the left edge
+     (expediter, 6.1.1, DejaVuSans 64 px, a 49-character caption at x = 0.5 on 1080x1920: ink columns
+     0..1077, the head gone; before T-151 the tail was cut instead). The input is one line and drawtext
+     does not wrap, so a 40-odd character hook on the 1080-wide verticals reaches it at ordinary sizes.
+     TextOverlayEditor.tsx:77 and USER_GUIDE.md:294-296 say "a caption that would run past an edge is
+     kept inside the frame". Fix direction: swap the nesting so the left and top edges win —
+     `x='max(0,min(X,w-tw))'`, `y='max(0,min(Y,h-th))'` (same quoting): a caption that fits is
+     unchanged (pulled back in at the right / bottom), a line wider than the frame starts at the left
+     edge and only its end runs off (measured: 4..1079). The copy says exactly that — the card's hint
+     line: "Position is where the text's top left corner sits. A caption that would run past the right
+     or bottom edge is moved back inside the frame; a line wider than the frame starts at the left edge
+     and its end is cut, so shorten it or lower the size." and USER_GUIDE the same in its own words.
+     Wrap / auto-fit stays the T-110 (aq) owner design call (say so in the Done entry, not the copy).
+     Covering tests: unit (every exact-string pin of the clamp: filters.test.ts, reframe.test.ts, the
+     media.spec.ts:660 comment; the copy pins in truthInCopy.test.ts and interactionWiring.test.ts);
+     **Layer 5** (IMG-PREC), in a NEW describe appended at the end of media.spec.ts, on the distro 6.1.1
+     through the 611 config with a system font substituted ONLY in the test (as the T-151 case does) and
+     a win32-gated twin: render the same long white caption (wider than 1080 px at 64 px — assert that
+     from the reference below so the case is real) (a) at x = 0 on a black 3000-px-wide reference frame
+     and (b) at x = 0.5 on a black 1080x1920 frame; the leftmost 200 columns of (b)'s text strip match
+     (a)'s (the START is kept: mean absolute difference under a small bound you state) and (b) touches
+     column 1079 (the end runs off); plus the T-151 fitting case still green. Red on the unchanged tree
+     (the leftmost columns are mid-sentence).
+
+  **Track B — a replace that asks, a size read before the file, a clip with length (items 2-4).**
+  2. **[LOW-MED] One click on an Asset Library card replaces a canvas the person cannot see, with no
+     question, and the toast reads as an addition.** AssetLibraryPanel.tsx:42-48 `dropToCanvas` calls
+     `setDocument` (every layer of the Stream Graphics canvas replaced) and navigates, then a 2 s toast
+     `Dropped "X" into the editor` that never names Undo; the replace is disclosed only in the footer
+     under the whole catalog. The app asks before a cross-studio replace elsewhere (`confirm(message)`
+     in VideoStudio's Edit in Video Studio and Audio Studio), and the mood board's Delete names Ctrl+Z at
+     ACTION_TOAST_MS. Fix direction: read the canvas at the press; when it holds a layer, ask with the
+     app's `confirm`: `Replace the Stream Graphics canvas with "<name>"? Its <countOf(N, 'layer')> will
+     be replaced. Undo in Stream Graphics brings them back.` — Cancel: nothing changes, no navigation,
+     no toast. Accepted: `setDocument`, navigate, and the toast `Replaced the canvas with "<name>" —
+     press Ctrl+Z to undo` at ACTION_TOAST_MS. An empty canvas (no layer): no question, the toast
+     `"<name>" is on the Stream Graphics canvas` (default duration). The header copy says "Click an asset
+     to open it on the Stream Graphics canvas, in place of what is there." (footer kept); USER_GUIDE's
+     Asset Library line says it asks first when the canvas holds layers. TemplatesDialog unchanged (in
+     the studio, the canvas behind it, its own footer). Covering tests: e2e (references.spec.ts — adapt
+     the existing card case, whose second card now meets a canvas with layers, and a NEW describe at the
+     end): canvas with layers → References → Asset Library → a card, the dialog DISMISSED: still on
+     References, the layer count unchanged, no toast; ACCEPTED: on Stream Graphics with the asset's
+     layers, the toast text, and Ctrl+Z puts the previous layers back; an empty canvas: no dialog. Red on
+     21c4eef (no dialog). Unit/wiring pins for the header and toast copy.
+  3. **[LOW] Open project reads the whole picked file before the 50 MB rule.** ipc/project.ts:71-75
+     `readFile(filePath, 'utf8')` runs before `validateProjectJsonString`'s size rule; the dialog takes
+     any *.json (a long VOD's chat-log export can be hundreds of MB). Over V8's string cap (~512 MB)
+     the read itself fails with "Invalid string length", which `userFacingError` does not take as a
+     sentence, so Home says the file may be damaged — the wording T-137 (6) promised Open would replace
+     with the size. Fix direction: `stat` the file first; over `MAX_PROJECT_BYTES` (bytes ≥ characters,
+     so the string rule still runs for a file under the cap) return
+     `{ ok: false, reason: projectSizeProblem(size, 'open') }` without reading it; a stat failure takes
+     the existing read-failure path. Covering test: unit, in a NEW describe at the end of the project
+     handler's test file, through the real handler with real files (the projectSave.test.ts harness):
+     a SPARSE file (`truncate`, nothing written) of MAX_PROJECT_BYTES + 1 bytes and one of 600,000,000
+     bytes → the size sentence, and `readFile` never called for either; red on 21c4eef (the 600 MB case
+     returns "Invalid string length").
+  4. **[LOW-MED] The I and O keys can make a clip with no length, and every output then fails with a bare
+     sentence.** videoStore.ts `applyRange` (:411-420) clamps the end to [start, duration] with no floor;
+     `setClipEnd(id, 0)` (O at 0:00) gives [0, 0] and `setClipStart(id, duration)` (I after the End key
+     or the end of playback) gives [D, D]. Main's validators refuse the range with a developer message,
+     so Export / GIF / Reframe / Compile / Clip Kit say only "Export failed." (and one such clip fails a
+     whole compile). The Timeline drag keeps 0.1 s; `appendRange` keeps MIN_SCANNED_CLIP_SEC (0.1).
+     Fix direction: the floor lives in `applyRange` (the one function every range edit goes through):
+     when the source is at least 0.1 s long, start ≤ duration − 0.1 and end ≥ start + 0.1 (a source
+     shorter than that keeps today's clamp). O at 0:00 gives [0, 0.1]; I at the end gives [D − 0.1, D].
+     One undo step per key press, as now. Covering tests: unit (videoStore: both keys' cases, a mid-clip
+     I/O unchanged, a range drag unchanged, a sub-0.1 s source); e2e (video-core.spec.ts NEW describe):
+     O at 0:00 → the clip row reads 0:00 → 0:00.1 (or the list's own format for 0.1 s) and Export
+     produces a file; red on 21c4eef (the row reads 0:00 → 0:00 and Export says "Export failed.").
+
+  **Docs (each track its own items):** IC rows (item 1 REVISES the T-151 row; item 2 the Asset Library
+  row; item 4 the I/O row); TESTING paragraphs; USER_GUIDE lines; LESSONS entry at the TOP per track
+  (Track A: "a clamp's order is a decision about which end of the sentence is lost — test the case that
+  does not fit").
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; Layer 5 for item 1 as described; new cases in NEW describe blocks appended at the end of
+  shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
+  handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
+  lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 101)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
