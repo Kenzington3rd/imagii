@@ -7320,6 +7320,79 @@ IMG-PREC.
 
 ---
 
+## T-157 — sweep-43 fixes (round 106)
+
+- **Spec:** the forty-third sweep's six verified findings (candidate clean pass #1 on 2441b12),
+  confirmed by the expediter against source. Privacy, ffmpeg, audio, a11y, Electron and streamer clean
+  on their whole lens; QA read all 214 non-test files (two readers), UX and design theirs in full. Not
+  counted: panel SETTINGS resetting when Video Studio unmounts (caption style and its "selected clip
+  range only" box, the crop aspect lock, GIF / Reframe / Compile settings, the guides box) — the T-135
+  (4) rule "settings, not results, stay with the panel"; the sharpest consequence (after the app's own
+  "Clean audio" detour, Burn into video defaults to the whole VOD again) is named for the owner as new
+  letter (bw); Audio / Stream Graphics Undo and Redo without shortcut titles and Stream Graphics' px-6
+  (polish); the POG emote's name not naming its 28/56/112 trio (the Export row states it). Two tracks,
+  disjoint files.
+
+  **Track A — the players say where they are and whether they play (items 1-3).**
+  1. **[LOW] Coming back to Audio Studio puts the playhead at 0:00** (the Audio Studio twin of T-156
+     (2); WaveformView.tsx:39-45 and the wavesurfer effect, audioStore.ts:212). The view keeps `time` in
+     `useState(0)` and builds a fresh wavesurfer on mount with no seek, and `audioStore.currentTime`
+     (written by the `audioprocess` / `seeking` events) is read by nothing: a person who scrubbed a 2 h
+     sound to 1:10:00 and visits Home, Video Studio or References comes back to 0:00 while the cuts, the
+     chain and the history survive. Fix direction: when the effect builds the player, read
+     `useAudioStore.getState().currentTime`; on wavesurfer's `ready`, when it is > 0 and inside the
+     waveform's duration, seek there (`ws.setTime(t)`) and set the readout; `loadSource` / `clearSource`
+     already zero it (audioStore.ts:133, 191, 209), so a different sound starts at 0.
+  2. **[LOW] A sound swapped while Audio Studio is open keeps the old one's readout and Play state**
+     (WaveformView.tsx:44-48, 126-138). The effect resets `ready` and `mediaEl` only, and its cleanup
+     removes the pause / finish listeners before `ws.destroy()`, so nothing clears `playing` or `time`:
+     Clean audio finishing on /video while the person is on /audio playing sound A swaps in B under a
+     readout at A's last position and an enabled "Pause" over a stopped player. Fix direction: the
+     effect sets `setPlaying(false)` and `setTime(0)` at its top (item 1's restore then sets the time
+     on `ready` when the store holds one).
+  3. **[LOW] The Player shows "Pause" over a stopped video after its preview copy lands**
+     (Player.tsx:408, :423-425). `playing` is written only by `onPlay` / `onPause` / `onEnded`; when
+     "Make a preview copy" finishes, `previewUrl` changes the `<video>`'s `src`, and the media element's
+     load algorithm sets `paused` with NO `pause` event (executed in Electron 31: abort, emptied,
+     loadedmetadata, `paused: true`), so a person who pressed Play to hear a ProRes file's sound while the
+     copy was made sees "Pause" (and its title) over a stopped picture. Fix direction:
+     `onEmptied={() => setPlaying(false)}` on the `<video>` (the element's own signal that it reset).
+  Covering tests: e2e (NEW describes): audio.spec.ts — an imported fixture sound, the playhead put at
+  a known time, Home and back -> the readout and the media element read that time; a second sound loaded
+  while the first plays -> 0:00 and "Play"; red on 2441b12 each. video-core.spec.ts — a playing video
+  whose `src` is swapped the way the preview copy swaps it (the store's `setPreviewCopyFor` with a second
+  fixture) -> the button reads "Play"; red on 2441b12. Unit pins on each.
+
+  **Track B — labels a person reads, not ids (items 4-6).**
+  4. **[LOW] The crop aspect row's first button reads "free"** (CropOverlay.tsx:15, :116 renders the
+     internal mode name) — the only lowercase button label in the app; BRANDING_GUIDE "A button is a
+     verb, capitalized. No lowercase outliers"; copyConventions.test.ts misses a label that reaches the
+     DOM through a variable. Fix direction: a display label per mode (`Free`, `16:9`, `9:16`, `1:1`,
+     `4:5`) with the `AspectMode` values unchanged; update video-core.spec.ts's `name: 'free'` locators.
+  5. **[LOW] Record's source tiles caption each source with its internal type** (RecordStudio.tsx:800
+     renders `{s.type}`, `'screen' | 'window'`) — BRANDING_GUIDE "A label names the thing, not its
+     internal id". Fix direction: "Screen" / "Window" from a small label map.
+  6. **[LOW] The webcam Corner select hyphenates its corners** (RecordStudio.tsx:43-48 "Top-left" …
+     "Bottom-right") while BRANDING_GUIDE says "Spell a corner out. 'Top left', 'Bottom right'" and the
+     watermark and Picture-in-picture pickers already do. Fix direction: the same four words without the
+     hyphen; update record.spec.ts's corner assertions in place.
+  Covering tests: e2e: video-core.spec.ts's crop case finds and asserts the "Free" button (in place);
+  record.spec.ts (NEW describe) with the named-source stub (record.spec.ts:306-321) asserts a screen tile
+  reads "Screen" and a window tile "Window", and the Corner select offers "Top left" … "Bottom right";
+  red on 2441b12. Unit: a copyConventions / interactionWiring pin that every crop preset label and every
+  corner label starts with a capital or a digit and carries no hyphen between corner words.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE where a label it quotes
+  changes ("free", "Top-left"); LESSONS entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 106)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7856,6 +7929,12 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 43 (not gate-holding): (bw) panel SETTINGS reset when Video Studio unmounts (the caption
+  style and its "selected clip range only" box, the crop aspect lock, GIF / Reframe / Compile settings,
+  the guides box) — the T-135 (4) rule "settings, not results, stay with the panel"; the sharpest
+  consequence is the app's own "Clean audio" detour, after which Burn into video defaults to the whole
+  VOD again (a new file, cancelable). Settings in a module store (the run-store pattern) is the upgrade;
+  whether settings should outlive a visit is an owner call.
   From sweep 42 (not gate-holding): (bv) "Discard recording" (RecordStudio.tsx) deletes the take
   without a question while it is being saved — BRANDING's verb table makes it a Discard (abandon
   something never saved; Delete is the verb that always asks), the (bu) precedent; whether this one
