@@ -2979,3 +2979,183 @@ test.describe('T-152 (2): an Asset Library card asks before it replaces a canvas
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (1), (2): "→ Canvas" and a board tile's ✕ are one press, whatever the second one does
+// ═══════════════════════════════════════════════════════════════════════════
+// "→ Canvas" awaits the picture's load before it adds the layer, so T-153's route-change swallow cannot catch the second press of a double-click (it lands BEFORE the
+// route changes): the reference was added twice. The tile's ✕ removed two pictures: the grid reflows when the first tile goes and the next tile's ✕ is under the pointer.
+// Two rules cover each: a repeat press (a double-click's second) is dropped, and a claim is held across the await so a second, separate press is refused too.
+test.describe('T-154 (1), (2): one press on → Canvas and on a tile ✕', () => {
+  /** Board `fiveboard` with `n` items, each with its cached thumbnail on disk (`slow-thumb-N.png`: the page parks loads of any file with "slow-thumb" in its name). */
+  function seedBoard(fx: Fixture, n: number): void {
+    const names = Array.from({ length: n }, (_, i) => `slow-thumb-${i}.png`)
+    for (const name of names) writeFileSync(path.join(fx.thumbsDir, name), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 'fiveboard.json'), JSON.stringify(boardOwning('fiveboard', 'Five board', fx.thumbsDir, names)), 'utf8')
+  }
+
+  /** The T-135 (13) hold: every `img.src = <a slow-thumb file>` is parked until `release`. */
+  async function parkSlowThumbs(window: Page): Promise<{ parked: () => Promise<number>; release: () => Promise<void> }> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+      w.__parked = []
+      w.__holdSlow = true
+      const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+      if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+      const { get, set } = desc
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return get.call(this)
+        },
+        set(value: string) {
+          if (w.__holdSlow && String(value).includes('slow-thumb')) w.__parked.push(() => set.call(this, value))
+          else set.call(this, value)
+        }
+      })
+    })
+    return {
+      parked: () => window.evaluate(() => (window as unknown as { __parked: unknown[] }).__parked.length),
+      release: () =>
+        window.evaluate(() => {
+          const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+          w.__holdSlow = false
+          for (const go of w.__parked.splice(0)) go()
+        })
+    }
+  }
+
+  const ADDED = "Added to canvas as a reference — it won't be in your export"
+
+  test('a real double-click on → Canvas, and two separate presses while the picture loads, each add ONE reference layer and say so once', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t154-tocanvas')
+    seedBoard(fx, 2)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const { parked, release } = await parkSlowThumbs(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ }).first()
+      const added = async (): Promise<number> => (await readToastLog(window)).filter((t) => t === ADDED).length
+
+      // ── a real double-click: the second press is the first one's decision ──
+      // App swallows a repeat press for half a second after every route change (T-153 (3)); the double-click must come after that, or it proves nothing.
+      await window.waitForTimeout(800)
+      await toCanvas.dblclick()
+      await expect.poll(parked, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
+      await window.waitForTimeout(500)
+      expect(await parked(), 'the double-click started ONE load').toBe(1)
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await window.waitForTimeout(500)
+      await expect(window.getByRole('heading', { name: 'Layers (1)' }), 'still one reference layer a moment later').toBeVisible()
+      expect(await added(), 'one toast').toBe(1)
+
+      // ── two separate presses (not a double-click) while the picture is still loading: the claim refuses the second ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible({ timeout: 15_000 })
+      await moodBoardTab(window).click()
+      await window.evaluate(() => {
+        ;(window as unknown as { __holdSlow: boolean }).__holdSlow = true
+      })
+      await toCanvas.click()
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await window.waitForTimeout(700)
+      await toCanvas.click()
+      await window.waitForTimeout(500)
+      expect(await parked(), 'the second press during the load started nothing').toBe(1)
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+      await window.waitForTimeout(500)
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+      expect(await added(), 'two toasts in all: one per send').toBe(2)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a real double-click on a tile ✕ removes ONE picture from the board file, and two separate presses while the removal is out remove one', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t154-remove')
+    seedBoard(fx, 5)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const remove = window.getByRole('button', { name: 'Remove item' })
+      await expect(remove).toHaveCount(5)
+      const items = (): string[] => readBoardsFromDisk(fx.boardsDir).flatMap((b) => b.items.map((i) => i.id))
+      expect(items()).toHaveLength(5)
+
+      // ── a real double-click on the first tile's ✕ (the second tile's ✕ is under the pointer once the grid reflows) ──
+      // After the half second App swallows repeats for on a route change (T-153 (3)), or the second press never arrives and the test proves nothing.
+      await window.waitForTimeout(800)
+      await remove.first().dblclick()
+      await expect.poll(items, { timeout: 15_000 }).toHaveLength(4)
+      await window.waitForTimeout(800)
+      expect(items(), 'one picture removed, the first').toEqual(['fiveboarditem1', 'fiveboarditem2', 'fiveboarditem3', 'fiveboarditem4'])
+      await expect(remove).toHaveCount(4)
+      // The same press twice (the write is still out when the second lands) is a second "remove" of the same picture: it raised "Couldn't remove" and pushed a no-op
+      // undo step that ate the first Ctrl+Z. One press, one undo step.
+      expect((await readToastLog(window)).filter((t) => /Couldn't remove/.test(t)), 'no refusal from the repeated press').toEqual([])
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 15_000, message: 'ONE Ctrl+Z brings the picture back' }).toBe(5)
+      await expect(remove).toHaveCount(5)
+
+      // ── a slow double-click: the first press's removal is DONE (the grid has reflowed, the neighbour's ✕ is under the pointer) when the second, counted as a repeat, lands ──
+      const box = await remove.first().boundingBox()
+      if (!box) throw new Error('the first ✕ has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await expect(remove).toHaveCount(4)
+      await expect.poll(() => items().length, { timeout: 15_000 }).toBe(4)
+      await window.waitForTimeout(300)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await window.waitForTimeout(800)
+      expect(items(), 'the repeat press removed nothing more').toHaveLength(4)
+      await expect(remove).toHaveCount(4)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 15_000, message: 'ONE Ctrl+Z brings that one back too' }).toBe(5)
+      await expect(remove).toHaveCount(5)
+
+      // ── two separate presses while the removal's write is slow: the claim refuses the second ──
+      await app.evaluate((_electron, delay) => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const fsp = getBuiltin('node:fs/promises') as { writeFile: (...a: unknown[]) => Promise<unknown> }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = fsp.writeFile
+        fsp.writeFile = async (...a: unknown[]) => {
+          if (/moodboards/.test(String(a[0]))) await new Promise((resolve) => setTimeout(resolve, delay))
+          return real(...a)
+        }
+        mod.syncBuiltinESMExports()
+      }, 1200)
+      await remove.first().click()
+      await window.waitForTimeout(300)
+      await remove.nth(1).click({ force: true })
+      await expect.poll(items, { timeout: 15_000 }).toHaveLength(4)
+      await window.waitForTimeout(1800)
+      expect(items(), 'the second press during the removal removed nothing').toHaveLength(4)
+      await expect(remove).toHaveCount(4)
+      expect((await readToastLog(window)).filter((t) => /Couldn't remove/.test(t)), 'and raised no error').toEqual([])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

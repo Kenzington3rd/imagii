@@ -3,6 +3,7 @@ import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { assertDefined } from '@shared/assert'
 import { hintTag } from '@shared/canvas'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 export function LayerPanel(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
@@ -156,6 +157,8 @@ export function LayerPanel(): JSX.Element {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
+                    // T-154 (3): the next row moves up under the pointer when this one goes; its press is not a new decision.
+                    if (isRepeatPress(e)) return
                     removeLayer(layer.id)
                   }}
                   className="text-ink-dim hover:text-danger px-1 flex"

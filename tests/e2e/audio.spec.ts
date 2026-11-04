@@ -5007,3 +5007,32 @@ test.describe('T-150 (1): Match loudness plans the measuring step', () => {
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (4): a double-click on a cut chip puts back ONE cut
+// ═══════════════════════════════════════════════════════════════════════════
+// The chip is gone after the first press and the next one slides under the pointer, so the second press of a double-click put back a second cut.
+// (App swallows a repeat press for half a second after a route change, T-153 (3): the double-click comes after that, or it proves nothing.)
+test.describe('Audio Studio - a cut chip is one press (T-154 (4))', () => {
+  test('a real double-click on the first of two cut chips puts back ONE cut; the survivor is the second', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t154-cut-dblclick')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await dragCut(window, 0.2, 0.4)
+      await expect(cutChips(window)).toHaveCount(1)
+      await dragCut(window, 0.6, 0.8)
+      await expect(cutChips(window)).toHaveCount(2)
+      const second = (await cutChips(window).nth(1).textContent()) ?? ''
+      await window.waitForTimeout(800)
+      await cutChips(window).first().dblclick()
+      await expect(cutChips(window)).toHaveCount(1)
+      await window.waitForTimeout(800)
+      await expect(cutChips(window), 'still one a moment later').toHaveCount(1)
+      expect(await cutChips(window).first().textContent(), 'the one left is the second').toBe(second)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

@@ -120,6 +120,15 @@ vi.mock('node:child_process', () => ({
   spawn: (_command: string, args: string[] = []) => {
     const child = new FakeChild()
     child.args = args
+    // T-154 (8): the convert probes the input's size first, as its own child. It answers by itself and is not one of the runner's children
+    // (`children` is what a case starts, cancels and closes; the convert's own cancel-in-the-probe cases live in convertCancel.test.ts).
+    if (args.includes('-show_entries')) {
+      queueMicrotask(() => {
+        child.stdout.emit('data', '{"streams":[{"width":1280,"height":720}]}')
+        child.emit('close', 0, null)
+      })
+      return child
+    }
     children.push(child)
     return child
   }

@@ -8,6 +8,7 @@ import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvas
 import { currentRoute } from '../project/ProjectIO'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { PanelHeader } from '../../components/PanelHeader'
 import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
@@ -26,7 +27,18 @@ export function MoodBoardPanel(): JSX.Element {
   const addCanvasLayer = useCanvasStore((s) => s.addLayer)
   const navigate = useNavigate()
 
+  // T-154 (1): and one send at a time. The picture's load below is an await (a network fetch for a tile that fell back to its source URL), so a second
+  // press during it - a double-click's, or a Tab-Enter - found nothing done yet and added the reference again; T-153's route-change swallow cannot reach a
+  // press that lands BEFORE the route changes. Claimed ahead of the first await and given back in a finally; the button also drops the double-click's repeat.
+  const sendingRef = useRef(false)
+  // T-154 (2): and one removal at a time, for the same reason: the grid reflows when the first tile goes and the next tile's ✕ sits under the pointer.
+  const removingRef = useRef(false)
+
   async function sendToCanvas(src: string, title: string): Promise<void> {
+    await claimFirst(sendingRef, () => sendToCanvasNow(src, title))
+  }
+
+  async function sendToCanvasNow(src: string, title: string): Promise<void> {
     try {
       const img = await loadImage(src, 'anonymous')
       // T-139 (2): placed wholly on the canvas that is open when the picture lands (a small one - the 112 px emote - shrinks it to fit), like an imported file.
@@ -148,11 +160,13 @@ export function MoodBoardPanel(): JSX.Element {
 
   async function onRemoveItem(itemId: string): Promise<void> {
     if (!collection) return
-    try {
-      await removeFromCollection(collection.id, itemId)
-    } catch (err) {
-      reportFailure(err, { failed: "Couldn't remove that picture." })
-    }
+    await claimFirst(removingRef, async () => {
+      try {
+        await removeFromCollection(collection.id, itemId)
+      } catch (err) {
+        reportFailure(err, { failed: "Couldn't remove that picture." })
+      }
+    })
   }
 
   return (
@@ -293,7 +307,11 @@ export function MoodBoardPanel(): JSX.Element {
                         <span className="text-xs text-ink-base line-clamp-2" title={item.title}>{item.title}</span>
                         <button
                           className="btn-primary px-3 py-1 text-xs"
-                          onClick={() => sendToCanvas(src, item.title)}
+                          onClick={(e) => {
+                            // T-154 (1): the second press of a double-click is the first one's decision, not a new one.
+                            if (isRepeatPress(e)) return
+                            void sendToCanvas(src, item.title)
+                          }}
                         >
                           → Canvas
                         </button>
@@ -306,7 +324,11 @@ export function MoodBoardPanel(): JSX.Element {
                         // `.btn-primary` already answers this against accent;
                         // here it reads 7.20:1.
                         className="absolute top-1 right-1 bg-bg-base/80 hover:bg-danger-strong hover:text-bg-base text-xs rounded-full w-6 h-6 flex items-center justify-center"
-                        onClick={() => void onRemoveItem(item.id)}
+                        onClick={(e) => {
+                          // T-154 (2): the grid reflows under the pointer when the tile goes; the second press would remove its neighbour.
+                          if (isRepeatPress(e)) return
+                          void onRemoveItem(item.id)
+                        }}
                         title="Remove"
                         aria-label="Remove item"
                       >

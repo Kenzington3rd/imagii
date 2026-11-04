@@ -325,3 +325,15 @@ describe('the preset manager names YouTube Shorts as a name (T-153)', () => {
   })
 })
 
+
+// T-154 (6): the audio tutorial's Cleanup step named a checkbox ("Softer harsh' sounds") that the screen does not have; the screen's label is "Softer harsh 's' sounds".
+describe('the audio tutorial names the Cleanup checkboxes as the screen labels them (T-154)', () => {
+  it('"Softer harsh \'s\' sounds", in the tutorial exactly as on the panel; the old fragment is gone', async () => {
+    const { audioTutorial } = await import('../../src/renderer/src/tutorials/audioTutorial')
+    const body = audioTutorial.steps.find((s) => s.id === 'cleanup')?.body ?? ''
+    const label = "Softer harsh 's' sounds"
+    expect(read('src/renderer/src/modules/audio-studio/CleanupPanel.tsx')).toContain(`<span>${label}</span>`)
+    expect(body).toContain(`"${label}"`)
+    expect(body).not.toContain("'Softer harsh' sounds")
+  })
+})

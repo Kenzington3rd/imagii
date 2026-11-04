@@ -11790,3 +11790,286 @@ describe('a caption wider than the frame keeps its start (drawtext, T-152)', () 
     180_000
   )
 })
+
+/**
+ * T-154 (8): a screen-only take whose window changes size mid-take was STRETCHED in the mp4. ffmpeg re-initialises its filter graph at the change and
+ * scales every later frame to the FIRST size with no aspect handling: a 1280x720 take that became 1000x1000 converted (exit 0, on 7.0.2 and 6.1.1) to
+ * 1280x720 SAR 1:1 with the square half drawn as a 1280x720 rectangle. The convert now probes the input's first size and fits every frame inside it, aspect
+ * kept and centred on black. A MediaRecorder webm is written by the browser, which a test cannot drive, so the fixture is two libvpx segments of different
+ * sizes joined with `concat -c copy` (a size change in one stream, the way the recorder's file has one). A unit test of the argv would pass with a graph
+ * ffmpeg rejects or one that does nothing: only the real binary says what the picture is. The importer shares the command, so a constant-size file is
+ * proved to be the picture, the frames and the timing it always was.
+ */
+describe('a recording that changes size keeps its shape (real ffmpeg, T-154 (8))', () => {
+  const FPS = 25
+  const HALF_FRAMES = 40
+  /** The convert as it was before T-154 (8): the plain even crop, no fit. Spelled out here so a change to the product's chain cannot move the reference. */
+  const OLD_ARGV = (src: string, out: string): string[] => [
+    '-y', '-i', src,
+    '-vf', 'crop=trunc(iw/2)*2:trunc(ih/2)*2',
+    '-fps_mode', 'vfr',
+    '-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '192k',
+    '-movflags', '+faststart',
+    out
+  ]
+  let resized = ''
+
+  /** Two webm segments of different sizes as ONE stream: the size change a MediaRecorder file has, built with a packet copy (no re-encode). */
+  async function joinSegments(a: string, b: string, out: string): Promise<void> {
+    const list = `${out}.txt`
+    await writeFile(list, `file '${a.replace(/\\/g, '/')}'\nfile '${b.replace(/\\/g, '/')}'\n`)
+    await ff(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', out])
+  }
+
+  async function frameCount(file: string): Promise<number> {
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = spawn(ffprobePath, [
+        '-v', 'error', '-select_streams', 'v:0', '-count_frames',
+        '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', file
+      ])
+      let text = ''
+      child.stdout.on('data', (b) => (text += String(b)))
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve(text.trim()) : reject(new Error(`ffprobe exit ${code} for ${file}`))))
+    })
+    return Number(out)
+  }
+
+  async function videoFacts(file: string): Promise<{ w: number; h: number; sar: string | undefined }> {
+    const v = (await ffprobeJson(file)).streams.find((s) => s.codec_type === 'video')
+    return { w: v?.width ?? 0, h: v?.height ?? 0, sar: v?.sample_aspect_ratio }
+  }
+
+  /** The decoded frame at `timeSec` as rgb24, and a reader for one pixel of it. */
+  async function frameAt(file: string, timeSec: number, w: number, h: number) {
+    const buf = await samplePixels(file, timeSec, 'null', 'rgb24')
+    expect(buf.length, 'the whole frame was decoded').toBe(w * h * 3)
+    const px = (x: number, y: number): [number, number, number] => {
+      const i = (y * w + x) * 3
+      return [buf[i] ?? 0, buf[i + 1] ?? 0, buf[i + 2] ?? 0]
+    }
+    /** The bounding box of every pixel `pick` accepts. */
+    const box = (pick: (p: [number, number, number]) => boolean) => {
+      let minX = w, maxX = -1, minY = h, maxY = -1
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (!pick(px(x, y))) continue
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+      return { minX, maxX, minY, maxY, w: maxX - minX + 1, h: maxY - minY + 1 }
+    }
+    return { px, box }
+  }
+
+  const isInk = (p: [number, number, number]): boolean => Math.max(...p) > 60
+  const isRed = (p: [number, number, number]): boolean => p[0] > 150 && p[1] < 90 && p[2] < 90
+
+  beforeAll(async () => {
+    const a = path.join(workDir, 't154-a.webm')
+    const b = path.join(workDir, 't154-b.webm')
+    // The first half: flat mid-gray at the take's first size. The second: the window became a 1000x1000 square, white, with a red 500x500 square
+    // in its middle - a known pattern whose width and height can be measured after the convert.
+    await ff([
+      '-y', '-f', 'lavfi', '-i', `color=c=0x808080:s=1280x720:r=${FPS}:d=${HALF_FRAMES / FPS}`,
+      '-c:v', 'libvpx', '-b:v', '2M', '-pix_fmt', 'yuv420p', a
+    ])
+    await ff([
+      '-y', '-f', 'lavfi',
+      '-i', `color=c=white:s=1000x1000:r=${FPS}:d=${HALF_FRAMES / FPS},drawbox=x=250:y=250:w=500:h=500:c=red:t=fill`,
+      '-c:v', 'libvpx', '-b:v', '2M', '-pix_fmt', 'yuv420p', b
+    ])
+    resized = path.join(workDir, 't154-resized.webm')
+    await joinSegments(a, b, resized)
+  }, 120_000)
+
+  it('the fixture: one stream that starts 1280x720 and turns 1000x1000, with every frame in it', async () => {
+    expect(await videoFacts(resized)).toMatchObject({ w: 1280, h: 720 })
+    expect(await frameCount(resized)).toBe(HALF_FRAMES * 2)
+    // The second half really is 1000x1000: a graph that does nothing (`scale=iw:ih`) hands the frame over at its own size, so the raw frame is 1000x1000.
+    const raw = path.join(workDir, 't154-second-raw.raw')
+    await ff(['-y', '-ss', '2.0', '-i', resized, '-vf', 'scale=iw:ih', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', raw])
+    expect((await readFile(raw)).length).toBe(1000 * 1000 * 3)
+  }, 120_000)
+
+  it('Convert: the output is 1280x720 at a square pixel, with every frame of the take', async () => {
+    const out = path.join(workDir, 't154-resized.mp4')
+    await convertToMp4(recordingOwner('take'), resized, out, () => undefined)
+    expect(await videoFacts(out)).toEqual({ w: 1280, h: 720, sar: '1:1' })
+    expect(await frameCount(out), 'every frame of the input is in the output').toBe(HALF_FRAMES * 2)
+  }, 120_000)
+
+  it('Convert: a frame from after the resize is the square, centred, with black bars at both sides and its content square', async () => {
+    const out = path.join(workDir, 't154-resized-shape.mp4')
+    await convertToMp4(recordingOwner('take'), resized, out, () => undefined)
+    const f = await frameAt(out, 2.2, 1280, 720)
+    // The 1000x1000 window fits a 720-high frame as 720x720, centred: columns 280-999 are the picture and the 280 on each side are bars.
+    for (const x of [0, 60, 140, 270, 1010, 1140, 1219, 1279]) {
+      expect(Math.max(...f.px(x, 360)), `column ${x} is a black bar`).toBeLessThan(40)
+      expect(Math.max(...f.px(x, 5)), `column ${x}, near the top, is a black bar`).toBeLessThan(40)
+    }
+    expect(f.px(300, 100)[1], 'just inside the left edge of the picture is its white').toBeGreaterThan(200)
+    expect(f.px(980, 600)[1], 'and just inside the right edge').toBeGreaterThan(200)
+    const picture = f.box(isInk)
+    expect(Math.abs(picture.w - picture.h), `the picture is ${picture.w}x${picture.h}: square within 2 px`).toBeLessThanOrEqual(2)
+    expect(picture.w, 'and as wide as the frame is high').toBeGreaterThanOrEqual(718)
+    expect(picture.minX, 'centred: as far from the left as the right').toBeGreaterThan(274)
+    expect(picture.minX).toBeLessThan(286)
+    expect(1279 - picture.maxX).toBeGreaterThan(274)
+    expect(1279 - picture.maxX).toBeLessThan(286)
+    // The ink INSIDE the picture is square too: the 500x500 red square, 0.72 of its size.
+    const red = f.box(isRed)
+    expect(red.w, `the red square is ${red.w}x${red.h}`).toBeGreaterThan(352)
+    expect(red.w).toBeLessThan(368)
+    expect(Math.abs(red.w - red.h), 'square within 2 px').toBeLessThanOrEqual(2)
+    expect(Math.abs((red.minX + red.maxX) / 2 - 639.5), 'in the middle of the frame').toBeLessThan(3)
+    expect(Math.abs((red.minY + red.maxY) / 2 - 359.5)).toBeLessThan(3)
+  }, 120_000)
+
+  it('Convert: a frame from before the resize is the whole flat frame, no bars', async () => {
+    const out = path.join(workDir, 't154-resized-first.mp4')
+    await convertToMp4(recordingOwner('take'), resized, out, () => undefined)
+    const f = await frameAt(out, 0.5, 1280, 720)
+    for (const x of [0, 5, 640, 1274, 1279]) {
+      const [r] = f.px(x, 360)
+      expect(r, `column ${x} is the take's gray`).toBeGreaterThan(110)
+      expect(r).toBeLessThan(150)
+    }
+  }, 120_000)
+
+  it('the importer shares the command: the same picture, bars and frames', async () => {
+    const out = await convertForImport(resized)
+    try {
+      expect(await videoFacts(out)).toEqual({ w: 1280, h: 720, sar: '1:1' })
+      expect(await frameCount(out)).toBe(HALF_FRAMES * 2)
+      const f = await frameAt(out, 2.2, 1280, 720)
+      expect(Math.max(...f.px(100, 360)), 'a bar at the left').toBeLessThan(40)
+      expect(Math.max(...f.px(1180, 360)), 'a bar at the right').toBeLessThan(40)
+    } finally {
+      await rm(out, { force: true })
+    }
+  }, 120_000)
+
+  it('a take whose window grew keeps its shape too: a 640x480 half in a 400x400 first size is fitted, not stretched', async () => {
+    const a = path.join(workDir, 't154-small-a.webm')
+    const b = path.join(workDir, 't154-small-b.webm')
+    await ff(['-y', '-f', 'lavfi', '-i', 'color=c=0x808080:s=400x400:r=25:d=1', '-c:v', 'libvpx', '-b:v', '1M', '-pix_fmt', 'yuv420p', a])
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'color=c=white:s=640x480:r=25:d=1,drawbox=x=160:y=120:w=320:h=240:c=red:t=fill',
+      '-c:v', 'libvpx', '-b:v', '1M', '-pix_fmt', 'yuv420p', b
+    ])
+    const joined = path.join(workDir, 't154-small.webm')
+    await joinSegments(a, b, joined)
+    const out = path.join(workDir, 't154-small.mp4')
+    await convertToMp4(recordingOwner('take'), joined, out, () => undefined)
+    expect(await videoFacts(out)).toEqual({ w: 400, h: 400, sar: '1:1' })
+    expect(await frameCount(out)).toBe(50)
+    // 640x480 fits 400 wide as 400x300 (4:3): bars above and below, and the red 320x240 (half of each side) is 200x150.
+    const f = await frameAt(out, 1.5, 400, 400)
+    expect(Math.max(...f.px(200, 10)), 'a bar above').toBeLessThan(40)
+    expect(Math.max(...f.px(200, 390)), 'a bar below').toBeLessThan(40)
+    const red = f.box(isRed)
+    expect(red.w, `the red box is ${red.w}x${red.h}`).toBeGreaterThan(196)
+    expect(red.w).toBeLessThan(204)
+    expect(red.h).toBeGreaterThan(146)
+    expect(red.h).toBeLessThan(154)
+  }, 120_000)
+
+  it('a take that STARTS at an odd size is held at the even size below it (an odd pad would be refused by libx264) and still fitted', async () => {
+    const a = path.join(workDir, 't154-oddfirst-a.webm')
+    const b = path.join(workDir, 't154-oddfirst-b.webm')
+    await ff(['-y', '-f', 'lavfi', '-i', 'color=c=0x808080:s=321x241:r=25:d=1', '-c:v', 'libvpx', '-b:v', '1M', '-pix_fmt', 'yuv420p', a])
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'color=c=white:s=200x400:r=25:d=1,drawbox=x=50:y=100:w=100:h=200:c=red:t=fill',
+      '-c:v', 'libvpx', '-b:v', '1M', '-pix_fmt', 'yuv420p', b
+    ])
+    const joined = path.join(workDir, 't154-oddfirst.webm')
+    await joinSegments(a, b, joined)
+    const out = path.join(workDir, 't154-oddfirst.mp4')
+    await convertToMp4(recordingOwner('take'), joined, out, () => undefined)
+    expect(await videoFacts(out)).toEqual({ w: 320, h: 240, sar: '1:1' })
+    expect(await frameCount(out)).toBe(50)
+    // 200x400 fits 240 high as 120x240: bars at the left and right, and the red box (half of each side) is 60x120.
+    const f = await frameAt(out, 1.5, 320, 240)
+    expect(Math.max(...f.px(10, 120)), 'a bar at the left').toBeLessThan(40)
+    expect(Math.max(...f.px(310, 120)), 'a bar at the right').toBeLessThan(40)
+    const red = f.box(isRed)
+    expect(red.w, `the red box is ${red.w}x${red.h}`).toBeGreaterThan(56)
+    expect(red.w).toBeLessThan(64)
+    expect(red.h).toBeGreaterThan(116)
+    expect(red.h).toBeLessThan(124)
+  }, 120_000)
+
+  describe('a take that never changes size is the picture, the frames and the timing it always was', () => {
+    it('a MediaRecorder-shaped 320x240 webm: the same frames, the same size and the same decoded picture as the old command', async () => {
+      const src = path.join(workDir, 't154-constant.webm')
+      await mediaRecorderWebm('libvpx', src, 3)
+      const before = path.join(workDir, 't154-constant-old.mp4')
+      const after = path.join(workDir, 't154-constant-new.mp4')
+      await ff(OLD_ARGV(src, before))
+      await convertToMp4(recordingOwner('take'), src, after, () => undefined)
+      expect(await videoFacts(after)).toEqual(await videoFacts(before))
+      expect((await videoFacts(after)).w).toBe(320)
+      expect(await frameCount(after)).toBe(await frameCount(before))
+      const md5 = async (file: string): Promise<string> => (await ff(['-v', 'error', '-i', file, '-map', '0:v:0', '-f', 'md5', '-'])).stdout.trim()
+      expect(await md5(after), 'every decoded frame is identical: scale and pad pass a same-size frame through untouched').toBe(await md5(before))
+    }, 120_000)
+
+    it('an odd-sized webm: trimmed by one pixel as before, not letterboxed', async () => {
+      const src = path.join(workDir, 't154-odd.webm')
+      await ff([
+        '-y', '-f', 'lavfi', '-i', 'testsrc2=size=321x241:rate=25:duration=1',
+        '-c:v', 'libvpx', '-b:v', '1M', '-pix_fmt', 'yuv420p', src
+      ])
+      const before = path.join(workDir, 't154-odd-old.mp4')
+      const after = path.join(workDir, 't154-odd-new.mp4')
+      await ff(OLD_ARGV(src, before))
+      await convertToMp4(recordingOwner('take'), src, after, () => undefined)
+      expect(await videoFacts(after)).toEqual(await videoFacts(before))
+      expect((await videoFacts(after)).w).toBe(320)
+      const md5 = async (file: string): Promise<string> => (await ff(['-v', 'error', '-i', file, '-map', '0:v:0', '-f', 'md5', '-'])).stdout.trim()
+      expect(await md5(after)).toBe(await md5(before))
+    }, 120_000)
+
+    it('a phone clip with a rotation: still turned upright and not letterboxed into its coded size', async () => {
+      const upright = path.join(workDir, 't154-rot-src.mp4')
+      const turned = path.join(workDir, 't154-rot.mp4')
+      await ff(['-y', '-f', 'lavfi', '-i', 'color=c=0x20c040:s=640x360:r=25:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', upright])
+      await ff(['-y', '-display_rotation', '90', '-i', upright, '-c', 'copy', turned])
+      const before = path.join(workDir, 't154-rot-old.mp4')
+      const after = path.join(workDir, 't154-rot-new.mp4')
+      await ff(OLD_ARGV(turned, before))
+      await convertToMp4(recordingOwner('take'), turned, after, () => undefined)
+      expect(await videoFacts(before), 'the reference turns it upright: 360x640').toMatchObject({ w: 360, h: 640 })
+      expect(await videoFacts(after)).toEqual(await videoFacts(before))
+      const f = await frameAt(after, 0.5, 360, 640)
+      expect(f.px(0, 320)[1], 'no bar at the left edge').toBeGreaterThan(150)
+      expect(f.px(320, 5)[1], 'and none at the top').toBeGreaterThan(150)
+    }, 120_000)
+
+    it('an anamorphic clip: the pixel aspect it declares is kept', async () => {
+      const src = path.join(workDir, 't154-anamorphic.mp4')
+      await ff([
+        '-y', '-f', 'lavfi', '-i', 'testsrc2=size=720x576:rate=25:duration=1',
+        '-vf', 'setsar=16/15', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', src
+      ])
+      const before = path.join(workDir, 't154-anamorphic-old.mp4')
+      const after = path.join(workDir, 't154-anamorphic-new.mp4')
+      await ff(OLD_ARGV(src, before))
+      await convertToMp4(recordingOwner('take'), src, after, () => undefined)
+      expect((await videoFacts(before)).sar).toBe('16:15')
+      expect(await videoFacts(after)).toEqual(await videoFacts(before))
+    }, 120_000)
+  })
+
+  it('a file ffprobe cannot read still fails as before (the probe never turns a failure into something else)', async () => {
+    const junk = path.join(workDir, 't154-junk.webm')
+    await writeFile(junk, 'this is not a video')
+    const out = path.join(workDir, 't154-junk.mp4')
+    await expect(convertToMp4(recordingOwner('take'), junk, out, () => undefined)).rejects.toThrow(/convert-to-mp4 exit/)
+  }, 60_000)
+})

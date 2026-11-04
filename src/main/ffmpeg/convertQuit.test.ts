@@ -58,6 +58,15 @@ const spawned: Array<{ args: string[]; child: FakeChild }> = []
 vi.mock('node:child_process', () => ({
   spawn: (_cmd: string, args: string[]) => {
     const child = new FakeChild()
+    // T-154 (8): the convert probes the input's size first (its own child, killed by the same sweep). It answers by itself here and is not
+    // an "encode that started": `spawned` is the encodes, as before.
+    if (args.includes('-show_entries')) {
+      queueMicrotask(() => {
+        child.stdout.emit('data', '{"streams":[{"width":1280,"height":720}]}')
+        child.emit('close', 0, null)
+      })
+      return child
+    }
     spawned.push({ args, child })
     // ffmpeg opens its output when it starts.
     writeFileSync(args[args.length - 1] as string, 'half-written transcode')

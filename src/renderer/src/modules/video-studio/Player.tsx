@@ -376,6 +376,10 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     <div
       className="flex flex-col gap-3 outline-none focus:ring-2 focus:ring-accent"
       tabIndex={0}
+      // T-154 (7): a focusable container is a named group (DESIGN_GUIDE), and the keys it answers are told to AT. Home / End are the timeline's (the dialog says "timeline focused"), not this handler's, so they are not listed.
+      role="group"
+      aria-label="Video player"
+      aria-keyshortcuts="Space ArrowLeft ArrowRight , . I O"
       onKeyDown={onKeyDown}
     >
       <CropControls

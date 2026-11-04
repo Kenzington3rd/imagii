@@ -14,6 +14,43 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-154 (round 103), Track A: a press that outlives its first await needs a claim, and one that moves its own target needs a repeat guard; the test must outwait the page's own swallow
+
+The fortieth sweep, Track A (the second press on five controls, a held Ctrl+V, a tutorial's word, the Player's name, and the shortcuts column; Track B lands separately).
+
+### (1)-(4), (9) [LOW] - A double-click did twice what one press means
+
+- **Bug.** A double-click on a mood-board tile's "→ Canvas" added the reference twice; on the tile's ✕ it removed two pictures (or the same one twice: a "Couldn't remove" and a no-op undo step); on a layer's ✕, a cut chip and a text overlay's ✕ it removed or restored two items.
+- **Root cause.** Each control removes the thing under the pointer, so the list reflows and its neighbour sits there for the second press; "→ Canvas" and the tile ✕ also await (a picture's load, a write), so T-153's route-change swallow and the store's own state had not changed yet when the second press arrived.
+- **Fix.** `isRepeatPress(e)` on the button; and for the two that await, a `claimFirst` held across the await (a second, separate press is refused too). Move up, move down and duplicate stay repeat-tolerant.
+- **Test.** references.spec.ts / image.spec.ts / audio.spec.ts / video-core.spec.ts "T-154" (real `dblclick`, a separate second press, a slow double-click after the reflow); red on the unchanged build.
+- **Lesson.** **A double-click test that is green on the unchanged build has not delivered its second press.** App drops a repeat for half a second after a route change; the first drafts of two of these cases passed there because they clicked inside that window. Run every new case on the old tree and read WHY it fails. **And two guards on one press are two tests**: a `dblclick` is caught by either, so the claim gets two separate presses with the work held, the repeat guard gets a slow double-click made after the work finished.
+
+### (5) [LOW] - A held Ctrl+V added a layer per key repeat, and a double-click opened two choosers
+
+- **Root cause.** A `paste` event carries no `repeat`; the chord's keydown does. The chooser button awaited nothing before `input.click()`, so nothing stopped the second press landing before the OS drew the first dialog.
+- **Fix.** The keydown of Ctrl/Cmd+V sets a flag from its own `repeat`; the paste handler drops a paste while it is set (a fresh keydown, the key's release or losing the window clears it). `pickFile` claims until the input's `change` or `cancel`. (`createHeldKeyGuard` only watches Enter and Space, so the paste tracks its own key.)
+- **Test.** image.spec.ts "T-154 (3), (5)": Control down, `v` down four times, up: one layer, then a fresh `Control+v`: two; one `filechooser` event per double-click; `setFiles` and a dispatched `cancel` each give the button back; `webContents.paste()` right after the hold pastes.
+- **Lesson.** **A repeat that the event hides is read from the event that causes it.** And a claim around a native dialog needs both of its exits (answered and dismissed).
+
+### (6), (7), fold
+
+- **(6)** The audio tutorial named 'Softer harsh' sounds, a checkbox that does not exist; the screen's label is "Softer harsh 's' sounds". `truthInCopy.test.ts` compares the body with the panel's label. **(7)** The Player's focusable column is `role="group"` `aria-label="Video player"` with `aria-keyshortcuts` for the keys its handler answers; Home and End are the timeline's (the dialog says "timeline focused") and so are not listed. **Fold.** The shortcuts dialog's rows are a two-column grid, every description at one left edge (measured on /video and /image at 1024x640).
+
+## 2026-11-04 - T-154 (round 103), Track B: a graph that re-initialises is a graph whose last stage you did not write
+
+The fortieth sweep, Track B (one item: a screen take whose window is resized mid-take; Track A lands beside it). Ledger: r103b/ledger.tsv (red rows against a `git archive` of the unchanged tree `f8f7f6d`, then a content-replace mutation per line of the fix, each restore sha256-verified).
+
+### (8) [LOW] - A resized take was stretched in the MP4
+
+- **Bug.** A screen-only take whose window changed size mid-take converted (exit 0) to an mp4 of the FIRST size with every later frame stretched to it: a 1280x720 take that became 1000x1000 came out 1280x720 at a square pixel with the square half drawn as a wide rectangle. The compositor path got its fix in T-153 (10) (the webcam-composited take draws each frame contained); the plain screen take goes straight through `convertToMp4`.
+- **Root cause.** ffmpeg re-initialises its filter graph when a frame's size changes, and the encoder is already open at the first size, so ffmpeg appends a scaler to the graph's tail to the encoder's size with no aspect handling. The convert's graph was one crop and nothing after it, so that appended scaler was the last stage and it stretched. The graph has no way to name "the first frame's size", so the size has to come from outside.
+- **Fix.** `convertToMp4` probes the input's first video stream (ffprobe's stream width and height, which for a MediaRecorder webm is its first frame's size), rounds each down to even, and the `-vf` becomes the even crop, then `scale=W:H:force_original_aspect_ratio=decrease:force_divisible_by=2`, `pad=W:H:(ow-iw)/2:(oh-ih)/2:color=black` and `setsar=1`. A frame already W x H passes through scale and pad untouched, so a constant-size file is the picture it was. The probe is a child of the convert, registered under the same owner, so a Discard or the quit's sweep reaches it and the same sentinel comes back; a probe that fails for any other reason answers nothing and the convert keeps the plain crop (a convert must not newly fail). Three inputs keep the plain crop on purpose, because the fit would change a constant-size file the importer shares the argv with: a stream with a rotation (ffmpeg turns it upright, so the frames are the coded size on its side and a fit to the coded size letterboxes every frame), a non-square pixel aspect (`setsar=1` would rewrite what the file declares), and more than one video stream (ffmpeg takes the one with the most pixels, not the first). Marked `// simplification:` in `convert.ts`.
+- **Test.** `convertCancel.test.ts` (the argv, the probe's argv, the rounding, every fallback, a Discard and a quit that land during the probe), and Layer 5 "a recording that changes size keeps its shape" on both majors: the concat-made 1280x720 then 1000x1000 webm through the real convert is 1280x720 at SAR 1:1 with every frame, a frame from the second half has black columns at both sides of a centred picture that is square within 2 px (and a red square inside it, 0.72 of its size, square within 2 px), a window that GREW and one that starts at an ODD size are fitted too, the importer shares the result, and a constant-size MediaRecorder-shaped webm, an odd-sized one, a rotated one and an anamorphic one decode to the same frames (md5) or the same size and pixel aspect as the old command. Red on the unchanged build: the post-resize frame has no bars (column 0 is 255).
+- **Lesson.** **A re-initialising graph ends in a stage you did not write, so a graph that can see a size change must end in a stage that does.** The unit test of the old argv passed and so did the exit code: only a decoded frame from AFTER the change shows the stretch, so a fixture for a mid-stream change must be measured after the change. And **the bundled ffprobe is not the bundled ffmpeg**: ffmpeg is 7.0.2 and ffprobe-static is a 4.0 build that rejects `stream_side_data` (a section name added later) while accepting `stream_side_data_list`. The first version of the probe asked with the newer name, failed on the bundled binary, fell back to the plain crop as designed, and the Layer 5 post-resize case was the only thing that said so: a fallback that is silent needs a test that cannot pass through it.
+
+---
+
 ## 2026-11-04 - T-153 (round 102), Track A: a replacement control inherits what the old one passed, and a repeat click is dropped where the page changes, not at every link
 
 The thirty-ninth sweep, Track A (Stream Graphics' number boxes, the shortcuts dialog, the second click of a double-click, four labels and one colour, and the Export notes' status region; Track B lands beside it). Ledger: r102a/ledger.tsv (red rows on a `git archive` of the unchanged tree `1bdeada` and an e2e build of it, and the mutation rows).

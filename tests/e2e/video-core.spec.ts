@@ -3481,3 +3481,83 @@ test.describe('T-153: clips that load with length, clocks that read true, Export
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (7), (9) and the shortcuts-dialog fold
+// ═══════════════════════════════════════════════════════════════════════════
+// (7) the Player's keyboard stop was a bare focusable <div>: no role, no name. It is a named group now, with the keys it answers in `aria-keyshortcuts`.
+// (9) a text overlay's ✕: the list reflows when the first row goes and the next row's ✕ is under the pointer, so a double-click removed two overlays.
+// (fold) the `?` dialog's descriptions start at one left edge (a two-column grid), on /image as well as /video.
+test.describe('T-154 (7), (9), fold: the Player has a name, an overlay ✕ is one press, the shortcuts read in a column', () => {
+  test('the Player\'s keyboard stop is the group "Video player" and lists the keys it answers (and not the timeline\'s Home / End)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t154-player-name')
+    try {
+      const player = window.getByRole('group', { name: 'Video player' })
+      await expect(player).toHaveCount(1)
+      await expect(player, 'it is still the tab stop that owns the shortcuts').toHaveAttribute('tabindex', '0')
+      await expect(player).toHaveAttribute('aria-keyshortcuts', 'Space ArrowLeft ArrowRight , . I O')
+      await player.focus()
+      await expect(player).toBeFocused()
+      // The keys really do reach it: Space from the group plays the video.
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a real double-click on the first overlay\'s ✕ removes ONE overlay of two', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t154-overlay-dblclick')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      await expect(card.locator('h3')).toHaveText('Text overlays (2)')
+      await card.locator('li').first().getByPlaceholder('Caption').fill('KEEP ME')
+      await card.locator('li').nth(1).getByPlaceholder('Caption').fill('FIRST GONE')
+      // A second overlay below it: the first row's ✕ is what is pressed; the one that moves up under the pointer is the other.
+      await card.locator('li').first().getByRole('button', { name: 'Remove overlay' }).dblclick()
+      await expect(card.locator('h3')).toHaveText('Text overlays (1)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still one a moment later').toHaveText('Text overlays (1)')
+      await expect(card.locator('li').first().getByPlaceholder('Caption')).toHaveValue('FIRST GONE')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('on /video and /image at 1024x640 every description in the `?` dialog starts at the same left edge, right of every chip', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await launchWithVideo('t154-kbd-column')
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      for (const [hash, heading] of [['#/video', 'Video Studio'], ['#/image', 'Stream Graphics']] as const) {
+        await window.evaluate((h) => {
+          window.location.hash = h
+        }, hash)
+        await expect(window.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible({ timeout: 30_000 })
+        await window.keyboard.press('?')
+        const dialog = window.getByRole('dialog')
+        await expect(dialog).toContainText('Keyboard shortcuts')
+        const rows = dialog.getByRole('listitem')
+        expect(await rows.count(), `${hash} lists several shortcuts`).toBeGreaterThan(4)
+        const edges = await rows.evaluateAll((lis) =>
+          lis.map((li) => ({
+            chipRight: (li.querySelector('kbd') as HTMLElement).getBoundingClientRect().right,
+            descLeft: (li.querySelector('span') as HTMLElement).getBoundingClientRect().left
+          }))
+        )
+        const lefts = new Set(edges.map((e) => Math.round(e.descLeft)))
+        expect(lefts.size, `${hash}: one left edge for every description (${[...lefts].join(', ')})`).toBe(1)
+        const widest = Math.max(...edges.map((e) => e.chipRight))
+        expect(edges[0]?.descLeft, 'and it is right of the widest chip').toBeGreaterThan(widest)
+        await window.keyboard.press('?')
+        await expect(dialog).toHaveCount(0)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+})

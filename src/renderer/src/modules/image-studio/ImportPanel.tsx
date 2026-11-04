@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import { makeImageLayer, textLayerFor, useCanvasStore } from './state/canvasStore'
@@ -13,6 +13,7 @@ import {
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { loadImage, storedDataUrl } from '../../lib/boundedImage'
+import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
@@ -82,7 +83,20 @@ export function ImportPanel(): JSX.Element {
   }
 
   useEffect(() => {
+    // T-154 (5): a `paste` event carries no `repeat`, and a held Ctrl+V fires one per key repeat - an image layer each. The chord's KEYDOWN knows: a repeat of it
+    // marks the paste that follows as a repeat. A fresh keydown (or the key's release, or losing the window) clears it, so a second deliberate Ctrl+V pastes again.
+    let pasteHeld = false
+    function onKeyDown(e: KeyboardEvent): void {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') pasteHeld = e.repeat
+    }
+    function onKeyUp(e: KeyboardEvent): void {
+      if (e.key.toLowerCase() === 'v') pasteHeld = false
+    }
     function onPaste(e: ClipboardEvent): void {
+      if (pasteHeld) {
+        e.preventDefault()
+        return
+      }
       const items = e.clipboardData?.items
       if (!items) return
       for (const item of Array.from(items)) {
@@ -96,8 +110,19 @@ export function ImportPanel(): JSX.Element {
         }
       }
     }
+    const releaseHeld = (): void => {
+      pasteHeld = false
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', releaseHeld)
     window.addEventListener('paste', onPaste)
-    return () => window.removeEventListener('paste', onPaste)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', releaseHeld)
+      window.removeEventListener('paste', onPaste)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -108,15 +133,27 @@ export function ImportPanel(): JSX.Element {
     files.forEach((f) => void ingestFile(f))
   }
 
+  // T-154 (5): one chooser at a time. The second press of a double-click lands in the moment before the OS draws the first chooser and opened a second one;
+  // the claim is given back when the chooser answers (a file) or is dismissed (`cancel`), so a person who cancels can open it again.
+  // simplification: a chooser that ends with neither event (none known on this Chromium) would leave the buttons idle until the studio is reopened.
+  const pickingRef = useRef(false)
   async function pickFile(): Promise<void> {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.onchange = () => {
-      const file = input.files?.[0]
-      if (file) void ingestFile(file)
-    }
-    input.click()
+    await claimFirst(
+      pickingRef,
+      () =>
+        new Promise<void>((resolve) => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = 'image/*'
+          input.onchange = () => {
+            const file = input.files?.[0]
+            if (file) void ingestFile(file)
+            resolve()
+          }
+          input.oncancel = () => resolve()
+          input.click()
+        })
+    )
   }
 
   // T-140 (2): the word is sized, placed and inked for the document that is open when the button is pressed (it was a fixed (120, 120) in the app's near-black).

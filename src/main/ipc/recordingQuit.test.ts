@@ -78,6 +78,15 @@ let finishWith: 'hold' | 'ok' = 'hold'
 vi.mock('node:child_process', () => ({
   spawn: (_cmd: string, args: string[]) => {
     const child = new FakeChild()
+    // T-154 (8): the convert probes the take's size first (its own child, which the same sweep kills). It answers by itself here and is not
+    // an ffmpeg that started: `spawned` is the encodes, as before.
+    if (args.includes('-show_entries')) {
+      queueMicrotask(() => {
+        child.stdout.emit('data', '{"streams":[{"width":1280,"height":720}]}')
+        child.emit('close', 0, null)
+      })
+      return child
+    }
     spawned.push({ args, child })
     writeFileSync(args[args.length - 1] as string, 'half-written output')
     if (finishWith === 'ok') setImmediate(() => child.emit('close', 0, null))

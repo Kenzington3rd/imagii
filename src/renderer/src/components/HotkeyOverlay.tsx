@@ -162,9 +162,11 @@ export function HotkeyOverlay(): JSX.Element | null {
           Close
         </button>
       </div>
-      <ul className="flex flex-col gap-1.5 text-sm">
+      {/* T-154: a two-column grid so every description starts at one left edge (the chip column is as wide as the widest chip). `contents` on the
+          row keeps the <li> in the list and puts its two children in the grid; `role="list"` keeps the list read as one (Safari drops it with a list-style reset). */}
+      <ul role="list" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 items-center text-sm">
         {shortcuts.map((s, i) => (
-          <li key={i} className="flex items-center gap-3">
+          <li key={i} className="contents">
             <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center whitespace-nowrap shrink-0">
               {s.keys}
             </kbd>

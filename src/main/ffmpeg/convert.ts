@@ -3,7 +3,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdir, unlink } from 'node:fs/promises'
 import { nanoid } from 'nanoid'
-import { ffmpegPath } from './paths'
+import { ffmpegPath, ffprobePath } from './paths'
 import { EVEN_PICTURE } from './filters'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { CancelledError } from '../../shared/cancel'
@@ -127,17 +127,121 @@ export function beginConvertRun(owner: ConvertOwner): LatchRun {
 }
 
 /**
+ * T-154 (8): the size every frame of the output is held to. A MediaRecorder screen take whose window is resized mid-take changes the picture's
+ * size; ffmpeg re-initialises its graph at the change and scales every later frame to the FIRST size with no aspect handling, so a 1280x720
+ * take that became 1000x1000 converted (exit 0) to 1280x720 with the square half stretched. `width`/`height` are the first video stream's own,
+ * rounded down to even (libx264 + yuv420p refuse an odd edge, T-114).
+ *
+ * `null` is "do not fit": the caller keeps the plain even crop it always had. That is the answer for anything this fit would CHANGE on a
+ * constant-size file, because the importer shares the argv and its picture must stay what it was:
+ *   - a rotated stream (a phone clip's display matrix): ffmpeg auto-rotates, so the frames are the probed size turned on its side and a fit to
+ *     the coded size would letterbox every frame;
+ *   - a non-square pixel aspect (an anamorphic file): `setsar=1` would rewrite the shape the file declares;
+ *   - anything but exactly one video stream (a cover picture beside the video): ffmpeg picks the stream with the most pixels, not the first.
+ * simplification: those three keep the old behaviour, so a mid-stream resize inside such a file is still stretched. A screen or webcam webm is
+ * none of them; handle rotation (swap W and H) and the stream choice if an imported file ever needs it.
+ */
+export interface HeldSize {
+  width: number
+  height: number
+}
+
+interface ProbedVideoStream {
+  width?: unknown
+  height?: unknown
+  sample_aspect_ratio?: unknown
+  tags?: { rotate?: unknown }
+  side_data_list?: Array<{ rotation?: unknown }>
+}
+
+export function heldSizeOf(probed: unknown): HeldSize | null {
+  const streams = (probed as { streams?: ProbedVideoStream[] } | null)?.streams
+  if (!Array.isArray(streams) || streams.length !== 1) return null
+  const v = streams[0]!
+  const evenDown = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) ? Math.floor(n / 2) * 2 : 0)
+  const width = evenDown(v.width)
+  const height = evenDown(v.height)
+  if (width < 2 || height < 2) return null
+  const turned = (r: unknown): boolean => r !== undefined && r !== null && Number(r) % 360 !== 0
+  if (turned(v.tags?.rotate) || (v.side_data_list ?? []).some((d) => turned(d.rotation))) return null
+  const sar = typeof v.sample_aspect_ratio === 'string' ? v.sample_aspect_ratio : '1:1'
+  if (!['1:1', '0:1', 'N/A'].includes(sar)) return null
+  return { width, height }
+}
+
+/**
+ * The `-vf` chain of the convert. Without a held size it is the even crop alone (EVEN_PICTURE). With one, every frame is cropped even, then fit
+ * INSIDE W x H with its aspect kept (`force_divisible_by` keeps the fitted size even), centred on black, at a square pixel: a frame already
+ * W x H passes through scale and pad untouched, so a constant-size file is the picture it always was.
+ */
+export function convertFilter(held: HeldSize | null): string {
+  if (!held) return EVEN_PICTURE
+  const { width: w, height: h } = held
+  return (
+    `${EVEN_PICTURE},scale=${w}:${h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`
+  )
+}
+
+/**
+ * The size to hold the convert's frames to, from a probe of the input's first video stream (ffprobe's stream width/height is the first frame's
+ * size for a MediaRecorder webm). The probe is a child of the convert like the encode is - registered under `owner`, so Discard and the quit
+ * sweep reach it and the same sentinel comes back. A probe that fails for any other reason answers `null`: a convert must not newly fail
+ * because a size could not be read.
+ */
+function probeHeldSize(owner: ConvertOwner, inputPath: string): Promise<HeldSize | null> {
+  return new Promise<HeldSize | null>((resolve, reject) => {
+    const child = spawn(
+      ffprobePath,
+      [
+        '-v', 'error',
+        '-select_streams', 'v',
+        // `stream_side_data_list` is the section name every ffprobe knows (the bundled build is a 4.0 one, which rejects `stream_side_data`
+        // and prints the whole display matrix; the `rotation` key is in it on that build and on 6 and 7).
+        '-show_entries', 'stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data_list',
+        '-of', 'json',
+        inputPath
+      ],
+      { windowsHide: true }
+    )
+    const active: ActiveConvert = { child, owner, cancelled: false, byQuit: false }
+    activeConverts.add(active)
+    let stdout = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (c: string) => {
+      if (stdout.length < 65536) stdout += c
+    })
+    child.stderr.on('data', () => undefined)
+    const settle = (held: HeldSize | null): void => {
+      activeConverts.delete(active)
+      if (active.cancelled) reject(new ConvertCancelledError(active.byQuit))
+      else resolve(held)
+    }
+    child.on('error', () => settle(null))
+    child.on('close', (code) => {
+      if (code !== 0) return settle(null)
+      try {
+        settle(heldSizeOf(JSON.parse(stdout)))
+      } catch {
+        settle(null)
+      }
+    })
+  })
+}
+
+/**
  * `durationSec` is the length of the output, when the caller knows it (the recording knows
  * how long it recorded; an importer's container has not been probed): ffmpeg's `out_time`
  * over it is the percent. Without it progress still ticks, with no percent.
  */
-export function convertToMp4(
+export async function convertToMp4(
   owner: ConvertOwner,
   inputPath: string,
   mp4Path: string,
   onProgress: (p: ConvertProgress) => void,
   durationSec?: number
 ): Promise<void> {
+  const held = await probeHeldSize(owner, inputPath)
   return runConvertChild(
     owner,
     [
@@ -147,8 +251,10 @@ export function convertToMp4(
       // T-114: libx264 + yuv420p refuse an odd edge (exit 187), and a screen recording's
       // VP8/VP9 webm is where one comes from. recording.ts unlinks the temp webm when this
       // convert fails, so an odd take was LOST here.
+      // T-154 (8): and every frame is held to the take's first size (`convertFilter`), so a window
+      // resized mid-take is letterboxed, not stretched.
       '-vf',
-      EVEN_PICTURE,
+      convertFilter(held),
       // T-120: keep each frame at its own time. A MediaRecorder webm declares no frame rate (ffprobe
       // reads its container rate as 1000/1: its clock ticks in milliseconds) and the mp4 muxer's
       // default is a CONSTANT rate, so the convert wrote one frame per millisecond. QA measured a 9.6 s

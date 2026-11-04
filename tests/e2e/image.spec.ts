@@ -1981,7 +1981,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:76).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:77).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -5564,6 +5564,109 @@ test.describe('Image Studio - the Export notes are announced (T-153 fold)', () =
       await expect(status).toHaveCount(1)
       await expect(status).toHaveText('')
       expect(await gapBelow()).toBeLessThanOrEqual(13)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (3), (5): a layer's ✕, a held Ctrl+V and a double-clicked Import are each one action
+// ═══════════════════════════════════════════════════════════════════════════
+// (3) the next layer row moves up under the pointer when the first goes, so a double-click on Remove layer removed two. (5) a `paste` event carries no `repeat`, so a held
+// Ctrl+V added an image layer per key repeat; the chord's keydown knows. The chooser's double click opened two choosers (the second press lands before the OS draws the first).
+// Each repeat-press test waits past the half second App swallows repeats after a route change (T-153 (3)), or the second press never arrives.
+test.describe('Image Studio - one press, one action (T-154 (3), (5))', () => {
+  test('a real double-click on a layer\'s Remove layer removes ONE layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t154-layer-dblclick')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 3)
+      await window.waitForTimeout(800)
+      await window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' }).dblclick()
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a held Ctrl+V pastes ONE image layer; a fresh Ctrl+V pastes another', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t154-held-paste')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+        clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+      }, `data:image/png;base64,${readFileSync(studio.fixturePng).toString('base64')}`)
+      await window.waitForTimeout(800)
+      // The first down is the press, the next are the key's auto-repeats.
+      await window.keyboard.down('Control')
+      await window.keyboard.down('v')
+      await window.keyboard.down('v')
+      await window.keyboard.down('v')
+      await window.keyboard.down('v')
+      await window.keyboard.up('v')
+      await window.keyboard.up('Control')
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+      // A paste that is not the chord (Edit > Paste, the context menu: no keydown) right after the hold is a paste too: the key's release lets go of the hold.
+      await studio.app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.paste()
+      })
+      await expectLayerCount(window, 3)
+      // A deliberate second press is a second paste.
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 4)
+      await window.waitForTimeout(500)
+      await expectLayerCount(window, 4)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a double-click on + Import image opens ONE chooser; once it answers, the next press opens another', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t154-chooser')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const choosers: Array<Awaited<ReturnType<Page['waitForEvent']>>> = []
+      window.on('filechooser', (c) => choosers.push(c))
+      await window.evaluate(() => {
+        const click = HTMLInputElement.prototype.click
+        HTMLInputElement.prototype.click = function (this: HTMLInputElement) {
+          if (this.type === 'file') (window as unknown as { __lastFileInput?: HTMLInputElement }).__lastFileInput = this
+          return click.call(this)
+        }
+      })
+      await window.waitForTimeout(800)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).dblclick()
+      await window.waitForTimeout(800)
+      expect(choosers, 'a double-click opened one chooser').toHaveLength(1)
+      // Two separate presses while that chooser is still up: still one.
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await window.waitForTimeout(500)
+      expect(choosers, 'a second press while the chooser is open opens nothing').toHaveLength(1)
+      await (choosers[0] as unknown as { setFiles: (f: string) => Promise<void> }).setFiles(studio.fixturePng)
+      await expectLayerCount(window, 2)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await expect.poll(() => choosers.length, { timeout: 10_000, message: 'a chooser that answered gives the button back' }).toBe(2)
+      // A chooser that is dismissed gives it back too: the browser fires `cancel` on the input (a stand-in for the OS dialog's Cancel, which no automation reaches).
+      await window.evaluate(() => {
+        const input = (window as unknown as { __lastFileInput?: HTMLInputElement }).__lastFileInput
+        if (!input) throw new Error('no file input was clicked')
+        input.dispatchEvent(new Event('cancel'))
+      })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
+      await expect.poll(() => choosers.length, { timeout: 10_000, message: 'a chooser that was dismissed gives the button back' }).toBe(3)
     } finally {
       await closeStudio(studio)
     }

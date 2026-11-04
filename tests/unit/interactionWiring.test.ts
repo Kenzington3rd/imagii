@@ -167,7 +167,8 @@ describe('T-17 — the restructured rows keep their behavior', () => {
 
   it('TextOverlayEditor still removes an overlay', () => {
     const editor = read('modules/video-studio/TextOverlayEditor.tsx')
-    expect(editor).toMatch(/onClick=\{\(\) => removeTextOverlay\(clip\.id, overlay\.id\)\}/)
+    // T-154 (9): the press is guarded against a double-click's repeat first.
+    expect(editor).toMatch(/onClick=\{\(e\) => \{[\s\S]*?removeTextOverlay\(clip\.id, overlay\.id\)\s*\}\}/)
     expect(editor).toMatch(/aria-label="Remove overlay"/)
     // T-125 (27): each box's name BEGINS with the text it shows beside it (WCAG 2.5.3, label in name); the start box was
     // "Overlay start second" beside a visible "Source time".
@@ -3901,5 +3902,59 @@ describe('T-153 Track A - the thirty-ninth sweep', () => {
     // Empty, the region is out of the flow: in this wrapping card a `basis-full` item is a line of its own and the row gap above it a hole under the button.
     expect(dialog).toMatch(/<div role="status" className=\{sizeNote \|\| jpgNote \? 'basis-full flex flex-col gap-2' : 'absolute'\}>/)
     expect(dialog, 'the wrapper does not depend on a note being there').not.toMatch(/\{\(sizeNote \|\| jpgNote\) \? <div role="status"/)
+  })
+})
+
+describe('T-154 Track A - the second press, the held paste, the Player\'s name, the shortcuts column', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) "→ Canvas" drops a repeat press and holds a claim across the awaited load', () => {
+    const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(panel).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*void sendToCanvas\(src, item\.title\)/)
+    expect(panel).toMatch(/await claimFirst\(sendingRef, \(\) => sendToCanvasNow\(src, title\)\)/)
+  })
+
+  it('(2) the tile ✕ drops a repeat press and claims across the awaited removal', () => {
+    const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(panel).toMatch(/if \(isRepeatPress\(e\)\) return\s*void onRemoveItem\(item\.id\)/)
+    expect(panel).toMatch(/await claimFirst\(removingRef, async \(\) => \{\s*try \{\s*await removeFromCollection/)
+  })
+
+  it('(3) Remove layer drops a repeat press; move up / down / duplicate stay repeat-tolerant', () => {
+    const panel = strip(read('modules/image-studio/LayerPanel.tsx'))
+    expect(panel).toMatch(/e\.stopPropagation\(\)\s*if \(isRepeatPress\(e\)\) return\s*removeLayer\(layer\.id\)/)
+    expect(panel.match(/isRepeatPress\(e\)/g)).toHaveLength(1)
+  })
+
+  it('(4) a cut chip drops a repeat press', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    expect(view).toMatch(/if \(isRepeatPress\(e\)\) return\s*removeCutRegion\(i\)/)
+  })
+
+  it('(5) a held Ctrl+V is one paste (the chord\'s keydown repeat marks the paste), and the chooser is claimed until it answers or is cancelled', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    expect(panel).toMatch(/if \(\(e\.ctrlKey \|\| e\.metaKey\) && e\.key\.toLowerCase\(\) === 'v'\) pasteHeld = e\.repeat/)
+    expect(panel).toMatch(/if \(pasteHeld\) \{\s*e\.preventDefault\(\)\s*return\s*\}/)
+    expect(panel).toMatch(/await claimFirst\(\s*pickingRef,/)
+    expect(panel).toMatch(/input\.onchange = \(\) => \{[\s\S]*?resolve\(\)\s*\}\s*input\.oncancel = \(\) => resolve\(\)/)
+  })
+
+  it('(9) a text overlay\'s ✕ drops a repeat press', () => {
+    const editor = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
+    expect(editor).toMatch(/if \(isRepeatPress\(e\)\) return\s*removeTextOverlay\(clip\.id, overlay\.id\)/)
+  })
+
+  it('(7) the Player\'s focusable column is the named group, with the keys its handler answers', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/tabIndex=\{0\}\s*role="group"\s*aria-label="Video player"\s*aria-keyshortcuts="Space ArrowLeft ArrowRight , \. I O"/)
+    // Every key it lists is one its handler has a case for (Home / End are the timeline's, so they are not listed).
+    for (const k of [`' '`, `'ArrowLeft'`, `'ArrowRight'`, `','`, `'\\.'`, `'I'`, `'O'`]) expect(player).toMatch(new RegExp(`case ${k.replace('\\\\.', '\\.')}:`))
+  })
+
+  it('(fold) the shortcuts list is a two-column grid whose rows contribute both cells', () => {
+    const overlay = strip(read('components/HotkeyOverlay.tsx'))
+    expect(overlay).toMatch(/<ul role="list" className="grid grid-cols-\[auto_1fr\] gap-x-3 gap-y-1\.5 items-center text-sm">/)
+    expect(overlay).toMatch(/<li key=\{i\} className="contents">/)
   })
 })

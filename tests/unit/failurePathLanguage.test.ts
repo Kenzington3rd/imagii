@@ -492,7 +492,8 @@ describe('the mood-board cache clear and the tile remove report their refusals (
 
   it('both handlers are the ones the buttons call (no inline arrow awaiting a write is left in the JSX)', () => {
     expect(panel().text).toMatch(/onClick=\{\(\) => void onClearThumbs\(\)\}/)
-    expect(panel().text).toMatch(/onClick=\{\(\) => void onRemoveItem\(item\.id\)\}/)
+    // T-154 (2): the ✕ drops a repeat press first, then calls the handler.
+    expect(panel().text).toMatch(/if \(isRepeatPress\(e\)\) return\s*void onRemoveItem\(item\.id\)/)
     expect(panel().text).not.toMatch(/onClick=\{async/)
     expect(panel().text.split('reportFailure(').length - 1, 'sendToCanvas, create, rename, delete, and these two').toBeGreaterThanOrEqual(6)
   })

@@ -36,7 +36,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'cleanup',
       title: 'Cleanup',
-      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then check 'Remove low rumble', 'Hum removal', or 'Softer harsh' sounds as needed.",
+      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then check 'Remove low rumble', 'Hum removal', or \"Softer harsh 's' sounds\" as needed.",
       targetSelector: '[data-tutorial="audio-cleanup"]',
       placement: 'left'
     },

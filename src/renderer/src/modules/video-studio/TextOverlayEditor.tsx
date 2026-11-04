@@ -15,6 +15,7 @@ import { resolveOverlayColor } from '@shared/overlayColors'
 import { useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useGestureEnd } from '../../lib/gestureEnd'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { DraftField } from '../../components/DraftField'
 
 /** True when `typed` is a whole number inside the size range the export gate takes. */
@@ -100,7 +101,11 @@ export function TextOverlayEditor(): JSX.Element | null {
               {/* T-17: the remove button is a sibling of the label of the boxes, not inside one, so a click on it never also
                   targets a field. */}
               <button
-                onClick={() => removeTextOverlay(clip.id, overlay.id)}
+                onClick={(e) => {
+                  // T-154 (9): the list reflows when this row goes and the next row's cross is under the pointer; its press is not a new decision.
+                  if (isRepeatPress(e)) return
+                  removeTextOverlay(clip.id, overlay.id)
+                }}
                 className="shrink-0 text-ink-dim hover:text-danger px-2"
                 title="Remove"
                 aria-label="Remove overlay"

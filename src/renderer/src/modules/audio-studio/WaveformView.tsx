@@ -9,6 +9,7 @@ import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
 import { PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { formatClock } from '@shared/clockTime'
+import { isRepeatPress } from '../../lib/repeatPress'
 
 /**
  * Every region this view puts on the waveform for a stored cut carries this id
@@ -225,7 +226,11 @@ export function WaveformView(): JSX.Element | null {
           {cutRegions.map((cut, i) => (
             <button
               key={i}
-              onClick={() => removeCutRegion(i)}
+              onClick={(e) => {
+                // T-154 (4): the chip is gone after the first press and the next one slides under the pointer.
+                if (isRepeatPress(e)) return
+                removeCutRegion(i)
+              }}
               className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
               title="Click to put this part back"
             >

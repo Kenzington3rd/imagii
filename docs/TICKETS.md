@@ -7157,7 +7157,7 @@ IMG-PREC.
   shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
   handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
   lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 103)
+- **Status:** done (round 103 — see the Done entry)
 
 ---
 
@@ -7714,6 +7714,43 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 103 — T-154, all nine counted items and the fold, landed in the
+commit that carries this entry (T-110 gains (bs); item 9 arrived from
+QA's whole-tree remainder after dispatch). Two Sonnet workers in fresh
+clones of f8f7f6d, disjoint files, merged by the expediter. Track A:
+"→ Canvas" drops a double-click's repeat and holds a claim across its
+load; a board tile's ✕, a layer's ✕, a cut chip and a text overlay's ✕
+are one removal per press; a held Ctrl+V pastes once (a fresh Ctrl+V,
+the key's release or a blur lets the next one through) and a
+double-click on the import buttons opens one chooser; the audio
+tutorial names "Softer harsh 's' sounds"; the Player's keyboard stop is
+the group "Video player" with the keys its handler answers; the
+shortcuts dialog's descriptions start in one column. Track B: the
+recording convert probes the take's first size and fits every later
+frame inside it, aspect kept, centred on black, so a window resized
+mid-take is no longer stretched; a constant-size file is the picture it
+was (md5-identical frames). Deviations, accepted: Home / End stay out
+of the Player's aria-keyshortcuts (its handler has no case for them);
+the chooser, not ingestFile, holds the claim (a multi-file drop calls
+it per file); a paste-hold tracker of its own (the lib's guard covers
+Enter and Space); rotated, anamorphic and multi-video-stream inputs keep
+the plain even crop (a `simplification:` ceiling); the probe asks for
+`stream_side_data_list`, which the bundled ffprobe 4.0.2 accepts. Ledgers:
+A 14 RED / 19 mutations (three survivors disclosed: two equivalent, one
+replaced by a stricter case and killed); B 2 RED / 30 mutations (three
+Layer 5 survivors, each killed by its unit pin); every restore
+byte-identical. Found not fixed: a version change in ffprobe's field
+name makes the probe fall back silently (only the post-resize Layer 5
+case guards it); the probe's cost on a huge VOD import is untimed.
+Expedited personally: two independent mutations at seams no ledger row
+names — A: the Player's role group → region (name kept) → the
+interactionWiring T-154 (7) pin red; B: heldSizeOf refusing an unset
+0:1 pixel aspect → the convertCancel T-154 (8) unit red — each restored
+byte-identical, sha256 verified; the T-154 (8) Layer 5 block on 6.1.1
+12/12; on the MERGED tree: verify x2 (207/6112), test:media 453 passed | 17 skipped of 470 on 7.0.2, FULL
+Playwright 609/609 (a container restart cut the run at 579 passed, 0 failed; the remaining 30 and the last reached case ran on the same build, 31/31). Applied to da8889a by `git apply` with every
+file byte-identical to the expedited merge.
 
 Round 102 — T-153, all ten counted items and the three folds, landed
 in the commit that carries this entry (T-110 (n)'s canvas half closes:
