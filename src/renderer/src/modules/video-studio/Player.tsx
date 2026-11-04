@@ -423,6 +423,8 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
           onEnded={() => setPlaying(false)}
+          // T-157 (3): a `src` change (the preview copy landing) resets the element to paused with NO `pause` event; `emptied` is its own signal.
+          onEmptied={() => setPlaying(false)}
           controls={false}
         />
         {cropEnabled ? <CropOverlay rect={pictureRect} aspect={cropAspect} /> : null}

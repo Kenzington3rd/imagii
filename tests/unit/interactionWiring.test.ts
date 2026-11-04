@@ -4076,3 +4076,28 @@ describe('T-156 Track B - the kit title, the module-scope send claim, the one lo
     expect(panel).toMatch(/Promise\.race\(\[load, deadline\]\)\.finally\(\(\) => clearTimeout\(timer\)\)/)
   })
 })
+
+// T-157 Track A (1)-(3): the Audio Studio view keeps its place and clears a swapped sound's readout; the Player's Play button follows the element's own reset.
+describe('T-157 Track A - the players say where they are and whether they play', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) the wavesurfer effect reads the store position when it builds the player and seeks to it on ready, only inside the waveform', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    expect(view).toMatch(/const resumeAt = useAudioStore\.getState\(\)\.currentTime/)
+    expect(view).toMatch(/const offReady = ws\.on\('ready', \(\) => \{\s*setReady\(true\)\s*if \(resumeAt > 0 && resumeAt < waveform\.duration\) \{\s*ws\.setTime\(resumeAt\)\s*setTime\(resumeAt\)\s*\}/)
+  })
+
+  it('(2) the effect clears Play and the readout before it can return early, so a swapped sound never inherits them', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    const body = view.slice(view.indexOf('useEffect(() => {'), view.indexOf('const regions = RegionsPlugin.create()'))
+    expect(body).toMatch(/setPlaying\(false\)/)
+    expect(body).toMatch(/setTime\(0\)/)
+    expect(body.indexOf('setPlaying(false)')).toBeLessThan(body.indexOf('if (!source'))
+    expect(body.indexOf('setTime(0)')).toBeLessThan(body.indexOf('if (!source'))
+  })
+
+  it('(3) the Player\'s <video> sets playing false on `emptied`, the one event a src change gives', () => {
+    const player = strip(read('modules/video-studio/Player.tsx'))
+    expect(player).toMatch(/onEnded=\{\(\) => setPlaying\(false\)\}\s*onEmptied=\{\(\) => setPlaying\(false\)\}/)
+  })
+})

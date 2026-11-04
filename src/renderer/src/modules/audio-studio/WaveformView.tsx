@@ -45,6 +45,10 @@ export function WaveformView(): JSX.Element | null {
     // A file whose waveform is still being read has no player yet: nothing from the last one may stay ready.
     setReady(false)
     setMediaEl(null)
+    // T-157 (2): a new sound never inherits the old one's readout or Play state (the cleanup below removes the pause / finish listeners before
+    // `ws.destroy()`, so nothing else clears them). Item 1's restore sets the time again on `ready` when the store holds one.
+    setPlaying(false)
+    setTime(0)
     if (!source || !waveform || !containerRef.current) return
     const regions = RegionsPlugin.create()
     regionsRef.current = regions
@@ -73,9 +77,17 @@ export function WaveformView(): JSX.Element | null {
     })
     wsRef.current = ws
     setReady(false)
+    // T-157 (1): the Audio Studio twin of T-156 (2). Visiting Home, Video Studio or References unmounts this view and builds a fresh player on
+    // return, while the store's `currentTime` (written by `audioprocess` / `seeking`) still holds the place the person left. That is safe to
+    // restore because every way a DIFFERENT sound arrives goes through `loadSource` / `clearSource`, which zero it.
+    const resumeAt = useAudioStore.getState().currentTime
 
     const offReady = ws.on('ready', () => {
       setReady(true)
+      if (resumeAt > 0 && resumeAt < waveform.duration) {
+        ws.setTime(resumeAt)
+        setTime(resumeAt)
+      }
       try {
         const internal = (ws as unknown as { getMediaElement?: () => HTMLMediaElement })
           .getMediaElement

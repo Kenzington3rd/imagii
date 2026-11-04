@@ -41,11 +41,13 @@ type SourceSearch = 'never' | 'searching' | 'done'
 
 const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
 const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
-  'top-left': 'Top-left',
-  'top-right': 'Top-right',
-  'bottom-left': 'Bottom-left',
-  'bottom-right': 'Bottom-right'
+  'top-left': 'Top left',
+  'top-right': 'Top right',
+  'bottom-left': 'Bottom left',
+  'bottom-right': 'Bottom right'
 }
+// A source tile captions its type in words, not the internal 'screen' | 'window' (T-157 (5)).
+const SOURCE_TYPE_LABELS: Record<'screen' | 'window', string> = { screen: 'Screen', window: 'Window' }
 
 export function RecordStudio(): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle')
@@ -797,7 +799,7 @@ export function RecordStudio(): JSX.Element {
                       className="w-full rounded mb-2"
                     />
                     <div className="text-xs font-medium truncate" title={s.name}>{s.name}</div>
-                    <div className="text-xs text-ink-dim">{s.type}</div>
+                    <div className="text-xs text-ink-dim">{SOURCE_TYPE_LABELS[s.type]}</div>
                   </button>
                 ))}
               </div>

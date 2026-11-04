@@ -679,13 +679,13 @@ test.describe('T-27 Record Studio', () => {
 
       // ...and now the Corner picker, with its four exact labels. A renamed
       // option is a user-visible change and fails here.
-      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      const corner = window.locator('select').filter({ hasText: 'Bottom right' })
       await expect(corner).toBeVisible()
       await expect(corner.locator('option')).toHaveText([
-        'Top-left',
-        'Top-right',
-        'Bottom-left',
-        'Bottom-right'
+        'Top left',
+        'Top right',
+        'Bottom left',
+        'Bottom right'
       ])
       await window.screenshot({ path: path.join(SCREENSHOTS, 'record-10-camera.png') })
 
@@ -898,7 +898,7 @@ test.describe('T-27 Record Studio', () => {
       expect(readConfig(userDataDir).record).toBeUndefined()
 
       await window.getByRole('checkbox').nth(1).check()
-      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      const corner = window.locator('select').filter({ hasText: 'Bottom right' })
       await corner.selectOption('top-left')
       await expect(corner).toHaveValue('top-left')
 
@@ -921,7 +921,7 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('link', { name: /Record/ }).first().click()
       await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
       await window.getByRole('checkbox').nth(1).check()
-      const corner = window.locator('select').filter({ hasText: 'Bottom-right' })
+      const corner = window.locator('select').filter({ hasText: 'Bottom right' })
       await expect(corner).toHaveValue('top-left')
       // Restoring must not rewrite a different value over the stored one.
       expect(readConfig(userDataDir).record?.webcamCorner).toBe('top-left')
@@ -1184,7 +1184,8 @@ test.describe('T-27 Record Studio', () => {
       expect(src?.startsWith('data:image/png;base64,')).toBe(true)
       // A non-empty thumbnail, not a 1-px placeholder.
       expect((src ?? '').length).toBeGreaterThan(500)
-      await expect(window.getByText('screen', { exact: true }).first()).toBeVisible()
+      // The tile's caption is the T-157 (5) label "Screen", not the internal type id.
+      await expect(window.getByText('Screen', { exact: true }).first()).toBeVisible()
 
       // chooseSource auto-selects the first entry when nothing is selected,
       // which is what un-disables Start.
@@ -3986,6 +3987,66 @@ test.describe('T-143 (1): a kept take survives the launch sweep for the 6 hours 
     } finally {
       await app.close().catch(() => undefined)
       await app2?.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+test.describe('T-157 (5) / (6): a source tile names its type, and the Corner picker spells its corners out', () => {
+  test('a screen tile captions "Screen" and a window tile "Window", never the internal type', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t157-source-type')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      // The named-source stub, with a screen id and a window id: main reads a source's type from its id's prefix.
+      await app.evaluate(
+        async ({ desktopCapturer, nativeImage }, png) => {
+          const thumbnail = nativeImage.createFromDataURL(png)
+          const target = desktopCapturer as unknown as { getSources: unknown }
+          target.getSources = async () => [
+            { id: 'screen:t157-0:0', name: 'Fake Screen', thumbnail },
+            { id: 'window:t157-1:0', name: 'Fake Window', thumbnail }
+          ]
+        },
+        TINY_PNG
+      )
+      await window.getByRole('button', { name: 'Pick a screen or window' }).click()
+      const cards = window.locator('button.card').filter({ has: window.locator('img[alt^="Fake"]') })
+      await expect(cards).toHaveCount(2, { timeout: 20_000 })
+      const tileOf = (alt: string) => window.locator('button.card').filter({ has: window.locator(`img[alt="${alt}"]`) })
+      await expect(tileOf('Fake Screen').locator('div.text-ink-dim')).toHaveText('Screen')
+      await expect(tileOf('Fake Window').locator('div.text-ink-dim')).toHaveText('Window')
+      // Both captions at once: the two words and nothing lowercase.
+      await expect(window.locator('button.card div.text-ink-dim')).toHaveText(['Screen', 'Window'])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the webcam Corner picker offers Top left, Top right, Bottom left and Bottom right', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t157-corner')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('checkbox').nth(1).check()
+      const corner = window.locator('label', { hasText: 'Corner' }).locator('select')
+      await expect(corner.locator('option')).toHaveText(['Top left', 'Top right', 'Bottom left', 'Bottom right'])
+    } finally {
+      await app.close()
       cleanup(root)
     }
   })

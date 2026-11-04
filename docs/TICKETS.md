@@ -7389,7 +7389,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 106)
+- **Status:** done (round 106 — see the Done entry)
 
 ---
 
@@ -7960,6 +7960,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 106 — T-157, all six counted items, landed in the commit that
+carries this entry (T-110 gains (bw), an owner call). Two workers in
+fresh clones of 552aa37 — Track A on Sonnet, Track B (isolated copy) on
+Haiku — disjoint source files, merged by the expediter. Track A: coming
+back to Audio Studio restores the waveform's position on `ready` (the
+store already zeroes it for a different sound); a sound swapped in while
+the studio is open starts at 0:00 with Play (the effect clears both
+before it can return); the Player's Play button follows the element's
+own `emptied` signal, so the preview copy landing no longer leaves
+"Pause" over a stopped picture. Track B: the crop row's first button
+reads "Free", the Record source tiles read "Screen" / "Window", and the
+webcam Corner select reads "Top left" … "Bottom right", each through a
+display map with the internal values unchanged. Deviations, accepted:
+the Player case swaps the element's own `src` (no store hook exists;
+the ProRes preview-copy route stays covered by video-pipelines); the
+Audio swap case reaches a second sound through Clean audio (the importer
+is hidden once a sound is open); the new Record case inlines its own
+screen/window source stub (the shared helper gives only window ids).
+Ledgers: A 4 RED / 12 mutations (one e2e survivor, the explicit readout
+write in `ready`, equivalent because the seek raises `seeking`, which
+writes the readout); B 7 RED / 4 green (a copy track). Track B's own
+full Playwright run found the existing T-27 case asserting the old
+lowercase "screen" caption — sent back, edited in place, and every test
+file grepped for another old-form assertion (none); that file re-run
+53/53. Found not fixed: none new. Expedited personally: two independent
+mutations at seams no ledger row names — A: the reset moved below the
+effect's early return (a swap keeps the stale readout and Play while the
+new waveform draws) → the T-157 Track A (2) pin red; B: "Bottom right"
+→ "Bottom Right" (title case that passes a capital-first, no-hyphen
+rule) → the copyConventions T-157 Track B corner case red — each
+restored byte-identical, sha256 verified; on the MERGED tree: verify x2
+(207/6147), test:media 453 passed | 17
+skipped of 470 on 7.0.2, FULL
+Playwright 629/630 (48.6 min; the one failure, home-chrome.spec.ts
+T-131 "the last step names the ? key" — `?` pressed straight after a
+tour's Done found no shortcuts dialog — is outside every file the round
+touched and passed 5 of 5 standalone on the same build: a load flake,
+recorded in TESTING). Applied to 552aa37 by
+`git apply` with every file byte-identical to the expedited merge.
 
 Round 105 — T-156, all five counted items and the fold, landed in the
 commit that carries this entry (T-110 gains (bv), an owner call). Two

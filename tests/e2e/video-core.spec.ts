@@ -2002,8 +2002,8 @@ test.describe('Video Studio core editing surface', () => {
       // The fifth preset, `free`, unlocks the ratio instead of writing a rect
       // — the stored box must survive the click untouched.
       const beforeFree = await cropBox(window)
-      await cropRow.getByRole('button', { name: 'free', exact: true }).click()
-      await expect(cropRow.getByRole('button', { name: 'free', exact: true })).toHaveClass(
+      await cropRow.getByRole('button', { name: 'Free', exact: true }).click()
+      await expect(cropRow.getByRole('button', { name: 'Free', exact: true })).toHaveClass(
         /bg-accent/
       )
       expect(await cropBox(window)).toEqual(beforeFree)
@@ -3663,6 +3663,37 @@ test.describe('T-156 (2): coming back to Video Studio keeps the playhead where i
       await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
       await expect(window.getByText(/^0:00\.00 \/ \d+:\d\d\.\d\d$/)).toBeVisible({ timeout: 10_000 })
       expect(await settledTime(window)).toBeLessThan(frame)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-157 (3): "Pause" over a stopped video after the preview copy lands. `playing` was written only by the element's play / pause / ended events, and a
+// `src` change (what `previewUrl` does when "Make a preview copy" finishes) resets the element to paused with NO `pause` event - so a person who pressed
+// Play to hear a ProRes file's sound while the copy was made saw "Pause" (and its title) over a stopped picture.
+test.describe('T-157 (3): the Play button follows the element when its src is swapped', () => {
+  test('a playing video whose src is swapped for another file (the way the preview copy swaps it) reads Play within a second', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t157-src-swap')
+    try {
+      const other = path.join(root, 'source', 'video-core-t157-other.mp4')
+      await makeFixtureMp4(other)
+      const transport = window.getByRole('button', { name: /^(Play|Pause)$/ })
+      await expect(transport).toHaveAttribute('aria-label', 'Play')
+      await transport.click()
+      await expect(transport).toHaveAttribute('aria-label', 'Pause', { timeout: 10_000 })
+      // The swap is the element's `src` property, which is all `previewUrl` changes in the Player; no store hook is exposed to a test.
+      const wasPlaying = await window.evaluate((p) => {
+        const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl
+        const playing = !v.paused
+        v.src = window.api.video.fileUrl(p)
+        return playing
+      }, other)
+      expect(wasPlaying, 'the video was playing when its src was swapped').toBe(true)
+      await expect.poll(async () => (await window.evaluate(() => (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl.paused)), { timeout: 5_000 }).toBe(true)
+      await expect(transport, 'the button says Play over the stopped video').toHaveAttribute('aria-label', 'Play', { timeout: 1_000 })
+      await expect(transport).toHaveAttribute('title', 'Play (Space)')
     } finally {
       await app.close()
     }

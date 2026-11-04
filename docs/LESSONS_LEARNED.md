@@ -14,6 +14,46 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-157 (round 106), Track A: the state that outlives a view is read at mount; a control follows the element's own events, and a src change gives only one
+
+The forty-third sweep, Track A (the two players; Track B lands separately).
+
+### (1) [LOW] - Coming back to Audio Studio put the playhead at 0:00
+
+- **Bug.** A person who scrubbed a 2 h sound to 1:10:00 and visited Home, Video Studio or References came back to 0:00 while the cuts, the chain and the history survived.
+- **Root cause.** The twin of T-156 (2). `WaveformView` keeps `time` in `useState(0)` and builds a fresh wavesurfer on mount with no seek; `audioStore.currentTime` (written by the `audioprocess` and `seeking` events) was read by nothing.
+- **Fix.** The wavesurfer effect reads `useAudioStore.getState().currentTime` when it builds the player and, on `ready`, when it is above 0 and inside the waveform's duration, calls `ws.setTime` and sets the readout. No mount ref is needed: `loadSource` and `clearSource` zero the store's `currentTime` and every way a different sound arrives (the importer, Recent, Open project, Clean audio, the autosave restore) goes through them, so a non-zero value belongs to this sound.
+- **Test.** audio.spec.ts "T-157 (1), (2) ... Home and back keeps the readout and the media element where they were" (a click on the waveform, Home and back: the readout and the newest `<audio>` element read the same time); red on a build of the unchanged tree; interactionWiring.test.ts "T-157 Track A" (1).
+- **Lesson.** **A store field that is written on every tick and read by nothing is a restore nobody built.** When a sibling view was fixed to read it at mount, grep for the other views that write the same kind of field.
+
+### (2) [LOW] - A sound swapped while Audio Studio was open kept the old one's readout and Play state
+
+- **Bug.** Clean audio finishing on the video side while the person is on Audio Studio playing sound A put B in under a readout at A's last position and an enabled "Pause" over a stopped player.
+- **Root cause.** The effect that rebuilds the player reset `ready` and the media element only, and its cleanup removes the `pause` / `finish` listeners before `ws.destroy()`, so nothing ever cleared `playing` or `time`.
+- **Fix.** The effect sets `setPlaying(false)` and `setTime(0)` at its top, before the early return; item (1)'s restore then sets the time on `ready` when the store holds one.
+- **Test.** audio.spec.ts "T-157 (1), (2) ... a sound swapped in while the first plays reads 0:00 and Play" (a 60 s sound playing, Clean audio from a video held in ffmpeg, the extraction lands: 0:00.00 and Play within 1.5 s); red on the unchanged tree (the readout read 0:11.93); interactionWiring.test.ts "T-157 Track A" (2).
+- **Lesson.** **An effect that tears a player down owns every piece of state the player's events were writing.** The cleanup unsubscribes the events, so the reset has to be written by hand where the player is rebuilt.
+
+### (3) [LOW] - The Player showed "Pause" over a stopped video after its preview copy landed
+
+- **Bug.** A person who pressed Play to hear a ProRes file's sound while "Make a preview copy" ran saw "Pause" (and its title) over a stopped picture when the copy replaced the element's source.
+- **Root cause.** `playing` was written only by `onPlay`, `onPause` and `onEnded`. A `src` change runs the element's load algorithm, which sets `paused` with no `pause` event (executed in Electron 31: abort, emptied, loadedmetadata, `paused: true`).
+- **Fix.** `onEmptied={() => setPlaying(false)}` on the `<video>`: the element's own signal that it reset. `togglePlay` is unchanged.
+- **Test.** video-core.spec.ts "T-157 (3)" (Play, then the element's `src` set to a second fixture the way `previewUrl` does: the button reads Play within a second, title "Play (Space)"); red on the unchanged tree; interactionWiring.test.ts "T-157 Track A" (3).
+- **Lesson.** **A button that mirrors an element's state should listen to every event that can change it, and `src` is a change with no `pause`.** When the control follows events, list the events the platform fires for the transition, not the ones the user's gesture suggests.
+
+## 2026-11-04 - T-157 (round 106), Track B: a label is its words, and the scanner has to see the variable it comes from
+
+The forty-third sweep, Track B (three labels a person reads; Track A lands beside it).
+
+- **Bug.** Three buttons and captions a person reads showed their internal names: the crop aspect row's first button read "free" (the only lowercase button in the app; `AspectMode` is the store's value, so the mode name went straight to the DOM); each record source tile captioned its type as "screen" or "window"; and the webcam Corner picker read "Top-left" and "Bottom-right" where the watermark and Picture-in-picture pickers say "Top left" and "Bottom right" (BRANDING_GUIDE: "Spell a corner out").
+- **Root cause.** The copy scanner (`copyConventions.test.ts`) reads string literals and JSX text, and none of the three reached it as copy: each was a value a variable carried into `{m}`, `{s.type}` or a `Record` of corner names, so a lowercase or hyphenated word passed every rule.
+- **Fix.** A display map beside each value: `PRESET_LABELS` ("Free", "16:9", ...) with `AspectMode` unchanged, `SOURCE_TYPE_LABELS` ("Screen", "Window"), and the Corner map without hyphens. The store, Player and main's type strings keep their values.
+- **Test.** `copyConventions.test.ts` "T-157 Track B" (each map's values, the render site reads the map, every value starts with a capital or a digit); video-core.spec.ts's crop case finds the "Free" button by name; record.spec.ts "T-157 (5) / (6)" (a screen tile reads "Screen", a window tile "Window", and the Corner options are the four spelled-out corners). Red on the unchanged tree: the unit pins at the missing maps, the crop button not found, the captions reading "screen", the options reading "Top-left".
+- **Lesson.** A rule that reads string literals misses a label that arrives through a variable: when a display string comes from a map, pin the map and the render site, not only the scanner. And the id a store or a main process uses is not the word on screen; the map is where that word is chosen, so it is the one place to look when a label reads like code.
+
+---
+
 ## 2026-11-04 - T-156 (round 105), Track A: a rate gate must keep its phase; a reset that runs on mount is a reset on every visit
 
 The forty-second sweep, Track A (the recorder's frame cadence and the Player's place; Track B lands separately).

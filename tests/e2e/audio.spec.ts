@@ -5036,3 +5036,122 @@ test.describe('Audio Studio - a cut chip is one press (T-154 (4))', () => {
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-157 Track A (1), (2): Audio Studio keeps its place across a trip away; a swapped sound starts clean
+// ═══════════════════════════════════════════════════════════════════════════
+// The view built a fresh wavesurfer on mount with no seek and `audioStore.currentTime` was read by nothing, so a person who scrubbed a long sound and
+// visited Home came back to 0:00 (the cuts and the chain survived). And the effect that rebuilds the player on a new source reset `ready` and the
+// element only: a sound swapped in while Audio Studio was open kept the old one's readout and an enabled "Pause" over a stopped player.
+test.describe('T-157 (1), (2): Audio Studio keeps its place; a swapped-in sound starts at 0:00 and Play', () => {
+  const readout = (window: Page) => window.locator(`${WAVEFORM} .font-mono`).first()
+  /** wavesurfer's media element is created detached (never in the document): record the ones made from here on, so the NEWEST can be read. */
+  const recordAudioElements = (window: Page): Promise<void> =>
+    window.evaluate(() => {
+      const w = window as unknown as { __t157Audio?: HTMLAudioElement[] }
+      w.__t157Audio = []
+      const create = document.createElement.bind(document)
+      document.createElement = ((tag: string, options?: ElementCreationOptions) => {
+        const el = create(tag, options)
+        if (tag.toLowerCase() === 'audio') w.__t157Audio!.push(el as HTMLAudioElement)
+        return el
+      }) as typeof document.createElement
+    })
+  const elementSeconds = (window: Page): Promise<number> =>
+    window.evaluate(() => {
+      const list = (window as unknown as { __t157Audio?: HTMLAudioElement[] }).__t157Audio ?? []
+      const a = list[list.length - 1]
+      if (!a) throw new Error('no <audio> element was created after the recorder went in')
+      return a.currentTime
+    })
+
+  test('Home and back keeps the readout and the media element where they were', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t157-keeps-place')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const surface = window.locator(`${WAVEFORM} .card > div`).first()
+      const box = await surface.boundingBox()
+      if (!box) throw new Error('waveform surface has no box')
+      await window.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2)
+      await expect
+        .poll(async () => parseTimestampPair((await readout(window).textContent()) ?? '')[0], { timeout: 10_000, intervals: [200] })
+        .toBeGreaterThan(1.2)
+      const left = parseTimestampPair((await readout(window).textContent()) ?? '')[0]
+
+      await recordAudioElements(window)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      await expect
+        .poll(async () => Math.abs(parseTimestampPair((await readout(window).textContent()) ?? '')[0] - left) < 0.05, {
+          timeout: 10_000,
+          intervals: [200],
+          message: `the readout reads ${left} s after the round trip`
+        })
+        .toBe(true)
+      await expect
+        .poll(async () => Math.abs((await elementSeconds(window)) - left) < 0.05, { timeout: 10_000, intervals: [200], message: 'the media element sits there too' })
+        .toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a sound swapped in while the first plays reads 0:00 and Play', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t157-swap')
+    const { window, app } = studio
+    try {
+      // Sound A is long enough to still be playing when the extraction of sound B (from a video, Clean audio) lands.
+      const longWav = path.join(studio.root, 'source', 'long-a.wav')
+      writeFileSync(longWav, squareWav(60, 0.5, -0.5))
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, longWav, 'long-a.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      // Video Studio: open the clip, start Clean audio with its ffmpeg held, then come back to Audio Studio and play A meanwhile.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await window.evaluate((file) => {
+        const zone = document.querySelector('[data-tutorial="video-import"] .card')
+        if (!zone) throw new Error('Video Studio drop zone not found')
+        const f = new File([new Uint8Array([0])], 'e2e-clip.mp4', { type: '' })
+        Object.defineProperty(f, 'path', { value: file })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [f] } })
+        zone.dispatchEvent(event)
+      }, video)
+      const clean = window.getByRole('button', { name: 'Clean audio' })
+      await expect(clean).toBeEnabled({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 12_000 }])
+      await clean.click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await playButton(window).click()
+      const pause = window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })
+      await expect(pause).toBeVisible({ timeout: 10_000 })
+      await expect
+        .poll(async () => parseTimestampPair((await readout(window).textContent()) ?? '')[0], { timeout: 15_000, intervals: [200] })
+        .toBeGreaterThan(0.3)
+
+      // The extraction ends while A plays: B takes its place under a clean readout and a Play button.
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible({ timeout: 60_000 })
+      await expect(readout(window)).toHaveText(/^0:00\.00 \/ 0:0\d\.\d\d$/, { timeout: 1_500 })
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Play', exact: true })).toBeVisible({ timeout: 1_500 })
+      await expect(pause).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

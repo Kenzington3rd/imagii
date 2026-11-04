@@ -564,3 +564,79 @@ describe('the scan discriminates — it fires on the copy that shipped', () => {
     expect(run(src, `${path.sep}components${path.sep}Modal.tsx`)).toHaveLength(1)
   })
 })
+
+/**
+ * T-157 Track B. The crop aspect buttons, the source tile captions and the webcam
+ * Corner picker each render through a label map (`PRESET_LABELS`,
+ * `SOURCE_TYPE_LABELS`, `WEBCAM_CORNER_LABELS`) — the value reaches the DOM through
+ * a variable, which the string rules above cannot see. This pins each map's
+ * values and that the render site reads the map, not the internal id.
+ */
+describe('T-157 Track B: the labels a person reads are spelled out and capitalized', () => {
+  const CROP = path.join(RENDERER_ROOT, 'modules', 'video-studio', 'CropOverlay.tsx')
+  const RECORD = path.join(RENDERER_ROOT, 'modules', 'record-studio', 'RecordStudio.tsx')
+
+  /** The string values of `const NAME ... = { key: 'value', ... }` in a file; undefined when it is not declared there. */
+  function labelMap(file: string, name: string): Record<string, string> | undefined {
+    const sf = parseSource(file)
+    let found: Record<string, string> | undefined
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name && n.initializer) {
+        if (ts.isObjectLiteralExpression(n.initializer)) {
+          found = {}
+          for (const p of n.initializer.properties) {
+            if (ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer)) {
+              found[p.name.getText(sf).replace(/^['"]|['"]$/g, '')] = p.initializer.text
+            }
+          }
+        }
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    return found
+  }
+
+  it('the crop aspect buttons read their PRESET_LABELS, and "free" reads Free', () => {
+    expect(labelMap(CROP, 'PRESET_LABELS')).toEqual({
+      free: 'Free',
+      '16:9': '16:9',
+      '9:16': '9:16',
+      '1:1': '1:1',
+      '4:5': '4:5'
+    })
+    expect(parseSource(CROP).text).toMatch(/\{PRESET_LABELS\[m\]\}/)
+    expect(parseSource(CROP).text).not.toMatch(/^\s*\{m\}\s*$/m)
+  })
+
+  it('the source tile captions read SOURCE_TYPE_LABELS: Screen and Window, not the type', () => {
+    expect(labelMap(RECORD, 'SOURCE_TYPE_LABELS')).toEqual({ screen: 'Screen', window: 'Window' })
+    expect(parseSource(RECORD).text).toMatch(/\{SOURCE_TYPE_LABELS\[s\.type\]\}/)
+    expect(parseSource(RECORD).text).not.toMatch(/^\s*\{s\.type\}\s*$/m)
+  })
+
+  it('the webcam Corner picker spells its corners out, with no hyphen', () => {
+    const corners = labelMap(RECORD, 'WEBCAM_CORNER_LABELS')
+    expect(corners).toEqual({
+      'top-left': 'Top left',
+      'top-right': 'Top right',
+      'bottom-left': 'Bottom left',
+      'bottom-right': 'Bottom right'
+    })
+    expect(Object.values(corners ?? {}).filter((v) => v.includes('-'))).toEqual([])
+  })
+
+  it('every one of those label values starts with a capital letter or a digit', () => {
+    for (const [file, name] of [
+      [CROP, 'PRESET_LABELS'],
+      [RECORD, 'SOURCE_TYPE_LABELS'],
+      [RECORD, 'WEBCAM_CORNER_LABELS']
+    ] as const) {
+      const map = labelMap(file, name)
+      expect(map, `${name} is declared in ${path.basename(file)}`).toBeDefined()
+      for (const [key, value] of Object.entries(map ?? {})) {
+        expect(value, `${name}.${key}`).toMatch(/^[A-Z0-9]/)
+      }
+    }
+  })
+})

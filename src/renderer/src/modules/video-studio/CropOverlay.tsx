@@ -14,6 +14,16 @@ const ASPECTS: Record<AspectMode, number | null> = {
 
 const PRESETS: AspectMode[] = ['free', '16:9', '9:16', '1:1', '4:5']
 
+// The button text. `AspectMode` is the store's value (and Player's), so the
+// lowercase internal name never reaches the screen (T-157 (4)).
+const PRESET_LABELS: Record<AspectMode, string> = {
+  free: 'Free',
+  '16:9': '16:9',
+  '9:16': '9:16',
+  '1:1': '1:1',
+  '4:5': '4:5'
+}
+
 interface CropControlsProps {
   enabled: boolean
   onEnabledChange: (on: boolean) => void
@@ -113,7 +123,7 @@ export function CropControls({
               aria-pressed={aspect === m}
               onClick={() => applyAspectPreset(m)}
             >
-              {m}
+              {PRESET_LABELS[m]}
             </button>
           ))}
           <button
