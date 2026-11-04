@@ -7223,6 +7223,103 @@ IMG-PREC.
 
 ---
 
+## T-156 — sweep-42 fixes (round 105)
+
+- **Spec:** the forty-second sweep's five verified findings (candidate clean pass #1 on 81880f7),
+  confirmed by the expediter against source (item 1 is the expediter's, from QA's verified-clean note: the
+  brief's T-155 disclosure "floors to display multiples (144 Hz gives ~29 fps)" understated it). Privacy, audio, ffmpeg, a11y, Electron and QA (whole tree, three passes) clean on their whole lens. Not counted:
+  "Discard recording" deleting the take without a question (BRANDING's verb table: a Discard, which
+  never asks — Delete always does; the (bu) precedent — new letter (bv), an owner call); a natively
+  disabled button's reason living only in its title (T-140 Track C / T-110 (l)); the empty-state template tiles taking no repeat guard (measured on the built tip: the
+  second press lands on the new canvas, a plain div or a layer row's name — a selection, no document
+  change).
+  Two tracks, disjoint files.
+
+  **Track A — the recorder keeps its 30, the Player keeps its place (items 1-2; fold).**
+  1. **[LOW-MED] The webcam compositor records 25 fps on a 75 Hz or 100 Hz display** (a T-155 (bt)
+     consequence; compositor.ts:239-246). `minGapMs = 1000 / fps - 2` with `lastDrawMs = now`
+     re-anchors on every draw, so the rate floors to the first refresh tick past 31.3 ms: 60 / 90 /
+     120 / 240 Hz give 30, 144 Hz 28.8, 165 Hz 27.6, 75 and 100 Hz 25.0 draws a second (simulated on
+     the exact loop). Before T-155 the canvas painted every refresh and `captureStream(30)`'s timed
+     capture took ~30 frames from any display, so every webcam-on recording on a 75 Hz monitor (the
+     composite is the whole picture) lost a sixth of its frames. Fix direction: keep the PHASE, not
+     the last draw — `const intervalMs = 1000 / fps; let nextDueMs = -Infinity`; a tick draws when
+     `now >= nextDueMs - 2` (the 2 ms is the tick's jitter) and then sets `nextDueMs = now - nextDueMs >
+     intervalMs ? now + intervalMs : nextDueMs + intervalMs` (resync after a stall instead of bursting);
+     the rAF re-arms on every tick, drawn or not, as now. Simulated: 24 Hz -> every frame; 30, 50, 60,
+     75, 90, 100, 120, 144, 165, 240 Hz -> 30.0 a second; a 500 ms stall resyncs with no burst.
+  2. **[LOW] Coming back to Video Studio puts the playhead at 0:00** (Player.tsx:157-172). The
+     source-change effect also runs on MOUNT and, with no parked seek, writes `setTime(0)` and
+     `setCurrentTime(0)`: a person working at 2:41:00 of a 3 h VOD who visits Audio Studio, Home or
+     References comes back to 0:00 — clips, scans and the selection survive (T-135 / T-147), their
+     place does not. T-52 made the store match the new `<video>` (which starts at 0) instead of
+     seeking the new element to the store's position; T-47 already restores a parked seek that way.
+     Fix direction: on MOUNT (a ref tells mount from a path change) with no parked seek, treat the
+     store's `currentTime` as the parked position — set the new element's `currentTime` (at
+     HAVE_NOTHING it is the default start position) and keep the store's value; a genuinely different
+     file (the path changes while mounted, or a different file was loaded while the Player was away)
+     still starts at 0. Confirm every way a DIFFERENT file arrives while the Player is unmounted (Open
+     project, session restore, Edit in Video Studio, Recent files) leaves the store at 0 or parks a
+     seek, so a stale position cannot carry to a new file; where it does not, reset it at that source
+     change in the store, not in the Player.
+  Fold (docs, not counted): INTERACTION_COVERAGE.md says a quit mid-download "leaves the `.part` file
+  for the next launch's sweep"; the file is `<model>.partial` and no launch sweep touches
+  userData/models/ (tempCleanup.ts sweeps imagii-audio, imagii-concat and imagii-import); the next
+  download's write replaces it. Correct the sentence to what the code does.
+  Covering tests: unit (compositor.test.ts, NEW describe beside the T-155 one, the same fake rAF clock):
+  75, 100, 144, 165 Hz -> 29-31 draws in a second; 60 and 240 -> 29-31; 24 Hz -> every tick; a 500 ms
+  stall -> no more than one draw in the tick after it; red on 81880f7 at 75 and 100 Hz. e2e (NEW
+  describe): a loaded fixture, the playhead put at a known time (the Timeline or the Player's keys),
+  Home and back -> the Player's readout and the media element read that time; a different file loaded
+  -> 0:00; red on 81880f7.
+
+  **Track B — a title that promises only what happens; a send that a tab change cannot re-arm, and one sentence for a picture that did not load (items 3-5).**
+  3. **[LOW] The Clip Kit button's disabled title promises an automatic start** (a T-155 (4)
+     consequence; ClipKitButton.tsx:381-385). While an export runs it reads "An export is running.
+     Clip Kit starts when it is done." — nothing queues the kit (`runKit` begins only from the
+     button's click; the export's `finish()` starts nothing), so a streamer who walks away comes back
+     to an idle button. The promise is clearly wrong (a kit needs its folder chooser), so the copy
+     changes, matching Export's imperative sibling: "An export is running. Start Clip Kit when it is
+     done." Update its pins (video-pipelines.spec.ts `EXPORT_RUNNING_TITLE`, the interactionWiring
+     T-155 Track B (4) regex) and USER_GUIDE's "take turns" sentence; LESSONS' round-104 quote is
+     history and stays, the new entry records the change.
+  4. **[LOW] A tab change re-arms "→ Canvas" while a send is out** (a T-154 (1) / T-155 (1)
+     consequence; MoodBoardPanel.tsx:49-51, ReferencesStudio.tsx:66-72). The send claim
+     (`sendingRef`) and the busy flag (`sending`) live in the panel, and the studio renders its tabs
+     conditionally, so Mood Boards -> Asset Library -> Mood Boards remounts the panel with the claim
+     released while the first send is still out (up to the 10 s deadline): a second press sends again
+     and, if both loads land, adds two reference layers with two toasts, and every "→ Canvas" has lost
+     its busy state. T-135 / T-136 moved every other long job into a module store for exactly this.
+     Fix direction: the claim and the busy flag move to module scope (a small module store the panel
+     reads, or `createRunStore`), claimed ahead of the first await and released in a finally as now;
+     the deadline, the sentence and the toasts are unchanged.
+  5. **[LOW] A "→ Canvas" picture that fails fast says less than one that stalls** (a T-155 (1)
+     consequence; MoodBoardPanel.tsx:23-31, boundedImage.ts:30). Offline, a 404, a host with no CORS
+     header or a cached data URL that will not decode rejects `loadImage` with the bare "Decode
+     failed", which `userFacingError` does not show, so the person reads "Couldn't add that image to
+     the canvas." with nothing to do next — while the same fact reached by the 10 s deadline reads
+     "That picture didn't load. Try again, or save it to the board again." Fix direction: every load
+     failure inside `loadWithinDeadline` rejects with `SEND_LOAD_FAILED` (the deadline becomes one of
+     the ways to reach it); `loadImage` itself is unchanged (ImportPanel's caller keeps its own copy).
+  Covering tests: e2e (NEW describe): an export held running -> Clip Kit disabled with the new title
+  (the existing T-155 (4) case's constant updated in place is an edit, not the cover); a stalled
+  "→ Canvas" (the T-155 page-side src hold), then Asset Library and back to Mood Boards -> every
+  "→ Canvas" is still aria-disabled with its title and a press says "Still adding the last picture";
+  after the deadline one sentence and ZERO or ONE reference layer, never two; a tile whose fallback
+  address answers 404 at once -> the toast reads "That picture didn't load. Try again, or save it to
+  the board again." and the claim is released; red on 81880f7.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE where behaviour the
+  person sees changes; LESSONS entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 105)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7759,6 +7856,10 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 42 (not gate-holding): (bv) "Discard recording" (RecordStudio.tsx) deletes the take
+  without a question while it is being saved — BRANDING's verb table makes it a Discard (abandon
+  something never saved; Delete is the verb that always asks), the (bu) precedent; whether this one
+  Discard asks first, given a take can be an hour of gameplay, is an owner call.
   From sweep 41 (not gate-holding): (bt) the webcam compositor redraws on every display refresh
   while its capture keeps 30 fps (folded into T-155); (bu) the autosave banner's Clear deletes the only
   crash-recovery copy without a question — BRANDING's verb table makes it a Clear (empties something
