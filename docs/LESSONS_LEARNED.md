@@ -14,6 +14,56 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-152 (round 101), Track A: a clamp's order is a decision about which end of the sentence is lost - test the case that does not fit
+
+The thirty-eighth sweep, Track A (the Text overlay's clamp and the Stroke box; Track B lands beside it). Ledger: r101a/ledger.tsv (red rows on a `git archive` of the unchanged tree `1aa1e78` and the mutation rows).
+
+### (1) [MED] - T-151's clamp cut the START of a caption wider than the frame
+
+- **Bug.** `x='min(max(0,X),w-tw)'`: when the text is wider than the frame `w-tw` is negative and wins the outer `min`, so the text's END sat on the right edge and its first words were off the left edge (a 51-character caption at 64 px, x = 0.5, 1080 wide: ink 0..1073, the head gone). The card and the guide said a caption that would run past an edge is kept inside the frame.
+- **Root cause.** The nesting was chosen for the case that fits and never asked what the other case should lose. T-151's Layer 5 case used a 25-character caption, which fits at any x, so no test could see the order.
+- **Fix.** `x='max(0,min(X,w-tw))'`, `y='max(0,min(Y,h-th))'` (same quoting): a caption that fits is unchanged, a line wider than the frame starts at the left edge and only its end runs off. The hint line and USER_GUIDE say exactly that, including "shorten it or lower the size". Wrap or auto-fit stays the T-110 (aq) owner design call.
+- **Test.** `filters.test.ts` and `reframe.test.ts` (the string in the new order), the copy pins, and Layer 5 media.spec.ts "T-152" (reference at x = 0 on 3000x200 vs x = 0.5 on 1080x1920: ink wider than 1080, touches column 1079, starts at the reference's first column, first 200 columns identical, MAD 0.000 against a bound of 2). Red on the unchanged tree.
+- **Lesson.** **A clamp's order is a decision about which end of the sentence is lost: test the case that does not fit.** When two bounds can conflict, the outer one wins, and the test needs an input where they do conflict.
+
+### (5) [LOW] - "Stroke (px)" stored a negative number
+
+- **Bug.** Typing "-3" in Stroke (px) stored it; Konva counted it as a stroke and the canvas ignored a non-positive `lineWidth` and kept the previous shape's width, so the outline drawn and exported depended on layer order.
+- **Root cause.** The panel's one raw number box: `Number(e.target.value) || 0` with only `min={0}`, which limits the spinner and not the keyboard. Its neighbour "Size (px)" had been a `DraftField` since T-123 (4).
+- **Fix.** The same `DraftField` (`live` only for a number from 0 up, `commit` clamps to 0): one undo step, kept until typing ends.
+- **Test.** image.spec.ts "T-152 (5)" (the autosave file on disk, the canvas node and the box after "-3"), and the wiring pin. Red on the unchanged build.
+- **Lesson.** **`min` on an input is a hint for the spinner, not a rule: the store's gate is the rule.** When a sibling box was fixed by a shared component, grep the rest of the panel for the pattern it replaced.
+
+## 2026-11-04 - T-152 (round 101), Track B: ask the cheap question first, and put the floor where every edit passes
+
+The thirty-eighth sweep, Track B (the Asset Library replace, Open project's size, the I and O keys; Track A lands beside it). Ledger: r101b/ledger.tsv (red rows against a `git archive` of the unchanged tree `1aa1e78` and an e2e build of it, and the mutation rows).
+
+### (2) [LOW-MED] - One click on an Asset Library card replaced a canvas the person could not see, and the toast read as an addition
+
+- **Bug.** A card on References replaced every layer of the Stream Graphics canvas with no question, then toasted `Dropped "X" into the editor` for 2 s. The replace was disclosed only in the footer under the whole catalog.
+- **Root cause.** The card was written as "add this to the editor" and the canvas was never read: `setDocument` ran on every press, though the app asks before a cross-studio replace everywhere else (Edit in Video Studio, the mood board's Delete names Ctrl+Z).
+- **Fix.** `dropToCanvas` reads `useCanvasStore.getState().doc.layers.length` at the press. A canvas with layers is asked with the app's `confirm` (the layer count in the sentence); Cancel returns before `setDocument`, the toast and `navigate`. An accepted replace toasts `Replaced the canvas with "X" - press Ctrl+Z to undo` at `ACTION_TOAST_MS` (Ctrl+Z in Stream Graphics does bring the layers back: `setDocument` is an undoable edit); an empty canvas is not asked and the toast says `"X" is on the Stream Graphics canvas`. The header says "in place of what is there".
+- **Test.** references.spec.ts "T-152 (2)" (the dialog's exact text, dismissed: still on References with no toast and the canvas as it was; accepted: the asset's layers, the toast still up 4.5 s later, Ctrl+Z brings the previous layer back) and the adapted Asset Library card case (an empty canvas is not asked; the second card is); `interactionWiring.test.ts` and `truthInCopy.test.ts` (the copy and the order: confirm, return, setDocument, navigate).
+- **Lesson.** **A control that replaces something the person is not looking at must say so before it acts and name the way back after.** The toast's job is to say what happened in the words the person would use for it ("replaced", not "dropped"), and the question is read from the thing at risk at the moment of the press, not from what the panel remembers.
+
+### (3) [LOW] - Open project read the whole file before the 50 MB rule
+
+- **Bug.** The dialog takes any `*.json`; a chat-log export of hundreds of MB was read into a string first. Over V8's cap the read itself failed with "Invalid string length", which Home showed as a damaged file, the wording T-137 (6) promised Open would replace with the size.
+- **Root cause.** The size rule sat on the text (`validateProjectJsonString`), so it could only run after the read that was too big to make.
+- **Fix.** `project:load` `stat`s the file inside the existing try and answers `projectSizeProblem(size, 'open')` before `readFile`; a stat failure takes the same read-failure path. Bytes are at least characters, so a file under the cap still meets the string rule on its text, which stays.
+- **Test.** `projectSave.test.ts` "project:load - the size is read before the file": SPARSE files (`truncate`, nothing written) of the limit plus one byte and of 600,000,000 bytes through the real handler, each answered with the exact sentence and `readFile` never called; a file exactly at the limit still reads and opens.
+- **Lesson.** **Ask the cheap question (how big is it?) before the expensive one (read it), at every trust boundary that takes a file the person chose.** A rule applied to the content cannot protect the code that fetches the content.
+
+### (4) [LOW-MED] - The I and O keys could make a clip with no length
+
+- **Bug.** `O` at 0:00 made [0, 0] and `I` at the end made [D, D]; main's validators refuse such a range with a developer sentence, so Export, GIF, Reframe, Compile and Clip Kit said only "Export failed." (and one such clip failed a whole compile).
+- **Root cause.** The callers each reserved 0.1 s (`setClipStart` passes `max(end, start + 0.1)`), but `applyRange` then clamped both ends to [0, duration], and at the edge of the video the reserved 0.1 s fell outside the range and was clamped away. The Timeline drag and `appendRange` each kept their own floor; the one function every range edit passes through kept none.
+- **Fix.** `applyRange` keeps `MIN_SCANNED_CLIP_SEC` (0.1) between In and Out when the source is at least that long: start in [0, D - 0.1], end in [start + 0.1, D]. A shorter source keeps the old clamp. One undo step per press, as before.
+- **Test.** `videoStore.test.ts` "the I and O keys never make a clip with no length" (both keys at the edge, past the edge, mid-clip unchanged, a drag unchanged, one undo step, a sub-0.1 s source), video-core.spec.ts "T-152 (4)" (the Timeline's In / Length / Out read 0:00.0 / 0:00.1 / 0:00.1, Export writes a file under a second long, Ctrl+Z gives the whole clip back; `I` at the end). The Clips list prints whole seconds, so it cannot tell 0.1 s from none and the e2e reads the Timeline's tenths.
+- **Lesson.** **A floor belongs in the one function every edit passes through, not in each caller, because a caller's headroom is clamped away at the exact edge it was meant to protect.** Test the edge itself (the first and last instant), not the middle.
+
+---
+
 ## 2026-11-04 - T-151 (round 100), Track A: a sentence that explains a number is a spec for the pixels
 
 The thirty-seventh sweep, Track A (the Text overlay's position; Track B lands beside it). Ledger: r100a/ledger.tsv (red rows for the unit pins and for the Layer 5 case on the 6.1.1 config, run against a `git archive` of the unchanged tree `324a77f`, and the mutation rows).

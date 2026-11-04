@@ -316,7 +316,7 @@ export function videoHasNoSound(source: Pick<VideoSource, 'probe'> | null): bool
   return source !== null && source.probe.audioCodec === null
 }
 
-/** The shortest clip a scanner's add makes (s): a range with less than this left in the video is refused (T-131 (3)). */
+/** The shortest clip any range edit makes (s): a scanner add with less than this left in the video is refused (T-131 (3)), and applyRange keeps it between In and Out (T-152 (4)). */
 const MIN_SCANNED_CLIP_SEC = 0.1
 
 /** What `addScannedClip` did (T-94). 'duplicate' (T-150 (3)): a clip with exactly this range is already in the list, so nothing was added. */
@@ -410,8 +410,11 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
 
   function applyRange(id: string, startSec: number, endSec: number, key: string): void {
     const duration = get().source?.probe.duration ?? endSec
-    const safeStart = clamp(startSec, 0, duration)
-    const safeEnd = clamp(endSec, safeStart, duration)
+    // T-152 (4): the I and O keys (setClipStart / setClipEnd) reach here with the playhead at the very start or end, which made a clip of
+    // no length that every output then refused. The floor is the Timeline drag's own 0.1 s; a source shorter than that keeps the plain clamp.
+    const room = duration >= MIN_SCANNED_CLIP_SEC ? MIN_SCANNED_CLIP_SEC : 0
+    const safeStart = clamp(startSec, 0, duration - room)
+    const safeEnd = clamp(endSec, safeStart + room, duration)
     set({
       ...snapshot(key),
       clips: get().clips.map((c) =>

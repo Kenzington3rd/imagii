@@ -1589,3 +1589,86 @@ describe('addScannedClip — the same range twice is one clip (T-150 (3))', () =
     expect(useVideoStore.getState().clips).toEqual(before)
   })
 })
+
+describe('the I and O keys never make a clip with no length (T-152 (4))', () => {
+  const D = 60
+  const setup = (probeDuration = D): string => {
+    useVideoStore.setState({
+      source: { ...FAKE_SOURCE, probe: { ...FAKE_SOURCE.probe, duration: probeDuration } },
+      clips: [],
+      selectedClipId: null,
+      srtPath: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+    if (probeDuration >= 1) useVideoStore.getState().addScannedClip('c', 10, 20)
+    else useVideoStore.setState({ clips: [pristine({ id: 'tiny', endSec: probeDuration })], selectedClipId: 'tiny' })
+    return useVideoStore.getState().clips[0]!.id
+  }
+  const range = (id: string): [number, number] => {
+    const c = useVideoStore.getState().clips.find((x) => x.id === id)!
+    return [c.startSec, c.endSec]
+  }
+
+  it('O at 0:00 (setClipEnd 0) keeps 0.1 s: [0, 0.1], not [0, 0]', () => {
+    const id = setup()
+    useVideoStore.getState().setClipEnd(id, 0)
+    expect(range(id)).toEqual([0, 0.1])
+  })
+
+  it('I at the very end (setClipStart D) keeps 0.1 s: [D - 0.1, D], not [D, D]', () => {
+    const id = setup()
+    useVideoStore.getState().setClipStart(id, D)
+    const [s, e] = range(id)
+    expect(s).toBeCloseTo(D - 0.1, 10)
+    expect(e).toBe(D)
+  })
+
+  it('I past the end and O before the start are held to the same floor', () => {
+    const id = setup()
+    useVideoStore.getState().setClipStart(id, D + 5)
+    expect(range(id)[1] - range(id)[0]).toBeGreaterThanOrEqual(0.1 - 1e-9)
+    expect(range(id)[1]).toBe(D)
+    useVideoStore.getState().setClipEnd(id, -3)
+    expect(range(id)).toEqual([0, 0.1])
+  })
+
+  it('a mid-clip I or O is exactly what was pressed (the floor changes nothing there)', () => {
+    const id = setup()
+    useVideoStore.getState().setClipStart(id, 12.5)
+    expect(range(id)).toEqual([12.5, 20])
+    useVideoStore.getState().setClipEnd(id, 30)
+    expect(range(id)).toEqual([12.5, 30])
+    // an I past the clip's end moves the end out with it, as before
+    useVideoStore.getState().setClipStart(id, 40)
+    expect(range(id)[0]).toBe(40)
+    expect(range(id)[1]).toBeCloseTo(40.1, 10)
+  })
+
+  it('a Timeline drag (setClipRange) is unchanged, including a range of exactly 0.1 s', () => {
+    const id = setup()
+    useVideoStore.getState().setClipRange(id, 8, 12)
+    expect(range(id)).toEqual([8, 12])
+    useVideoStore.getState().setClipRange(id, 8, 8.1)
+    expect(range(id)).toEqual([8, 8.1])
+    useVideoStore.getState().setClipRange(id, 30, 75)
+    expect(range(id)).toEqual([30, D])
+  })
+
+  it('each key press is one undo step, and undo brings the old range back', () => {
+    const id = setup()
+    useVideoStore.getState().setClipEnd(id, 0)
+    expect(useVideoStore.getState().history.past).toHaveLength(2) // the add, then the O
+    useVideoStore.getState().undo()
+    expect(range(id)).toEqual([10, 20])
+  })
+
+  it('a source shorter than 0.1 s keeps the old clamp (no room for a floor)', () => {
+    const id = setup(0.05)
+    useVideoStore.getState().setClipRange(id, 0, 0.05)
+    useVideoStore.getState().setClipEnd(id, 0)
+    expect(range(id)).toEqual([0, 0])
+    useVideoStore.getState().setClipStart(id, 0.05)
+    expect(range(id)).toEqual([0.05, 0.05])
+  })
+})

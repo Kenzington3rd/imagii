@@ -29,6 +29,7 @@ import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
+import { countOf } from '../../src/shared/plural'
 import { installToastLog, readToastLog } from './toastLog'
 import { withoutAtomicTmp } from './atomicTmp'
 
@@ -1440,11 +1441,20 @@ test.describe('imagii References studio', () => {
       await installToastLog(window)
       await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
 
-      // ── card 1: a scene card ──
+      // T-152 (2): every dialog the page raises is recorded and accepted, so the empty canvas below can prove it was NOT asked and the second
+      // card can read the question it was.
+      const dialogs: string[] = []
+      window.on('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+
+      // ── card 1: a scene card, onto an EMPTY canvas: no question, and the toast does not claim a replace ──
       await window.getByRole('button', { name: new RegExp(sceneCard.name) }).click()
       await expect
         .poll(() => readToastLog(window))
-        .toContain(`Dropped "${sceneCard.name}" into the editor`)
+        .toContain(`"${sceneCard.name}" is on the Stream Graphics canvas`)
+      expect(dialogs, 'an empty canvas has nothing to lose, so it is not asked').toEqual([])
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
         timeout: 15_000
       })
@@ -1461,6 +1471,11 @@ test.describe('imagii References studio', () => {
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
         timeout: 15_000
       })
+      // The canvas held the scene card's layers, so this one asked first (T-152 (2)) and the toast says it was a replace.
+      expect(dialogs).toEqual([
+        `confirm: Replace the Stream Graphics canvas with "${socialCard.name}"? Its ${countOf(sceneCard.doc.layers.length, 'layer')} will be replaced. Undo in Stream Graphics brings them back.`
+      ])
+      expect(await readToastLog(window)).toContain(`Replaced the canvas with "${socialCard.name}" — press Ctrl+Z to undo`)
       await expect(
         window.getByRole('heading', { name: `Layers (${socialCard.doc.layers.length})` })
       ).toBeVisible()
@@ -2871,6 +2886,94 @@ test.describe('T-151 (2): a thumbnail host that never answers does not hold the 
     } finally {
       for (const s of sockets) s.destroy()
       thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-152 (2): one click on an Asset Library card replaced the whole Stream Graphics canvas, a canvas the person was not looking at, with no question, and
+// the toast ("Dropped ... into the editor", 2 s) read as an addition. Now a canvas that holds layers is asked first (Cancel changes nothing, goes nowhere,
+// says nothing), an accepted replace says so and names Ctrl+Z at the action-toast duration, and Ctrl+Z in Stream Graphics brings the layers back.
+test.describe('T-152 (2): an Asset Library card asks before it replaces a canvas that has layers', () => {
+  test('dismissed: nothing changes; accepted: the asset is there, the toast names Undo, and Ctrl+Z brings the old layers back', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t152-replace')
+    const asset = ASSET_CATALOG.find((a) => a.id === 'scene-brb')
+    expect(asset, 'catalog asset scene-brb').toBeTruthy()
+    if (!asset) return
+    const question = `confirm: Replace the Stream Graphics canvas with "${asset.name}"? Its 1 layer will be replaced. Undo in Stream Graphics brings them back.`
+    const replacedToast = `Replaced the canvas with "${asset.name}" — press Ctrl+Z to undo`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+
+      // The header says what a click does.
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(
+        window.getByText(
+          'Click an asset to open it on the Stream Graphics canvas, in place of what is there.',
+          { exact: false }
+        )
+      ).toBeVisible()
+      await expect(window.getByText(/drop it directly into/)).toHaveCount(0)
+
+      // A canvas with one layer (Start with text), then back to the Asset Library.
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible({ timeout: 20_000 })
+      const before = await layerRows(window).allTextContents()
+      expect(before).toHaveLength(1)
+      await backToReferences(window)
+      await expect(window.getByRole('heading', { name: 'Overlay frames', exact: true })).toBeVisible()
+
+      // ── dismissed ──
+      const dialogs: string[] = []
+      const dismisser = (d: Dialog): void => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.dismiss()
+      }
+      window.once('dialog', dismisser)
+      await window.getByRole('button', { name: new RegExp(asset.name) }).click()
+      await expect.poll(() => dialogs).toEqual([question])
+      // Cancel means cancel: still on References, no toast, and the canvas is as it was.
+      await window.waitForTimeout(500)
+      expect(window.url()).toContain('#/references')
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible()
+      expect(await readToastLog(window), 'a refused replace says nothing').toEqual([])
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(layerRows(window)).toHaveText(before)
+      await backToReferences(window)
+
+      // ── accepted ──
+      dialogs.length = 0
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+      await window.getByRole('button', { name: new RegExp(asset.name) }).click()
+      await expect.poll(() => dialogs).toEqual([question])
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/image')
+      await expect(window.getByRole('heading', { name: `Layers (${asset.doc.layers.length})` })).toBeVisible()
+      await expect(layerRows(window)).toHaveText([...asset.doc.layers].reverse().map((l) => l.name))
+      expect(await readToastLog(window)).toEqual([replacedToast])
+      // It carries the way back, so it is up for the action-toast duration, not react-hot-toast's 2 s default.
+      const toast = window.locator('[data-rht-toaster]').getByText(replacedToast, { exact: true })
+      await expect(toast).toBeVisible()
+      await window.waitForTimeout(4500)
+      await expect(toast, 'still up 4.5 s later').toBeVisible()
+
+      // ── Ctrl+Z puts the previous layers back ──
+      await window.keyboard.press('Control+z')
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(layerRows(window)).toHaveText(before)
+    } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
     }

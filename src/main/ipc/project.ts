@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import type { ImagiiProject } from '../../shared/workspace'
 import {
   writeAutosave,
@@ -70,6 +70,12 @@ export function registerProjectIpc(): void {
       const filePath = assertDefined(result.filePaths[0], 'filePath')
       let raw: string
       try {
+        // T-152 (3): ask the size BEFORE reading. The dialog takes any *.json (a chat-log export can be hundreds of MB) and past V8's string cap the
+        // read itself fails with "Invalid string length", which reads as a damaged file. Bytes are at least characters, so a file under the cap
+        // still meets validateProjectJsonString's own rule on the text. A stat failure takes the same read-failure path below.
+        const { size } = await stat(filePath)
+        const tooLarge = projectSizeProblem(size, 'open')
+        if (tooLarge !== null) return { ok: false, reason: tooLarge }
         raw = await readFile(filePath, 'utf8')
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : 'read failed' }

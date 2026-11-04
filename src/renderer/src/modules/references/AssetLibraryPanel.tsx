@@ -12,6 +12,8 @@ import {
 import { PanelHeader } from '../../components/PanelHeader'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
+import { countOf } from '@shared/plural'
 
 /**
  * Asset Library tab. Curated CC0 / imagii-authored assets that the user
@@ -29,6 +31,12 @@ import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
  * Loading an asset replaces the current canvas — same as a template.
  * The asset's `doc.layers` get fresh ids on load so re-drops produce
  * independent layer sets.
+ *
+ * T-152 (2): the canvas is behind another studio, so a click that would
+ * replace layers asks first (the app's `confirm`, as Edit in Video Studio
+ * does) and, once done, says it was a replace and names Ctrl+Z. A canvas
+ * with no layers has nothing to lose: no question, and the toast does not
+ * claim a replace.
  */
 
 function cloneAssetDoc<T>(obj: T): T {
@@ -40,10 +48,24 @@ export function AssetLibraryPanel(): JSX.Element {
   const navigate = useNavigate()
 
   function dropToCanvas(asset: CatalogAsset): void {
+    // Read at the press, not at render: the canvas can change while this tab is open.
+    const held = useCanvasStore.getState().doc.layers.length
+    if (
+      held > 0 &&
+      !confirm(
+        `Replace the Stream Graphics canvas with "${asset.name}"? Its ${countOf(held, 'layer')} will be replaced. Undo in Stream Graphics brings them back.`
+      )
+    ) {
+      return
+    }
     const doc = cloneAssetDoc(asset.doc)
     doc.layers = doc.layers.map((l) => ({ ...l, id: nanoid(8) }))
     setDocument(doc)
-    toast.success(`Dropped "${asset.name}" into the editor`)
+    if (held > 0) {
+      toast.success(`Replaced the canvas with "${asset.name}" — press Ctrl+Z to undo`, { duration: ACTION_TOAST_MS })
+    } else {
+      toast.success(`"${asset.name}" is on the Stream Graphics canvas`)
+    }
     navigate('/image')
   }
 
@@ -54,7 +76,7 @@ export function AssetLibraryPanel(): JSX.Element {
       <div className="card p-3 text-xs text-ink-muted">
         Curated assets shipped with imagii — every item is either CC0 or
         imagii-authored and released into the public domain. Click an asset to
-        drop it directly into the Stream Graphics editor.
+        open it on the Stream Graphics canvas, in place of what is there.
       </div>
 
       {(Object.keys(grouped) as AssetCategory[]).map((category) => {

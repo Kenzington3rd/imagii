@@ -155,7 +155,7 @@ describe('buildReframeGraph: the clip\'s look is the shared builder\'s, at the 9
     // The overlay's window is on the clip's clock at its speed: (12 - 10) / 2 s to (14 - 10) / 2 s.
     expect(filter).toContain("enable='between(t,1.000,2.000)'")
     // x and y are fractions of the 9:16 frame, not of the source.
-    expect(filter).toContain(":x='min(max(0,108),w-tw)':y='min(max(0,288),h-th)':")
+    expect(filter).toContain(":x='max(0,min(108,w-tw))':y='max(0,min(288,h-th))':")
   })
 
   it('a clip with a grade and no source color space has no matrix stage; a bt709 source gets its retag right after colorbalance', () => {

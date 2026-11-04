@@ -181,15 +181,17 @@ function FillStrokeFields({
       </label>
       <label className="flex items-center gap-2">
         <span className="text-xs text-ink-muted w-16">Stroke (px)</span>
-        <input
+        {/* T-152 (5): kept until typing ends, like Size (px); `Number(typed) || 0` with only `min={0}` stored a typed negative, and a non-positive lineWidth is drawn at the previous shape's width. */}
+        <DraftField
           type="number"
           min={0}
-          value={layer.strokeWidth}
-          onChange={(e) =>
-            updateLayer(layer.id, {
-              strokeWidth: Number(e.target.value) || 0
-            } as Partial<CanvasLayer>, 'strokeWidth')
-          }
+          value={String(layer.strokeWidth)}
+          live={(typed) => isTypedInRange(typed, 0)}
+          commit={(typed) => {
+            const n = clampTyped(typed, 0)
+            if (n !== null) updateLayer(layer.id, { strokeWidth: n } as Partial<CanvasLayer>)
+            return null
+          }}
           className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
         />
       </label>

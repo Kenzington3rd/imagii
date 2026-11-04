@@ -1921,7 +1921,10 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     const overlay = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
     expect(overlay).toContain('Text appears in the exported file, not in the player. Times are seconds in the source video, or a time like 2:47:13.')
     // T-151 (1): and the same line says what the Position boxes place - the text's top left corner - and that an edge never cuts a caption off (the guide said "centre").
-    expect(overlay).toContain("Position is where the text's top left corner sits. A caption that would run past an edge is kept inside the frame.")
+    // T-152 (1): and a line WIDER than the frame starts at the left edge with its end cut (the clamp's order keeps the START), and the line says so.
+    expect(overlay.replace(/\s+/g, ' ')).toContain(
+      "Position is where the text's top left corner sits. A caption that would run past the right or bottom edge is moved back inside the frame; a line wider than the frame starts at the left edge and its end is cut, so shorten it or lower the size."
+    )
     expect(overlay).not.toMatch(/is the cent(re|er)/i)
     expect(overlay).toContain('Source time')
     // The window that misses the clip: asked of the shared helper, drawn as a live region so a screen reader hears it appear.
@@ -3623,9 +3626,12 @@ describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Propert
     const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
     expect(panel).toMatch(/const gesture = useGestureEnd\(useCanvasStore\(\(s\) => s\.endGesture\)\)/)
     expect(panel).toMatch(/className="card [^"]*" \{\.\.\.gesture\}>/)
-    for (const key of ['name', 'opacity', 'fill', 'stroke', 'strokeWidth', 'text']) {
+    // T-152 (5): 'strokeWidth' left this list - Stroke (px) is a DraftField now (one commit when typing ends = one undo step, a negative clamped to 0), no coalescing key.
+    for (const key of ['name', 'opacity', 'fill', 'stroke', 'text']) {
       expect(panel, key).toMatch(new RegExp(`'${key}'\\)`))
     }
+    expect(panel).toMatch(/commit=\{\(typed\) => \{\s*const n = clampTyped\(typed, 0\)\s*if \(n !== null\) updateLayer\(layer\.id, \{ strokeWidth: n \}/)
+    expect(panel).not.toMatch(/Number\(e\.target\.value\) \|\| 0/)
   })
 
   it('the transparent-document note sits in the Export card\'s note slot, beside the size note', () => {
@@ -3773,5 +3779,55 @@ describe('T-150 - one chain for the board edits, a held Enter on Save, "Stroke (
     const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
     expect(panel).toMatch(/<span className="text-xs text-ink-muted w-16">Stroke \(px\)<\/span>/)
     expect(panel).not.toMatch(/Stroke px/)
+  })
+})
+
+// T-152 (2), (3), (4): the wiring the behavior tests stand on. Behavior: references.spec.ts "T-152 (2)" (the dialog dismissed / accepted, the toast, Ctrl+Z), projectSave.test.ts
+// "project:load - the size is read before the file", videoStore.test.ts and video-core.spec.ts "T-152 (4)".
+describe('T-152 - an Asset Library card asks before it replaces layers; Open stats before it reads; the range floor lives in applyRange', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+  const readRepo = (rel: string): string => readFileSync(path.join(RENDERER_ROOT, '..', '..', '..', rel), 'utf8')
+
+  it('the card reads the canvas AT THE PRESS, asks with confirm when it holds layers, and a refusal returns before setDocument, the toast and navigate', () => {
+    const panel = strip(read('modules/references/AssetLibraryPanel.tsx'))
+    const press = panel.slice(panel.indexOf('function dropToCanvas'), panel.indexOf('const grouped'))
+    expect(press).toContain('useCanvasStore.getState().doc.layers.length')
+    expect(press).toContain('Replace the Stream Graphics canvas with "${asset.name}"? Its ${countOf(held, \'layer\')} will be replaced. Undo in Stream Graphics brings them back.')
+    expect(press.indexOf('!confirm(')).toBeGreaterThan(-1)
+    expect(press.indexOf('return\n')).toBeGreaterThan(press.indexOf('!confirm('))
+    expect(press.indexOf('return\n')).toBeLessThan(press.indexOf('setDocument(doc)'))
+    expect(press.indexOf('setDocument(doc)')).toBeLessThan(press.indexOf("navigate('/image')"))
+    expect(press).toContain('Replaced the canvas with "${asset.name}" — press Ctrl+Z to undo`, { duration: ACTION_TOAST_MS }')
+    expect(press).toContain('"${asset.name}" is on the Stream Graphics canvas`')
+    expect(press).not.toContain('Dropped')
+    expect(panel).toContain('open it on the Stream Graphics canvas, in place of what is there.')
+    expect(panel).not.toContain('drop it directly')
+    expect(panel).toContain('drops replace the current Stream Graphics canvas.')
+  })
+
+  it('project:load asks stat() for the size and answers projectSizeProblem BEFORE it reads the file, inside the try that already owns a read failure', () => {
+    const handler = strip(readRepo('src/main/ipc/project.ts'))
+    const load = handler.slice(handler.indexOf("'project:load'"))
+    const tryAt = load.indexOf('try {')
+    const statAt = load.indexOf('await stat(filePath)')
+    const sizeAt = load.indexOf("projectSizeProblem(size, 'open')")
+    const readAt = load.indexOf("await readFile(filePath, 'utf8')")
+    expect(tryAt).toBeGreaterThan(-1)
+    expect(statAt).toBeGreaterThan(tryAt)
+    expect(sizeAt).toBeGreaterThan(statAt)
+    expect(readAt).toBeGreaterThan(sizeAt)
+    expect(load.slice(sizeAt, readAt)).toMatch(/return \{ ok: false, reason: tooLarge \}/)
+    expect(load.indexOf('catch (err)')).toBeGreaterThan(readAt)
+  })
+
+  it('applyRange alone holds the 0.1 s floor (setClipStart / setClipEnd / setClipRange all pass through it)', () => {
+    const store = strip(readRepo('src/renderer/src/modules/video-studio/store/videoStore.ts'))
+    const apply = store.slice(store.indexOf('function applyRange'), store.indexOf('function appendRange'))
+    expect(apply).toContain('duration >= MIN_SCANNED_CLIP_SEC ? MIN_SCANNED_CLIP_SEC : 0')
+    expect(apply).toContain('clamp(startSec, 0, duration - room)')
+    expect(apply).toContain('clamp(endSec, safeStart + room, duration)')
+    for (const setter of ['setClipRange', 'setClipStart', 'setClipEnd']) {
+      expect(store, setter).toMatch(new RegExp(`${setter}: \\([^)]*\\) =>[\\s\\S]{0,260}applyRange\\(`))
+    }
   })
 })

@@ -290,9 +290,28 @@ describe('the Text overlays paragraph describes the top-left anchor (T-151 (1))'
   const para = (): string => read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
   it('says the boxes place the text\'s top left corner and that a caption past an edge is kept inside the frame', () => {
     expect(para()).toMatch(/Position \(%\)\*\* is how far across and how far down the text's top left corner sits, from 0 to 100/)
-    expect(para()).toMatch(/a caption that would run past an edge is kept inside the frame/)
+    // T-152 (1): a caption that fits is moved back inside; a line wider than the frame keeps its START and loses its end - the guide says both.
+    expect(para()).toMatch(/a caption that would run past the right or bottom edge is moved back inside the frame/)
+    expect(para()).toMatch(/a line wider than the frame starts at the left edge and its end is cut/)
   })
   it('no longer calls 50 and 50 the centre', () => {
     expect(para()).not.toMatch(/50 and 50 is the centre/)
+  })
+})
+
+// T-152 (2), (3), (4): the guide's three lines. The behavior is held where it happens (references.spec.ts, projectSave.test.ts, videoStore.test.ts / video-core.spec.ts).
+describe('the guide says what an Asset Library card, Open project and the I and O keys do (T-152)', () => {
+  const para = (): string => read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+  it('an Asset Library card opens in place of what is there, asks first when the canvas has layers, and Undo brings them back', () => {
+    expect(para()).toContain('Click one to open it on the Stream Graphics canvas, in place of what is there. If the canvas already has layers, imagii asks first (Cancel changes nothing)')
+    expect(para()).toContain('Undo in Stream Graphics brings the old layers back')
+    expect(para()).not.toContain('Like a template, it replaces what is already on the canvas')
+  })
+  it('Open project names the size of a file over the limit however large, without reading it', () => {
+    expect(para()).toContain('**Open project** names the size of a file that is over it, however large')
+    expect(para()).toContain('without reading it, instead of calling it damaged')
+  })
+  it('a clip is never shorter than 0.1 seconds: O at the start or I at the end leaves 0.1, not nothing', () => {
+    expect(para()).toContain('A clip is never shorter than 0.1 seconds: `O` at the very start (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length.')
   })
 })

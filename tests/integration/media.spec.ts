@@ -657,8 +657,8 @@ async function withDrawboxStandIn<T>(run: () => Promise<T>): Promise<T> {
         const chain = real.buildVideoFilter(...args)
         let swapped = 0
         const standIn = chain.replace(
-          // T-151 (1): the position is `'min(max(0,X),w-tw)'` / `'min(max(0,Y),h-th)'` now; the box takes the pixel numbers X and Y (it has no text size to clamp by).
-          /drawtext=([\s\S]*?):x='min\(max\(0,(-?\d+)\),w-tw\)':y='min\(max\(0,(-?\d+)\),h-th\)':enable='(between\(t,[-\d.]+,[-\d.]+\))'/g,
+          // T-151 (1) / T-152 (1): the position is `'max(0,min(X,w-tw))'` / `'max(0,min(Y,h-th))'` now; the box takes the pixel numbers X and Y (it has no text size to clamp by).
+          /drawtext=([\s\S]*?):x='max\(0,min\((-?\d+),w-tw\)\)':y='max\(0,min\((-?\d+),h-th\)\)':enable='(between\(t,[-\d.]+,[-\d.]+\))'/g,
           (_all: string, head: string, x: string, y: string, enable: string): string => {
             const color = /fontcolor=([^:]+)/.exec(head)
             if (!color) throw new Error(`drawbox stand-in: no fontcolor in "${head}"`)
@@ -11523,7 +11523,7 @@ describe('Match loudness follows the voice when Even volume is off (T-150 (1))',
  * T-151 (1) - a text overlay near an edge stays INSIDE the frame (pixels).
  *
  * The Position boxes place the caption's TOP-LEFT corner, so a long caption at x = 0.9 used to start at 972 px of a 1080-wide file and be cut
- * off at the right edge. drawtext now takes `x='min(max(0,X),w-tw)'`. The bundled linux ffmpeg (7.0.2) has no drawtext, and Wine has no fonts, so
+ * off at the right edge. drawtext now takes `x='max(0,min(X,w-tw))'` (T-152 (1) swapped the nesting; its describe is at the end of this file). The bundled linux ffmpeg (7.0.2) has no drawtext, and Wine has no fonts, so
  * the case runs where there is a drawtext: the distro 6.1.1 through the 611 vitest config, with ONE substitution made in the TEST - the
  * `C:/Windows/Fonts/arial.ttf` fontfile in the graph production built is replaced by a font file present on this box (`fc-match sans`, else a
  * .ttf / .otf under /usr/share/fonts). Everything else in the string is production's own, so the clamp under test is the shipped one. On a binary
@@ -11640,5 +11640,153 @@ describe('a text overlay placed near an edge stays inside the frame (drawtext, T
       await assertKeptInside(null)
     },
     120_000
+  )
+})
+
+/**
+ * T-152 (1) - a caption WIDER than the frame keeps its START (pixels).
+ *
+ * T-151 clamped with `x='min(max(0,X),w-tw)'`. A line wider than the frame makes `w-tw` negative, the outer `min` takes it, and the text's END sat on
+ * the right edge with its first words off the left edge (DejaVuSans, 64 px, a 51-character caption at x = 0.5 on 1080x1920: ink columns 0..1077
+ * with the head gone). The clamp is now `max(0,min(X,w-tw))`: the left edge wins, so only the END of a too-wide line runs off. Same harness as the
+ * T-151 case (the distro 6.1.1 through the 611 vitest config, a system font substituted in the TEST only, a SKIP where `ffmpeg -filters` has no
+ * drawtext, a win32-gated twin beside it with the real Arial).
+ *
+ * Two renders of the SAME white caption, both with the REAL drawTextFilter string (buildVideoFilter), decoded to 8-bit gray:
+ *   (a) x = 0 on a black 3000x200 frame - the whole line fits, so this is the caption's true look and its true width (the reference);
+ *   (b) x = 0.5 on a black 1080x1920 frame - the line is wider than the frame, so the clamp has to choose which end to lose.
+ * Asserted: (a)'s ink is wider than 1080 (the case is real, not a caption that fits); (b)'s ink touches column 1079 (the end runs off); and the
+ * START is kept - (b)'s first 200 columns of the caption's rows equal (a)'s. The same glyphs at the same integer x = 0 rasterize identically, so
+ * the mean absolute difference measures 0.000 on the fixed tree; the bound is MAD < 2 (of 255): a 4 px shift of the start measures 34.6 (mutation row in the
+ * ledger), so 2 is far above the measured 0 and far below any real mismatch, and it does not depend on anti-aliasing luck.
+ */
+describe('a caption wider than the frame keeps its start (drawtext, T-152)', () => {
+  const WIDE_W = 3000
+  const WIDE_H = 200
+  const FRAME_W = 1080
+  const FRAME_H = 1920
+  const STRIP_COLS = 200
+  const STRIP_ROWS = 100
+  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arial.ttf'
+  const CAPTION = 'Subscribe now for the whole stream highlights reel!'
+  const MAD_BOUND = 2
+
+  async function systemFont(): Promise<string | null> {
+    const { execFileSync } = await import('node:child_process')
+    const { readdirSync, statSync } = await import('node:fs')
+    try {
+      const f = execFileSync('fc-match', ['-f', '%{file}', 'sans'], { encoding: 'utf8' }).trim()
+      if (f && existsSync(f)) return f
+    } catch {
+      /* no fontconfig: look under the font directories */
+    }
+    const walk = (dir: string, depth: number): string | null => {
+      if (depth > 4) return null
+      let names: string[] = []
+      try {
+        names = readdirSync(dir)
+      } catch {
+        return null
+      }
+      for (const n of names) {
+        const p = path.join(dir, n)
+        if (/\.(ttf|otf)$/i.test(n)) return p
+        try {
+          if (statSync(p).isDirectory()) {
+            const hit = walk(p, depth + 1)
+            if (hit) return hit
+          }
+        } catch {
+          /* unreadable entry */
+        }
+      }
+      return null
+    }
+    return walk('/usr/share/fonts', 0)
+  }
+
+  /** The caption at `x` (a 0-1 fraction) on a black `w` x `h` frame, as decoded gray, plus the first / last ink column. */
+  async function render(
+    x: number,
+    w: number,
+    h: number,
+    tag: string,
+    fontFile: string | null
+  ): Promise<{ gray: Buffer; w: number; first: number; last: number }> {
+    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    let graph = buildVideoFilter(
+      {
+        startSec: 0,
+        cropRect: null,
+        textOverlays: [
+          { id: `ov-t152-${tag}`, text: CAPTION, font: 'Arial', sizePx: 64, colorHex: '#ffffff', x, y: 0.25, startSec: 0, endSec: 1 }
+        ]
+      },
+      { ...PLATFORM_PRESETS.tiktok, width: w, height: h },
+      { width: w, height: h }
+    )
+    if (fontFile) {
+      expect(graph, 'production built the Windows fontfile this test substitutes').toContain(SHIPPED_FONT_IN_GRAPH)
+      graph = graph.replace(SHIPPED_FONT_IN_GRAPH, fontFile)
+    }
+    const png = path.join(workDir, `t152-${tag}.png`)
+    await ff(['-y', '-f', 'lavfi', '-i', `color=c=black:s=${w}x${h}:r=30:d=1`, '-vf', graph, '-frames:v', '1', png])
+    const gray = await samplePixels(png, 0, `crop=${w}:${h}:0:0`, 'gray')
+    let first = -1
+    let last = -1
+    for (let col = 0; col < w; col++) {
+      for (let row = 0; row < h; row++) {
+        if (gray[row * w + col]! > 128) {
+          if (first < 0) first = col
+          last = col
+          break
+        }
+      }
+    }
+    return { gray, w, first, last }
+  }
+
+  /** The strip of the caption's rows (from y = 0.25 of the frame) over the first STRIP_COLS columns. */
+  function strip(img: { gray: Buffer; w: number }, frameH: number): number[] {
+    const top = Math.round(0.25 * frameH)
+    const out: number[] = []
+    for (let row = top; row < top + STRIP_ROWS; row++) {
+      for (let col = 0; col < STRIP_COLS; col++) out.push(img.gray[row * img.w + col]!)
+    }
+    return out
+  }
+
+  async function assertStartKept(fontFile: string | null): Promise<void> {
+    const ref = await render(0, WIDE_W, WIDE_H, 'ref', fontFile)
+    const refWidth = ref.last - ref.first + 1
+    expect(refWidth, `the reference caption (x = 0, ink ${ref.first}..${ref.last}) is wider than the 1080 frame, so the case is real`).toBeGreaterThan(FRAME_W)
+    expect(ref.last, 'and the reference itself is not cut by its 3000-px frame').toBeLessThan(WIDE_W - 1)
+    const tall = await render(0.5, FRAME_W, FRAME_H, 'wide', fontFile)
+    expect(tall.last, `the END runs off the right edge (ink ${tall.first}..${tall.last} of ${FRAME_W} columns)`).toBe(FRAME_W - 1)
+    expect(tall.first, `the START is kept: the first ink column is the reference's (${ref.first})`).toBe(ref.first)
+    const a = strip(ref, WIDE_H)
+    const b = strip(tall, FRAME_H)
+    expect(a.some((v) => v > 128), 'the reference strip holds the caption\'s opening glyphs').toBe(true)
+    let sum = 0
+    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i]! - b[i]!)
+    const mad = sum / a.length
+    expect(mad, `the first ${STRIP_COLS} columns of the 1080-wide render match the reference's (mean absolute difference ${mad.toFixed(3)} of 255)`).toBeLessThan(MAD_BOUND)
+  }
+
+  it('a 51-character caption at x = 0.5 on 1080x1920: starts at the left edge like the reference, and its end touches column 1079 (distro 6.1.1, a system font in the test)', async (ctx) => {
+    const names = await ffFilterNames()
+    if (!names.has('drawtext')) ctx.skip() // the bundled linux 7.0.2 has no drawtext: nothing to measure; the 611 config and win32 run it
+    const font = await systemFont()
+    if (!font) ctx.skip() // no font file on this box: drawtext has nothing to draw with
+    await assertStartKept(font)
+  }, 180_000)
+
+  it.skipIf(process.platform !== 'win32')(
+    'win32 (the release run): the same, with the shipped ffmpeg and the real Arial',
+    async () => {
+      expect(existsSync('C:/Windows/Fonts/arial.ttf'), 'the text-overlay font is present').toBe(true)
+      await assertStartKept(null)
+    },
+    180_000
   )
 })

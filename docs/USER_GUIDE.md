@@ -205,7 +205,8 @@ that names the file being converted.)
   overlap and each moves its own end; a click inside the range moves the playhead. `,` and `.` step one frame, `Space` plays and pauses, and `←` / `→` nudge 0.1 seconds.
   The two handles are for the mouse; the keyboard's way to the same trim is `I` and `O`,
   and pressed while the video plays they mark the frame you are looking at. Holding the key marks once, and one
-  Undo takes the mark back.
+  Undo takes the mark back. A clip is never shorter than 0.1 seconds: `O` at the very start
+  (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length.
 - **A video the preview cannot draw.** imagii reads more formats than its built-in player can
   show: ProRes, and some H.265 or 10-bit files, load with no picture. When that happens a note under the
   player says "imagii can't preview this video's picture format — trimming, scanning and export still
@@ -292,8 +293,9 @@ that names the file being converted.)
   the typeface (Arial, Impact, Verdana, Georgia, Courier New or Comic Sans MS) and the
   export draws it. **Size (px)** runs from 8 to 512. **Position (%)** is how far across and
   how far down the text's top left corner sits, from 0 to 100; a caption that would run
-  past an edge is kept inside the frame, and a number outside 0 to 100 is refused in a
-  sentence and changes nothing. The untouched overlay is white, 48 px,
+  past the right or bottom edge is moved back inside the frame, a line wider than the frame
+  starts at the left edge and its end is cut (shorten it or lower the size), and a number
+  outside 0 to 100 is refused in a sentence and changes nothing. The untouched overlay is white, 48 px,
   Arial, and exports as it is. Text appears in the exported file, not in the
   player. **Source time** is in seconds of the video itself (not of the clip); the boxes also
   take a time the way a stream writes it, like **1:30** or **2:47:13**, and say so in a
@@ -715,8 +717,11 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   in progress); imagii deletes the ones older than 6 hours the next time it
   starts.
 - **Asset Library** — curated, free-to-use stream assets: overlay frames, lower
-  thirds, scene cards, and social cards. Click one to put it on the Stream
-  Graphics canvas. Like a template, it replaces what is already on the canvas.
+  thirds, scene cards, and social cards. Click one to open it on the Stream
+  Graphics canvas, in place of what is there. If the canvas already has layers,
+  imagii asks first (Cancel changes nothing), and after you say yes the message
+  names Ctrl+Z; Undo in Stream Graphics brings the old layers back. An empty
+  canvas is not asked.
 
 ---
 
@@ -733,8 +738,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   the Stream Graphics canvas). Over that, **Save project** says how big it is and
   to remove some of the large images or import smaller copies of them, and does
   not ask where to save; **Open project** names the size of a file that is over
-  it (one saved by an earlier version of imagii that did not check) instead of
-  calling it damaged.
+  it, however large (one saved by an earlier version of imagii that did not
+  check, or any other `.json` you pick), without reading it, instead of calling
+  it damaged.
 - **Autosave** runs in the background — every few seconds after you change something, and
   never more than 30 seconds after a change however busy you are, a video playing included
   (moving the playhead is not a change; it is saved with the next one) — and imagii takes one final snapshot as

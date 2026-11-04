@@ -6989,7 +6989,7 @@ IMG-PREC.
   shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
   handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
   lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 101)
+- **Status:** done (round 101 — see the Done entry)
 
 ---
 
@@ -7541,6 +7541,42 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 101 — T-152, all five counted items, landed in the commit that
+carries this entry. Two Sonnet workers in fresh clones of 1aa1e78,
+disjoint files, merged by the expediter (item 5 arrived from QA's
+whole-tree remainder after dispatch and went to Track A by message).
+Track A: the drawtext clamp is `x='max(0,min(X,w-tw))'`,
+`y='max(0,min(Y,h-th))'`, so a line wider than the frame keeps its
+START and only its end runs off (a caption that fits is unchanged), and
+the card's hint and the guide say exactly that — wrap / auto-fit stays
+the T-110 (aq) owner design call; "Stroke (px)" is the same DraftField
+as Size (px), so a typed negative commits as 0. Track B: an Asset
+Library card asks before it replaces a canvas that has layers (Cancel
+changes nothing; an accepted replace names Ctrl+Z at ACTION_TOAST_MS;
+an empty canvas is not asked); Open project measures the file before it
+reads it, so a file past V8's string cap gets the size sentence, not
+"damaged"; `applyRange` keeps 0.1 s between In and Out, so the I and O
+keys at the edge of the video no longer make a clip every output
+refuses. Deviations, accepted: the item-1 Layer 5 caption is 51
+characters; item 5's e2e types key by key (the repo's convention), so
+its red on the base shows 3 on disk rather than -3, and a stored
+negative is caught by the floor mutation; item 4's e2e reads the
+Timeline's tenths because ClipList prints whole seconds (a 0.1 s clip
+reads "0:00 → 0:00" there); a native-dialog inventory row for the
+Asset Library confirm. Ledgers: A 3 RED / 12 mutations, B 7 / 26 —
+B's one survivor (a stat failure swallowed) killed after an injected
+stat-failure case, every restore byte-identical. Found not fixed:
+nothing new. Expedited personally: two independent mutations at seams
+no ledger row names — A: the overlay's x scaled by the frame's HEIGHT
+→ the reframe pin and the T-111 exact strings red (the Layer 5 cases,
+which test the edges, pass it: unit-held); B: applyRange's end floor
+taken from the UNCLAMPED start → two videoStore units red (O at 0:00,
+the past-the-edge presses) — each restored byte-identical, sha256
+verified; on the MERGED tree: verify x2 (207/6037), test:media 441 passed | 17 skipped of 458 on 7.0.2, the
+T-151 and T-152 Layer 5 cases on 6.1.1 2/2, FULL Playwright
+585/585 in 51.3 min (no flake). Applied to 75ba5b5 by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 100 — T-151, both counted items and the fold, landed in the
 commit that carries this entry (T-110 gains (br); (bg) names the

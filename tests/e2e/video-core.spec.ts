@@ -6,13 +6,14 @@ import {
   type Locator,
   type Page
 } from '@playwright/test'
-import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { dragThrough, dragTo } from './drag'
+import { withoutAtomicTmp } from './atomicTmp'
 import { installToastLog, readToastLog } from './toastLog'
 import { DEFAULT_WINDOW, MIN_WINDOW, expectControlsWhole, expectNoHorizontalOverflow, expectNoOverlap, expectOneLine, expectSameRow, expectSelectsWhole, setWindowSize as resizeAndSettle } from './layout'
 import { leave, retype } from './typing'
@@ -3263,6 +3264,83 @@ test.describe('T-150 (4): the Text overlay Position boxes are a percent, and a n
       await leave(left)
       await expect(row.getByRole('alert')).toBeVisible()
       await expectNoHorizontalOverflow(card, 'the Text overlays card with a refused Position')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-152 (4): the O key at 0:00 made a clip of no length ([0, 0]) and the I key at the end made another ([D, D]); main refuses a range like that with a developer
+// sentence, so Export said only "Export failed.". `applyRange` now keeps the Timeline drag's own 0.1 s between In and Out. The Clips list prints whole seconds
+// ("0:00 → 0:00" for 0.1 s too), so the length is read where it is printed to the tenth: the Timeline's In / Length / Out.
+test.describe('T-152 (4): the I and O keys never make a clip with no length', () => {
+  const playerFocus = (window: Page): Promise<void> => window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+  const mp4s = (dir: string): string[] => withoutAtomicTmp(readdirSync(dir)).filter((f) => f.endsWith('.mp4'))
+
+  test('O at 0:00 keeps 0.1 s (In 0:00.0, Length 0:00.1, Out 0:00.1), Ctrl+Z gives the whole clip back, and Export writes a 0.1 s file', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t152-out')
+    try {
+      expect(await settledTime(window)).toBe(0)
+      await playerFocus(window)
+      await window.keyboard.press('o')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([0, 0.1, 0.1])
+
+      // The output the person asked for is real: the range reaches ffmpeg and a file comes out.
+      const outDir = path.join(root, `out-t152-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      await app.evaluate(({ dialog }, dir) => {
+        ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+      }, outDir)
+      await window.locator('[data-tutorial="video-export"]').getByRole('button', { name: /^Export/ }).click()
+      await expect.poll(() => mp4s(outDir), { timeout: 90_000, intervals: [500] }).toHaveLength(1)
+      const seconds = Number(
+        execFileSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(outDir, mp4s(outDir)[0]!)]).toString().trim()
+      )
+      expect(seconds, 'the file is the 0.1 s the range holds, not empty and not the whole clip').toBeGreaterThan(0)
+      expect(seconds).toBeLessThan(1)
+      expect((await readToastLog(window)).some((m) => /Export failed/.test(m)), 'no "Export failed."').toBe(false)
+
+      // One key press, one Undo step: Ctrl+Z puts the whole clip back.
+      await playerFocus(window)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([0, FIXTURE_SECONDS, FIXTURE_SECONDS])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('I at the end of the video keeps 0.1 s (In 0:01.9, Length 0:00.1, Out 0:02.0)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t152-in')
+    try {
+      await seekTo(window, FIXTURE_SECONDS)
+      await playerFocus(window)
+      await window.keyboard.press('i')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([FIXTURE_SECONDS - 0.1, 0.1, FIXTURE_SECONDS])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a mid-clip I and O are still exactly where the playhead was (the floor changes nothing there)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t152-mid')
+    try {
+      await seekTo(window, 0.4)
+      await playerFocus(window)
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeCloseTo(0.4, 0)
+      const [start] = await timelineReadouts(window)
+      expect(start).toBeGreaterThanOrEqual(0.3)
+      expect(start).toBeLessThanOrEqual(0.5)
+      await seekTo(window, 1.2)
+      await playerFocus(window)
+      await window.keyboard.press('o')
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 }).toBeGreaterThanOrEqual(1.1)
+      const [, length, end] = await timelineReadouts(window)
+      expect(end).toBeLessThanOrEqual(1.3)
+      expect(length).toBeGreaterThan(0.5)
     } finally {
       await app.close()
     }

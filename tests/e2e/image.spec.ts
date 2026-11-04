@@ -5318,3 +5318,50 @@ test.describe('Image Studio - the stroke width box counts pixels in its label (T
     }
   })
 })
+
+// T-152 (5): "Stroke (px)" was the panel's one raw number box: `Number(typed) || 0` with only `min={0}`, which limits the spinner and not the keyboard, so a typed "-3" was stored.
+// Konva's `hasStroke` takes -3 as a stroke and the canvas ignores a non-positive lineWidth and keeps the PREVIOUS shape's width, so the outline drawn and exported depended on layer
+// order. The box is a DraftField now, like "Size (px)": kept until typing ends, a negative commit clamps to 0. The end state is the project on disk (the autosave file, the app's own
+// save path for this studio) and the box.
+test.describe('Image Studio - a negative stroke width is never stored (T-152 (5))', () => {
+  /** The first rectangle's strokeWidth in the autosave file on disk, or null while there is none. */
+  function savedRectStroke(userDataDir: string): number | null {
+    const file = path.join(userDataDir, 'autosave', 'autosave.json')
+    if (!existsSync(file)) return null
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { imageCanvas?: { doc?: { layers?: Array<{ type?: string; strokeWidth?: number }> } } }
+      const rect = (parsed.imageCanvas?.doc?.layers ?? []).find((l) => l.type === 'rect')
+      return typeof rect?.strokeWidth === 'number' ? rect.strokeWidth : null
+    } catch {
+      return null
+    }
+  }
+
+  test('a rectangle at 4 px, "-3" typed in Stroke (px) and left: the box reads 0, the canvas draws no outline, and the project on disk says strokeWidth 0', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t152-negative-stroke')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+      await expectLayerCount(window, 2)
+
+      const stroke = field(window, 'Stroke (px)')
+      await retype(stroke, '4')
+      await leave(stroke)
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000 }).toBe(4)
+      await expect.poll(() => savedRectStroke(path.join(studio.root, 'userData')), { timeout: 60_000, intervals: [500], message: 'autosave wrote the 4 px rectangle' }).toBe(4)
+
+      await retype(stroke, '-3')
+      await leave(stroke)
+      await expect
+        .poll(() => savedRectStroke(path.join(studio.root, 'userData')), { timeout: 60_000, intervals: [500], message: 'the project on disk never keeps the negative width' })
+        .toBe(0)
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000, message: 'the layer on the canvas' }).toBe(0)
+      await expect(stroke, 'the box shows the clamped number, not the typed one').toHaveValue('0')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

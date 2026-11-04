@@ -385,8 +385,11 @@ function drawTextFilter(
   const fontPath = overlayFontPath(overlay.font)
   // T-151 (1): the boxes place the text's TOP-LEFT corner, so a long caption at x = 0.9 used to be cut off at the edge. drawtext knows the text's
   // own size (`tw`, `th`) and the frame's, so the corner is pulled back in; the commas live inside the single quotes, like `enable` below.
-  const x = `'min(max(0,${Math.round(overlay.x * preset.width)}),w-tw)'`
-  const y = `'min(max(0,${Math.round(overlay.y * preset.height)}),h-th)'`
+  // T-152 (1): the order is max OUTSIDE. A line wider than the frame makes `w-tw` negative; with `min` outside that negative number won and the
+  // text's END sat on the right edge with its first words off the left. With `max` outside the left (and top) edge wins: a too-wide line keeps its
+  // START and only its end runs off, and a caption that fits is unchanged (pulled back in at the right / bottom).
+  const x = `'max(0,min(${Math.round(overlay.x * preset.width)},w-tw))'`
+  const y = `'max(0,min(${Math.round(overlay.y * preset.height)},h-th))'`
   const text = escapeDrawtext(overlay.text)
   const fontSize = safeOverlaySize(overlay.sizePx)
   const fontColor = safeOverlayColor(overlay.colorHex)

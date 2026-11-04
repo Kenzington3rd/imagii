@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, truncateSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { MAX_PROJECT_BYTES, MAX_SCHEMA_VERSION, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { MAX_PROJECT_BYTES, MAX_SCHEMA_VERSION, projectSizeProblem, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { userFacingError } from '../../shared/userFacingError'
 import type { ImagiiProject } from '../../shared/workspace'
 
@@ -19,6 +19,7 @@ import type { ImagiiProject } from '../../shared/workspace'
  */
 const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
 const showSaveDialog = vi.fn()
+const showOpenDialog = vi.fn()
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -26,7 +27,7 @@ vi.mock('electron', () => ({
       handlers.set(channel, fn)
     }
   },
-  dialog: { showSaveDialog: (...args: unknown[]) => showSaveDialog(...args), showOpenDialog: vi.fn() },
+  dialog: { showSaveDialog: (...args: unknown[]) => showSaveDialog(...args), showOpenDialog: (...args: unknown[]) => showOpenDialog(...args) },
   BrowserWindow: { getFocusedWindow: () => ({}), getAllWindows: () => [{}] },
   app: { getVersion: () => '1.2.3', getPath: () => tmpdir() }
 }))
@@ -42,12 +43,24 @@ const faults = vi.hoisted(() => ({
   /** The next write puts the first half of its bytes on disk, then fails with this errno. */
   writeThenFail: null as string | null,
   /** The next rename fails with this errno. */
-  renameFails: null as string | null
+  renameFails: null as string | null,
+  /** Every path `readFile` was asked for (T-152 (3): a file over the size rule is never read). */
+  reads: [] as string[],
+  /** The next `stat` fails with this errno (T-152 (3): a failure of the size question takes the read-failure path, and the file is not read). */
+  statFails: null as string | null
 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...real,
+    stat: async (file: string, ...rest: unknown[]) => {
+      if (faults.statFails) throw Object.assign(new Error(`${faults.statFails}: simulated, stat`), { code: faults.statFails })
+      return (real.stat as (...a: unknown[]) => Promise<import('node:fs').Stats>)(file, ...rest)
+    },
+    readFile: async (file: string, ...rest: unknown[]) => {
+      faults.reads.push(String(file))
+      return (real.readFile as (...a: unknown[]) => Promise<string>)(file, ...rest)
+    },
     writeFile: async (file: string, data: string | Buffer, ...rest: unknown[]) => {
       if (faults.writeThenFail) {
         const bytes = Buffer.from(data)
@@ -98,6 +111,8 @@ let picked = ''
 beforeEach(() => {
   faults.writeThenFail = null
   faults.renameFails = null
+  faults.reads = []
+  faults.statFails = null
   vi.spyOn(Date, 'now').mockReturnValue(NOW)
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-projsave-'))
   picked = path.join(scratch, 'out.imagii.json')
@@ -222,5 +237,89 @@ describe('project:save over an existing project (T-139 (1))', () => {
     showSaveDialog.mockResolvedValue({ canceled: true })
     expect(await save(projectOfSize(4000))).toBeNull()
     expect(readFileSync(picked).equals(before)).toBe(true)
+  })
+})
+
+/**
+ * T-152 (3) - Open asks the file's size BEFORE it reads it.
+ *
+ * `project:load` read the whole picked file (`readFile(path, 'utf8')`) and only then applied the 50 MB rule, and the dialog takes any *.json (a long
+ * VOD's chat-log export can be hundreds of MB). Over V8's string cap the read itself failed with "Invalid string length", which `userFacingError` does not
+ * take as a sentence, so Home said the file may be damaged. Now it `stat`s first and answers the size sentence without reading the file.
+ *
+ * The files are SPARSE (`truncate` on an empty file, nothing is written), so the 600 MB case costs no disk and no time.
+ */
+describe('project:load - the size is read before the file (T-152 (3))', () => {
+  const load = (): Promise<unknown> => {
+    const handler = handlers.get('project:load')
+    if (!handler) throw new Error('project:load was not registered')
+    return handler({})
+  }
+  const sparse = (name: string, bytes: number): string => {
+    const file = path.join(scratch, name)
+    writeFileSync(file, '')
+    truncateSync(file, bytes)
+    return file
+  }
+  const sentenceFor = (size: number): string => {
+    const s = projectSizeProblem(size, 'open')
+    if (s === null) throw new Error('the size is within the limit')
+    return s
+  }
+
+  it('a file one byte over the limit is the size sentence, and readFile is never called', async () => {
+    const file = sparse('over.imagii.json', MAX_PROJECT_BYTES + 1)
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    expect(await load()).toEqual({ ok: false, reason: sentenceFor(MAX_PROJECT_BYTES + 1) })
+    expect(sentenceFor(MAX_PROJECT_BYTES + 1)).toBe(
+      'That project is too large to open (50.1 MB; the limit is 50 MB). An earlier version of imagii let one be saved this big; its images are the likely cause.'
+    )
+    expect(faults.reads, 'the file is not read').toEqual([])
+  })
+
+  it('a 600 MB file (past V8\'s string cap) is the size sentence, not "Invalid string length", and readFile is never called', async () => {
+    const file = sparse('huge.json', 600_000_000)
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    const result = (await load()) as { ok: boolean; reason?: string }
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe(sentenceFor(600_000_000))
+    expect(result.reason).toContain('572.3 MB; the limit is 50 MB')
+    expect(faults.reads, 'the file is not read').toEqual([])
+  })
+
+  it('a project exactly at the limit still goes through the read and opens', async () => {
+    const file = path.join(scratch, 'at.imagii.json')
+    writeFileSync(file, serializeProject(projectOfSize(MAX_PROJECT_BYTES)))
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    const result = (await load()) as { ok: boolean; filePath?: string }
+    expect(result.ok).toBe(true)
+    expect(result.filePath).toBe(file)
+    expect(faults.reads).toEqual([file])
+  })
+
+  it('a normal small project opens, and a file that is not there takes the read-failure path (a stat failure is not a crash)', async () => {
+    const file = path.join(scratch, 'small.imagii.json')
+    writeFileSync(file, serializeProject(projectOfSize(2000)))
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    expect(((await load()) as { ok: boolean }).ok).toBe(true)
+
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [path.join(scratch, 'gone.imagii.json')] })
+    const missing = (await load()) as { ok: boolean; reason?: string }
+    expect(missing.ok).toBe(false)
+    expect(missing.reason).toMatch(/ENOENT/)
+  })
+
+  it('a stat that fails takes the read-failure path: the reason is the error, and the file is not read', async () => {
+    const file = path.join(scratch, 'locked.imagii.json')
+    writeFileSync(file, serializeProject(projectOfSize(2000)))
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    faults.statFails = 'EPERM'
+    expect(await load()).toEqual({ ok: false, reason: 'EPERM: simulated, stat' })
+    expect(faults.reads).toEqual([])
+  })
+
+  it('a cancelled dialog is still null', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    expect(await load()).toBeNull()
   })
 })
