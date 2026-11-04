@@ -452,7 +452,7 @@ describe('T-49 — the export panel carries no copy a user can never reach', () 
   it('still refuses at zero queued targets, by disabling Export', () => {
     // The reachable half of the same guard. If this line ever goes, the
     // deleted branch stops being dead and its removal becomes a bug.
-    expect(panel).toMatch(/disabled=\{running \|\| totalQueued === 0\}/)
+    expect(panel).toMatch(/disabled=\{running \|\| kitRunning \|\| totalQueued === 0\}/)
   })
 
   it('remembers the watermark corner with the handle, not instead of it', () => {
@@ -2037,7 +2037,7 @@ describe('T-125 (round 75): the layout, copy and listener fixes are wired where 
   })
 
   it('the Video tour\'s Clip Kit step points at a button that carries its anchor (24)', () => {
-    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{kitRun !== null\}\s*data-tutorial="video-clipkit"/)
+    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}\s*data-tutorial="video-clipkit"/)
   })
 
   it('every overlay field\'s name begins with the text drawn beside it (27)', () => {
@@ -2619,9 +2619,9 @@ describe('T-135 — the twenty-first sweep', () => {
   it('(13) → Canvas navigates only if the person is STILL on References when the picture has loaded - the route is read after the await', () => {
     const src = strip(read('modules/references/MoodBoardPanel.tsx'))
     const fn = src.slice(src.indexOf('async function sendToCanvas'), src.indexOf('useEffect(() => {'))
-    expect(fn, 'found the function').toContain("await loadImage(src, 'anonymous')")
+    expect(fn, 'found the function').toContain('await loadWithinDeadline(src)')
     expect(fn).toMatch(/if \(currentRoute\(\) === '\/references'\) navigate\('\/image'\)/)
-    expect(fn.indexOf('await loadImage('), 'asked AFTER the wait, not before it').toBeLessThan(fn.indexOf('currentRoute()'))
+    expect(fn.indexOf('await loadWithinDeadline('), 'asked AFTER the wait, not before it').toBeLessThan(fn.indexOf('currentRoute()'))
     expect(src).toMatch(/import \{ currentRoute \} from '\.\.\/project\/ProjectIO'/)
     // The layer and the toast are not behind the guard: the add is reported wherever the person is.
     expect(fn.indexOf('addCanvasLayer('), 'the layer is added before the route is asked').toBeLessThan(fn.indexOf('currentRoute()'))
@@ -2755,7 +2755,7 @@ describe('T-135 — the twenty-first sweep', () => {
   it('(1) Clip Kit\'s run is shown wherever the kit button is, whichever clip is selected, with its Cancel (T-136 (1) replaced "one clip\'s row": the list draws ONE button)', () => {
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     expect(kit, 'the clip-keyed reading is gone').not.toMatch(/kitRun\.clipId === clip\.id|kitRun\.clipId !== clip\.id|otherKitRunning/)
-    expect(kit, 'the button is off, and shows the running label, for ANY run').toMatch(/disabled=\{kitRun !== null\}/)
+    expect(kit, 'the button is off, and shows the running label, for ANY run').toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}/)
     expect(kit).toMatch(/\{kitRun !== null \? kitRun\.phase \|\| 'Working…' : `Clip Kit/)
     expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, phase: '', canceled: false \}\)/)
     // The cancel latch is the run's field, set by the confirm and read by every step.
@@ -3910,9 +3910,9 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
 
   it('(1) "→ Canvas" drops a repeat press and holds a claim across the awaited load', () => {
     const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
-    expect(panel).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
-    expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*void sendToCanvas\(src, item\.title\)/)
-    expect(panel).toMatch(/await claimFirst\(sendingRef, \(\) => sendToCanvasNow\(src, title\)\)/)
+    expect(panel).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*if \(sending\) \{[\s\S]*?\}\s*void sendToCanvas\(src, item\.title\)/)
+    expect(panel).toMatch(/await claimFirst\(sendingRef, async \(\) => \{\s*setSending\(true\)\s*try \{\s*await sendToCanvasNow\(src, title\)/)
   })
 
   it('(2) the tile ✕ drops a repeat press and claims across the awaited removal', () => {
@@ -3921,10 +3921,11 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
     expect(panel).toMatch(/await claimFirst\(removingRef, async \(\) => \{\s*try \{\s*await removeFromCollection/)
   })
 
-  it('(3) Remove layer drops a repeat press; move up / down / duplicate stay repeat-tolerant', () => {
+  it('(3) Remove layer drops a repeat press; move up / down stay repeat-tolerant (T-155 (3): Duplicate drops one too)', () => {
     const panel = strip(read('modules/image-studio/LayerPanel.tsx'))
     expect(panel).toMatch(/e\.stopPropagation\(\)\s*if \(isRepeatPress\(e\)\) return\s*removeLayer\(layer\.id\)/)
-    expect(panel.match(/isRepeatPress\(e\)/g)).toHaveLength(1)
+    // (T-155 (3): and Duplicate drops one too, so the file holds two - Duplicate's and Remove's - and no other button takes the guard.)
+    expect(panel.match(/isRepeatPress\(e\)/g)).toHaveLength(2)
   })
 
   it('(4) a cut chip drops a repeat press', () => {
@@ -3934,7 +3935,7 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
 
   it('(5) a held Ctrl+V is one paste (the chord\'s keydown repeat marks the paste), and the chooser is claimed until it answers or is cancelled', () => {
     const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
-    expect(panel).toMatch(/if \(\(e\.ctrlKey \|\| e\.metaKey\) && e\.key\.toLowerCase\(\) === 'v'\) pasteHeld = e\.repeat/)
+    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && isV\) \|\| \(e\.shiftKey && e\.key === 'Insert'\)\) pasteHeld = e\.repeat/)
     expect(panel).toMatch(/if \(pasteHeld\) \{\s*e\.preventDefault\(\)\s*return\s*\}/)
     expect(panel).toMatch(/await claimFirst\(\s*pickingRef,/)
     expect(panel).toMatch(/input\.onchange = \(\) => \{[\s\S]*?resolve\(\)\s*\}\s*input\.oncancel = \(\) => resolve\(\)/)
@@ -3956,5 +3957,75 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
     const overlay = strip(read('components/HotkeyOverlay.tsx'))
     expect(overlay).toMatch(/<ul role="list" className="grid grid-cols-\[auto_1fr\] gap-x-3 gap-y-1\.5 items-center text-sm">/)
     expect(overlay).toMatch(/<li key=\{i\} className="contents">/)
+  })
+})
+
+describe('T-155 Track A - a press that waits says so, every paste chord, every add is one add', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) "→ Canvas" races the load against a 10 s deadline that speaks a finished sentence, clears the timer, and shows a send in flight on every tile', () => {
+    const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(panel).toMatch(/const SEND_LOAD_DEADLINE_MS = 10_000/)
+    expect(panel).toMatch(/const SEND_LOAD_FAILED = "That picture didn't load\. Try again, or save it to the board again\."/)
+    expect(panel).toMatch(/setTimeout\(\(\) => reject\(new Error\(SEND_LOAD_FAILED\)\), SEND_LOAD_DEADLINE_MS\)/)
+    expect(panel).toMatch(/Promise\.race\(\[loadImage\(src, 'anonymous'\), deadline\]\)\.finally\(\(\) => clearTimeout\(timer\)\)/)
+    // The flag the screen reads is raised inside the claimed work and lowered in its finally; the ref still does the claiming.
+    expect(panel).toMatch(/await claimFirst\(sendingRef, async \(\) => \{\s*setSending\(true\)\s*try \{\s*await sendToCanvasNow\(src, title\)\s*\} finally \{\s*setSending\(false\)/)
+    // Every → Canvas (one per tile, one source site) is marked, titled and answers a press while a send is out.
+    expect(panel).toMatch(/aria-disabled=\{sending \|\| undefined\}/)
+    expect(panel).toMatch(/title=\{sending \? 'Adding the last picture…' : undefined\}/)
+    // A held Enter on the focused button is one press, as on the five add buttons.
+    expect(panel).toMatch(/title=\{sending \? 'Adding the last picture…' : undefined\}\s*onKeyDown=\{ignoreHeldEnter\}/)
+    expect(panel).toMatch(/if \(sending\) \{\s*toast\('Still adding the last picture', \{ id: 'tocanvas-busy' \}\)\s*return\s*\}/)
+    // The repeat guard stays first: a double-click's second press is the first one's decision and says nothing.
+    expect(panel.indexOf('if (isRepeatPress(e)) return\n                            if (sending)')).toBeGreaterThan(-1)
+  })
+
+  it('(2) the paste chord is Ctrl or Cmd with the V key by letter OR position, or Shift+Insert; the release clears on the same keys', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    expect(panel).toMatch(/const isV = e\.code === 'KeyV' \|\| e\.key\.toLowerCase\(\) === 'v'/)
+    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && isV\) \|\| \(e\.shiftKey && e\.key === 'Insert'\)\) pasteHeld = e\.repeat/)
+    expect(panel).toMatch(/if \(e\.code === 'KeyV' \|\| e\.key\.toLowerCase\(\) === 'v' \|\| e\.key === 'Insert'\) pasteHeld = false/)
+  })
+
+  it('(3) each of the five add / duplicate buttons drops a repeat press and ignores a held Enter', () => {
+    const guarded = /onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*(\w+)\(\)\s*\}\}\s*onKeyDown=\{ignoreHeldEnter\}/g
+    const clips = strip(read('modules/video-studio/ClipList.tsx'))
+    expect([...clips.matchAll(guarded)].map((m) => m[1])).toEqual(['addClip'])
+    const overlays = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
+    expect([...overlays.matchAll(guarded)].map((m) => m[1])).toEqual(['addOverlay'])
+    const imports = strip(read('modules/image-studio/ImportPanel.tsx'))
+    expect([...imports.matchAll(guarded)].map((m) => m[1]), '+ Add text and Start with text').toEqual(['addText', 'addText'])
+    const layers = strip(read('modules/image-studio/LayerPanel.tsx'))
+    expect(layers).toMatch(/if \(isRepeatPress\(e\)\) return\s*duplicateLayer\(layer\.id\)\s*\}\}\s*onKeyDown=\{ignoreHeldEnter\}/)
+    for (const [file, src] of [['ClipList', clips], ['TextOverlayEditor', overlays], ['ImportPanel', imports], ['LayerPanel', layers]] as const) {
+      expect(src, `${file} imports both guards`).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    }
+  })
+})
+
+describe('T-155 Track B - Export and Clip Kit wait for each other, the compositor draws what it keeps', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(4) the Clip Kit start button is disabled while the export queue runs, and its title names the export', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toMatch(/import \{ useExportQueue \} from '\.\/store\/exportQueue'/)
+    expect(kit).toMatch(/const exportRunning = useExportQueue\(\(s\) => s\.running\)/)
+    expect(kit).toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}/)
+    expect(kit).toMatch(/exportRunning && kitRun === null\s*\? 'An export is running\. Clip Kit starts when it is done\.'/)
+  })
+
+  it('(4) the Export button is disabled while a kit runs, and its title names Clip Kit', () => {
+    const panel = strip(read('modules/video-studio/ExportPanel.tsx'))
+    expect(panel).toMatch(/import \{ useKitRun \} from '\.\/store\/runs'/)
+    expect(panel).toMatch(/const kitRunning = useKitRun\(\(s\) => s\.run\) !== null/)
+    expect(panel).toMatch(/disabled=\{running \|\| kitRunning \|\| totalQueued === 0\}/)
+    expect(panel).toMatch(/kitRunning && !running\s*\? 'Clip Kit is running\. Export when it is done\.'/)
+  })
+
+  it('(bt) the compositor loop draws only when a capture interval has passed and re-arms either way', () => {
+    const src = strip(read('modules/record-studio/compositor.ts'))
+    expect(src).toMatch(/const minGapMs = 1000 \/ fps - 2/)
+    expect(src).toMatch(/function frame\(now: DOMHighResTimeStamp\): void \{\s*if \(!running\) return\s*if \(now - lastDrawMs >= minGapMs\) \{\s*drawFrame\([^)]*\)\s*lastDrawMs = now\s*\}\s*rafHandle = requestAnimationFrame\(frame\)/)
   })
 })

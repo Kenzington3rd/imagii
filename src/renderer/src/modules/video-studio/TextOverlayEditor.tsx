@@ -15,7 +15,7 @@ import { resolveOverlayColor } from '@shared/overlayColors'
 import { useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useGestureEnd } from '../../lib/gestureEnd'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { DraftField } from '../../components/DraftField'
 
 /** True when `typed` is a whole number inside the size range the export gate takes. */
@@ -58,7 +58,15 @@ export function TextOverlayEditor(): JSX.Element | null {
       <PanelHeader
         icon="text"
         actions={
-          <button className="btn-ghost px-3 py-1 text-xs" onClick={addOverlay}>
+          <button
+            className="btn-ghost px-3 py-1 text-xs"
+            // T-155 (3): a double-click or a held Enter is one overlay, not two or twenty.
+            onClick={(e) => {
+              if (isRepeatPress(e)) return
+              addOverlay()
+            }}
+            onKeyDown={ignoreHeldEnter}
+          >
             + Add text
           </button>
         }

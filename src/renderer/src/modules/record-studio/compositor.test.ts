@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { computeContainRect, computeCornerRect, drawFrame, __testing__ } from './compositor'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { computeContainRect, computeCornerRect, drawFrame, startCompositor, __testing__ } from './compositor'
 
 /**
  * Pure-function tests for the compositor. The actual canvas drawing and
@@ -346,5 +346,105 @@ describe('drawFrame fits the screen by its size right now (T-153 (10))', () => {
       { op: 'drawImage', tag: 'screen', x: 0, y: 135, w: 1920, h: 810 },
       { op: 'drawImage', tag: 'webcam', x: 1504, y: 832, w: 384, h: 216 }
     ])
+  })
+})
+
+/**
+ * T-155 (bt): the draw loop keeps to the capture rate. `captureStream(30)` takes at most 30 frames a second, so a 144 Hz display used to draw
+ * about four frames for every one the recorder kept. These run the REAL `startCompositor` against stubbed globals and a fake rAF clock (the
+ * display's refresh), and count the draws the loop makes (a screen `drawImage` each) over one second of ticks.
+ */
+describe('startCompositor draws what the recorder keeps (T-155 (bt))', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** One second of display ticks at `hz` (the first at t = 0), with the loop's `now` the tick's time. Returns the draws made and the rAF re-arms. */
+  async function drawsAt(hz: number, fps?: number): Promise<{ draws: number; ticks: number; stillArmed: boolean; stopped: boolean; drawsAfterStop: number }> {
+    const loop: { pending: ((now: number) => void) | null; last: ((now: number) => void) | null } = { pending: null, last: null }
+    let draws = 0
+    const video = (): Record<string, unknown> => ({
+      readyState: 4,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      style: {},
+      muted: false,
+      playsInline: false,
+      srcObject: null,
+      parentNode: null,
+      play: () => Promise.resolve(),
+      pause: () => undefined
+    })
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ fillStyle: '', fillRect: () => undefined, drawImage: () => void draws++ }),
+      captureStream: () => ({ getTracks: () => [] })
+    }
+    vi.stubGlobal('document', {
+      body: { appendChild: () => undefined },
+      createElement: (tag: string) => (tag === 'canvas' ? canvas : video())
+    })
+    vi.stubGlobal('requestAnimationFrame', (cb: (now: number) => void) => {
+      loop.pending = cb
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {
+      loop.pending = null
+    })
+    const handle = await startCompositor({
+      screenStream: {} as MediaStream,
+      webcamStream: {} as MediaStream,
+      webcamCorner: 'bottom-right',
+      ...(fps === undefined ? {} : { fps })
+    })
+    let ticks = 0
+    for (let t = 0; t < 1000 - 1e-6; t += 1000 / hz) {
+      const cb = loop.pending
+      if (cb === null) break
+      loop.pending = null
+      loop.last = cb
+      cb(t)
+      ticks++
+    }
+    const stillArmed = loop.pending !== null
+    handle.stop()
+    // A tick already queued when stop() ran (the browser may still deliver it) draws nothing and arms nothing.
+    const before = draws
+    loop.last?.(5000)
+    return { draws, ticks, stillArmed, stopped: loop.pending === null, drawsAfterStop: draws - before }
+  }
+
+  // The webcam video is a stub with readyState 4 too, so one frame is TWO drawImage calls (screen, then webcam).
+  it('a 144 Hz display draws about 30 frames a second, not 144', async () => {
+    const r = await drawsAt(144)
+    expect(r.ticks).toBe(144)
+    expect(r.draws / 2).toBeGreaterThanOrEqual(29)
+    expect(r.draws / 2).toBeLessThanOrEqual(31)
+  })
+
+  it('a 60 Hz display draws 30 frames a second', async () => {
+    const r = await drawsAt(60)
+    expect(r.ticks).toBe(60)
+    expect(r.draws / 2).toBeGreaterThanOrEqual(29)
+    expect(r.draws / 2).toBeLessThanOrEqual(31)
+  })
+
+  it('a slow display (24 Hz) draws every frame it gets, and the loop is re-armed after every tick, drawn or skipped', async () => {
+    const slow = await drawsAt(24)
+    expect(slow.ticks).toBe(24)
+    expect(slow.draws / 2).toBe(24)
+    expect(slow.stillArmed).toBe(true)
+    const fast = await drawsAt(144)
+    expect(fast.ticks, 'skipped ticks re-arm the loop too: all 144 ran').toBe(144)
+    expect(fast.stillArmed).toBe(true)
+    expect(fast.stopped).toBe(true)
+    expect(fast.drawsAfterStop, 'a tick delivered after stop() draws nothing').toBe(0)
+  })
+
+  it('the interval is the fps the compositor was given: 60 fps on a 60 Hz display draws every tick', async () => {
+    const r = await drawsAt(60, 60)
+    expect(r.ticks).toBe(60)
+    expect(r.draws / 2).toBe(60)
   })
 })

@@ -236,9 +236,17 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
 
   let rafHandle: number | null = null
   let running = true
-  function frame(): void {
+  // T-155 (bt): `captureStream(fps)` keeps at most `fps` frames a second, but rAF ticks at the display's rate (144 Hz drew four frames for
+  // every one kept). A tick less than one capture interval after the last draw draws nothing and still re-arms; the 2 ms of slack is
+  // the tick's jitter, so a display that is an exact multiple of `fps` (60 Hz for 30) is not read as "too early" every other tick.
+  const minGapMs = 1000 / fps - 2
+  let lastDrawMs = -Infinity
+  function frame(now: DOMHighResTimeStamp): void {
     if (!running) return
-    drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
+    if (now - lastDrawMs >= minGapMs) {
+      drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
+      lastDrawMs = now
+    }
     rafHandle = requestAnimationFrame(frame)
   }
   rafHandle = requestAnimationFrame(frame)

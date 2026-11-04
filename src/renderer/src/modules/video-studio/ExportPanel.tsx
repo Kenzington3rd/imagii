@@ -13,6 +13,7 @@ import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/saf
 import { assertDefined } from '@shared/assert'
 import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
 import { useVideoStore } from './store/videoStore'
+import { useKitRun } from './store/runs'
 import {
   cancelExportBatch,
   remainingExportJobs,
@@ -176,6 +177,9 @@ export function ExportPanel(): JSX.Element | null {
   // was made from (or while it runs), not under another video.
   const queueJobs = useExportQueue((s) => s.jobs)
   const running = useExportQueue((s) => s.running)
+  // T-155 (4): Clip Kit runs its exports as a batch of its own, and main runs one batch at a time: a press while the kit works was refused
+  // after the fact and replaced the last batch's rows with Failed / Not run. Export waits for the kit, and says so.
+  const kitRunning = useKitRun((s) => s.run) !== null
   const queueSource = useExportQueue((s) => s.sourcePath)
   const jobs = queueJobs.length > 0 && (running || queueSource === source?.filePath) ? queueJobs : []
   // T-125 (18): one start at a time, claimed the instant the function runs. `running` is state, set only after the awaits in
@@ -420,11 +424,18 @@ export function ExportPanel(): JSX.Element | null {
             </button>
             <button
               className="btn-primary px-4 py-1.5 text-sm disabled:opacity-50"
-              disabled={running || totalQueued === 0}
+              disabled={running || kitRunning || totalQueued === 0}
               onClick={startExport}
               // T-112: a disabled button says why (the same sentence is under the
               // header, visible without hovering — the Compile card's pattern).
-              title={!running && totalQueued === 0 ? NOTHING_QUEUED : undefined}
+              // T-155 (4): and when it is the kit it waits for, it names the kit.
+              title={
+                kitRunning && !running
+                  ? 'Clip Kit is running. Export when it is done.'
+                  : !running && totalQueued === 0
+                    ? NOTHING_QUEUED
+                    : undefined
+              }
             >
               {/* T-94: the button says what it will produce. "Export 6" left a
                   user who had scanned a VOD for highlights to guess whether

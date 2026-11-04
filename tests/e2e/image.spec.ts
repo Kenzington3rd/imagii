@@ -1981,7 +1981,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:77).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:78).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -5667,6 +5667,208 @@ test.describe('Image Studio - one press, one action (T-154 (3), (5))', () => {
       })
       await window.locator(IMPORT).getByRole('button', { name: '+ Import image' }).click()
       await expect.poll(() => choosers.length, { timeout: 10_000, message: 'a chooser that was dismissed gives the button back' }).toBe(3)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-155 (2), (3): every paste chord is one paste; every add and a layer's Duplicate are one add per press
+// ═══════════════════════════════════════════════════════════════════════════
+// (2) the held-paste guard (T-154 (5)) knew only the letter V: Shift+Insert, and Ctrl+V on a layout whose `key` is not "v" (Russian: `key` "м", `code` "KeyV"), still pasted once per key repeat.
+// (3) "+ Add text", "Start with text" and a layer's Duplicate ran again on a double-click or a held Enter (the duplicate shifts every row, so the second press copied the copy).
+// Each repeat-press test waits past the half second App swallows repeats after a route change (T-153 (3)), or the second press never arrives.
+test.describe('Image Studio - one paste, one add (T-155 (2), (3))', () => {
+  async function putPngOnClipboard(studio: Studio): Promise<void> {
+    await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+      clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+    }, `data:image/png;base64,${readFileSync(studio.fixturePng).toString('base64')}`)
+  }
+  const nativePaste = (studio: Studio): Promise<void> =>
+    studio.app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.paste()
+    })
+
+  test('a held Shift+Insert pastes ONE image layer; a fresh Shift+Insert pastes another', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t155-shift-insert')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await putPngOnClipboard(studio)
+      await window.waitForTimeout(800)
+      await window.keyboard.down('Shift')
+      // The first down is the press, the next are the key's auto-repeats.
+      await window.keyboard.down('Insert')
+      await window.keyboard.down('Insert')
+      await window.keyboard.down('Insert')
+      await window.keyboard.down('Insert')
+      await window.keyboard.up('Insert')
+      await window.keyboard.up('Shift')
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+      // A paste that is not the chord (Edit > Paste: no keydown) right after the hold is a paste too: the key's release lets go of the hold.
+      await nativePaste(studio)
+      await expectLayerCount(window, 3)
+      // A deliberate second press is a second paste.
+      await window.keyboard.press('Shift+Insert')
+      await expectLayerCount(window, 4)
+      await window.waitForTimeout(500)
+      await expectLayerCount(window, 4)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a held Ctrl+V on a non-Latin layout (code KeyV, key "м") pastes ONE image layer; a fresh chord pastes another', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t155-cyrillic-paste')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await putPngOnClipboard(studio)
+      await window.waitForTimeout(800)
+      const key = (type: 'keydown' | 'keyup', repeat: boolean): Promise<void> =>
+        window.evaluate(
+          ([t, r]) => {
+            window.dispatchEvent(new KeyboardEvent(t as string, { code: 'KeyV', key: 'м', ctrlKey: t === 'keydown', repeat: r as boolean, bubbles: true, cancelable: true }))
+          },
+          [type, repeat] as const
+        )
+      // The OS sends a keydown and, with it, a paste; the key's auto-repeats send one each.
+      await key('keydown', false)
+      await nativePaste(studio)
+      await expectLayerCount(window, 2)
+      for (let i = 0; i < 3; i++) {
+        await key('keydown', true)
+        await nativePaste(studio)
+        await window.waitForTimeout(250)
+      }
+      await key('keyup', false)
+      await window.waitForTimeout(500)
+      await expectLayerCount(window, 2)
+      // A paste with no chord (Edit > Paste) after the release is a paste.
+      await nativePaste(studio)
+      await expectLayerCount(window, 3)
+      // A deliberate second chord is a second paste.
+      await key('keydown', false)
+      await nativePaste(studio)
+      await expectLayerCount(window, 4)
+      await key('keyup', false)
+      await window.waitForTimeout(500)
+      await expectLayerCount(window, 4)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real double-click and a held Enter on + Add text each add ONE text layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t155-add-text')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.waitForTimeout(800)
+      const add = window.locator(IMPORT).getByRole('button', { name: '+ Add text' })
+      await add.dblclick()
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+      await add.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expectLayerCount(window, 3)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 3)
+      // A fresh press is still an add.
+      await add.click()
+      await expectLayerCount(window, 4)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real double-click and a held Enter on Start with text each start the canvas with ONE text layer', async () => {
+    test.setTimeout(150_000)
+    for (const how of ['double-click', 'held Enter'] as const) {
+      const studio = await openStudio(`t155-start-text-${how === 'held Enter' ? 'enter' : 'dbl'}`)
+      const { window } = studio
+      try {
+        await window.waitForTimeout(800)
+        const start = window.getByRole('button', { name: 'Start with text' })
+        if (how === 'double-click') await start.dblclick()
+        else {
+          await start.focus()
+          await window.keyboard.down('Enter')
+          await window.keyboard.down('Enter')
+          await window.keyboard.down('Enter')
+          await window.keyboard.up('Enter')
+        }
+        await expectLayerCount(window, 1)
+        await window.waitForTimeout(800)
+        await expectLayerCount(window, 1)
+      } finally {
+        await closeStudio(studio)
+      }
+    }
+  })
+
+  test('a real double-click and a held Enter on a layer\'s Duplicate each add ONE copy', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t155-duplicate')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.waitForTimeout(800)
+      const duplicate = (): Locator => window.locator(`${LAYERS} li`).last().getByRole('button', { name: 'Duplicate layer' })
+      await duplicate().dblclick()
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+      expect(await layerNames(window), 'one copy of the original, and no copy of the copy').toHaveLength(2)
+      expect((await layerNames(window)).filter((n) => /copy copy/.test(n))).toEqual([])
+      // The original is the bottom row; hold Enter on its Duplicate.
+      await duplicate().focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expectLayerCount(window, 3)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 3)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real double-click on a lower layer\'s Duplicate leaves the copy selected, not the layer the rows shifted under the pointer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t155-duplicate-selection')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      // Rows are top first: the bottom layer is the last row. Select it, then double-click its Duplicate (one locator, so both presses land on the same point).
+      const bottom = window.locator(`${LAYERS} li`).last()
+      await bottom.getByRole('button', { name: /^Text/ }).first().click()
+      await expect(bottom).toHaveAttribute('aria-current', 'true')
+      const duplicate = bottom.getByRole('button', { name: 'Duplicate layer' })
+      await duplicate.dblclick()
+      await expectLayerCount(window, 3)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 3)
+      // The copy went on top and is selected; the second press lands on the row that shifted under the pointer and must not select it.
+      const current = window.locator(`${LAYERS} li[aria-current="true"]`)
+      await expect(current, 'exactly one row is selected').toHaveCount(1)
+      await expect(current.locator('span.truncate')).toHaveText('Text copy')
     } finally {
       await closeStudio(studio)
     }

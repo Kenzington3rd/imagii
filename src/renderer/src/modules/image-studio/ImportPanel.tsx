@@ -14,6 +14,7 @@ import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { loadImage, storedDataUrl } from '../../lib/boundedImage'
 import { claimFirst } from '../../lib/claimFirst'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
 
@@ -87,10 +88,12 @@ export function ImportPanel(): JSX.Element {
     // marks the paste that follows as a repeat. A fresh keydown (or the key's release, or losing the window) clears it, so a second deliberate Ctrl+V pastes again.
     let pasteHeld = false
     function onKeyDown(e: KeyboardEvent): void {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') pasteHeld = e.repeat
+      // T-155 (2): the chord is the paste key by POSITION as well as by letter (`code` is KeyV on a Cyrillic or Greek layout, where `key` is that layout's letter), and Shift+Insert.
+      const isV = e.code === 'KeyV' || e.key.toLowerCase() === 'v'
+      if (((e.ctrlKey || e.metaKey) && isV) || (e.shiftKey && e.key === 'Insert')) pasteHeld = e.repeat
     }
     function onKeyUp(e: KeyboardEvent): void {
-      if (e.key.toLowerCase() === 'v') pasteHeld = false
+      if (e.code === 'KeyV' || e.key.toLowerCase() === 'v' || e.key === 'Insert') pasteHeld = false
     }
     function onPaste(e: ClipboardEvent): void {
       if (pasteHeld) {
@@ -179,7 +182,15 @@ export function ImportPanel(): JSX.Element {
           <button className="btn-ghost px-3 py-1" onClick={pickFile}>
             + Import image
           </button>
-          <button className="btn-ghost px-3 py-1" onClick={addText}>
+          <button
+            className="btn-ghost px-3 py-1"
+            // T-155 (3): a double-click or a held Enter is one add, not two or twenty.
+            onClick={(e) => {
+              if (isRepeatPress(e)) return
+              addText()
+            }}
+            onKeyDown={ignoreHeldEnter}
+          >
             + Add text
           </button>
           <button
@@ -270,7 +281,14 @@ export function ImportPanel(): JSX.Element {
             <button className="btn-primary" onClick={pickFile}>
               Import image
             </button>
-            <button className="btn-ghost" onClick={addText}>
+            <button
+              className="btn-ghost"
+              onClick={(e) => {
+                if (isRepeatPress(e)) return
+                addText()
+              }}
+              onKeyDown={ignoreHeldEnter}
+            >
               Start with text
             </button>
           </div>

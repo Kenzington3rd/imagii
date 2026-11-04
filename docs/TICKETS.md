@@ -7219,7 +7219,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 104)
+- **Status:** done (round 104 — see the Done entry)
 
 ---
 
@@ -7780,6 +7780,49 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 104 — T-155, all four counted items and the fold, landed in the
+commit that carries this entry (T-110's (bt) folded in; (bu) stays an
+owner call).
+Two Sonnet workers in fresh clones of ae14598, disjoint files, merged by
+the expediter. Track A: "→ Canvas" races its load against a 10 s
+deadline and, on it, says "That picture didn't load. Try again, or save
+it to the board again." and gives the claim back; while a send is out
+every "→ Canvas" is aria-disabled with the title "Adding the last
+picture…" and a press says "Still adding the last picture"; the held-
+paste guard knows the paste key by position (`code` KeyV, so a Cyrillic
+or Greek layout) and Shift+Insert; "+ Add clip", both "+ Add text"s,
+"Start with text" and a layer's Duplicate are one add per press (a
+double-click or a held Enter). Track B: Clip Kit is disabled while an
+Export batch runs and Export while a kit runs, each titled with the run
+it waits for (main's one-batch gate stays the backstop); the webcam
+compositor draws once per capture interval instead of on every display
+refresh. Deviations, accepted: the stalled-load e2e holds the image's
+source page-side (the CSP refuses a loopback host); the "Start with
+text" and → Canvas held-Enter e2e cases cannot be red on the unchanged
+build (the first press navigates away and unmounts the button), so unit
+pins hold those guards; one existing T-154 (1) e2e press became
+`{ force: true }` because Playwright does not act on an aria-disabled
+button. Ledgers: A 8 RED / 34 mutations (three e2e survivors — Start
+with text twice and → Canvas held Enter — each the unmounting case
+above and each killed by its unit pin); B 6 RED / 21 mutations (one
+survivor, the loop ignoring `running`, replaced by a stricter case and
+killed); every restore byte-identical. Found not fixed: the saving on a
+real display is host-dependent and unasserted; the live compositor path
+still has no e2e (screen capture is the OS boundary). Expedited
+personally: two independent mutations at seams no ledger row names —
+B: Export's Clip Kit title shown only when something is queued → the
+interactionWiring T-155 Track B (4) pin red; A: Duplicate's repeat
+guard returning before its stopPropagation, so a double-click's second
+press selects the row the copy shifted under the pointer → SURVIVED
+(the case used a one-layer stack, where that row is the copy), sent
+back, and a two-layer case added ("a real double-click on a lower
+layer's Duplicate leaves the copy selected") → red on the mutant
+("Text" selected, not "Text copy"), re-run by the expediter — each restored
+byte-identical, sha256 verified; on the MERGED tree: verify x2
+(207/6123), test:media 453 passed | 17
+skipped of 470 on 7.0.2, FULL Playwright 621/621 (51.0 min). Applied to ae14598
+by `git apply` with every file byte-identical to the expedited merge.
 
 Round 103 — T-154, all nine counted items and the fold, landed in the
 commit that carries this entry (T-110 gains (bs); item 9 arrived from

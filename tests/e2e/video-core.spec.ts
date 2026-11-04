@@ -3561,3 +3561,67 @@ test.describe('T-154 (7), (9), fold: the Player has a name, an overlay ✕ is on
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-155 (3): "+ Add clip" and "+ Add text" are one add per press
+// ═══════════════════════════════════════════════════════════════════════════
+// Both ran again on the second press of a double-click and on every auto-repeat of a held Enter (Enter on a focused button clicks it on keydown; each repeat is a keyboard
+// click). A fresh press is still an add. (The Stream Graphics "+ Add text" / "Start with text" and a layer's Duplicate are in image.spec.ts.)
+test.describe('T-155 (3): + Add clip and + Add text (Video Studio) are one add per press', () => {
+  test('a real double-click and a held Enter on + Add clip each add ONE clip', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t155-add-clip')
+    try {
+      await window.waitForTimeout(800)
+      const card = clipListCard(window)
+      const add = card.getByRole('button', { name: '+ Add clip' })
+      await expect(card.locator('h3')).toHaveText('Clips (1)')
+      await add.dblclick()
+      await expect(card.locator('h3')).toHaveText('Clips (2)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still two a moment later').toHaveText('Clips (2)')
+      await add.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(card.locator('h3')).toHaveText('Clips (3)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still three a moment later').toHaveText('Clips (3)')
+      // A fresh press is still an add.
+      await add.click()
+      await expect(card.locator('h3')).toHaveText('Clips (4)')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a real double-click and a held Enter on + Add text each add ONE overlay', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t155-add-overlay')
+    try {
+      await window.waitForTimeout(800)
+      const card = overlayCard(window)
+      const add = card.getByRole('button', { name: '+ Add text' })
+      await expect(card.locator('h3')).toHaveText('Text overlays (0)')
+      await add.dblclick()
+      await expect(card.locator('h3')).toHaveText('Text overlays (1)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still one a moment later').toHaveText('Text overlays (1)')
+      await add.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(card.locator('h3')).toHaveText('Text overlays (2)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still two a moment later').toHaveText('Text overlays (2)')
+      await add.click()
+      await expect(card.locator('h3')).toHaveText('Text overlays (3)')
+    } finally {
+      await app.close()
+    }
+  })
+})

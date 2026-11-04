@@ -9020,9 +9020,9 @@ test.describe('T-112: review-gate fixes', () => {
   // T-111 / T-112 pinned a returning panel that "believes nothing runs" and a second press that main refused. T-135 (1) removed the belief: the batch is
   // the Export queue store's, so a panel that comes back mid-batch is not idle (no Export button to press: it reads "Exporting…", the row and the
   // Cancel are there). Main's one-batch-at-a-time gate (T-111) stays the backstop, and it is still reachable from another door: Clip Kit runs its
-  // five exports as a batch too. Pressing it while the Export batch runs is refused by main in a finished sentence, the running batch is untouched,
-  // and the kit's empty folder goes with the refusal (T-112).
-  test('after leaving Video Studio mid-batch there is no Export to press, and Clip Kit, the other door, is refused by main while the first batch runs (T-111 / T-112 / T-135 (1))', async () => {
+  // five exports as a batch too. T-155 (4) shut that door in the UI (its button is disabled while the batch runs); a call that reaches main anyway is
+  // refused in a finished sentence, the running batch is untouched, and no kit folder is left behind (T-112).
+  test('after leaving Video Studio mid-batch there is no Export to press, and Clip Kit, the other door, is shut and main refuses what reaches it while the first batch runs (T-111 / T-112 / T-135 (1) / T-155 (4))', async () => {
     test.setTimeout(300_000)
     const { app, window, outDir } = await launchWithVideo('t112again')
     try {
@@ -9055,13 +9055,21 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(clipListCard(window).getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
       const spawnedBefore = (await readSpawnLog(app)).length
 
-      // The other door: Clip Kit's batch is refused by main, in words, and starts nothing.
-      await clipListCard(window).getByTitle('Export this clip for all 5 platforms + 3 thumbnails into one folder').click()
+      // The other door: Clip Kit's own button is shut while the batch runs (T-155 (4), the T-155 describe at the end of this file pins that). Main's
+      // gate is still the backstop for anything that reaches it, so it is asked directly: the refusal is in words, and starts nothing.
+      await expect(clipListCard(window).locator('[data-tutorial="video-clipkit"]')).toBeDisabled()
       const REFUSAL =
         'An export is already running. Wait for it to finish, or cancel it, then try again.'
-      await expectToast(window, REFUSAL)
-      const entry = (await readToastEntries(window)).find((e) => e.text === REFUSAL)
-      expect(entry?.hasIcon, 'a refusal is an error toast').toBe(true)
+      const asked = await window.evaluate(async () => {
+        const api = (window as unknown as { api: { video: { exportBatch: (jobs: unknown[]) => Promise<unknown> } } }).api
+        try {
+          await api.video.exportBatch([])
+          return 'accepted'
+        } catch (err) {
+          return String(err)
+        }
+      })
+      expect(asked, "main's one-batch gate refuses it, in words").toContain(REFUSAL)
       // The batch that IS running is untouched: no Failed row, its Cancel still there.
       await expect(again.getByText('Failed', { exact: true })).toHaveCount(0)
       await expect(again.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
@@ -12943,6 +12951,82 @@ test.describe('T-150 (3): "+ Clip" on a scan row adds one clip however it is pre
       await window.keyboard.up('Enter')
       await expectToast(window, 'Already in the Clips list')
       await expect(clipListCard(window).locator('h3'), 'the held key added nothing').toHaveText('Clips (1)')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+test.describe('T-155 (4): Export and Clip Kit wait for each other', () => {
+  // Main runs ONE export batch at a time (T-111), and Clip Kit's five exports are a batch. The second door used to be open: Clip Kit started
+  // (chooser, folder made, refused, folder removed) while an Export ran, and Export while a kit ran replaced the last batch's rows with
+  // Failed / Not run. Each is disabled while the other runs, with a title that names it; main's gate stays as the backstop.
+  const KIT_RUNNING_TITLE = 'Clip Kit is running. Export when it is done.'
+  const EXPORT_RUNNING_TITLE = 'An export is running. Clip Kit starts when it is done.'
+  const kitStart = (window: Page): Locator => clipListCard(window).locator('[data-tutorial="video-clipkit"]')
+
+  test('while a kit runs, Export is disabled and says Clip Kit is running; when the kit ends it is enabled again', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t155-4-kit')
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const exportButton = exportCard(window).getByRole('button', { name: /^Export 1/ })
+      await expect(exportButton, 'idle: Export is there to press').toBeEnabled()
+      await expect(exportButton).not.toHaveAttribute('title', /.+/)
+
+      // Job 2's probe is held so the kit is still in its export phase while Export is looked at.
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 25_000 }])
+      await kitStart(window).click()
+      await expect(kitStart(window)).toHaveText('Exporting platform version 2 of 5…', { timeout: 120_000 })
+
+      await expect(exportButton, 'a kit is running: Export waits for it').toBeDisabled()
+      await expect(exportButton).toHaveAttribute('title', KIT_RUNNING_TITLE)
+      await expect(exportCard(window).getByText('Failed', { exact: true })).toHaveCount(0)
+
+      // The kit ends (a Cancel is how a person ends one early): Export is back, with no excuse left on it.
+      await clipListCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Clip Kit canceled. Files already finished are in your folder.')
+      await expect(kitStart(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      await expect(exportButton).toBeEnabled()
+      await expect(exportButton).not.toHaveAttribute('title', /.+/)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('while an export runs, Clip Kit is disabled and says an export is running, and starts nothing; when the export ends it is enabled again', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t155-4-export')
+    try {
+      const kitParent = path.join(root, `kit-155-${Date.now().toString(36)}`)
+      mkdirSync(kitParent, { recursive: true })
+      await stubDialogs(app, { open: [outDir, kitParent] })
+      const card = exportCard(window)
+      await expect(kitStart(window), 'idle: Clip Kit is there to press').toBeEnabled()
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 60_000 }])
+      await card.getByRole('button', { name: /^Export 1/ }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect
+        .poll(async () => (await readSpawnLog(app)).filter((k) => k === 'ffmpeg').length, { timeout: 30_000, intervals: [100] })
+        .toBe(1)
+
+      await expect(kitStart(window), 'an export is running: Clip Kit waits for it').toBeDisabled()
+      await expect(kitStart(window)).toHaveAttribute('title', EXPORT_RUNNING_TITLE)
+      // A press that reaches it anyway starts nothing: no chooser answered, no folder made, no refusal toast, the batch untouched.
+      await kitStart(window).dispatchEvent('click')
+      await window.waitForTimeout(500)
+      expect(withEverything(readdirSync(kitParent)), 'no kit folder').toEqual([])
+      expect(await readToastLog(window), 'main was never asked').not.toContain('An export is already running. Wait for it to finish, or cancel it, then try again.')
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(0)
+
+      // The export ends (one job: Cancel asks nothing): Clip Kit is back, with its own title.
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(kitStart(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(kitStart(window)).toHaveAttribute('title', 'Export this clip for all 5 platforms + 3 thumbnails into one folder')
+      await expect(kitStart(window)).toHaveText('Clip Kit (5 + thumbs)')
     } finally {
       await app.close()
     }

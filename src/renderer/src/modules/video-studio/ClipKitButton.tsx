@@ -24,6 +24,7 @@ import {
 } from './clipKit'
 import { useVideoStore } from './store/videoStore'
 import { useKitRun } from './store/runs'
+import { useExportQueue } from './store/exportQueue'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
 import { RunningCancel } from '../../components/RunningCancel'
@@ -146,6 +147,9 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
   // a second press used to be refused with a sentence after a chooser had been answered). Tied to the clip's row, the Cancel was lost when another
   // clip was selected, and for good when the clip was removed or the video closed (`ClipKitRunning` is the closed video's).
   const kitRun = useKitRun((s) => s.run)
+  // T-155 (4): the kit is a batch of exports, and main runs one batch at a time. While the Export panel's batch runs the button waits for it
+  // (it used to start, ask for a folder, make it, and be refused - the empty folder removed again) and says which run it is waiting for.
+  const exportRunning = useExportQueue((s) => s.running)
   // T-85: the kit's one question. It used to raise the safe-zone modal on
   // every run — picking "all five platforms" IS the answer to that question,
   // and each platform's centered cut is made on purpose (T-83) — so what a
@@ -367,14 +371,18 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
       ) : null}
       <button
         onClick={startKit}
-        disabled={kitRun !== null}
+        disabled={kitRun !== null || exportRunning}
         // T-125 (24): the Video tour's Clip Kit step points here.
         data-tutorial="video-clipkit"
         // T-113: the label IS the progress readout ("Exporting platform version 2 of 5…"), so
         // it is announced as it changes (GifPanel's pattern; role="status" would clobber the
         // button role).
         aria-live="polite"
-        title="Export this clip for all 5 platforms + 3 thumbnails into one folder"
+        title={
+          exportRunning && kitRun === null
+            ? 'An export is running. Clip Kit starts when it is done.'
+            : 'Export this clip for all 5 platforms + 3 thumbnails into one folder'
+        }
         // T-112: ink on the wash, the accent border carries the identity. accent text on
         // an accent wash over the row's bg-hover measured 4.10:1 at rest and about 3.6:1
         // on hover (under the 4.5:1 AA floor); ink-base clears it with room.

@@ -3069,7 +3069,8 @@ test.describe('T-154 (1), (2): one press on → Canvas and on a tile ✕', () =>
       await toCanvas.click()
       await expect.poll(parked, { timeout: 10_000 }).toBe(1)
       await window.waitForTimeout(700)
-      await toCanvas.click()
+      // T-155 (1): the button is `aria-disabled` while a send is out, which Playwright's click waits out; a person's press lands (and is told, "Still adding the last picture").
+      await toCanvas.click({ force: true })
       await window.waitForTimeout(500)
       expect(await parked(), 'the second press during the load started nothing').toBe(1)
       await release()
@@ -3153,6 +3154,113 @@ test.describe('T-154 (1), (2): one press on → Canvas and on a tile ✕', () =>
       expect(items(), 'the second press during the removal removed nothing').toHaveLength(4)
       await expect(remove).toHaveCount(4)
       expect((await readToastLog(window)).filter((t) => /Couldn't remove/.test(t)), 'and raised no error').toEqual([])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-155 (1): one stalled "→ Canvas" load no longer silences every other "→ Canvas" press
+// ═══════════════════════════════════════════════════════════════════════════
+// The send claim (T-154 (1)) is held across the picture's load, and the load had no deadline: a tile whose cached thumbnail is gone falls back to its source address, and a host that
+// accepts and never answers held the claim for ever, so every other tile's "→ Canvas" returned in silence. Now the load gives up after 10 s with a sentence, every "→ Canvas" shows
+// that a send is out (aria-disabled + a title), and a press says "Still adding the last picture". The renderer's CSP (`img-src https:`) bars a loopback HTTP host, so the stalled host is
+// the page-side hold the T-154 case uses, never released: an image whose address says "stall-thumb" is simply never started, which is what a host that never answers looks like to the page.
+// The 10 s is the shipped constant (no env hook), so this case waits it out (~12 s).
+test.describe('T-155 (1): a stalled "→ Canvas" load says so, gives up with a sentence, and gives the other tiles back', () => {
+  test('while a load is out every "→ Canvas" shows it and a press says "Still adding the last picture"; at the deadline the failure sentence shows and the second tile then adds its layer', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t155-stalled-send')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-1.png'), Buffer.from(PNG_8x6, 'base64'))
+    const board = boardOwning('sendboard', 'Send board', fx.thumbsDir, ['stall-thumb-0.png', 'fast-thumb-1.png'])
+    // Item 0's cache is gone (Clear thumbnail cache): its tile falls back to the address the picture came from.
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'sendboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.evaluate(() => {
+        const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+        if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+        const { get, set } = desc
+        Object.defineProperty(HTMLImageElement.prototype, 'src', {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return get.call(this)
+          },
+          set(value: string) {
+            if (!String(value).includes('stall-thumb')) set.call(this, value)
+          }
+        })
+      })
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await expect(toCanvas).toHaveCount(2)
+      const ADDED = "Added to canvas as a reference — it won't be in your export"
+      const FAILED = "That picture didn't load. Try again, or save it to the board again."
+      const BUSY = 'Still adding the last picture'
+      await expect(toCanvas.nth(0), 'idle: not marked busy').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas.nth(1), 'idle: no busy title').not.toHaveAttribute('title', /.+/)
+
+      // ── the stalled send ──
+      await window.waitForTimeout(800) // past T-153's half-second repeat swallow after the route change
+      await toCanvas.nth(0).click()
+      for (const i of [0, 1]) {
+        await expect(toCanvas.nth(i), `tile ${i}: a send is out`).toHaveAttribute('aria-disabled', 'true')
+        await expect(toCanvas.nth(i), `tile ${i}: the title says what it is waiting for`).toHaveAttribute('title', 'Adding the last picture…')
+      }
+      // ── a press on the other tile during the stall: told, not ignored, and nothing is added ──
+      // (`force`: Playwright treats aria-disabled as not actionable and would wait the stall out; a person's click lands.)
+      await toCanvas.nth(1).click({ force: true })
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(BUSY)
+      await expect(window.locator('h1', { hasText: 'References' }), 'still on References').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'nothing was added').toEqual([])
+
+      // ── the deadline: the finished sentence, and the claim is given back ──
+      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [500] }).toContain(FAILED)
+      await expect(toCanvas.nth(0), 'the busy mark is gone').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas.nth(1)).not.toHaveAttribute('title', /.+/)
+
+      // ── the second tile now works ──
+      await toCanvas.nth(1).click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'one reference added, by the second tile').toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+  test('a held Enter on a cached tile\'s "→ Canvas" adds ONE reference layer', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-t155-held-enter')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-0.png'), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 'heldsend.json'), JSON.stringify(boardOwning('heldsend', 'Held send', fx.thumbsDir, ['fast-thumb-0.png'])), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.waitForTimeout(800)
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      // The first down is the press, the next are the key's auto-repeats (a person's hold spans the picture's load).
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 6; i++) {
+        await window.waitForTimeout(40)
+        await window.keyboard.down('Enter')
+      }
+      await window.keyboard.up('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await window.waitForTimeout(800)
+      await expect(window.getByRole('heading', { name: 'Layers (1)' }), 'still one reference layer a moment later').toBeVisible()
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

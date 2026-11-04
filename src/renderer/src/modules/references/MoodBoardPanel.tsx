@@ -8,12 +8,28 @@ import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvas
 import { currentRoute } from '../project/ProjectIO'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { PanelHeader } from '../../components/PanelHeader'
 import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
 import { reportFailure } from '../../lib/reportFailure'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { LAYER_DRAWN_MAX_DIM, placementFor } from '@shared/imageBounds'
+
+/**
+ * T-155 (1): how long "→ Canvas" waits for a picture. A tile whose cached thumbnail is gone falls back to the address it came from, and a host that accepts
+ * and never answers would hold the one send claim for ever (the 10 s is the thumbnail fetch's own figure). The sentence is the finished one `reportFailure` shows as written.
+ */
+const SEND_LOAD_DEADLINE_MS = 10_000
+const SEND_LOAD_FAILED = "That picture didn't load. Try again, or save it to the board again."
+
+/** `loadImage`, given up on after `SEND_LOAD_DEADLINE_MS`; the timer is cleared the moment the load settles. */
+function loadWithinDeadline(src: string): Promise<HTMLImageElement> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(SEND_LOAD_FAILED)), SEND_LOAD_DEADLINE_MS)
+  })
+  return Promise.race([loadImage(src, 'anonymous'), deadline]).finally(() => clearTimeout(timer))
+}
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -31,16 +47,25 @@ export function MoodBoardPanel(): JSX.Element {
   // press during it - a double-click's, or a Tab-Enter - found nothing done yet and added the reference again; T-153's route-change swallow cannot reach a
   // press that lands BEFORE the route changes. Claimed ahead of the first await and given back in a finally; the button also drops the double-click's repeat.
   const sendingRef = useRef(false)
+  // T-155 (1): the same fact, for the screen: while a send is out every "→ Canvas" says so, and a press says why nothing happened instead of returning in silence.
+  const [sending, setSending] = useState(false)
   // T-154 (2): and one removal at a time, for the same reason: the grid reflows when the first tile goes and the next tile's ✕ sits under the pointer.
   const removingRef = useRef(false)
 
   async function sendToCanvas(src: string, title: string): Promise<void> {
-    await claimFirst(sendingRef, () => sendToCanvasNow(src, title))
+    await claimFirst(sendingRef, async () => {
+      setSending(true)
+      try {
+        await sendToCanvasNow(src, title)
+      } finally {
+        setSending(false)
+      }
+    })
   }
 
   async function sendToCanvasNow(src: string, title: string): Promise<void> {
     try {
-      const img = await loadImage(src, 'anonymous')
+      const img = await loadWithinDeadline(src)
       // T-139 (2): placed wholly on the canvas that is open when the picture lands (a small one - the 112 px emote - shrinks it to fit), like an imported file.
       const { width: docWidth, height: docHeight } = useCanvasStore.getState().doc
       const place = placementFor(img.naturalWidth, img.naturalHeight, docWidth, docHeight)
@@ -306,10 +331,18 @@ export function MoodBoardPanel(): JSX.Element {
                       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                         <span className="text-xs text-ink-base line-clamp-2" title={item.title}>{item.title}</span>
                         <button
-                          className="btn-primary px-3 py-1 text-xs"
+                          className="btn-primary px-3 py-1 text-xs aria-disabled:opacity-50"
+                          // T-155 (1): `aria-disabled`, not `disabled`, so a keyboard press keeps its focus (T-140 (8)); the press says why it did nothing.
+                          aria-disabled={sending || undefined}
+                          title={sending ? 'Adding the last picture…' : undefined}
+                          onKeyDown={ignoreHeldEnter}
                           onClick={(e) => {
                             // T-154 (1): the second press of a double-click is the first one's decision, not a new one.
                             if (isRepeatPress(e)) return
+                            if (sending) {
+                              toast('Still adding the last picture', { id: 'tocanvas-busy' })
+                              return
+                            }
                             void sendToCanvas(src, item.title)
                           }}
                         >

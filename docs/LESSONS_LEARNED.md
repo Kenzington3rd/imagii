@@ -14,6 +14,53 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-155 (round 104), Track A: a claim with no deadline is a lock with no key; a guard keyed on one letter guards one layout; a press that is refused says why
+
+The forty-first sweep, Track A (a stalled "→ Canvas" load, the held-paste chord, and five add buttons; Track B lands separately).
+
+### (1) [LOW] - One stalled "→ Canvas" load silenced every other "→ Canvas" press
+
+- **Bug.** A tile whose cached thumbnail is gone falls back to its source address; if that host accepts and never answers, the load never settles, so the one send claim (T-154 (1)) was never given back and every other tile's "→ Canvas" returned in silence, for as long as the app stayed open.
+- **Root cause.** T-154 put a `claimFirst` around an await that has no deadline (`loadImage` waits for `onload` or `onerror`, and a silent host gives neither), and the refused press had no visible answer.
+- **Fix.** The load races a 10 s timer (the thumbnail fetch's own figure) that rejects with the finished sentence "That picture didn't load. Try again, or save it to the board again." (`reportFailure` shows a one-line sentence as written; the timer is cleared when the load settles; the claim is released by its `finally`). While a send is out every "→ Canvas" is `aria-disabled` with the title "Adding the last picture…" and a press raises "Still adding the last picture" (one toast id) instead of nothing. A `sending` state mirrors the ref; the ref still does the claiming. A held Enter on the button is covered too (`ignoreHeldEnter`; the e2e case is green on the unchanged build, because the claim and the route change already stop repeats, so the unit pin holds the guard).
+- **Test.** references.spec.ts "T-155 (1)" (~13 s: marked and titled, the busy toast, the failure sentence, then the second tile adds its layer); `interactionWiring.test.ts`, `truthInCopy.test.ts`; red on the unchanged build.
+- **Lesson.** **Every claim held across an await needs a deadline, and a press the claim refuses needs a sentence.** A flag that can only be lowered by the thing it guards turns one slow host into a dead button; and silence is the one answer that looks the same as a bug. `aria-disabled` and not `disabled`, so a keyboard press keeps its focus (T-140 (8)). **And a test must press like a person**: Playwright treats `aria-disabled` as not clickable and waits for it to lift, so the first draft waited out the stall and never saw the busy toast; `{ force: true }` is the person's click.
+
+### (2) [LOW] - The held-paste guard knew only the letter "v"
+
+- **Root cause.** T-154 (5) keyed the chord on `e.key.toLowerCase() === 'v'`: Shift+Insert has no V in it, and on a Cyrillic or Greek layout `key` is that layout's letter (the key's position is `code`, `KeyV`), so each key repeat still pasted a layer.
+- **Fix.** The chord is Ctrl or Cmd with `code` `KeyV` or `key` "v", or Shift+Insert; the release clears on `KeyV`, "v" or Insert.
+- **Test.** image.spec.ts "T-155 (2), (3)": a held Shift+Insert (real keys) and a held Ctrl+V dispatched with `code: 'KeyV'`, `key: 'м'`, each followed by the real `webContents.paste()`; red on the unchanged build (`Layers (5)`).
+- **Lesson.** **A shortcut is the key's position or its command, not the letter a layout prints on it, and every spelling of a command is one command** (Paste is Ctrl+V and Shift+Insert). A guard written for the chord the author types guards one keyboard.
+
+### (3) [LOW] - Five add buttons ran again on a double-click or a held Enter
+
+- **Root cause.** "+ Add clip", "+ Add text" (Video Studio), "+ Add text" and "Start with text" (Stream Graphics) and a layer's Duplicate took the second press of a double-click and every auto-repeat of a held Enter as new decisions; Duplicate put the copy on top and shifted every row, so the second press copied the copy ("X copy copy").
+- **Fix.** `isRepeatPress(e)` in the click and `onKeyDown={ignoreHeldEnter}` on each, the T-150 / T-154 shape.
+- **Test.** video-core.spec.ts "T-155 (3)", image.spec.ts "T-155 (2), (3)" (a real `dblclick` and a held Enter on each; a fresh click still adds); red on the unchanged build for all but "Start with text".
+- **Lesson.** **A case that is green on the unchanged build is a guard that cannot be red, and it is said so.** "Start with text" is replaced by the canvas its first press makes, so its second press and its repeats land on nothing; it stays as the negative, and the ledger row says it discriminates nothing.
+
+## 2026-11-04 - T-155 (round 104), Track B: two doors into one gate, and a loop that outruns its consumer
+
+The forty-first sweep, Track B (Export and Clip Kit wait for each other; the compositor's draw rate; Track A lands beside it). Ledger: r104b/ledger.tsv (red rows against a `git archive` of the unchanged tree `ae14598`, sha256 triples for every mutation).
+
+### (4) [LOW] - Clip Kit started while an Export ran, and Export while a kit ran
+
+- **Bug.** Pressing Clip Kit while an Export batch ran asked for a folder, made it, was refused by main ("An export is already running...") and removed it again; pressing Export while a kit ran was refused the same way and its catch replaced the last batch's rows with Failed / Not run, erasing their "Show in folder".
+- **Root cause.** Each surface disabled itself for ITS OWN run (`running` for Export, `kitRun` for the kit) and knew nothing of the other, so the only thing standing between the two was main's one-batch gate, which answers after the work (the chooser, the folder, the rows) has been done. The T-111 / T-112 test had pinned that late refusal as the designed behaviour, and the coverage ledger's "only two surfaces at once reach it" was the same shrug.
+- **Fix.** The Clip Kit button adds `|| exportRunning` (`useExportQueue`) to its `disabled` and, when that is why, the title "An export is running. Clip Kit starts when it is done."; the Export button adds `|| kitRunning` (`useKitRun`) and "Clip Kit is running. Export when it is done." Main's gate is unchanged, the backstop.
+- **Test.** video-pipelines.spec.ts "T-155 (4): Export and Clip Kit wait for each other" (a kit held by a stalled probe: Export disabled with its title, no Failed row, enabled again once the kit ends; an export held by a stalled ffmpeg: Clip Kit disabled with its title, a click dispatched at it anyway makes no folder and no refusal, enabled again once the export ends), the T-111 / T-112 case re-pointed (the button asserted shut, main's gate asked directly), `interactionWiring.test.ts` pins. Red on the unchanged build, six e2e and nine unit mutations killed.
+- **Lesson.** **A gate that answers after the work is a backstop, not the control: when two surfaces share a resource, each one's `disabled` must read the other's state, and its title must say whose run it is waiting for.** And a test that pins the late refusal pins the bug; when the door is closed in the UI, ask the gate directly.
+
+### Fold (T-110 (bt)) - the compositor drew every display refresh for a 30 fps stream
+
+- **Bug.** The webcam compositor's `requestAnimationFrame` loop drew on every tick of the display (144 Hz: 144 draws a second) while `captureStream(30)` keeps at most 30 frames, so about four draws in five were discarded (measured 35.6% against 21.2% main-thread under software rendering).
+- **Fix.** `frame(now)` skips `drawFrame` while less than `1000 / fps - 2` ms has passed since the last draw and re-arms on every tick, drawn or not (the 2 ms is the tick's jitter, so 60 Hz for 30 fps is not "too early" every other tick).
+- **Test.** `compositor.test.ts` drives the real `startCompositor` against stubbed globals and a fake rAF clock: 144 Hz and 60 Hz give 29-31 draws in a second, 24 Hz and 60 fps on 60 Hz every tick, every tick re-arms, and a tick delivered after `stop()` draws nothing. Red on the unchanged tree; six mutations killed (the one that dropped the `running` guard survived the first draft of the test, which never delivered a late tick; the late-tick case is why it does not now).
+- **Lesson.** **A loop that is paced by something faster than its consumer should be paced by the consumer, and the pacing is a number you can test with a clock you own.** The rule floors to the display's multiples (a 60 fps stream on 144 Hz draws about 48), which is the price of not tracking a second timer; a 30 fps stream, the default, lands within a frame of 30 on every common refresh rate.
+
+---
+
 ## 2026-11-04 - T-154 (round 103), Track A: a press that outlives its first await needs a claim, and one that moves its own target needs a repeat guard; the test must outwait the page's own swallow
 
 The fortieth sweep, Track A (the second press on five controls, a held Ctrl+V, a tutorial's word, the Player's name, and the shortcuts column; Track B lands separately).

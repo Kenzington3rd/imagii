@@ -6,6 +6,7 @@ import { HookIndicator } from './HookIndicator'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useGestureEnd } from '../../lib/gestureEnd'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { formatClock } from '@shared/clockTime'
 
 export function ClipList(): JSX.Element {
@@ -38,7 +39,15 @@ export function ClipList(): JSX.Element {
       <PanelHeader
         icon="film"
         actions={
-          <button className="btn-ghost px-3 py-1 text-xs" onClick={addClip}>
+          <button
+            className="btn-ghost px-3 py-1 text-xs"
+            // T-155 (3): a double-click or a held Enter is one clip, not two or twenty.
+            onClick={(e) => {
+              if (isRepeatPress(e)) return
+              addClip()
+            }}
+            onKeyDown={ignoreHeldEnter}
+          >
             + Add clip
           </button>
         }

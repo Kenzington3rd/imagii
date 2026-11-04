@@ -337,3 +337,17 @@ describe('the audio tutorial names the Cleanup checkboxes as the screen labels t
     expect(body).not.toContain("'Softer harsh' sounds")
   })
 })
+
+// T-155 (1): a "→ Canvas" whose picture does not load in 10 s says so in a finished sentence, and the sentence is the one the failure toast shows AS WRITTEN (not the fallback
+// "Couldn't add that image to the canvas."), because `userFacingError` lets a one-line sentence ending in a full stop stand alone.
+describe('a stalled "→ Canvas" load speaks one finished sentence (T-155)', () => {
+  it('the deadline error is shown exactly as written, and the busy copy is in the panel', async () => {
+    const { userFacingError } = await import('../../src/shared/userFacingError')
+    const panel = read('src/renderer/src/modules/references/MoodBoardPanel.tsx')
+    const sentence = "That picture didn't load. Try again, or save it to the board again."
+    expect(panel).toContain(`const SEND_LOAD_FAILED = "${sentence}"`)
+    expect(userFacingError(new Error(sentence), "Couldn't add that image to the canvas.").message).toBe(sentence)
+    expect(panel).toContain("'Adding the last picture…'")
+    expect(panel).toContain("'Still adding the last picture'")
+  })
+})

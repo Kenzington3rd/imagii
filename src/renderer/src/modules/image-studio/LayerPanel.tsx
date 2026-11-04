@@ -3,7 +3,7 @@ import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { assertDefined } from '@shared/assert'
 import { hintTag } from '@shared/canvas'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 
 export function LayerPanel(): JSX.Element {
   const layers = useCanvasStore((s) => s.doc.layers)
@@ -146,8 +146,11 @@ export function LayerPanel(): JSX.Element {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
+                    // T-155 (3): the copy goes on top and shifts every row, so a double-click's second press copied the copy.
+                    if (isRepeatPress(e)) return
                     duplicateLayer(layer.id)
                   }}
+                  onKeyDown={ignoreHeldEnter}
                   className="text-ink-dim hover:text-ink-base px-1 flex"
                   title="Duplicate"
                   aria-label="Duplicate layer"
