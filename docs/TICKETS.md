@@ -6886,7 +6886,8 @@ IMG-PREC.
 
 ## T-152 — sweep-38 fixes (round 101)
 
-- **Spec:** the thirty-eighth sweep's four verified findings (candidate clean pass #1 on 21c4eef),
+- **Spec:** the thirty-eighth sweep's five verified findings (candidate clean pass #1 on 21c4eef; item 5
+  arrived from QA's whole-tree remainder after dispatch),
   confirmed by the expediter against source (item 1 also measured on the distro 6.1.1). Privacy, a11y,
   audio and design clean; ffmpeg's, streamer's, QA's and UX's item 1 are one finding (collapsed);
   UX's "Compile shows only Stitching…" is T-110 (c) (sweep 13) verbatim, not counted. Two tracks,
@@ -6919,6 +6920,17 @@ IMG-PREC.
      (a)'s (the START is kept: mean absolute difference under a small bound you state) and (b) touches
      column 1079 (the end runs off); plus the T-151 fitting case still green. Red on the unchanged tree
      (the leftmost columns are mid-sentence).
+
+  5. **[LOW] (QA's remainder, folded into Track A after dispatch) "Stroke (px)" stores a negative
+     number, and a negative stroke draws at the width of whatever was drawn before it.**
+     PropertiesPanel.tsx `FillStrokeFields` (:183-193) is the panel's one raw number box:
+     `Number(e.target.value) || 0` with only `min={0}` (a spinner limit), so a typed "-3" is stored; Konva
+     treats -3 as a stroke (`hasStroke`) and the canvas ignores a non-positive `lineWidth`, keeping the
+     previous shape's, so the outline drawn and exported depends on layer order. Fix direction: the same
+     `DraftField` + `clampTyped(typed, 0)` the neighbouring Size (px) box uses (kept until typing ends,
+     one undo step). Covering tests: e2e (image.spec.ts NEW describe): a rectangle, "-3" typed in
+     Stroke (px) and committed → the box reads 0 and a saved project's layer has `strokeWidth: 0`; red on
+     1aa1e78 (-3 on disk).
 
   **Track B — a replace that asks, a size read before the file, a clip with length (items 2-4).**
   2. **[LOW-MED] One click on an Asset Library card replaces a canvas the person cannot see, with no
