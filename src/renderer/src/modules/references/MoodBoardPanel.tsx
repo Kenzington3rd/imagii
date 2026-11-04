@@ -8,6 +8,7 @@ import { useCanvasStore, makeReferenceLayer } from '../image-studio/state/canvas
 import { currentRoute } from '../project/ProjectIO'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
+import { createRunStore } from '../../lib/runStore'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { PanelHeader } from '../../components/PanelHeader'
 import { boundedDataUrl, loadImage } from '../../lib/boundedImage'
@@ -28,8 +29,20 @@ function loadWithinDeadline(src: string): Promise<HTMLImageElement> {
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(SEND_LOAD_FAILED)), SEND_LOAD_DEADLINE_MS)
   })
-  return Promise.race([loadImage(src, 'anonymous'), deadline]).finally(() => clearTimeout(timer))
+  // T-156 (5): a picture that fails at once (offline, a 404, a host with no CORS header, a data URL that will not decode) says what a stalled one says: `loadImage`'s bare
+  // "Decode failed" is not shown by `userFacingError`, so it read "Couldn't add that image to the canvas." with nothing to do next.
+  const load = loadImage(src, 'anonymous').catch(() => {
+    throw new Error(SEND_LOAD_FAILED)
+  })
+  return Promise.race([load, deadline]).finally(() => clearTimeout(timer))
 }
+
+/**
+ * T-156 (4): the send in flight, at module scope (the T-135 / T-136 pattern). The claim and the busy flag were a `useRef` and a `useState` of the panel, and the studio
+ * renders its tabs conditionally, so Mood Boards -> Asset Library -> Mood Boards remounted the panel with the claim given back while the first send was still out
+ * (up to the deadline): a second press sent again and every "→ Canvas" had lost its busy state. `begin` is the claim, ahead of the first await; `end` is in a finally.
+ */
+const useSendRun = createRunStore<{ title: string }>()
 
 export function MoodBoardPanel(): JSX.Element {
   const collections = useReferencesStore((s) => s.collections)
@@ -46,21 +59,19 @@ export function MoodBoardPanel(): JSX.Element {
   // T-154 (1): and one send at a time. The picture's load below is an await (a network fetch for a tile that fell back to its source URL), so a second
   // press during it - a double-click's, or a Tab-Enter - found nothing done yet and added the reference again; T-153's route-change swallow cannot reach a
   // press that lands BEFORE the route changes. Claimed ahead of the first await and given back in a finally; the button also drops the double-click's repeat.
-  const sendingRef = useRef(false)
-  // T-155 (1): the same fact, for the screen: while a send is out every "→ Canvas" says so, and a press says why nothing happened instead of returning in silence.
-  const [sending, setSending] = useState(false)
+  // T-155 (1): and the same fact, for the screen: while a send is out every "→ Canvas" says so, and a press says why nothing happened instead of returning in silence.
+  // T-156 (4): both are `useSendRun` above, which a tab change cannot reach.
+  const sending = useSendRun((s) => s.run !== null)
   // T-154 (2): and one removal at a time, for the same reason: the grid reflows when the first tile goes and the next tile's ✕ sits under the pointer.
   const removingRef = useRef(false)
 
   async function sendToCanvas(src: string, title: string): Promise<void> {
-    await claimFirst(sendingRef, async () => {
-      setSending(true)
-      try {
-        await sendToCanvasNow(src, title)
-      } finally {
-        setSending(false)
-      }
-    })
+    if (!useSendRun.getState().begin({ title })) return
+    try {
+      await sendToCanvasNow(src, title)
+    } finally {
+      useSendRun.getState().end()
+    }
   }
 
   async function sendToCanvasNow(src: string, title: string): Promise<void> {

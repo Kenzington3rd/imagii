@@ -1699,7 +1699,7 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('timeline: the playhead never lies — store churn keeps it, leaving and returning resets it (T-52)', async () => {
+  test('timeline: the playhead never lies — store churn keeps it, leaving and returning keeps it too (T-52, T-156 (2))', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('playheadsync')
     try {
@@ -1732,9 +1732,9 @@ test.describe('Video Studio core editing surface', () => {
       expect(churnedPct).toBeGreaterThan(55)
       expect(churnedPct).toBeLessThan(65)
 
-      // ── leaving and returning: the studio remounts with a NEW <video> that
-      //    starts at 0, so the marker must say 0 too. The stale store value
-      //    used to draw a playhead the video was nowhere near. ──
+      // ── leaving and returning (T-156 (2), edited in place: T-52 had this reset to 0): the studio remounts with a NEW <video>, which is
+      //    sent back to where the person left it, and the marker, the readout and the element must all say the same thing. The stale-marker
+      //    lie T-52 fixed (a marker where the video is not) is still the failure this case catches. ──
       await window.getByRole('link', { name: 'Home' }).click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
@@ -1744,17 +1744,16 @@ test.describe('Video Studio core editing surface', () => {
       // GifPanel's "Export GIF" — hence the exact name).
       await expect(window.getByRole('button', { name: 'Export 2' })).toBeVisible()
 
-      expect((await videoState(window)).t, 'the remounted media element starts at 0').toBeLessThan(
-        SEEK_TOLERANCE
-      )
+      await expectLanded(window, 1.2, 'the remounted media element is back at 1.2 s')
       await expect
         .poll(() => playheadPercent(window), {
           timeout: 10_000,
-          message: 'the drawn playhead must follow the remounted element back to 0'
+          message: 'the drawn playhead must follow the remounted element, not rewind to 0'
         })
-        .toBeLessThan(1)
+        .toBeGreaterThan(55)
+      expect(await playheadPercent(window)).toBeLessThan(65)
       await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
-        '0:00.00'
+        '0:01.20'
       )
     } finally {
       await app.close()
@@ -3620,6 +3619,50 @@ test.describe('T-155 (3): + Add clip and + Add text (Video Studio) are one add p
       await expect(card.locator('h3'), 'still two a moment later').toHaveText('Text overlays (2)')
       await add.click()
       await expect(card.locator('h3')).toHaveText('Text overlays (3)')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-156 (2): the Player's source effect ran on MOUNT and wrote 0 to the transport and the store, so a person at 2:41:00 of a long VOD who visited Home,
+// Audio Studio or References came back to 0:00 (clips and scans survived; the place did not). A remount now restores the store's position the way a
+// parked seek is restored; a different file (Close, then another drop: `clearSource` / `loadSource` zero the store) still starts at 0.
+test.describe('T-156 (2): coming back to Video Studio keeps the playhead where it was', () => {
+  /** The Player's own clock readout ("0:01.00 / 0:02.02") as seconds elapsed. */
+  async function readoutSeconds(window: Page): Promise<number> {
+    const text = (await window.getByText(/^\d+:\d\d\.\d\d \/ \d+:\d\d\.\d\d$/).textContent()) ?? ''
+    const [m, s] = text.split(' / ')[0]!.split(':')
+    return Number(m) * 60 + Number(s)
+  }
+
+  test('Home and back keeps 1.0 s on the readout and the media element; a different file starts at 0:00', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t156-keeps-place')
+    try {
+      const other = path.join(root, 'source', 'video-core-other.mp4')
+      await makeFixtureMp4(other)
+      const frame = 1 / FIXTURE_FPS
+      await seekTo(window, 1)
+      await expect.poll(() => readoutSeconds(window), { timeout: 10_000, message: 'the readout follows the seek' }).toBeGreaterThan(1 - frame)
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('video')).toHaveCount(0)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
+      await expect.poll(async () => Math.abs((await readoutSeconds(window)) - 1) < frame, { timeout: 10_000, message: 'the readout reads 1.0 s after the round trip' }).toBe(true)
+      await expect.poll(async () => Math.abs((await settledTime(window)) - 1) < frame, { timeout: 10_000, message: 'the media element sits at 1.0 s' }).toBe(true)
+      await expect.poll(async () => Math.abs(Number(await window.getByRole('slider', { name: 'Playhead' }).getAttribute('aria-valuenow')) - 1) < frame, { timeout: 10_000, message: 'the Timeline playhead reads 1.0 s' }).toBe(true)
+
+      // A different file: Close (clearSource), then a drop of another path. Nothing carries over.
+      window.on('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, other, path.basename(other))
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/^0:00\.00 \/ \d+:\d\d\.\d\d$/)).toBeVisible({ timeout: 10_000 })
+      expect(await settledTime(window)).toBeLessThan(frame)
     } finally {
       await app.close()
     }

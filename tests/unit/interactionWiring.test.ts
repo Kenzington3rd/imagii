@@ -3912,7 +3912,7 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
     const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
     expect(panel).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
     expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*if \(sending\) \{[\s\S]*?\}\s*void sendToCanvas\(src, item\.title\)/)
-    expect(panel).toMatch(/await claimFirst\(sendingRef, async \(\) => \{\s*setSending\(true\)\s*try \{\s*await sendToCanvasNow\(src, title\)/)
+    expect(panel).toMatch(/if \(!useSendRun\.getState\(\)\.begin\(\{ title \}\)\) return\s*try \{\s*await sendToCanvasNow\(src, title\)/)
   })
 
   it('(2) the tile ✕ drops a repeat press and claims across the awaited removal', () => {
@@ -3968,9 +3968,10 @@ describe('T-155 Track A - a press that waits says so, every paste chord, every a
     expect(panel).toMatch(/const SEND_LOAD_DEADLINE_MS = 10_000/)
     expect(panel).toMatch(/const SEND_LOAD_FAILED = "That picture didn't load\. Try again, or save it to the board again\."/)
     expect(panel).toMatch(/setTimeout\(\(\) => reject\(new Error\(SEND_LOAD_FAILED\)\), SEND_LOAD_DEADLINE_MS\)/)
-    expect(panel).toMatch(/Promise\.race\(\[loadImage\(src, 'anonymous'\), deadline\]\)\.finally\(\(\) => clearTimeout\(timer\)\)/)
+    expect(panel).toMatch(/loadImage\(src, 'anonymous'\)/)
+    expect(panel).toMatch(/Promise\.race\(\[load, deadline\]\)\.finally\(\(\) => clearTimeout\(timer\)\)/)
     // The flag the screen reads is raised inside the claimed work and lowered in its finally; the ref still does the claiming.
-    expect(panel).toMatch(/await claimFirst\(sendingRef, async \(\) => \{\s*setSending\(true\)\s*try \{\s*await sendToCanvasNow\(src, title\)\s*\} finally \{\s*setSending\(false\)/)
+    expect(panel).toMatch(/if \(!useSendRun\.getState\(\)\.begin\(\{ title \}\)\) return\s*try \{\s*await sendToCanvasNow\(src, title\)\s*\} finally \{\s*useSendRun\.getState\(\)\.end\(\)/)
     // Every → Canvas (one per tile, one source site) is marked, titled and answers a press while a send is out.
     expect(panel).toMatch(/aria-disabled=\{sending \|\| undefined\}/)
     expect(panel).toMatch(/title=\{sending \? 'Adding the last picture…' : undefined\}/)
@@ -4012,7 +4013,7 @@ describe('T-155 Track B - Export and Clip Kit wait for each other, the composito
     expect(kit).toMatch(/import \{ useExportQueue \} from '\.\/store\/exportQueue'/)
     expect(kit).toMatch(/const exportRunning = useExportQueue\(\(s\) => s\.running\)/)
     expect(kit).toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}/)
-    expect(kit).toMatch(/exportRunning && kitRun === null\s*\? 'An export is running\. Clip Kit starts when it is done\.'/)
+    expect(kit).toMatch(/exportRunning && kitRun === null\s*\? 'An export is running\. Start Clip Kit when it is done\.'/)
   })
 
   it('(4) the Export button is disabled while a kit runs, and its title names Clip Kit', () => {
@@ -4023,9 +4024,55 @@ describe('T-155 Track B - Export and Clip Kit wait for each other, the composito
     expect(panel).toMatch(/kitRunning && !running\s*\? 'Clip Kit is running\. Export when it is done\.'/)
   })
 
-  it('(bt) the compositor loop draws only when a capture interval has passed and re-arms either way', () => {
+  it('(bt) the compositor loop draws only when a capture interval is due (phase kept, T-156 (1)) and re-arms either way', () => {
     const src = strip(read('modules/record-studio/compositor.ts'))
-    expect(src).toMatch(/const minGapMs = 1000 \/ fps - 2/)
-    expect(src).toMatch(/function frame\(now: DOMHighResTimeStamp\): void \{\s*if \(!running\) return\s*if \(now - lastDrawMs >= minGapMs\) \{\s*drawFrame\([^)]*\)\s*lastDrawMs = now\s*\}\s*rafHandle = requestAnimationFrame\(frame\)/)
+    expect(src).toMatch(/const intervalMs = 1000 \/ fps\s*let nextDueMs = -Infinity/)
+    expect(src).toMatch(/function frame\(now: DOMHighResTimeStamp\): void \{\s*if \(!running\) return\s*if \(now >= nextDueMs - 2\) \{\s*drawFrame\([^)]*\)\s*nextDueMs = now - nextDueMs > intervalMs \? now \+ intervalMs : nextDueMs \+ intervalMs\s*\}\s*rafHandle = requestAnimationFrame\(frame\)/)
+  })
+})
+
+describe('T-156 Track A - the recorder keeps its 30, the Player keeps its place', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(2) the Player restores the store position on MOUNT only (a ref), and a path change while mounted still starts at 0', () => {
+    const src = strip(read('modules/video-studio/Player.tsx'))
+    expect(src).toMatch(/const mountedRef = useRef\(false\)/)
+    expect(src).toMatch(/const mounting = !mountedRef\.current\s*mountedRef\.current = true/)
+    expect(src).toMatch(/const resumeAt = parked \? parked\.seconds : mounting && state\.currentTime > 0 \? state\.currentTime : null/)
+    expect(src).toMatch(/if \(resumeAt !== null\) \{\s*useVideoStore\.setState\(\{ seekRequest: null, currentTime: resumeAt \}\)\s*setTime\(resumeAt\)/)
+    expect(src).toMatch(/if \(v\) v\.currentTime = resumeAt\s*return\s*\}\s*setTime\(0\)\s*setCurrentTime\(0\)/)
+  })
+
+  it('(2) a different file cannot inherit the position: loadSource and clearSource both zero the store\'s currentTime', () => {
+    const src = strip(read('modules/video-studio/store/videoStore.ts'))
+    const load = src.slice(src.indexOf('loadSource: async'), src.indexOf('clearSource: () =>\n'))
+    const clear = src.slice(src.indexOf('clearSource: () =>\n'), src.indexOf('setCurrentTime: (t: number) => set'))
+    expect(load).toMatch(/currentTime: 0,/)
+    expect(clear).toMatch(/currentTime: 0,/)
+  })
+})
+
+// T-156 (3)-(5): the Clip Kit title that promises only what happens; a send claim a tab change cannot re-arm; one sentence for a picture that did not load.
+describe('T-156 Track B - the kit title, the module-scope send claim, the one load-failure sentence', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(3) the Clip Kit button\'s disabled title is an instruction, and the old promise is gone', () => {
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
+    expect(kit).toContain("'An export is running. Start Clip Kit when it is done.'")
+    expect(kit).not.toContain('Clip Kit starts when it is done')
+  })
+
+  it('(4) the send claim and the busy flag are a module-scope run store, claimed ahead of the first await and ended in a finally; the panel keeps no ref or state of its own for them', () => {
+    const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(panel).toMatch(/^const useSendRun = createRunStore<\{ title: string \}>\(\)$/m)
+    expect(panel).toMatch(/const sending = useSendRun\(\(s\) => s\.run !== null\)/)
+    expect(panel).toMatch(/async function sendToCanvas\(src: string, title: string\): Promise<void> \{\s*if \(!useSendRun\.getState\(\)\.begin\(\{ title \}\)\) return\s*try \{/)
+    expect(panel).not.toMatch(/sendingRef|setSending/)
+  })
+
+  it('(5) every load failure inside loadWithinDeadline is the one sentence, and the timer is still cleared on every settle', () => {
+    const panel = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(panel).toMatch(/const load = loadImage\(src, 'anonymous'\)\.catch\(\(\) => \{\s*throw new Error\(SEND_LOAD_FAILED\)\s*\}\)/)
+    expect(panel).toMatch(/Promise\.race\(\[load, deadline\]\)\.finally\(\(\) => clearTimeout\(timer\)\)/)
   })
 })

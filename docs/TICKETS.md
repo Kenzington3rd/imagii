@@ -7316,7 +7316,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 105)
+- **Status:** done (round 105 — see the Done entry)
 
 ---
 
@@ -7881,6 +7881,45 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 105 — T-156, all five counted items and the fold, landed in the
+commit that carries this entry (T-110 gains (bv), an owner call). Two
+Sonnet workers in fresh clones of 0236359, disjoint files, merged by the
+expediter. Track A: the webcam compositor keeps its schedule's phase (the
+next draw is due one capture interval after the last DUE time, not after
+the draw), so every display at or above 30 Hz averages 30 frames a second
+(75 and 100 Hz gave 25) and a stall resyncs without a burst; coming back
+to Video Studio keeps the playhead where it was (a mount with no parked
+seek restores the store's position; a different file still starts at 0,
+because `loadSource` / `clearSource` already zero it); INTERACTION_COVERAGE
+says what happens to an interrupted caption-model download. Track B: the
+disabled Clip Kit button says "An export is running. Start Clip Kit when
+it is done."; the "→ Canvas" claim and its busy state are a module-scope
+run store, so a tab change cannot re-arm a send that is out; every load
+failure inside the deadline race is the one finished sentence.
+Deviations, accepted: the existing T-52 case "leaving and returning
+resets it" asserted the old reset and was edited in place to assert the
+kept position; the Player's "path changed while mounted" branch has no UI
+route (Close unmounts the Player) and is held by a source pin; the fast
+load failure is a page-side `error` dispatch (a real offline fetch is the
+OS boundary). Ledgers: A 2 RED / 20 mutations (one e2e survivor, the
+store reset after the restore, equivalent there because the element's
+timeupdate writes the store back within a frame, killed by its pin;
+three compositor mutants that first died only on the pin got behavioural
+cases — jitter, the 240 Hz minimum gap, a 50 ms hitch — and now die on
+behaviour); B 4 RED / 11 mutations, all killed; every restore
+byte-identical. Found not fixed: none new. Expedited personally: two
+independent mutations at seams no ledger row names — A: the resync lands
+on `now` instead of one interval ahead (a second draw on the next tick
+at the start and after every stall) → three compositor behaviour cases
+and the (bt) pin red; B: the panel reads the send store once with
+`getState()` instead of subscribing → the T-156 Track B (4) pin red AND
+references.spec.ts T-155 (1) "while a load is out every → Canvas shows
+it" and T-156 (4) red on a build — each restored byte-identical, sha256
+verified; on the MERGED tree: verify x2 (207/6140), test:media 453 passed | 17
+skipped of 470 on 7.0.2, FULL
+Playwright 625/625 (50.4 min). Applied to 0236359 by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 104 — T-155, all four counted items and the fold, landed in the
 commit that carries this entry (T-110's (bt) folded in; (bu) stays an

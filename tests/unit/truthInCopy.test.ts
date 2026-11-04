@@ -351,3 +351,12 @@ describe('a stalled "→ Canvas" load speaks one finished sentence (T-155)', () 
     expect(panel).toContain("'Still adding the last picture'")
   })
 })
+
+// T-156 (3): nothing queues a Clip Kit behind an export (`runKit` begins only from the button's click), so its disabled title must not say the kit "starts" by itself.
+describe('the Clip Kit button\'s disabled title promises only what happens (T-156)', () => {
+  it('it tells the person to start the kit, and never says the kit starts when the export is done', () => {
+    const kit = read('src/renderer/src/modules/video-studio/ClipKitButton.tsx')
+    expect(kit).toContain("'An export is running. Start Clip Kit when it is done.'")
+    expect(kit).not.toMatch(/Clip Kit starts/i)
+  })
+})

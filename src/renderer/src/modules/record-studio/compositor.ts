@@ -236,16 +236,19 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
 
   let rafHandle: number | null = null
   let running = true
-  // T-155 (bt): `captureStream(fps)` keeps at most `fps` frames a second, but rAF ticks at the display's rate (144 Hz drew four frames for
-  // every one kept). A tick less than one capture interval after the last draw draws nothing and still re-arms; the 2 ms of slack is
-  // the tick's jitter, so a display that is an exact multiple of `fps` (60 Hz for 30) is not read as "too early" every other tick.
-  const minGapMs = 1000 / fps - 2
-  let lastDrawMs = -Infinity
+  // T-155 (bt) / T-156 (1): `captureStream(fps)` keeps at most `fps` frames a second, but rAF ticks at the display's rate (144 Hz drew four
+  // frames for every one kept). A tick that is not yet due draws nothing and still re-arms. The schedule keeps its PHASE (`nextDueMs` steps
+  // by one interval, it is not re-anchored to the draw), so the average is `fps` on any display at or above it: re-anchoring on the draw
+  // floored the rate to the first refresh tick past the interval (25 fps on 75 or 100 Hz). The 2 ms is the tick's jitter, so a display that
+  // is an exact multiple of `fps` is not read as "too early" every other tick. A tick more than one interval late (a stall, a hidden tab)
+  // resyncs to `now` instead of bursting to catch up.
+  const intervalMs = 1000 / fps
+  let nextDueMs = -Infinity
   function frame(now: DOMHighResTimeStamp): void {
     if (!running) return
-    if (now - lastDrawMs >= minGapMs) {
+    if (now >= nextDueMs - 2) {
       drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
-      lastDrawMs = now
+      nextDueMs = now - nextDueMs > intervalMs ? now + intervalMs : nextDueMs + intervalMs
     }
     rafHandle = requestAnimationFrame(frame)
   }

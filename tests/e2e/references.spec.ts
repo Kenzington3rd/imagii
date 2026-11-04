@@ -3267,3 +3267,128 @@ test.describe('T-155 (1): a stalled "→ Canvas" load says so, gives up with a s
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-156 (4) / (5): a send a tab change cannot re-arm, and one sentence for a picture that fails at once
+// ═══════════════════════════════════════════════════════════════════════════
+// (4) The send claim and the busy flag were the panel's own (`useRef` / `useState`) and the studio renders its tabs conditionally, so Mood Boards -> Asset Library -> Mood Boards remounted the
+// panel with the claim given back while the first send was still out. They are a module store now. (5) `loadImage` rejects a picture that fails at once with a bare "Decode failed" that
+// `userFacingError` does not show, so it read "Couldn't add that image to the canvas."; every load failure inside the send is the stalled picture's sentence. The stall is the T-155 page-side
+// hold (an image whose address says "stall-thumb" is never started); the fast failure is the same hold firing the image's `error` at once for an address that says "fail-thumb" (the CSP
+// bars a loopback host, and a real offline fetch is not deterministic).
+test.describe('T-156 (4) / (5): the send claim survives a tab change, and a picture that fails at once says one sentence', () => {
+  const ADDED = "Added to canvas as a reference — it won't be in your export"
+  const FAILED = "That picture didn't load. Try again, or save it to the board again."
+  const BUSY = 'Still adding the last picture'
+  const GENERIC = "Couldn't add that image to the canvas."
+
+  async function installSrcHold(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+      if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+      const { get, set } = desc
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return get.call(this)
+        },
+        set(value: string) {
+          const v = String(value)
+          if (v.includes('stall-thumb')) return
+          if (v.includes('fail-thumb')) {
+            setTimeout(() => (this as HTMLImageElement).dispatchEvent(new Event('error')), 0)
+            return
+          }
+          set.call(this, value)
+        }
+      })
+    })
+  }
+
+  test('a stalled send, then Asset Library and back: every "→ Canvas" is still busy, a press says so, and the deadline gives one sentence and no layer; then the claim is free', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t156-remount-send')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-1.png'), Buffer.from(PNG_8x6, 'base64'))
+    const board = boardOwning('sendboard', 'Send board', fx.thumbsDir, ['stall-thumb-0.png', 'fast-thumb-1.png'])
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'sendboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await installSrcHold(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await expect(toCanvas).toHaveCount(2)
+      await window.waitForTimeout(800) // past T-153's half-second repeat swallow after the route change
+      await toCanvas.nth(0).click()
+      await expect(toCanvas.nth(0)).toHaveAttribute('aria-disabled', 'true')
+
+      // ── leave the Mood Boards tab and come back: the panel is a new mount, the send is still out ──
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(window.getByRole('button', { name: /Canvas/ })).toHaveCount(0)
+      await moodBoardTab(window).click()
+      await expect(toCanvas).toHaveCount(2)
+      for (const i of [0, 1]) {
+        await expect(toCanvas.nth(i), `tile ${i}: still marked busy after the remount`).toHaveAttribute('aria-disabled', 'true')
+        await expect(toCanvas.nth(i), `tile ${i}: still says what it waits for`).toHaveAttribute('title', 'Adding the last picture…')
+      }
+      await window.waitForTimeout(800)
+      await toCanvas.nth(1).click({ force: true })
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(BUSY)
+      await expect(window.locator('h1', { hasText: 'References' }), 'the press added nothing and went nowhere').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'no layer yet').toEqual([])
+
+      // ── the deadline: one sentence, never two, and no layer ──
+      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [500] }).toContain(FAILED)
+      await expect(toCanvas.nth(0), 'the busy mark is gone').not.toHaveAttribute('aria-disabled', 'true')
+      await window.waitForTimeout(1500)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => t === FAILED), 'one failure sentence').toHaveLength(1)
+      expect(log.filter((t) => t === ADDED), 'no reference layer from the stalled send or the refused press').toEqual([])
+
+      // ── and the claim is free again: the second tile adds exactly one layer ──
+      await toCanvas.nth(1).click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED)).toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a picture that fails to load at once says "That picture didn\'t load. Try again, or save it to the board again." and the button is pressable again at once', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-t156-fast-fail')
+    const board = boardOwning('failboard', 'Fail board', fx.thumbsDir, ['fail-thumb-0.png'])
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'failboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await installSrcHold(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await window.waitForTimeout(800)
+      await toCanvas.click()
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(FAILED)
+      expect(await readToastLog(window), 'not the bare fallback').not.toContain(GENERIC)
+      await expect(toCanvas, 'pressable again at once').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas).not.toHaveAttribute('title', /.+/)
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible()
+      // A second press is a new send (it fails the same way, once more), not a refusal.
+      await toCanvas.click()
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === FAILED).length, { timeout: 5000 }).toBe(2)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

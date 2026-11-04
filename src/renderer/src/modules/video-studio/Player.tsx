@@ -154,17 +154,27 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   // would throw away the position the user closed the app at. Seeks made
   // while a Player is mounted are consumed as they land (below), so a stale
   // one can never reach this branch.
+  //
+  // T-156 (2): on MOUNT with no parked seek, the store's currentTime IS the position the person left (a visit to Audio Studio, Home or References
+  // unmounts the Player; the clips, scans and selection survive, so the place must too) and is restored the way the parked branch does. That is
+  // safe because every way a DIFFERENT file arrives goes through `loadSource` / `clearSource`, which zero `currentTime` in the store - so a
+  // non-zero value at mount always belongs to this file. A path change while MOUNTED (the ref) is a different file: it starts at 0 as before.
+  const mountedRef = useRef(false)
   useEffect(() => {
+    const mounting = !mountedRef.current
+    mountedRef.current = true
     setNoPicture(false)
     setPlaying(false)
-    const parked = useVideoStore.getState().seekRequest
-    if (parked) {
-      useVideoStore.setState({ seekRequest: null, currentTime: parked.seconds })
-      setTime(parked.seconds)
+    const state = useVideoStore.getState()
+    const parked = state.seekRequest
+    const resumeAt = parked ? parked.seconds : mounting && state.currentTime > 0 ? state.currentTime : null
+    if (resumeAt !== null) {
+      useVideoStore.setState({ seekRequest: null, currentTime: resumeAt })
+      setTime(resumeAt)
       // At HAVE_NOTHING the element stores this as its default playback
       // start position and seeks there once metadata arrives.
       const v = videoRef.current
-      if (v) v.currentTime = parked.seconds
+      if (v) v.currentTime = resumeAt
       return
     }
     setTime(0)

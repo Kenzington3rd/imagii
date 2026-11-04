@@ -14,6 +14,56 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-156 (round 105), Track A: a rate gate must keep its phase; a reset that runs on mount is a reset on every visit
+
+The forty-second sweep, Track A (the recorder's frame cadence and the Player's place; Track B lands separately).
+
+### (1) [LOW-MED] - The webcam compositor recorded 25 fps on a 75 Hz or 100 Hz display
+
+- **Bug.** T-155's draw gate (`now - lastDrawMs >= 1000 / fps - 2`, `lastDrawMs = now` on each draw) drew 25 frames a second on 75 Hz and 100 Hz, 28.8 on 144 Hz and 27.6 on 165 Hz, for a recorder that keeps 30. Before T-155 the canvas painted every refresh and `captureStream(30)` took about 30 of them, so a webcam-on recording on a 75 Hz monitor lost a sixth of its frames.
+- **Root cause.** Re-anchoring on the draw throws away the remainder: the draw lands on the first tick past the interval, and the next interval is measured from there, so the rate floors to a whole number of refresh ticks (two at 75 Hz is 26.7 ms, under 31.3; three is 40 ms, so 25 a second). T-155's tests ran 144, 60 and 24 Hz, where the floor is invisible or exact.
+- **Fix.** The schedule keeps its phase: `nextDueMs` steps by one interval, a tick draws when `now >= nextDueMs - 2` (the 2 ms is the tick's jitter), and a tick more than one interval late resyncs to `now + interval` rather than drawing again at once to catch up.
+- **Test.** compositor.test.ts "startCompositor keeps its 30 on any display (T-156 (1))" (six display rates, a slow display, jitter, the minimum gap, a 500 ms stall and a 50 ms hitch); red on the unchanged tree (25 at 75 Hz and 100 Hz); interactionWiring.test.ts "(bt)" updated in place.
+- **Lesson.** **A rate limiter that measures from its last action floors to the clock's resolution; measure from its own schedule.** And test a cadence at the rates in the field (60, 75, 100, 120, 144, 165, 240), not at the two that happen to work: the first version of these cases passed, and was wrong at two of the most common monitors. A first-pass mutation run also showed three surviving mutants (slack 0, slack 8 ms, a resync threshold of two intervals), and each got a case that tells it from the real value.
+
+### (2) [LOW] - Coming back to Video Studio put the playhead at 0:00
+
+- **Bug.** A person at 2:41:00 of a long VOD who visited Audio Studio, Home or References came back to 0:00. The clips, scans and selection survived (T-135 / T-147); the place did not.
+- **Root cause.** The Player's source-change effect (T-52) also runs on mount and, with no parked seek (T-47), wrote 0 to the readout and the store, so the new `<video>` and the store agreed on 0 and the old position was gone. T-52 had meant "a different file starts at 0"; the effect could not tell a different file from the same file on a second visit.
+- **Fix.** On mount (a ref tells mount from a path change) with no parked seek, the store's `currentTime` is the position: the readout and the new element's `currentTime` (its default start position at HAVE_NOTHING) take it, the store keeps it. A path change while mounted still resets to 0, a parked seek still wins, and a different file loaded while the Player was away cannot inherit the position because `loadSource` and `clearSource` (every way a file arrives: Importer, Recent files, Edit in Video Studio, Open project, the autosave restore) already zero the store's `currentTime`.
+- **Test.** video-core.spec.ts "T-156 (2)" (seek to 1.0 s, Home and back: readout, element and Timeline agree; Close and another file: 0:00.00), red on a build of the unchanged tree; interactionWiring.test.ts "T-156 Track A" (the mount ref, the restore expression, the two store zeroings).
+- **Lesson.** **An effect that resets on a key also runs at mount, so "reset when it changes" and "reset when it appears" are two decisions.** The state that outlives the component (a store) is the source of truth at mount, and the question to ask is who else resets it when the key really does change; here the store already did, which is what made the fix safe in the Player alone.
+
+## 2026-11-04 - T-156 (round 105), Track B: a title is a promise the code must keep; a claim lives where the screen cannot unmount it; every load failure is one sentence
+
+The forty-second sweep, Track B (the Clip Kit title, the "→ Canvas" claim, and the picture that fails at once; Track A lands separately).
+
+### (3) [LOW] - The Clip Kit button's disabled title promised an automatic start
+
+- **Bug.** While an export ran the kit button read "An export is running. Clip Kit starts when it is done." Nothing queues the kit (`runKit` begins only from the button's click, and the export's `finish()` starts nothing), so a streamer who walked away came back to an idle button.
+- **Root cause.** T-155 (4) wrote the title as a status line in the sibling's voice and never checked it against the mechanism: a kit needs its folder chooser, so it cannot start on its own.
+- **Fix.** The title is "An export is running. Start Clip Kit when it is done." (the imperative Export's sibling already used). The round-104 entry's quote of the old title is history and stays; `EXPORT_RUNNING_TITLE`, the T-155 Track B (4) regex and USER_GUIDE's sentence changed in place.
+- **Test.** video-pipelines.spec.ts "T-156 (3)" (an export held by a stalled ffmpeg: the kit disabled with the new title, then enabled with its idle title and not started when the export is canceled); `truthInCopy.test.ts` (the title never says the kit "starts"); `interactionWiring.test.ts` "T-156 Track B"; red on the unchanged build.
+- **Lesson.** **A disabled title may say what the person should do, or what is true now; it may say what will happen only if code makes it happen.** Grep for the mechanism before promising it.
+
+### (4) [LOW] - A tab change re-armed "→ Canvas" while a send was out
+
+- **Bug.** Mood Boards -> Asset Library -> Mood Boards while a send was out (up to the 10 s deadline) left every "→ Canvas" idle and pressable; a second press sent again and, if both loads landed, added two reference layers with two toasts.
+- **Root cause.** The claim (`sendingRef`) and the busy flag (`useState`) were the panel's, and the studio renders its tabs conditionally, so the tab change unmounted both. The T-135 / T-136 rule (a long job lives in a module store) had been applied to every other job but not to this one.
+- **Fix.** `const useSendRun = createRunStore<{ title: string }>()` at module scope in MoodBoardPanel.tsx. `sendToCanvas` claims with `begin` ahead of the first await and `end`s in a finally; the panel reads `s.run !== null` for `aria-disabled`, the title and the busy toast. The deadline, sentences and toasts are unchanged.
+- **Test.** references.spec.ts "T-156 (4) / (5)" (a stalled send, Asset Library and back: every tile still busy, a press says "Still adding the last picture", one failure sentence at the deadline and no layer, then the claim is free); `interactionWiring.test.ts`; red on the unchanged build (the remount re-armed the buttons).
+- **Lesson.** **A claim held across an await belongs wherever the screen that started it cannot unmount it.** The question to ask of any `useRef` guard is "what remounts this component?", and the answer in a tabbed studio is "a tab".
+
+### (5) [LOW] - A picture that failed at once said less than one that stalled
+
+- **Bug.** Offline, a 404, a host with no CORS header or a data URL that would not decode read "Couldn't add that image to the canvas." (nothing to do next), while the same fact reached by the 10 s deadline read "That picture didn't load. Try again, or save it to the board again."
+- **Root cause.** `loadImage` rejects with the bare "Decode failed", which `userFacingError` does not show, so `reportFailure` fell back to its generic sentence; only the deadline arm raised the finished one.
+- **Fix.** Inside `loadWithinDeadline` the load arm maps any rejection to `new Error(SEND_LOAD_FAILED)`; the deadline is one more way to the same sentence and the timer is still cleared on every settle. `loadImage` is unchanged (ImportPanel keeps its own copy).
+- **Test.** references.spec.ts "T-156 (4) / (5)" (an image whose `error` fires at once: the toast reads the sentence, not the generic one, and the button is pressable again); `interactionWiring.test.ts` pins the catch; red on the unchanged build.
+- **Lesson.** **Two routes to the same fact get one sentence.** When a timeout and an error mean the same thing to the person, map both at the one seam that races them.
+
+---
+
 ## 2026-11-04 - T-155 (round 104), Track A: a claim with no deadline is a lock with no key; a guard keyed on one letter guards one layout; a press that is refused says why
 
 The forty-first sweep, Track A (a stalled "→ Canvas" load, the held-paste chord, and five add buttons; Track B lands separately).

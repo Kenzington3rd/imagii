@@ -380,7 +380,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         aria-live="polite"
         title={
           exportRunning && kitRun === null
-            ? 'An export is running. Clip Kit starts when it is done.'
+            ? 'An export is running. Start Clip Kit when it is done.'
             : 'Export this clip for all 5 platforms + 3 thumbnails into one folder'
         }
         // T-112: ink on the wash, the accent border carries the identity. accent text on

@@ -448,3 +448,121 @@ describe('startCompositor draws what the recorder keeps (T-155 (bt))', () => {
     expect(r.draws / 2).toBe(60)
   })
 })
+
+/**
+ * T-156 (1): T-155's gate re-anchored on every draw, so the rate floored to the first refresh tick past 1000 / fps - 2 ms: a 75 Hz or 100 Hz
+ * display drew 25 frames a second, 144 Hz 28.8. The gate now keeps the schedule's phase, so the average is `fps` on any display at or above it.
+ * Same stubbed globals and fake rAF clock as the T-155 describe; the ticks are an explicit list of times so a stall can be one of them.
+ */
+describe('startCompositor keeps its 30 on any display (T-156 (1))', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** Runs the REAL loop over the given tick times; returns the frames drawn at each tick (a frame is two drawImage calls). */
+  async function framesPerTick(times: number[]): Promise<number[]> {
+    let pending: ((now: number) => void) | null = null
+    let draws = 0
+    const video = (): Record<string, unknown> => ({
+      readyState: 4,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      style: {},
+      muted: false,
+      playsInline: false,
+      srcObject: null,
+      parentNode: null,
+      play: () => Promise.resolve(),
+      pause: () => undefined
+    })
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ fillStyle: '', fillRect: () => undefined, drawImage: () => void draws++ }),
+      captureStream: () => ({ getTracks: () => [] })
+    }
+    vi.stubGlobal('document', {
+      body: { appendChild: () => undefined },
+      createElement: (tag: string) => (tag === 'canvas' ? canvas : video())
+    })
+    vi.stubGlobal('requestAnimationFrame', (cb: (now: number) => void) => {
+      pending = cb
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {
+      pending = null
+    })
+    const handle = await startCompositor({
+      screenStream: {} as MediaStream,
+      webcamStream: {} as MediaStream,
+      webcamCorner: 'bottom-right'
+    })
+    const out: number[] = []
+    for (const t of times) {
+      const cb = pending as ((now: number) => void) | null
+      if (cb === null) break
+      pending = null
+      const before = draws
+      cb(t)
+      out.push((draws - before) / 2)
+    }
+    handle.stop()
+    return out
+  }
+
+  /** One second of ticks at `hz`, starting at `from`. */
+  const second = (hz: number, from = 0): number[] => {
+    const ts: number[] = []
+    for (let t = from; t < from + 1000 - 1e-6; t += 1000 / hz) ts.push(t)
+    return ts
+  }
+  const sum = (a: number[]): number => a.reduce((x, y) => x + y, 0)
+
+  it.each([60, 75, 100, 144, 165, 240])('a %i Hz display draws 29-31 frames a second', async (hz) => {
+    const per = await framesPerTick(second(hz))
+    expect(per.length).toBeGreaterThanOrEqual(Math.floor(hz) - 1)
+    expect(sum(per)).toBeGreaterThanOrEqual(29)
+    expect(sum(per)).toBeLessThanOrEqual(31)
+  })
+
+  it('a 24 Hz display draws every tick it gets', async () => {
+    const per = await framesPerTick(second(24))
+    expect(per).toHaveLength(24)
+    expect(sum(per)).toBe(24)
+  })
+
+  it('after a 500 ms stall the next tick draws once, no burst follows, and the next second is still 29-31', async () => {
+    const before = second(75)
+    const resume = 1000 + 500
+    const after = second(75, resume)
+    const per = await framesPerTick([...before, ...after])
+    const first = per.slice(before.length)
+    expect(first[0], 'the first tick after the stall draws').toBe(1)
+    expect(Math.max(...per), 'never two frames in one tick').toBe(1)
+    expect(first[1], 'no catch-up burst on the tick after it').toBe(0)
+    expect(sum(first)).toBeGreaterThanOrEqual(29)
+    expect(sum(first)).toBeLessThanOrEqual(31)
+  })
+
+  it('a tick that arrives 1 ms early (the display\'s jitter) is not read as too early: 60 Hz with alternating +-1 ms still draws 29-31', async () => {
+    const jittered = second(60).map((t, i) => t + (i % 2 === 0 ? -1 : 1))
+    const per = await framesPerTick(jittered)
+    expect(sum(per)).toBeGreaterThanOrEqual(29)
+    expect(sum(per)).toBeLessThanOrEqual(31)
+  })
+
+  it('on a 240 Hz display no two draws are closer than a capture interval less the 2 ms of jitter', async () => {
+    const ticks = second(240)
+    const per = await framesPerTick(ticks)
+    const drawn = ticks.filter((_, i) => per[i] === 1)
+    for (let i = 1; i < drawn.length; i++) expect(drawn[i]! - drawn[i - 1]!, `gap before the draw at ${drawn[i]}`).toBeGreaterThanOrEqual(1000 / 30 - 2)
+  })
+
+  it('a 50 ms hitch (more than one interval, less than two) resyncs: one draw, then none on the next ticks', async () => {
+    const before = second(240)
+    const after = second(240, 1000 + 50)
+    const per = await framesPerTick([...before, ...after])
+    const first = per.slice(before.length)
+    expect(first.slice(0, 3)).toEqual([1, 0, 0])
+  })
+})

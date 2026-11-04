@@ -383,7 +383,7 @@ that names the file being converted.)
   the batch ends (on Home, in another studio, or beside another video). Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
   names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
-  running label stays on one line), and no second kit starts until it ends. **Export** and Clip Kit take turns: while a kit runs, **Export** is off and its tooltip says "Clip Kit is running. Export when it is done.", and while an export runs the kit button is off with "An export is running. Clip Kit starts when it is done.". If you remove that clip the kit keeps running and stays cancelable; if you close the video,
+  running label stays on one line), and no second kit starts until it ends. **Export** and Clip Kit take turns: while a kit runs, **Export** is off and its tooltip says "Clip Kit is running. Export when it is done.", and while an export runs the kit button is off with "An export is running. Start Clip Kit when it is done." (the kit does not start by itself; press it once the export ends). If you remove that clip the kit keeps running and stays cancelable; if you close the video,
   a card beside the importer keeps the kit's name and its **Cancel** until it ends. The caption model's download is the
   same: its bar and its **Cancel** are there when you come back to **Auto-captions**, and the panel is ready the moment it ends.
   The scan's candidates, the chat log you pasted, the spikes found in it and

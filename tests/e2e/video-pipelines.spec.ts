@@ -12962,7 +12962,7 @@ test.describe('T-155 (4): Export and Clip Kit wait for each other', () => {
   // (chooser, folder made, refused, folder removed) while an Export ran, and Export while a kit ran replaced the last batch's rows with
   // Failed / Not run. Each is disabled while the other runs, with a title that names it; main's gate stays as the backstop.
   const KIT_RUNNING_TITLE = 'Clip Kit is running. Export when it is done.'
-  const EXPORT_RUNNING_TITLE = 'An export is running. Clip Kit starts when it is done.'
+  const EXPORT_RUNNING_TITLE = 'An export is running. Start Clip Kit when it is done.'
   const kitStart = (window: Page): Locator => clipListCard(window).locator('[data-tutorial="video-clipkit"]')
 
   test('while a kit runs, Export is disabled and says Clip Kit is running; when the kit ends it is enabled again', async () => {
@@ -13027,6 +13027,34 @@ test.describe('T-155 (4): Export and Clip Kit wait for each other', () => {
       await expect(kitStart(window)).toBeEnabled({ timeout: 60_000 })
       await expect(kitStart(window)).toHaveAttribute('title', 'Export this clip for all 5 platforms + 3 thumbnails into one folder')
       await expect(kitStart(window)).toHaveText('Clip Kit (5 + thumbs)')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-156 (3): the Clip Kit button's disabled title while an export runs promised "Clip Kit starts when it is done", and nothing queues the kit (`runKit` begins only from the
+// button's click). It is an instruction now, matching Export's sibling; the idle title comes back with the export's end.
+test.describe('T-156 (3): Clip Kit\'s title while an export runs tells the person to start it', () => {
+  test('an export held running -> Clip Kit is disabled with "Start Clip Kit when it is done."; when the export ends the idle title is back and nothing started', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t156-3-kit-title')
+    try {
+      const kit = clipListCard(window).locator('[data-tutorial="video-clipkit"]')
+      const card = exportCard(window)
+      await stubDialogs(app, { open: [outDir] })
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 60_000 }])
+      await card.getByRole('button', { name: /^Export 1/ }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(kit).toBeDisabled()
+      await expect(kit).toHaveAttribute('title', 'An export is running. Start Clip Kit when it is done.')
+      // The export ends: the kit is enabled with its idle title, and it did not start by itself.
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expect(kit).toBeEnabled({ timeout: 60_000 })
+      await expect(kit).toHaveAttribute('title', 'Export this clip for all 5 platforms + 3 thumbnails into one folder')
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
     } finally {
       await app.close()
     }
