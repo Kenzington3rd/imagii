@@ -7161,6 +7161,68 @@ IMG-PREC.
 
 ---
 
+## T-155 — sweep-41 fixes (round 104)
+
+- **Spec:** the forty-first sweep's four verified findings (candidate clean pass #1 on 09ffcd9),
+  confirmed by the expediter against source. Privacy, Electron, ffmpeg, audio, design, a11y and
+  streamer clean on their whole lens. Not counted: the window X / Alt+F4 mid-take discard (= T-110 (ah)
+  verbatim, an owner product call; (az) for a Windows shutdown); the autosave banner's Clear asking
+  nothing (BRANDING's verb table makes "Clear the autosave" a Clear, not a Delete — new letter (bu)); the
+  compositor redrawing on every display refresh (a performance initiative — new letter (bt), folded
+  below); the highlight scan's fixed ±5 s padding (an initiative). Two tracks, disjoint files.
+
+  **Track A — a press that waits says so, every paste chord, every add is one add (items 1-3).**
+  1. **[LOW] One stalled "→ Canvas" load silences every other "→ Canvas" press** (a T-154 (1)
+     consequence). MoodBoardPanel.tsx: the one shared `claimFirst(sendingRef, …)` wraps `loadImage`, which
+     has no deadline, so a tile whose source host accepts and never answers holds the claim and every
+     other tile's "→ Canvas" returns in silence. Fix direction: the load races a 10 s deadline (the
+     thumbnail fetch's own figure) and on the deadline reports "That picture didn't load. Try again, or
+     save it to the board again." (reportFailure, the claim released by its finally); while a send is
+     in flight every "→ Canvas" shows it (`aria-disabled` + a title "Adding the last picture…") and a
+     press says "Still adding the last picture" (one toast id), never silence.
+  2. **[LOW] The held-paste guard knows only the "v" key** (a T-154 (5) gap). ImportPanel.tsx keys on
+     `e.key.toLowerCase() === 'v'`, so Shift+Insert and Ctrl+V on a non-Latin layout (e.key is the
+     layout's letter) still paste once per key repeat. Fix direction: the paste chord is
+     `(ctrl|meta) && (e.code === 'KeyV' || e.key.toLowerCase() === 'v')` or `shift && e.key ===
+     'Insert'`; the release clears on the same keys.
+  3. **[LOW] "+ Add clip", "+ Add text" (Video Studio), "+ Add text" / "Start with text" (Stream
+     Graphics) and a layer's Duplicate run again on a double-click or a held Enter** (ClipList.tsx:41,
+     TextOverlayEditor.tsx:61-63, ImportPanel.tsx:182 and :273, LayerPanel.tsx:146-156 — the duplicate
+     shifts every row and the second press copies the layer above). Fix direction: `isRepeatPress` +
+     `onKeyDown={ignoreHeldEnter}` on each, the T-150 / T-154 shape.
+  Covering tests: e2e (NEW describes): a "→ Canvas" whose thumbnail host never answers → within ~12 s
+  the failure sentence, and a second tile's "→ Canvas" during the stall shows the busy title / says
+  "Still adding…" and, after the deadline, works; a held Shift+Insert (and a held Ctrl+V dispatched with
+  `code: 'KeyV'` and a non-Latin `key`) adds ONE layer; a real dblclick and a held Enter on each add /
+  duplicate control adds ONE. Red on the ticket commit each.
+
+  **Track B — Export and Clip Kit wait for each other; the recorder draws what it keeps (item 4; fold).**
+  4. **[LOW] Clip Kit starts while an Export batch runs, and Export while a kit runs** — the second is
+     refused by main's one-batch gate only after the kit's folder chooser (the folder made, then
+     removed), and Export-while-kit replaces the queue rows with Failed / Not run, erasing the last
+     batch's "Show in folder" rows (ClipKitButton.tsx:368-370, ExportPanel.tsx:421-424, ipc/video.ts:299).
+     Fix direction: Clip Kit is disabled while the export queue runs and Export while a kit runs, each
+     with a title that says which run it is waiting for; main's gate stays as the backstop.
+  Fold (new T-110 letter (bt), not counted): the webcam compositor draws on every display refresh while
+     `captureStream(30)` keeps 30 (compositor.ts:237-246; ~79% of draws discarded at 144 Hz, measured
+     35.6% vs 21.2% main-thread under software rendering) — `frame(now)` skips the draw when less than one
+     capture interval has passed and still re-arms the rAF.
+  Covering tests: e2e (NEW describe): a kit running (held in main) → Export is disabled with its title,
+  and an export running → Clip Kit is disabled with its title, both enabled again when the run ends; red
+  on the ticket commit. Unit (compositor cadence beside compositor.test.ts: 144 Hz frames → ~30 draws/s;
+  60 Hz → 30; a slow display → every frame).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE where behaviour the
+  person sees changes; LESSONS entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 104)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7697,6 +7759,10 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 41 (not gate-holding): (bt) the webcam compositor redraws on every display refresh
+  while its capture keeps 30 fps (folded into T-155); (bu) the autosave banner's Clear deletes the only
+  crash-recovery copy without a question — BRANDING's verb table makes it a Clear (empties something
+  that stays), so whether this one Clear asks first is an owner call.
   From sweep 40 (not gate-holding): (bs) the `fps=` stage (filters.ts export / reframe / compile,
   gif.ts) rounds a clip shorter than half an output frame to NO frames, so a 0.10-0.14 s clip as a GIF
   at 3-4x and 10-12 fps, or a custom export preset at 1-4 fps on a sub-0.5 s clip, is refused (no file)
