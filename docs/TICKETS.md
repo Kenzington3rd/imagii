@@ -7086,6 +7086,77 @@ IMG-PREC.
 
 ---
 
+## T-154 — sweep-40 fixes (round 103)
+
+- **Spec:** the fortieth sweep's verified findings (candidate clean pass #1 on c06e072), confirmed by
+  the expediter against source; item 8 measured by the expediter on 7.0.2 and 6.1.1 from the streamer
+  lens's unmeasured probe. Privacy, Electron, ffmpeg and audio clean on their whole lens. Not counted:
+  ffmpeg's fps stage dropping a clip shorter than half an output frame (a refusal on a contrived
+  combination — new letter (bs) below), design's burn-in trim box (withdrawn by the reviewer:
+  unreachable — Remove shows only with two clips), placeholder-only inputs (T-110 (l)), the ragged
+  shortcuts column (no guide rule; folded), "Could not" vs "Couldn't" (no rule), CJK fonts (IC:3056
+  owner call), duplicate clip names (no loss), the h3 heading order (best practice, not AA). Two tracks,
+  disjoint files.
+
+  **Track A — the second press, the tutorial's word, the Player's name (items 1-7; fold).**
+  1. **[LOW] "→ Canvas" adds the reference twice on a double-click.** MoodBoardPanel.tsx:294-299 →
+     `sendToCanvas` awaits `loadImage` (a network fetch after Clear thumbnail cache or a T-151 miss)
+     before `addCanvasLayer` and `navigate`, so T-153's route-change swallow cannot catch a second press
+     during the load. Fix: `isRepeatPress` on the button and a `claimFirst` held across the await.
+  2. **[LOW] The board tile's ✕ removes two pictures on a double-click** (MoodBoardPanel.tsx:301-314:
+     the grid reflows and the next tile's ✕ sits under the pointer; or the same id twice — a no-op undo
+     step / "Couldn't remove"). Fix: `isRepeatPress` + a claim per removal.
+  3. **[LOW] Layers' "Remove layer" ✕ removes two layers on a double-click** (LayerPanel.tsx:156-166:
+     the next row moves up under the pointer). Fix: `isRepeatPress` on the ✕ (move / duplicate stay
+     repeat-tolerant).
+  4. **[LOW] A cut chip double-clicked puts back two cuts** (WaveformView.tsx:226-233). Fix:
+     `isRepeatPress`.
+  5. **[LOW] A held Ctrl+V adds one image layer per key repeat** (ImportPanel.tsx:84-102; `paste`
+     carries no `repeat`). Fix: one hold is one paste — the lib's held-key guard on the keydown of the
+     paste chord (a deliberate second Ctrl+V still pastes); `ingestFile` claimed so the chooser's double
+     click opens one chooser.
+  6. **[LOW] The audio tutorial names a checkbox that does not exist.** audioTutorial.ts:39 "'Softer
+     harsh' sounds" → the screen's "Softer harsh 's' sounds" (BRANDING_GUIDE:79), quoted so the inner
+     quotes read cleanly.
+  7. **[LOW] The Player's keyboard stop has no role or name.** Player.tsx:375-379 `<div tabIndex={0}>`
+     → `role="group" aria-label="Video player"` (and `aria-keyshortcuts` for the keys the HotkeyOverlay
+     lists for it), the DESIGN_GUIDE:441-447 shape every other focusable container has.
+  Fold (polish): the shortcuts dialog's descriptions start in one column (a two-column grid, chip
+     column `auto`, every chip one line as T-153 (2) holds).
+  Covering tests: e2e per item (NEW describes): a real `dblclick` on → Canvas (with the thumbnail served
+  slowly) adds ONE layer; a dblclick on a tile ✕ removes ONE picture (disk); a dblclick on a layer ✕
+  removes ONE layer; a dblclick on a cut chip restores ONE cut; a held Ctrl+V (keyboard.down, repeats,
+  up) adds ONE layer and a second deliberate Ctrl+V adds a second; the Player stop's role and name
+  (`getByRole('group', { name: 'Video player' })`); the tutorial copy pinned against the screen label.
+  Red on c06e072 each.
+
+  **Track B — a recording that changes size keeps its shape (item 8).**
+  8. **[LOW] A screen-only take whose window changes size mid-take is stretched in the MP4.**
+     convert.ts `convertToMp4` (`crop=trunc(iw/2)*2:trunc(ih/2)*2`, libx264): on a mid-stream size
+     change ffmpeg re-initialises the graph and scales every later frame to the FIRST size with no aspect
+     handling — measured on 7.0.2 and 6.1.1: a 1280x720 → 1000x1000 VP8 webm converts (exit 0) to
+     1280x720 SAR 1:1, the square half stretched. T-153 (10) fixed the webcam-composited path only.
+     Fix direction: the convert fits every frame into the take's first (even) size, aspect kept and
+     centred on black — `scale=W:H:force_original_aspect_ratio=decrease,pad=W:H:(ow-iw)/2:(oh-ih)/2,
+     setsar=1` after the even crop, W×H from a probe of the input's first video size (the same for the
+     importer, where a constant-size file is unchanged — prove it). Covering tests: unit (the argv);
+     **Layer 5** (IMG-PREC, both majors): the concat-made 1280x720 → 1000x1000 webm through the real
+     convert → 1280x720 out, a frame from the second half has black bars left and right and its content
+     square (measure a known pattern's width and height); a constant-size webm and the importer's flv /
+     wmv / mpg cases unchanged (frame count and size); red on c06e072 (no bars, stretched).
+
+  **Docs (each track its own items):** IC rows (item 8: screen capture is an OS boundary — Layer 5 is
+  the deepest layer); TESTING paragraphs; USER_GUIDE where behaviour the person sees changes; LESSONS
+  entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; Layer 5 for item 8 on both majors; new cases in NEW describe blocks appended at the end of
+  shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
+  handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
+  lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 103)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7622,6 +7693,11 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 40 (not gate-holding): (bs) the `fps=` stage (filters.ts export / reframe / compile,
+  gif.ts) rounds a clip shorter than half an output frame to NO frames, so a 0.10-0.14 s clip as a GIF
+  at 3-4x and 10-12 fps, or a custom export preset at 1-4 fps on a sub-0.5 s clip, is refused (no file)
+  with a generic or a start/end sentence — `fps=N:eof_action=pass` (or round=up) with Layer 5, or a
+  sentence that names "too short for this frame rate", is the upgrade.
   From sweep 37 (product call, not gate-holding): (br) a "Centre across"
   choice for a Text overlay (drawtext `x=(w-tw)/2`): the boxes place the
   text's top-left corner, and with no preview a centred caption is a guess.
