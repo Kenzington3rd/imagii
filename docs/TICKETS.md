@@ -6736,6 +6736,93 @@ IMG-PREC.
 
 ---
 
+## T-150 — sweep-36 fixes (round 99)
+
+- **Spec:** the thirty-sixth sweep's verified findings (candidate clean pass #1 on eafc9a2), each
+  confirmed by the expediter against source; the race (item 2) reviewer-executed twice. Privacy,
+  ffmpeg and streamer clean (the streamer's PiP silent-base item is T-110 (bp)); UX's item is polish
+  (folded). Three tracks, disjoint files.
+
+  **Track A — Audio Studio's "Match loudness with your voice" (item 1).**
+  1. **[LOW-MED] "Match loudness with your voice" moves the voice to a hidden absolute target.** The
+     checkbox's label makes the VOICE the reference, but with Even volume off, process.ts:284-290
+     single-pass loudnorms the PRIMARY to `loudnormTargetLufs ?? -16` (read even with loudnorm off; the
+     target box is disabled and the platform picker hidden while Even volume is off), the second track
+     to the same target (:296-298), and the mix bus again (:342-344): a -22 LUFS voice comes out at -16
+     with its loudness range reshaped. Every Layer 5 case with `matchLoudness` also sets `loudnorm: true`.
+     Fix direction (expected usability: the music follows the voice; the voice is kept): with Even volume
+     OFF and Match on, measure the primary chain's integrated loudness (the pass-1 `print_format=json`
+     machinery on the primary's own chain) and loudnorm the SECOND track to that measured I (clamped to
+     loudnorm's -70..-5; a non-finite measurement — a silent voice — falls back to the second track's
+     plain gain, said in a code comment); the primary gets no loudnorm and the bus ends in the existing
+     `MIX_LIMITER`; with Even volume ON the current behaviour stands. The pass plan names the new measure
+     pass (`audioPassPlan` learns `matchLoudness`), so the row and the closed-sound card say "Step 1 of
+     N — measuring". Covering tests: unit (the graph for each combination of Even volume x Match; the
+     pass plan); **Layer 5** (IMG-PREC): a voice at about -22 LUFS for 20 s and a music bed at about -32
+     on a second track, Match on, Even volume off → the voice-only stretch of the output measures within
+     ±1 LU of the input voice and the music-only stretch within ±1.5 LU of the voice; red on the
+     unchanged tree (the voice comes out near -16); on 7.0.2 and 6.1.1; the Even-volume-on cases
+     unchanged.
+
+  **Track B — Video Studio, Record and the importers (items 3, 4 copy pair, 5's video half, folds).**
+  3. **[LOW] Scan VOD's and Chat spike's "+ Clip" take every press.** HighlightPanel.tsx:244-249 and
+     ChatHighlightPanel.tsx:172 have no repeat guard; a mouse double-click (detail 2) or a held Enter
+     (detail 0) appends identical clips through `appendRange` (store/videoStore.ts:422-450, no same-range
+     check), each with a toast and an undo step — the repeat-press class counted since T-131 (4).
+     Fix direction: `isRepeatPress` on both buttons AND a same-range guard in the store (a scanned clip
+     whose range equals an existing scanned clip's is not appended again; the toast says "Already in
+     the Clips list"), which also closes the held-Enter half. Covering tests: unit (the store guard);
+     e2e: a real double-click on "+ Clip" → one clip, one toast; a held Enter → one clip; red on eafc9a2.
+  4. **[LOW] The Text overlay's position boxes are bare 0-1 fractions with a silent clamp.**
+     TextOverlayEditor.tsx:163/:177/:192: the visible label is "x / y" over 0.1 and 0.85; "0 to 1" is only
+     in the accessible name; typing 50 commits 1 (the far edge) with no sentence (BRANDING: "A bare number
+     is not a value"). Fix direction (expected usability): the boxes show PERCENT from the top left
+     (0-100, stored as the same 0-1 fraction), the visible label says so ("Position (%)" or "Left / Top
+     (%)"), and a typed value outside 0-100 is refused with DraftField's own sentence (the PipPanel
+     Margin pattern) instead of clamping silently; the accessible names begin with the visible text
+     (T-125 (27)). Covering tests: unit (the percent <-> fraction mapping); e2e: the label, 50 → the
+     centre, 150 → the refusal sentence and the overlay unmoved; existing overlay pins updated.
+  5. **[LOW, video half] One event, one phrasing.** RecordStudio.tsx:343's toast "Pick a screen / window
+     first" names the button "Pick a screen or window" → use the button's words; Scan VOD's toast "No
+     standout moments detected" vs its line "No standout moments found in this video." (and Chat spike's
+     toast "No chat spikes detected" vs its own inline line) → one phrasing per event (the toast says
+     what the line says). Covering tests: the copy pins and e2e expectations that read them.
+  Fold (non-counted, UX polish): a Recent-files entry whose file is gone stays and fails again on every
+     pick (useRecentFiles.ts has push/clear/refresh only). When opening a Recent entry fails with the
+     not-found sentence (`importDiagnostics.ts`'s ENOENT case), drop that path from its bucket (both
+     importers share the hook); the toast adds "It was removed from Recent." Covering e2e: a seeded
+     Recent entry for a missing file → the toast, and the menu no longer lists it.
+
+  **Track C — References' store and Save, Stream Graphics' Properties label (items 2, 5's image half,
+  fold).**
+  2. **[LOW] Two saves (or any two board edits) in quick succession share one undo step.**
+     referencesStore.ts takes `before = snapshot()` at PRESS time, ahead of its await, in all five board
+     mutators (create :172, delete :185, rename :198, add :205, remove :215); main serialises the writes
+     under its board lock (an add fetches the thumbnail inside it), so saving picture A then B before A
+     lands records [N, N]: one Ctrl+Z removes both, the next does nothing (executed twice by reviewers).
+     Fix direction: ONE serialised chain for the store's board mutations (a promise queue like
+     `diskWrites`), each mutation taking its snapshot when its turn STARTS (after the previous one has
+     set its result); undo / redo wait for the chain too. Covering tests: unit (two overlapping adds with
+     a lock-serialised stub → two steps, ONE undo removes only B, a second only A; the same for remove and
+     for add-then-remove); e2e: save two different results quickly (a held thumbnail socket so the first
+     is in flight) → one Ctrl+Z removes only the second; red on eafc9a2.
+  5. **[LOW, image half] "Stroke px".** PropertiesPanel.tsx:183 → "Stroke (px)", the panel's own "Size
+     (px)" and the T-125 (16) convention. Covering test: the copy pin.
+  Fold (non-counted): References Save is guarded by `isRepeatPress` only, so a held Enter stacks "Already
+     on" toasts (nothing is written twice) — add `ignoreHeldEnter` (or the held-key guard the wizard
+     uses). Covering e2e: a held Enter on Save → one toast.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; USER_GUIDE lines (items 1, 3, 4, the
+  Recent fold); LESSONS_LEARNED entry at the TOP per track.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; Layer 5 for item 1 on both majors; new cases in NEW describe blocks appended at the end of
+  shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
+  handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
+  lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 99)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -7252,6 +7339,15 @@ IMG-PREC.
   picker over the bundled and system-safe faces, and an outline/stroke
   field. And (u) is narrowed by T-141 (5): a swap refused after a whole
   convert keeps the take.
+  From sweep 36 (product call, not gate-holding): (bp) Picture-in-picture
+  takes its sound from the base only (the panel says so: "Audio comes
+  from the base video"), so a silent screen capture under a facecam with
+  the microphone gives a silent file with a success toast; candidates: an
+  audio-source choice (base / overlay / both) or a heads-up when the base
+  has no sound and the overlay has some. Beside it: a silent base whose
+  length cannot be read (a durationless, soundless WebM) under a longer
+  overlay still runs to the overlay (concat.ts:533 says so; Record's own
+  WebMs carry a duration since T-120).
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
