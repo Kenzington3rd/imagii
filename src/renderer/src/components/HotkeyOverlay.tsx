@@ -165,7 +165,7 @@ export function HotkeyOverlay(): JSX.Element | null {
       <ul className="flex flex-col gap-1.5 text-sm">
         {shortcuts.map((s, i) => (
           <li key={i} className="flex items-center gap-3">
-            <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center">
+            <kbd className="bg-bg-hover px-2 py-0.5 rounded text-xs font-mono min-w-[80px] text-center whitespace-nowrap shrink-0">
               {s.keys}
             </kbd>
             <span className="text-ink-base">{s.description}</span>

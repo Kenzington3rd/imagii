@@ -83,6 +83,21 @@ export function computeCornerRect(
 }
 
 /**
+ * Pure geometry (T-153 (10)). The rectangle a `srcW` x `srcH` picture fills when it is fitted INSIDE a `canvasW` x `canvasH` canvas
+ * without distortion (contain): scaled to the smaller of the two ratios, centred, the rest left for black bars. The same aspect is
+ * the full canvas, a wider picture has bars above and below, a taller one beside. A picture with no size yet (a video element
+ * that has not reported one) falls back to the full canvas, which is what the compositor drew before.
+ */
+export function computeContainRect(srcW: number, srcH: number, canvasW: number, canvasH: number): CornerRect {
+  assert(canvasW > 0 && canvasH > 0, 'canvas dimensions must be positive')
+  if (!(srcW > 0 && srcH > 0)) return { x: 0, y: 0, w: canvasW, h: canvasH }
+  const scale = Math.min(canvasW / srcW, canvasH / srcH)
+  const w = Math.min(canvasW, Math.round(srcW * scale))
+  const h = Math.min(canvasH, Math.round(srcH * scale))
+  return { x: Math.round((canvasW - w) / 2), y: Math.round((canvasH - h) / 2), w, h }
+}
+
+/**
  * Drawing helper used inside the rAF loop. Pulled out for clarity + tests.
  * The aspect-preserve logic keeps the webcam from being stretched even
  * when the source camera's native aspect differs from 16:9.
@@ -95,10 +110,17 @@ export function drawFrame(
   canvasW: number,
   canvasH: number
 ): void {
-  // Screen as base, stretched to canvas dimensions. Canvas was sized to
-  // match the screen's natural width/height at start, so this is 1:1.
+  // Screen as base, fitted into the fixed canvas by its size RIGHT NOW (T-153 (10)). The canvas is pinned at the size the screen
+  // had at start; a window source resized mid-take reports a new videoWidth/videoHeight, and a stretch to the canvas recorded the
+  // rest of the take distorted. At the start size this is the full canvas (1:1); otherwise it is centred with black bars.
   if (screen.readyState >= 2) {
-    ctx.drawImage(screen, 0, 0, canvasW, canvasH)
+    const fit = computeContainRect(screen.videoWidth, screen.videoHeight, canvasW, canvasH)
+    if (fit.w < canvasW || fit.h < canvasH) {
+      // Bars: clear what an earlier, larger frame left under them. (A full-canvas draw covers everything, so it needs no clear.)
+      ctx.fillStyle = 'black' // the bars of a video's letterbox, not a palette color
+      ctx.fillRect(0, 0, canvasW, canvasH)
+    }
+    ctx.drawImage(screen, fit.x, fit.y, fit.w, fit.h)
   }
   if (!webcam || webcam.readyState < 2) return
 

@@ -609,3 +609,70 @@ describe('updateLayer coalescing - one gesture, one undo step (T-78)', () => {
     expect(useCanvasStore.getState().historyKey).toBeNull()
   })
 })
+
+describe('typed boxes - one burst of typing is one undo step (T-153 (1))', () => {
+  // The Properties panel's DraftFields commit LIVE on each in-range keystroke (T-124 (15)), so "12" typed into a box is two `updateLayer` calls. Each box passes
+  // its own key (`'strokeWidth'`, `'fontSize'`, `'x'`, `'y'`, `'rotation'`) and the window `useGestureEnd` closes on leaving the panel makes the burst one step.
+  // The panel half (the keys are passed) is pinned in interactionWiring.test.ts and driven in image.spec.ts "T-153 (1)"; this is the store's half of the contract.
+  const stepsBack = (): number => useCanvasStore.getState().history.past.length
+  const layerNow = (id: string): TextLayer => useCanvasStore.getState().doc.layers.find((l) => l.id === id) as TextLayer
+  let id = ''
+
+  beforeEach(() => {
+    useCanvasStore.getState().resetDocument()
+    const t = makeTextLayer(10, 10, 'A')
+    id = t.id
+    useCanvasStore.getState().addLayer(t)
+  })
+
+  for (const [key, first, second, start] of [
+    ['strokeWidth', 1, 12, 0],
+    ['fontSize', 7, 72, 32],
+    ['x', 5, 50, 10],
+    ['y', 3, 30, 10],
+    ['rotation', 4, 45, 0]
+  ] as const) {
+    it(`"${first}" then "${second}" typed into the ${key} box is ONE step, and a second burst after the window closes is a second`, () => {
+      const store = useCanvasStore.getState
+      // The layer is a word, which has no stroke: seed the box's starting value as its own step first.
+      store().updateLayer(id, { [key]: start }, 'seed')
+      store().endGesture()
+      const before = stepsBack()
+      store().updateLayer(id, { [key]: first }, key)
+      store().updateLayer(id, { [key]: second }, key)
+      expect(stepsBack(), 'the two keystrokes are one step').toBe(before + 1)
+      store().undo()
+      expect((layerNow(id) as unknown as Record<string, number>)[key], 'one Undo restores the value from before the typing').toBe(start)
+
+      store().redo()
+      store().endGesture()
+      store().updateLayer(id, { [key]: 99 }, key)
+      store().updateLayer(id, { [key]: 98 }, key)
+      expect(stepsBack(), 'a burst after endGesture is a new step').toBe(before + 2)
+      store().undo()
+      expect((layerNow(id) as unknown as Record<string, number>)[key], 'and its Undo lands on the first burst\'s value').toBe(second)
+    })
+  }
+
+  it('x then y typed in a row are two steps: each box is its own window', () => {
+    const before = stepsBack()
+    useCanvasStore.getState().updateLayer(id, { x: 5 }, 'x')
+    useCanvasStore.getState().updateLayer(id, { x: 50 }, 'x')
+    useCanvasStore.getState().updateLayer(id, { y: 3 }, 'y')
+    useCanvasStore.getState().updateLayer(id, { y: 30 }, 'y')
+    expect(stepsBack()).toBe(before + 2)
+  })
+
+  it('a rotation preset is one step each, and typing after a preset starts a new step', () => {
+    const before = stepsBack()
+    useCanvasStore.getState().updateLayer(id, { rotation: 4 }, 'rotation')
+    useCanvasStore.getState().updateLayer(id, { rotation: 45 }, 'rotation')
+    useCanvasStore.getState().setRotation(id, 90)
+    useCanvasStore.getState().setRotation(id, 90)
+    expect(stepsBack(), 'typed burst + two presses').toBe(before + 3)
+    useCanvasStore.getState().updateLayer(id, { rotation: 1 }, 'rotation')
+    expect(stepsBack(), 'a preset closes the typing window').toBe(before + 4)
+    useCanvasStore.getState().undo()
+    expect(layerNow(id).rotation).toBe(90)
+  })
+})

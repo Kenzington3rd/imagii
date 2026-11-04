@@ -47,12 +47,12 @@ export function PropertiesPanel(): JSX.Element | null {
           to the layer as it is typed; a number outside it becomes the nearest edge when typing ends (one page beyond each edge). */}
       <div className="grid grid-cols-2 gap-2">
         <label className="flex items-center gap-1.5">
-          <span className="text-xs text-ink-muted">x</span>
-          <PositionBox value={layer.x} range={layerOffsetRange(docWidth)} onCommit={(x) => updateLayer(layer.id, { x })} />
+          <span className="text-xs text-ink-muted">X (px)</span>
+          <PositionBox value={layer.x} range={layerOffsetRange(docWidth)} onCommit={(x) => updateLayer(layer.id, { x }, 'x')} />
         </label>
         <label className="flex items-center gap-1.5">
-          <span className="text-xs text-ink-muted">y</span>
-          <PositionBox value={layer.y} range={layerOffsetRange(docHeight)} onCommit={(y) => updateLayer(layer.id, { y })} />
+          <span className="text-xs text-ink-muted">Y (px)</span>
+          <PositionBox value={layer.y} range={layerOffsetRange(docHeight)} onCommit={(y) => updateLayer(layer.id, { y }, 'y')} />
         </label>
       </div>
 
@@ -74,7 +74,7 @@ export function PropertiesPanel(): JSX.Element | null {
             live={(typed) => isTypedInRange(typed, LAYER_ROTATION_RANGE.min, LAYER_ROTATION_RANGE.max, false)}
             commit={(typed) => {
               const n = clampTyped(typed, LAYER_ROTATION_RANGE.min, LAYER_ROTATION_RANGE.max, false)
-              if (n !== null) setRotation(layer.id, n)
+              if (n !== null) updateLayer(layer.id, { rotation: n }, 'rotation')
               return null
             }}
             className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
@@ -124,7 +124,11 @@ export function PropertiesPanel(): JSX.Element | null {
   )
 }
 
-/** A layer's x or y: a whole number, kept until typing ends, held to one page beyond each edge (T-124 (15)). */
+/**
+ * A layer's x or y: a whole number, kept until typing ends, held to one page beyond each edge (T-124 (15)).
+ * T-153 (1): every number box in this panel (this one, Rotation, Size (px), Stroke (px)) passes its own key to `updateLayer`. A number typed key by key is committed live on each
+ * keystroke, and without a key each commit was an undo step ("12" was two); leaving the box closes the window (`gesture` above). The rotation presets are single presses, one step each.
+ */
 function PositionBox({
   value,
   range,
@@ -189,7 +193,7 @@ function FillStrokeFields({
           live={(typed) => isTypedInRange(typed, 0)}
           commit={(typed) => {
             const n = clampTyped(typed, 0)
-            if (n !== null) updateLayer(layer.id, { strokeWidth: n } as Partial<CanvasLayer>)
+            if (n !== null) updateLayer(layer.id, { strokeWidth: n } as Partial<CanvasLayer>, 'strokeWidth')
             return null
           }}
           className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
@@ -224,7 +228,7 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
           live={(typed) => isTypedInRange(typed, FONT_SIZE_MIN)}
           commit={(typed) => {
             const n = clampTyped(typed, FONT_SIZE_MIN)
-            if (n !== null) updateLayer(layer.id, { fontSize: n } as Partial<CanvasLayer>)
+            if (n !== null) updateLayer(layer.id, { fontSize: n } as Partial<CanvasLayer>, 'fontSize')
             return null
           }}
           className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"

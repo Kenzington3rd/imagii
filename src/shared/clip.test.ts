@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clipForExport, clipRecipe, clipSpeed, type Clip } from './clip'
+import { MIN_CLIP_SEC, clipForExport, clipRecipe, clipSpeed, floorRange, type Clip } from './clip'
 
 /**
  * T-105 — the two helpers that make "what a clip IS" one thing in every place
@@ -163,5 +163,51 @@ describe('clipForExport — the clip an export job carries (T-113)', () => {
     const before = JSON.stringify(stored)
     clipForExport(stored)
     expect(JSON.stringify(stored)).toBe(before)
+  })
+})
+
+/**
+ * T-153 (8) - `floorRange`, the ONE copy of the range floor `applyRange` holds, which the project restore applies to a saved clip too. A v1.6.0 project
+ * could carry [0, 0] or [D, D] (the I and O keys made them), and every output then said only "Export failed.".
+ */
+describe('floorRange - a range keeps 0.1 s between In and Out, inside the source (T-153 (8))', () => {
+  it('a clip with no length at the start becomes [0, 0.1]', () => {
+    expect(floorRange(0, 0, 10)).toEqual({ startSec: 0, endSec: 0.1 })
+  })
+
+  it('a clip with no length at the end becomes [D - 0.1, D]', () => {
+    expect(floorRange(10, 10, 10)).toEqual({ startSec: 10 - 0.1, endSec: 10 })
+  })
+
+  it('a clip with no length in the middle gets 0.1 s after its start', () => {
+    expect(floorRange(4, 4, 10)).toEqual({ startSec: 4, endSec: 4.1 })
+  })
+
+  it('a clip that already has length is itself, to the bit', () => {
+    expect(floorRange(1.25, 3.5, 10)).toEqual({ startSec: 1.25, endSec: 3.5 })
+    expect(floorRange(0, 10, 10)).toEqual({ startSec: 0, endSec: 10 })
+    expect(floorRange(0, 0.1, 10)).toEqual({ startSec: 0, endSec: 0.1 })
+  })
+
+  it('a range past either edge of the source is brought inside it', () => {
+    expect(floorRange(-3, 5, 10)).toEqual({ startSec: 0, endSec: 5 })
+    expect(floorRange(2, 50, 10)).toEqual({ startSec: 2, endSec: 10 })
+    expect(floorRange(40, 50, 10)).toEqual({ startSec: 10 - 0.1, endSec: 10 })
+  })
+
+  it('a reversed pair keeps its start and gets the floor after it', () => {
+    expect(floorRange(5, 3, 10)).toEqual({ startSec: 5, endSec: 5.1 })
+  })
+
+  it('a source shorter than the floor keeps the plain clamp: no room to hold, nothing negative', () => {
+    expect(floorRange(0, 0, 0.05)).toEqual({ startSec: 0, endSec: 0 })
+    expect(floorRange(0.2, 0.3, 0.05)).toEqual({ startSec: 0.05, endSec: 0.05 })
+    expect(floorRange(0, 0.05, 0.05)).toEqual({ startSec: 0, endSec: 0.05 })
+  })
+
+  it('the floor is MIN_CLIP_SEC, and a source exactly that long is one whole clip', () => {
+    expect(MIN_CLIP_SEC).toBe(0.1)
+    expect(floorRange(0, 0, 0.1)).toEqual({ startSec: 0, endSec: 0.1 })
+    expect(floorRange(0.1, 0.1, 0.1)).toEqual({ startSec: 0, endSec: 0.1 })
   })
 })

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Welcome } from './routes/Welcome'
 import { Home } from './routes/Home'
 import { Video } from './routes/Video'
@@ -51,6 +51,14 @@ export function App(): JSX.Element {
   // Gating on `ready` keeps the welcome screen out of the autosave stream.
   // The empty-project skip is handled main-side via isSafeToAutosave.
   useAutosave({ enabled: status.phase === 'ready' })
+
+  // T-153 (3): every route change swallows the repeat click of a double-click. NavCard and HomeLink are bare `<Link>`s: the first click opens the page and the second lands at the
+  // same point IN it (Home's Stream Graphics card, double-clicked, applied the template under the pointer on the empty canvas's one-click grid). One rule at the root covers every
+  // link, button and redirect that navigates; only a click with a count above 1 inside half a second is dropped, so a keyboard route change and a fresh click are untouched.
+  const location = useLocation()
+  useEffect(() => {
+    swallowRepeatClicks()
+  }, [location.pathname])
 
   useEffect(() => {
     let cancelled = false

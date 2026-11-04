@@ -179,7 +179,7 @@ export function CustomPresetManager({
             </PanelHeader>
             <p className="text-xs text-ink-dim mb-3">
               Create a custom resolution / bitrate combo on top of an existing platform preset.
-              Useful for non-standard targets (Discord 1080p, vertical YouTube shorts at custom
+              Useful for non-standard targets (Discord 1080p, vertical YouTube Shorts at custom
               size, etc.).
             </p>
             <div className="flex flex-col gap-2 text-sm">

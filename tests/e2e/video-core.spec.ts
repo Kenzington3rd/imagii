@@ -193,7 +193,7 @@ async function dropOnVideoImporter(window: Page, filePath: string, fileName: str
 }
 
 /** Launch, walk to Video Studio, and import the fixture through the drop zone. */
-async function launchWithVideo(name: string): Promise<{ app: ElectronApplication; window: Page }> {
+async function launchWithVideo(name: string, source = fixture): Promise<{ app: ElectronApplication; window: Page }> {
   const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
   seedUserData(userDataDir)
   const app = await launchApp(userDataDir)
@@ -204,7 +204,7 @@ async function launchWithVideo(name: string): Promise<{ app: ElectronApplication
   await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
   await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 15_000 })
   await installToastLog(window)
-  await dropOnVideoImporter(window, fixture, 'video-core.mp4')
+  await dropOnVideoImporter(window, source, path.basename(source))
   // Loaded state: the Importer is replaced by the player + Export panel.
   await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
   await expect(window.locator('video')).toHaveCount(1)
@@ -422,6 +422,11 @@ async function timelineReadouts(window: Page): Promise<[number, number, number]>
     .allInnerTexts()
   expect(texts).toHaveLength(3)
   return [parseShort(texts[0] ?? ''), parseShort(texts[1] ?? ''), parseShort(texts[2] ?? '')]
+}
+
+/** [In, Length, Out] exactly as the Timeline prints them ("0:01.9"), for the cases that are about the digits. */
+function timelineTexts(window: Page): Promise<string[]> {
+  return window.locator('[data-tutorial="video-timeline"] span.font-mono').allInnerTexts()
 }
 
 /** The OutputPreview canvas as a PNG data URL, plus its backing-store size. */
@@ -3318,6 +3323,9 @@ test.describe('T-152 (4): the I and O keys never make a clip with no length', ()
       await playerFocus(window)
       await window.keyboard.press('i')
       await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([FIXTURE_SECONDS - 0.1, 0.1, FIXTURE_SECONDS])
+      // T-153 (9): and the digits are the ones printed: Length reads 0:00.1 (the float is 0.10000000000000009 here, which was always read right; the
+      // 10 s case that read "Length 0:00.0" is in the T-153 describe below), and In and Out agree with each other.
+      expect(await timelineTexts(window)).toEqual(['0:01.9', '0:00.1', '0:02.0'])
     } finally {
       await app.close()
     }
@@ -3341,6 +3349,133 @@ test.describe('T-152 (4): the I and O keys never make a clip with no length', ()
       const [, length, end] = await timelineReadouts(window)
       expect(end).toBeLessThanOrEqual(1.3)
       expect(length).toBeGreaterThan(0.5)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-153 (8) + (9) + the Export panel's status region.
+//   (8) a project file whose clips carry no length ([0, 0], [D, D]; v1.6.0's I and O keys wrote them) restores with the 0.1 s floor, and Export writes both;
+//   (9) every tenths readout truncates float error into a whole digit: 1.2 read 0:01.1, 4.1 read 0:04.0, and I at the end of a 10 s video read "Length 0:00.0";
+//   fold: unchecking the last platform announces why Export went dark, in a status region that was already on the page.
+test.describe('T-153: clips that load with length, clocks that read true, Export says why it is off', () => {
+  const clip = (id: string, name: string, startSec: number, endSec: number) => ({
+    id,
+    name,
+    startSec,
+    endSec,
+    cropRect: null,
+    textOverlays: [],
+    selectedPresets: ['youtube']
+  })
+
+  /** Launch on Home with a seeded profile, write `clips` into a project file over the fixture, and open it through the real Open project button. */
+  async function openProjectWith(name: string, clips: ReturnType<typeof clip>[]): Promise<{ app: ElectronApplication; window: Page }> {
+    const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
+    seedUserData(userDataDir)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+    const projectPath = path.join(root, `${name}-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(
+      projectPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        videoStudio: { sourcePath: fixture, clips, selectedClipId: clips[0]?.id ?? null, watermark: null, srtPath: null }
+      }),
+      'utf8'
+    )
+    await app.evaluate(({ dialog }, picked) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, projectPath)
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+    await installToastLog(window)
+    await expect(window.locator('video')).toHaveCount(1, { timeout: 30_000 })
+    return { app, window }
+  }
+
+  test('(8) a project whose clips are [0, 0] and [D, D] opens with [0, 0.1] and [D - 0.1, D], and Export writes a file for each', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await openProjectWith('t153-floor', [clip('a', 'Start', 0, 0), clip('b', 'End', FIXTURE_SECONDS, FIXTURE_SECONDS)])
+    try {
+      await expect.poll(() => timelineReadouts(window), { timeout: 15_000 }).toEqual([0, 0.1, 0.1])
+      await window.getByRole('button', { name: 'Select clip End' }).click()
+      await expect.poll(() => timelineReadouts(window), { timeout: 15_000 }).toEqual([FIXTURE_SECONDS - 0.1, 0.1, FIXTURE_SECONDS])
+
+      const outDir = path.join(root, `out-t153-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      await app.evaluate(({ dialog }, dir) => {
+        ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+      }, outDir)
+      await window.locator('[data-tutorial="video-export"]').getByRole('button', { name: 'Export 2' }).click()
+      const mp4s = (): string[] => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('.mp4'))
+      await expect.poll(mp4s, { timeout: 120_000, intervals: [500] }).toHaveLength(2)
+      for (const file of mp4s()) {
+        const seconds = Number(execFileSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(outDir, file)]).toString().trim())
+        expect(seconds, `${file} is the 0.1 s the floor holds, not empty and not the whole clip`).toBeGreaterThan(0)
+        expect(seconds).toBeLessThan(1)
+      }
+      expect((await readToastLog(window)).some((m) => /Export failed/.test(m)), 'no "Export failed."').toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(9) the Timeline reads the tenths that were saved: 1.1 to 1.9 is In 0:01.1, Length 0:00.8, Out 0:01.9, and 0.2 to 1.2 is 0:00.2, 0:01.0, 0:01.2; the playhead at 1.2 reads 0:01.2', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await openProjectWith('t153-tenths', [clip('a', 'Late', 1.1, 1.9), clip('b', 'Early', 0.2, 1.2)])
+    try {
+      await expect.poll(() => timelineTexts(window), { timeout: 15_000 }).toEqual(['0:01.1', '0:00.8', '0:01.9'])
+      await window.getByRole('button', { name: 'Select clip Early' }).click()
+      await expect.poll(() => timelineTexts(window), { timeout: 15_000 }).toEqual(['0:00.2', '0:01.0', '0:01.2'])
+      // The slider's valuetext is the same readout: 18 frames at 15 fps is exactly 1.2 s.
+      await seekTo(window, 1.2)
+      await expect(window.locator('[data-tutorial="video-timeline"]').getByRole('slider', { name: 'Playhead' })).toHaveAttribute('aria-valuetext', '0:01.2')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(9) I at the end of a 10 s video is In 0:09.9, Length 0:00.1, Out 0:10.0 (it read 0:09.8, 0:00.0)', async () => {
+    test.setTimeout(150_000)
+    const tenSeconds = path.join(root, 'source', 'video-core-10s.mp4')
+    const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=10', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', tenSeconds])
+    expect(made.code, made.stderr.slice(-400)).toBe(0)
+    const { app, window } = await launchWithVideo('t153-ten', tenSeconds)
+    try {
+      await seekTo(window, 10)
+      await window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+      await window.keyboard.press('i')
+      await expect.poll(() => timelineTexts(window), { timeout: 10_000 }).toEqual(['0:09.9', '0:00.1', '0:10.0'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(fold) unchecking the last platform puts why Export is off inside a status region that was already on the page', async () => {
+    test.setTimeout(90_000)
+    const WHY = 'Check at least one platform below to export.'
+    const { app, window } = await launchWithVideo('t153-status')
+    try {
+      const card = window.locator('[data-tutorial="video-export"]')
+      const region = card.locator('[role="status"]')
+      // Mounted while there is nothing to say: that is what makes a live region speak when its text arrives.
+      await expect(region).toHaveCount(1)
+      await expect(region).toHaveText('')
+      const before = await region.elementHandle()
+      await card.locator('label').filter({ has: window.getByText('YouTube', { exact: true }) }).getByRole('checkbox').uncheck()
+      await expect(region).toHaveText(WHY)
+      expect(await before?.evaluate((el) => el.isConnected), 'the same element that was there before, not a new one').toBe(true)
+      await expect(card.getByRole('button', { name: 'Export', exact: true })).toBeDisabled()
+      await card.locator('label').filter({ has: window.getByText('YouTube', { exact: true }) }).getByRole('checkbox').check()
+      await expect(region).toHaveText('')
+      await expect(region).toHaveCount(1)
     } finally {
       await app.close()
     }

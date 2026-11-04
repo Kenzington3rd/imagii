@@ -98,7 +98,10 @@ shortcuts over a tour.
 
 ## Home
 
-The Home screen has a card for each of the five studios. The top-right
+The Home screen has a card for each of the five studios. A double-click on a card
+opens that studio and stops there: the second click is not passed on to whatever the
+studio shows under the pointer (the same goes for the **Home** link and every other
+link that changes the screen). The top-right
 controls:
 
 - **Undo / Redo** — step back and forward through your recent actions across
@@ -206,7 +209,8 @@ that names the file being converted.)
   The two handles are for the mouse; the keyboard's way to the same trim is `I` and `O`,
   and pressed while the video plays they mark the frame you are looking at. Holding the key marks once, and one
   Undo takes the mark back. A clip is never shorter than 0.1 seconds: `O` at the very start
-  (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length.
+  (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length. A project
+  saved with a clip of no length (an earlier version could save one) opens with that clip given the same 0.1 seconds.
 - **A video the preview cannot draw.** imagii reads more formats than its built-in player can
   show: ProRes, and some H.265 or 10-bit files, load with no picture. When that happens a note under the
   player says "imagii can't preview this video's picture format — trimming, scanning and export still
@@ -492,7 +496,7 @@ The posting helpers sit at the bottom of Video Studio, in three parts:
   general*) and copy its hashtags.
 - **Posting log** — type a clip name, check the platforms you posted it to
   (YouTube, Reels, TikTok, X, Facebook, Twitch, or Discord), add notes, and click
-  **+ Log post**. Each entry has **views**, **likes**, and **comments** boxes you
+  **+ Log post**. Each entry has **Views**, **Likes**, and **Comments** boxes you
   fill in yourself, and a delete button that asks first. The log keeps the 100
   most recent entries. It is saved with
   your settings, not in a project file.
@@ -648,7 +652,9 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    exactly that size; a Shift-stretched word keeps its extra width, and the size takes the height.
 3. Use the **Layers** panel to move layers up and down, hide, lock, duplicate,
    and remove them. The **Properties** panel edits the selected layer; one drag of its
-   **Opacity** slider, or one run of typing in a name, text or color field, is one **Undo**. A picture
+   **Opacity** slider, or one run of typing in a name, text, color or number field (**X (px)**,
+   **Y (px)**, **Rotation**, **Size (px)**, **Stroke (px)**), is one **Undo**; a rotation preset
+   button is one **Undo** each. A picture
    you import is placed at most 800 px on its long side, and always inside the canvas
    (a small canvas such as the 112×112 emote makes it smaller to fit, and it starts
    60 px in from the corner when there is room for that), whether you drop it, pick

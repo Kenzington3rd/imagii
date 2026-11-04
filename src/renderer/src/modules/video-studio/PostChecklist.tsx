@@ -87,6 +87,8 @@ interface PostChecklistProps {}
  * `*_twitter.mp4`, `*_facebook.mp4`), then the two a stream goes to. T-123 (17): Facebook had a file in every kit and no chip here.
  */
 const POSTING_PLATFORMS = ['YouTube', 'Reels', 'TikTok', 'X', 'Facebook', 'Twitch', 'Discord']
+/** T-153 (4): the posting log's three numbers, in the words a person reads (the stored keys are `views` / `likes` / `comments`). */
+const PERFORMANCE_LABEL = { views: 'Views', likes: 'Likes', comments: 'Comments' } as const
 
 export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
   const [diary, setDiary] = useState<DiaryEntry[]>([])
@@ -319,7 +321,8 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 {(['views', 'likes', 'comments'] as const).map((f) => (
                   <label key={f} className="flex items-center gap-1">
-                    <span className="text-ink-dim">{f}</span>
+                    {/* T-153 (4): sentence case, not the stored key; the box's accessible name follows. */}
+                    <span className="text-ink-dim">{PERFORMANCE_LABEL[f]}</span>
                     <input
                       type="number"
                       value={e.performance?.[f] ?? 0}

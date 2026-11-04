@@ -436,7 +436,12 @@ export function ExportPanel(): JSX.Element | null {
       >
         Export
       </PanelHeader>
-      {!running && totalQueued === 0 ? <p className="text-xs text-warn">{NOTHING_QUEUED}</p> : null}
+      {/* T-153: the wrapper is always mounted so unchecking the last platform ANNOUNCES why Export went dark (a live region that appears
+          with its content is not reliably read - GifPanel's pattern). While it is empty it is still a flex item with a gap on each side, so
+          `-mb-4` takes back the second one; nothing is hidden (no display:none, no visibility:hidden), it stays in the accessibility tree. */}
+      <div role="status" className={!running && totalQueued === 0 ? undefined : '-mb-4'}>
+        {!running && totalQueued === 0 ? <p className="text-xs text-warn">{NOTHING_QUEUED}</p> : null}
+      </div>
       {running ? (
         // B8 fix (round 15) + INIT-I (round 16): a long batch had no abort path. Cancel calls cancelAll, but a misclick during a
         // 20-clip batch was too costly - confirm before nuking >=2 running jobs.

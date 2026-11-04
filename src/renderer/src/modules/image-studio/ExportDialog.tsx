@@ -338,8 +338,15 @@ export function ExportDialog(): JSX.Element {
       >
         {busy ? 'Exporting…' : 'Export'}
       </button>
-      {sizeNote ? <p className="basis-full text-xs text-ink-muted">{sizeNote}</p> : null}
-      {jpgNote ? <p className="basis-full text-xs text-ink-muted">{jpgNote}</p> : null}
+      {/* T-153 (T-110 (l)): the notes sit in ONE wrapper that is always mounted, so choosing JPG ANNOUNCES the transparency note - a live region that appears together
+          with its content is not reliably read (the GIF card's shape, GifPanel.tsx). While it is empty it must take no room: in this WRAPPING card an empty `basis-full`
+          item is a line of its own, and the 8 px row gap above it is a hole under the button (GifPanel's `-mb-3` cannot take it back here: a flex line's height is never
+          negative, measured 21 px under the button where 12 is the padding). Out of the flow (`absolute`) it makes no line and no gap, and nothing is hidden: no display:none,
+          no visibility:hidden - either drops the region from the accessibility tree. With a note in it, it is a row like any other. */}
+      <div role="status" className={sizeNote || jpgNote ? 'basis-full flex flex-col gap-2' : 'absolute'}>
+        {sizeNote ? <p className="text-xs text-ink-muted">{sizeNote}</p> : null}
+        {jpgNote ? <p className="text-xs text-ink-muted">{jpgNote}</p> : null}
+      </div>
       <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
     </div>
   )

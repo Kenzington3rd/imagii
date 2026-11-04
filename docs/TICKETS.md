@@ -7082,7 +7082,7 @@ IMG-PREC.
   twice, `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with
   an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped
   by explicit PID only.
-- **Status:** open (round 102)
+- **Status:** done (round 102 — see the Done entry)
 
 ---
 
@@ -7634,6 +7634,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 102 — T-153, all ten counted items and the three folds, landed
+in the commit that carries this entry (T-110 (n)'s canvas half closes:
+every Properties number box is one undo step per typed value; (l)
+gains the image Export notes and the empty-queue reason by name, both
+now in always-mounted status regions). Two Sonnet workers in fresh
+clones of 1bdeada, disjoint files, merged by the expediter. Track A:
+Stroke, Size, X, Y and Rotation commit with a per-control key (the
+panel's useGestureEnd ends the window); the shortcuts chips never wrap;
+App swallows the repeat click on every route change, so a double-click
+on a Home card (or the Home link, an Asset Library card, → Canvas,
+Clean audio, Edit in Video Studio, Restore) cannot land its second
+press in the page it opened; the posting log reads Views / Likes /
+Comments, the volume meter's middle band is ember, "YouTube Shorts",
+and Stream Graphics' boxes read "X (px)" / "Y (px)". Track B: one
+`floorRange` in shared/clip.ts holds the 0.1 s floor for `applyRange`
+and for a restored clip shorter than it (a clip with length past the
+end of a shorter recording stays as saved — T-133 (4)); formatClock
+rounds once at the millisecond and truncates in integers, so tenths and
+hundredths read the number the clip holds; the recorder fits each
+screen frame by its current size (contain); Open refuses unread only
+past 3 × the character limit, so every file Save writes opens. Deviations,
+accepted: the restore floors only clips shorter than 0.1 s; the image
+Export status region is absolute while empty (a wrapping row's gap
+cannot be reclaimed by a negative margin); line-cite edits in
+docClaims and IC forced by line shifts; formatClock's single rounding
+also applies at 0 places. Ledgers: A 10 RED / 40 mutations (four VOID rows re-run; four survivors equivalent through the UI, each killed by its unit pin); B 5 RED / 32
+mutations, none surviving; every restore byte-identical. Found not
+fixed: App's route-change swallow also covers the first 500 ms after
+launch (harmless); ExportPanel's empty-region gap correction has no
+layout test. Expediter edit at the merge (non-functional): USER_GUIDE
+says a saved clip of no length opens with 0.1 seconds. Expedited
+personally: two independent mutations at seams no ledger row names —
+A: the Likes label back to its stored key → the interactionWiring
+T-153 (4) pin red; B: floorRange's end floor from the UNCLAMPED start
+→ two videoStore units red (clip.test.ts alone passes it) — each
+restored byte-identical, sha256 verified; on the MERGED tree: verify
+x2 (207/6085), test:media 441 passed | 17 skipped of 458 on 7.0.2, FULL Playwright 600/600 in 50.2 min (no flake). Applied to
+1bdeada by `git apply` with every file byte-identical to the
+expedited merge.
 
 Round 101 — T-152, all five counted items, landed in the commit that
 carries this entry. Two Sonnet workers in fresh clones of 1aa1e78,

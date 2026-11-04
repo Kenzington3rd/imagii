@@ -1,5 +1,6 @@
 import toast from 'react-hot-toast'
 import type { ChainSpec } from '@shared/audio'
+import { MIN_CLIP_SEC, floorRange } from '@shared/clip'
 import type { ImagiiProject, PlaceRecord } from '@shared/workspace'
 import { KNOWN_ROUTES, MAX_SCHEMA_VERSION, hasStudioState } from '@shared/projectValidation'
 import { isMissingFileError, userFacingError } from '@shared/userFacingError'
@@ -436,8 +437,15 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     videoOpened = loaded
     if (loaded) {
       if (video.clips.length > 0) {
+        // T-153 (8): a clip a saved project or an autosave carries with no length ([0, 0], [D, D]; v1.6.0 wrote them) comes back
+        // with the floor every range edit holds, once the source's duration is known - the validator checks finiteness only. Only a clip SHORTER
+        // than the floor is touched: one with length that lies past the end of a recording that got shorter stays as saved (T-133 (4): Burn says so in a sentence).
+        const duration = useVideoStore.getState().source?.probe.duration
         useVideoStore.setState({
-          clips: video.clips,
+          clips:
+            duration === undefined
+              ? video.clips
+              : video.clips.map((c) => (c.endSec - c.startSec < MIN_CLIP_SEC ? { ...c, ...floorRange(c.startSec, c.endSec, duration) } : c)),
           selectedClipId: video.selectedClipId ?? video.clips[0]?.id ?? null
         })
       }

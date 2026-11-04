@@ -110,3 +110,67 @@ describe('formatTimer', () => {
     for (const bad of [NaN, -1, Infinity]) expect(formatTimer(bad)).toBe('00:00')
   })
 })
+
+/**
+ * T-153 (9) - the fraction was `Math.floor((safe - whole) * 10 ** places)`: float error made into a whole digit. formatClock(1.2, 1) read "0:01.1", 4.1 read "0:04.0",
+ * 152 of the 400 tenths 0.0-39.9 were wrong, and I at the end of a 10 s video (start 9.9, end 10) read "Length 0:00.0". The count is now ONE rounding at the
+ * millisecond, then integer arithmetic that still truncates.
+ */
+describe('formatClock - the tenths and hundredths are the number that was meant (T-153 (9))', () => {
+  it('the values that read a digit low', () => {
+    expect(formatClock(1.2, 1)).toBe('0:01.2')
+    expect(formatClock(4.1, 1)).toBe('0:04.1')
+    expect(formatClock(19.9, 1)).toBe('0:19.9')
+    expect(formatClock(59.9, 1)).toBe('0:59.9')
+  })
+
+  it('the length of an I at the end of a 10 s video is a tenth, not nothing', () => {
+    expect(10 - 9.9, 'the float really is under 0.1').toBeLessThan(0.1)
+    expect(formatClock(10 - 9.9, 1)).toBe('0:00.1')
+    expect(formatClock(9.9, 1)).toBe('0:09.9')
+    expect(formatClock(0.1, 1)).toBe('0:00.1')
+  })
+
+  it('it still truncates, never rounds, past the places asked for', () => {
+    expect(formatClock(1.49, 1)).toBe('0:01.4')
+    expect(formatClock(1.49, 2)).toBe('0:01.49')
+    expect(formatClock(1.499, 2)).toBe('0:01.49')
+    expect(formatClock(65.999, 2)).toBe('1:05.99')
+  })
+
+  it('hundredths read true too', () => {
+    expect(formatClock(1.07, 2)).toBe('0:01.07')
+    expect(formatClock(4.35, 2)).toBe('0:04.35')
+    expect(formatClock(0.57, 2)).toBe('0:00.57')
+  })
+
+  it('an hour value keeps its fraction', () => {
+    expect(formatClock(3599.95, 1)).toBe('59:59.9')
+    expect(formatClock(3599.95, 2)).toBe('59:59.95')
+    expect(formatClock(3600.1, 1)).toBe('1:00:00.1')
+    expect(formatClock(10033.3, 1)).toBe('2:47:13.3')
+  })
+
+  it('a value a hair under a whole second carries into the next, with a fraction that fits (never "0:59.10")', () => {
+    expect(formatClock(59.9999, 1)).toBe('1:00.0')
+    expect(formatClock(59.9999, 2)).toBe('1:00.00')
+    expect(formatClock(3599.9999, 1)).toBe('1:00:00.0')
+  })
+
+  it('every tenth from 0.0 to 39.9 reads as it was written', () => {
+    const wrong: string[] = []
+    for (let i = 0; i < 400; i++) {
+      const value = i / 10
+      const want = `${Math.floor(value / 60)}:${String(Math.floor(value) % 60).padStart(2, '0')}.${i % 10}`
+      if (formatClock(value, 1) !== want) wrong.push(`${value} -> ${formatClock(value, 1)} (wanted ${want})`)
+    }
+    expect(wrong).toEqual([])
+  })
+
+  it('and the places that were never wrong did not move', () => {
+    expect(formatClock(1.2)).toBe('0:01')
+    expect(formatClock(59.9)).toBe('0:59')
+    expect(formatClock(3599.99)).toBe('59:59')
+    expect(formatTimer(1.2)).toBe('00:01')
+  })
+})

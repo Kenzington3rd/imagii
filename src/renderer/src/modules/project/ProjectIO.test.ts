@@ -2358,3 +2358,54 @@ describe('describeRestoreRefused: the one sentence when Restore finds the sessio
     expect(sentence).toBe('Nothing was restored: your work is open now, and restoring would replace it.')
   })
 })
+
+/**
+ * T-153 (8) - a clip with no length restores with the floor every range edit holds. v1.6.0's I and O keys wrote [0, 0] and [D, D] (the validator checks
+ * finiteness only), and every output of such a clip said only "Export failed.". The source's duration (VIDEO_PROBE: 120 s) is known once `loadSource` has
+ * answered, and that is when the restore floors each clip.
+ */
+describe('applyProject floors a clip with no length once the source is known (T-153 (8))', () => {
+  const clip = (id: string, startSec: number, endSec: number): Clip => ({ id, name: id, startSec, endSec, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] })
+  const projectWith = (clips: Clip[], extra: Partial<NonNullable<ImagiiProject['videoStudio']>> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath: VIDEO_PATH, clips, selectedClipId: clips[0]?.id ?? null, watermark: null, srtPath: null, ...extra }
+  })
+
+  it('[0, 0] and [D, D] come back as [0, 0.1] and [D - 0.1, D]; everything else about the clip is as saved', async () => {
+    const saved = [clip('start', 0, 0), clip('end', 120, 120), clip('mid', 30, 30)]
+    await applyProject(projectWith(saved))
+    const { clips } = useVideoStore.getState()
+    expect(clips.map((c) => [c.startSec, c.endSec])).toEqual([[0, 0.1], [120 - 0.1, 120], [30, 30.1]])
+    expect(clips.map((c) => c.id)).toEqual(['start', 'end', 'mid'])
+    expect(clips[0]).toEqual({ ...saved[0], endSec: 0.1 })
+  })
+
+  it('a clip with length is untouched, even one past the end of a source that got shorter (T-133 (4): Burn says so in a sentence)', async () => {
+    await applyProject(projectWith([clip('ok', 12.5, 40), clip('past', 100, 400), clip('gone', 500, 600)]))
+    expect(useVideoStore.getState().clips.map((c) => [c.startSec, c.endSec])).toEqual([[12.5, 40], [100, 400], [500, 600]])
+  })
+
+  it('a clip with no length past the end of the source comes back as the last 0.1 s', async () => {
+    await applyProject(projectWith([clip('past', 500, 500)]))
+    expect(useVideoStore.getState().clips[0]).toMatchObject({ startSec: 120 - 0.1, endSec: 120 })
+  })
+
+  it('the selection is the saved one, on the floored clip', async () => {
+    await applyProject(projectWith([clip('a', 0, 5), clip('b', 0, 0)], { selectedClipId: 'b' }))
+    expect(useVideoStore.getState().selectedClipId).toBe('b')
+    expect(useVideoStore.getState().clips[1]).toMatchObject({ startSec: 0, endSec: 0.1 })
+  })
+
+  it('a video that did not open leaves the studio as it was: no clips applied, none floored', async () => {
+    vi.stubGlobal('window', { api: { video: { probe: () => Promise.reject(new Error('gone')), fileUrl: (p: string) => pathToImagiiFileUrl(p) }, audio: { ...PEAKS_BRIDGE, probe: () => Promise.resolve(AUDIO_PROBE) } } })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await applyProject(projectWith([clip('start', 0, 0)]))
+    } finally {
+      consoleError.mockRestore()
+    }
+    expect(useVideoStore.getState().clips).toEqual([])
+  })
+})

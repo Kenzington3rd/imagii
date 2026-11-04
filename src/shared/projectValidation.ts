@@ -47,6 +47,14 @@ export type ValidationResult =
  */
 export const MAX_PROJECT_BYTES = 50 * 1024 * 1024
 
+/**
+ * T-153: the size past which Open refuses a file WITHOUT reading it (T-152 (3)). The limit above counts characters (UTF-16 units) of the text Save
+ * and autosave measure, and a unit is at most 3 bytes of UTF-8, so a file Save wrote with accented paths or text can hold up to three times
+ * MAX_PROJECT_BYTES on disk and still be within the character rule. Only a file bigger than THIS cannot be one; below it Open reads the file and
+ * `validateProjectJsonString` decides in characters, so every file Save writes opens.
+ */
+export const MAX_PROJECT_FILE_BYTES = 3 * MAX_PROJECT_BYTES
+
 /** The ONE serialization a project is measured on and written in (T-137 (6)): compact JSON, the form autosave always wrote. */
 export function serializeProject(project: ImagiiProject): string {
   return JSON.stringify(project)

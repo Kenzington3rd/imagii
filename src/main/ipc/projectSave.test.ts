@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, truncateSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { MAX_PROJECT_BYTES, MAX_SCHEMA_VERSION, projectSizeProblem, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { MAX_PROJECT_BYTES, MAX_PROJECT_FILE_BYTES, MAX_SCHEMA_VERSION, projectSizeProblem, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { userFacingError } from '../../shared/userFacingError'
 import type { ImagiiProject } from '../../shared/workspace'
 
@@ -267,14 +267,45 @@ describe('project:load - the size is read before the file (T-152 (3))', () => {
     return s
   }
 
-  it('a file one byte over the limit is the size sentence, and readFile is never called', async () => {
+  it('a file one byte over the character limit is READ now, and the character rule refuses it with the same sentence (T-153)', async () => {
+    // The limit counts characters; a UTF-16 unit is up to 3 bytes of UTF-8, so a file this size on disk can still be within it. Only the text can say.
     const file = sparse('over.imagii.json', MAX_PROJECT_BYTES + 1)
     showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
     expect(await load()).toEqual({ ok: false, reason: sentenceFor(MAX_PROJECT_BYTES + 1) })
     expect(sentenceFor(MAX_PROJECT_BYTES + 1)).toBe(
       'That project is too large to open (50.1 MB; the limit is 50 MB). An earlier version of imagii let one be saved this big; its images are the likely cause.'
     )
+    expect(faults.reads, 'the file is read: below 3x the limit the size in bytes decides nothing').toEqual([file])
+  })
+
+  it('a file past three times the limit (the most a project within the character rule can be on disk) is the size sentence, and readFile is never called (T-153)', async () => {
+    expect(MAX_PROJECT_FILE_BYTES).toBe(3 * MAX_PROJECT_BYTES)
+    const file = sparse('triple.imagii.json', MAX_PROJECT_FILE_BYTES + 1)
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    expect(await load()).toEqual({ ok: false, reason: sentenceFor(MAX_PROJECT_FILE_BYTES + 1) })
+    expect(sentenceFor(MAX_PROJECT_FILE_BYTES + 1)).toContain('150.1 MB; the limit is 50 MB')
     expect(faults.reads, 'the file is not read').toEqual([])
+  })
+
+  it('a file of exactly three times the limit is still READ (it could be all three-byte characters), and the character rule refuses it (T-153)', async () => {
+    const file = sparse('triple-exact.imagii.json', MAX_PROJECT_FILE_BYTES)
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    expect(await load()).toEqual({ ok: false, reason: sentenceFor(MAX_PROJECT_FILE_BYTES) })
+    expect(faults.reads).toEqual([file])
+  })
+
+  it('a project of exactly the limit in CHARACTERS with non-ASCII text (more bytes than characters) opens: every file Save writes opens (T-153)', async () => {
+    const ascii = serializeProject(projectOfSize(MAX_PROJECT_BYTES))
+    const text = ascii.replace('A'.repeat(1000), '\u00e9'.repeat(1000))
+    expect(text.length, 'the same number of characters').toBe(MAX_PROJECT_BYTES)
+    const file = path.join(scratch, 'accented.imagii.json')
+    writeFileSync(file, text, 'utf8')
+    expect(statSync(file).size, 'more bytes on disk than the limit').toBe(MAX_PROJECT_BYTES + 1000)
+    showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+    const result = (await load()) as { ok: boolean; filePath?: string }
+    expect(result.ok).toBe(true)
+    expect(result.filePath).toBe(file)
+    expect(faults.reads).toEqual([file])
   })
 
   it('a 600 MB file (past V8\'s string cap) is the size sentence, not "Invalid string length", and readFile is never called', async () => {

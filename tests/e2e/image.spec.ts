@@ -1309,8 +1309,8 @@ test.describe('Image Studio — selection', () => {
       await clickDoc(window, { x: 450, y: 400 })
       const start = await lastShape(window)
       // The number fields are the store's own readout (PropertiesPanel.tsx:51).
-      await expect(field(window, 'x')).toHaveValue(String(Math.round(start.x)))
-      await expect(field(window, 'y')).toHaveValue(String(Math.round(start.y)))
+      await expect(field(window, 'X (px)')).toHaveValue(String(Math.round(start.x)))
+      await expect(field(window, 'Y (px)')).toHaveValue(String(Math.round(start.y)))
 
       // ── drag the shape: onDragEnd writes x/y through updateLayer ──
       // T-62: through drag.ts, like every other gesture in this directory —
@@ -1337,8 +1337,8 @@ test.describe('Image Studio — selection', () => {
       const dragged = await lastShape(window)
       expectNear(dragged.x, start.x + 80, 'dragged x')
       expectNear(dragged.y, start.y + 60, 'dragged y')
-      await expect(field(window, 'x')).toHaveValue(String(Math.round(dragged.x)))
-      await expect(field(window, 'y')).toHaveValue(String(Math.round(dragged.y)))
+      await expect(field(window, 'X (px)')).toHaveValue(String(Math.round(dragged.x)))
+      await expect(field(window, 'Y (px)')).toHaveValue(String(Math.round(dragged.y)))
 
       // ── drag a corner anchor: onTransformEnd writes scale + position ──
       // The Transformer scales the node while the button is down, so the
@@ -1876,8 +1876,8 @@ test.describe('Image Studio — properties panel', () => {
       expect(await layerNames(window)).toEqual(['Face box', 'Text'])
 
       // ── x / y ──
-      await field(window, 'x').fill('123')
-      await field(window, 'y').fill('456')
+      await field(window, 'X (px)').fill('123')
+      await field(window, 'Y (px)').fill('456')
       await expect
         .poll(async () => (await lastShape(window)).x, { timeout: 10_000 })
         .toBe(123)
@@ -3375,8 +3375,8 @@ test.describe('Image Studio — handles, draw gestures, lock, snap and typed num
       await expect.poll(async () => (await imageNow()).x, { timeout: 10_000, message: 'the node stayed where the pointer left it' }).toBe(100)
       expect((await imageNow()).y).toBe(100)
       // Properties says the same thing the stage does.
-      await expect(field(window, 'x')).toHaveValue('100')
-      await expect(field(window, 'y')).toHaveValue('100')
+      await expect(field(window, 'X (px)')).toHaveValue('100')
+      await expect(field(window, 'Y (px)')).toHaveValue('100')
     } finally {
       await closeStudio(studio)
     }
@@ -3391,8 +3391,8 @@ test.describe('Image Studio — handles, draw gestures, lock, snap and typed num
     try {
       await startBlank(window)
       await layerRow(window, 'Text').click()
-      const x = field(window, 'x')
-      const y = field(window, 'y')
+      const x = field(window, 'X (px)')
+      const y = field(window, 'Y (px)')
       const rotation = field(window, 'Rotation')
       const layerX = async (): Promise<number> => (await lastShape(window)).x
 
@@ -5114,8 +5114,8 @@ test.describe('Image Studio - JPG over a transparent document says so (T-147 (4)
       await expect(exportPanel, 'PNG keeps the clear parts clear: nothing to say').not.toContainText('JPG has no transparency')
       await format.selectOption('jpg')
       await expect(exportPanel.getByText(NOTE, { exact: true })).toBeVisible()
-      // The line is one paragraph in the card's note slot, the same one the size note uses.
-      await expect(exportPanel.locator('p.basis-full').filter({ hasText: NOTE })).toHaveCount(1)
+      // The line is one paragraph in the card's note slot, the status region the size note uses (T-153: that region is always mounted).
+      await expect(exportPanel.locator('[role="status"] p').filter({ hasText: NOTE })).toHaveCount(1)
       await format.selectOption('png')
       await expect(exportPanel.getByText(NOTE)).toHaveCount(0)
 
@@ -5360,6 +5360,210 @@ test.describe('Image Studio - a negative stroke width is never stored (T-152 (5)
         .toBe(0)
       await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000, message: 'the layer on the canvas' }).toBe(0)
       await expect(stroke, 'the box shows the clamped number, not the typed one').toHaveValue('0')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-153 (1): a number typed into a Properties box is ONE undo step
+// ═══════════════════════════════════════════════════════════════════════════
+// The boxes are DraftFields that commit live on each in-range keystroke (T-124 (15)), and `updateLayer(id, patch)` with no key pushes a step per call: "12" typed
+// into Stroke (px) was two steps, and one Undo left 1 (T-152 (5) moved the box off the keyed raw input and lost the coalescing). Each box passes its own key now, and
+// leaving the box closes the window (`useGestureEnd`), so a second run of typing is a second step. The end state is the layer on the stage and the box after Undo.
+test.describe('Image Studio - a typed number in Properties is one undo step (T-153 (1))', () => {
+  const undo = (window: Page): Locator => window.getByRole('button', { name: 'Undo' })
+
+  test('Stroke (px): "12" typed key by key and left is ONE step; one Undo gives the old width back, and a second run is a second step', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t153-stroke-undo')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+      await expectLayerCount(window, 2)
+      const width = async (): Promise<number | undefined> => (await lastShape(window)).strokeWidth
+      const before = await width()
+      expect(before, 'a drawn rectangle starts at 2 px').toBe(2)
+
+      const stroke = field(window, 'Stroke (px)')
+      await retype(stroke, '12')
+      await leave(stroke)
+      await expect.poll(width, { timeout: 10_000 }).toBe(12)
+      await undo(window).click()
+      await expect.poll(width, { timeout: 10_000, message: 'one Undo puts back the width from before the typing, not the "1" on the way to "12"' }).toBe(2)
+      await expect(stroke).toHaveValue('2')
+
+      // Two runs of typing, the box left between them: two steps, each Undo lands on the run before it.
+      await retype(stroke, '8')
+      await leave(stroke)
+      await retype(stroke, '20')
+      await leave(stroke)
+      await expect.poll(width, { timeout: 10_000 }).toBe(20)
+      await undo(window).click()
+      await expect.poll(width, { timeout: 10_000 }).toBe(8)
+      await undo(window).click()
+      await expect.poll(width, { timeout: 10_000 }).toBe(2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Size (px): "72" typed key by key is ONE step; one Undo gives the old size back', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t153-size-undo')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const fontSize = async (): Promise<number | undefined> => (await lastShape(window)).fontSize
+      expect(await fontSize()).toBe(32)
+      const size = field(window, 'Size (px)')
+      await retype(size, '72')
+      await leave(size)
+      await expect.poll(fontSize, { timeout: 10_000 }).toBe(72)
+      await undo(window).click()
+      await expect.poll(fontSize, { timeout: 10_000, message: 'one Undo puts back 32, not the "7" on the way to "72"' }).toBe(32)
+      await expect(size).toHaveValue('32')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('X (px) and Y (px): each is typed key by key, left, and undone by ONE Undo; the two are separate steps', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t153-xy-undo')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const start = await lastShape(window)
+      expect(start.x, 'the fixture is not already at the typed numbers').not.toBe(50)
+      const x = field(window, 'X (px)')
+      const y = field(window, 'Y (px)')
+      const pos = async (): Promise<[number, number]> => {
+        const s = await lastShape(window)
+        return [s.x, s.y]
+      }
+
+      await retype(x, '50')
+      await leave(x)
+      await retype(y, '40')
+      await leave(y)
+      await expect.poll(pos, { timeout: 10_000 }).toEqual([50, 40])
+      await undo(window).click()
+      await expect.poll(pos, { timeout: 10_000, message: 'one Undo takes back the Y run only, not the "4" on the way to "40"' }).toEqual([50, start.y])
+      await undo(window).click()
+      await expect.poll(pos, { timeout: 10_000, message: 'and the next takes back the X run whole' }).toEqual([start.x, start.y])
+      await expect(x).toHaveValue(String(Math.round(start.x)))
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Rotation: "45" typed key by key is ONE step; a preset is its own step, and the first typed run after it is another', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t153-rotation-undo')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const angle = async (): Promise<number> => (await lastShape(window)).rotation
+      expect(await angle()).toBe(0)
+      const rotation = field(window, 'Rotation')
+      await retype(rotation, '45')
+      await leave(rotation)
+      await expect.poll(angle, { timeout: 10_000 }).toBe(45)
+      await window.getByRole('button', { name: 'Rotate 90 degrees' }).click()
+      await expect.poll(angle, { timeout: 10_000 }).toBe(90)
+      await retype(rotation, '30')
+      await leave(rotation)
+      await expect.poll(angle, { timeout: 10_000 }).toBe(30)
+
+      await undo(window).click()
+      await expect.poll(angle, { timeout: 10_000, message: 'the typed run after the preset is one step' }).toBe(90)
+      await undo(window).click()
+      await expect.poll(angle, { timeout: 10_000, message: 'the preset is one step' }).toBe(45)
+      await undo(window).click()
+      await expect.poll(angle, { timeout: 10_000, message: 'the first typed run is one step, not "4" then "45"' }).toBe(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-153 (7): Properties' position boxes say what they count
+// ═══════════════════════════════════════════════════════════════════════════
+// "x" and "y" were bare letters beside a number (BRANDING: a bare number is not a value); they read "X (px)" and "Y (px)" like Size (px) and Stroke (px), and the
+// accessible names follow. The two share one grid row, so the longer words must stay on one line at the 1024 px minimum.
+test.describe('Image Studio - the position boxes are labelled in pixels (T-153 (7))', () => {
+  test('Properties says "X (px)" and "Y (px)", each on one line with its box whole, at the default window and the minimum; the bare letters are gone', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t153-xy-labels')
+    const { app, window } = studio
+    try {
+      await startBlank(window)
+      const card = propsCard(window)
+      await expect(window.getByRole('spinbutton', { name: 'X (px)' })).toHaveCount(1)
+      await expect(window.getByRole('spinbutton', { name: 'Y (px)' })).toHaveCount(1)
+      await expect(card.getByText('x', { exact: true }), 'the bare letter is gone').toHaveCount(0)
+      await expect(card.getByText('y', { exact: true }), 'the bare letter is gone').toHaveCount(0)
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await resizeAndSettle(app, window, size)
+        await expectOneLine(card.getByText('X (px)', { exact: true }), `the X label at ${where}`)
+        await expectOneLine(card.getByText('Y (px)', { exact: true }), `the Y label at ${where}`)
+        await expectNoHorizontalOverflow(card, `the Properties card at ${where}`)
+        await expectControlsWhole(card, card.getByRole('spinbutton', { name: /^[XY] \(px\)$/ }), `the position boxes at ${where}`)
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-153 (fold, T-110 (l)): the Export card's notes sit in one always-mounted status region
+// ═══════════════════════════════════════════════════════════════════════════
+// The size note and the JPG note were conditional paragraphs: a live region that appears together with its content is not reliably read, so a screen-reader user
+// who picked JPG heard nothing. They sit in ONE `role="status"` wrapper that exists before the format changes (the GIF card's shape), and while it is empty it
+// takes no room (the card is no taller than it was).
+test.describe('Image Studio - the Export notes are announced (T-153 fold)', () => {
+  const NOTE = 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
+
+  test('the status region is in the card before JPG is picked, empty and taking no room; picking JPG puts the note INSIDE it, and PNG empties it again', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t153-export-status')
+    const { window } = studio
+    try {
+      const overlay = templateById('tw-overlay-streamer')
+      await templateCard(window, overlay).click()
+      await expectTemplateApplied(window, overlay)
+      const exportPanel = window.locator(EXPORT)
+      const format = exportPanel.getByRole('combobox', { name: 'Export format' })
+      // By role, so a region that is display:none (and so is not in the accessibility tree) is not found.
+      const status = exportPanel.getByRole('status')
+      await expect(status, 'one region, mounted before the note exists').toHaveCount(1)
+      await expect(status).toHaveText('')
+      // Empty, it adds no row under the Export button: the card's bottom edge is its padding (12 px) below the button.
+      const gapBelow = async (): Promise<number> =>
+        exportPanel.evaluate((card) => {
+          const button = Array.from(card.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim() === 'Export')
+          if (!button) throw new Error('no Export button')
+          return card.getBoundingClientRect().bottom - button.getBoundingClientRect().bottom
+        })
+      expect(await gapBelow(), 'the empty region leaves no hole under the button').toBeLessThanOrEqual(13)
+
+      await format.selectOption('jpg')
+      await expect(status).toHaveCount(1)
+      await expect(status.getByText(NOTE, { exact: true }), 'the note arrives inside the region that was already there').toBeVisible()
+      await expect(status.locator('p')).toHaveCount(1)
+      await format.selectOption('png')
+      await expect(status).toHaveCount(1)
+      await expect(status).toHaveText('')
+      expect(await gapBelow()).toBeLessThanOrEqual(13)
     } finally {
       await closeStudio(studio)
     }

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { VideoProbe } from '@shared/api'
-import { DEFAULT_COLOR_GRADE, clipSpeed } from '@shared/clip'
+import { DEFAULT_COLOR_GRADE, MIN_CLIP_SEC, clipSpeed, floorRange } from '@shared/clip'
 import type { Clip, ColorGrade, CropRect, PlatformId, TextOverlay } from '@shared/clip'
 import { newTextOverlay, normalizeOverlayPatch } from '@shared/textOverlay'
 import type { CaptionSegment } from '@shared/captions'
@@ -317,7 +317,7 @@ export function videoHasNoSound(source: Pick<VideoSource, 'probe'> | null): bool
 }
 
 /** The shortest clip any range edit makes (s): a scanner add with less than this left in the video is refused (T-131 (3)), and applyRange keeps it between In and Out (T-152 (4)). */
-const MIN_SCANNED_CLIP_SEC = 0.1
+const MIN_SCANNED_CLIP_SEC = MIN_CLIP_SEC
 
 /** What `addScannedClip` did (T-94). 'duplicate' (T-150 (3)): a clip with exactly this range is already in the list, so nothing was added. */
 export type ScannedClipResult = 'refused' | 'duplicate' | 'added' | 'added-dropped-whole-video'
@@ -411,10 +411,9 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
   function applyRange(id: string, startSec: number, endSec: number, key: string): void {
     const duration = get().source?.probe.duration ?? endSec
     // T-152 (4): the I and O keys (setClipStart / setClipEnd) reach here with the playhead at the very start or end, which made a clip of
-    // no length that every output then refused. The floor is the Timeline drag's own 0.1 s; a source shorter than that keeps the plain clamp.
-    const room = duration >= MIN_SCANNED_CLIP_SEC ? MIN_SCANNED_CLIP_SEC : 0
-    const safeStart = clamp(startSec, 0, duration - room)
-    const safeEnd = clamp(endSec, safeStart + room, duration)
+    // no length that every output then refused. The floor is the Timeline drag's own 0.1 s; a source shorter than that keeps the plain clamp
+    // (`floorRange`, T-153 (8): the same rule the project restore applies to a saved clip).
+    const { startSec: safeStart, endSec: safeEnd } = floorRange(startSec, endSec, duration)
     set({
       ...snapshot(key),
       clips: get().clips.map((c) =>

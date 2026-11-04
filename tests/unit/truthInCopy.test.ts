@@ -315,3 +315,13 @@ describe('the guide says what an Asset Library card, Open project and the I and 
     expect(para()).toContain('A clip is never shorter than 0.1 seconds: `O` at the very start (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length.')
   })
 })
+
+// T-153 (6): the product name is "YouTube Shorts" (a proper name, like TikTok and Reels); the preset manager's hint wrote it as a common noun.
+describe('the preset manager names YouTube Shorts as a name (T-153)', () => {
+  it('"vertical YouTube Shorts", never "shorts" in lower case', () => {
+    const manager = read('src/renderer/src/modules/video-studio/CustomPresetManager.tsx').replace(/\s+/g, ' ')
+    expect(manager).toContain('vertical YouTube Shorts at custom size')
+    expect(manager).not.toContain('YouTube shorts')
+  })
+})
+

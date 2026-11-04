@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { computeCornerRect, drawFrame, __testing__ } from './compositor'
+import { computeContainRect, computeCornerRect, drawFrame, __testing__ } from './compositor'
 
 /**
  * Pure-function tests for the compositor. The actual canvas drawing and
@@ -231,5 +231,120 @@ describe('teardownOffscreen (partial-init cleanup)', () => {
       parentNode: null
     } as unknown as HTMLVideoElement
     expect(() => __testing__.teardownOffscreen([a])).not.toThrow()
+  })
+})
+
+/**
+ * T-153 (10) - a window source resized mid-take. The canvas is pinned at the size the screen had at start and `drawFrame` stretched every frame into it, so the
+ * rest of the take was recorded distorted. `computeContainRect` fits the CURRENT size inside the canvas (centred, black bars) and `drawFrame` asks it per frame.
+ * Screen capture is an OS boundary, so the deepest layer that reaches a real resize is this one (docs/INTERACTION_COVERAGE.md).
+ */
+describe('computeContainRect (T-153 (10))', () => {
+  it('the same aspect fills the whole canvas, at the same size and at another', () => {
+    expect(computeContainRect(1920, 1080, 1920, 1080)).toEqual({ x: 0, y: 0, w: 1920, h: 1080 })
+    expect(computeContainRect(1280, 720, 1920, 1080)).toEqual({ x: 0, y: 0, w: 1920, h: 1080 })
+    expect(computeContainRect(960, 540, 1920, 1080)).toEqual({ x: 0, y: 0, w: 1920, h: 1080 })
+  })
+
+  it('a wider picture has bars above and below, centred', () => {
+    // 2560x1080 (21:9) into 1920x1080: width-bound, 810 tall, 135 above and below.
+    expect(computeContainRect(2560, 1080, 1920, 1080)).toEqual({ x: 0, y: 135, w: 1920, h: 810 })
+  })
+
+  it('a taller picture has bars left and right, centred', () => {
+    // 1080x1080 into 1920x1080: height-bound, 1080 wide, 420 each side.
+    expect(computeContainRect(1080, 1080, 1920, 1080)).toEqual({ x: 420, y: 0, w: 1080, h: 1080 })
+    // A window dragged narrow and tall.
+    expect(computeContainRect(600, 1000, 1920, 1080)).toEqual({ x: 636, y: 0, w: 648, h: 1080 })
+  })
+
+  it('never leaves the canvas and never changes the aspect it was given (beyond a pixel of rounding)', () => {
+    for (const [w, h] of [[1, 1], [333, 777], [4000, 300], [300, 4000], [1920, 1081]] as const) {
+      const r = computeContainRect(w, h, 1920, 1080)
+      expect(r.x).toBeGreaterThanOrEqual(0)
+      expect(r.y).toBeGreaterThanOrEqual(0)
+      expect(r.x + r.w).toBeLessThanOrEqual(1920)
+      expect(r.y + r.h).toBeLessThanOrEqual(1080)
+      expect(Math.abs(r.w / r.h - w / h) / (w / h)).toBeLessThan(0.01)
+    }
+  })
+
+  it('a size not reported yet is the full canvas, as it always drew', () => {
+    expect(computeContainRect(0, 0, 1920, 1080)).toEqual({ x: 0, y: 0, w: 1920, h: 1080 })
+    expect(computeContainRect(NaN, 1080, 1920, 1080)).toEqual({ x: 0, y: 0, w: 1920, h: 1080 })
+  })
+
+  it('refuses a canvas with no size', () => {
+    expect(() => computeContainRect(1920, 1080, 0, 1080)).toThrow()
+  })
+})
+
+describe('drawFrame fits the screen by its size right now (T-153 (10))', () => {
+  interface Call {
+    op: 'fillRect' | 'drawImage'
+    tag?: string
+    x: number
+    y: number
+    w: number
+    h: number
+    fillStyle?: string
+  }
+  function stub(): { ctx: CanvasRenderingContext2D; calls: Call[] } {
+    const calls: Call[] = []
+    const state = { fillStyle: '' }
+    const ctx = {
+      set fillStyle(v: string) {
+        state.fillStyle = v
+      },
+      get fillStyle() {
+        return state.fillStyle
+      },
+      fillRect: (x: number, y: number, w: number, h: number) => calls.push({ op: 'fillRect', x, y, w, h, fillStyle: state.fillStyle }),
+      drawImage: (img: { tag: string }, x: number, y: number, w: number, h: number) => calls.push({ op: 'drawImage', tag: img.tag, x, y, w, h })
+    } as unknown as CanvasRenderingContext2D
+    return { ctx, calls }
+  }
+  const video = (tag: string, w: number, h: number): HTMLVideoElement => ({ tag, readyState: 4, videoWidth: w, videoHeight: h }) as unknown as HTMLVideoElement
+  const NO_CAM = { x: 0, y: 0, w: 100, h: 100 }
+
+  it('at the start size the screen is the full canvas and nothing is cleared first', () => {
+    const { ctx, calls } = stub()
+    drawFrame(ctx, video('screen', 1920, 1080), null, NO_CAM, 1920, 1080)
+    expect(calls).toEqual([{ op: 'drawImage', tag: 'screen', x: 0, y: 0, w: 1920, h: 1080 }])
+  })
+
+  it('a take whose window changes aspect: the same canvas, the picture letterboxed on black, then back to full when it returns', () => {
+    const screen = { tag: 'screen', readyState: 4, videoWidth: 1920, videoHeight: 1080 }
+    const el = screen as unknown as HTMLVideoElement
+
+    const first = stub()
+    drawFrame(first.ctx, el, null, NO_CAM, 1920, 1080)
+    expect(first.calls.map((c) => c.op)).toEqual(['drawImage'])
+
+    // The person drags the window square: 1080x1080 now, the canvas still 1920x1080.
+    screen.videoWidth = 1080
+    const squared = stub()
+    drawFrame(squared.ctx, el, null, NO_CAM, 1920, 1080)
+    expect(squared.calls).toEqual([
+      { op: 'fillRect', x: 0, y: 0, w: 1920, h: 1080, fillStyle: 'black' },
+      { op: 'drawImage', tag: 'screen', x: 420, y: 0, w: 1080, h: 1080 }
+    ])
+
+    // And back: the bars go with the next frame's full-canvas draw.
+    screen.videoWidth = 1920
+    const back = stub()
+    drawFrame(back.ctx, el, null, NO_CAM, 1920, 1080)
+    expect(back.calls).toEqual([{ op: 'drawImage', tag: 'screen', x: 0, y: 0, w: 1920, h: 1080 }])
+  })
+
+  it('a wider window has bars above and below, and the webcam corner math is untouched', () => {
+    const { ctx, calls } = stub()
+    const corner = { x: 1504, y: 832, w: 384, h: 216 }
+    drawFrame(ctx, video('screen', 2560, 1080), { tag: 'webcam', readyState: 4, videoWidth: 1280, videoHeight: 720 } as unknown as HTMLVideoElement, corner, 1920, 1080)
+    expect(calls).toEqual([
+      { op: 'fillRect', x: 0, y: 0, w: 1920, h: 1080, fillStyle: 'black' },
+      { op: 'drawImage', tag: 'screen', x: 0, y: 135, w: 1920, h: 810 },
+      { op: 'drawImage', tag: 'webcam', x: 1504, y: 832, w: 384, h: 216 }
+    ])
   })
 })

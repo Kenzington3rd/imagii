@@ -74,6 +74,22 @@ export function clipSpeed(clip: Pick<Clip, 'speedMultiplier'>): number {
   return typeof speed === 'number' && Number.isFinite(speed) && speed > 0 ? speed : 1
 }
 
+/** The shortest clip any range edit makes (s): the Timeline drag's own floor, `applyRange`'s, a scanner add's (T-131 (3), T-152 (4)). */
+export const MIN_CLIP_SEC = 0.1
+
+/**
+ * A clip's range with the floor held (T-153 (8)): at least `MIN_CLIP_SEC` between In and Out, inside `[0, duration]`. The ONE copy of
+ * `applyRange`'s clamp, so a clip a saved project or an autosave carries as [0, 0] or [D, D] (v1.6.0 wrote them; every output then
+ * said only "Export failed.") comes back with length by the same rule an I or O key press does. A source shorter than the floor
+ * keeps the plain clamp (room 0); a reversed pair resolves to a start and an end at least the floor apart.
+ */
+export function floorRange(startSec: number, endSec: number, duration: number): { startSec: number; endSec: number } {
+  const room = duration >= MIN_CLIP_SEC ? MIN_CLIP_SEC : 0
+  const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max)
+  const start = clamp(startSec, 0, duration - room)
+  return { startSec: start, endSec: clamp(endSec, start + room, duration) }
+}
+
 /**
  * Everything about a clip that decides what its exported picture and sound ARE
  * (T-105), as opposed to which part of the source it is (`startSec`/`endSec`) or

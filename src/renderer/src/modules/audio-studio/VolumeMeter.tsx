@@ -99,7 +99,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
             <div
               key={i}
               className={`flex-1 rounded-sm transition-[height] ${
-                isHot ? 'bg-danger-strong' : lvl > 0.55 ? 'bg-warn' : 'bg-ok-strong'
+                isHot ? 'bg-danger-strong' : lvl > 0.55 ? 'bg-ember' : 'bg-ok-strong'
               }`}
               style={{ height: `${Math.max(2, pct)}%` }}
             />

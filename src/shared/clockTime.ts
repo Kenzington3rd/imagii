@@ -13,11 +13,16 @@ export type ClockPlaces = 0 | 1 | 2
 
 export function formatClock(seconds: number, places: ClockPlaces = 0): string {
   const safe = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0
-  const whole = Math.floor(safe)
+  // T-153 (9): ONE rounding, at a finer scale than any readout, then integer arithmetic. `(safe - whole) * 10` is float error
+  // made into a digit (1.2 - 1 = 0.19999999999999996, so tenths read 1.1; 10 - 9.9 read 0.0): rounding to the millisecond puts
+  // the value back on the number a person typed or a probe printed, and the integer divisions below TRUNCATE from there, so 1.49
+  // is still "1.4" at one place. h:m:s come from the same `whole`, so 59.9999 carries into 1:00.0 instead of printing 0:59.10.
+  const milli = Math.round(safe * 1000)
+  const whole = Math.floor(milli / 1000)
   const h = Math.floor(whole / 3600)
   const m = Math.floor((whole % 3600) / 60)
   const s = whole % 60
-  const frac = places === 0 ? '' : '.' + String(Math.floor((safe - whole) * 10 ** places)).padStart(places, '0')
+  const frac = places === 0 ? '' : '.' + String(Math.floor((milli % 1000) / 10 ** (3 - places))).padStart(places, '0')
   const ss = String(s).padStart(2, '0')
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}${frac}` : `${m}:${ss}${frac}`
 }

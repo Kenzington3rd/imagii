@@ -14,6 +14,69 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-153 (round 102), Track A: a replacement control inherits what the old one passed, and a repeat click is dropped where the page changes, not at every link
+
+The thirty-ninth sweep, Track A (Stream Graphics' number boxes, the shortcuts dialog, the second click of a double-click, four labels and one colour, and the Export notes' status region; Track B lands beside it). Ledger: r102a/ledger.tsv (red rows on a `git archive` of the unchanged tree `1bdeada` and an e2e build of it, and the mutation rows).
+
+### (1) [LOW] - A number typed into a Properties box was one undo step per keystroke
+
+- **Bug.** "12" typed into Stroke (px) was two undo steps, and one Undo left 1. Size (px), X, Y and Rotation did the same: the T-110 (n) "canvas undo pushes a step per keystroke" family.
+- **Root cause.** T-152 (5) moved Stroke (px) from a raw input that passed `'strokeWidth'` to a `DraftField`, which commits live on each in-range keystroke, and its `updateLayer(id, patch)` passed no key. `updateLayer` pushes a step per call unless the key matches the previous edit's. The sibling boxes had been DraftFields (without keys) since T-123 (4) and T-124 (15): the panel's undo window (T-147) was added for the slider and the text fields and never reached them.
+- **Fix.** Every canvas DraftField's commit passes its own key (`'strokeWidth'`, `'fontSize'`, `'x'`, `'y'`, `'rotation'`); Rotation commits through `updateLayer(id, { rotation }, 'rotation')` (`applyLayerPatch` takes the field as it is, so `setRotation` needed no key), and the seven presets keep `setRotation` (one step each, and a discrete action closes the typing window). `useGestureEnd` already closed the window on leaving the panel, so a second run of typing is a second step. T-110 (n)'s canvas half closes.
+- **Test.** image.spec.ts "T-153 (1)" (a run typed key by key into each box, one Undo by the header button, the layer read off the stage; a second run is a second step; a preset is its own step), `canvasStore.test.ts` (the store's half: two keyed updates are one entry, a keyed update after `endGesture` a new one, X then Y two), and the wiring pin. Red on the unchanged build: `Expected: 2 Received: 1` for the Stroke box, `Expected: 32 Received: 7` for Size, `Expected: 90 Received: 3` for Rotation.
+- **Lesson.** **When a control is replaced by a shared component, carry over what the old control passed, not only what it showed.** The key was an argument nobody read as behaviour. A unit test of the store passes on the old code (the store was right), so this one is held by the e2e that types key by key and undoes once.
+
+### (3) [MED] - The second click of a double-click landed in the studio the first click opened
+
+- **Bug.** A double-click on Home's "Stream Graphics" card opened the studio and applied whichever template was under the pointer on the empty canvas's one-click grid.
+- **Root cause.** NavCard and HomeLink are bare `<Link>`s: the first click navigates, the second lands at the same point on the new page. T-139 (9) had fixed Welcome's "Let's go" alone, with `swallowRepeatClicks()` at that one dismiss.
+- **Fix.** App swallows the repeat on EVERY route change: one effect keyed on `location.pathname`. A click with a count above 1 inside half a second is dropped; a keyboard route change (no click) and a fresh single click are untouched. Welcome's own call stays (its dismiss is a status change, not a route change).
+- **Test.** home-chrome.spec.ts "T-153 (3)": a double-click on the card of an empty session leaves the template grid showing (red on the unchanged build), a single click and then a template inside the window still applies it, Enter on a focused card is untouched; the Home link's double-click case is a guard (the second press lands on Home's heading, so it cannot be red).
+- **Lesson.** **Fix a hazard of every navigation at the navigation, not at each link that can start one.** The family had a fix and a name; the second site was found by a sweep because the fix was applied to the instance.
+
+### (2), (4), (5), (6), (7) and the fold - labels, a colour, and a status region
+
+- **(2)** The shortcuts dialog's key chip (`kbd`, a flex item) wrapped "Save project" onto two lines at the 1024 px minimum: `whitespace-nowrap shrink-0`; every chip on all six routes is asserted one line.
+- **(4)** The posting log labelled its boxes with the stored keys: a label map ("Views", "Likes", "Comments"), the accessible names follow. **(5)** The volume meter's middle band was `bg-warn`, a text-only token: `bg-ember`, the mark colour. **(6)** "YouTube Shorts" is a name. **(7)** The bare "x" and "y" labels read "X (px)" and "Y (px)" like the boxes beside them; both stay one line at the 1024 px minimum.
+- **Fold (T-110 (l)).** The image Export card's size note and JPG note are one always-mounted `role="status"` wrapper, so choosing JPG announces the note. The GIF card's `-mb-3` empty-gap correction does NOT carry over: that card is a column, this one a wrapping row, where an empty `basis-full` item is a line of its own with the row gap above it (21 px under the button where 12 is the padding, measured) and a negative margin cannot take it back (a flex line's height is never negative). Empty, the region is `absolute` (no line, no gap, still in the accessibility tree); with a note in it, it is a row.
+- **Test.** image.spec.ts "T-153 (7)" and "T-153 fold" (the region exists before JPG is picked and holds the note after; the card is no taller empty), home-chrome.spec.ts "T-153 (2)", the posting-log case's names, and `interactionWiring.test.ts` / `truthInCopy.test.ts` pins.
+- **Lesson.** **A layout fix copied from a sibling carries its container's assumptions: measure it in the new container.** The a11y wrapper is the same idea in both cards, and the same class is wrong in one of them.
+
+## 2026-11-04 - T-153 (round 102), Track B: one floor for every way a clip arrives, and a digit is an integer you rounded once
+
+The thirty-ninth sweep, Track B (clips from a saved project, the tenths readouts, the recorder's resize, one size rule; Track A lands beside it). Ledger: r102b/ledger.tsv (red rows on a `git archive` of the unchanged tree `1bdeada`, then a mutation per line of every new behavior, each restored byte-identical by sha256).
+
+### (8) [LOW] - A clip with no length restored from a saved project as it was written
+
+- **Bug.** A v1.6.0 project or autosave could carry [0, 0] or [D, D] (the same I and O keys, the same `applyRange`), and it opened as written: every output of that clip said only "Export failed.".
+- **Root cause.** T-152 (4) put the 0.1 s floor in the one function every range EDIT passes through and never asked what else puts a range in the store. The restore sets `clips` directly, and the validator checks that a range is finite, not that it has length.
+- **Fix.** `floorRange(start, end, duration)` in `shared/clip.ts` is applyRange's clamp, exactly; `applyRange` calls it and the restore maps each clip through it once `loadSource` has the duration.
+- **Test.** `clip.test.ts`, `ProjectIO.test.ts`, and video-core.spec.ts "T-153 (8)" (a project file through the real Open project button, the Timeline, a real two-file Export). Red on the unchanged build.
+- **Lesson.** **A rule held at the edit is not held at the door: list every way a value reaches the store (an edit, a restore, an import, an autosave) and put the rule where they meet.** The fix that was the smaller diff last round (the floor in one function) was right for the callers it knew about; the new caller was the file format.
+
+### (9) [MED] - Every tenths and hundredths readout truncated float error into a whole digit
+
+- **Bug.** `formatClock(1.2, 1)` read "0:01.1", 4.1 read "0:04.0", 152 of the 400 tenths 0.0-39.9 were wrong, and I at the end of a 10 s video read "Length 0:00.0" (T-152 (4)'s own symptom, on a longer video). The Timeline, its slider's valuetext, the Player and the Waveform all read it.
+- **Root cause.** `Math.floor((safe - whole) * 10 ** places)`: `1.2 - 1` is 0.19999999999999996, and truncation turns the error into a digit. The unit tests used values that happen to be exact in binary (0.5, 0.25, 10033.5), and the 2 s e2e fixture's end is exact too.
+- **Fix.** One rounding at the millisecond (`Math.round(safe * 1000)`), then integer arithmetic that truncates (`Math.floor(milli % 1000 / 10 ** (3 - places))`), with h:m:s from the same count so a hair under a second carries (59.9999 is 1:00.0, never 0:59.10). Truncation is kept: 1.49 is still 0:01.4.
+- **Test.** `clockTime.test.ts` (the measured failures, the truncation cases, the carry, every tenth 0.0-39.9) and video-core.spec.ts "T-153 (9)" (a project with clips at 1.1 / 1.9 and 0.2 / 1.2, and I at the end of a real 10 s video). Red on the unchanged build.
+- **Lesson.** **Test a formatter with the numbers a person types, not the numbers a binary float can hold.** A loop over every tenth is cheaper than a hand-picked list and finds the 152 you would not have picked. When a fixture's numbers happen to be exact, the e2e that "covers" the readout is covering nothing: say so, and add the case that is not exact.
+
+### (10) [LOW] - A window source resized mid-take recorded the rest of the take stretched
+
+- **Bug.** With the webcam on, the compositor's canvas is fixed at the screen's size when recording starts and `drawFrame` stretched every frame into it, so a window dragged to another aspect was recorded distorted.
+- **Root cause.** The comment said it: "Canvas was sized to match the screen's natural width/height at start, so this is 1:1." True at frame one and an assumption after.
+- **Fix.** `computeContainRect` fits the screen's CURRENT `videoWidth / videoHeight` into the fixed canvas (centred, black bars) and `drawFrame` asks it per frame, filling black only when there are bars; the webcam corner math is unchanged.
+- **Test.** `compositor.test.ts` (the rect for the same aspect, wider, taller and not reported; the draw calls across a mid-take aspect change and back). Screen capture is an OS boundary, so this is the deepest layer: the disposition row is in docs/INTERACTION_COVERAGE.md.
+- **Lesson.** **A comment that states an invariant ("this is 1:1") is a claim about the input, and the input is a window the person can drag.** Read the size where it is used, every time.
+
+### Folds
+
+- **Open's unread refusal is in bytes, the rule is in characters.** A UTF-16 unit is at most 3 UTF-8 bytes, so a file Save wrote within the character rule can be 3x on disk; `MAX_PROJECT_FILE_BYTES = 3 * MAX_PROJECT_BYTES` is the size past which a file cannot be one, and below it the read happens and the character rule decides. Test: `projectSave.test.ts` (the limit plus one byte is read and refused with the same sentence; exactly 3x is read; 3x plus one and 600 MB are not; a project of exactly the limit in characters with two-byte letters opens). **A guard that approximates a rule with a cheaper measure must refuse only what the rule would, never more.**
+- **Export's "Check at least one platform below to export." in an always-mounted `role="status"`** (GifPanel's shape): a region that mounts with its text is not reliably announced. Test: video-core.spec.ts "T-153 (fold)" asserts the same element holds the sentence after the uncheck.
+
+---
+
 ## 2026-11-04 - T-152 (round 101), Track A: a clamp's order is a decision about which end of the sentence is lost - test the case that does not fit
 
 The thirty-eighth sweep, Track A (the Text overlay's clamp and the Stroke box; Track B lands beside it). Ledger: r101a/ledger.tsv (red rows on a `git archive` of the unchanged tree `1aa1e78` and the mutation rows).

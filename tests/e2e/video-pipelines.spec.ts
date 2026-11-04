@@ -7567,6 +7567,9 @@ test.describe('PostChecklist', () => {
       // ── the three performance inputs persist per field ──
       const perf = entry.getByRole('spinbutton')
       await expect(perf).toHaveCount(3)
+      // T-153 (4): the three boxes are named in sentence case, not by their stored keys ("views", "likes", "comments").
+      for (const label of ['Views', 'Likes', 'Comments']) await expect(entry.getByRole('spinbutton', { name: label, exact: true }), label).toHaveCount(1)
+      await expect(entry.getByText('views', { exact: true }), 'the raw key is not a label').toHaveCount(0)
       await perf.nth(0).fill('1200')
       await perf.nth(1).fill('95')
       await perf.nth(2).fill('7')

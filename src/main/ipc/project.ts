@@ -7,7 +7,7 @@ import {
   clearAutosave,
   getAutosaveInfo
 } from '../autosave'
-import { projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { MAX_PROJECT_FILE_BYTES, projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { assertAlways, assertDefined } from '../../shared/assert'
 import { writeFileAtomic } from '../fsAtomic'
 
@@ -71,10 +71,11 @@ export function registerProjectIpc(): void {
       let raw: string
       try {
         // T-152 (3): ask the size BEFORE reading. The dialog takes any *.json (a chat-log export can be hundreds of MB) and past V8's string cap the
-        // read itself fails with "Invalid string length", which reads as a damaged file. Bytes are at least characters, so a file under the cap
-        // still meets validateProjectJsonString's own rule on the text. A stat failure takes the same read-failure path below.
+        // read itself fails with "Invalid string length", which reads as a damaged file. A character is at most 3 bytes, so only a file past
+        // MAX_PROJECT_FILE_BYTES (3 x the character limit) cannot be one Save wrote; below it the read happens and validateProjectJsonString
+        // measures in characters (T-153). A stat failure takes the same read-failure path below.
         const { size } = await stat(filePath)
-        const tooLarge = projectSizeProblem(size, 'open')
+        const tooLarge = size > MAX_PROJECT_FILE_BYTES ? projectSizeProblem(size, 'open') : null
         if (tooLarge !== null) return { ok: false, reason: tooLarge }
         raw = await readFile(filePath, 'utf8')
       } catch (err) {

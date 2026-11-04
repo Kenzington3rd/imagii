@@ -3626,18 +3626,19 @@ describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Propert
     const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
     expect(panel).toMatch(/const gesture = useGestureEnd\(useCanvasStore\(\(s\) => s\.endGesture\)\)/)
     expect(panel).toMatch(/className="card [^"]*" \{\.\.\.gesture\}>/)
-    // T-152 (5): 'strokeWidth' left this list - Stroke (px) is a DraftField now (one commit when typing ends = one undo step, a negative clamped to 0), no coalescing key.
-    for (const key of ['name', 'opacity', 'fill', 'stroke', 'text']) {
+    // T-152 (5): Stroke (px) is a DraftField (a negative clamped to 0). T-153 (1): and its live commits carry the key again, so "12" typed is one undo step ('strokeWidth' and 'fontSize' are back in this list).
+    for (const key of ['name', 'opacity', 'fill', 'stroke', 'text', 'strokeWidth', 'fontSize']) {
       expect(panel, key).toMatch(new RegExp(`'${key}'\\)`))
     }
-    expect(panel).toMatch(/commit=\{\(typed\) => \{\s*const n = clampTyped\(typed, 0\)\s*if \(n !== null\) updateLayer\(layer\.id, \{ strokeWidth: n \}/)
+    expect(panel).toMatch(/commit=\{\(typed\) => \{\s*const n = clampTyped\(typed, 0\)\s*if \(n !== null\) updateLayer\(layer\.id, \{ strokeWidth: n \} as Partial<CanvasLayer>, 'strokeWidth'\)/)
     expect(panel).not.toMatch(/Number\(e\.target\.value\) \|\| 0/)
   })
 
   it('the transparent-document note sits in the Export card\'s note slot, beside the size note', () => {
     const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/jpgTransparencyNote\(format, doc\.background === 'transparent'\)/)
-    expect(dialog).toMatch(/\{jpgNote \? <p className="basis-full text-xs text-ink-muted">\{jpgNote\}<\/p> : null\}/)
+    // T-153: both notes sit in ONE always-mounted status region (the pin for its shape is in the T-153 Track A block at the end of this file).
+    expect(dialog).toMatch(/\{jpgNote \? <p className="text-xs text-ink-muted">\{jpgNote\}<\/p> : null\}/)
   })
 })
 
@@ -3823,11 +3824,82 @@ describe('T-152 - an Asset Library card asks before it replaces layers; Open sta
   it('applyRange alone holds the 0.1 s floor (setClipStart / setClipEnd / setClipRange all pass through it)', () => {
     const store = strip(readRepo('src/renderer/src/modules/video-studio/store/videoStore.ts'))
     const apply = store.slice(store.indexOf('function applyRange'), store.indexOf('function appendRange'))
-    expect(apply).toContain('duration >= MIN_SCANNED_CLIP_SEC ? MIN_SCANNED_CLIP_SEC : 0')
-    expect(apply).toContain('clamp(startSec, 0, duration - room)')
-    expect(apply).toContain('clamp(endSec, safeStart + room, duration)')
+    // T-153 (8): the clamp itself is `floorRange` (shared/clip.ts, which the project restore calls too); applyRange only asks it.
+    expect(apply).toContain('floorRange(startSec, endSec, duration)')
+    const clip = strip(readRepo('src/shared/clip.ts'))
+    expect(clip).toContain('duration >= MIN_CLIP_SEC ? MIN_CLIP_SEC : 0')
+    expect(clip).toContain('clamp(startSec, 0, duration - room)')
+    expect(clip).toContain('clamp(endSec, start + room, duration)')
     for (const setter of ['setClipRange', 'setClipStart', 'setClipEnd']) {
       expect(store, setter).toMatch(new RegExp(`${setter}: \\([^)]*\\) =>[\\s\\S]{0,260}applyRange\\(`))
     }
+  })
+})
+
+// T-153 Track A: the thirty-ninth sweep's wiring. E2E per item: (1) image.spec.ts "a typed number in Properties is one undo step" (Stroke, Size, X / Y, Rotation); (2) home-chrome.spec.ts
+// "the shortcuts dialog draws every key chip on one line"; (3) home-chrome.spec.ts "a double-click on a link opens the page and stops there"; (4) video-pipelines.spec.ts "the posting
+// log" case (the boxes' names); (7) image.spec.ts "the position boxes are labelled in pixels"; fold: image.spec.ts "the Export notes are announced". (5) is a colour, pinned here and by
+// the token tests.
+describe('T-153 Track A - the thirty-ninth sweep', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) every Properties number box commits with its own key: Stroke, Size, X, Y and Rotation; the presets keep setRotation (one step each)', () => {
+    const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+    expect(panel).toMatch(/\{ strokeWidth: n \} as Partial<CanvasLayer>, 'strokeWidth'\)/)
+    expect(panel).toMatch(/\{ fontSize: n \} as Partial<CanvasLayer>, 'fontSize'\)/)
+    expect(panel).toMatch(/onCommit=\{\(x\) => updateLayer\(layer\.id, \{ x \}, 'x'\)\}/)
+    expect(panel).toMatch(/onCommit=\{\(y\) => updateLayer\(layer\.id, \{ y \}, 'y'\)\}/)
+    expect(panel).toMatch(/if \(n !== null\) updateLayer\(layer\.id, \{ rotation: n \}, 'rotation'\)/)
+    expect(panel, 'a preset is a discrete press: no key').toMatch(/onClick=\{\(\) => setRotation\(layer\.id, r\)\}/)
+    expect(panel, 'the box never goes through the keyless setter').not.toMatch(/if \(n !== null\) setRotation/)
+  })
+
+  it('(2) the shortcuts dialog\'s key chip does not wrap or shrink', () => {
+    const overlay = strip(read('components/HotkeyOverlay.tsx'))
+    expect(overlay).toMatch(/<kbd className="[^"]*\bwhitespace-nowrap\b[^"]*\bshrink-0\b[^"]*"/)
+  })
+
+  it('(3) App swallows the repeat click on EVERY route change: one effect keyed on the location\'s pathname, before the early returns', () => {
+    const app = strip(read('App.tsx'))
+    expect(app).toMatch(/import \{ Routes, Route, Navigate, useLocation \} from 'react-router-dom'/)
+    const effect = app.match(/useEffect\(\(\) => \{\s*swallowRepeatClicks\(\)\s*\}, \[location\.pathname\]\)/)
+    expect(effect, 'the effect').not.toBeNull()
+    // Hooks run in the same order every render: the effect sits above the first early return.
+    expect(app.indexOf(effect![0])).toBeLessThan(app.indexOf("if (status.phase === 'loading')"))
+    // Welcome's own call stays (its dismiss swaps a button for Home under the pointer without a route change).
+    expect(app).toMatch(/setStatus\(\{ phase: 'ready' \}\)\s*(?:\/\/.*\n\s*)*swallowRepeatClicks\(\)/)
+  })
+
+  it('(4) the posting log\'s boxes are labelled Views / Likes / Comments, not by their stored keys', () => {
+    const log = strip(read('modules/video-studio/PostChecklist.tsx'))
+    expect(log).toMatch(/views: 'Views'/)
+    expect(log).toMatch(/likes: 'Likes'/)
+    expect(log).toMatch(/comments: 'Comments'/)
+    expect(log).not.toMatch(/<span className="text-ink-dim">\{f\}<\/span>/)
+  })
+
+  it('(5) the volume meter\'s middle band is an ember mark; warn is a text colour', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/lvl > 0\.55 \? 'bg-ember'/)
+    expect(meter).not.toMatch(/bg-warn/)
+  })
+
+  it('(7) Properties\' position boxes count pixels in their labels', () => {
+    const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted">X \(px\)<\/span>/)
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted">Y \(px\)<\/span>/)
+    expect(panel).not.toMatch(/<span className="text-xs text-ink-muted">[xy]<\/span>/)
+  })
+
+  it('fold: the image Export card\'s two notes sit in ONE always-mounted status region, closed up while empty', () => {
+    const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
+    const region = dialog.match(/<div role="status" className=\{[^}]*\}>([\s\S]*?)<\/div>\s*<ThumbnailVariants/)
+    expect(region, 'the wrapper, straight before the Variants dialog').not.toBeNull()
+    expect(region![1]).toMatch(/\{sizeNote \? <p className="text-xs text-ink-muted">\{sizeNote\}<\/p> : null\}/)
+    expect(region![1]).toMatch(/\{jpgNote \? <p className="text-xs text-ink-muted">\{jpgNote\}<\/p> : null\}/)
+    expect(dialog.match(/role="status"/g)).toHaveLength(1)
+    // Empty, the region is out of the flow: in this wrapping card a `basis-full` item is a line of its own and the row gap above it a hole under the button.
+    expect(dialog).toMatch(/<div role="status" className=\{sizeNote \|\| jpgNote \? 'basis-full flex flex-col gap-2' : 'absolute'\}>/)
+    expect(dialog, 'the wrapper does not depend on a note being there').not.toMatch(/\{\(sizeNote \|\| jpgNote\) \? <div role="status"/)
   })
 })

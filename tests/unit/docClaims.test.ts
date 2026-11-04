@@ -748,19 +748,19 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     expect(read('tests/e2e/home-chrome.spec.ts')).toContain('getByRole(\'button\', { name: "Let\'s go" }).click()')
   })
 
-  it('the Welcome row\'s Chain says what the handler does: persistSetting (App.tsx:84), then swallowRepeatClicks() (App.tsx:88), and both cited lines hold them', () => {
+  it('the Welcome row\'s Chain says what the handler does: persistSetting (App.tsx:92), then swallowRepeatClicks() (App.tsx:96), and both cited lines hold them', () => {
     const welcomeRow = welcomeRows.split('\n').find((l) => l.startsWith('| Button "Let\'s go"')) ?? ''
     expect(welcomeRow, 'the Let\'s go row was found').not.toBe('')
     // The row is `| element | file:line | chain | end state | flags |`, so the Chain cell is the fourth split part.
     const chain = welcomeRow.split('|')[3] ?? ''
     expect(chain, 'the Chain cell names the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
-    expect(chain).toContain('App.tsx:84')
+    expect(chain).toContain('App.tsx:92')
     expect(chain).toContain('swallowRepeatClicks()')
-    expect(chain).toContain('App.tsx:88')
+    expect(chain).toContain('App.tsx:96')
     expect(chain, 'the Chain cell no longer names the bare settings.set').not.toContain('settings.set(\'welcomeSeen\')')
     const app = 'src/renderer/src/App.tsx'
-    expect(lines(app, 84), 'App.tsx:84 is the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
-    expect(lines(app, 88), 'App.tsx:88 is the double-press swallow').toContain('swallowRepeatClicks()')
+    expect(lines(app, 92), 'App.tsx:92 is the persisted write').toContain('persistSetting(\'welcomeSeen\', true)')
+    expect(lines(app, 96), 'App.tsx:96 is the double-press swallow').toContain('swallowRepeatClicks()')
   })
 })
 

@@ -14,6 +14,7 @@ import { aiTutorial } from '../../src/renderer/src/tutorials/aiTutorial'
 import type { TutorialDef } from '../../src/renderer/src/tutorials/types'
 import { chooserCalls, recordSlowChooser } from './chooser'
 import { installToastLog, readToastLog } from './toastLog'
+import { MIN_WINDOW, expectOneLine, setWindowSize as resizeAndSettle } from './layout'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -3768,6 +3769,144 @@ test.describe('T-150: a Recent entry whose file is gone is removed when it fails
       expect((await readToastLog(window)).join(' | ')).not.toContain('removed from Recent')
       expect(readConfig(userDataDir).recentFiles?.video).toEqual([junk])
       await expect(window.getByRole('button', { name: 'Recent (1)' })).toBeVisible()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-153 (2): the shortcuts dialog's key chips stay on one line ───────────────────────────────────────────────────────────────────────────
+//
+// The chip is a flex item in a row with the description beside it, and a chip with spaces in its text ("Save project", "Open project", "Ctrl+Z / Ctrl+Y",
+// "Drag on waveform") was squeezed by a long description and drawn on two lines at the 1024 px minimum (Home's "Save / project"). `whitespace-nowrap shrink-0`.
+test.describe('T-153 (2): the shortcuts dialog draws every key chip on one line', () => {
+  const ROUTES: Array<[string, string]> = [
+    ['#/home', 'imagii'],
+    ['#/video', 'Video Studio'],
+    ['#/audio', 'Audio Studio'],
+    ['#/image', 'Stream Graphics'],
+    ['#/record', 'Record'],
+    ['#/references', 'References']
+  ]
+
+  test('on all six routes, at the 1024x640 minimum, every chip in the `?` dialog is one line', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t153-kbd-chips')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      for (const [hash, heading] of ROUTES) {
+        await window.evaluate((h) => {
+          window.location.hash = h
+        }, hash)
+        await expect(window.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible({ timeout: 30_000 })
+        await window.keyboard.press('?')
+        const dialog = window.getByRole('dialog')
+        await expect(dialog).toContainText('Keyboard shortcuts')
+        await expectOneLine(dialog.locator('kbd'), `every key chip on ${hash} at the 1024 px minimum`)
+        await window.keyboard.press('?')
+        await expect(dialog).toHaveCount(0)
+      }
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── T-153 (3): the second click of a double-click on a link does not land in the page it opened ──────────────────────────────────────────
+//
+// NavCard and HomeLink are bare `<Link>`s. A double-click on Home's "Stream Graphics" card navigates on the first click, and the second lands at the same point in the
+// studio: on the empty canvas's one-click template grid, which applied whichever template was under the pointer. Welcome's "Let's go" swallowed it (T-139 (9)); App
+// swallows the repeat on EVERY route change now (a repeat press does not reach what is under it for half a second). A single click is untouched.
+test.describe('T-153 (3): a double-click on a link opens the page and stops there', () => {
+  test('a double-click on the Stream Graphics card of an empty session opens Stream Graphics with no layer: the template grid is still showing', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t153-dblclick-card')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // The app swallows repeat clicks for half a second after it starts too: wait it out, so what stops the second press is the ROUTE CHANGE's swallow.
+      await window.waitForTimeout(1000)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().dblclick()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      // Past the swallow window, so a template the second press applied would be on the page by now.
+      await window.waitForTimeout(1200)
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+      await expect(window.getByText(/Layers \(\d+\)/), 'no template was applied by the second press').toHaveCount(0)
+      expect(await window.evaluate(() => window.location.hash)).toBe('#/image')
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a double-click on a studio\'s Home link lands on Home and stays there', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t153-dblclick-home')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(700)
+      await window.getByRole('link', { name: 'Home' }).dblclick()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(1200)
+      expect(await window.evaluate(() => window.location.hash), 'the second press opened nothing').toBe('#/home')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a SINGLE click on the card, then a template at once (inside the swallow window), still applies it: only a repeat is dropped', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t153-single-click')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 30_000 })
+      // No wait: this press is a fresh decision (click count 1), 50 ms after the route changed.
+      await window.waitForTimeout(50)
+      await window.locator('button.card').first().click()
+      await expect(window.getByText(/Layers \(\d+\)/)).toBeVisible({ timeout: 15_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a keyboard route change is untouched: Enter on a focused card opens the studio, and the studio answers a click at once', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t153-keyboard-route')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().focus()
+      await window.keyboard.press('Enter')
+      await expect(window.getByText('Pick a template to start')).toBeVisible({ timeout: 30_000 })
+      await window.locator('button.card').first().click()
+      await expect(window.getByText(/Layers \(\d+\)/)).toBeVisible({ timeout: 15_000 })
     } finally {
       await app.close().catch(() => undefined)
       cleanup(root)
