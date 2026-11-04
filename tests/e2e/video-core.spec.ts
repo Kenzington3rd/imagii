@@ -7,7 +7,7 @@ import {
   type Page
 } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -2367,18 +2367,19 @@ test.describe('Video Studio core editing surface', () => {
       await numbers.nth(0).pressSequentially('72')
       await expect(numbers.nth(0)).toHaveValue('72')
 
-      await numbers.nth(1).fill('0.42')
-      await expect(numbers.nth(1)).toHaveValue('0.42')
-      await numbers.nth(2).fill('0.66')
-      await expect(numbers.nth(2)).toHaveValue('0.66')
+      // T-150 (4): the boxes are a PERCENT from the top left (0 to 100), stored as the same 0-1 fraction.
+      await numbers.nth(1).fill('42')
+      await expect(numbers.nth(1)).toHaveValue('42')
+      await numbers.nth(2).fill('66')
+      await expect(numbers.nth(2)).toHaveValue('66')
 
       // T-114: both position boxes are named. One <label> wraps the pair, so only the first used to
-      // have a name from it ("x / y") and the second had none at all. T-115: the names say what the
-      // boxes ARE ("x" and "y" said what they are called), including the range they take.
-      await expect(numbers.nth(1)).toHaveAccessibleName('x / y, horizontal position (0 to 1)')
-      await expect(numbers.nth(2)).toHaveAccessibleName('x / y, vertical position (0 to 1)')
-      await expect(row.getByRole('spinbutton', { name: 'x / y, horizontal position (0 to 1)', exact: true })).toHaveValue('0.42')
-      await expect(row.getByRole('spinbutton', { name: 'x / y, vertical position (0 to 1)', exact: true })).toHaveValue('0.66')
+      // have a name from it and the second had none at all. T-115: the names say what the boxes ARE, including the range they
+      // take. T-150 (4): the label is "Position (%)" and both names begin with it.
+      await expect(numbers.nth(1)).toHaveAccessibleName('Position (%), from the left (0 to 100)')
+      await expect(numbers.nth(2)).toHaveAccessibleName('Position (%), from the top (0 to 100)')
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })).toHaveValue('42')
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })).toHaveValue('66')
 
       // The two time fields round-trip through the store, which re-formats
       // them to two decimals — proof the value went through the clip.
@@ -2584,10 +2585,10 @@ test.describe('Video Studio core editing surface', () => {
           checked += 1
         }
       }
-      // Font, Size (px), Color (a DraftField's own row), x / y twice and Source time start: six of the seven fields draw a label.
+      // Font, Size (px), Color (a DraftField's own row), Position (%) twice and Source time start: six of the seven fields draw a label.
       expect(checked, 'the loop looked at the card\'s labelled fields').toBeGreaterThanOrEqual(6)
-      await expect(row.getByRole('spinbutton', { name: 'x / y, horizontal position (0 to 1)', exact: true })).toBeVisible()
-      await expect(row.getByRole('spinbutton', { name: 'x / y, vertical position (0 to 1)', exact: true })).toBeVisible()
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })).toBeVisible()
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })).toBeVisible()
       await expect(row.getByRole('textbox', { name: 'Overlay start second' }), 'the old names are gone').toHaveCount(0)
       await expect(row.getByRole('spinbutton', { name: 'Overlay horizontal position (0 to 1)' })).toHaveCount(0)
     } finally {
@@ -2595,26 +2596,26 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('text overlays: the position boxes take a leading decimal (.5 is 0.5, not 1), and a typed number is held to 0 to 1 (T-124 (15))', async () => {
+  test('text overlays: the position boxes take a leading decimal (.5 is 0.5%, not 100), and the draft is kept until typing ends (T-124 (15), T-150 (4))', async () => {
     // The x / y boxes were controlled by `Math.min(1, Math.max(0, Number(e.target.value) || 0))` on every keystroke, and a number
-    // input reports "" for a lone ".", which became 0 and rewrote the box: ".5" was "05", then 1, and ".25" was 1.
+    // input reports "" for a lone ".", which became 0 and rewrote the box: ".5" was "05", then 1, and ".25" was 1. T-150 (4): the boxes
+    // are a percent now (0 to 100) and commit when typing ends; the discipline of the draft is the same.
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('overlay-position')
     try {
       const card = overlayCard(window)
       await card.getByRole('button', { name: '+ Add text' }).click()
       const row = card.locator('li')
-      const x = row.getByRole('spinbutton', { name: 'x / y, horizontal position (0 to 1)' })
-      const y = row.getByRole('spinbutton', { name: 'x / y, vertical position (0 to 1)' })
-      await expect(x).toHaveValue('0.1')
+      const x = row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)' })
+      const y = row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)' })
+      await expect(x).toHaveValue('10')
+      await expect(y).toHaveValue('85')
 
       for (const [typed, shown] of [
-        ['.25', '0.25'],
-        ['0.75', '0.75'],
         ['.5', '0.5'],
-        // T-125 (8): a "0" is already a number in range, so it went to the overlay and the box was rewritten to the stored "0"; the
-        // "." then read as "" (a number input's value for "0.") and the next digits stacked up behind a lost dot: "0.05" became 1.
-        ['0.05', '0.05']
+        ['12.5', '12.5'],
+        ['7', '7'],
+        ['0.5', '0.5']
       ] as const) {
         await x.click()
         await x.press('Control+a')
@@ -2626,34 +2627,25 @@ test.describe('Video Studio core editing surface', () => {
         await x.press('Control+a')
         await x.press('Backspace')
         await x.pressSequentially(typed)
-        // Usable as typed, so the overlay follows the keys - and the box keeps what is TYPED while it has focus (T-125 (8): a box that
-        // swaps in the stored number mid-word rewrites "0.05" into 1), then shows the stored number when it is left.
         await expect(x, `"${typed}" stays as typed while the box has focus`).toHaveValue(typed)
         await leave(x)
-        await expect(x, `"${typed}" is ${shown}, not 1`).toHaveValue(shown)
-        // ...and the overlay really has it (the store followed the keys): the box reads it back after a trip off and on.
+        await expect(x, `"${typed}" is ${shown}`).toHaveValue(shown)
+        // ...and the overlay really has it: the box reads it back after a trip off and on.
         await x.focus()
         await expect(x).toHaveValue(shown)
         await leave(x)
       }
 
-      await retype(y, '.3')
-      // T-125 (8): while the box has focus it shows what was typed (the store already has 0.3), and the stored form once it is left.
-      await expect(y).toHaveValue('.3')
+      await retype(y, '30')
+      await expect(y).toHaveValue('30')
       await leave(y)
-      await expect(y).toHaveValue('0.3')
-      // Past the range is the nearest edge when typing ends, and an emptied box commits nothing.
-      await retype(y, '7')
-      await leave(y)
-      await expect(y).toHaveValue('1')
-      await retype(x, '-2')
-      await leave(x)
-      await expect(x).toHaveValue('0')
+      await expect(y).toHaveValue('30')
+      // An emptied box commits nothing and goes back to what it was.
       await x.click()
       await x.press('Control+a')
       await x.press('Backspace')
       await leave(x)
-      await expect(x, 'an emptied box goes back to what it was').toHaveValue('0')
+      await expect(x, 'an emptied box goes back to what it was').toHaveValue('0.5')
     } finally {
       await app.close()
     }
@@ -2768,7 +2760,8 @@ test.describe('Video Studio core editing surface', () => {
         const controls = row.locator('input, select, button')
         await expectControlsWhole(card, controls.filter({ hasNot: window.locator('select') }), `the overlay's boxes and buttons at ${where}`)
         await expectSelectsWhole(card, row.locator('select'), `the overlay's Font select at ${where}`)
-        // The labels each fit on one line: "x / y" was drawn as "x", "/", "y". T-125 (16): and "Size (px)" is one of them.
+        // The labels each fit on one line: "x / y" was drawn as "x", "/", "y". T-125 (16): and "Size (px)" is one of them; T-150 (4): so is "Position (%)".
+        await expect(row.getByText('Position (%)', { exact: true }), `the Position label at ${where}`).toBeVisible()
         await expect(row.getByText('Size (px)', { exact: true }), `the Size label says what it counts, at ${where}`).toBeVisible()
         await expectOneLine(row.locator('label > span.text-ink-muted'), `the overlay's labels at ${where}`)
         // And nothing is painted over anything else (the Font select ran under "Size").
@@ -3192,6 +3185,84 @@ test.describe('T-149 (5): a click from one Text overlay field into another is it
       await undo.click()
       await expect(caption, 'the second Undo is the caption').toHaveValue('Your text here')
       await expect(color).toHaveValue(defaultColor)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-150 (4): the Text overlay's position boxes were a bare 0-1 fraction under "x / y" (0.1 over 0.85) and a typed 50 committed 1 - the far edge - with no
+// sentence. They are a PERCENT from the top left now, named by the label the row draws, and a number outside 0 to 100 is refused in a sentence and
+// stores nothing. The stored value is read from the project file Home saves (the overlay's own model is 0-1 and unchanged), not from the box.
+test.describe('T-150 (4): the Text overlay Position boxes are a percent, and a number outside 0 to 100 is refused', () => {
+  async function savedOverlay(app: ElectronApplication, window: Page, name: string): Promise<{ x: number; y: number }> {
+    const file = path.join(root, `t150-${name}-${Date.now().toString(36)}.imagii.json`)
+    await app.evaluate(({ dialog }, target) => {
+      ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async () => ({ canceled: false, filePath: target })
+    }, file)
+    await window.getByRole('link', { name: 'Home' }).click()
+    await window.getByRole('button', { name: 'Save project' }).click()
+    await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true)
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { videoStudio: { clips: Array<{ textOverlays: Array<{ x: number; y: number }> }> } }
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(overlayCard(window)).toBeVisible()
+    const overlay = saved.videoStudio.clips[0]!.textOverlays[0]!
+    return { x: overlay.x, y: overlay.y }
+  }
+
+  test('the label says Position (%), 50 is the centre (stored 0.5), and 150 and -5 are refused in a sentence with the overlay unmoved', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t150-position')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      await expect(row.getByText('Position (%)', { exact: true }), 'the label says what the boxes are').toBeVisible()
+      await expect(row.getByText('x / y', { exact: true }), 'the bare x / y label is gone').toHaveCount(0)
+      const left = row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })
+      const top = row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })
+      await expect(left).toHaveValue('10')
+      await expect(top).toHaveValue('85')
+      expect(await savedOverlay(app, window, 'default'), 'the default is the same 0-1 fraction as before').toEqual({ x: 0.1, y: 0.85 })
+
+      // 50 is the CENTRE: stored 0.5 (it used to commit 1, the far edge, with no sentence).
+      await retype(left, '50')
+      await leave(left)
+      await expect(left).toHaveValue('50')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      expect(await savedOverlay(app, window, 'centre')).toEqual({ x: 0.5, y: 0.85 })
+
+      // 150 is refused with the sentence, the text stays to be fixed, and the overlay does not move.
+      await retype(left, '150')
+      await leave(left)
+      await expect(row.getByRole('alert')).toHaveText('Position is a percent from the top left, from 0 to 100.')
+      await expect(left).toHaveValue('150')
+      await expect(left).toHaveAttribute('aria-invalid', 'true')
+      expect(await savedOverlay(app, window, 'refused'), 'the refused 150 stored nothing: not 1, not 0.15').toEqual({ x: 0.5, y: 0.85 })
+
+      // (The trip to Home above remounted the card, so every box starts clean.) Enter commits too, a negative is refused the same way, and each box
+      // carries its own sentence.
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      await retype(top, '-5')
+      await top.press('Enter')
+      await expect(row.getByRole('alert')).toHaveCount(1)
+      await expect(top).toHaveAttribute('aria-invalid', 'true')
+      await retype(left, '150')
+      await leave(left)
+      await expect(row.getByRole('alert')).toHaveCount(2)
+      await retype(left, '25')
+      await leave(left)
+      await expect(row.getByRole('alert'), 'a corrected box clears its own sentence').toHaveCount(1)
+      await retype(top, '100')
+      await top.press('Enter')
+      await expect(row.getByRole('alert'), 'the edge is a value').toHaveCount(0)
+      expect(await savedOverlay(app, window, 'edges')).toEqual({ x: 0.25, y: 1 })
+
+      // The sentence is a row of its own under the boxes: nothing in the card overflows or is overlapped at the minimum window.
+      await retype(left, '999')
+      await leave(left)
+      await expect(row.getByRole('alert')).toBeVisible()
+      await expectNoHorizontalOverflow(card, 'the Text overlays card with a refused Position')
     } finally {
       await app.close()
     }

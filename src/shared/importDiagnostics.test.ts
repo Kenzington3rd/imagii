@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   describeImportError,
   examineDroppedFile,
+  isNotFoundError,
   pathLooksLikeCloudSync
 } from './importDiagnostics'
 
@@ -338,3 +339,32 @@ describe('describeImportError - ffmpeg\'s "Permission denied" from a runner or p
   })
 })
 
+
+// T-150 (Recent fold): the importers drop a Recent entry whose file is gone, and say so. This is the question they ask.
+describe('isNotFoundError - the file is gone (T-150)', () => {
+  const wrap = (m: string): Error => new Error(`Error invoking remote method 'video:probe': Error: ${m}`)
+
+  it.each([
+    ['ffprobe, the POSIX line', wrap('ffprobe exit 1: /x/a.mp4: No such file or directory')],
+    ['a Node error code', new Error("ENOENT: no such file or directory, open '/x/a.mp4'")],
+    ['the Windows line', wrap('The system cannot find the file specified.')],
+    ['a bare "cannot find"', new Error('Cannot find the path')]
+  ])('%s is the not-found case', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(true)
+  })
+
+  it.each([
+    ['a blocked file', new Error('EACCES: permission denied, open')],
+    ['an unreadable format', new Error('Invalid data found when processing input')],
+    ['a file NAME that says it, in quotes (a name is not a cause)', new Error('Still extracting the sound from "no such file.mp4"')],
+    ['nothing recognisable', new Error('boom')]
+  ])('%s is not', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(false)
+  })
+
+  it('agrees with the sentence describeImportError writes, so "removed from Recent" is only ever said under "can\'t find that file"', () => {
+    const err = wrap('ffprobe exit 1: /x/a.mp4: No such file or directory')
+    expect(isNotFoundError(err)).toBe(true)
+    expect(describeImportError(err, '/x/a.mp4')).toMatch(/can't find that file/)
+  })
+})

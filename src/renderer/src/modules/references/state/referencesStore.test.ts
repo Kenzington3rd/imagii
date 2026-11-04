@@ -637,3 +637,146 @@ describe('the store trusts main\'s answer to "did that add anything?" (T-149 (4)
     expect(store().history.past).toHaveLength(steps + 1)
   })
 })
+
+// T-150 (2): two board edits in quick succession are two Undo steps. Main serialises the writes under its board lock (an add fetches the thumbnail inside it); the
+// store took `before` at PRESS time, so saving picture A then B before A landed recorded [N, N] and one Ctrl+Z removed both. The bridge below is lock-serialised
+// and DELAYED the way main is: the first call is the slow one (a thumbnail still downloading), so the second press is certainly issued while it is in flight.
+describe('overlapping board edits are separate Undo steps (T-150 (2))', () => {
+  function stubLockedBridge(): void {
+    let lock: Promise<unknown> = Promise.resolve()
+    const locked = <T>(ms: number, fn: () => T): Promise<T> => {
+      const turn = lock.then(async () => {
+        await new Promise((r) => setTimeout(r, ms))
+        return fn()
+      })
+      lock = turn.then(() => undefined, () => undefined)
+      return turn
+    }
+    let calls = 0
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          addItem: (collectionId: string, result: SearchResult) => {
+            const slow = ++calls === 1
+            return locked(slow ? 40 : 1, () => {
+              const found = disk.find((c) => c.id === collectionId)
+              if (!found) return { collection: null, added: false }
+              found.items.push({ ...makeItem(found.items.length + 1), collectionId, fullUrl: result.fullUrl, title: result.title })
+              return { collection: clone(found), added: true }
+            })
+          },
+          removeItem: (collectionId: string, itemId: string) =>
+            locked(calls++ === 0 ? 40 : 1, () => {
+              const found = disk.find((c) => c.id === collectionId)
+              if (!found) return null
+              found.items = found.items.filter((i) => i.id !== itemId)
+              return clone(found)
+            })
+        }
+      }
+    })
+  }
+
+  const titles = (): string[] => (store().collections[0]?.items ?? []).map((i) => i.title)
+
+  it('two overlapping adds of different pictures: two steps; one undo removes only B, a second only A', async () => {
+    stubLockedBridge()
+    await store().createCollection('Alpha')
+    const base = store().history.past.length
+    const a = store().addToCollection('board-1', makeResult(1))
+    const b = store().addToCollection('board-1', makeResult(2))
+    expect(await Promise.all([a, b])).toEqual([true, true])
+    expect(store().history.past, 'two adds, two steps').toHaveLength(base + 2)
+    expect(titles()).toEqual(['Reference 1', 'Reference 2'])
+
+    store().undo()
+    await settle()
+    expect(titles(), 'ONE undo removes only the second picture').toEqual(['Reference 1'])
+    expect(disk[0]?.items.map((i) => i.title)).toEqual(['Reference 1'])
+    store().undo()
+    await settle()
+    expect(titles(), 'a second undo removes the first').toEqual([])
+  })
+
+  it('two overlapping removes: one undo restores only the second one removed, a second the first', async () => {
+    disk = [board('b', 'Alpha', [makeItem(1), makeItem(2)])]
+    await store().refreshCollections()
+    stubLockedBridge()
+    const a = store().removeFromCollection('b', 'item-1')
+    const b = store().removeFromCollection('b', 'item-2')
+    await Promise.all([a, b])
+    expect(store().history.past).toHaveLength(2)
+    expect(titles()).toEqual([])
+
+    store().undo()
+    await settle()
+    expect(titles()).toEqual(['Reference 2'])
+    store().undo()
+    await settle()
+    expect(titles()).toEqual(['Reference 1', 'Reference 2'])
+  })
+
+  it('an add then a remove pressed together: the remove\'s step starts from the add\'s result', async () => {
+    disk = [board('b', 'Alpha', [makeItem(1)])]
+    await store().refreshCollections()
+    stubLockedBridge()
+    const add = store().addToCollection('b', makeResult(2))
+    const remove = store().removeFromCollection('b', 'item-1')
+    await Promise.all([add, remove])
+    expect(store().history.past).toHaveLength(2)
+    expect(titles()).toEqual(['Reference 2'])
+
+    store().undo()
+    await settle()
+    expect(titles(), 'undoing the remove puts the first picture back and keeps the add').toEqual(['Reference 1', 'Reference 2'])
+    store().undo()
+    await settle()
+    expect(titles()).toEqual(['Reference 1'])
+  })
+
+  it('an undo pressed while a save is still in flight waits for it and undoes that save', async () => {
+    stubLockedBridge()
+    await store().createCollection('Alpha')
+    const saving = store().addToCollection('board-1', makeResult(1))
+    store().undo()
+    await saving
+    await settle()
+    expect(titles()).toEqual([])
+    expect(disk[0]?.items).toEqual([])
+    expect(store().canRedo()).toBe(true)
+  })
+
+  it('an edit pressed right after an undo waits for the undo\'s disk write (the restore cannot land on top of it)', async () => {
+    await store().createCollection('Alpha')
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          restore: async (collections: MoodBoardCollection[]) => {
+            await new Promise((r) => setTimeout(r, 30)) // a slow disk
+            return moodboardApi.restore(collections)
+          }
+        }
+      }
+    })
+    await store().addToCollection('board-1', makeResult(1))
+    store().undo() // the add is undone on screen at once; its restore is still in flight
+    await store().renameCollection('board-1', 'Renamed')
+    await settle()
+    expect(diskNames(), 'the rename was written after the restore, not under it').toEqual(['Renamed'])
+    expect(disk[0]?.items).toEqual([])
+  })
+
+  it('a failed mutation rejects to its caller and the chain keeps going', async () => {
+    stubLockedBridge()
+    await store().createCollection('Alpha')
+    vi.stubGlobal('window', {
+      api: { moodboard: { ...moodboardApi, addItem: () => Promise.reject(new Error('disk full')) } }
+    })
+    await expect(store().addToCollection('board-1', makeResult(1))).rejects.toThrow('disk full')
+    vi.stubGlobal('window', { api: { moodboard: moodboardApi } })
+    await store().renameCollection('board-1', 'Renamed')
+    expect(names()).toEqual(['Renamed'])
+  })
+})

@@ -8,6 +8,7 @@ import {
   type ScoredHighlight
 } from '@shared/highlights'
 import {
+  ALREADY_IN_CLIPS_MESSAGE,
   NO_SOUND_MESSAGE,
   WHOLE_VIDEO_DROPPED_MESSAGE,
   useVideoStore,
@@ -19,6 +20,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { ACCENT, EMBER, SIGNAL_PINK } from '../../styles/tokens'
 import { formatClock } from '@shared/clockTime'
 
@@ -117,7 +119,7 @@ export function HighlightPanel(): JSX.Element | null {
       }))
       if (!stored(narrowed)) return
       if (narrowed.length === 0) {
-        toast('No standout moments detected', { icon: <Icon name="search" size={18} /> })
+        toast('No standout moments found in this video', { icon: <Icon name="search" size={18} /> })
       } else {
         toast.success(`Found ${countOf(narrowed.length, 'highlight')}`)
       }
@@ -140,6 +142,10 @@ export function HighlightPanel(): JSX.Element | null {
     const added = addScannedClip(`Highlight ${index + 1}`, h.startSec, h.endSec)
     if (added === 'refused') {
       toast.error("Couldn't add that clip — the highlight is outside this video.")
+      return
+    }
+    if (added === 'duplicate') {
+      toast(ALREADY_IN_CLIPS_MESSAGE, { id: 'scanned-clip-duplicate', icon: <Icon name="warning" size={18} /> })
       return
     }
     toast.success('Clip added — see the Clips list')
@@ -243,7 +249,11 @@ export function HighlightPanel(): JSX.Element | null {
                   </button>
                   <button
                     className="text-accent hover:underline"
-                    onClick={() => addAsClip(h, i)}
+                    onClick={(e) => {
+                      // T-150 (3): the second press of a double-click is not a second decision (the store also refuses the same range).
+                      if (isRepeatPress(e)) return
+                      addAsClip(h, i)
+                    }}
                   >
                     + Clip
                   </button>

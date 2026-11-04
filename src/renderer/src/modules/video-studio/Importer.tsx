@@ -8,7 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import { describeImportError } from '@shared/importDiagnostics'
+import { describeImportError, isNotFoundError } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
   isVideoFilename,
@@ -28,7 +28,7 @@ export function Importer(): JSX.Element {
   // render); `converting` only chooses the words of the refusal. Main refuses a second convert too (`video:convertForImport`), whoever asks.
   const busy = useImportRun((s) => s.run !== null)
   const [dragOver, setDragOver] = useState(false)
-  const { recent, push, clear } = useRecentFiles('video')
+  const { recent, push, remove, clear } = useRecentFiles('video')
   // T-131 (5): and one chooser at a time. `busy` is only set once a file was PICKED, so a double-click on "Choose file…" opened two
   // choosers (the first's answer loads the file, the second's replaced it or was refused). Claimed before the dialog, given back after.
   const pickingRef = useRef(false)
@@ -86,7 +86,9 @@ export function Importer(): JSX.Element {
       // codec-not-supported error. Mirror AudioImporter — 8 s + the shared
       // describeImportError which surfaces actionable hints (cloud-sync,
       // permission, unknown codec).
-      toast.error(describeImportError(err, filePath), { duration: 8000 })
+      // T-150: a Recent entry whose file is gone would fail the same way on every pick. Dropped from its list, and the toast says so.
+      const gone = isNotFoundError(err) && (await remove(filePath))
+      toast.error(describeImportError(err, filePath) + (gone ? ' It was removed from Recent.' : ''), { duration: 8000 })
     } finally {
       useImportRun.getState().end()
     }

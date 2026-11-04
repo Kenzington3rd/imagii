@@ -455,3 +455,26 @@ describe('the second track\'s two no-sound sentences (T-136 (10))', () => {
     }
   })
 })
+
+describe('audioPassPlan — a second track that matches the voice measures first (T-150 (1))', () => {
+  it('Match loudness with Even volume off plans the measure pass, so the row says "Step 1 of 2 - measuring"', () => {
+    const plan = audioPassPlan({ loudnorm: false, reattach: false, matchLoudness: true })
+    expect(plan).toEqual(['measure', 'render'])
+    expect(audioPassLabel('measure', plan)).toBe('Step 1 of 2 — measuring loudness')
+    expect(audioPassLabel('render', plan)).toBe('Step 2 of 2 — rendering')
+  })
+
+  it('Match loudness is a measure pass of its own, not a second one: Even volume on as well still plans one', () => {
+    expect(audioPassPlan({ loudnorm: true, reattach: false, matchLoudness: true })).toEqual(['measure', 'render'])
+  })
+
+  it('Match loudness with the video re-attach: measure, render, mux', () => {
+    expect(audioPassPlan({ loudnorm: false, reattach: true, matchLoudness: true })).toEqual(['measure', 'render', 'mux'])
+  })
+
+  it('no Match (or the flag left out): the plans are the ones they were', () => {
+    expect(audioPassPlan({ loudnorm: false, reattach: false, matchLoudness: false })).toEqual(['render'])
+    expect(audioPassPlan({ loudnorm: false, reattach: false })).toEqual(['render'])
+    expect(audioPassPlan({ loudnorm: true, reattach: true, matchLoudness: false })).toEqual(['measure', 'render', 'mux'])
+  })
+})

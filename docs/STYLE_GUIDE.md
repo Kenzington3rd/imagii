@@ -844,8 +844,10 @@ Repeated UI is a component, not copy-paste:
   height and frame rate, the grid size, a text layer's Size, and (T-124 (15)) a layer's x / y / Rotation in Properties and the
   overlay's x / y, and (T-136 (9)) the chat spike finder's extra seconds, 0 to 60) is one; a new one is too, never `|| <default>` in an `onChange`. A `type="number"` box fed
   `String(n)` on every keystroke cannot be typed a minus sign into (`"-"` is not a number, so the store's old value replaced it)
-  and turns ".5" into 1: the clamps are `layerOffsetRange` and `LAYER_ROTATION_RANGE` (`@shared/canvas`) for a layer and 0..1
-  for the overlay's fractions, applied by `clampTyped` when typing ends.
+  and turns ".5" into 1: the clamps are `layerOffsetRange` and `LAYER_ROTATION_RANGE` (`@shared/canvas`) for a layer, applied by `clampTyped` when typing
+  ends. The overlay's Position boxes (T-150 (4)) are a percent, 0..100, over the stored 0..1 fraction (`fractionToPercent` / `percentToFraction` /
+  `positionFromTyped` in `@shared/textOverlay`), and a number outside the range is REFUSED with `OVERLAY_POSITION_REFUSAL`, not clamped: clamp where the
+  nearest legal number is what the person meant (a pixel margin), refuse where it would be a different value shown as the one typed.
 - **`formatClock(seconds, places)` and `parseClock(typed)`** (`@shared/clockTime`, T-125 (23)) — a time in a source video as a person
   reads and types it. `formatClock` is the one `m:ss` (`places` 0, 1 or 2 truncated digits of fraction) and writes `h:mm:ss` from one
   hour up; the Timeline, the clip list, the highlight lists, the captions list, the player and Audio Studio's waveform all call it, and

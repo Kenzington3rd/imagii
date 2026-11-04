@@ -11396,3 +11396,124 @@ describe('Picture-in-picture ends at the base\'s length, with or without sound u
     near(await packetsEnd(out, 'v:0'), BASE_SEC, FRAME + 0.01, 'the last picture')
   }, 120_000)
 })
+
+/**
+ * T-150 (1): "Match loudness with your voice" with Even volume OFF keeps the voice and brings the music to it.
+ *
+ * Before: the primary AND the second track were single-pass loudnormed to the Even volume target box's value (-16, read while the box is disabled), so a -22
+ * LUFS voice came out at -16 with its loudness range reshaped, and the checkbox's own sentence ("your voice" is the reference) was not what happened. Every
+ * older Layer 5 case with Match on also had Even volume on. Here a steady "voice" (pink noise with a speech-like tremolo) at -22 LUFS and a "music" bed
+ * (brown noise) at -32 LUFS go through the real export, the music on the second track, duck off, and the output is measured in a stretch where only
+ * the music plays (the voice starts at 10 s) and a stretch where only the voice plays (the bed ends at 18 s). A string cannot say that ffmpeg accepts
+ * the measure pass's graph or where the loudness lands. (The bed has no silence of its own at its head: a single-pass loudnorm that opens on seconds of
+ * silence under-shoots for a long while, measured, which is the music branch's own business and not this item's.)
+ */
+describe('Match loudness follows the voice when Even volume is off (T-150 (1))', () => {
+  const VOICE_LUFS = -22
+  const MUSIC_LUFS = -32
+  const VOICE_START = 10
+  const MUSIC_END = 18
+  const TOTAL = 24
+  let voice = ''
+  let silentVoice = ''
+  let music = ''
+
+  /** Pink/brown noise, scaled by a measurement so its integrated loudness is `lufs` (a fixture that is the level it says it is). */
+  async function noiseAt(out: string, source: string, lufs: number): Promise<void> {
+    const raw = path.join(workDir, `t150-raw-${path.basename(out)}`)
+    await ff(['-y', '-f', 'lavfi', '-i', source, '-ac', '1', '-ar', '44100', raw])
+    const gain = lufs - (await measureLufs(raw))
+    await ff(['-y', '-i', raw, '-af', `volume=${gain.toFixed(2)}dB`, '-ar', '44100', out])
+  }
+
+  beforeAll(async () => {
+    voice = path.join(workDir, 't150-voice.wav')
+    silentVoice = path.join(workDir, 't150-silent-voice.wav')
+    music = path.join(workDir, 't150-music.wav')
+    // Voice: 10 s of silence (the music-only stretch), then 14 s of sound. Gated integrated loudness ignores the head.
+    const voiceRaw = path.join(workDir, 't150-voice-raw.wav')
+    await noiseAt(voiceRaw, `anoisesrc=c=pink:r=44100:d=${TOTAL - VOICE_START}:seed=7,tremolo=f=3:d=0.4`, VOICE_LUFS)
+    await ff(['-y', '-i', voiceRaw, '-af', `adelay=${VOICE_START * 1000}:all=1`, voice])
+    // Music: 18 s of sound from the start.
+    await noiseAt(music, `anoisesrc=c=brown:r=44100:d=${MUSIC_END}:seed=3`, MUSIC_LUFS)
+    await ff(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', String(TOTAL), silentVoice])
+  }, 180_000)
+
+  /** Integrated loudness of a stretch of a file (a window is its own programme: ebur128 gates inside it). */
+  async function windowLufs(file: string, start: number, len: number): Promise<number> {
+    const { stderr } = await ff(['-hide_banner', '-ss', String(start), '-t', String(len), '-i', file, '-af', 'ebur128=framelog=verbose', '-f', 'null', '-'])
+    const m = stderr.match(/I:\s+(-?[\d.]+)\s+LUFS/g)
+    const v = m?.[m.length - 1]?.match(/(-?[\d.]+)/)
+    if (!v) throw new Error('no ebur128 summary found')
+    return Number(v[1])
+  }
+  /** Only the voice plays: after the bed ended (18 s). */
+  const voiceOnly = (file: string): Promise<number> => windowLufs(file, MUSIC_END + 1.5, 4)
+  /** Only the music plays: before the voice starts (10 s), past loudnorm's first seconds. */
+  const musicOnly = (file: string): Promise<number> => windowLufs(file, 5, 4)
+
+  function specFor(name: string, chain: Partial<ChainSpec>, secondary: Record<string, unknown> = {}, source = voice): AudioExportSpec {
+    return {
+      jobId: `t150-${name}`,
+      sourcePath: source,
+      outputPath: path.join(workDir, `t150-${name}.wav`),
+      chain: {
+        ...DEFAULT_CHAIN_SPEC,
+        ...chain,
+        secondaryTrack: {
+          filePath: music,
+          fileName: 't150-music.wav',
+          role: 'music',
+          gainDb: 0,
+          duckUnderPrimary: false,
+          matchLoudness: true,
+          ...secondary
+        } as ChainSpec['secondaryTrack']
+      },
+      format: 'wav'
+    }
+  }
+
+  it('the fixtures are the levels they claim: the voice -22, the bed -32 (inside their own stretches)', async () => {
+    near(await voiceOnly(voice), VOICE_LUFS, 0.6, 'the voice fixture')
+    near(await musicOnly(music), MUSIC_LUFS, 0.6, 'the music fixture')
+  }, 120_000)
+
+  it('Even volume OFF, Match ON: the voice stays where it was (within 1 LU) and the music sits within 1.5 LU of it', async () => {
+    const events: Array<{ pass: string; percent: number }> = []
+    const res = await runAudioExport(specFor('match', {}), (p) => events.push(p))
+    const v = await voiceOnly(res.outputPath)
+    const m = await musicOnly(res.outputPath)
+    expect(Math.abs(v - VOICE_LUFS), `the voice-only stretch measures ${v} LUFS, its input was ${VOICE_LUFS} (the old code put it near -16)`).toBeLessThanOrEqual(1)
+    expect(Math.abs(m - v), `the music-only stretch measures ${m} LUFS against the voice's ${v}`).toBeLessThanOrEqual(1.5)
+    // The measuring pass came first and announced itself, then the render.
+    expect(events.filter((e) => e.percent === 0).map((e) => e.pass)).toEqual(['measure', 'render'])
+  }, 300_000)
+
+  it('Even volume OFF, Match ON, ducking on: the same graph runs, and the voice still stays where it was', async () => {
+    const res = await runAudioExport(specFor('match-duck', {}, { duckUnderPrimary: true }), () => {})
+    const v = await voiceOnly(res.outputPath)
+    // The duck acts on the bed, never on the voice; a ducked bed is shorter than the voice's tail, so the stretch after the bed ends is the voice alone.
+    expect(Math.abs(v - VOICE_LUFS), `the voice-only stretch measures ${v} LUFS`).toBeLessThanOrEqual(1)
+  }, 300_000)
+
+  it('Even volume OFF, Match ON, a silent voice: nothing to follow, the music takes its own gain and the export still succeeds', async () => {
+    const res = await runAudioExport(specFor('match-silent', {}, { gainDb: -3 }, silentVoice), () => {})
+    // The bed alone: MUSIC_LUFS less the 3 dB asked (a mono bed is upmixed power-preserving).
+    near(await musicOnly(res.outputPath), MUSIC_LUFS - 3, 1, 'the bed alone, at its own gain')
+  }, 300_000)
+
+  it('Match OFF (Even volume off): neither track is moved - the voice at -22, the bed at -32', async () => {
+    const res = await runAudioExport(specFor('nomatch', {}, { matchLoudness: false }), () => {})
+    near(await voiceOnly(res.outputPath), VOICE_LUFS, 1, 'the voice')
+    near(await musicOnly(res.outputPath), MUSIC_LUFS, 1, 'the music')
+  }, 300_000)
+
+  it('the control: Even volume ON + Match ON is the older behavior - the voice is brought to the target (-16) and the bed is pulled toward it', async () => {
+    const res = await runAudioExport(specFor('even', { loudnorm: true, loudnormTargetLufs: -16 }), () => {})
+    near(await voiceOnly(res.outputPath), -16, 2, 'the voice-only stretch, at the Even volume target')
+    // The mix bus's loudnorm holds the MIX at the target, so a stretch where only the bed plays is judged loosely: it is the target's side, not the bed's -32.
+    const m = await musicOnly(res.outputPath)
+    expect(m, `the music-only stretch measures ${m} LUFS, well above the bed's own -32`).toBeGreaterThan(-24)
+  }, 300_000)
+})

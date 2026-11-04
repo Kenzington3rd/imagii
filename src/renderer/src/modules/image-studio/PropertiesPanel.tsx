@@ -180,7 +180,7 @@ function FillStrokeFields({
         />
       </label>
       <label className="flex items-center gap-2">
-        <span className="text-xs text-ink-muted w-16">Stroke px</span>
+        <span className="text-xs text-ink-muted w-16">Stroke (px)</span>
         <input
           type="number"
           min={0}

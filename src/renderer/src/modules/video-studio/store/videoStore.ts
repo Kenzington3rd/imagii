@@ -319,8 +319,11 @@ export function videoHasNoSound(source: Pick<VideoSource, 'probe'> | null): bool
 /** The shortest clip a scanner's add makes (s): a range with less than this left in the video is refused (T-131 (3)). */
 const MIN_SCANNED_CLIP_SEC = 0.1
 
-/** What `addScannedClip` did (T-94). */
-export type ScannedClipResult = 'refused' | 'added' | 'added-dropped-whole-video'
+/** What `addScannedClip` did (T-94). 'duplicate' (T-150 (3)): a clip with exactly this range is already in the list, so nothing was added. */
+export type ScannedClipResult = 'refused' | 'duplicate' | 'added' | 'added-dropped-whole-video'
+
+/** The toast a scanner shows when `addScannedClip` answers 'duplicate' (T-150 (3)). */
+export const ALREADY_IN_CLIPS_MESSAGE = 'Already in the Clips list'
 
 /** The toast a scanner shows when `addScannedClip` answers
  *  'added-dropped-whole-video'. Neutral on purpose — nothing was lost, and the
@@ -438,6 +441,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     const base = makeDefaultClip(duration, clips.length + 1)
     const next = { ...base, name, startSec: safeStart, endSec: safeEnd }
     const kept = clips.filter((c) => !isPristineWholeVideoClip(c, duration))
+    // T-150 (3): the same range twice is one clip. A double-click or a held Enter on "+ Clip" appended identical clips, each with a toast and an undo
+    // step. ANY clip with this exact (clamped) range counts, not only one a scan made: clips carry no origin, and a second copy of a clip the person
+    // already has is never what "+ Clip" on a candidate means. The untouched whole-video clip is not compared (it is about to be retired).
+    if (kept.some((c) => c.startSec === safeStart && c.endSec === safeEnd)) return 'duplicate'
     // ONE snapshot of the state before either change: the retirement and the
     // add are a single undo step, so Ctrl+Z puts the whole-video clip back and
     // takes the highlight away together (T-94).

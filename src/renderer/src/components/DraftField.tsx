@@ -112,7 +112,7 @@ export function DraftField(props: DraftFieldProps): JSX.Element {
   return (
     <div className="flex flex-col gap-0.5">
       <label className="flex items-center gap-1.5">
-        <span className="text-ink-muted w-14 shrink-0">{label}</span>
+        <span className="text-ink-muted w-[4.5rem] shrink-0">{label}</span>
         {box}
       </label>
       {refusal}

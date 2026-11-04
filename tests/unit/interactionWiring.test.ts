@@ -1956,10 +1956,10 @@ describe('T-125 (round 75): the layout, copy and listener fixes are wired where 
     const editor = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
     expect(editor).toMatch(/label="Size \(px\)"/)
     expect(editor).not.toMatch(/label="Size"/)
-    // Every label of the card shares one width, so the boxes stay in a column: "Size (px)" does not fit w-12.
-    expect(editor).toMatch(/w-14 shrink-0">Font</)
-    expect(editor).toMatch(/w-14 shrink-0">x \/ y</)
-    expect(strip(read('components/DraftField.tsx'))).toMatch(/text-ink-muted w-14 shrink-0">\{label\}/)
+    // Every label of the card shares one width, so the boxes stay in a column: "Size (px)" does not fit w-12, and T-150 (4)'s "Position (%)" does not fit w-14 (4.5rem).
+    expect(editor).toMatch(/w-\[4\.5rem\] shrink-0">Font</)
+    expect(editor).toMatch(/w-\[4\.5rem\] shrink-0">Position \(%\)</)
+    expect(strip(read('components/DraftField.tsx'))).toMatch(/text-ink-muted w-\[4\.5rem\] shrink-0">\{label\}/)
   })
 
   it('the arrow, the end box and "s" are one wrap unit in the Source time row (17), and the pair decides the form (T-127 (7))', () => {
@@ -2038,15 +2038,15 @@ describe('T-125 (round 75): the layout, copy and listener fixes are wired where 
     const labels = [...editor.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1] as string)
     const named = labels.filter((l) => !/^Remove overlay$/.test(l))
     expect(named).toEqual([
-      'x / y, horizontal position (0 to 1)',
-      'x / y, vertical position (0 to 1)',
+      'Position (%), from the left (0 to 100)',
+      'Position (%), from the top (0 to 100)',
       'Source time, start (seconds, or a time like 2:47:13)',
       'Source time, end (seconds, or a time like 2:47:13)'
     ])
     // The visible words those names must start with are the ones the card draws.
-    expect(editor).toContain('>x / y</span>')
+    expect(editor).toContain('>Position (%)</span>')
     expect(editor).toContain('>Source time</span>')
-    for (const l of named) expect(/^(x \/ y|Source time)\b/.test(l), l).toBe(true)
+    for (const l of named) expect(/^(Position \(%\)|Source time)/.test(l), l).toBe(true)
   })
 })
 
@@ -3686,7 +3686,7 @@ describe('T-149 - a double-click on Save is one save; a press that moves focus e
     expect(store).toMatch(/const \{ added \} = await window\.api\.moodboard\.addItem\(collectionId, result\)/)
     expect(store).not.toMatch(/count\(collections\)/)
     const panel = strip(read('modules/references/ReferencePanel.tsx'))
-    expect(panel).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(panel).toMatch(/import \{ (?:ignoreHeldEnter, )?isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
     expect(panel).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*saveResult\(result\)\s*\}\}/)
   })
 
@@ -3701,5 +3701,74 @@ describe('T-149 - a double-click on Save is one save; a press that moves focus e
     expect(dialog).toContain("shrink-0 whitespace-nowrap ${otherSoundLabel ? '' : 'w-56'}")
     expect(dialog).toMatch(/<span className="min-w-0 flex-1 truncate text-xs" title=\{otherSoundLabel\}>/)
     expect(read('modules/audio-studio/AudioJobRunning.tsx')).not.toContain('Export - voice.wav')
+  })
+})
+
+// T-150: the wiring of Track B's items that a node test can see. The behaviour is driven by video-core / video-pipelines / record / home-chrome
+// (see docs/INTERACTION_COVERAGE.md); these pins keep the pieces joined.
+describe('T-150 — scanner "+ Clip" repeat guard, one phrasing per event, the Recent fold', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  it('both scanners\' "+ Clip" ignore the second press of a double-click, and answer a duplicate with the store\'s own sentence', () => {
+    for (const f of ['modules/video-studio/HighlightPanel.tsx', 'modules/video-studio/ChatHighlightPanel.tsx']) {
+      const src = strip(read(f))
+      expect(src, f).toMatch(/onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return\s*(addAsClip|addPeak)\(/)
+      expect(src, f).toContain("added === 'duplicate'")
+      expect(src, f).toContain('ALREADY_IN_CLIPS_MESSAGE')
+    }
+    expect(read('modules/video-studio/store/videoStore.ts')).toContain("ALREADY_IN_CLIPS_MESSAGE = 'Already in the Clips list'")
+  })
+
+  it('the scan toasts say what their inline lines say, and Record\'s toast uses its button\'s words', () => {
+    const highlights = read('modules/video-studio/HighlightPanel.tsx')
+    expect(highlights).toContain("toast('No standout moments found in this video'")
+    expect(highlights).toContain('No standout moments found in this video.</p>')
+    expect(highlights).not.toContain('No standout moments detected')
+    const chat = read('modules/video-studio/ChatHighlightPanel.tsx')
+    expect(chat).toContain("toast('No chat spikes found'")
+    expect(chat).not.toContain('No chat spikes detected')
+    const record = read('modules/record-studio/RecordStudio.tsx')
+    expect(record).toContain("toast.error('Pick a screen or window first')")
+    expect(record).toContain('Pick a screen or window\n')
+    expect(record).not.toContain('screen / window first')
+  })
+
+  it('both importers drop a not-found Recent entry and say so, from the same hook', () => {
+    for (const f of ['modules/video-studio/Importer.tsx', 'modules/audio-studio/AudioImporter.tsx']) {
+      const src = strip(read(f))
+      expect(src, f).toMatch(/const \{ recent, push, remove, clear \} = useRecentFiles\(/)
+      expect(src, f).toContain('isNotFoundError(err) && (await remove(filePath))')
+      expect(src, f).toContain("' It was removed from Recent.'")
+    }
+    expect(read('hooks/useRecentFiles.ts')).toMatch(/remove: \(filePath: string\) => Promise<boolean>/)
+  })
+})
+
+// T-150 (2), (5, image half), fold: the wiring the behavior tests stand on. Behavior: referencesStore.test.ts "overlapping board edits" (the chain),
+// references.spec.ts / image.spec.ts "T-150" (two real quick saves, a held Enter, the label measured on one line).
+describe('T-150 - one chain for the board edits, a held Enter on Save, "Stroke (px)"', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('every board mutator takes its Undo snapshot INSIDE its turn on the one chain, and undo / redo go through it', () => {
+    const store = strip(read('modules/references/state/referencesStore.ts'))
+    for (const name of ['createCollection', 'deleteCollection', 'renameCollection', 'addToCollection', 'removeFromCollection']) {
+      expect(store, name).toMatch(new RegExp(`${name}: \\([^)]*\\) =>\\s*mutate\\(async \\(\\) => \\{\\s*const before = snapshot\\(\\)`))
+    }
+    expect(store).toMatch(/const next = chain\.then\(fn, fn\)/)
+    expect(store).toMatch(/undo: \(\) => stepThroughChain\('undo'\)/)
+    expect(store).toMatch(/redo: \(\) => stepThroughChain\('redo'\)/)
+    expect(store).toMatch(/await chain\s*const collections = await window\.api\.moodboard\.list\(\)/)
+    expect(store, 'no press-time snapshot: a mutator is never an async function of its own').not.toMatch(/(?:create|delete|rename)Collection: async|(?:add|remove)(?:To|From)Collection: async/)
+  })
+
+  it('the Save button drops a repeat press of a double-click AND a held Enter', () => {
+    const panel = strip(read('modules/references/ReferencePanel.tsx'))
+    expect(panel).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(panel).toMatch(/<button\s+className="btn-primary px-3 py-1 text-xs inline-flex items-center gap-1\.5"\s+onKeyDown=\{ignoreHeldEnter\}\s+onClick=\{\(e\) => \{\s*if \(isRepeatPress\(e\)\) return/)
+  })
+
+  it('the stroke width box says it counts pixels', () => {
+    const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted w-16">Stroke \(px\)<\/span>/)
+    expect(panel).not.toMatch(/Stroke px/)
   })
 })

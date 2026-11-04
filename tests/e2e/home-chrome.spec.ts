@@ -3684,3 +3684,93 @@ test.describe('T-147 (6a): the tour announces each step it moves to', () => {
     }
   })
 })
+
+// ── T-150 (Recent fold): a Recent entry whose file is gone is dropped when it fails ───────────────────────────────────────────────────────────────────
+//
+// useRecentFiles had push / clear / refresh only, so an entry whose file had been moved or deleted stayed in the menu and failed with the same sentence on every pick.
+// Opening an entry that fails with the not-found sentence now drops that path from its list (the video and audio importers share the hook) and the toast says so. Any
+// other failure keeps the entry: the file may still be there.
+test.describe('T-150: a Recent entry whose file is gone is removed when it fails to open', () => {
+  async function openImporter(label: string, studio: 'Video Studio' | 'Audio Studio'): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; missing: string; clip: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'still-here.mp4')
+    await makeFixtureMp4(clip)
+    // The missing one is NEWER (first in the list) and has never existed: the same thing a moved or deleted file is to the app.
+    const missing = path.join(sourceDir, studio === 'Video Studio' ? 'gone-clip.mp4' : 'gone-sound.wav')
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: ALL_TUTORIALS_SEEN,
+      recentFiles: studio === 'Video Studio' ? { video: [missing, clip] } : { audio: [missing, clip] }
+    })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await window.locator('a', { hasText: studio }).first().click()
+    await expect(window.getByText(studio === 'Video Studio' ? 'Drop a video here' : 'Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    return { app, window, root, userDataDir, missing, clip }
+  }
+
+  for (const [studio, bucket, entry] of [
+    ['Video Studio', 'video', /gone-clip\.mp4/],
+    ['Audio Studio', 'audio', /gone-sound\.wav/]
+  ] as const) {
+    test(`${studio}: picking the missing entry says it can't be found and that it was removed from Recent, the menu no longer lists it, and the file that is there stays`, async () => {
+      test.setTimeout(180_000)
+      const { app, window, root, userDataDir, missing, clip } = await openImporter(`t150-recent-${bucket}`, studio)
+      try {
+        const toggle = window.getByRole('button', { name: 'Recent (2)' })
+        await toggle.click()
+        await window.getByRole('button', { name: entry }).click()
+
+        const sentence = "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…. It was removed from Recent."
+        await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(sentence)
+        // The list in the menu and the list on disk both lost it, and nothing else.
+        await expect(window.getByRole('button', { name: 'Recent (1)' })).toBeVisible()
+        await window.getByRole('button', { name: 'Recent (1)' }).click()
+        await expect(window.getByRole('button', { name: entry }), 'the menu no longer lists the missing file').toHaveCount(0)
+        await expect(window.getByRole('button', { name: /still-here\.mp4/ }), 'the file that is there is still listed').toBeVisible()
+        await expect.poll(() => readConfig(userDataDir).recentFiles?.[bucket], { timeout: 15_000, intervals: [200] }).toEqual([clip])
+        expect(missing).not.toBe(clip)
+
+        // It does not fail twice: there is nothing left to pick. The sentence was said once.
+        expect((await readToastLog(window)).filter((t) => t.includes('removed from Recent'))).toHaveLength(1)
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+  }
+
+  test('a file that is NOT a not-found failure keeps its entry and its toast does not claim a removal (a present file that is not a video)', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t150-recent-keep')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    // A file that exists and is not a video: ffprobe says "invalid data", which is a format failure, not a missing file.
+    const junk = path.join(sourceDir, 'not-a-video.mp4')
+    writeFileSync(junk, 'this is not a video')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN, recentFiles: { video: [junk] } })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Recent (1)' }).click()
+      await window.getByRole('button', { name: /not-a-video\.mp4/ }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain("imagii can't read this video format. Re-export it as MP4 from your recorder.")
+      expect((await readToastLog(window)).join(' | ')).not.toContain('removed from Recent')
+      expect(readConfig(userDataDir).recentFiles?.video).toEqual([junk])
+      await expect(window.getByRole('button', { name: 'Recent (1)' })).toBeVisible()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

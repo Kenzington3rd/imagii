@@ -340,7 +340,7 @@ export function RecordStudio(): JSX.Element {
       return
     }
     if (!selectedSourceId) {
-      toast.error('Pick a screen / window first')
+      toast.error('Pick a screen or window first')
       return
     }
     startingRef.current = true

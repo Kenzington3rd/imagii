@@ -73,7 +73,8 @@ export function ExportDialog(): JSX.Element | null {
       // the wrong thing for as long as the measure takes.
       const plan = audioPassPlan({
         loudnorm: chain.loudnorm,
-        reattach: Boolean(source.fromVideo && muxBack)
+        reattach: Boolean(source.fromVideo && muxBack),
+        matchLoudness: Boolean(chain.secondaryTrack?.matchLoudness)
       })
       if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, source.filePath, source.fileName)) return
       // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).

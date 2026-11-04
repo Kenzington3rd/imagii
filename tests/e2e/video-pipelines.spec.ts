@@ -1081,7 +1081,7 @@ test.describe('ChatHighlightPanel', () => {
       // pinned to the parse branch rather than to "some toast appeared".
       await card.locator('textarea').fill(chatLogWithNoSpike())
       await analyze.click()
-      await expectToast(window, 'No chat spikes detected')
+      await expectToast(window, 'No chat spikes found')
       await expect(card.locator('li')).toHaveCount(0)
       const toasts = await readToastLog(window)
       expect(toasts.filter((t) => t.includes(PARSE_ERROR))).toHaveLength(1)
@@ -10739,7 +10739,7 @@ test.describe('ChatHighlightPanel - range, extra seconds, empty result, alignmen
 
       await card.locator('textarea').fill(chatLogWithNoSpike())
       await card.getByRole('button', { name: 'Find chat spikes' }).click()
-      await expectToast(window, 'No chat spikes detected')
+      await expectToast(window, 'No chat spikes found')
       await expect(line, 'the rule stays on the panel after the 4 s toast is gone').toBeVisible()
       await expect(card.locator('li')).toHaveCount(0)
 
@@ -12831,13 +12831,13 @@ test.describe('T-149 (3): a Scan VOD that finds nothing says so in the panel, no
       await expect(line, 'a video that was never scanned says nothing of the kind').toHaveCount(0)
 
       await card.getByRole('button', { name: 'Scan VOD' }).click()
-      await expectToast(window, 'No standout moments detected')
+      await expectToast(window, 'No standout moments found in this video')
       await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible({ timeout: 60_000 })
       await expect(line).toBeVisible()
       await expect(card.locator('li'), 'there is no list').toHaveCount(0)
 
       // The toast (about 4 s) is gone and the line is not.
-      await expect(window.getByText('No standout moments detected', { exact: true }), 'the toast faded').toHaveCount(0, { timeout: 15_000 })
+      await expect(window.getByText('No standout moments found in this video', { exact: true }), 'the toast faded').toHaveCount(0, { timeout: 15_000 })
       await window.waitForTimeout(1_000)
       await expect(line, 'the line outlives the toast').toBeVisible()
 
@@ -12872,6 +12872,74 @@ test.describe('T-149 (3): a Scan VOD that finds nothing says so in the panel, no
       await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
       await expect(card.getByText(EMPTY_LINE, { exact: true })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-150 (3): Scan VOD's and Chat spike's "+ Clip" took every press. A mouse double-click (the second click has detail 2) or a held Enter (a keyboard click has
+// detail 0, so the click count cannot see it) appended identical clips, each with a toast and an undo step. The panels drop the second press of a double-click
+// (`isRepeatPress`); the store refuses a clip whose range is already in the list, which is what closes the held key.
+test.describe('T-150 (3): "+ Clip" on a scan row adds one clip however it is pressed', () => {
+  const clipToasts = async (window: Page): Promise<string[]> => (await readToastLog(window)).filter((t) => t.startsWith('Clip added'))
+
+  test('Scan VOD: a real double-click is one clip and one toast; a held Enter is still one clip, and says it is already there', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await launchWithVideo('t150-3-scan', burstSrc)
+    try {
+      const card = highlightCard(window)
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(card.locator('li')).toHaveCount(1, { timeout: 60_000 })
+      const add = card.locator('li').first().getByRole('button', { name: '+ Clip' })
+
+      await add.dblclick()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Highlight 1'])
+      await window.waitForTimeout(500)
+      expect(await clipToasts(window), 'one press that counts, one toast').toEqual(['Clip added — see the Clips list'])
+      expect((await readToastLog(window)).filter((t) => t.includes('Already in the Clips list')), 'the second click was not a decision').toEqual([])
+
+      // A held Enter on the focused button: the first keydown is a press, every repeat is a keyboard click with no count.
+      await add.focus()
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expectToast(window, 'Already in the Clips list')
+      await expect(clipListCard(window).locator('h3'), 'the held key added nothing').toHaveText('Clips (1)')
+
+      // ONE Undo takes back the one real add (no phantom steps from the presses above): the whole-video clip is back and no highlight is left.
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 1'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Chat spike: a real double-click is one clip and one toast; a held Enter is still one clip', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await launchWithVideo('t150-3-chat', longSrc)
+    try {
+      const card = chatCard(window)
+      await card.locator('textarea').fill(chatLogWithOneSpike())
+      await card.getByRole('button', { name: 'Find chat spikes' }).click()
+      await expect(card.locator('li')).toHaveCount(1)
+      const add = card.locator('li').first().getByRole('button', { name: '+ Clip' })
+
+      await add.dblclick()
+      await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
+      expect((await clipRows(window)).map((r) => r.name)).toEqual(['Chat spike 1'])
+      await window.waitForTimeout(500)
+      expect(await clipToasts(window), 'one press that counts, one toast').toEqual(['Clip added'])
+      expect((await readToastLog(window)).filter((t) => t.includes('Already in the Clips list'))).toEqual([])
+
+      await add.focus()
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expectToast(window, 'Already in the Clips list')
+      await expect(clipListCard(window).locator('h3'), 'the held key added nothing').toHaveText('Clips (1)')
     } finally {
       await app.close()
     }

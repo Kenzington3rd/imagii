@@ -301,13 +301,19 @@ const AUDIO_PASS_WORDS: Record<AudioJobProgress['pass'], string> = {
  * numbers); re-attaching to a video renders to a scratch file and then puts it
  * on the picture. Each pass reports its own 0-100%, so the bar restarts at 0 at
  * every one of them.
+ *
+ * T-150 (1): "Match loudness with your voice" with Even volume off measures the voice first
+ * (the music is brought to what the voice measures), so a second track with Match on plans the
+ * measure pass too. `matchLoudness` is the SECOND TRACK's flag: the caller passes false when
+ * there is no second track.
  */
 export function audioPassPlan(opts: {
   loudnorm: boolean
   reattach: boolean
+  matchLoudness?: boolean
 }): Array<AudioJobProgress['pass']> {
   return [
-    ...(opts.loudnorm ? (['measure'] as const) : []),
+    ...(opts.loudnorm || opts.matchLoudness ? (['measure'] as const) : []),
     'render',
     ...(opts.reattach ? (['mux'] as const) : [])
   ]

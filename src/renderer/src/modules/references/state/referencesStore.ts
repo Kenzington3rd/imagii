@@ -40,16 +40,33 @@ function pushHistory(history: History, snapshot: BoardsSnapshot): History {
 const EMPTY_HISTORY: History = { past: [], future: [] }
 
 /**
- * Every disk write undo/redo issues, chained.
+ * T-150 (2): ONE serialised chain for everything that changes the boards - the five mutators and the disk write an undo/redo issues.
  *
- * The three other studios undo pure renderer state; this one owns files. The
- * undo itself has to stay synchronous (Home calls it through the same
- * `() => void` the others expose), so the write is fired rather than awaited
- * — and `refreshCollections` waits on this chain before re-reading, or a
- * panel mounting right after a Ctrl+Z could read the pre-undo directory and
- * quietly put the undone change back on screen.
+ * The three other studios undo pure renderer state; this one owns files. Main serialises the writes under its board lock (an add fetches the thumbnail
+ * inside it), but the store took its undo snapshot at PRESS time: saving picture A then B before A landed recorded [N, N] and one Ctrl+Z removed both.
+ * Each mutation now takes its snapshot when its TURN starts, after the previous one has set its result. The undo itself has to stay synchronous (Home
+ * calls it through the same `() => void` the others expose), so its write is fired rather than awaited - and `refreshCollections` waits on this chain
+ * before re-reading, or a panel mounting right after a Ctrl+Z could read the pre-undo directory and quietly put the undone change back on screen.
  */
-let diskWrites: Promise<unknown> = Promise.resolve()
+let chain: Promise<unknown> = Promise.resolve()
+const noop = (): void => {}
+
+function run<T>(fn: () => Promise<T>): Promise<T> {
+  const next = chain.then(fn, fn)
+  chain = next.then(noop, noop)
+  return next
+}
+
+/** Mutations queued or running. An undo/redo pressed while one is out waits its turn (it undoes what that mutation is about to record); with none out
+ *  it is applied on the spot, so the other studios' synchronous contract (and the tests that read the state right after `undo()`) still holds. */
+let mutating = 0
+
+function mutate<T>(fn: () => Promise<T>): Promise<T> {
+  mutating++
+  return run(fn).finally(() => {
+    mutating--
+  })
+}
 
 interface ReferencesStudioState {
   tab: ReferencesTab
@@ -109,15 +126,49 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
   /** Make the boards on disk match the step we just moved to. On failure,
    *  adopt what the disk really says rather than leaving the UI showing an
    *  undo that never landed. */
-  function writeThrough(collections: MoodBoardCollection[]): void {
-    const run = async (): Promise<void> => {
+  function writeThrough(collections: MoodBoardCollection[]): () => Promise<void> {
+    return async () => {
       try {
         await window.api.moodboard.restore(collections)
       } catch {
         set({ collections: await window.api.moodboard.list() })
       }
     }
-    diskWrites = diskWrites.then(run, run)
+  }
+
+  /** Move one step back (undo) or forward (redo) NOW and hand back the disk write that makes the directory match, or null when there is no step. */
+  function step(direction: 'undo' | 'redo'): (() => Promise<void>) | null {
+    const { history, collections, selectedCollectionId } = get()
+    const here = { collections, selectedCollectionId }
+    if (direction === 'undo') {
+      const last = history.past[history.past.length - 1]
+      if (!last) return null
+      set({
+        collections: last.collections,
+        selectedCollectionId: last.selectedCollectionId,
+        history: { past: history.past.slice(0, -1), future: [here, ...history.future] }
+      })
+      return writeThrough(last.collections)
+    }
+    const next = history.future[0]
+    if (!next) return null
+    set({
+      collections: next.collections,
+      selectedCollectionId: next.selectedCollectionId,
+      history: { past: [...history.past, here], future: history.future.slice(1) }
+    })
+    return writeThrough(next.collections)
+  }
+
+  function stepThroughChain(direction: 'undo' | 'redo'): void {
+    if (mutating > 0) {
+      void mutate(async () => {
+        await step(direction)?.()
+      }).catch(noop)
+      return
+    }
+    const write = step(direction)
+    if (write) void run(write)
   }
 
   return {
@@ -157,7 +208,7 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     },
 
     refreshCollections: async () => {
-      await diskWrites
+      await chain
       const collections = await window.api.moodboard.list()
       const current = get().selectedCollectionId
       set({
@@ -168,84 +219,64 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
             : (collections[0]?.id ?? null)
       })
     },
-    createCollection: async (name: string) => {
-      const before = snapshot()
-      const collection = await window.api.moodboard.create(name)
-      const collections = await window.api.moodboard.list()
-      // The step is pushed only once the write succeeded: a refused name must
-      // not leave an undo entry that would step back over nothing.
-      set({
-        collections,
-        selectedCollectionId: collection.id,
-        history: pushHistory(get().history, before)
-      })
-      return collection.id
-    },
-    deleteCollection: async (id: string) => {
-      const before = snapshot()
-      await window.api.moodboard.delete(id)
-      const collections = await window.api.moodboard.list()
-      set({
-        collections,
-        selectedCollectionId:
-          get().selectedCollectionId === id
-            ? (collections[0]?.id ?? null)
-            : get().selectedCollectionId,
-        history: pushHistory(get().history, before)
-      })
-    },
-    renameCollection: async (id: string, name: string) => {
-      const before = snapshot()
-      await window.api.moodboard.rename(id, name)
-      const collections = await window.api.moodboard.list()
-      set({ collections, history: pushHistory(get().history, before) })
-    },
+    createCollection: (name: string) =>
+      mutate(async () => {
+        const before = snapshot()
+        const collection = await window.api.moodboard.create(name)
+        const collections = await window.api.moodboard.list()
+        // The step is pushed only once the write succeeded: a refused name must
+        // not leave an undo entry that would step back over nothing.
+        set({
+          collections,
+          selectedCollectionId: collection.id,
+          history: pushHistory(get().history, before)
+        })
+        return collection.id
+      }),
+    deleteCollection: (id: string) =>
+      mutate(async () => {
+        const before = snapshot()
+        await window.api.moodboard.delete(id)
+        const collections = await window.api.moodboard.list()
+        set({
+          collections,
+          selectedCollectionId:
+            get().selectedCollectionId === id
+              ? (collections[0]?.id ?? null)
+              : get().selectedCollectionId,
+          history: pushHistory(get().history, before)
+        })
+      }),
+    renameCollection: (id: string, name: string) =>
+      mutate(async () => {
+        const before = snapshot()
+        await window.api.moodboard.rename(id, name)
+        const collections = await window.api.moodboard.list()
+        set({ collections, history: pushHistory(get().history, before) })
+      }),
     selectCollection: (id) => set({ selectedCollectionId: id }),
-    addToCollection: async (collectionId, result) => {
-      const before = snapshot()
-      // T-149 (4): main says whether IT added the picture (decided under its lock). A count compare of two re-reads could not tell two presses in flight apart:
-      // both snapshots held N, both re-reads held N+1, both pushed a step.
-      const { added } = await window.api.moodboard.addItem(collectionId, result)
-      const collections = await window.api.moodboard.list()
-      // A duplicate changed nothing on disk, so it is not a step: pushing one left an Undo that undid nothing, on top of the real steps.
-      set(added ? { collections, history: pushHistory(get().history, before) } : { collections })
-      return added
-    },
-    removeFromCollection: async (collectionId, itemId) => {
-      const before = snapshot()
-      await window.api.moodboard.removeItem(collectionId, itemId)
-      const collections = await window.api.moodboard.list()
-      set({ collections, history: pushHistory(get().history, before) })
-    },
+    addToCollection: (collectionId, result) =>
+      mutate(async () => {
+        // T-150 (2): the snapshot is taken when this turn STARTS, so it holds the previous mutation's result (taken at press time, two quick saves both held N).
+        const before = snapshot()
+        // T-149 (4): main says whether IT added the picture (decided under its lock). A count compare of two re-reads could not tell two presses in flight apart:
+        // both snapshots held N, both re-reads held N+1, both pushed a step.
+        const { added } = await window.api.moodboard.addItem(collectionId, result)
+        const collections = await window.api.moodboard.list()
+        // A duplicate changed nothing on disk, so it is not a step: pushing one left an Undo that undid nothing, on top of the real steps.
+        set(added ? { collections, history: pushHistory(get().history, before) } : { collections })
+        return added
+      }),
+    removeFromCollection: (collectionId, itemId) =>
+      mutate(async () => {
+        const before = snapshot()
+        await window.api.moodboard.removeItem(collectionId, itemId)
+        const collections = await window.api.moodboard.list()
+        set({ collections, history: pushHistory(get().history, before) })
+      }),
 
-    undo: () => {
-      const { history, collections, selectedCollectionId } = get()
-      if (history.past.length === 0) return
-      const last = history.past[history.past.length - 1]!
-      set({
-        collections: last.collections,
-        selectedCollectionId: last.selectedCollectionId,
-        history: {
-          past: history.past.slice(0, -1),
-          future: [{ collections, selectedCollectionId }, ...history.future]
-        }
-      })
-      writeThrough(last.collections)
-    },
-    redo: () => {
-      const { history, collections, selectedCollectionId } = get()
-      if (history.future.length === 0) return
-      const next = history.future[0]!
-      set({
-        collections: next.collections,
-        selectedCollectionId: next.selectedCollectionId,
-        history: {
-          past: [...history.past, { collections, selectedCollectionId }],
-          future: history.future.slice(1)
-        }
-      })
-      writeThrough(next.collections)
-    },
+    undo: () => stepThroughChain('undo'),
+    redo: () => stepThroughChain('redo'),
     canUndo: () => get().history.past.length > 0,
     canRedo: () => get().history.future.length > 0,
     resetHistory: () => set({ history: EMPTY_HISTORY })

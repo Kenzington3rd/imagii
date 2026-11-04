@@ -388,7 +388,7 @@ const WIRED: ReadonlyArray<readonly [string, string, RegExp]> = [
   ['modules/video-studio/SafeZoneWarningModal.tsx', 'opens on Cancel', /data-initial-focus[\s\S]{0,120}onClick=\{onCancel\}/],
   ['hooks/useFocusTrap.ts', 'initial focus honored', /\[data-initial-focus\]/],
   ['modules/video-studio/ExportPanel.tsx', 'queue bar', /<ProgressTrack\s+className="w-40"\s+label=\{`\$\{j\.clipName\} · \$\{j\.presetLabel\}`\}\s+percent=\{j\.percent\}/],
-  ['modules/video-studio/TextOverlayEditor.tsx', 'x and y names', /aria-label="x \/ y, horizontal position \(0 to 1\)"[\s\S]{0,700}aria-label="x \/ y, vertical position \(0 to 1\)"/],
+  ['modules/video-studio/TextOverlayEditor.tsx', 'x and y names', /aria-label="Position \(%\), from the left \(0 to 100\)"[\s\S]{0,700}aria-label="Position \(%\), from the top \(0 to 100\)"/],
   ['modules/image-studio/ExportDialog.tsx', 'format select name', /aria-label="Export format"[\s\S]{0,120}setFormat\(/],
   // T-123 (4): `DraftField` moved out of TextOverlayEditor into components/ (nine boxes use it now), so the T-114 claim
   // "the color box points at its sentence" is two facts: the shared box wires its description to the sentence it draws,

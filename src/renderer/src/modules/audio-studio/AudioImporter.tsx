@@ -11,6 +11,7 @@ import { claimFirst } from '../../lib/claimFirst'
 import {
   describeImportError,
   examineDroppedFile,
+  isNotFoundError,
   pathLooksLikeCloudSync
 } from '@shared/importDiagnostics'
 import { assertDefined } from '@shared/assert'
@@ -28,7 +29,7 @@ export function AudioImporter(): JSX.Element {
   // store, not a render); `extracting` only chooses the words of the refusal. A returning importer is the same import: busy, refusing a second.
   const busy = useAudioImportRun((s) => s.run !== null)
   const [dragOver, setDragOver] = useState(false)
-  const { recent, push, clear } = useRecentFiles('audio')
+  const { recent, push, remove, clear } = useRecentFiles('audio')
   // T-131 (5): and one chooser at a time (the Importer's `pickingRef`): `busy` is set only once a file was picked.
   const pickingRef = useRef(false)
 
@@ -80,7 +81,9 @@ export function AudioImporter(): JSX.Element {
     } catch (err) {
       console.error('[audio-import] failed', { filePath, err })
       toast.dismiss('extract')
-      toast.error(describeImportError(err, filePath, 'audio'), { duration: 8000 })
+      // T-150: a Recent entry whose file is gone would fail the same way on every pick. Dropped from its list, and the toast says so.
+      const gone = isNotFoundError(err) && (await remove(filePath))
+      toast.error(describeImportError(err, filePath, 'audio') + (gone ? ' It was removed from Recent.' : ''), { duration: 8000 })
     } finally {
       useAudioImportRun.getState().end()
     }

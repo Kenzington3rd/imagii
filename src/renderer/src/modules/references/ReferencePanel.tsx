@@ -6,7 +6,7 @@ import { Icon } from '../../components/Icon'
 import { NameDialog } from '../../components/NameDialog'
 import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 
 export function ReferencePanel(): JSX.Element {
   const search = useReferencesStore((s) => s.search)
@@ -185,6 +185,8 @@ export function ReferencePanel(): JSX.Element {
                     unreachable, and hid the fact that it was broken. */}
                 <button
                   className="btn-primary px-3 py-1 text-xs inline-flex items-center gap-1.5"
+                  // T-150: a HELD Enter is the keyboard's double-click: each auto-repeat is a keyboard click (`detail` 0) that stacked an "Already on" toast.
+                  onKeyDown={ignoreHeldEnter}
                   onClick={(e) => {
                     // T-149 (4): the second press of a double-click is the same decision as the first (one save, one toast).
                     if (isRepeatPress(e)) return

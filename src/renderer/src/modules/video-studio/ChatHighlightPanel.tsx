@@ -3,7 +3,8 @@ import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
 import { MAX_CHAT_PAD_SEC, NO_CHAT_SPIKES_MESSAGE, findChatPeaks, type ChatPeak } from '@shared/chatPeaks'
 import { countOf } from '@shared/plural'
-import { WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
+import { ALREADY_IN_CLIPS_MESSAGE, WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
+import { isRepeatPress } from '../../lib/repeatPress'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
 import { DraftField } from '../../components/DraftField'
@@ -50,7 +51,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
     const found: ChatPeak[] = findChatPeaks(msgs, bucketSec, padSec)
     setDerived({ spikes: found })
     if (found.length === 0) {
-      toast('No chat spikes detected', { icon: <Icon name="search" size={18} /> })
+      toast('No chat spikes found', { icon: <Icon name="search" size={18} /> })
     } else {
       toast.success(`Found ${countOf(found.length, 'chat spike')}`)
     }
@@ -75,6 +76,10 @@ export function ChatHighlightPanel(): JSX.Element | null {
       toast.error(
         'That spike is past the end of this video — check the log matches this source.'
       )
+      return
+    }
+    if (added === 'duplicate') {
+      toast(ALREADY_IN_CLIPS_MESSAGE, { id: 'scanned-clip-duplicate', icon: <Icon name="warning" size={18} /> })
       return
     }
     toast.success('Clip added')
@@ -169,7 +174,11 @@ export function ChatHighlightPanel(): JSX.Element | null {
                     </button>
                     <button
                       className="text-accent hover:underline"
-                      onClick={() => addPeak(p, i)}
+                      onClick={(e) => {
+                        // T-150 (3): the second press of a double-click is not a second decision (the store also refuses the same range).
+                        if (isRepeatPress(e)) return
+                        addPeak(p, i)
+                      }}
                     >
                       + Clip
                     </button>

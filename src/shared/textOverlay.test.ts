@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   OVERLAY_COLOR_REFUSAL,
+  OVERLAY_POSITION_REFUSAL,
   OVERLAY_TIME_REFUSAL,
   clampOverlaySize,
+  fractionToPercent,
   newTextOverlay,
   normalizeOverlayPatch,
   overlayOutsideClipMessage,
   overlayTimePair,
-  overlayTimeText
+  overlayTimeText,
+  percentToFraction,
+  positionFromTyped
 } from './textOverlay'
 import { resolveOverlayColor } from './overlayColors'
 import { parseClock } from './clockTime'
@@ -256,5 +260,55 @@ describe('overlayOutsideClipMessage - a clip an hour or more into the video (T-1
 
   it('a clip that ends before the hour keeps the seconds form and the "s"', () => {
     expect(overlayOutsideClipMessage(at(0, 5), { startSec: 3500, endSec: 3599.5 })).toContain('from 3500.00 to 3599.50 s of the video')
+  })
+})
+
+// T-150 (4): the Position boxes show a PERCENT from the top left and store the same 0-1 fraction.
+describe('the Position boxes: percent <-> fraction (T-150 (4))', () => {
+  it('the new overlay\'s defaults read as 10 and 85, whole numbers', () => {
+    const o = newTextOverlay(0, 5)
+    expect([fractionToPercent(o.x), fractionToPercent(o.y)]).toEqual([10, 85])
+  })
+
+  it('fraction -> percent keeps one decimal at most and never shows floating noise', () => {
+    expect(fractionToPercent(0)).toBe(0)
+    expect(fractionToPercent(1)).toBe(100)
+    expect(fractionToPercent(0.5)).toBe(50)
+    expect(fractionToPercent(0.3456)).toBe(34.6)
+    expect(fractionToPercent(0.07)).toBe(7)
+    expect(fractionToPercent(0.29)).toBe(29)
+  })
+
+  it('percent -> fraction is the stored 0-1 form without floating noise', () => {
+    expect(percentToFraction(50)).toBe(0.5)
+    expect(percentToFraction(33.3)).toBe(0.333)
+    expect(percentToFraction(29)).toBe(0.29)
+    expect(percentToFraction(0)).toBe(0)
+    expect(percentToFraction(100)).toBe(1)
+  })
+
+  it('a value shown is a value that round-trips', () => {
+    for (const f of [0, 0.1, 0.25, 0.333, 0.85, 1]) expect(percentToFraction(fractionToPercent(f))).toBe(f)
+  })
+
+  it('a typed percent inside 0 to 100 is the fraction (50 is the centre, the edges are taken)', () => {
+    expect(positionFromTyped('50')).toEqual({ fraction: 0.5 })
+    expect(positionFromTyped('0')).toEqual({ fraction: 0 })
+    expect(positionFromTyped('100')).toEqual({ fraction: 1 })
+    expect(positionFromTyped(' 12.5 ')).toEqual({ fraction: 0.125 })
+  })
+
+  it('a number outside 0 to 100 is REFUSED with the sentence, never clamped to the far edge (a typed 50 used to commit 1)', () => {
+    expect(positionFromTyped('150')).toEqual({ refusal: OVERLAY_POSITION_REFUSAL })
+    expect(positionFromTyped('100.5')).toEqual({ refusal: OVERLAY_POSITION_REFUSAL })
+    expect(positionFromTyped('-1')).toEqual({ refusal: OVERLAY_POSITION_REFUSAL })
+    expect(OVERLAY_POSITION_REFUSAL).toBe('Position is a percent from the top left, from 0 to 100.')
+  })
+
+  it('an empty box or text that is not a number stores nothing (the box shows what it had)', () => {
+    expect(positionFromTyped('')).toBeNull()
+    expect(positionFromTyped('   ')).toBeNull()
+    expect(positionFromTyped('abc')).toBeNull()
+    expect(positionFromTyped('Infinity')).toBeNull()
   })
 })

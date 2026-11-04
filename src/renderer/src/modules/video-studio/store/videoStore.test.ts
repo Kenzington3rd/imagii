@@ -1534,3 +1534,58 @@ describe('pruneCustomPresets - a clip whose customPresetIds is not a list (T-137
     expect(useVideoStore.getState().history.past.length).toBe(depth)
   })
 })
+
+// T-150 (3): "+ Clip" on a scanner row took every press, so a double-click or a held Enter appended identical clips, each with a toast and an undo
+// step. The panels now drop the second press of a double-click (`isRepeatPress`); the store refuses the same range itself, which also closes the
+// held Enter (a keyboard click has no click count).
+describe('addScannedClip — the same range twice is one clip (T-150 (3))', () => {
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [pristine()],
+      selectedClipId: 'whole',
+      srtPath: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+  })
+
+  it('a second add of the same range answers duplicate and adds nothing, no clip and no undo step', () => {
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe('added-dropped-whole-video')
+    const afterFirst = useVideoStore.getState()
+    expect(useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)).toBe('duplicate')
+    const s = useVideoStore.getState()
+    expect(s.clips).toHaveLength(1)
+    expect(s.clips).toBe(afterFirst.clips)
+    expect(s.history.past).toHaveLength(1)
+    expect(s.selectedClipId).toBe(afterFirst.selectedClipId)
+  })
+
+  it('the range compared is the CLAMPED one: two reaches past the end are the same clip', () => {
+    expect(useVideoStore.getState().addScannedClip('a', 50, 70)).toBe('added-dropped-whole-video')
+    expect(useVideoStore.getState().addScannedClip('b', 50, 99)).toBe('duplicate')
+    expect(useVideoStore.getState().clips).toHaveLength(1)
+  })
+
+  it('a different range is still added, and a clip the person made by hand with this range counts too (clips carry no origin)', () => {
+    useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)
+    expect(useVideoStore.getState().addScannedClip('Highlight 2', 5, 16)).toBe('added')
+    expect(useVideoStore.getState().addScannedClip('Highlight 3', 6, 15)).toBe('added')
+    expect(useVideoStore.getState().clips).toHaveLength(3)
+    expect(useVideoStore.getState().addScannedClip('again', 5, 16)).toBe('duplicate')
+    expect(useVideoStore.getState().clips).toHaveLength(3)
+  })
+
+  it('the untouched whole-video clip is not "a clip with that range": a candidate that spans the whole video still retires it and is added', () => {
+    expect(useVideoStore.getState().addScannedClip('whole candidate', 0, 60)).toBe('added-dropped-whole-video')
+    expect(useVideoStore.getState().clips.map((c) => c.name)).toEqual(['whole candidate'])
+  })
+
+  it('undo after a refused duplicate takes back the one real add, not a phantom step', () => {
+    const before = useVideoStore.getState().clips
+    useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)
+    useVideoStore.getState().addScannedClip('Highlight 1', 5, 15)
+    useVideoStore.getState().undo()
+    expect(useVideoStore.getState().clips).toEqual(before)
+  })
+})

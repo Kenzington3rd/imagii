@@ -15,6 +15,8 @@ const MAX_RECENT = 10
 export interface UseRecentFilesResult {
   recent: string[]
   push: (filePath: string) => Promise<void>
+  /** T-150: drop one path (a Recent entry whose file is gone would fail again on every pick); true when it was in the list. */
+  remove: (filePath: string) => Promise<boolean>
   clear: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -42,10 +44,22 @@ export function useRecentFiles(bucket: RecentFileBucket): UseRecentFilesResult {
     [bucket]
   )
 
+  const remove = useCallback(
+    async (filePath: string): Promise<boolean> => {
+      const existing = (await window.api.settings.get<string[]>(KEY[bucket])) ?? []
+      const next = existing.filter((p) => p !== filePath)
+      if (next.length === existing.length) return false
+      await persistSetting(KEY[bucket], next)
+      setRecent(next)
+      return true
+    },
+    [bucket]
+  )
+
   const clear = useCallback(async (): Promise<void> => {
     await persistSetting(KEY[bucket], [])
     setRecent([])
   }, [bucket])
 
-  return { recent, push, clear, refresh }
+  return { recent, push, remove, clear, refresh }
 }

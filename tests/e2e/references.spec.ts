@@ -2679,3 +2679,138 @@ test.describe('T-149 (4): a double-click on Save is one save', () => {
     }
   })
 })
+
+// T-150 (2): two saves in quick succession are two Undo steps. Main serialises the writes under its board lock and the first picture's thumbnail fetch runs
+// INSIDE it, so a second Save pressed while the first is still downloading used to take its Undo snapshot at press time - the same N as the first - and one
+// Ctrl+Z removed both pictures (the next did nothing). The thumbnail server below holds picture A's socket until the test lets it go.
+test.describe('T-150 (2): two quick saves are two Undo steps', () => {
+  test('Save A (held thumbnail), Save B, release: ONE Ctrl+Z removes only B, a second Ctrl+Z removes A', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-two-saves')
+    writeFileSync(
+      path.join(fx.boardsDir, 'twoboard.json'),
+      JSON.stringify({ id: 'twoboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    let releaseA!: () => void
+    const aHeld = new Promise<void>((resolve) => (releaseA = resolve))
+    let aRequested!: () => void
+    const aSeen = new Promise<void>((resolve) => (aRequested = resolve))
+    const thumbServer = http.createServer((req, res) => {
+      const send = (): void => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }
+      if ((req.url ?? '').includes('/a.png')) {
+        aRequested()
+        void aHeld.then(send)
+      } else send()
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await app.evaluate(async ({ ipcMain }, root) => {
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', (_e, query: unknown) => ({
+          query: typeof query === 'string' ? query : '',
+          provider: 'duckduckgo',
+          results: ['a', 'b'].map((k) => ({
+            id: `result-${k}`,
+            thumbnail: `${root}/${k}.png`,
+            fullUrl: `${root}/${k}.png`,
+            source: '127.0.0.1',
+            title: `Picture ${k.toUpperCase()}`
+          }))
+        }))
+      }, base)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('two pictures')
+      await input.press('Enter')
+      const saves = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(saves).toHaveCount(2)
+
+      await saves.nth(0).click()
+      await aSeen // main is inside its lock, fetching A's thumbnail
+      await saves.nth(1).click()
+      await window.waitForTimeout(500) // B is certainly issued while A is still in flight
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'nothing has landed yet').toHaveLength(0)
+      releaseA()
+
+      await expect.poll(() => readToastLog(window), { timeout: 20_000 }).toEqual(['Saved to "Inspiration"', 'Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(2)
+      const titlesOnDisk = (): string[] => (readBoardsFromDisk(fx.boardsDir)[0]?.items ?? []).map((i) => i.title)
+      expect(titlesOnDisk()).toEqual(['Picture A', 'Picture B'])
+
+      await window.keyboard.press('Control+z')
+      await expect.poll(titlesOnDisk, { timeout: 15_000 }).toEqual(['Picture A'])
+      await window.waitForTimeout(500)
+      expect(titlesOnDisk(), 'ONE Ctrl+Z removed only the second picture').toEqual(['Picture A'])
+      await window.keyboard.press('Control+z')
+      await expect.poll(titlesOnDisk, { timeout: 15_000 }).toEqual([])
+      expect(pageErrors).toEqual([])
+    } finally {
+      releaseA()
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-150 fold: the Save button ignores a HELD Enter. Enter on a focused button clicks it on keydown and the key auto-repeats; each repeat is a keyboard click
+// (`detail` 0, so the double-click guard lets it through) and stacked an "Already on" toast per repeat. Nothing was written twice.
+test.describe('T-150: a held Enter on Save is one save', () => {
+  test('focus Save, hold Enter: one "Saved to" toast, no "Already on", one item on the board', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-held-enter-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'heldboard.json'),
+      JSON.stringify({ id: 'heldboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }, 200)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.focus()
+
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 6; i++) {
+        await window.waitForTimeout(60)
+        await window.keyboard.down('Enter') // auto-repeats while the key is held
+      }
+      await window.keyboard.up('Enter')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(1)
+      await window.waitForTimeout(1000)
+      expect(await readToastLog(window), 'a held key is one decision: one toast, never an "Already on" per repeat').toEqual(['Saved to "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items).toHaveLength(1)
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

@@ -4947,3 +4947,63 @@ test.describe('T-149 (fold): the row under another sound at the 1024 px minimum'
     }
   })
 })
+
+// T-150 (1): "Match loudness with your voice" with Even volume off now measures the voice first (the music is brought to what it measures), so the
+// Export row names the measuring step the moment the export starts, the way Even volume's own measure pass does. The job is held in MAIN (audio:export
+// replaced by one the test holds, as T-100's row test does), so the label is the one the dialog planned and nothing races a render. The measure and
+// the levels it produces are Layer 5's (media.spec.ts, "Match loudness follows the voice when Even volume is off").
+test.describe('T-150 (1): Match loudness plans the measuring step', () => {
+  test('Match on (Even volume off): "Step 1 of 2 — measuring loudness"; Match off: "Rendering…" alone', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t150-plan')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(app, studio.fixture)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      const match = panel.getByLabel('Match loudness with your voice')
+      await expect(window.locator(LEVELS).getByRole('checkbox'), 'Even volume stays off').not.toBeChecked()
+
+      await stubSaveDialog(app, path.join(studio.root, 'plan.mp3'))
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { __planJob: { jobId: string; stop: () => void } }
+        g.__planJob = { jobId: '', stop: () => undefined }
+        ipcMain.removeHandler('audio:export')
+        ipcMain.handle(
+          'audio:export',
+          (_e, spec: { jobId: string }) =>
+            new Promise((_resolve, reject) => {
+              g.__planJob = { jobId: spec.jobId, stop: () => reject(new Error('imagii:cancelled')) }
+            })
+        )
+      })
+      const jobId = (): Promise<string> => app.evaluate(() => (globalThis as unknown as { __planJob: { jobId: string } }).__planJob.jobId)
+      const stop = (): Promise<void> => app.evaluate(() => (globalThis as unknown as { __planJob: { stop: () => void } }).__planJob.stop())
+      const exportPanel = window.locator(EXPORT)
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      // Match ON: the plan is measure, render.
+      await match.check()
+      await exportButton.click()
+      await expect.poll(jobId, { timeout: 15_000 }).not.toBe('')
+      await expect(exportPanel).toContainText('Step 1 of 2 — measuring loudness')
+      await expect(exportPanel.getByRole('progressbar')).toHaveAccessibleName('Step 1 of 2 — measuring loudness')
+      await stop()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Audio export canceled.')
+
+      // Match OFF: one pass, no steps to count.
+      const first = await jobId()
+      await match.uncheck()
+      await exportButton.click()
+      await expect.poll(jobId, { timeout: 15_000 }).not.toBe(first)
+      await expect(exportPanel).toContainText('Rendering…')
+      await expect(exportPanel).not.toContainText('Step 1 of')
+      await expect(exportPanel).not.toContainText('measuring loudness')
+      await stop()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

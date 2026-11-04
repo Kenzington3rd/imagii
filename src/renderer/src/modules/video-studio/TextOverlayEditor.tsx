@@ -4,9 +4,11 @@ import {
   OVERLAY_COLOR_REFUSAL,
   OVERLAY_FONTS,
   OVERLAY_TIME_REFUSAL,
+  fractionToPercent,
   newTextOverlay,
   overlayOutsideClipMessage,
-  overlayTimePair
+  overlayTimePair,
+  positionFromTyped
 } from '@shared/textOverlay'
 import { parseClock } from '@shared/clockTime'
 import { resolveOverlayColor } from '@shared/overlayColors'
@@ -14,7 +16,6 @@ import { useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useGestureEnd } from '../../lib/gestureEnd'
 import { DraftField } from '../../components/DraftField'
-import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 /** True when `typed` is a whole number inside the size range the export gate takes. */
 function isSizeInRange(typed: string): boolean {
@@ -110,7 +111,7 @@ export function TextOverlayEditor(): JSX.Element | null {
                 lines, and the Time row was 41 px wider than its cell. The labels do not shrink, the select may. */}
             <div className="flex flex-col gap-2 text-xs">
               <label className="flex items-center gap-1.5">
-                <span className="text-ink-muted w-14 shrink-0">Font</span>
+                <span className="text-ink-muted w-[4.5rem] shrink-0">Font</span>
                 <select
                   value={overlay.font}
                   onChange={(e) =>
@@ -159,44 +160,45 @@ export function TextOverlayEditor(): JSX.Element | null {
                 }}
                 className="bg-bg-base rounded px-1 py-0.5 flex-1 min-w-0 font-mono"
               />
-              <label className="flex items-center gap-1.5">
-                <span className="text-ink-muted w-14 shrink-0">x / y</span>
-                {/* T-124 (15): the boxes keep what is typed until typing ends, like Size and the Time boxes. A number input reports ""
-                    for a lone "." (and for "-"), which the old per-keystroke handler turned into 0, so ".5" became "05" and 1. A
-                    fraction inside 0 to 1 goes straight to the overlay as it is typed; typing ends clamping to the edge. */}
+              <label className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                <span className="text-ink-muted w-[4.5rem] shrink-0">Position (%)</span>
+                {/* T-150 (4): a PERCENT from the top left (the stored 0-1 fraction x 100), not a bare "0.1" over "0.85" - and a number outside 0 to 100 is
+                    refused with a sentence instead of clamped to the far edge in silence (a typed 50 used to commit 1). T-124 (15): the boxes keep what
+                    is typed until typing ends. There is no `live` commit: nothing previews an overlay, and a typed 150 would already have stored 15 ("1", "15") when it was
+                    refused. The row wraps so the refusal takes a full-width row of its own under the boxes (T-126 (3)). */}
                 <DraftField
                   type="number"
-                  step={0.01}
+                  step={1}
                   min={0}
-                  max={1}
-                  value={String(overlay.x)}
-                  // T-114: one <label> wraps both boxes, so only the first was named by it.
-                  // T-115: and "x" / "y" said what they are called, not what they are.
-                  // T-125 (27): and the name BEGINS with the text the row shows ("x / y"), so a person who says "click x / y" and a voice
-                  // control that matches the visible label both land on the box (WCAG 2.5.3 Label in Name).
-                  aria-label="x / y, horizontal position (0 to 1)"
-                  live={(typed) => isTypedInRange(typed, 0, 1, false)}
+                  max={100}
+                  value={String(fractionToPercent(overlay.x))}
+                  // T-114: one <label> wraps both boxes, so only the first was named by it. T-125 (27): and the name BEGINS with the text the
+                  // row shows ("Position (%)"), so a person who says "click Position" and a voice control that matches the visible label land on the box.
+                  aria-label="Position (%), from the left (0 to 100)"
                   commit={(typed) => {
-                    const n = clampTyped(typed, 0, 1, false)
-                    if (n !== null) updateTextOverlay(clip.id, overlay.id, { x: n })
+                    const read = positionFromTyped(typed)
+                    if (read === null) return null
+                    if ('refusal' in read) return read.refusal
+                    updateTextOverlay(clip.id, overlay.id, { x: read.fraction })
                     return null
                   }}
-                  className="bg-bg-base rounded px-1 py-0.5 w-16"
+                  className="bg-bg-base rounded px-1 py-0.5 w-14"
                 />
                 <DraftField
                   type="number"
-                  step={0.01}
+                  step={1}
                   min={0}
-                  max={1}
-                  value={String(overlay.y)}
-                  aria-label="x / y, vertical position (0 to 1)"
-                  live={(typed) => isTypedInRange(typed, 0, 1, false)}
+                  max={100}
+                  value={String(fractionToPercent(overlay.y))}
+                  aria-label="Position (%), from the top (0 to 100)"
                   commit={(typed) => {
-                    const n = clampTyped(typed, 0, 1, false)
-                    if (n !== null) updateTextOverlay(clip.id, overlay.id, { y: n })
+                    const read = positionFromTyped(typed)
+                    if (read === null) return null
+                    if ('refusal' in read) return read.refusal
+                    updateTextOverlay(clip.id, overlay.id, { y: read.fraction })
                     return null
                   }}
-                  className="bg-bg-base rounded px-1 py-0.5 w-16"
+                  className="bg-bg-base rounded px-1 py-0.5 w-14"
                 />
               </label>
               {/* T-124 (18): the boxes are seconds in the SOURCE video (they start as the clip's own range), and the label says so

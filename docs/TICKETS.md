@@ -6819,7 +6819,7 @@ IMG-PREC.
   shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
   handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
   lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 99)
+- **Status:** done (round 99 — see the Done entry)
 
 ---
 
@@ -7348,6 +7348,12 @@ IMG-PREC.
   length cannot be read (a durationless, soundless WebM) under a longer
   overlay still runs to the overlay (concat.ts:533 says so; Record's own
   WebMs carry a duration since T-120).
+  From round 99 (found by T-150's Track A, not gate-holding): (bq) a second
+  track that opens with seconds of silence is undershot about 5 LU by the
+  single-pass loudnorm "Match loudness" puts on it, for a long while
+  (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
+  behaviour, the class of the standing mix-bus tolerance; candidate: a
+  two-pass (measured, linear) loudnorm on the second track.
 - **Acceptance criteria:** per item, standard bars (red-first where
   behavior changes; Layer 5 for anything in a graph; T-84 voice for
   refusals); (f) is a release-run checkpoint, not code; (g), (h)
@@ -7357,6 +7363,51 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 99 — T-150, all six counted items and the three folds, landed
+in the commit that carries this entry (T-110 gains (bp) beside it and
+(bq) here). Three Sonnet workers in fresh clones of 7706506, disjoint
+files, merged by the expediter into one tree; a container restart cut
+all three full-e2e gates mid-run (death audit clean: no file at a
+mutated sha), and each finished the unreached remainder on its same
+build. Track A: with Even volume off, "Match loudness with your voice"
+first measures the voice's own chain (the pass-1 builder, at a fixed
+-16 so a typed target is never read) and loudnorms only the second
+track to the measured I (clamped -70..-5; a silent voice falls back to
+the second track's own gain); the voice gets no loudnorm and the bus
+ends in the limiter; Even volume on is unchanged; the plan names the
+measuring step. Track B: both scanners' "+ Clip" swallow a double
+click and the store refuses an identical range ("Already in the Clips
+list"); the Text overlay's position boxes are percent from the top
+left with a refusal sentence outside 0-100 (the stored model is still
+0-1); one phrasing per event (Record's toast uses the button's words,
+the scan toasts read as their lines); a Recent entry whose file is gone
+is removed on the failed pick. Track C: every References board edit
+runs on one serialised chain and takes its undo snapshot when its turn
+starts (undo / redo apply at once when nothing is queued, the studios'
+synchronous contract); "Stroke (px)"; Save ignores a held Enter.
+Deviations, accepted: see the three tracks' TESTING paragraphs (the
+measure at -16, the plan's flag from the caller, the bed with no
+leading silence; no live commit on the Position boxes, the wider label
+column, any clip counts for the range guard; undo applied at once when
+idle). Ledgers: A 4 RED / 22 mutations (one Layer 5 survivor killed at
+unit), B 15 / 29, C 5 / 14 (one survivor strengthened and killed) —
+every restore byte-identical. Found not fixed: T-110 (bq) — a second
+track that opens with seconds of silence is undershot ~5 LU by the
+single-pass loudnorm for a long while (measured -26.9 vs -22.0); a held
+Enter on "+ Clip" says "Clip added" then "Already in the Clips list";
+Record's toast sits behind a Start that is disabled with no source
+(pinned only). Expedited personally: three independent mutations at
+seams no ledger row names — A: the voice measured without its Manual
+gain → unit "the measure pass is the voice's own chain" red (the Layer 5
+fixture has no gain: the seam is unit-held); B: the panel's duplicate
+branch skipped → e2e "T-150 (3) Scan VOD" red (seven "Clip added"); C:
+the mutation counter never lowered → unit "undo puts the boards back"
+and the T-47 contract red — each restored byte-identical, sha256
+verified; on the MERGED tree: verify x2 (206/5998), test:media on 7.0.2 (441 passed | 13 skipped of 454, 598 s), Track
+A's Layer 5 block on 6.1.1 (6/6), FULL Playwright 579/579 (45.6 min, no flake). Applied to
+7706506 by `git apply` with every file byte-identical to the expedited
+merge.
 
 Round 98 — T-149, all five counted items and the design fold, landed
 in the commit that carries this entry. Two Sonnet workers in fresh

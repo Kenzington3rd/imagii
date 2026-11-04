@@ -184,6 +184,10 @@ Windows privacy settings, then click **Refresh sources** again.
 
 Drop a video in (or click **Choose file…**), then:
 
+(**Recent** lists the last files you opened here. A file that has been moved or deleted
+says so when you pick it, and imagii takes it off the list: **It was removed from
+Recent.** Audio Studio's **Recent** does the same.)
+
 (One video loads at a time. If you drop a second while the first is still loading
 or converting, imagii says it is still working on the last one and leaves the
 second alone — and it keeps saying so if you leave Video Studio and come back
@@ -286,7 +290,9 @@ that names the file being converted.)
   shows the code once you leave the box; a name imagii doesn't know is refused right
   there, in a sentence; a short code like **#fc0** is read as **#ffcc00**. **Font** picks
   the typeface (Arial, Impact, Verdana, Georgia, Courier New or Comic Sans MS) and the
-  export draws it. **Size (px)** runs from 8 to 512. The untouched overlay is white, 48 px,
+  export draws it. **Size (px)** runs from 8 to 512. **Position (%)** is how far across and
+  how far down from the top left the text starts, from 0 to 100 (50 and 50 is the centre); a
+  number outside that is refused in a sentence and changes nothing. The untouched overlay is white, 48 px,
   Arial, and exports as it is. Text appears in the exported file, not in the
   player. **Source time** is in seconds of the video itself (not of the clip); the boxes also
   take a time the way a stream writes it, like **1:30** or **2:47:13**, and say so in a
@@ -304,11 +310,12 @@ that names the file being converted.)
   beside your excerpts. **Ctrl+Z** brings it back. **Go to** on a highlight puts the
   player at its start so you can look at it before you keep it, and adds nothing;
   **+ Clip** adds it and leaves the player where it is, so adding several in a row
-  does not make the playhead jump. A scan ends a loud moment where the sound
+  does not make the playhead jump; pressing it again for a moment that is already a clip
+  (a double-click, a held Enter) adds nothing and says **Already in the Clips list**. A scan ends a loud moment where the sound
   stops, so a loud sign-off before a muted stretch is not stretched across the
-  silence. A scan that finds nothing leaves the line **No standout moments found
-  in this video.** in the panel (the toast fades; the line stays until you scan
-  again or open another video).
+  silence. A scan that finds nothing says **No standout moments found in this video**
+  and leaves the line **No standout moments found in this video.** in the panel (the
+  toast fades; the line stays until you scan again or open another video).
 - **Reframe to 9:16** — cuts a vertical 9:16 strip (1080×1920)
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action. It cuts the strip from the crop you drew for the clip
@@ -408,7 +415,8 @@ listed, in time order. Each row shows where its clip would run, start → end, w
 the extra seconds included and held to the video (a moment near the end of the
 video stops at its end, and one at the very start begins at 0:00), so a long moment
 is not a surprise. **+ Clip** on a
-moment adds exactly that range as a clip named **Chat spike N**, with **Extra
+moment adds exactly that range as a clip named **Chat spike N** (a second press for the
+same range adds nothing and says **Already in the Clips list**), with **Extra
 seconds around each clip** (0 to 60; a number outside that is brought into it when you
 leave the box) on either side. Like the Smart highlight finder, the first one you
 add replaces the untouched whole-video **Clip 1**. **Go to** on a moment puts the
@@ -537,7 +545,10 @@ never called loaded.
     later. Cuts and the second track belong to the recording, so they are not
     saved in a preset.
   - **Add a second track** — layer in background music, a co-host's mic, or game
-    audio. **Duck under your voice** lowers it while you speak. A file with no sound in it is
+    audio. **Duck under your voice** lowers it while you speak. **Match loudness with your voice**
+    brings the second track to how loud your voice is: with **Even volume** off your voice is left
+    exactly as it is (imagii measures it first, so the export shows a measuring step) and the
+    music follows it; with **Even volume** on, both go to its loudness target. A file with no sound in it is
     refused when you pick it ("That file has no sound in it. Pick another file."; nothing is
     added), and an export says it again, naming the second track ("The second track has no
     sound in it. Remove it or pick another file."), if the file loses its sound before you

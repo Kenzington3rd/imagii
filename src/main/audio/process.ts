@@ -217,13 +217,13 @@ async function exportAudio(
   // length both bars are measured against (the measure pass is cut-first, like the render).
   const writtenSeconds = keptDurationSec(probe.duration, spec.chain.cutRegions)
 
-  if (chain.needsTwoPass && chain.filterPass1) {
+  const measure = async (filter: string): Promise<LoudnormMeasurement | null> => {
     const args = [
       '-y',
       '-i',
       spec.sourcePath,
       '-af',
-      chain.filterPass1,
+      filter,
       '-f',
       'null',
       '-progress',
@@ -231,16 +231,27 @@ async function exportAudio(
       '-nostats',
       '-'
     ]
-    const { stderr } = await runFfmpegJob(
-      args,
-      spec.jobId,
-      writtenSeconds,
-      'measure',
-      onProgress,
-      run
-    )
-    const parsed = parseLoudnormJson(stderr)
+    const { stderr } = await runFfmpegJob(args, spec.jobId, writtenSeconds, 'measure', onProgress, run)
+    return parseLoudnormJson(stderr)
+  }
+
+  if (chain.needsTwoPass && chain.filterPass1) {
+    const parsed = await measure(chain.filterPass1)
     if (parsed) measurement = parsed
+  }
+
+  // T-150 (1): "Match loudness with your voice" with Even volume OFF makes the VOICE the reference, so it is measured (the primary's own chain, cut-first like
+  // the pass above, built by the same pass-1 builder with Even volume switched on for the measuring only) and the music is brought to what it measures. The
+  // target in that chain is only a placeholder for the option's range (a typed -3 would be refused), the measurement is what is read. A mono voice is not
+  // dual-mono here: with a second track it is forced to stereo ahead of the mix, and that upmix keeps its power.
+  let matchedLufs: number | null = null
+  if (spec.chain.secondaryTrack?.matchLoudness === true && !spec.chain.loudnorm) {
+    const voiceChain = buildChain({ ...spec.chain, loudnorm: true, loudnormTargetLufs: -16 })
+    const parsed = voiceChain.filterPass1 ? await measure(voiceChain.filterPass1) : null
+    const lufs = parsed ? Number(parsed.input_i) : Number.NaN
+    // loudnorm's `I` is -70..-5; a measurement outside it is clamped. parseLoudnormJson answers null for a non-finite one (a silent voice, "-inf"), which leaves
+    // nothing to follow: the music then takes its plain gain, the way it does with Match off, rather than a target made up for it.
+    if (Number.isFinite(lufs)) matchedLufs = Math.min(-5, Math.max(-70, lufs))
   }
 
   const secondary = spec.chain.secondaryTrack
@@ -273,9 +284,12 @@ async function exportAudio(
   if (secondary) {
     const ducking = secondary.duckUnderPrimary
     const gainDb = secondary.gainDb
-    // Match-loudness mode runs both tracks through single-pass loudnorm at the
-    // same target before mixing — handy for co-host mics or game audio that
-    // arrives at very different levels.
+    // Match loudness (T-150 (1)). Two modes, by Even volume:
+    //  - ON: the primary's chain ends in its own loudnorm (to the chosen target) and the second track is brought to the same target; the mix bus
+    //    ends in a loudnorm too (below). Handy for co-host mics or game audio that arrive at very different levels.
+    //  - OFF: the voice is the reference and is left as it is. The Even volume target box is disabled in that state, so no target is read: the second
+    //    track is brought to the voice's own measured loudness (`matchedLufs`, above), the primary gets no loudnorm and the bus ends in the limiter.
+    //    Before T-150 both tracks went to a hidden -16 here and a -22 LUFS voice came out at -16.
     //
     // Bug-fix (Phase 2.9): if ChainSpec.loudnorm is on, finalChain.filterPass2
     // already ends with a measurement-aware loudnorm. Appending a second
@@ -284,19 +298,17 @@ async function exportAudio(
     const matchLoudness = secondary.matchLoudness === true
     const target = spec.chain.loudnormTargetLufs ?? -16
     const primaryAlreadyLoudnormed = chainEndsWithLoudnorm(finalChain.filterPass2)
-    const primaryStage =
-      matchLoudness && !primaryAlreadyLoudnormed
-        ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
-        : finalChain.filterPass2
     // M5 fix (round 15): amix requires both inputs at the same sample rate
     // and channel layout. The output is forced to 48 kHz stereo below, so
     // resample + format the secondary first. Without this, a 44.1 kHz music
     // track mixed with a 48 kHz mic either silently auto-resamples (lossy)
     // or fails the filter graph entirely.
     const secondaryNormalize = 'aresample=48000,aformat=channel_layouts=stereo'
-    const secondaryGainOrLoud = matchLoudness
-      ? `${secondaryNormalize},loudnorm=I=${target}:TP=-1.5:LRA=11`
-      : `${secondaryNormalize},volume=${gainDb}dB`
+    const matchTarget = primaryAlreadyLoudnormed ? target : matchedLufs
+    const secondaryGainOrLoud =
+      matchLoudness && matchTarget !== null
+        ? `${secondaryNormalize},loudnorm=I=${matchTarget}:TP=-1.5:LRA=11`
+        : `${secondaryNormalize},volume=${gainDb}dB`
     // Phase 3.2: replace hardcoded sidechain params with duckParams from
     // the SecondaryTrack (falls back to defaults that preserve previous
     // behavior). Threshold is dBFS in the UI; ffmpeg expects linear.
@@ -339,14 +351,14 @@ async function exportAudio(
     // what is kept.
     const postMixStages = [
       mixCut,
-      matchLoudness || primaryAlreadyLoudnormed
+      primaryAlreadyLoudnormed
         ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
         : MIX_LIMITER
     ].filter((stage): stage is string => stage !== null)
     const postMix = `;[premix]${postMixStages.join(',')}[mix]`
     const amix = `amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1':normalize=0`
     const filterGraph = ducking
-      ? `[0:a]${primaryStage},${primaryNormalize},asplit=2[primary][primary_sc];` +
+      ? `[0:a]${finalChain.filterPass2},${primaryNormalize},asplit=2[primary][primary_sc];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
         `[secondary_pre][primary_sc]sidechaincompress=` +
         `threshold=${thresholdLinear.toFixed(4)}:` +
@@ -355,7 +367,7 @@ async function exportAudio(
         `release=${dp.releaseMs}[secondary_ducked];` +
         `[primary][secondary_ducked]${amix}[premix]` +
         postMix
-      : `[0:a]${primaryStage},${primaryNormalize}[primary];` +
+      : `[0:a]${finalChain.filterPass2},${primaryNormalize}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +
         `[primary][secondary]${amix}[premix]` +
         postMix

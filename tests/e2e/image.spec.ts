@@ -1846,7 +1846,7 @@ test.describe('Image Studio — properties panel', () => {
       await check('the default 1632 px window (a text layer)')
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-11-properties-default.png') })
 
-      // A shape's panel (Fill, Stroke, Stroke px) at the same width, then both at the smallest window.
+      // A shape's panel (Fill, Stroke, Stroke (px)) at the same width, then both at the smallest window.
       await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
       await expectLayerCount(window, 2)
@@ -1909,7 +1909,7 @@ test.describe('Image Studio — properties panel', () => {
       // ── fill / stroke / stroke px ──
       await field(window, 'Fill').fill('#00ff88')
       await field(window, 'Stroke').fill('#123456')
-      await field(window, 'Stroke px').fill('7')
+      await field(window, 'Stroke (px)').fill('7')
       await expect.poll(async () => (await lastShape(window)).fill, { timeout: 10_000 }).toBe('#00ff88')
       const styled = await lastShape(window)
       expect(styled.stroke).toBe('#123456')
@@ -1924,7 +1924,7 @@ test.describe('Image Studio — properties panel', () => {
       await dragOnStage(window, { x: 200, y: 600 }, { x: 500, y: 700 })
       await expect(field(window, 'Name')).toHaveValue('Line')
       await expect(field(window, 'Fill')).toHaveCount(0)
-      await expect(field(window, 'Stroke px')).toHaveCount(0)
+      await expect(field(window, 'Stroke (px)')).toHaveCount(0)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-06-properties.png') })
     } finally {
       await closeStudio(studio)
@@ -1955,7 +1955,7 @@ test.describe('Image Studio — properties panel', () => {
 
       // The text layer never offers the shape-only fields.
       await expect(field(window, 'Stroke')).toHaveCount(0)
-      await expect(field(window, 'Stroke px')).toHaveCount(0)
+      await expect(field(window, 'Stroke (px)')).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }
@@ -5285,6 +5285,34 @@ test.describe('Image Studio - a drag right after clicking another field is one u
       await window.getByRole('button', { name: 'Undo' }).click()
       await expect.poll(async () => (await lastShape(window)).opacity, { timeout: 10_000 }).toBe(1)
       await expect(window.getByText('100%').first()).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// T-150 (5, image half): the shape panel's stroke width box is "Stroke (px)", the panel's own "Size (px)" and the T-125 (16) convention (it read "Stroke px"). The
+// longer caption has to stay on ONE line in the panel's fixed label column.
+test.describe('Image Studio - the stroke width box counts pixels in its label (T-150)', () => {
+  test('a rectangle\'s Properties say "Stroke (px)", on one line, and the box still takes a width', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t150-stroke-px-label')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+      await expectLayerCount(window, 2)
+
+      await expect(propsCard(window).getByText('Stroke (px)', { exact: true })).toBeVisible()
+      await expect(propsCard(window).getByText('Stroke px', { exact: true }), 'the bare-number caption is gone').toHaveCount(0)
+      const lines = await propsCard(window).getByText('Stroke (px)', { exact: true }).evaluate((el) => {
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight)
+        return Math.round(el.getBoundingClientRect().height / lineHeight)
+      })
+      expect(lines, 'the caption fits the label column without wrapping').toBe(1)
+      await field(window, 'Stroke (px)').fill('9')
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000 }).toBe(9)
     } finally {
       await closeStudio(studio)
     }

@@ -26,6 +26,35 @@ export const OVERLAY_COLOR_REFUSAL = "imagii doesn't know that color. Use a name
  */
 export const OVERLAY_TIME_REFUSAL = 'imagii could not read that time. Use seconds like 90.5, or a time like 1:30 or 2:47:13.'
 
+/**
+ * T-150 (4): the Position boxes. The overlay stores x / y as a 0-1 fraction of the frame from the top left; the card shows and takes a PERCENT
+ * (0-100), because a bare "0.1" over "0.85" says nothing about what it is a fraction of, and a typed 50 used to commit 1 (the far edge) with no
+ * sentence. A value outside 0-100 is refused with this sentence instead of clamped (BRANDING: a bare number is not a value).
+ */
+export const OVERLAY_POSITION_REFUSAL = 'Position is a percent from the top left, from 0 to 100.'
+
+/** A stored 0-1 fraction as the percent the box shows: one decimal at most (a drag-placed 0.3456 reads 34.6), so 0.1 is 10 and 0.85 is 85. */
+export function fractionToPercent(fraction: number): number {
+  return Math.round(fraction * 1000) / 10
+}
+
+/** A typed percent as the 0-1 fraction the overlay stores (four decimals, so 33.3 is 0.333 and not 0.33299999999999996). */
+export function percentToFraction(percent: number): number {
+  return Math.round(percent * 100) / 10000
+}
+
+/**
+ * What a Position box commit stores: the fraction for a typed percent inside 0-100, `null` for an empty box or text that is not a number
+ * (nothing changes, the box shows what it had), or the refusal sentence for a number outside the range.
+ */
+export function positionFromTyped(typed: string): { fraction: number } | { refusal: string } | null {
+  if (typed.trim() === '') return null
+  const n = Number(typed)
+  if (!Number.isFinite(n)) return null
+  if (n < 0 || n > 100) return { refusal: OVERLAY_POSITION_REFUSAL }
+  return { fraction: percentToFraction(n) }
+}
+
 /** The ONE boundary between the two forms: one hour, decided on the rounded hundredths (3599.996 is a whole hour). */
 const inClockForm = (seconds: number): boolean => Math.round(seconds * 100) >= 360000
 
