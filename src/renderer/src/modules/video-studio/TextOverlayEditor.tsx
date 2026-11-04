@@ -74,6 +74,7 @@ export function TextOverlayEditor(): JSX.Element | null {
         // control with no live preview says so. T-124 (18): and the Time boxes are seconds in the SOURCE, not in the clip.
         <p className="text-xs text-ink-dim">
           Text appears in the exported file, not in the player. Times are seconds in the source video, or a time like 2:47:13.
+          Position is where the text's top left corner sits. A caption that would run past an edge is kept inside the frame.
         </p>
       )}
 

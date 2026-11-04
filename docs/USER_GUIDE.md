@@ -291,8 +291,9 @@ that names the file being converted.)
   there, in a sentence; a short code like **#fc0** is read as **#ffcc00**. **Font** picks
   the typeface (Arial, Impact, Verdana, Georgia, Courier New or Comic Sans MS) and the
   export draws it. **Size (px)** runs from 8 to 512. **Position (%)** is how far across and
-  how far down from the top left the text starts, from 0 to 100 (50 and 50 is the centre); a
-  number outside that is refused in a sentence and changes nothing. The untouched overlay is white, 48 px,
+  how far down the text's top left corner sits, from 0 to 100; a caption that would run
+  past an edge is kept inside the frame, and a number outside 0 to 100 is refused in a
+  sentence and changes nothing. The untouched overlay is white, 48 px,
   Arial, and exports as it is. Text appears in the exported file, not in the
   player. **Source time** is in seconds of the video itself (not of the clip); the boxes also
   take a time the way a stream writes it, like **1:30** or **2:47:13**, and say so in a
@@ -692,7 +693,7 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
   mood board you have selected; the notice names the board. A picture that is already on that board is not
   added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
-  saves once, with one notice, and one **Undo** takes it back. If you have no board yet, imagii asks you to
+  saves once, with one notice, and one **Undo** takes it back. If a picture's thumbnail will not download (the site is not answering, within 10 seconds, or the file is over 8 MB), it is still saved, and its tile draws the picture from where it came from. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
 - **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first; the notice
   that follows says **Ctrl+Z** brings the board back, and it stays on screen for 8 seconds. Hover an item and click **→ Canvas**

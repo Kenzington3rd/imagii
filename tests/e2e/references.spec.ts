@@ -2814,3 +2814,65 @@ test.describe('T-150: a held Enter on Save is one save', () => {
     }
   })
 })
+
+// T-151 (2): the thumbnail fetch inside Save had no deadline. A host that accepts the connection and never answers held the board's lock - and, through T-150's single
+// References chain, every later board edit and Undo - with nothing on screen to say why. The fetch now gives up after 10 s (and past 8 MB); the item is saved WITHOUT a
+// cached thumbnail and its tile draws the source URL. The 10 s is the shipped constant: the suite has no env hook for it, so this case waits it out (~12 s).
+test.describe('T-151 (2): a thumbnail host that never answers does not hold the board', () => {
+  test('Save lands within the deadline with no cached thumbnail, the tile shows the source URL, the next edit completes and Ctrl+Z works', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-stalled-thumb')
+    writeFileSync(
+      path.join(fx.boardsDir, 'stallboard.json'),
+      JSON.stringify({ id: 'stallboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const sockets = new Set<net.Socket>()
+    // Accepts, reads, never answers.
+    const thumbServer = http.createServer(() => undefined)
+    thumbServer.on('connection', (s) => {
+      sockets.add(s)
+      s.on('close', () => sockets.delete(s))
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/never.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('a picture on a host that is down')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.click()
+
+      const items = (): MoodBoardCollection['items'] => readBoardsFromDisk(fx.boardsDir)[0]?.items ?? []
+      await expect.poll(() => items().length, { timeout: 15_000, intervals: [250] }).toBe(1)
+      expect(items()[0]?.cachedThumbPath, 'saved without a cached thumbnail').toBeUndefined()
+      expect(items()[0]?.thumbnail).toBe(thumbUrl)
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toEqual(['Saved to "Inspiration"'])
+      expect(readdirSync(fx.thumbsDir), 'nothing half-written in the cache').toEqual([])
+
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Inspiration')
+      await expect(window.locator('img[alt="Stubbed reference"]'), 'the tile draws the source URL').toHaveAttribute('src', thumbUrl)
+
+      // The next board edit is not queued behind anything.
+      await window.getByRole('button', { name: 'Remove item' }).click()
+      await expect.poll(() => items().length, { timeout: 5000 }).toBe(0)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 5000 }).toBe(1)
+      expect(pageErrors).toEqual([])
+    } finally {
+      for (const s of sockets) s.destroy()
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

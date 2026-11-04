@@ -181,8 +181,8 @@ describe('the escaped text survives ffmpeg\'s three passes (T-111)', () => {
     expect(parsed.text).toBe(text)
     expect(parsed.options.fontsize).toBe('48')
     expect(parsed.options.fontcolor).toBe('#ffffff')
-    expect(parsed.options.x).toBe('128')
-    expect(parsed.options.y).toBe('144')
+    expect(parsed.options.x).toBe('min(max(0,128),w-tw)')
+    expect(parsed.options.y).toBe('min(max(0,144),h-th)')
     expect(parsed.options.enable).toBe('between(t,0.000,5.000)')
     expect(parsed.options.fontfile).toBe('C:/Windows/Fonts/arial.ttf')
   })
@@ -206,11 +206,11 @@ describe('the escaped text survives ffmpeg\'s three passes (T-111)', () => {
       buildVideoFilter(clip(text), PLATFORM_PRESETS.twitter, { width: 1280, height: 720 })
     expect(graph("Let's go")).toBe(
       "fps=30,scale=1280:720:flags=lanczos,setsar=1," +
-        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Let\\'\\''s go':fontsize=48:fontcolor=#ffffff:x=128:y=144:enable='between(t,0.000,5.000)'"
+        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Let\\'\\''s go':fontsize=48:fontcolor=#ffffff:x='min(max(0,128),w-tw)':y='min(max(0,144),h-th)':enable='between(t,0.000,5.000)'"
     )
     expect(graph('Sale 50% off')).toBe(
       "fps=30,scale=1280:720:flags=lanczos,setsar=1," +
-        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Sale 50\\\\% off':fontsize=48:fontcolor=#ffffff:x=128:y=144:enable='between(t,0.000,5.000)'"
+        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Sale 50\\\\% off':fontsize=48:fontcolor=#ffffff:x='min(max(0,128),w-tw)':y='min(max(0,144),h-th)':enable='between(t,0.000,5.000)'"
     )
   })
 
@@ -1251,5 +1251,60 @@ describe('the watermark clears the platform interface on a vertical frame (T-130
     expect(options.box).toBe('1')
     expect(options.boxborderw).toBe('8')
     expect(options.fontfile).toBe('C:/Windows/Fonts/arialbd.ttf')
+  })
+})
+
+/**
+ * T-151 (1): the Position boxes place the text's TOP-LEFT corner, and a caption that would run past an edge is kept inside the frame.
+ * T-150 (4) wrote "50 and 50 is the centre" in the guide over this very anchor, and a 25-character caption at x = 0.9 was cut off at the right
+ * edge of a 1080-wide file. drawtext knows the text's own size (`tw`, `th`) and the frame's (`w`, `h`), so the position is
+ * `min(max(0, X), w-tw)`: the commas are inside the single quotes (as `enable='between(...)'` already is), or the graph parser would end the filter
+ * at the first one. Layer 5 (media.spec.ts, "T-151") decodes the pixels; these pin the string and its parse.
+ */
+describe('the overlay position keeps the caption inside the frame (T-151 (1))', () => {
+  const at = (x: number, y: number): TextOverlay => ({
+    id: 'ov',
+    text: 'Hello',
+    font: 'Arial',
+    sizePx: 48,
+    colorHex: '#ffffff',
+    x,
+    y,
+    startSec: 0,
+    endSec: 5
+  })
+  const graphAt = (x: number, y: number): string =>
+    buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [at(x, y)] }, PLATFORM_PRESETS.twitter, { width: 1280, height: 720 })
+
+  it('an in-frame position: the exact drawtext, the pixel numbers clamped by the text\'s own size', () => {
+    expect(graphAt(0.1, 0.2)).toBe(
+      "fps=30,scale=1280:720:flags=lanczos,setsar=1," +
+        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Hello':fontsize=48:fontcolor=#ffffff:x='min(max(0,128),w-tw)':y='min(max(0,144),h-th)':enable='between(t,0.000,5.000)'"
+    )
+  })
+
+  it('x = 0.9 and y = 0.98: the same shape with the far-edge numbers, so drawtext pulls the text back in', () => {
+    expect(graphAt(0.9, 0.98)).toBe(
+      "fps=30,scale=1280:720:flags=lanczos,setsar=1," +
+        "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='Hello':fontsize=48:fontcolor=#ffffff:x='min(max(0,1152),w-tw)':y='min(max(0,706),h-th)':enable='between(t,0.000,5.000)'"
+    )
+  })
+
+  it('the commas stay inside quotes: the graph parser reads one filter, with x and y whole', () => {
+    const graph = graphAt(0.9, 0.98)
+    const { options } = parseDrawtext(graph.slice(graph.indexOf('drawtext=') + 'drawtext='.length))
+    expect(options.x).toBe('min(max(0,1152),w-tw)')
+    expect(options.y).toBe('min(max(0,706),h-th)')
+  })
+
+  it('the watermark is not touched: it still anchors to its corner with a plain expression', () => {
+    const graph = buildVideoFilter(
+      { startSec: 0, cropRect: null, textOverlays: [] },
+      PLATFORM_PRESETS.twitter,
+      { width: 1280, height: 720 },
+      { text: 'wm', position: 'bottom-right', fontSizePct: 4, opacity: 0.85 }
+    )
+    expect(graph).toContain(':x=w-tw-20:')
+    expect(graph).not.toContain('min(max(')
   })
 })

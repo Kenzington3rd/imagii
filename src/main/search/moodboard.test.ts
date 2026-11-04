@@ -22,11 +22,15 @@ vi.mock('electron', () => ({
     getPath: () => TMP
   },
   net: {
-    // cacheThumb must fail gracefully in tests — no network.
-    fetch: async () => {
-      throw new Error('no network in tests')
-    }
+    // cacheThumb must fail gracefully in tests — no network. T-151 (2): a test swaps `fetchImpl` for a stalled / oversize / good answer.
+    fetch: (url: string, init?: { signal?: AbortSignal }) =>
+      fetchStub.impl(url, init)
   }
+}))
+const fetchStub = vi.hoisted(() => ({
+  impl: (async () => {
+    throw new Error('no network in tests')
+  }) as (url: string, init?: { signal?: AbortSignal }) => Promise<Response>
 }))
 
 // T-139 (1): the failures a disk makes, injected into the real `node:fs/promises` (everything else in it stays real). Off unless a test turns one on.
@@ -534,5 +538,134 @@ describe('addToCollection says whether it added the picture (T-149 (4))', () => 
     const m = await import('./moodboard')
     const answer = await m.addToCollection('missingboard', makeResult(1))
     expect(answer).toEqual({ collection: null, added: false })
+  })
+})
+
+
+// T-151 (2): cacheThumb runs inside the board's lock (and T-150's References chain waits behind it), so a thumbnail host that accepts and never answers stalled
+// every later board edit and Undo. The fetch now has a deadline and a byte cap; a miss saves the item WITHOUT a cached thumbnail (the tile shows the source URL).
+describe('the thumbnail fetch has a deadline and a size cap (T-151 (2))', () => {
+  const stubTimeout = (): { signal: AbortSignal; fire: () => void; asked: number[] } => {
+    const ctl = new AbortController()
+    const asked: number[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      asked.push(ms)
+      return ctl.signal
+    })
+    return { signal: ctl.signal, fire: () => ctl.abort(new DOMException('timed out', 'TimeoutError')), asked }
+  }
+  const streamOf = (chunks: Uint8Array[]): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const ch of chunks) c.enqueue(ch)
+          c.close()
+        }
+      }),
+      { status: 200 }
+    )
+  afterEach(() => {
+    vi.restoreAllMocks()
+    fetchStub.impl = async () => {
+      throw new Error('no network in tests')
+    }
+  })
+
+  it('asks for a 10 s deadline and an answer that never comes saves the item with no cached thumbnail, once the deadline fires', async () => {
+    const m = await import('./moodboard')
+    expect(m.THUMB_FETCH_TIMEOUT_MS).toBe(10_000)
+    const t = stubTimeout()
+    let seen: AbortSignal | undefined
+    fetchStub.impl = (_url, init) => {
+      seen = init?.signal
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)))
+    }
+    const board = await m.createCollection('Stalled')
+    let settled = false
+    const pending = m.addToCollection(board.id, makeResult(1)).then((r) => ((settled = true), r))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(settled, 'still waiting on the host before the deadline').toBe(false)
+    expect(seen, 'the fetch carries the deadline signal').toBe(t.signal)
+    expect(t.asked).toEqual([10_000])
+    t.fire()
+    const answer = await pending
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+    expect(readdirSync(path.join(TMP, 'cache', 'thumbs')), 'no half file left in the cache').toEqual([])
+  })
+
+  it('a body past 8 MB is dropped as it streams in: no cached thumbnail, nothing written', async () => {
+    const m = await import('./moodboard')
+    expect(m.THUMB_MAX_BYTES).toBe(8 * 1024 * 1024)
+    stubTimeout()
+    const chunk = new Uint8Array(1024 * 1024)
+    let pulled = 0
+    fetchStub.impl = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            pulled++
+            c.enqueue(chunk) // never ends on its own
+          }
+        }),
+        { status: 200 }
+      )
+    const board = await m.createCollection('Huge')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+    expect(pulled, 'the read stopped soon after the cap, it did not drain the stream').toBeLessThan(14)
+    expect(readdirSync(path.join(TMP, 'cache', 'thumbs'))).toEqual([])
+  })
+
+  it('a body of exactly the cap is kept', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => streamOf([new Uint8Array(m.THUMB_MAX_BYTES)])
+    const board = await m.createCollection('Edge')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeTruthy()
+  })
+
+  it('an ordinary body is cached: the item carries the path and the bytes are on disk', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => streamOf([Uint8Array.from([1, 2, 3]), Uint8Array.from([4, 5])])
+    const board = await m.createCollection('Normal')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    const cached = answer.collection?.items[0]?.cachedThumbPath
+    expect(cached).toBeTruthy()
+    expect([...readFileSync(cached as string)]).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('a non-ok answer saves the item without a cached thumbnail', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => new Response('nope', { status: 404 })
+    const board = await m.createCollection('Missing')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+  })
+
+  it('a stall while the body is streaming is cut by the same deadline', async () => {
+    const m = await import('./moodboard')
+    const t = stubTimeout()
+    fetchStub.impl = async (_url, init) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(Uint8Array.from([1]))
+            init?.signal?.addEventListener('abort', () => c.error(init.signal?.reason))
+          }
+        }),
+        { status: 200 }
+      )
+    const board = await m.createCollection('Trickle')
+    const pending = m.addToCollection(board.id, makeResult(1))
+    await new Promise((r) => setTimeout(r, 50))
+    t.fire()
+    const answer = await pending
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
   })
 })

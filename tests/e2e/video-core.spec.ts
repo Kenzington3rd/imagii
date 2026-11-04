@@ -3210,7 +3210,7 @@ test.describe('T-150 (4): the Text overlay Position boxes are a percent, and a n
     return { x: overlay.x, y: overlay.y }
   }
 
-  test('the label says Position (%), 50 is the centre (stored 0.5), and 150 and -5 are refused in a sentence with the overlay unmoved', async () => {
+  test('the label says Position (%), 50 is half way (stored 0.5), and 150 and -5 are refused in a sentence with the overlay unmoved', async () => {
     test.setTimeout(120_000)
     const { app, window } = await launchWithVideo('t150-position')
     try {
@@ -3225,7 +3225,7 @@ test.describe('T-150 (4): the Text overlay Position boxes are a percent, and a n
       await expect(top).toHaveValue('85')
       expect(await savedOverlay(app, window, 'default'), 'the default is the same 0-1 fraction as before').toEqual({ x: 0.1, y: 0.85 })
 
-      // 50 is the CENTRE: stored 0.5 (it used to commit 1, the far edge, with no sentence).
+      // 50 is HALF WAY: stored 0.5 (it used to commit 1, the far edge, with no sentence).
       await retype(left, '50')
       await leave(left)
       await expect(left).toHaveValue('50')

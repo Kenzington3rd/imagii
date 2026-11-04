@@ -46,12 +46,17 @@ export function useRecentFiles(bucket: RecentFileBucket): UseRecentFilesResult {
 
   const remove = useCallback(
     async (filePath: string): Promise<boolean> => {
-      const existing = (await window.api.settings.get<string[]>(KEY[bucket])) ?? []
-      const next = existing.filter((p) => p !== filePath)
-      if (next.length === existing.length) return false
-      await persistSetting(KEY[bucket], next)
-      setRecent(next)
-      return true
+      // T-151: a refused settings read must not skip the caller's toast (it is awaited inside the importer's catch).
+      try {
+        const existing = (await window.api.settings.get<string[]>(KEY[bucket])) ?? []
+        const next = existing.filter((p) => p !== filePath)
+        if (next.length === existing.length) return false
+        await persistSetting(KEY[bucket], next)
+        setRecent(next)
+        return true
+      } catch {
+        return false
+      }
     },
     [bucket]
   )

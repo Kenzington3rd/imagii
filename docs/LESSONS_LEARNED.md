@@ -14,6 +14,32 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-04 - T-151 (round 100), Track A: a sentence that explains a number is a spec for the pixels
+
+The thirty-seventh sweep, Track A (the Text overlay's position; Track B lands beside it). Ledger: r100a/ledger.tsv (red rows for the unit pins and for the Layer 5 case on the 6.1.1 config, run against a `git archive` of the unchanged tree `324a77f`, and the mutation rows).
+
+### (1) [LOW-MED] - "50 and 50 is the centre" over a top-left anchor, and a caption could run off the frame
+
+- **Bug.** T-150 (4) wrote "(50 and 50 is the centre)" in the guide. A caption typed at 50 / 85 started at the frame's middle, and a 25-character caption at x = 0.9 was cut off at the right edge of a 1080-wide file; nothing previewed it and nothing warned.
+- **Root cause.** `drawTextFilter` emits the text's TOP-LEFT corner (`x=round(x * W)`), so a fraction is where the text STARTS, not where it is centred, and the width of the text was never part of the position. The sentence was written from the number (0.5 is half) and not from the filter that draws it.
+- **Fix.** The anchor stays top-left (a centre anchor would move every saved overlay). The position is `x='min(max(0,X),w-tw)'`, `y='min(max(0,Y),h-th)'`: drawtext knows the text's own size, so a caption that would leave the frame is pulled back in. The commas sit inside the single quotes, as `enable='between(...)'` already does, so the graph parser keeps one filter. The guide and the card's hint line say the boxes place the text's top left corner and that a caption past an edge is kept inside the frame.
+- **Test.** `filters.test.ts` (the exact drawtext for an in-frame position and for x = 0.9 / y = 0.98, and the parse of the quoted expressions), `interactionWiring.test.ts` and `truthInCopy.test.ts` (the copy), and Layer 5 (media.spec.ts "T-151"): a long white caption at x = 0.9 on a black 1080x1920 frame, decoded to gray, ends inside the frame and is as wide as the same caption at x = 0.1 (the unclamped control). Red on the unchanged tree: the white run touched column 1079. The first `npm run test:media` after the change failed five drawbox-stand-in cases ("swapped 0 of N overlays"): the stand-in's regex read the old `x=128:y=144` and found nothing in the new string; it now reads the pixel numbers out of the clamp, which makes it a pin on the clamp's shape as well. Unit tests did not see it - only the real-media suite ran the stand-in.
+- **Lesson.** **A sentence that explains a number is a spec for the pixels: read the filter that draws it before writing it.** And a position that is a fraction of the frame must be clamped by the thing's own size, or "inside the range" is not "inside the picture". The bundled linux ffmpeg has no drawtext, so the pixel case runs on the distro 6.1.1 with ONE substitution made in the test (a system font for the Windows fontfile) and skips when the binary has no drawtext; the win32 twin runs unsubstituted in the release workflow.
+
+## 2026-11-04 - T-151 (round 100), Track B: a lock is only as short as the slowest thing inside it
+
+The thirty-seventh sweep, Track B (the mood board's thumbnail fetch; Track A lands beside it). Ledger: r100b/ledger.tsv.
+
+### (2) [LOW] - One stalled thumbnail host stalled every board edit and every Undo
+
+- **Bug.** Saving a picture whose thumbnail host accepted the connection and never answered left the Save pending forever, and every later board edit and Undo waited behind it with nothing on screen to say why.
+- **Root cause.** `cacheThumb` was a bare `net.fetch` with no deadline and no size cap, run inside `addToCollection` under the board's lock. Before T-150 that held one board's lock; T-150's single References chain (and an Undo deferred while a mutation is out) made it hold all of them.
+- **Fix.** The fetch carries `AbortSignal.timeout(10_000)` for the whole answer, body included, and the body is read with a running byte count that cancels past 8 MB. A timeout, an abort, the cap or a non-ok answer returns `undefined`, so the item is saved without a cached thumbnail and its tile draws the source URL (`MoodBoardPanel` falls back to `item.thumbnail`). Fold: `isNotFoundError` no longer reads `spawn <path> ENOENT` (the app's own ffprobe / ffmpeg failing to start) as the person's file being gone, and `useRecentFiles.remove` answers `false` on a refused settings read so the importer's toast still shows.
+- **Test.** `moodboard.test.ts` "the thumbnail fetch has a deadline and a size cap", references.spec.ts "T-151 (2)" (red on the unchanged tree: nothing lands), `importDiagnostics.test.ts`, `useRecentFiles.test.ts`.
+- **Lesson.** **Whatever runs inside a lock inherits the lock's blast radius, and a network call inside one needs a deadline and a size cap.** When a change widens what a lock (or a queue) covers, re-read everything inside it for calls that can wait on someone else.
+
+---
+
 ## 2026-11-04 - T-150 (round 99), Track A: a checkbox's sentence is the spec, and a default read from a disabled control is a hidden setting
 
 The thirty-sixth sweep, Track A (Audio Studio's "Match loudness with your voice"; Tracks B and C land beside it). Ledger: r99a/ledger.tsv (4 red rows: the unit files, the Layer 5 block on 7.0.2 and on 6.1.1 and the e2e case, run against a `git archive` of the unchanged tree `7706506`; and 22 mutation rows, 14 unit, 6 Layer 5 (4 on 7.0.2, 2 on 6.1.1) and 2 e2e, all restores byte-identical by sha256; one survivor at Layer 5, the Even-volume bus loudnorm, killed by a unit mutation instead).

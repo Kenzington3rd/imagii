@@ -1920,6 +1920,9 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(strip(read('modules/video-studio/ClipList.tsx'))).toContain('Speed is applied when you export. The player here always plays at normal speed.')
     const overlay = strip(read('modules/video-studio/TextOverlayEditor.tsx'))
     expect(overlay).toContain('Text appears in the exported file, not in the player. Times are seconds in the source video, or a time like 2:47:13.')
+    // T-151 (1): and the same line says what the Position boxes place - the text's top left corner - and that an edge never cuts a caption off (the guide said "centre").
+    expect(overlay).toContain("Position is where the text's top left corner sits. A caption that would run past an edge is kept inside the frame.")
+    expect(overlay).not.toMatch(/is the cent(re|er)/i)
     expect(overlay).toContain('Source time')
     // The window that misses the clip: asked of the shared helper, drawn as a live region so a screen reader hears it appear.
     expect(overlay).toMatch(/overlayOutsideClipMessage\(/)

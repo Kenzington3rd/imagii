@@ -291,7 +291,7 @@ describe('the Position boxes: percent <-> fraction (T-150 (4))', () => {
     for (const f of [0, 0.1, 0.25, 0.333, 0.85, 1]) expect(percentToFraction(fractionToPercent(f))).toBe(f)
   })
 
-  it('a typed percent inside 0 to 100 is the fraction (50 is the centre, the edges are taken)', () => {
+  it('a typed percent inside 0 to 100 is the fraction (50 is half way, the edges are taken)', () => {
     expect(positionFromTyped('50')).toEqual({ fraction: 0.5 })
     expect(positionFromTyped('0')).toEqual({ fraction: 0 })
     expect(positionFromTyped('100')).toEqual({ fraction: 1 })

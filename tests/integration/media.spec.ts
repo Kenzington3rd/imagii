@@ -657,7 +657,8 @@ async function withDrawboxStandIn<T>(run: () => Promise<T>): Promise<T> {
         const chain = real.buildVideoFilter(...args)
         let swapped = 0
         const standIn = chain.replace(
-          /drawtext=([\s\S]*?):x=(-?\d+):y=(-?\d+):enable='(between\(t,[-\d.]+,[-\d.]+\))'/g,
+          // T-151 (1): the position is `'min(max(0,X),w-tw)'` / `'min(max(0,Y),h-th)'` now; the box takes the pixel numbers X and Y (it has no text size to clamp by).
+          /drawtext=([\s\S]*?):x='min\(max\(0,(-?\d+)\),w-tw\)':y='min\(max\(0,(-?\d+)\),h-th\)':enable='(between\(t,[-\d.]+,[-\d.]+\))'/g,
           (_all: string, head: string, x: string, y: string, enable: string): string => {
             const color = /fontcolor=([^:]+)/.exec(head)
             if (!color) throw new Error(`drawbox stand-in: no fontcolor in "${head}"`)
@@ -11516,4 +11517,128 @@ describe('Match loudness follows the voice when Even volume is off (T-150 (1))',
     const m = await musicOnly(res.outputPath)
     expect(m, `the music-only stretch measures ${m} LUFS, well above the bed's own -32`).toBeGreaterThan(-24)
   }, 300_000)
+})
+
+/**
+ * T-151 (1) - a text overlay near an edge stays INSIDE the frame (pixels).
+ *
+ * The Position boxes place the caption's TOP-LEFT corner, so a long caption at x = 0.9 used to start at 972 px of a 1080-wide file and be cut
+ * off at the right edge. drawtext now takes `x='min(max(0,X),w-tw)'`. The bundled linux ffmpeg (7.0.2) has no drawtext, and Wine has no fonts, so
+ * the case runs where there is a drawtext: the distro 6.1.1 through the 611 vitest config, with ONE substitution made in the TEST - the
+ * `C:/Windows/Fonts/arial.ttf` fontfile in the graph production built is replaced by a font file present on this box (`fc-match sans`, else a
+ * .ttf / .otf under /usr/share/fonts). Everything else in the string is production's own, so the clamp under test is the shipped one. On a binary
+ * without drawtext it SKIPS; the win32-gated twin (the release run, the shipped 6.1.1 and the real Arial) asserts the same unsubstituted.
+ *
+ * Evidence is the decoded frame: a black 1080x1920 lavfi frame, the caption white, read back as 8-bit gray. The control is the SAME caption at
+ * x = 0.1, which never needs the clamp - its white run's width is the caption's true width, so "the width is unchanged" cannot be a clipped
+ * caption that merely ends early.
+ */
+describe('a text overlay placed near an edge stays inside the frame (drawtext, T-151)', () => {
+  const FRAME_W = 1080
+  const FRAME_H = 1920
+  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arial.ttf'
+  const CAPTION = 'Subscribe for more clips!'
+
+  async function systemFont(): Promise<string | null> {
+    const { execFileSync } = await import('node:child_process')
+    const { readdirSync, statSync } = await import('node:fs')
+    try {
+      const f = execFileSync('fc-match', ['-f', '%{file}', 'sans'], { encoding: 'utf8' }).trim()
+      if (f && existsSync(f)) return f
+    } catch {
+      /* no fontconfig: look under the font directories */
+    }
+    const walk = (dir: string, depth: number): string | null => {
+      if (depth > 4) return null
+      let names: string[] = []
+      try {
+        names = readdirSync(dir)
+      } catch {
+        return null
+      }
+      for (const n of names) {
+        const p = path.join(dir, n)
+        if (/\.(ttf|otf)$/i.test(n)) return p
+        try {
+          if (statSync(p).isDirectory()) {
+            const hit = walk(p, depth + 1)
+            if (hit) return hit
+          }
+        } catch {
+          /* unreadable entry */
+        }
+      }
+      return null
+    }
+    return walk('/usr/share/fonts', 0)
+  }
+
+  /** The white run of the caption drawn at `x` (a 0-1 fraction): its first and last column and the frame's width, from decoded pixels. */
+  async function whiteRun(x: number, tag: string, fontFile: string | null): Promise<{ first: number; last: number; width: number }> {
+    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    let graph = buildVideoFilter(
+      {
+        startSec: 0,
+        cropRect: null,
+        textOverlays: [
+          { id: `ov-t151-${tag}`, text: CAPTION, font: 'Arial', sizePx: 64, colorHex: '#ffffff', x, y: 0.5, startSec: 0, endSec: 1 }
+        ]
+      },
+      PLATFORM_PRESETS.tiktok,
+      { width: FRAME_W, height: FRAME_H }
+    )
+    if (fontFile) {
+      expect(graph, 'production built the Windows fontfile this test substitutes').toContain(SHIPPED_FONT_IN_GRAPH)
+      graph = graph.replace(SHIPPED_FONT_IN_GRAPH, fontFile)
+    }
+    const png = path.join(workDir, `t151-${tag}.png`)
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', `color=c=black:s=${FRAME_W}x${FRAME_H}:r=30:d=1`,
+      '-vf', graph,
+      '-frames:v', '1',
+      png
+    ])
+    const gray = await samplePixels(png, 0, `crop=${FRAME_W}:${FRAME_H}:0:0`, 'gray')
+    let first = -1
+    let last = -1
+    for (let col = 0; col < FRAME_W; col++) {
+      for (let row = 0; row < FRAME_H; row++) {
+        if (gray[row * FRAME_W + col]! > 128) {
+          if (first < 0) first = col
+          last = col
+          break
+        }
+      }
+    }
+    return { first, last, width: last - first + 1 }
+  }
+
+  async function assertKeptInside(fontFile: string | null): Promise<void> {
+    const control = await whiteRun(0.1, 'control', fontFile)
+    expect(control.first, 'the control caption was painted').toBeGreaterThan(0)
+    expect(control.last, `the control (x = 0.1) is whole inside the frame: ${control.first}..${control.last}`).toBeLessThan(FRAME_W - 1)
+    expect(control.width, 'the caption is wide enough that x = 0.9 cannot fit unclamped').toBeGreaterThan(FRAME_W * 0.1)
+    const near = await whiteRun(0.9, 'edge', fontFile)
+    expect(near.last, `the caption at x = 0.9 ends inside the frame (white ${near.first}..${near.last} of ${FRAME_W} columns)`).toBeLessThan(FRAME_W)
+    expect(near.last, 'and it does not touch the last column (cut off)').toBeLessThan(FRAME_W - 1)
+    expect(near.width, `the same caption, whole: ${near.width} px wide vs the unclamped ${control.width}`).toBe(control.width)
+  }
+
+  it('x = 0.9: a long white caption ends inside the 1080-wide frame at its full width (distro 6.1.1, a system font in the test)', async (ctx) => {
+    const names = await ffFilterNames()
+    if (!names.has('drawtext')) ctx.skip() // the bundled linux 7.0.2 has no drawtext: nothing to measure; the 611 config and win32 run it
+    const font = await systemFont()
+    if (!font) ctx.skip() // no font file on this box: drawtext has nothing to draw with
+    await assertKeptInside(font)
+  }, 120_000)
+
+  it.skipIf(process.platform !== 'win32')(
+    'win32 (the release run): the same, with the shipped ffmpeg and the real Arial',
+    async () => {
+      expect(existsSync('C:/Windows/Fonts/arial.ttf'), 'the text-overlay font is present').toBe(true)
+      await assertKeptInside(null)
+    },
+    120_000
+  )
 })

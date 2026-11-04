@@ -6880,7 +6880,7 @@ IMG-PREC.
   shared files; `npm run verify` twice, `npm run test:media` and the FULL Playwright suite green before
   handback — a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or
   lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 100)
+- **Status:** done (round 100 — see the Done entry)
 
 ---
 
@@ -7432,6 +7432,38 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 100 — T-151, both counted items and the fold, landed in the
+commit that carries this entry (T-110 gains (br); (bg) names the
+discarded session the banner offers back). Two Sonnet workers in fresh
+clones of 324a77f, disjoint files, merged by the expediter. Track A:
+drawtext keeps a caption inside the frame —
+`x='min(max(0,X),w-tw)'`, `y='min(max(0,Y),h-th)'`, the top-left anchor
+kept so no saved project's overlay moves — and the guide and the card's
+hint say the boxes place the text's top-left corner ("50 and 50 is the
+centre" is gone); the drawbox stand-in in media.spec.ts reads the clamp.
+Track B: the mood board's thumbnail fetch has a 10 s deadline and an
+8 MiB cap, and a thumbnail that misses either is saved without a cached
+copy (the tile draws the source URL), so one stalled host no longer
+holds the References chain — (bf)'s mood-board half is closed; a
+`spawn … ENOENT` (the app's own ffmpeg missing) is no longer read as "the
+file is gone", and the Recent removal cannot skip its toast on a refused
+read. Deviations, accepted: single-quoted drawtext expressions (house
+style); the win32 drawtext twin in the same describe; the T-151 (2) e2e
+waits the real 10 s; AbortSignal.timeout spied, not faked. Ledgers: A 2
+RED / 11 mutations, B 2 / 13 — none surviving, every restore
+byte-identical. Found not fixed: the y clamp has no pixel case at Layer
+5 (unit pins hold it); nothing previews an overlay. Expediter edit at
+the merge (non-functional): the T-150 (4) e2e title and comment "50 is
+the centre" now read "50 is half way". Expedited personally: two
+independent mutations at seams no ledger row names — A: y clamped to h
+instead of h-th → six T-111 exact-string units red; B: an item dropped
+when no thumbnail was cached → six moodboard units red (round-18
+concurrency, T-139 (1)) — each restored byte-identical, sha256
+verified; on the MERGED tree: verify x2 (207/6018), test:media on 7.0.2 (441 passed | 15 skipped of 456, 602 s), the
+T-151 Layer 5 block on 6.1.1 (1/1; the win32 twin skipped), FULL Playwright 580/580 (46.9 min, no flake). Applied
+to 324a77f by `git apply` with every file byte-identical to the
+expedited merge.
 
 Round 99 — T-150, all six counted items and the three folds, landed
 in the commit that carries this entry (T-110 gains (bp) beside it and

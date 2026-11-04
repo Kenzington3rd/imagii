@@ -283,3 +283,16 @@ describe('the Captions setup names the download the releases page really has (T-
     expect(stripComments(read('src/main/sidecars/paths.ts'))).toMatch(/WHISPER_EXE_NAMES = \['whisper-cli\.exe', 'whisper\.exe'\]/)
   })
 })
+
+// T-151 (1): T-150 (4) wrote "(50 and 50 is the centre)" in the guide over a top-left anchor; a 50 / 85 caption starts at the frame's middle and runs off the right edge.
+// The guide now says what the boxes place and that an edge never cuts a caption off. (filters.test.ts pins the drawtext clamp; media.spec.ts decodes the pixels.)
+describe('the Text overlays paragraph describes the top-left anchor (T-151 (1))', () => {
+  const para = (): string => read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+  it('says the boxes place the text\'s top left corner and that a caption past an edge is kept inside the frame', () => {
+    expect(para()).toMatch(/Position \(%\)\*\* is how far across and how far down the text's top left corner sits, from 0 to 100/)
+    expect(para()).toMatch(/a caption that would run past an edge is kept inside the frame/)
+  })
+  it('no longer calls 50 and 50 the centre', () => {
+    expect(para()).not.toMatch(/50 and 50 is the centre/)
+  })
+})

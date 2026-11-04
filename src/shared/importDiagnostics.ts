@@ -86,6 +86,8 @@ function openErrorText(err: unknown): string {
 }
 
 function isNotFoundText(lowered: string): boolean {
+  // T-151: `spawn <path> ENOENT` is the runner failing to start the app's own ffprobe / ffmpeg, not the person's file being gone.
+  if (/\bspawn\b[^\n]*\benoent\b/.test(lowered)) return false
   return (
     lowered.includes('enoent') ||
     lowered.includes('cannot find') ||

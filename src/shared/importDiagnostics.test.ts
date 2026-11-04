@@ -368,3 +368,23 @@ describe('isNotFoundError - the file is gone (T-150)', () => {
     expect(describeImportError(err, '/x/a.mp4')).toMatch(/can't find that file/)
   })
 })
+
+
+// T-151 fold: the runner's own `spawn <path> ENOENT` means the app's ffprobe / ffmpeg is missing, not that the person's file is gone.
+describe('isNotFoundError - a missing program is not a missing file (T-151)', () => {
+  it.each([
+    ['spawn ENOENT', new Error('spawn C:\\app\\resources\\ffprobe.exe ENOENT')],
+    ['spawn ENOENT across the bridge', new Error("Error invoking remote method 'video:probe': Error: spawn /opt/imagii/ffprobe ENOENT")],
+    ['spawn ENOENT, upper case', new Error('Spawn /x/ffmpeg ENOENT')]
+  ])('%s is not the not-found case', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(false)
+  })
+
+  it('a missing FILE that happens to follow a spawn line on its own line is still found', () => {
+    expect(isNotFoundError(new Error('spawn ok\nENOENT: no such file or directory, open /x/a.mp4'))).toBe(true)
+  })
+
+  it('the ordinary ENOENT is still the not-found case', () => {
+    expect(isNotFoundError(new Error("ENOENT: no such file or directory, open '/x/a.mp4'"))).toBe(true)
+  })
+})

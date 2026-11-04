@@ -194,14 +194,35 @@ export async function renameCollection(id: string, name: string): Promise<MoodBo
   })
 }
 
+/**
+ * T-151 (2): cacheThumb runs inside the board's lock, and the References chain (T-150) queues every later board edit and Undo behind it, so one thumbnail
+ * host that accepts and never answers (or streams forever) froze them all with no feedback. The fetch has a deadline for the whole answer, body included,
+ * and a byte cap counted as the body streams in. A miss of any kind returns undefined: the item is saved without a cached thumbnail and its tile draws the
+ * source URL (MoodBoardPanel falls back to `item.thumbnail`).
+ */
+export const THUMB_FETCH_TIMEOUT_MS = 10_000
+export const THUMB_MAX_BYTES = 8 * 1024 * 1024
+
 async function cacheThumb(thumbnailUrl: string): Promise<string | undefined> {
   try {
-    const res = await net.fetch(thumbnailUrl)
-    if (!res.ok) return undefined
-    const buffer = Buffer.from(await res.arrayBuffer())
+    const res = await net.fetch(thumbnailUrl, { signal: AbortSignal.timeout(THUMB_FETCH_TIMEOUT_MS) })
+    if (!res.ok || !res.body) return undefined
+    const reader = res.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > THUMB_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        return undefined
+      }
+      chunks.push(value)
+    }
     const filename = `${nanoid(12)}.jpg`
     const filePath = path.join(thumbsCacheDir(), filename)
-    await writeFile(filePath, buffer)
+    await writeFile(filePath, Buffer.concat(chunks))
     return filePath
   } catch {
     return undefined
