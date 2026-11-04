@@ -7088,7 +7088,8 @@ IMG-PREC.
 
 ## T-154 — sweep-40 fixes (round 103)
 
-- **Spec:** the fortieth sweep's verified findings (candidate clean pass #1 on c06e072), confirmed by
+- **Spec:** the fortieth sweep's verified findings (candidate clean pass #1 on c06e072; item 9 arrived from
+  QA's whole-tree remainder after dispatch), confirmed by
   the expediter against source; item 8 measured by the expediter on 7.0.2 and 6.1.1 from the streamer
   lens's unmeasured probe. Privacy, Electron, ffmpeg and audio clean on their whole lens. Not counted:
   ffmpeg's fps stage dropping a clip shorter than half an output frame (a refusal on a contrived
@@ -7121,6 +7122,9 @@ IMG-PREC.
   7. **[LOW] The Player's keyboard stop has no role or name.** Player.tsx:375-379 `<div tabIndex={0}>`
      → `role="group" aria-label="Video player"` (and `aria-keyshortcuts` for the keys the HotkeyOverlay
      lists for it), the DESIGN_GUIDE:441-447 shape every other focusable container has.
+  9. **[LOW] (QA's remainder, folded into Track A after dispatch) A text overlay's ✕ removes two
+     overlays on a double-click** (TextOverlayEditor.tsx:102-109: the list reflows and the next ✕ sits
+     under the pointer). Fix: `isRepeatPress`. E2E: a clip with two overlays, a real dblclick → one gone.
   Fold (polish): the shortcuts dialog's descriptions start in one column (a two-column grid, chip
      column `auto`, every chip one line as T-153 (2) holds).
   Covering tests: e2e per item (NEW describes): a real `dblclick` on → Canvas (with the thumbnail served
