@@ -58,7 +58,7 @@ function gate<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; rejec
 }
 
 beforeEach(() => {
-  useExportQueue.setState({ jobs: [], running: false, sourcePath: null })
+  useExportQueue.setState({ jobs: [], running: false, sourcePath: null, sourceName: null })
   vi.spyOn(toast, 'success').mockImplementation(() => 'id')
   vi.spyOn(toast, 'error').mockImplementation(() => 'id')
   vi.spyOn(toast, 'custom').mockImplementation(() => 'id')
@@ -74,7 +74,7 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
   it('shows the rows as running from the first moment, and keeps drawing the events that arrive with no panel anywhere', async () => {
     const held = gate<unknown[]>()
     const bridge = install(() => held.promise)
-    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(useExportQueue.getState().running).toBe(true)
     expect(useExportQueue.getState().jobs.map((j) => j.percent)).toEqual([0, 0])
 
@@ -100,8 +100,8 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
       calls.push(queue.map((q) => q.jobId))
       return held.promise
     })
-    const first = runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4' })
-    await runExportBatch({ queue: [spec('z')], statuses: [row('z')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const first = runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
+    await runExportBatch({ queue: [spec('z')], statuses: [row('z')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(calls).toEqual([['a']])
     expect(useExportQueue.getState().jobs.map((j) => j.jobId)).toEqual(['a'])
     held.resolve([])
@@ -110,7 +110,7 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
 
   it('a failure marks the first unfinished row Failed with the sentence and the ones behind it Not run, and frees the queue', async () => {
     const bridge = install(() => Promise.reject(new Error('FFmpeg exit 1: Conversion failed!')))
-    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     const [a, b] = useExportQueue.getState().jobs
     expect(a?.error).toMatch(/Export failed\./)
     expect(a?.canceled).toBeUndefined()
@@ -123,7 +123,7 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
   it('a cancel marks every unfinished row Canceled, in the batch\'s own words, and finished rows keep their file', async () => {
     const held = gate()
     const bridge = install(() => held.promise)
-    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     bridge.complete[0]?.({ jobId: 'a', outputPath: '/out/a.mp4' })
     held.reject(new Error(CANCELLED_MESSAGE))
     await done
@@ -138,20 +138,20 @@ describe('runExportBatch - a batch the panel does not have to be mounted for (T-
   // 100% with no file and no "Show in folder" (the panel's old always-on listener caught the late event). The call's own results are the record.
   it('takes each row\'s file from the batch\'s own results, so an event that lands after the call resolved is not needed', async () => {
     install(() => Promise.resolve([{ jobId: 'a', outputPath: '/out/a (2).mp4', durationMs: 5 }]))
-    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(useExportQueue.getState().jobs).toEqual([row('a', { percent: 100, outputPath: '/out/a (2).mp4' })])
   })
 
   it('the next batch replaces the rows of the last one', async () => {
     install(() => Promise.resolve([]))
-    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4' })
-    await runExportBatch({ queue: [spec('c')], statuses: [row('c')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
+    await runExportBatch({ queue: [spec('c')], statuses: [row('c')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(useExportQueue.getState().jobs.map((j) => j.jobId)).toEqual(['c'])
   })
 
   it('remembers the video the batch was made from, so a panel can show its rows for that video and no other', async () => {
     install(() => Promise.resolve([]))
-    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(useExportQueue.getState().sourcePath).toBe('/v/a.mp4')
   })
 })
@@ -169,7 +169,7 @@ describe('the Export Cancel - one path for the panel and the closed video\'s car
   })
 
   it('one job left stops the batch at once, with no question', () => {
-    useExportQueue.setState({ jobs: [row('a', { percent: 100 }), row('b', { percent: 30 })], running: true, sourcePath: '/v/a.mp4' })
+    useExportQueue.setState({ jobs: [row('a', { percent: 100 }), row('b', { percent: 30 })], running: true, sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     const ask = vi.fn()
     requestExportCancel(ask)
     expect(cancelAll).toHaveBeenCalledTimes(1)
@@ -177,7 +177,7 @@ describe('the Export Cancel - one path for the panel and the closed video\'s car
   })
 
   it('two or more left ask first and stop nothing until the question is answered', () => {
-    useExportQueue.setState({ jobs: [row('a'), row('b')], running: true, sourcePath: '/v/a.mp4' })
+    useExportQueue.setState({ jobs: [row('a'), row('b')], running: true, sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     const ask = vi.fn()
     requestExportCancel(ask)
     expect(ask).toHaveBeenCalledTimes(1)
@@ -194,7 +194,7 @@ describe('the finished toast of a batch always carries the way to its first file
   ]
   const run = async (): Promise<void> => {
     install(() => Promise.resolve(results))
-    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
   }
   /** Every <button> in the element the toast carries, with its onClick. */
   const buttons = (node: ReactNode, found: Array<{ text: string; onClick: () => void }> = []): Array<{ text: string; onClick: () => void }> => {
@@ -238,7 +238,7 @@ describe('the finished toast of a batch always carries the way to its first file
     const reveal = vi.fn()
     install(() => Promise.resolve([{ jobId: 'a', outputPath: '', durationMs: 1 }, { jobId: 'b', outputPath: '/out/b.mp4', durationMs: 1 }]))
     ;(window as unknown as { api: { video: Record<string, unknown> } }).api.video.revealInFolder = reveal
-    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     const [message] = vi.mocked(toast.success).mock.calls[0] as [ReactNode]
     buttons(message)[0]?.onClick()
     expect(reveal).toHaveBeenCalledWith('/out/b.mp4')
@@ -246,7 +246,7 @@ describe('the finished toast of a batch always carries the way to its first file
 
   it('a batch that wrote no file says the plain sentence and offers nothing to reveal', async () => {
     install(() => Promise.resolve([]))
-    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     expect(toast.success).toHaveBeenCalledWith('Exported 2 files')
   })
 })
@@ -266,7 +266,7 @@ describe('exportCanceledMessage - what a canceled batch says depends on what sur
   it('a cancel during the FIRST job leaves its row saying only that it was canceled', async () => {
     const held = gate()
     install(() => held.promise)
-    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     held.reject(new Error(CANCELLED_MESSAGE))
     await done
     const [a, b] = useExportQueue.getState().jobs
@@ -278,10 +278,41 @@ describe('exportCanceledMessage - what a canceled batch says depends on what sur
   it('a cancel after the first file finished keeps the folder sentence on the rows left', async () => {
     const held = gate()
     const bridge = install(() => held.promise)
-    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'a.mp4' })
     bridge.complete[0]?.({ jobId: 'a', outputPath: '/out/a.mp4' })
     held.reject(new Error(CANCELLED_MESSAGE))
     await done
     expect(useExportQueue.getState().jobs[1]?.error).toBe('Export canceled. Files already finished are in your folder.')
+  })
+})
+
+describe('the queue carries the name of the person\'s file with the batch (T-164 (5))', () => {
+  it('keeps sourceName beside sourcePath while the batch runs, and after it, for the rows that stay', async () => {
+    const held = gate<unknown[]>()
+    install(() => held.promise)
+    // A converted import is played from "stream-aB3dE5fG.mp4"; the person opened "stream.flv".
+    const done = runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/tmp/imports/stream-aB3dE5fG.mp4', sourceName: 'stream.flv' })
+    expect(useExportQueue.getState().sourcePath).toBe('/tmp/imports/stream-aB3dE5fG.mp4')
+    expect(useExportQueue.getState().sourceName).toBe('stream.flv')
+    held.resolve([])
+    await done
+    expect(useExportQueue.getState().sourceName).toBe('stream.flv')
+  })
+
+  it('a batch refused because one is running does not change the name of the one that is', async () => {
+    const held = gate<unknown[]>()
+    install(() => held.promise)
+    const first = runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'first.flv' })
+    await runExportBatch({ queue: [spec('z')], statuses: [row('z')], dir: '/out', sourcePath: '/v/b.mp4', sourceName: 'second.flv' })
+    expect(useExportQueue.getState().sourceName).toBe('first.flv')
+    held.resolve([])
+    await first
+  })
+
+  it('the next batch replaces the name with its own', async () => {
+    install(() => Promise.resolve([]))
+    await runExportBatch({ queue: [spec('a')], statuses: [row('a')], dir: '/out', sourcePath: '/v/a.mp4', sourceName: 'first.flv' })
+    await runExportBatch({ queue: [spec('b')], statuses: [row('b')], dir: '/out', sourcePath: '/v/b.mp4', sourceName: 'second.ts' })
+    expect(useExportQueue.getState().sourceName).toBe('second.ts')
   })
 })

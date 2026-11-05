@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import { REFRAME_TARGET, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
+import { REFRAME_TARGET, reframePanelShows, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
 import { clipRecipe } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
 import { cancelReframe, useReframeRun } from './store/runs'
@@ -51,12 +51,10 @@ export function ReframePanel(): JSX.Element | null {
   // is a vertical video, so opening it here is also the way into captions for it (transcribe, then burn it in).
   const editInVideoStudio = useEditInVideoStudio("Couldn't open the reframed video in Video Studio.")
 
-  if (!source) return null
   const clip = clips.find((c) => c.id === selectedClipId)
-  if (!clip) return null
-
-  const isHorizontal = source.probe.width > source.probe.height
-  if (!isHorizontal) return null
+  // T-164 (4): one rule, `reframePanelShows`, that the closed-video card reads too (a run with no panel drawn has no row but the card's). The first two tests
+  // are the compiler's - they narrow `source` and `clip` for the body - and the helper repeats them as part of the rule.
+  if (!source || !clip || !reframePanelShows(source, clip)) return null
 
   async function reframe(): Promise<void> {
     if (startingRef.current) return

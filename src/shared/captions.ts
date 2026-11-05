@@ -47,7 +47,16 @@ export interface CaptionStyle {
   primaryColor: string
   /** Hex `#RRGGBB` for the outline. Translated to ASS &Hbbggrr&. */
   outlineColor: string
+  /**
+   * T-164 (2): the outline's thickness, in libass `Outline` units at the same 288-line basis as `fontSize` (so the picture scales it with the text), 0-10.
+   * Absent is 2 (`DEFAULT_OUTLINE_WIDTH`): the weight every burn had before the presets set one, and what a style saved by an older version burns with.
+   */
+  outlineWidth?: number
 }
+
+/** The outline weight a style without `outlineWidth` burns with (T-164 (2)); the bounds are what `captions:burnIn` accepts. */
+export const DEFAULT_OUTLINE_WIDTH = 2
+export const MAX_OUTLINE_WIDTH = 10
 
 /**
  * The sound the speech engine is given (T-111): 16 kHz mono, whisper's native
@@ -93,7 +102,8 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
       fontSize: 56,
       position: 'bottom',
       primaryColor: '#ffffff',
-      outlineColor: '#000000'
+      outlineColor: '#000000',
+      outlineWidth: 4
     }
   },
   {
@@ -104,7 +114,8 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
       fontSize: 28,
       position: 'bottom',
       primaryColor: '#f5f5f5',
-      outlineColor: '#222222'
+      outlineColor: '#222222',
+      outlineWidth: 2
     }
   },
   {
@@ -115,7 +126,8 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
       fontSize: 24,
       position: 'bottom',
       primaryColor: '#ffffff',
-      outlineColor: '#000000'
+      outlineColor: '#000000',
+      outlineWidth: 2
     }
   },
   {
@@ -126,7 +138,8 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
       fontSize: 48,
       position: 'bottom',
       primaryColor: '#ffff00',
-      outlineColor: '#000000'
+      outlineColor: '#000000',
+      outlineWidth: 5
     }
   }
 ] as const

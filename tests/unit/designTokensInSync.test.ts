@@ -460,3 +460,34 @@ describe('placeholder text wears the palette, and stays readable on every surfac
     expect(contrast('#5a4f4c', BG_BASE)).toBeLessThan(4.5)
   })
 })
+
+/**
+ * T-164 (8): react-konva's <Transformer> draws its border and anchors in Konva's stock rgb(0, 161, 255), a second accent against the one BRANDING allows
+ * (the same finding as the toast marks above: a library's own colors). The three props are token imports, and the anchors stay visible on a light and on a dark
+ * document. E2E: image.spec.ts "the selection handles wear the palette (T-164 (8))" reads them off the real stage.
+ */
+describe('the selection handles take their colors from the palette (T-164 (8))', () => {
+  const canvas = readFileSync(path.resolve(RENDERER_ROOT, 'modules/image-studio/Canvas.tsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  const transformer = canvas.slice(canvas.indexOf('<Transformer'), canvas.indexOf('/>', canvas.indexOf('<Transformer')))
+
+  it('borderStroke and anchorStroke are ACCENT, anchorFill is INK_BASE, all imported from the tokens module', () => {
+    expect(transformer).toMatch(/borderStroke=\{ACCENT\}/)
+    expect(transformer).toMatch(/anchorStroke=\{ACCENT\}/)
+    expect(transformer).toMatch(/anchorFill=\{INK_BASE\}/)
+    expect(canvas).toMatch(/import \{[^}]*\bACCENT\b[^}]*\bINK_BASE\b[^}]*\} from '\.\.\/\.\.\/styles\/tokens'/)
+    expect(transformer, 'no raw color is written on it').not.toMatch(/(?:Stroke|Fill)=["'{]\s*["']?(#|rgb)/i)
+  })
+
+  it('an anchor (a light fill with an accent stroke) is visible on a white document and on the dark one, at the 3:1 a UI component needs', () => {
+    expect(Math.max(contrast(INK_BASE, '#ffffff'), contrast(ACCENT, '#ffffff')), 'on white: the stroke carries it').toBeGreaterThanOrEqual(3)
+    expect(contrast(ACCENT, '#ffffff')).toBeGreaterThanOrEqual(3)
+    expect(contrast(INK_BASE, BG_BASE), 'on the app\'s own near-black: the fill carries it').toBeGreaterThanOrEqual(3)
+    expect(contrast(ACCENT, BG_BASE), 'and the border (the accent) does too').toBeGreaterThanOrEqual(3)
+  })
+
+  it('the pin can fail: the stock blue is not a token', () => {
+    expect([ACCENT, INK_BASE].map((c) => c.toLowerCase())).not.toContain('#00a1ff')
+  })
+})

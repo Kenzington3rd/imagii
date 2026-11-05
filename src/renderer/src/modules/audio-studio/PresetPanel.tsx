@@ -35,8 +35,9 @@ export function PresetPanel(): JSX.Element {
     try {
       const list = await window.api.audio.listPresets()
       setPresets(list)
-    } catch {
-      toast.error('Could not load saved presets')
+    } catch (err) {
+      // T-164 (3): a finished sentence like its siblings' ("Couldn't save that preset."), with the cause when main gave one.
+      reportFailure(err, { failed: "Couldn't load your saved presets." })
     }
   }
 

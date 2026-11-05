@@ -264,6 +264,12 @@ Repeated UI is a component, not copy-paste:
   matrix (5.1 by 1/2.414, so every channel drops 7.6 dB; 7.1 about 9.9); in float it does not, and the matrix is the player's
   (fronts at unity, centre and surrounds 0.7071, LFE dropped). A loud mix can pass full scale as in a player; the s16
   conversion clips it. A conversion's place is part of its meaning: a level claim on a down-mix is measured per channel.
+  T-164 (1): the export has the same rule. An MP3 holds two channels at most, so a surround source exported to MP3 (no second track) has
+  `SURROUND_TO_STEREO_FILTER` as the FIRST stage of the measure pass's filter and of the render's `-af` (`audio/process.ts`, by
+  `probeAudioChannels` in main, once per export, inside the run's guard; a null count is no fold): Even volume measures and targets the stereo
+  file that is written (R128 weights a surround channel +1.5 dB, a fold at 0.7071 does not: a loudnorm over six channels landed it 4.7 LU low), and a bare
+  `anull` export folded by ffmpeg itself was 7.8 dB down (centre 10.9). The `-1 dBFS` limiter is still decided on the chain, not on the fold, so
+  nothing switched on stays `fold,anull`. WAV, FLAC and AAC keep the file's channels; a second track's mix already folds both sides.
 - **A result belongs to what the job was started on (T-112).** Nothing locks the app while a long job runs, so a
   result can arrive after the person has moved on. A transcription started on video A and finished after video B
   was opened used to attach A's captions to B: the panel captures the source path when the job starts and applies
@@ -556,6 +562,10 @@ Repeated UI is a component, not copy-paste:
   (`shiftSrtToRange(srt, start, end, speed)`: shifted, cut to the range, then divided by the speed). A clip nobody
   speaks in gets no file. The YouTube slot of a vertical clip is asked about as a YouTube Short with its own
   3-minute limit (`kitLimitTargets`); Reels stays 20 minutes.
+- **A caption style carries its outline weight (T-164 (2)).** `CaptionStyle.outlineWidth` (optional, libass `Outline` units at the same 288-line basis as `FontSize`,
+  so the picture scales it with the text; 0-10) is written by `buildForceStyle` as `Outline=${outlineWidth ?? 2}`: Subtle subtitle 2, Reels minimal 2,
+  TikTok bold 4, Big-outline accessibility 5. A style without one (the default style, an older saved one) burns with 2, as every burn did. The IPC gate
+  (`assertUsableCaptionStyle`) and the runner both refuse a value that is not a finite number from 0 to 10, because it is printed into `force_style`.
 - **The caption burn reads a cleaned transcript, whole video or range (T-162 (1)).** `runBurnIn` reads the .srt once and cleans it the one way: `range ? shiftSrtToRange(raw, ...) : cleanTranscriptSrt(raw)`.
   An empty result is no subtitle stage and `captioned: false` (`subtitles=` cannot open a cue-less file: exit 183); a text that differs from the
   file (a range always; a whole video when the file still holds an older release's tags) burns from a temporary copy (`shiftedSrtPath`) removed

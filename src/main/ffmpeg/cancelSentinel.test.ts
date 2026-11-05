@@ -167,7 +167,9 @@ vi.mock('../audio/probe', () => ({
       format: 'wav',
       sizeBytes: 0
     }
-  }
+  },
+  // T-164 (1): an MP3 export asks for the source's channel count (it is not a length probe, so `probeCalls` does not count it).
+  probeAudioChannels: async () => 2
 }))
 
 // whisperManager reads electron (`net`, `app`) and the sidecar paths; neither

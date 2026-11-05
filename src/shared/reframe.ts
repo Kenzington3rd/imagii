@@ -25,6 +25,18 @@ export function reframePhaseLabel(phase: ReframePhase): string {
   return PHASE_LABELS[phase]
 }
 
+/**
+ * Whether the Reframe panel draws its body (T-164 (4)): a video is open, a clip is selected, and the picture is horizontal - a vertical or square one
+ * has nothing to cut a 9:16 strip from. ReframePanel's early returns and the closed-video card (`VideoJobsRunning`) both ask this one, because a Reframe
+ * that runs while the panel is not drawn has no row of its own, and the card must draw it then.
+ */
+export function reframePanelShows(
+  source: { probe: { width: number; height: number } } | null,
+  clip: object | null | undefined
+): boolean {
+  return source !== null && clip !== null && clip !== undefined && source.probe.width > source.probe.height
+}
+
 /** The size a Reframe writes: a vertical 9:16 file (the panel, the IPC call and the readout all read it from here). */
 export const REFRAME_TARGET = { width: 1080, height: 1920 } as const
 

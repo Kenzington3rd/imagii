@@ -33,6 +33,8 @@ import type {
 import {
   ASS_PLAY_RES_Y,
   DEFAULT_CAPTION_STYLE,
+  DEFAULT_OUTLINE_WIDTH,
+  MAX_OUTLINE_WIDTH,
   TRANSCRIPTION_AUDIO,
   WHISPER_MODEL_FILENAME,
   WHISPER_MODEL_MAX_BYTES,
@@ -387,6 +389,12 @@ function buildForceStyle(
       : Math.max(16, Math.round(legacyFontSizePct * 10))
   const primary = hexToAssColor(style.primaryColor)
   const outline = hexToAssColor(style.outlineColor)
+  // T-164 (2): printed into the same `force_style`, so the runner asks again what the IPC gate asked (a number 0-10, or none).
+  const outlineWidth = style.outlineWidth ?? DEFAULT_OUTLINE_WIDTH
+  assertAlways(
+    typeof outlineWidth === 'number' && Number.isFinite(outlineWidth) && outlineWidth >= 0 && outlineWidth <= MAX_OUTLINE_WIDTH,
+    `caption outline width must be a number from 0 to ${MAX_OUTLINE_WIDTH}, got ${String(outlineWidth)}`
+  )
   const alignment = alignmentForPosition(style.position)
   const baseMarginV = style.position === 'middle' ? 0 : 40
   // T-113: a probe can answer with a frame of 0, which `captionBasisPx` refuses; that is
@@ -398,7 +406,7 @@ function buildForceStyle(
     `FontSize=${fontSize}`,
     `PrimaryColour=${primary}`,
     `OutlineColour=${outline}`,
-    `Outline=2`,
+    `Outline=${outlineWidth}`,
     `Shadow=0`,
     `Alignment=${alignment}`,
     `MarginV=${marginV}`,

@@ -238,3 +238,40 @@ describe('CAPTION_STYLE_PRESETS — Phase 4A.2', () => {
     }
   })
 })
+
+describe('the caption outline weight (T-164 (2))', () => {
+  // The presets promised a heavier outline ("thick black outline", "Big-outline accessibility") and every burn wrote `Outline=2`. The weight is the style's `outlineWidth`
+  // (libass Outline units); a style without one burns with 2, as every burn did before.
+  const outlineOf = (out: string): string => /(?:^|,)Outline=([^,]*)/.exec(out)?.[1] ?? 'missing'
+
+  it.each([
+    ['tiktok-bold', '4'],
+    ['reels-minimal', '2'],
+    ['subtle-subtitle', '2'],
+    ['big-outline-accessibility', '5']
+  ])('the %s preset burns with Outline=%s', (id, width) => {
+    const preset = CAPTION_STYLE_PRESETS.find((p) => p.id === id)
+    if (!preset) throw new Error(`no preset ${id}`)
+    expect(outlineOf(buildForceStyle(preset.style, 0))).toBe(width)
+  })
+
+  it('a style with no outlineWidth burns with Outline=2, the default style included', () => {
+    expect(outlineOf(buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5))).toBe('2')
+    expect(DEFAULT_CAPTION_STYLE.outlineWidth, 'the default style carries none').toBeUndefined()
+  })
+
+  it('a width the style carries is the one written, 0 included (no outline), and it does not disturb the other fields', () => {
+    const base = buildForceStyle(DEFAULT_CAPTION_STYLE, 3.5)
+    expect(outlineOf(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: 0 }, 3.5))).toBe('0')
+    expect(outlineOf(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: 3.5 }, 3.5))).toBe('3.5')
+    expect(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: 2 }, 3.5), 'an explicit 2 is the default').toBe(base)
+    expect(buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: 5 }, 3.5).replace('Outline=5', 'Outline=2')).toBe(base)
+  })
+
+  it('the runner asks again what the gate asks: a width that is not a number from 0 to 10 throws before anything is built', () => {
+    for (const bad of [-1, 10.5, Number.NaN, Number.POSITIVE_INFINITY, '3,FontName=x' as unknown as number]) {
+      expect(() => buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: bad }, 3.5), String(bad)).toThrow(/outline width/)
+    }
+    expect(() => buildForceStyle({ ...DEFAULT_CAPTION_STYLE, outlineWidth: 10 }, 3.5)).not.toThrow()
+  })
+})

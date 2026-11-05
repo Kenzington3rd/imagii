@@ -15,6 +15,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { loadImage, storedDataUrl } from '../../lib/boundedImage'
 import { claimFirst } from '../../lib/claimFirst'
+import { inputTypeOf, isTextEntryTarget } from '../../lib/keyOwnership'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
 import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
@@ -100,6 +101,9 @@ export function ImportPanel(): JSX.Element {
       // T-163 (4): a dialog (or the coachmark) is a claim over the window, as for every other studio key (ImageStudio, RecordStudio, undo/redo): a picture pasted behind the
       // Variants scrim added a layer and dropped the previews. No `preventDefault`, so a text field inside a dialog still pastes its text.
       if (anyDialogClaim()) return
+      // T-164 (7): a text field the person is typing in owns the paste, as it owns every other studio key (`focusOwnsKey`): a clipboard holding text AND a picture (an
+      // office app writes both) added a layer and swallowed the text. No `preventDefault`, so the field gets its text.
+      if (e.target instanceof HTMLElement && isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return
       if (pasteHeld) {
         e.preventDefault()
         return
@@ -241,7 +245,7 @@ export function ImportPanel(): JSX.Element {
                 <button
                   key={t.id}
                   onClick={() => applyTemplate(t)}
-                  className="card p-3 text-left hover:border-accent transition-colors"
+                  className="card p-3 flex flex-col justify-start items-stretch text-left hover:border-accent transition-colors"
                 >
                   <div
                     className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"

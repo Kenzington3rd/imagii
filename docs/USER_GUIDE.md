@@ -398,7 +398,10 @@ that names the file being converted.)
 - **Closing the video does not stop a job either.** A render, a scan, a transcription or an export that is running when you
   press **Close** keeps going, and a card beside the importer lists each one - what it is and which clip or file it is for, how far
   along it is where imagii can tell, and its own **Cancel** - until it finishes or you cancel it. **Close** says so when it asks
-  ("The export that is running keeps going; its Cancel stays on screen.").
+  ("The export that is running keeps going; its Cancel stays on screen."). An export's row names the video as you
+  opened it (**stream.flv**), not the working copy imagii made to play it. A Reframe is the one job that can also
+  outlast its panel with a video open: if the video you open next is vertical, so there is nothing to reframe, the card
+  stays above it with the Reframe's row and its **Cancel** until it ends or you cancel it.
   **Close** asks only when it would throw something away that took you time: more than one clip, a changed
   clip, anything you can still undo, a scan's moments, a chat log you pasted or the spikes found in it. A video
   you have only opened closes with no question (and with nothing running, nothing is asked at all); a
@@ -552,8 +555,9 @@ never called loaded.
     target is what you hear. A 5.1 or 7.1 sound taken from a video (and an AIFF or
     WMA file, which imagii extracts) is folded to stereo the way a player does (the centre and the
     surrounds a little under the fronts, the bass channel left out), so it keeps its level, and so
-    is what you hear in the preview; a 5.1 or 7.1 WAV, FLAC, MP3, AAC, M4A, OGG or Opus file opens as it is
-    and exports with its own channels. Whatever you switch on or cut out, peaks above −1 dBFS
+    is what you hear in the preview; a 5.1 or 7.1 WAV, FLAC, MP3, AAC, M4A, OGG or Opus file opens as it is.
+    WAV, FLAC and AAC exports keep the file's channels; an MP3 is stereo, so a surround file exported
+    as MP3 is folded the way a player does, at the same level. Whatever you switch on or cut out, peaks above −1 dBFS
     are limited when you export, so a boost cannot clip; an export with nothing
     switched on and nothing cut keeps the file's levels as they are. If your cuts take out
     everything, **Export** says "Everything is cut out. Click a mark to put a part back." and

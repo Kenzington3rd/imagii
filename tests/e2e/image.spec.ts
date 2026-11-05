@@ -17,7 +17,7 @@ import {
   type CanvasTemplate
 } from '../../src/renderer/src/modules/image-studio/templates'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
-import { BG_BASE, INK_BASE } from '../../src/renderer/src/styles/tokens'
+import { ACCENT, BG_BASE, INK_BASE } from '../../src/renderer/src/styles/tokens'
 import { dragThrough, dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
@@ -1981,7 +1981,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:79).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:80).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -6159,6 +6159,162 @@ test.describe('Image Studio - Ctrl+V stands down for an open dialog (T-163 (4))'
       await putPictureOnClipboard(studio)
       await window.keyboard.press('Control+v')
       await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-164 (7): Ctrl+V into a focused text field pastes the text ────────────────────────────────────────────────────────────────────────────
+//
+// ImportPanel's window-level `paste` listener did not ask whether a text field owns the paste (the other studio keys ask `focusOwnsKey`): with a clipboard
+// that holds text AND a picture (an office app writes both), Ctrl+V in Properties' Name box added an image layer and swallowed the text. The clipboard is
+// REAL (Electron's `clipboard.write` with both formats) and so is the chord.
+test.describe('Image Studio - Ctrl+V into a focused text field pastes the text (T-164 (7))', () => {
+  async function putTextAndPictureOnClipboard(studio: Studio): Promise<void> {
+    await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+      clipboard.write({ text: 'PASTED', image: nativeImage.createFromDataURL(dataUrl) })
+    }, `data:image/png;base64,${readFileSync(studio.fixturePng).toString('base64')}`)
+    await studio.window.waitForTimeout(800)
+  }
+
+  test('a mixed clipboard pasted into the Name box puts the text in the box and adds no layer; with the canvas focused it still adds the picture', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t164-paste-field')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const name = field(window, 'Name')
+      await expect(name).toBeVisible()
+      await putTextAndPictureOnClipboard(studio)
+
+      await name.click()
+      await window.keyboard.press('Control+a')
+      await window.keyboard.press('Control+v')
+      await expect(name, 'the text is what the box now holds').toHaveValue('PASTED')
+      await window.waitForTimeout(1200)
+      await expectLayerCount(window, 1)
+
+      // The control, in the same flow and the same clipboard: the focus leaves the field (a click on the empty canvas) and the chord adds the picture.
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(name).toHaveCount(0)
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // The text layer's "Text" box is a <textarea>, the likeliest place to paste a title copied from a document: the guard covers every text-entry element, not <input> alone.
+  test('a mixed clipboard pasted into the Text textarea puts the text in the box and adds no layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t164-paste-textarea')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const text = field(window, 'Text')
+      await expect(text).toBeVisible()
+      expect(await text.evaluate((el) => el.tagName)).toBe('TEXTAREA')
+      await putTextAndPictureOnClipboard(studio)
+
+      await text.click()
+      await window.keyboard.press('Control+a')
+      await window.keyboard.press('Control+v')
+      await expect(text, 'the text is what the box now holds').toHaveValue('PASTED')
+      await window.waitForTimeout(1200)
+      await expectLayerCount(window, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-164 (8): the selection handles are the palette's ─────────────────────────────────────────────────────────────────────────────────────
+//
+// The <Transformer> set no colours, so its border and anchors were Konva's stock rgb(0, 161, 255): a second accent beside the one BRANDING allows. The
+// strokes read off the real stage are the accent token and the anchor fill is the ink token, on a white page and on a dark template.
+test.describe('Image Studio - the selection handles wear the palette (T-164 (8))', () => {
+  function transformerColors(window: Page): Promise<{ border: string; anchorStroke: string; anchorFill: string }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        findOne(sel: string): { borderStroke(): string; anchorStroke(): string; anchorFill(): string } | undefined
+      }
+      const tr = stage.findOne('Transformer')
+      if (!tr) throw new Error('no Transformer on the stage')
+      return { border: tr.borderStroke(), anchorStroke: tr.anchorStroke(), anchorFill: tr.anchorFill() }
+    })
+  }
+
+  test('with a layer selected on the white page, and on a dark template, the border and anchor strokes are the accent and the anchor fill is ink-base', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t164-handles')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await expect.poll(() => transformerNodeCount(window), { timeout: 10_000 }).toBe(1)
+      expect(await transformerColors(window), 'white page').toEqual({ border: ACCENT, anchorStroke: ACCENT, anchorFill: INK_BASE })
+
+      const t = templateById('yt-thumb-bold')
+      expect(t.doc.background, 'the template is dark').not.toBe('#ffffff')
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      await window.locator('[role="dialog"]').locator('button.card').filter({ has: window.getByText(t.name, { exact: true }) }).click()
+      await expectTemplateApplied(window, t)
+      await layerRow(window, t.doc.layers[0]!.name).click()
+      await expect.poll(() => transformerNodeCount(window), { timeout: 10_000 }).toBe(1)
+      expect(await transformerColors(window), 'dark template').toEqual({ border: ACCENT, anchorStroke: ACCENT, anchorFill: INK_BASE })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-164 (9): the template tiles lay their content from the top ───────────────────────────────────────────────────────────────────────────
+//
+// A <button> in a stretched grid cell centres its content, so a tile with a longer description started its preview lower than its neighbour's. In the
+// empty state's grid and in the Templates dialog's, the previews of one row share a top, at the narrowest window.
+test.describe('Image Studio - template tile previews line up across a row (T-164 (9))', () => {
+  /** Tiles grouped into rows by their own top; each row's preview tops (client rects), read in one pass. */
+  function rowsOfPreviewTops(tiles: Locator): Promise<Array<{ tileTop: number; previewTops: number[]; names: string[] }>> {
+    return tiles.evaluateAll((els) => {
+      const rows: Array<{ tileTop: number; previewTops: number[]; names: string[] }> = []
+      for (const el of els) {
+        const top = el.getBoundingClientRect().top
+        const preview = el.firstElementChild as HTMLElement
+        const row = rows.find((r) => Math.abs(r.tileTop - top) <= 1)
+        const entry = { top: preview.getBoundingClientRect().top, name: (el.querySelector('.font-medium')?.textContent ?? '') }
+        if (row) {
+          row.previewTops.push(entry.top)
+          row.names.push(entry.name)
+        } else rows.push({ tileTop: top, previewTops: [entry.top], names: [entry.name] })
+      }
+      return rows
+    })
+  }
+
+  function expectRowsLineUp(rows: Array<{ tileTop: number; previewTops: number[]; names: string[] }>, what: string): void {
+    expect(rows.some((r) => r.previewTops.length >= 2), `${what}: the grid has a row of two or more tiles`).toBe(true)
+    for (const r of rows) {
+      const spread = Math.max(...r.previewTops) - Math.min(...r.previewTops)
+      expect(spread, `${what}: the previews of the row [${r.names.join(' | ')}] start at ${r.previewTops.map((n) => n.toFixed(1)).join(', ')}`).toBeLessThanOrEqual(1)
+    }
+  }
+
+  test('at the narrowest window, the empty state\'s grid and the Templates dialog\'s each have previews that share a top within a row', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t164-tiles')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      const tiles = window.locator('button.card')
+      await expect(tiles).toHaveCount(CANVAS_TEMPLATES.length)
+      expectRowsLineUp(await rowsOfPreviewTops(tiles), 'the empty state')
+
+      await startBlank(window)
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await expect(dialog.locator('button.card')).toHaveCount(CANVAS_TEMPLATES.length)
+      expectRowsLineUp(await rowsOfPreviewTops(dialog.locator('button.card')), 'the Templates dialog')
     } finally {
       await closeStudio(studio)
     }

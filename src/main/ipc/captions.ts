@@ -14,7 +14,7 @@ import {
 import { captionsOutputDir } from '../sidecars/paths'
 import { isOutsideFolder } from '../pathConfine'
 import { clearTranscripts, countTranscripts } from '../transcripts'
-import { shiftSrtToRange, type TranscribeRequest, type BurnInRequest } from '../../shared/captions'
+import { MAX_OUTLINE_WIDTH, shiftSrtToRange, type TranscribeRequest, type BurnInRequest } from '../../shared/captions'
 import {
   assertFiniteNonNeg,
   assertNonEmptyString,
@@ -36,12 +36,14 @@ import { writeFileAtomic } from '../fsAtomic'
 const BAD_CAPTION_COLOR =
   "A caption color has a setting imagii can't use — check the text and outline colors, then try again."
 const CAPTION_COLOR = /^#[0-9a-fA-F]{6}$/
+/** T-164 (2): the same for the outline weight, which has no dial of its own (a preset sets it), so the way out is a preset. */
+const BAD_CAPTION_OUTLINE = "The caption outline has a setting imagii can't use — pick a caption style again, then try again."
 
 function assertUsableCaptionStyle(style: unknown): void {
   if (style === undefined || style === null) return
-  const bad = (detail: string): never => {
+  const bad = (detail: string, sentence = BAD_CAPTION_COLOR): never => {
     console.error(`[imagii] captions:burnIn refused a caption style: ${detail}`)
-    throw new Error(BAD_CAPTION_COLOR)
+    throw new Error(sentence)
   }
   if (typeof style !== 'object' || Array.isArray(style)) return bad('req.style is not an object')
   const colors = style as Record<string, unknown>
@@ -49,6 +51,10 @@ function assertUsableCaptionStyle(style: unknown): void {
     const v = colors[key]
     if (typeof v !== 'string' || !CAPTION_COLOR.test(v)) bad(`req.style.${key} is not #RRGGBB`)
   }
+  // T-164 (2): the outline weight is printed into the same `force_style` (`Outline=`), so it is a finite number in 0-10, or absent (the presets carry 2 to 5).
+  const width = colors.outlineWidth
+  if (width !== undefined && (typeof width !== 'number' || !Number.isFinite(width) || width < 0 || width > MAX_OUTLINE_WIDTH))
+    bad(`req.style.outlineWidth is not a number from 0 to ${MAX_OUTLINE_WIDTH}`, BAD_CAPTION_OUTLINE)
 }
 
 /**

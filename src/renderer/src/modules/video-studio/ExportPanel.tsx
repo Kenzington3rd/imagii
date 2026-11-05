@@ -380,7 +380,7 @@ export function ExportPanel(): JSX.Element | null {
     // copy nobody notices going wrong.
     // T-135 (1): the batch runs in the queue's store (its listeners, its toast, its settling of the rows), not in this component: the person can
     // leave this studio while it runs, and it still ends where it should.
-    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath })
+    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath, sourceName: source.fileName })
   }
 
   // Counts custom targets too, so the button's number is the number of files

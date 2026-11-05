@@ -178,9 +178,13 @@ closed face needs no class to be right (the open list of a `<select>` is the exc
 and a new one is not given a color of its own. The same rule for the
 two things a library draws with its own stock colors: the toast marks (the green tick and the red
 cross are react-hot-toast's own) are set from the tokens in `AppToaster` (`TOAST_ICON_THEME`:
-`OK_STRONG` and `DANGER_STRONG` discs, `BG_BASE` glyphs, 10.08:1 and 7.20:1).
-`designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, or a toast mark that
-is not a token.
+`OK_STRONG` and `DANGER_STRONG` discs, `BG_BASE` glyphs, 10.08:1 and 7.20:1). The third is Stream
+Graphics' selection frame (T-164 (8)): react-konva's `<Transformer>` draws its border and anchors in
+Konva's stock `rgb(0, 161, 255)`, so `Canvas.tsx` sets `borderStroke` and `anchorStroke` from `ACCENT`
+and `anchorFill` from `INK_BASE`, all imported from `tokens.ts` (an accent line, light handles with an
+accent edge: 3.6:1 on a white page, which is the number that matters there, and 15.5:1 for the fill on
+the near-black). `designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, a toast
+mark that is not a token, or a Transformer whose three colors are not those imports.
 
 **What the two properties do not reach (T-126 (16)).** `color-scheme: dark` makes a `<select>`'s
 closed control and its open list dark. The row the pointer or the arrow keys are on in that open

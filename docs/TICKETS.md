@@ -7975,7 +7975,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 113)
+- **Status:** done (round 113 — see the Done entry)
 
 ---
 
@@ -8546,6 +8546,47 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 113 — T-164, all ten counted items and the fold, landed in the
+commit that carries this entry. Three Sonnet workers in fresh clones of
+f81b8be, disjoint source files, merged by the expediter; a container
+restart cut all three mid-run, and each was resumed from its own
+transcript (every interrupted mutation reversed and sha-checked, every
+interrupted gate re-run from the start). Track A: an MP3 export of a
+surround source folds to stereo in float as the first stage of both
+passes, so a 5.1 or 7.1 WAV/FLAC keeps a player's levels with nothing
+switched on (it was ~8 dB down) and Even volume targets the stereo file
+written; the caption presets carry an outline weight (TikTok bold 4,
+Big-outline accessibility 5, the light presets 2) and an unusable
+width is refused at the IPC gate; the saved-presets load failure is a
+finished sentence; the unreachable trim-to-clip refusal names the
+checkbox (fold). Track B: a running Reframe keeps its row and Cancel on
+the job card while a video whose Reframe panel does not show is open
+(one rule, `reframePanelShows`); the card names an Export batch by the
+person's file, not a converted import's working copy; the Compile card
+says clips keep their text. Track C: a paste into a focused text field
+(an input or the Text textarea) is the field's; the selection handles
+are drawn from the tokens; template and asset tile previews line up
+across a row; Record's webcam hint is in plain words.
+Deviations, accepted: A's Even volume red needs a back-left tone
+(R128's +1.5 dB weight; FL/FC are float either way) and a new IPC
+sentence for an unusable outline; B made `sourceName` required (test
+call sites edited in place) and ran the real reframe and convert in its
+e2e; C re-pointed the `ImportPanel.tsx:80` cite. Ledgers: A 5 RED / 27
+mutations (one disclosed survivor: the measure-pass fold at Layer 5,
+which loudnorm's second pass re-corrects; killed at unit), B 23
+mutations, C 17 (after the expediter's send-back), all others killed.
+Found not fixed: a contenteditable target is not a text entry for the
+paste guard (the app has none). Expedited personally: one independent
+mutation per track at a seam no ledger row names — A: Reels minimal's
+outline 2 -> 6 → captions.test.ts red; B: the open-video card filter
+widened to every non-export row → VideoJobsRunning.test.tsx and
+interactionWiring red; C: the paste guard narrowed to <input> →
+SURVIVED, sent back, the Text-textarea e2e added (red on the base) and
+now red on it — each restored byte-identical, sha256 verified; on the
+MERGED tree: verify x2 (208/6298), test:media 491 passed | 17 skipped of 508 on 7.0.2, FULL
+Playwright 678/678 (42.5 min). Applied to f81b8be by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 112 — T-163, all five counted items and the folds, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

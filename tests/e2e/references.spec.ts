@@ -3467,3 +3467,45 @@ test.describe('T-161 (8): the Delete board question reads right for an empty boa
     ])
   })
 })
+
+// ── T-164 (9): the Asset Library's tiles lay their content from the top ────────────────────────────────────────────────────────────────────
+// A <button> in a stretched grid cell centres its content, so a tile with a longer description started its preview lower than its neighbour's (about 8 px
+// at 1024 wide). At the narrowest window, the previews of one row share a top (client rects), every row of every category.
+test.describe('T-164 (9): Asset Library tile previews line up across a row', () => {
+  test('at the narrowest window the previews of each row start at the same top', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t164-tiles')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const { MIN_WINDOW, setWindowSize } = await import('./layout')
+      await setWindowSize(app, window, MIN_WINDOW)
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      const tiles = window.locator('button.card')
+      await expect(tiles).toHaveCount(ASSET_CATALOG.length)
+      const rows = await tiles.evaluateAll((els) => {
+        const out: Array<{ tileTop: number; previewTops: number[]; names: string[] }> = []
+        for (const el of els) {
+          const top = el.getBoundingClientRect().top
+          const previewTop = (el.firstElementChild as HTMLElement).getBoundingClientRect().top
+          const name = el.querySelector('.font-medium')?.textContent ?? ''
+          const row = out.find((r) => Math.abs(r.tileTop - top) <= 1)
+          if (row) {
+            row.previewTops.push(previewTop)
+            row.names.push(name)
+          } else out.push({ tileTop: top, previewTops: [previewTop], names: [name] })
+        }
+        return out
+      })
+      expect(rows.some((r) => r.previewTops.length >= 2), 'the grid has a row of two or more tiles').toBe(true)
+      for (const r of rows) {
+        const spread = Math.max(...r.previewTops) - Math.min(...r.previewTops)
+        expect(spread, `the previews of the row [${r.names.join(' | ')}] start at ${r.previewTops.map((n) => n.toFixed(1)).join(', ')}`).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

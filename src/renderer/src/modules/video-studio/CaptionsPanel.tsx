@@ -222,7 +222,7 @@ export function CaptionsPanel(): JSX.Element | null {
           ? clips.find((c) => c.id === selectedClipId) ?? null
           : null
       if (trimToClip && !selectedClip) {
-        toast.error('Pick a clip first to use trim-to-clip burn-in.')
+        toast.error('Pick a clip first to burn captions over its range.')
         return
       }
       const ranged = selectedClip !== null

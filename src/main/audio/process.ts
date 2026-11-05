@@ -17,11 +17,11 @@ import {
   vselectForCuts,
   type LoudnormMeasurement
 } from './chain'
-import { probeAudio } from './probe'
+import { probeAudio, probeAudioChannels } from './probe'
 import { probeVideo, type ProbeResult } from '../ffmpeg/probe'
 import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { canStreamCopyIntoMp4 } from '../../shared/mediaFormats'
-import { cancelAllExtractions } from './extract'
+import { cancelAllExtractions, SURROUND_TO_STEREO_FILTER } from './extract'
 import { cancelAllPeaks, cancelPeaksJob } from './peaks'
 import type {
   AudioExportSpec,
@@ -213,6 +213,14 @@ async function exportAudio(
   // primary is forced to stereo ahead of the mix's own last stage, which is not told.
   const dualMono = probe.channels === 1 && !spec.chain.secondaryTrack
   const chain = buildChain(spec.chain, undefined, dualMono)
+  // T-164 (1): an MP3 holds two channels at most, so ffmpeg folds a surround source in the s16 output conversion, where swresample NORMALISES the matrix (a
+  // front-left tone 7.8 dB down, a centre one 11 dB). The fold is made here instead, in float, as the player's own matrix (extract.ts's `SURROUND_TO_STEREO_FILTER`),
+  // and is the FIRST stage of both passes, so Even volume measures and targets the stereo file that is written. WAV, FLAC and AAC keep the file's channels. With a
+  // second track the mix folds both sides itself. The channel count is read the way the extract reads it (the most of any stream); a source it cannot read is left
+  // as it was. Whether the chain gets the limiter is decided on the chain below, not on this fold: nothing switched on stays a pass-through.
+  const foldToStereo =
+    spec.format === 'mp3' && !spec.chain.secondaryTrack && ((await run.guard(probeAudioChannels(spec.sourcePath))) ?? 0) > 2
+  const folded = (filter: string): string => (foldToStereo ? `${SURROUND_TO_STEREO_FILTER},${filter}` : filter)
   // T-125 (6): ffmpeg's `out_time` is a position in the file this job WRITES, which is the source less its cuts, so that is the
   // length both bars are measured against (the measure pass is cut-first, like the render).
   const writtenSeconds = keptDurationSec(probe.duration, spec.chain.cutRegions)
@@ -236,7 +244,7 @@ async function exportAudio(
   }
 
   if (chain.needsTwoPass && chain.filterPass1) {
-    const parsed = await measure(chain.filterPass1)
+    const parsed = await measure(folded(chain.filterPass1))
     if (parsed) measurement = parsed
   }
 
@@ -379,7 +387,7 @@ async function exportAudio(
     // switched on is the file that went in). Even volume's own last stage is loudnorm, whose true-peak limit
     // (-1.5 dB) is the answer, so it gets no second one.
     const limited = !spec.chain.loudnorm && finalChain.filterPass2 !== EMPTY_CHAIN
-    args.push('-af', limited ? `${finalChain.filterPass2},${MIX_LIMITER}` : finalChain.filterPass2)
+    args.push('-af', folded(limited ? `${finalChain.filterPass2},${MIX_LIMITER}` : finalChain.filterPass2))
   }
   args.push(...codecArgsFor(spec.format, spec.bitrate), '-ar', '48000', '-progress', 'pipe:1', '-nostats')
   const landed = await runFfmpegToFile(args, spec.outputPath, spec.jobId, writtenSeconds, 'render', onProgress, run)

@@ -92,7 +92,7 @@ export function AssetLibraryPanel(): JSX.Element {
                 <button
                   key={asset.id}
                   onClick={() => dropToCanvas(asset)}
-                  className="card p-3 text-left hover:border-accent transition-colors"
+                  className="card p-3 flex flex-col justify-start items-stretch text-left hover:border-accent transition-colors"
                 >
                   <div
                     className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"

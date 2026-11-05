@@ -14,6 +14,97 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-164 (round 113), Track A: the sound and the captions keep their promises
+
+The fiftieth sweep, Track A (items 1-3 and a fold).
+
+### (1) [LOW] - A 5.1 or 7.1 file exported to MP3 with nothing switched on was ~8 dB down
+
+- **Bug.** A front-left tone at -24.08 dBFS exported to MP3 at -31.88 and a centre tone at -35.01 per side; USER_GUIDE said the file "exports with its own channels".
+- **Root cause.** MP3 holds two channels at most, so the bare `-af anull` left the fold to ffmpeg's s16 output conversion, where swresample NORMALISES the matrix (T-162 (2) fixed the same defect on the extract path). Any stage on the chain made the stream float and the fold a player's, so only the pass-through lost the level. Even volume's loudnorm also worked on the six channels it did not write: R128 weights a surround channel +1.5 dB and the fold does not, so a back-left tone landed 4.7 LU under the target.
+- **Fix.** For an MP3 export of a source with more than 2 channels (`probeAudioChannels`, once per export, inside the run's guard; no second track, whose mix folds already) `SURROUND_TO_STEREO_FILTER` is the first stage of both passes. The limiter is still decided on the chain, so a bare export stays `fold,anull`. WAV, FLAC and AAC keep the file's channels; USER_GUIDE says so.
+- **Test.** media.spec.ts "T-164 (1)" (real `runAudioExport`: FL and FC tones to MP3 at the source's peak / -3.01 dB per side within 0.6 dB for the codec, measured 0.26; 7.1; Even volume on a back-left tone lands within 1 LU; WAV and FLAC controls keep six channels); singleTrackTail.test.ts "T-164 (1)" (the argv, per format and channel count). Red on f81b8be (-31.96, -34.98, -37.19, -20.7 LUFS).
+- **Lesson.** **A fix to a conversion has to be made at every place the conversion happens.** The extract was fixed in T-162; the export had its own, silent, copy of it. And a level claim is only checked by a source that makes the two paths differ: a tone on a front channel measures the same either way.
+
+### (2) [LOW] - The caption presets promised an outline weight that was always the same
+
+- **Bug.** "Big-outline accessibility" and the "thick black outline" hints burned with the same stroke as "Subtle subtitle".
+- **Root cause.** `buildForceStyle` wrote `Outline=2` for every style and `CaptionStyle` had no outline field.
+- **Fix.** Optional `outlineWidth` on the style (0-10), written as `Outline=${outlineWidth ?? 2}`, set per preset (2, 2, 4, 5); the IPC gate and the runner refuse anything else.
+- **Test.** media.spec.ts "T-164 (2)" (dark pixels in the caption box, 1.8x or more for Big-outline over Subtle at one font size; no width is pixel-identical to 2); whisperManager.test.ts and captionsBurnIn.test.ts "T-164 (2)". Red on f81b8be (5476 dark pixels for both).
+- **Lesson.** **A label that names a visual property needs a field that carries it.** Copy that promises "thick" over a constant is a promise nothing can keep.
+
+### (3) [LOW] - The saved-presets load failure toast was not a finished sentence
+
+- **Bug.** `toast.error('Could not load saved presets')` in a bare catch: no period, no cause.
+- **Root cause.** A catch written before `reportFailure` (T-84) and never revisited.
+- **Fix.** `reportFailure(err, { failed: "Couldn't load your saved presets." })`. Fold: CaptionsPanel's no-clip refusal names the checkbox the person ticked ("Pick a clip first to burn captions over its range."; unreachable from the UI, pinned at the source).
+- **Test.** audio.spec.ts "T-164 (3)" (`audio:listPresets` throws in main; the toast is exactly the sentence); interactionWiring.test.ts "T-164 (fold)". Red on f81b8be.
+- **Lesson.** **Grep for the old helper's bare catches when a helper becomes the convention.**
+
+## 2026-11-05 - T-164 (round 113), Track B: the closed-video card names what is running, and for whom
+
+The fiftieth sweep, Track B (items 4-6).
+
+### (4) [LOW] - A running Reframe lost its progress and Cancel once a vertical video was open
+
+- **Bug.** A Reframe started on a horizontal video and left running across a Close and the opening of a vertical video had no row, no bar and no Cancel until it ended; a second Reframe was refused with nothing saying why.
+- **Root cause.** The closed-video card (T-144) drew rows only with no video open, on the assumption that an open video's panels draw their own jobs. ReframePanel is the one run-store panel with a content-based early return (it returns null for a source that is not horizontal), so that assumption was false for it.
+- **Fix.** `reframePanelShows(source, clip)` in shared/reframe.ts is the one rule; ReframePanel's early return and the card both ask it. With a video open the card draws the Reframe row alone (with its Cancel) when the panel does not show; every other row keeps its rule.
+- **Test.** video-pipelines.spec.ts "T-164 (4)-(6)" (4) (a Reframe, Close, a vertical file: the row, its Cancel and the sentence; Cancel ends it with no file), reframe.test.ts, VideoJobsRunning.test.tsx, interactionWiring.test.ts "T-164". Red on f81b8be.
+- **Lesson.** **When a card stands in for panels that can be gone, check every panel it stands in for for a second way to be gone.** "No video open" was one reason a panel draws nothing; a panel's own early return is another, and the rule for it belongs in one function both readers call.
+
+### (5) [LOW] - The closed-video card named a converted import by its working copy
+
+- **Bug.** The Export row read `stream-aB3dE5fG.mp4` for a .flv the person opened as stream.flv.
+- **Root cause.** The row read the basename of `sourcePath`, which is the file played from; the person's name (`source.fileName`) was never stored with the batch. Audio's export had carried it since T-146.
+- **Fix.** The queue carries `sourceName` with the batch and the row reads it, the basename only for a batch with no name.
+- **Test.** "T-164 (4)-(6)" (5) (a real .flv convert, the export's encode held in main, Close: the card names stream.flv and no working-copy name), exportQueue.test.ts, VideoJobsRunning.test.tsx. Red on f81b8be.
+- **Lesson.** **A name shown to a person is the name they gave, carried from where they gave it.** A path derived later is the program's name, and a fix made in one studio (T-146) is a question to ask of its twin.
+
+### (6) [LOW] - The Compile card left out text
+
+- **Fix.** "Each clip keeps its crop, speed, color, text and effects." as Reframe's card says. Test: "T-164 (4)-(6)" (6), interactionWiring.test.ts "T-164".
+- **Lesson.** **Two cards that describe the same recipe are read against each other.**
+
+## 2026-11-05 - T-164 (round 113), Track C: Stream Graphics and Record look and read as the guides say
+
+The fiftieth sweep, Track C (items 7-10).
+
+### (7) [LOW] - A paste into a focused text field added a picture and swallowed the text
+
+- **Bug.** With a clipboard that holds text and a picture (an office app writes both), Ctrl+V in Properties' Name box added an image layer and pasted no text.
+- **Root cause.** ImportPanel's window-level `paste` listener asked whether a dialog claims the window (T-163 (4)) but not whether a text field owns the paste, which every other studio key asks (`focusOwnsKey`). It found an `image/` item and called `preventDefault`.
+- **Fix.** After the dialog guard, `onPaste` returns when the target is a text-entry element (`isTextEntryTarget` with `inputTypeOf`, from `lib/keyOwnership.ts`), with no `preventDefault`, so the field gets its text. The import line moved `ImportPanel.tsx:79` to `:80`, and the cite in docClaims.test.ts and its comment in image.spec.ts moved with it.
+- **Test.** image.spec.ts "Ctrl+V into a focused text field pastes the text (T-164 (7))" (a real `clipboard.write({ text, image })` and a real chord: the Name box reads PASTED and the layer count is unchanged; the same clipboard with the focus on the canvas adds the picture); interactionWiring.test.ts T-164. Red on f81b8be.
+- **Lesson.** **A window-level listener for an event a text field also receives is a shortcut like any other: it asks who owns the focus.** T-163 (4) added the dialog question to this listener and the text-field question was the one next to it.
+
+### (8) [LOW] - The selection handles were Konva's stock blue
+
+- **Bug.** The border and anchors of the selection frame were `rgb(0, 161, 255)`, a second accent beside the one BRANDING allows.
+- **Root cause.** The `<Transformer>` set no colors, and the T-125 (13) rule that themes a library's stock colors from the tokens had been applied to the toast marks and the native controls only.
+- **Fix.** `borderStroke` and `anchorStroke` from `ACCENT`, `anchorFill` from `INK_BASE` (existing tokens; none added). DESIGN_GUIDE names the Transformer beside the toast marks.
+- **Test.** image.spec.ts "the selection handles wear the palette (T-164 (8))" (the three props read off the real stage on the white page and on a dark template; red on f81b8be: `rgb(0, 161, 255)`); designTokensInSync.test.ts (the props are those imports; an anchor is visible at 3:1 on white and on the near-black).
+- **Lesson.** **A library that draws its own chrome is a place a second palette hides.** When a rule names a library's stock colors, grep for the other libraries the app draws with.
+
+### (9) [LOW] - Template and asset tile previews did not line up across a row
+
+- **Bug.** In a row of tiles, one with a longer description started its preview lower than its neighbour's (about 8 px at 1024 wide).
+- **Root cause.** A `<button>` centres its content vertically, and a grid cell stretches it to the tallest tile in the row.
+- **Fix.** The three tile buttons (ImportPanel's empty state, TemplatesDialog, AssetLibraryPanel) are `flex flex-col justify-start items-stretch`, keeping `text-left`.
+- **Test.** references.spec.ts "T-164 (9): Asset Library tile previews line up across a row" and image.spec.ts "template tile previews line up across a row (T-164 (9))" (the empty state's grid and the dialog's, at the narrowest window: every row's preview client-rect tops within 1 px); interactionWiring.test.ts T-164.
+- **Lesson.** **A stretched `<button>` is a vertically centred box.** Layout that must start at the top says so on the button; a test that measures one row of equal content passes by accident.
+
+### (10) [LOW] - Record's webcam hint was in developer words
+
+- **Bug.** "Webcam is composited into the recording at the chosen corner. The preview overlay in the recording view shows the cam alongside the screen for monitoring." sat under an unchecked box with no corner control.
+- **Root cause.** The sentence described the implementation (a composited canvas, an overlay) rather than what the person sees, against BRANDING's "plain words over developer words".
+- **Fix.** "Your webcam is added to a corner of the recording. You can see it in the preview while you record."
+- **Test.** record.spec.ts "T-164 (10): the Record card's webcam hint is in plain words" (the sentence is on the card and the old words are not); interactionWiring.test.ts T-164. Red on f81b8be.
+- **Lesson.** **Say what the person gets, not what the code does.**
+
+---
+
 ## 2026-11-05 - T-163 (round 112), Track A: Video Studio says what happened
 
 The forty-ninth sweep, Track A (items 1-3 and a fold).

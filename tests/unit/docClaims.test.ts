@@ -221,7 +221,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:51', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 51, 51, /<PositionBox value=\{layer\.x\}/],
-    ['ImportPanel.tsx:79', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 79, 79, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
+    ['ImportPanel.tsx:80', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 80, 80, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]
 

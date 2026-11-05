@@ -5554,3 +5554,35 @@ test.describe('T-162 (6): the volume meter folds a 7.1 file\'s centre channel in
     }
   })
 })
+
+// ── T-164 (3): the saved-presets load failure is a finished sentence ────────────────────────────────────────────────────────────────────────
+//
+// `PresetPanel`'s load catch raised `toast.error('Could not load saved presets')`: no period, no cause, against BRANDING's failure-sentence rule and its siblings
+// ("Couldn't save that preset."). It is `reportFailure(err, { failed: "Couldn't load your saved presets." })` now. The rejection is the real shape: main's
+// `audio:listPresets` handler is replaced (before the sound opens, because the panel loads the list when it mounts) with one that throws, and Electron wraps the throw
+// in its "Error invoking remote method" envelope.
+test.describe('T-164 (3): the saved-presets load failure is a finished sentence', () => {
+  test('a presets list main cannot read shows "Couldn\'t load your saved presets." and nothing of the old wording', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t164-presets-load')
+    const { app, window } = studio
+    try {
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('audio:listPresets')
+        ipcMain.handle('audio:listPresets', () => {
+          throw new Error('listPresets refused')
+        })
+      })
+      await dropAndWaitReady(studio)
+      await expect(window.locator('.card').filter({ hasText: 'Cleanup presets' }), 'the panel is on screen').toBeVisible()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain("Couldn't load your saved presets.")
+      const log = await readToastLog(window)
+      expect(log.filter((t) => /presets/i.test(t)), 'exactly the sentence (an entry of the log, whole): no cause tacked on for a throw that is not a finished sentence').toEqual([
+        "Couldn't load your saved presets."
+      ])
+      expect(log, 'and not the old wording').not.toContain('Could not load saved presets')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

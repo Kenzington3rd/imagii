@@ -30,7 +30,7 @@ import {
   makeRectLayer,
   useCanvasStore
 } from './state/canvasStore'
-import { ACCENT, EMBER, INK_MUTED, withAlpha } from '../../styles/tokens'
+import { ACCENT, EMBER, INK_BASE, INK_MUTED, withAlpha } from '../../styles/tokens'
 
 /**
  * What every layer type shares on the stage: where it is, how it is transformed, and the handlers that make it selectable,
@@ -537,6 +537,11 @@ export function Canvas(): JSX.Element {
             <Transformer
               ref={transformerRef}
               rotateEnabled
+              // T-164 (8): the handles are drawn from the palette, not Konva's stock rgb(0,161,255) (a second accent, as the toast marks were): an accent border and anchor
+              // stroke, and a light anchor fill that reads on a dark document and (with the accent stroke) on a white one. DESIGN_GUIDE names the Transformer beside the toast marks.
+              borderStroke={ACCENT}
+              anchorStroke={ACCENT}
+              anchorFill={INK_BASE}
               // T-140 (3): a corner drag keeps a picture's and a word's proportions (the export carries whatever scaleX / scaleY they end at), and Shift - `inverted` -
               // frees it. A shape stretches, and Shift keeps ITS ratio (Konva's `default`, which is what it always did). The side handles stretch every layer.
               keepRatio={selectedKeepsRatio}

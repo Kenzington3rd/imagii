@@ -71,7 +71,7 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
                   onClick={() => applyTemplate(t)}
                   onMouseEnter={() => setHover(t)}
                   onMouseLeave={() => setHover(null)}
-                  className="card p-3 text-left hover:border-accent transition-colors"
+                  className="card p-3 flex flex-col justify-start items-stretch text-left hover:border-accent transition-colors"
                 >
                   <div
                     className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"

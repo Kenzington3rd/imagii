@@ -74,6 +74,7 @@ import {
   type ChainSpec
 } from '../../src/shared/audio'
 import {
+  CAPTION_STYLE_PRESETS,
   DEFAULT_CAPTION_STYLE,
   escapeSubtitlesPath,
   shiftSrtToRange,
@@ -12574,4 +12575,182 @@ describe('a surround file keeps its level through the extract (real ffmpeg, T-16
     near(l ?? NaN, own ?? NaN, 0.1, 'left (dBFS)')
     near(r ?? NaN, own ?? NaN, 0.1, 'right (dBFS)')
   }, 120_000)
+})
+
+describe('an MP3 export of a surround file keeps its level (real runAudioExport + ffmpeg, T-164 (1))', () => {
+  // MP3 holds two channels at most, so a 5.1 source exported with nothing switched on (`-af anull`) was folded by ffmpeg in the s16 output conversion, where swresample NORMALISES the matrix
+  // (5.1 by 1/2.414): executed on 7.0.2, a front-left tone at -24.08 dBFS came out at -31.88 and a centre one at -35.01 per side. The export now folds in float first (the player's matrix, the extract's
+  // `SURROUND_TO_STEREO_FILTER`): the front left at unity on the left (the right silent), the centre at -3.01 dB on each side. Every tone is a 440 Hz sine at -24.08 dBFS on ONE channel of a 5.1 WAV
+  // (eight seconds, so Even volume has a window to measure). The MP3 is lossy (192 kbps, 48 kHz): the peak of the decoded file is within `MP3_PEAK_TOLERANCE` dB of the unencoded expectation
+  // (measured on 7.0.2: the encoder's peak lands 0.1-0.3 dB from the source's, so 0.6 is the bound the codec is held to, and the unfixed levels are 7.8 and 10.9 dB under it). WAV and FLAC are the controls:
+  // they keep the file's six channels at the source's level.
+  const TONE = 'sine=frequency=440:sample_rate=48000:duration=8,volume=-6dB'
+  const MINUS_3 = -3.0103
+  const MP3_PEAK_TOLERANCE = 0.6
+  let dir = ''
+
+  const make = async (name: string, layout: string, channel: number): Promise<string> => {
+    const file = path.join(dir, `${name}.wav`)
+    await ff(['-y', '-f', 'lavfi', '-i', TONE, '-af', `pan=${layout}|c${channel}=c0`, '-c:a', 'pcm_s16le', file])
+    return file
+  }
+  /** The peak (dBFS) of each channel of `file` from astats; a silent channel is -Infinity. */
+  async function peaks(file: string): Promise<number[]> {
+    const { stderr } = await ff(['-hide_banner', '-i', file, '-af', 'astats=measure_perchannel=Peak_level:measure_overall=none', '-f', 'null', '-'])
+    const out = stderr
+      .split(/Channel: \d+/)
+      .slice(1)
+      .map((block) => /Peak level dB:\s*(-?inf|-?[\d.]+)/.exec(block)?.[1])
+      .filter((v): v is string => v !== undefined)
+      .map((v) => (v === 'inf' || v === '-inf' ? -Infinity : Number(v)))
+    if (out.length === 0) throw new Error(`no astats peaks in: ${stderr.slice(-400)}`)
+    return out
+  }
+  const exportAs = async (src: string, format: AudioExportSpec['format'], name: string, chain: Partial<ChainSpec> = {}): Promise<string> => {
+    const spec: AudioExportSpec = { jobId: `t164-1-${name}`, sourcePath: src, outputPath: path.join(dir, `${name}.${format}`), chain: { ...DEFAULT_CHAIN_SPEC, ...chain }, format }
+    return (await runAudioExport(spec, () => {})).outputPath
+  }
+  const channelsOf = async (file: string): Promise<number> => (await ffprobeJson(file)).streams.find((s) => s.codec_type === 'audio')?.channels ?? 0
+
+  beforeAll(async () => {
+    dir = path.join(workDir, 't164-1')
+    await mkdir(dir, { recursive: true })
+  })
+
+  it('a front-left-only 5.1 tone exports to MP3 at the source\'s peak on the left and is silent on the right', async () => {
+    const src = await make('fl51', '5.1', 0)
+    const own = (await peaks(src))[0] as number
+    expect(own, 'the fixture is at -24 dBFS').toBeCloseTo(-24.08, 0)
+    const mp3 = await exportAs(src, 'mp3', 'fl51-mp3')
+    expect(await channelsOf(mp3), 'an MP3 is stereo').toBe(2)
+    const [l, r] = await peaks(mp3)
+    near(l ?? NaN, own, MP3_PEAK_TOLERANCE, 'left against the source front left (dBFS)')
+    expect(r ?? NaN, 'the right side holds nothing of it').toBeLessThan(own - 40)
+  }, 120_000)
+
+  it('a centre-only 5.1 tone exports to MP3 at -3.01 dB of the source on each side', async () => {
+    const src = await make('fc51', '5.1', 2)
+    const own = (await peaks(src))[2] as number
+    const [l, r] = await peaks(await exportAs(src, 'mp3', 'fc51-mp3'))
+    near(l ?? NaN, own + MINUS_3, MP3_PEAK_TOLERANCE, 'left against the centre (dBFS)')
+    near(r ?? NaN, own + MINUS_3, MP3_PEAK_TOLERANCE, 'right against the centre (dBFS)')
+  }, 120_000)
+
+  it('Even volume on: the stereo MP3 that is written lands within 1 LU of the -16 target (it is folded, so loudnorm works on the stereo file)', async () => {
+    // The back-left tone is the one that tells the two measurings apart: R128 weights a surround channel +1.5 dB, but the fold drops it into the left at 0.7071 (a power of 0.5), so a loudnorm that
+    // ran over the six channels would land the written file 4.7 LU under the target (executed on 7.0.2: -20.7). Front-left and centre tones read the same either way (the controls).
+    for (const [name, layout, channel] of [['bl51', '5.1', 4], ['fl51', '5.1', 0], ['fc51', '5.1', 2]] as const) {
+      const src = await make(`${name}-ev`, layout, channel)
+      const mp3 = await exportAs(src, 'mp3', `${name}-ev-mp3`, { loudnorm: true, loudnormTargetLufs: -16 })
+      expect(await channelsOf(mp3)).toBe(2)
+      near(await measureLufs(mp3), -16, 1, `${name}: integrated loudness of the stereo MP3 (LUFS)`)
+    }
+  }, 240_000)
+
+  it('a 7.1 file folds the same way (centre-only: -3.01 dB per side)', async () => {
+    const src = await make('fc71', '7.1', 2)
+    const own = (await peaks(src))[2] as number
+    const [l, r] = await peaks(await exportAs(src, 'mp3', 'fc71-mp3'))
+    near(l ?? NaN, own + MINUS_3, MP3_PEAK_TOLERANCE, 'left (dBFS)')
+    near(r ?? NaN, own + MINUS_3, MP3_PEAK_TOLERANCE, 'right (dBFS)')
+  }, 120_000)
+
+  it('control: a gain stage on the chain still lands where it says (+3 dB of Manual gain on the folded centre; a stage already made the fold a float one)', async () => {
+    const src = await make('fc51-gain', '5.1', 2)
+    const own = (await peaks(src))[2] as number
+    const [l] = await peaks(await exportAs(src, 'mp3', 'fc51-gain-mp3', { gainDb: 3 }))
+    near(l ?? NaN, own + MINUS_3 + 3, MP3_PEAK_TOLERANCE, 'left (dBFS)')
+  }, 120_000)
+
+  it.each(['wav', 'flac'] as const)('control: a %s export of the same file keeps its six channels at the source\'s level', async (format) => {
+    for (const [name, channel] of [['fl51', 0], ['fc51', 2]] as const) {
+      const src = await make(`${name}-${format}`, '5.1', channel)
+      const own = await peaks(src)
+      const out = await exportAs(src, format, `${name}-${format}-out`)
+      expect(await channelsOf(out), `${name}: six channels`).toBe(6)
+      const got = await peaks(out)
+      near(got[channel] ?? NaN, own[channel] ?? NaN, 0.1, `${name}: the tone's own channel (dBFS)`)
+      for (let c = 0; c < 6; c++) if (c !== channel) expect(got[c], `${name}: channel ${c} is silent`).toBe(-Infinity)
+    }
+  }, 240_000)
+
+  it('control: a stereo source to MP3 is unchanged (each side keeps its own peak)', async () => {
+    const src = path.join(dir, 'stereo.wav')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', TONE, '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=48000:duration=8,volume=-14dB',
+      '-filter_complex', '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-c:a', 'pcm_s16le', src
+    ])
+    const [srcL, srcR] = await peaks(src)
+    const [l, r] = await peaks(await exportAs(src, 'mp3', 'stereo-mp3'))
+    near(l ?? NaN, srcL ?? NaN, MP3_PEAK_TOLERANCE, 'left (dBFS)')
+    near(r ?? NaN, srcR ?? NaN, MP3_PEAK_TOLERANCE, 'right (dBFS)')
+  }, 120_000)
+})
+
+describe('a caption style\'s outline weight is drawn (real burn-in, T-164 (2))', () => {
+  // The presets promised a heavier outline and every burn wrote `Outline=2`. How it is measured: one short cue burned on the flat-gray 640x360 clip in white text with a black outline, at the SAME
+  // font size for both styles (only the outline weight differs: the Subtle subtitle preset's 2 and the Big-outline accessibility preset's 5); the outlined text is the DARK pixels (luma < 64 on a
+  // 126-luma background, a text fill is brighter than the background) inside the bottom third, counted. The outline is a band around each glyph, so its pixel count grows with its width
+  // (about 2.5x from 2 to 5 here: measured ratio stated in the failure message); the bound is 1.8. A style with no `outlineWidth` is compared pixel for pixel with the same style at 2.
+  let gray = ''
+  let dir = ''
+  const bottomThird = 'crop=iw:ih/3:0:ih*2/3'
+  const preset = (id: string) => (CAPTION_STYLE_PRESETS.find((p) => p.id === id) ?? CAPTION_STYLE_PRESETS[0]!).style
+
+  beforeAll(async () => {
+    dir = path.join(workDir, 't164-2')
+    await mkdir(dir, { recursive: true })
+    gray = path.join(dir, 'gray.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=640x360:r=15:d=6', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', gray
+    ])
+    await writeFile(path.join(dir, 'cue.srt'), '1\n00:00:01,000 --> 00:00:05,000\nOUTLINE WEIGHT\n', 'utf8')
+  }, 60_000)
+
+  const burn = async (name: string, style: ReturnType<typeof preset>): Promise<string> => {
+    const out = path.join(dir, `${name}.mp4`)
+    await runBurnIn({ jobId: `t164-2-${name}`, videoPath: gray, srtPath: path.join(dir, 'cue.srt'), outputPath: out, fontSizePct: 4, style }, () => {})
+    return out
+  }
+  /** The number of pixels in the bottom third darker than `64`, at 3 s (inside the cue). */
+  const darkPixels = async (file: string): Promise<number> => {
+    const buf = await samplePixels(file, 3, bottomThird, 'gray')
+    let n = 0
+    for (const v of buf) if (v < 64) n++
+    return n
+  }
+  const WHITE_ON_BLACK = { primaryColor: '#ffffff', outlineColor: '#000000' } as const
+
+  it('Big-outline accessibility draws a wider dark band than Subtle subtitle at the same font size', async () => {
+    const subtle = { ...preset('subtle-subtitle'), ...WHITE_ON_BLACK, fontSize: 40 }
+    const big = { ...preset('big-outline-accessibility'), ...WHITE_ON_BLACK, fontSize: 40 }
+    const thin = await darkPixels(await burn('subtle', subtle))
+    const thick = await darkPixels(await burn('big', big))
+    expect(thin, 'the control: the thin outline is drawn at all').toBeGreaterThan(200)
+    expect(thick / thin, `dark pixels: ${thin} for Subtle subtitle, ${thick} for Big-outline accessibility`).toBeGreaterThan(1.8)
+    expect([subtle.outlineWidth, big.outlineWidth], 'the widths are the presets\'').toEqual([2, 5])
+  }, 240_000)
+
+  it('a style with no outlineWidth burns exactly as one at 2 did before: the same picture, pixel for pixel', async () => {
+    const { outlineWidth: _w, ...none } = { ...preset('subtle-subtitle'), ...WHITE_ON_BLACK, fontSize: 40 }
+    expect('outlineWidth' in none).toBe(false)
+    const a = await samplePixels(await burn('none', none), 3, bottomThird, 'gray')
+    const b = await samplePixels(await burn('two', { ...none, outlineWidth: 2 }), 3, bottomThird, 'gray')
+    expect(a.length).toBeGreaterThan(0)
+    expect(a.equals(b), 'no outlineWidth is Outline=2').toBe(true)
+    const wide = await samplePixels(await burn('three', { ...none, outlineWidth: 3 }), 3, bottomThird, 'gray')
+    expect(a.equals(wide), 'the control: a different width is a different picture').toBe(false)
+  }, 240_000)
+
+  it('the one-click presets draw in the order they promise: Big-outline and TikTok bold heavier than Subtle and Reels minimal, at one size', async () => {
+    const counts: Record<string, number> = {}
+    for (const id of ['subtle-subtitle', 'reels-minimal', 'tiktok-bold', 'big-outline-accessibility']) {
+      counts[id] = await darkPixels(await burn(`order-${id}`, { ...preset(id), ...WHITE_ON_BLACK, fontSize: 40 }))
+    }
+    const detail = JSON.stringify(counts)
+    expect(counts['tiktok-bold'] as number, detail).toBeGreaterThan((counts['subtle-subtitle'] as number) * 1.3)
+    expect(counts['big-outline-accessibility'] as number, detail).toBeGreaterThan(counts['tiktok-bold'] as number)
+    expect(counts['reels-minimal'] as number, `${detail}: Reels minimal keeps the old weight`).toBe(counts['subtle-subtitle'])
+  }, 300_000)
 })

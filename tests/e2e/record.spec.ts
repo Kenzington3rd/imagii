@@ -4130,3 +4130,26 @@ test.describe('T-158 (2): a Discard pressed while the swap is waiting (no ffmpeg
     }
   })
 })
+
+// ═══════ T-164 (10): the webcam hint is in plain words ═══════
+// The hint under the webcam controls read "Webcam is composited into the recording at the chosen corner. The preview overlay in the recording view shows the
+// cam alongside the screen for monitoring." (developer words, and "the chosen corner" under an unchecked box with no corner control). BRANDING: plain words.
+test.describe('T-164 (10): the Record card\'s webcam hint is in plain words', () => {
+  test('the card shows the plain sentence, and none of the developer words', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t164-hint')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      await expect(window.getByText('Your webcam is added to a corner of the recording. You can see it in the preview while you record.', { exact: true })).toBeVisible()
+      await expect(window.getByText(/composited|preview overlay|the chosen corner/)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

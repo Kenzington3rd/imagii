@@ -13566,3 +13566,94 @@ test.describe('T-163 (2): the safe-zone dialog for a 9:16-cropped clip', () => {
     }
   })
 })
+
+// ═════════ T-164 (4)-(6): a running Reframe always has a row; the card names the person's file; the Compile card lists text ═════════
+//
+// (4) ReframePanel returns null for a source that is not horizontal, and the closed-video card drew rows only with no video open: a Reframe started on a horizontal video and
+// left running across a Close and the opening of a vertical one had no row, no bar and no Cancel. (5) The card's Export row read the basename of the working copy a converted
+// import is played from ("stream-aB3dE5fG.mp4"). The Reframe is the T-144 shape (the 20-minute fixture is still running when the person closes the video); the export is held in
+// main with `installSpawnStall` (the encode waits 30 s before it runs), so it is still going when the video is closed, and is cancelled before the wait is over.
+test.describe('T-164 (4)-(6): the closed-video card and the Compile card', () => {
+  const cardCancel = (window: Page): Locator => window.getByRole('button', { name: 'Cancel', exact: true })
+  async function closeVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+
+  test('(4) a Reframe held across a Close and a vertical video: its row and Cancel are on screen, and Cancel stops it', async () => {
+    test.setTimeout(600_000)
+    const vertical = path.join(root, 'source', 't164-vertical.mp4')
+    await ffmpeg([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=180x320:rate=15:duration=2',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest',
+      vertical
+    ])
+    const { app, window, outDir } = await launchWithVideo('t164reframe', longSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await reframeCard(window).getByRole('button', { name: 'Choose folder…' }).click()
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect(reframeCard(window).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible({ timeout: 30_000 })
+      await closeVideo(window)
+      await expect(window.getByText('Reframe — Clip 1'), 'the closed-video card has the row').toBeVisible()
+
+      await dropOnVideoImporter(window, vertical, path.basename(vertical))
+      await expect(window.locator('header').getByText(path.basename(vertical), { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(reframeCard(window), 'a vertical video has nothing to reframe: no panel').toHaveCount(0)
+      await expect(window.getByText('Reframe — Clip 1'), 'the run still has its row').toBeVisible()
+      await expect(window.getByText('The video is closed;'), 'and the card does not say a video is closed while one is open').toHaveCount(0)
+      await expect(window.getByText('The reframe keeps going until it finishes or you cancel it.')).toBeVisible()
+      await expect(cardCancel(window), 'with its Cancel').toHaveCount(1)
+
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Reframe canceled.')
+      await expect(cardCancel(window), 'the row goes with the job').toHaveCount(0, { timeout: 30_000 })
+      await expect(window.getByText('Reframe — Clip 1')).toHaveCount(0)
+      expect(mp4sOnDisk(outDir), 'no file, no partial').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(5) an export of a converted import, closed mid-batch: the card names stream.flv, not the working copy', async () => {
+    test.setTimeout(600_000)
+    const seeded = path.join(root, `t164exp-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchHome('t164convert', { export: { lastOutputDir: seeded } })
+    try {
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, flvSrc, 'stream.flv')
+      await expect(window.locator('header').getByText('stream.flv', { exact: true })).toBeVisible({ timeout: 120_000 })
+      await expect(exportCard(window).getByRole('button', { name: 'Export 1 file', exact: true })).toBeVisible()
+      // The conversion is over; hold the export's own encode so the batch is still running when the video is closed.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 30_000 }])
+      await exportCard(window).getByRole('button', { name: 'Export 1 file', exact: true }).click()
+      await expect.poll(() => readSpawnLog(app), { timeout: 60_000, intervals: [200] }).toContain('ffmpeg')
+      await closeVideo(window)
+      await expect(window.getByText('Export — stream.flv: file 1 of 1'), 'the card names the file the person opened').toBeVisible()
+      await expect(window.getByText(/Export — .*-[A-Za-z0-9_-]{8}\.mp4/), 'never the working copy').toHaveCount(0)
+      await cardCancel(window).click()
+      await expectCanceledNotFailed(window, 'Export canceled.')
+      await expect(cardCancel(window)).toHaveCount(0, { timeout: 60_000 })
+      expect(mp4sOnDisk(seeded), 'no file, no partial').toEqual([])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(6) the Compile card says each clip keeps its text, as the Reframe card does', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t164compile')
+    try {
+      await expect(compileCard(window)).toContainText('Each clip keeps its crop, speed, color, text and effects.')
+      await expect(reframeCard(window)).toContainText("with the clip's crop, speed, color, text and effects")
+    } finally {
+      await app.close()
+    }
+  })
+})

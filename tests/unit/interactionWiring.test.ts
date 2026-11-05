@@ -891,7 +891,7 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
     expect(exportPanel).not.toMatch(/Choose an output folder first/)
     expect(exportPanel).toMatch(/dir = await window\.api\.video\.pickOutputDir\(\)/)
     // T-135 (1): the settling moved with the batch into the queue's store (the panel can be gone when the batch ends); the panel hands the batch over.
-    expect(exportPanel).toMatch(/await runExportBatch\(\{ queue, statuses, dir, sourcePath: source\.filePath \}\)/)
+    expect(exportPanel).toMatch(/await runExportBatch\(\{ queue, statuses, dir, sourcePath: source\.filePath, sourceName: source\.fileName \}\)/)
     const queueStore = read('modules/video-studio/store/exportQueue.ts')
     expect(queueStore).toMatch(/set\(\{ jobs: settleJobs\(get\(\)\.jobs, end\) \}\)/)
     expect(queueStore).toMatch(/useExportQueue\.getState\(\)\.settle\(\{ cancelled, message \}\)/)
@@ -4427,5 +4427,81 @@ describe('T-163 (4) - the paste listener stands down for a dialog before it read
     expect(guard).toBeGreaterThan(-1)
     expect(body.slice(guard, guard + 'if (anyDialogClaim()) return'.length + 1)).not.toMatch(/preventDefault/)
     expect(body.indexOf('preventDefault'), 'every preventDefault comes after the guard').toBeGreaterThan(guard)
+  })
+})
+
+describe('T-164 (fold) - the captions panel\'s no-clip refusal names the checkbox the person ticked', () => {
+  // Unreachable from the UI (the checkbox is `disabled={!selectedClipId}`, so a ranged burn with no clip cannot be asked for) and so pinned at the source, with the gate that makes it
+  // so: the sentence read "trim-to-clip burn-in", a control that does not exist.
+  const panel = read('modules/video-studio/CaptionsPanel.tsx')
+
+  it('refuses with "Pick a clip first to burn captions over its range." and the old wording is gone', () => {
+    expect(panel).toContain("toast.error('Pick a clip first to burn captions over its range.')")
+    expect(panel).not.toContain('trim-to-clip burn-in')
+  })
+
+  it('the checkbox it answers for is off until a clip is selected', () => {
+    expect(panel).toMatch(/checked=\{trimToClip\}[\s\S]{0,160}disabled=\{!selectedClipId\}/)
+  })
+})
+
+// T-164 (4)-(6): a running Reframe always has a row, the closed-video card names the person's file, and the Compile card lists text.
+describe('T-164 (4)-(6): the Reframe row, the Export row\'s name and the Compile sentence', () => {
+  // E2E: video-pipelines.spec.ts "T-164 (4)-(6)" (a Reframe held across a Close and a vertical video; a converted import's export closed mid-batch; the Compile card).
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(4) ReframePanel\'s early returns and the closed-video card read the same rule', () => {
+    const panel = strip(read('modules/video-studio/ReframePanel.tsx'))
+    expect(panel).toMatch(/import \{[^}]*\breframePanelShows\b[^}]*\} from '@shared\/reframe'/)
+    expect(panel).toMatch(/!reframePanelShows\(source, clip\)\) return null/)
+    expect(panel).not.toMatch(/isHorizontal/)
+    const card = strip(read('modules/video-studio/VideoJobsRunning.tsx'))
+    expect(card).toMatch(/import \{[^}]*\breframePanelShows\b[^}]*\} from '@shared\/reframe'/)
+    expect(card).toMatch(/reframePanelShows\(source, selectedClip\) \? \[\] : allRows\.filter\(\(r\) => r\.kind === 'reframe'\)/)
+  })
+
+  it('(5) the batch is begun with the person\'s file name, from the panel to the card', () => {
+    expect(strip(read('modules/video-studio/ExportPanel.tsx'))).toMatch(/sourceName: source\.fileName/)
+    const queue = strip(read('modules/video-studio/store/exportQueue.ts'))
+    expect(queue).toMatch(/begin: \(statuses, sourcePath, sourceName\) =>/)
+    expect(queue).toMatch(/set\(\{ jobs: statuses, running: true, sourcePath, sourceName \}\)/)
+    expect(strip(read('modules/video-studio/VideoJobsRunning.tsx'))).toMatch(/q\.sourceName/)
+  })
+
+  it('(6) the Compile card says text is kept, as Reframe\'s does', () => {
+    expect(read('modules/video-studio/CompilationPanel.tsx').replace(/\s+/g, ' ')).toContain('Each clip keeps its crop, speed, color, text and effects.')
+  })
+})
+
+describe('T-164 (7), (9), (10) - the paste listener stands down for a text field; the tiles start from the top; the webcam hint is plain', () => {
+  // E2E: image.spec.ts "Ctrl+V into a focused text field pastes the text (T-164 (7))" and "template tile previews line up across a row (T-164 (9))",
+  // references.spec.ts "Asset Library tile previews line up across a row", record.spec.ts "the Record card's webcam hint is in plain words".
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('onPaste asks isTextEntryTarget (with the input type) right after the dialog guard, before it reads the clipboard or prevents anything', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    expect(panel).toMatch(/import \{ inputTypeOf, isTextEntryTarget \} from '\.\.\/\.\.\/lib\/keyOwnership'/)
+    const body = panel.slice(panel.indexOf('function onPaste'), panel.indexOf('const releaseHeld'))
+    const guard = body.indexOf('isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return')
+    expect(guard, 'the text-field guard is in onPaste').toBeGreaterThan(-1)
+    expect(body.indexOf('anyDialogClaim()'), 'after the dialog claim').toBeLessThan(guard)
+    expect(body.indexOf('clipboardData'), 'before the clipboard is read').toBeGreaterThan(guard)
+    expect(body.indexOf('preventDefault'), 'before any preventDefault (the field gets its text)').toBeGreaterThan(guard)
+  })
+
+  it('each tile button (the empty state, the Templates dialog, the Asset Library) lays its content from the top', () => {
+    for (const file of ['modules/image-studio/ImportPanel.tsx', 'modules/image-studio/TemplatesDialog.tsx', 'modules/references/AssetLibraryPanel.tsx']) {
+      const src = strip(read(file))
+      const tile = src.match(/className="card p-3 [^"]*hover:border-accent[^"]*"/)
+      expect(tile, `${file}: the tile's className`).not.toBeNull()
+      expect(tile?.[0], file).toMatch(/\bflex flex-col justify-start items-stretch\b/)
+      expect(tile?.[0], `${file}: still left-aligned text`).toMatch(/\btext-left\b/)
+    }
+  })
+
+  it('the webcam hint is the plain sentence and the developer words are gone', () => {
+    const src = strip(read('modules/record-studio/RecordStudio.tsx')).replace(/\s+/g, ' ')
+    expect(src).toContain('Your webcam is added to a corner of the recording. You can see it in the preview while you record.')
+    expect(src).not.toMatch(/composited|preview overlay|chosen corner/)
   })
 })

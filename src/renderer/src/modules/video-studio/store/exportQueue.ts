@@ -76,8 +76,11 @@ interface ExportQueueState {
   running: boolean
   /** The video the batch was made from: the panel shows these rows for that video (or while the batch runs), not under another one. */
   sourcePath: string | null
+  /** The name the person knows that video by (`source.fileName`, "stream.flv"), for the closed-video card (T-164 (5)): a converted import is played
+   *  from `<base>-<nanoid8>.mp4`, which `sourcePath` is and the person never saw. The model is `useAudioExport.sourceName` (T-146). */
+  sourceName: string | null
   /** Claim the queue with the batch's rows. False, and nothing changes, if a batch is already running. */
-  begin: (statuses: JobStatus[], sourcePath: string) => boolean
+  begin: (statuses: JobStatus[], sourcePath: string, sourceName: string) => boolean
   progress: (jobId: string, percent: number) => void
   complete: (jobId: string, outputPath: string) => void
   settle: (end: { cancelled: boolean; message: string }) => void
@@ -88,9 +91,10 @@ export const useExportQueue = create<ExportQueueState>((set, get) => ({
   jobs: [],
   running: false,
   sourcePath: null,
-  begin: (statuses, sourcePath) => {
+  sourceName: null,
+  begin: (statuses, sourcePath, sourceName) => {
     if (get().running) return false
-    set({ jobs: statuses, running: true, sourcePath })
+    set({ jobs: statuses, running: true, sourcePath, sourceName })
     return true
   },
   progress: (jobId, percent) =>
@@ -118,10 +122,11 @@ export async function runExportBatch(opts: {
   statuses: JobStatus[]
   dir: string
   sourcePath: string
+  sourceName: string
 }): Promise<void> {
-  const { queue, statuses, dir, sourcePath } = opts
+  const { queue, statuses, dir, sourcePath, sourceName } = opts
   const store = useExportQueue.getState()
-  if (!store.begin(statuses, sourcePath)) return
+  if (!store.begin(statuses, sourcePath, sourceName)) return
   const offProgress = window.api.video.onProgress((p) => useExportQueue.getState().progress(p.jobId, p.percent))
   const offDone = window.api.video.onJobComplete(({ jobId, outputPath }) => useExportQueue.getState().complete(jobId, outputPath))
   try {

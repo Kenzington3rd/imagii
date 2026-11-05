@@ -145,3 +145,45 @@ describe('captions:burnIn caption colors (T-114)', () => {
     expect(runBurnIn).not.toHaveBeenCalled()
   })
 })
+
+describe('captions:burnIn outline weight (T-164 (2))', () => {
+  // `outlineWidth` is printed into the same `force_style` as the colors (`Outline=`), so the gate takes a finite number 0-10 or none, and refuses anything else in one
+  // plain sentence (it has no dial: the way out is a preset) before the runner is touched.
+  const SENTENCE = "The caption outline has a setting imagii can't use — pick a caption style again, then try again."
+  const style = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    fontSize: 32,
+    position: 'bottom',
+    primaryColor: '#ffffff',
+    outlineColor: '#000000',
+    ...extra
+  })
+
+  it('passes a style with no outlineWidth and one inside 0-10, bounds included, through to the runner', async () => {
+    runBurnIn.mockClear()
+    for (const outlineWidth of [undefined, 0, 2, 5.5, 10]) {
+      await expect(burn({ style: style({ outlineWidth }) }), String(outlineWidth)).resolves.toBeDefined()
+    }
+    expect(runBurnIn).toHaveBeenCalledTimes(5)
+  })
+
+  it.each([
+    ['one under the range', -0.5],
+    ['one over the range', 10.5],
+    ['NaN', Number.NaN],
+    ['an infinite width', Number.POSITIVE_INFINITY],
+    ['a numeric string', '4'],
+    ['an ASS override smuggled in', '3,FontName=x'],
+    ['null', null],
+    ['an object', { v: 4 }]
+  ])('refuses %s in one plain sentence, before the runner is touched', async (_label, bad) => {
+    runBurnIn.mockClear()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(burn({ style: style({ outlineWidth: bad }) })).rejects.toThrow(SENTENCE)
+      expect(runBurnIn).not.toHaveBeenCalled()
+      expect(error, 'the detail goes to the console').toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+})

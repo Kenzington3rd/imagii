@@ -43,6 +43,9 @@ class FakeChild extends EventEmitter {
 }
 const spawned: string[][] = []
 let channels = 2
+/** What `probeAudioChannels` answers (T-164 (1): the MP3 fold reads the source's own count, the most of any stream); null is a count it could not read. */
+let sourceChannels: number | null = 2
+let probeAudioChannelsCalls = 0
 
 const MEASUREMENT = `{ "input_i": "-23.50", "input_tp": "-3.20", "input_lra": "5.10", "input_thresh": "-33.50", "output_i": "-16.0", "target_offset": "-0.12" }`
 const SILENT = `{ "input_i": "-inf", "input_tp": "-inf", "input_lra": "0.00", "input_thresh": "-inf", "output_i": "-inf", "target_offset": "inf" }`
@@ -61,7 +64,11 @@ vi.mock('node:child_process', () => ({
   }
 }))
 vi.mock('./probe', () => ({
-  probeAudio: async () => ({ duration: 4, sampleRate: 44100, channels, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 })
+  probeAudio: async () => ({ duration: 4, sampleRate: 44100, channels, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 }),
+  probeAudioChannels: async () => {
+    probeAudioChannelsCalls++
+    return sourceChannels
+  }
 }))
 
 const { runAudioExport } = await import('./process')
@@ -69,15 +76,16 @@ const { runAudioExport } = await import('./process')
 const LIMITER = 'alimiter=limit=0.891:level=disabled'
 
 async function exportWith(
-  chain: Partial<ChainSpec>
+  chain: Partial<ChainSpec>,
+  format: AudioExportSpec['format'] = 'wav'
 ): Promise<{ passes: string[][]; afs: string[]; render: string[] }> {
   spawned.length = 0
   const spec: AudioExportSpec = {
     jobId: 'tail',
     sourcePath: path.join(tmpdir(), 'voice.wav'),
-    outputPath: path.join(tmpdir(), 'out.wav'),
+    outputPath: path.join(tmpdir(), `out.${format}`),
     chain: { ...DEFAULT_CHAIN_SPEC, ...chain } as ChainSpec,
-    format: 'wav'
+    format
   }
   await runAudioExport(spec, () => undefined)
   const afOf = (args: string[]): string => args[args.indexOf('-af') + 1] ?? ''
@@ -86,6 +94,8 @@ async function exportWith(
 
 beforeEach(() => {
   channels = 2
+  sourceChannels = 2
+  probeAudioChannelsCalls = 0
   pass1Prints = MEASUREMENT
 })
 
@@ -190,5 +200,81 @@ describe('a mono source\'s loudnorm is told it is mono, on both passes (T-123 (1
       }
     })
     for (const args of passes) expect(args.join(' ')).not.toContain('dual_mono')
+  })
+})
+
+describe('an MP3 export of a surround source folds it first, in float (T-164 (1))', () => {
+  // MP3 holds two channels at most; with nothing on the chain ffmpeg folded the source in the s16 output conversion, where swresample normalises the matrix (a front-left tone
+  // 7.8 dB down). The fold is `SURROUND_TO_STEREO_FILTER`, the first stage of both passes. What ffmpeg does with it is Layer 5's ("an MP3 export of a surround file keeps its level").
+  const FOLD = 'aformat=sample_fmts=fltp:channel_layouts=stereo'
+  const EVEN = { loudnorm: true, loudnormTargetLufs: -16 } as const
+  const BED = { filePath: path.join(tmpdir(), 'bed.wav'), fileName: 'bed.wav', role: 'music' as const, gainDb: 0, duckUnderPrimary: false }
+
+  it.each([6, 8, 3])('a %d-channel source to MP3 with nothing switched on: the fold, then the bare pass-through, and no limiter', async (n) => {
+    sourceChannels = n
+    channels = n
+    const { afs } = await exportWith({}, 'mp3')
+    expect(afs).toEqual([`${FOLD},anull`])
+  })
+
+  it('a stage on the chain: the fold is FIRST, the chain next, the limiter last (the limiter is decided on the chain, not on the fold)', async () => {
+    sourceChannels = 6
+    const { afs } = await exportWith({ gainDb: 3 }, 'mp3')
+    expect(afs).toEqual([`${FOLD},volume=3dB,${LIMITER}`])
+  })
+
+  it('Even volume: BOTH passes start with the fold, so the measuring is of the stereo file that is written', async () => {
+    sourceChannels = 6
+    const { afs } = await exportWith(EVEN, 'mp3')
+    expect(afs).toHaveLength(2)
+    for (const af of afs) {
+      expect(af.startsWith(`${FOLD},`), af).toBe(true)
+      expect(af.match(/aformat=/g), 'folded once').toHaveLength(1)
+    }
+    expect(afs[0]).toContain('print_format=json')
+    expect(afs[1]).toContain('measured_I=-23.50')
+    expect(afs[1]).not.toContain('alimiter')
+  })
+
+  it('a cut is after the fold on both passes (the fold is the first stage, whatever the chain starts with)', async () => {
+    sourceChannels = 6
+    const { afs } = await exportWith({ ...EVEN, cutRegions: [{ startSec: 1, endSec: 2 }] }, 'mp3')
+    for (const af of afs) expect(af.startsWith(`${FOLD},asetnsamples=n=256:p=0,aselect=`), af).toBe(true)
+  })
+
+  it.each([1, 2])('a %d-channel source to MP3 is unchanged: no fold', async (n) => {
+    sourceChannels = n
+    channels = n
+    const { afs } = await exportWith({}, 'mp3')
+    expect(afs).toEqual(['anull'])
+  })
+
+  it('a source whose channels cannot be read (null) is exported as it always was', async () => {
+    sourceChannels = null
+    const { afs } = await exportWith({ gainDb: 3 }, 'mp3')
+    expect(afs).toEqual([`volume=3dB,${LIMITER}`])
+  })
+
+  it.each(['wav', 'flac', 'aac'] as const)('%s keeps the file\'s channels: no fold, and the source is not even probed for them', async (format) => {
+    sourceChannels = 6
+    const { afs } = await exportWith(EVEN, format)
+    for (const af of afs) expect(af).not.toContain(FOLD)
+    expect((await exportWith({}, format)).afs).toEqual(['anull'])
+    expect(probeAudioChannelsCalls).toBe(0)
+  })
+
+  it('a second track keeps its own fold (the mix normalises both sides to stereo): the primary is not folded twice, and nothing is probed', async () => {
+    sourceChannels = 6
+    const { render } = await exportWith({ secondaryTrack: BED }, 'mp3')
+    const graph = render[render.indexOf('-filter_complex') + 1] ?? ''
+    expect(graph).not.toContain(FOLD)
+    expect(graph).toContain('aformat=channel_layouts=stereo')
+    expect(probeAudioChannelsCalls).toBe(0)
+  })
+
+  it('the channel count is read once per export', async () => {
+    sourceChannels = 6
+    await exportWith(EVEN, 'mp3')
+    expect(probeAudioChannelsCalls).toBe(1)
   })
 })

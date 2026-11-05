@@ -891,9 +891,8 @@ export function RecordStudio(): JSX.Element {
                 </label>
               ) : null}
               <p className="text-xs text-ink-dim">
-                Webcam is composited into the recording at the chosen corner. The
-                preview overlay in the recording view shows the cam alongside the
-                screen for monitoring.
+                Your webcam is added to a corner of the recording. You can see it in the
+                preview while you record.
               </p>
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">

@@ -87,7 +87,7 @@ export function CompilationPanel(): JSX.Element | null {
       <p className="text-xs text-ink-dim">
         Stitch all clips into one montage MP4 ({COMPILE_SIZE.width}×{COMPILE_SIZE.height},{' '}
         {formatFps(compileFps([source.probe.fps]))}), in clip list order. Each clip keeps its crop,
-        speed, color and effects.
+        speed, color, text and effects.
       </p>
       {needsSecondClip ? (
         <p className="text-xs text-warn">Add a second clip to compile.</p>

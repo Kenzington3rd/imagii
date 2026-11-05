@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { REFRAME_TARGET, reframePhaseLabel, reframeReadout, type ReframePhase } from './reframe'
+import { REFRAME_TARGET, reframePanelShows, reframePhaseLabel, reframeReadout, type ReframePhase } from './reframe'
 
 describe('reframePhaseLabel — plain words for each phase (T-100)', () => {
   const PHASES: Array<[ReframePhase, string]> = [
@@ -46,5 +46,33 @@ describe('reframeReadout - the header reads the picture the strip is cut from (T
 
   it('the target is the one the panel and the IPC call send', () => {
     expect(REFRAME_TARGET).toEqual({ width: 1080, height: 1920 })
+  })
+})
+
+describe('reframePanelShows - one rule for "the Reframe panel draws its body" (T-164 (4))', () => {
+  const source = (width: number, height: number): { probe: { width: number; height: number } } => ({ probe: { width, height } })
+  const clip = { id: 'c1' }
+
+  it('a horizontal video with a selected clip shows the panel', () => {
+    expect(reframePanelShows(source(1920, 1080), clip)).toBe(true)
+    expect(reframePanelShows(source(321, 320), clip)).toBe(true)
+  })
+
+  it('no video open: nothing to show', () => {
+    expect(reframePanelShows(null, clip)).toBe(false)
+  })
+
+  it('no selected clip: nothing to cut', () => {
+    expect(reframePanelShows(source(1920, 1080), undefined)).toBe(false)
+    expect(reframePanelShows(source(1920, 1080), null)).toBe(false)
+  })
+
+  it('a vertical video has nothing left to reframe', () => {
+    expect(reframePanelShows(source(1080, 1920), clip)).toBe(false)
+    expect(reframePanelShows(source(320, 321), clip)).toBe(false)
+  })
+
+  it('a square one is not horizontal either', () => {
+    expect(reframePanelShows(source(1080, 1080), clip)).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { captionPhaseLabel } from '@shared/captions'
-import { reframePhaseLabel } from '@shared/reframe'
+import { reframePanelShows, reframePhaseLabel } from '@shared/reframe'
 import { Icon, type IconName } from '../../components/Icon'
 import { basename } from '../../components/OutputDirLabel'
 import { RunningCancel } from '../../components/RunningCancel'
@@ -55,7 +55,7 @@ type RunOf<T extends { getState: () => { run: unknown } }> = ReturnType<T['getSt
 
 /** Every run that can be going, as a plain value: the hook below reads it from the stores, the Close handler reads it at the moment it is asked. */
 export interface VideoRunSnapshot {
-  exportQueue: { running: boolean; jobs: ReadonlyArray<JobStatus>; sourcePath: string | null }
+  exportQueue: { running: boolean; jobs: ReadonlyArray<JobStatus>; sourcePath: string | null; sourceName: string | null }
   reframe: RunOf<typeof useReframeRun>
   gif: RunOf<typeof useGifRun>
   compile: RunOf<typeof useCompileRun>
@@ -70,7 +70,7 @@ export interface VideoRunSnapshot {
 export function readVideoRunSnapshot(): VideoRunSnapshot {
   const q = useExportQueue.getState()
   return {
-    exportQueue: { running: q.running, jobs: q.jobs, sourcePath: q.sourcePath },
+    exportQueue: { running: q.running, jobs: q.jobs, sourcePath: q.sourcePath, sourceName: q.sourceName },
     reframe: useReframeRun.getState().run,
     gif: useGifRun.getState().run,
     compile: useCompileRun.getState().run,
@@ -95,7 +95,7 @@ function useVideoRunSnapshot(): VideoRunSnapshot {
   const modelInstall = useModelInstallRun((s) => s.run)
   const kit = useKitRun((s) => s.run)
   return {
-    exportQueue: { running: queue.running, jobs: queue.jobs, sourcePath: queue.sourcePath },
+    exportQueue: { running: queue.running, jobs: queue.jobs, sourcePath: queue.sourcePath, sourceName: queue.sourceName },
     reframe,
     gif,
     compile,
@@ -127,7 +127,8 @@ export function videoJobRows(snap: VideoRunSnapshot): VideoJobRow[] {
     const total = q.jobs.length
     const done = q.jobs.filter((j) => j.percent >= 100).length
     const current = q.jobs.find((j) => j.percent < 100 && !j.error)
-    const where = q.sourcePath ? basename(q.sourcePath) : ''
+    // T-164 (5): the file the person opened, not the working copy a converted import is played from; the path's basename only for a batch with no name.
+    const where = q.sourceName || (q.sourcePath ? basename(q.sourcePath) : '')
     rows.push({
       kind: 'export',
       icon: 'download',
@@ -211,13 +212,20 @@ export function jobsKeepGoingSentence(snap: VideoRunSnapshot): string | null {
  * conditional, beside `ClipKitRunning`, and built the way that card is (T-137 (3), T-138 (4)): the wrapper is an ALWAYS-mounted polite live region
  * that is empty - and takes no gap, `-mb-5` giving back the second flex gap - unless no video is open and a job is going, because a region that arrives
  * with its text is not reliably announced. The progress figures are `aria-hidden`: a percent that moves several times a second would be read out each
- * time from a polite region. The Export question (a batch of two or more asks first, as its panel does) is a sibling of the wrapper, not inside it,
+ * time from a polite region. T-164 (4): with a video open the same card, in the same place (above the player and the panels, ahead of the open-or-closed
+ * conditional) and the same live region, draws the Reframe row alone when the open video's Reframe panel is not showing (`reframePanelShows`); its sentence
+ * then leaves out "The video is closed" (one is open) and the wrapper keeps its empty rule (`-mb-5`, no gap) whenever there is no row to draw. The Export question (a batch of two or more asks first, as its panel does) is a sibling of the wrapper, not inside it,
  * and goes with the batch.
  */
 export function VideoJobsRunning(): JSX.Element {
   const snap = useVideoRunSnapshot()
-  const videoOpen = useVideoStore((s) => s.source !== null)
-  const rows = videoOpen ? [] : videoJobRows(snap)
+  const source = useVideoStore((s) => s.source)
+  const selectedClip = useVideoStore((s) => s.clips.find((c) => c.id === s.selectedClipId))
+  const allRows = videoJobRows(snap)
+  // T-164 (4): with a video open the panels draw their own jobs - except a Reframe the open video's panel does not show (a vertical video, no clip
+  // selected), which has no row anywhere else: it is drawn here, with its Cancel, and only it. Every other row keeps the no-video-open rule.
+  const videoOpen = source !== null
+  const rows = !videoOpen ? allRows : reframePanelShows(source, selectedClip) ? [] : allRows.filter((r) => r.kind === 'reframe')
   const shown = rows.length > 0
   const [askingExport, setAskingExport] = useState(false)
   // The question is about the batch that is running: it goes with the batch (T-131 (9)), not on to the next one.
@@ -271,9 +279,11 @@ export function VideoJobsRunning(): JSX.Element {
               </div>
             ))}
             <p className="text-xs text-ink-muted">
-              {rows.length === 1
-                ? 'The video is closed; the job keeps going until it finishes or you cancel it.'
-                : 'The video is closed; these jobs keep going until they finish or you cancel them.'}
+              {videoOpen
+                ? 'The reframe keeps going until it finishes or you cancel it.'
+                : rows.length === 1
+                  ? 'The video is closed; the job keeps going until it finishes or you cancel it.'
+                  : 'The video is closed; these jobs keep going until they finish or you cancel them.'}
             </p>
           </div>
         ) : null}
