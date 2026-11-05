@@ -7867,6 +7867,118 @@ IMG-PREC.
 
 ---
 
+## T-164 — sweep-50 fixes (round 113)
+
+- **Spec:** the fiftieth sweep's ten verified findings (candidate clean pass #1 on 9c95dcb), each confirmed by the
+  expediter against source; two by execution (the surround MP3 export on 7.0.2; the mixed-clipboard paste in the
+  built app). Privacy, Electron, ffmpeg (executed on 7.0.2 and 6.1.1), a11y, QA main and the streamer renderer half
+  clean on their whole lens; UX read the whole renderer and src/shared over two passes; QA's renderer took two
+  readers from the start. Not counted: BRANDING has no rule for a validation refusal toast's trailing period (a
+  guide gap, named for the owner); the Clip Kit's dead-centre 9:16 strip from a 16:9 recording (T-85's choice; a kit
+  Left/Right position is an initiative); the two finders' separate pasted chat logs; Clean audio on the whole VOD;
+  the channel-art frame figures ((bn)); probeAudioChannels' unread stderr (unreachable volume). Three tracks,
+  disjoint files.
+
+  **Track A — the sound and the captions keep their promises (items 1-3 and a fold).**
+  1. **[LOW] A 5.1 or 7.1 WAV/FLAC opened directly and exported to MP3 with nothing switched on is ~8 dB down**
+     (audio/process.ts:381-384, :58-69). MP3 (the default format) holds at most two channels, so ffmpeg folds the
+     source in the s16 output conversion — swresample's NORMALISED matrix, the T-162 (2) defect on the export path.
+     Executed on 7.0.2 with the exact argv (`-af anull -c:a libmp3lame -b:a 192k -ar 48000`): a front-left tone at
+     -24.08 dBFS exports at -31.88, a centre tone at -35.01 per side; with any stage on the chain is float and the
+     fold is a player's (centre -27.36), so the bare pass-through is the one export that does not keep the file's
+     levels. And T-163's USER_GUIDE sentence ("exports with its own channels") is false for MP3; WAV, FLAC and AAC do
+     keep 5.1 at source level (executed). Fix: for an MP3 export of a source with more than 2 channels (probe it in
+     main with `probeAudioChannels`), the float fold `SURROUND_TO_STEREO_FILTER` (extract.ts) is the FIRST stage of
+     both passes' `-af` (so Even volume measures and targets the stereo file that is written); the limiter rule
+     (`limited`) is decided on the chain as before, not on the fold; WAV/FLAC/AAC are unchanged. The secondary-track
+     mix already folds. USER_GUIDE says it: WAV, FLAC and AAC keep the file's channels; MP3 is stereo, folded the way
+     a player does.
+  2. **[LOW] The caption presets promise an outline weight that is always the same** (shared/captions.ts:86-130;
+     sidecars/whisperManager.ts:401). "Big-outline accessibility" (its label) and the TikTok bold and Big-outline
+     hints ("thick black outline", the preset buttons' titles) promise a heavier outline, but `buildForceStyle`
+     writes `Outline=2` for every style and CaptionStyle has no outline field: "Subtle subtitle" gets the same stroke,
+     and the biggest text the proportionally thinnest. Fix: an optional `outlineWidth` on CaptionStyle (ASS Outline
+     units at the PlayRes basis), set per preset — Subtle subtitle 2, Reels minimal 2, TikTok bold 4,
+     Big-outline accessibility 5 — written as `Outline=${style.outlineWidth ?? 2}`; `assertUsableCaptionStyle`
+     (ipc/captions.ts:40) bounds it (a number 0-10); a saved style without it burns as before (2).
+  3. **[LOW] The saved-presets load failure toast** (audio-studio/PresetPanel.tsx:39). `toast.error('Could not load
+     saved presets')` in a bare catch: no period, no cause, against BRANDING's failure-sentence rule and its siblings
+     ("Couldn't save that preset."). Fix: `reportFailure(err, { failed: "Couldn't load your saved presets." })`.
+  Fold (not counted): CaptionsPanel.tsx:225 refuses with "Pick a clip first to use trim-to-clip burn-in.", naming a
+  control that does not exist; it names the checkbox the person ticked ("Pick a clip first to burn captions over its
+  range.").
+  Covering tests: Layer 5 (NEW describes at the end of media.spec.ts), each red on 9c95dcb: a 5.1 WAV with a tone on
+  FL only and one on FC only, exported to MP3 through the real `runAudioExport` with nothing switched on, reads FL at
+  the source's peak on L and FC at -3.01 dB per side (within the MP3 codec's tolerance — measure and state it); the
+  same with Even volume on lands near the target measured on the stereo MP3; WAV and FLAC exports of the same file
+  keep 6 channels at source level (controls); a burn with Big-outline accessibility draws a wider outline band than
+  Subtle subtitle at the same font size (measure the dark band around a glyph, or compare the outlined area — state
+  the method), and a style with no `outlineWidth` burns exactly as before. Unit: buildForceStyle per preset and the
+  default; the style validator's bounds. e2e (NEW describe at the end of audio.spec.ts): the presets IPC refused in
+  main shows "Couldn't load your saved presets." (red on 9c95dcb).
+
+  **Track B — Video Studio's job cards name what is running (items 4-6).**
+  4. **[LOW] A running Reframe loses its progress and Cancel once a vertical video is open**
+     (video-studio/VideoJobsRunning.tsx:219-220; ReframePanel.tsx:58-59). The card draws rows only when no video is
+     open, and ReframePanel returns null for a source that is not horizontal — the only run-store panel with a
+     content-based early return — so a Reframe started on a horizontal video and left running across a Close and the
+     opening of a vertical video has no row, no bar and no Cancel until it ends, and a second Reframe is refused with
+     nothing saying why. Fix: one pure helper `reframePanelShows(source, clip)` that ReframePanel's own early returns
+     use, and VideoJobsRunning draws the Reframe row (with its Cancel) whenever a Reframe runs and the open video's
+     Reframe panel does not show — every other row keeps its rule.
+  5. **[LOW] The closed-video card names a converted import by its working copy** (VideoJobsRunning.tsx:130;
+     ExportPanel.tsx:359, :383). The Export row reads `basename(q.sourcePath)`; for a .flv/.ts/.wmv/.mpg import that is
+     `<base>-<nanoid8>.mp4`, never the person's name (`source.fileName`). Fix: the export queue carries the display
+     name with the batch (`sourceName`, as `useAudioExport.sourceName` does, T-146) and the row reads it.
+  6. **[LOW] The Compile card leaves out text** (CompilationPanel.tsx:89-90). "Each clip keeps its crop, speed, color
+     and effects." while the recipe carries text overlays (concat.ts draws them) and Reframe's card says "crop,
+     speed, color, text and effects". Fix: "Each clip keeps its crop, speed, color, text and effects."
+  Covering tests: e2e (NEW describe at the end of video-pipelines.spec.ts), each red on 9c95dcb: a Reframe held in
+  main (the suite's held-spawn pattern) started on a horizontal clip, the video closed, a vertical video opened —
+  the Reframe row with its Cancel is on screen and Cancel stops it; an Export batch of a converted import (a .ts
+  fixture through the real convert, or the store seeded as the suite does) closed mid-batch — the card names the
+  person's file, not the working copy; the Compile card's sentence. Unit: `reframePanelShows`, the queue's name.
+
+  **Track C — Stream Graphics and Record look and read as the guides say (items 7-10).**
+  7. **[LOW] Paste with a mixed clipboard into a focused text field adds an image and swallows the text**
+     (image-studio/ImportPanel.tsx:99-118). Executed in the built app: a clipboard holding text and an image (as an
+     office app writes it), Ctrl+V in Properties' Name box: a new image layer and no text; a text-only clipboard
+     pastes the text. The other studio keys ask `focusOwnsKey` (lib/keyOwnership.ts); the paste listener does not.
+     Fix: after the dialog-claim guard, `onPaste` returns when the event's target is a text-entry element (the
+     keyOwnership predicate the studio keys use), with no `preventDefault`.
+  8. **[LOW] The selection handles are Konva's stock blue** (image-studio/Canvas.tsx:537-553). The `<Transformer>`
+     sets no borderStroke/anchorStroke/anchorFill, so the border and anchors are rgb(0,161,255) — a second accent;
+     DESIGN_GUIDE (T-125 (13)) themes a library's stock colors from the tokens, as the toast marks are. Fix: the
+     border and anchor strokes from `ACCENT` and the anchor fill from a token (tokens.ts); DESIGN_GUIDE names the
+     Transformer beside the toast marks; designTokensInSync pins it.
+  9. **[LOW] Template and asset tile previews do not line up across a row** (the tile buttons in ImportPanel.tsx,
+     TemplatesDialog.tsx, AssetLibraryPanel.tsx). A `<button>` in a stretched grid cell centres its content, so a
+     tile with a longer description starts its preview lower (seen: ~8 px at 1024 wide). Fix: the tiles lay their
+     content from the top (`flex flex-col justify-start` or the equivalent on the one tile markup each uses).
+  10. **[LOW] Record's webcam hint is in developer words** (record-studio/RecordStudio.tsx:893-896). "Webcam is
+     composited into the recording at the chosen corner. The preview overlay in the recording view shows the cam
+     alongside the screen for monitoring." — against BRANDING ("Plain words over developer words"), and "the chosen
+     corner" under an unchecked box with no corner control. Fix: "Your webcam is added to a corner of the recording.
+     You can see it in the preview while you record."
+  Covering tests: e2e (NEW describes at the end of image.spec.ts, references.spec.ts and record.spec.ts), each red on
+  9c95dcb: a mixed clipboard (Electron `clipboard.write({ text, image })`) pasted into the focused Name box pastes
+  the text and adds no layer, and pasted with the canvas focused still adds the image layer (control); the
+  Transformer's border and anchor strokes read from the stage are the accent token; in the Asset Library and the
+  Templates grid at 1024 wide the previews of one row share a top (client rects); the Record card's hint text.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong (A: the MP3 surround sentence, the caption presets if described; B: the closed-video
+  card if quoted; C: the webcam hint if quoted); STYLE_GUIDE where an ffmpeg rule changes (A: the MP3 fold, the
+  caption outline); DESIGN_GUIDE (C: the Transformer).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 113)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
