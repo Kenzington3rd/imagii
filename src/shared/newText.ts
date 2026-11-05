@@ -37,23 +37,33 @@ export const NEW_TEXT_WORD = 'Text'
  */
 const TEXT_EM_PER_CHAR = 0.6
 
-/** The box, in document px, `text` is estimated to take at `fontSize`: never narrower than what is drawn. */
+/**
+ * The box, in document px, `text` is estimated to take at `fontSize`: never narrower than what is drawn. It is LINE-AWARE (T-166 (1)): as wide as the longest line (a break is
+ * `\n` or `\r\n`, which is what a Windows clipboard carries) and a `fontSize` tall for each line, which is how Konva draws a Text (line height 1, width the longest line's). A
+ * one-line string is the box it always was: its characters wide, one line tall.
+ */
 export function estimatedTextBox(text: string, fontSize: number): { width: number; height: number } {
   assert(Number.isFinite(fontSize) && fontSize > 0, `estimatedTextBox expects a size above 0, got ${fontSize}`)
-  return { width: [...text].length * TEXT_EM_PER_CHAR * fontSize, height: fontSize }
+  const lines = text.split(/\r?\n/)
+  // (a reduce, not `Math.max(...)`: a paste can be hundreds of thousands of lines, more than a call takes as arguments)
+  const longest = lines.reduce((most, line) => Math.max(most, [...line].length), 0)
+  return { width: longest * TEXT_EM_PER_CHAR * fontSize, height: lines.length * fontSize }
 }
 
 /**
  * The font size of a new text layer on a `docWidth` x `docHeight` document: `DEFAULT_TEXT_SIZE` in proportion to the shorter side against the default page's (so
  * 1200x800 stays 32 px, a 1080p overlay is 43 and a 4K one 86), never under `MIN_NEW_TEXT_SIZE`, and never so big that the word is wider or taller than the document
- * (a 30 px strip gets the size that fits, not the floor). A document that is not a size (NaN, infinite, zero or negative: a project file the editor never made)
+ * (a 30 px strip gets the size that fits, not the floor). T-166 (1): "the word" is the whole text, so a pasted two-line title is fitted by its height too. A document that is not a size (NaN, infinite, zero or negative: a project file the editor never made)
  * leaves the old 32 px.
  */
 export function newTextSize(docWidth: number, docHeight: number, word: string = NEW_TEXT_WORD): number {
   const isSize = Number.isFinite(docWidth) && Number.isFinite(docHeight) && docWidth > 0 && docHeight > 0
   if (!isSize) return DEFAULT_TEXT_SIZE
   const proportional = Math.round((DEFAULT_TEXT_SIZE * Math.min(docWidth, docHeight)) / TEXT_REFERENCE_SIDE)
-  const fits = Math.floor(Math.min(docWidth / estimatedTextBox(word, 1).width, docHeight))
+  // simplification: a long paragraph is sized DOWN to fit, one canvas line per line it has - there is no wrap, so a pasted paragraph of a few hundred characters gets a small
+  // size. The upgrade is a wrap width on text layers (the box would then be a width and the lines it wraps to).
+  const box = estimatedTextBox(word, 1)
+  const fits = Math.floor(Math.min(docWidth / box.width, docHeight / box.height))
   return Math.max(1, Math.min(Math.max(proportional, MIN_NEW_TEXT_SIZE), fits))
 }
 
@@ -211,10 +221,8 @@ export function surfacesUnder(doc: { background: string; layers?: readonly Canva
     } else if (layer.type === 'ellipse') {
       shapes.push({ covers: coverageOf(layer, null), rgb: paint.rgb, alpha })
     } else if (layer.type === 'text' && Number.isFinite(layer.fontSize) && layer.fontSize > 0 && typeof layer.text === 'string') {
-      // Konva's line height is 1 and its width is the longest line's.
-      const lines = layer.text.split('\n')
-      const longest = lines.reduce((a, b) => ([...b].length > [...a].length ? b : a), '')
-      words.push({ covers: coverageOf(layer, { width: estimatedTextBox(longest, layer.fontSize).width, height: lines.length * layer.fontSize }), rgb: paint.rgb, alpha })
+      // (Konva's line height is 1 and its width is the longest line's: `estimatedTextBox`)
+      words.push({ covers: coverageOf(layer, estimatedTextBox(layer.text, layer.fontSize)), rgb: paint.rgb, alpha })
     }
   }
   // simplification: the ceilings of a pure answer, each making it a little kinder than the pixels. A picture is not a surface (its pixels are not in the store: `src` is a

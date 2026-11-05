@@ -408,7 +408,11 @@ Repeated UI is a component, not copy-paste:
   background alone: `surfacesUnder` lists the colours that can show under its box (the document, the rectangles' and ellipses' fills by their own geometry through
   their alpha and opacity, the text layers' colours; a picture is a documented ceiling), `inkFor` takes the ink whose worst contrast against them is best, and
   when neither reaches 4.5:1 (`READABLE_CONTRAST`) the word moves: the other three margin corners in a fixed order, then the nearest place on a grid out from the
-  first one. A new rule about what a word reads against changes that list, not the placement. `makeTextLayer` is unchanged for its other callers. A corner drag
+  first one. A new rule about what a word reads against changes that list, not the placement. T-166 (1): "the word" is whatever the layer will hold - `textLayerFor(doc, word?)`
+  takes it and the paste branch passes the pasted words, so a pasted sentence follows the same rules as "Text" (it was sized, placed and inked for "Text" and landed 70% off
+  the page); `estimatedTextBox` is line-aware (the longest line's width, a `fontSize` tall per line: Konva's line height 1, the rule `surfacesUnder` applies to an existing text
+  layer, which now calls it) and `newTextSize` fits both width and height; a long paragraph is sized down to fit one canvas line per line (a marked simplification: no wrap).
+  `makeTextLayer` is unchanged for its other callers. A corner drag
   keeps a picture's and a word's ratio (`keepsRatioOnCornerDrag`; the Transformer's `shiftBehavior` is `inverted` for them, so Shift frees it, and `default`
   for shapes), and a resize of a word ends by folding its scale into its size (`foldTextScale`: `fontSize` takes the height to the Size field's whole pixel,
   `scaleY` is 1, what is left of a stretch stays in `scaleX`, and the node is put at the folded scale as well as the store): "Size (px)" is what is drawn. `CANVAS_MIN_H` is both the canvas box's minimum height and the ResizeObserver's

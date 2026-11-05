@@ -389,9 +389,12 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
  * under it" is the document AND the shapes and words its box overlaps (`doc.layers`), so the emote's word is inked against the disc it sits on and a document with no
  * readable corner gets its word moved to a place that is. `makeTextLayer` is the layer itself and stays what it was for its other callers (a position it is given, 32 px,
  * `BG_BASE`).
+ *
+ * T-166 (1): `word` is the words the layer will hold when the caller already has them (a paste): the size, place and ink are chosen for THEM, not for "Text" (a pasted sentence on the
+ * Bold thumbnail landed 70% off the page). The layer's own `text` stays the default word; the caller sets it. With no word it is the layer it always was.
  */
-export function textLayerFor(doc: Pick<CanvasDocument, 'width' | 'height' | 'background'> & Partial<Pick<CanvasDocument, 'layers'>>): TextLayer {
-  const look = newTextLook(doc, { dark: BG_BASE, light: INK_BASE, behind: BG_BASE })
+export function textLayerFor(doc: Pick<CanvasDocument, 'width' | 'height' | 'background'> & Partial<Pick<CanvasDocument, 'layers'>>, word?: string): TextLayer {
+  const look = newTextLook(doc, { dark: BG_BASE, light: INK_BASE, behind: BG_BASE }, word)
   return { ...makeTextLayer(look.x, look.y), fontSize: look.fontSize, fill: look.fill }
 }
 

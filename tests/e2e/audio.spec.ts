@@ -5625,3 +5625,44 @@ test.describe('T-165 (3): Re-attach hides the Format select, unticking brings it
     }
   })
 })
+
+// ── T-166 (2): the Audio tour's Export step says what a video's sound shows ──────────────────────────────────────────────────────────────────
+//
+// T-165 (3) hides Format for a video's sound (Re-attach ticked), but the tour still told the person to "Pick a Format". The step now names both states.
+test.describe('T-166 (2): the tour\'s Export step names Re-attach for a video\'s sound', () => {
+  test('a video\'s sound, tour stepped to Export: the card shows the new sentence, and the Export card it points at has Re-attach and no Format', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t166-tour')
+    const { window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      const tour = window.getByRole('dialog')
+      await expect(tour).toBeVisible()
+      for (let i = 0; i < 12 && !/: Export$/.test((await tour.getAttribute('aria-label')) ?? ''); i++) {
+        await window.getByRole('button', { name: 'Next' }).click()
+      }
+      await expect(tour).toHaveAttribute('aria-label', /: Export$/)
+      await expect(tour).toContainText(
+        "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For a video's sound, 'Re-attach to video' is checked and puts the cleaned sound back on the original as an .mp4; uncheck it to pick a Format instead."
+      )
+
+      // The sentence is true of the screen it points at: Re-attach is ticked and no Format is shown; unticking it brings Format back (the tour is closed first: its scrim takes the click).
+      await tour.getByRole('button', { name: 'Skip' }).click()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      const exportPanel = window.locator(EXPORT)
+      const reattach = exportPanel.getByRole('checkbox', { name: 'Re-attach to video (output .mp4)' })
+      const format = exportPanel.locator('label').filter({ hasText: 'Format' }).locator('select')
+      await expect(reattach).toBeChecked()
+      await expect(format).toHaveCount(0)
+      await reattach.uncheck()
+      await expect(format).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

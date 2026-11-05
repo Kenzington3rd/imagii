@@ -57,7 +57,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'export',
       title: 'Export',
-      body: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For audio taken from a video, 'Re-attach to video' puts the cleaned sound back on the original.",
+      body: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For a video's sound, 'Re-attach to video' is checked and puts the cleaned sound back on the original as an .mp4; uncheck it to pick a Format instead.",
       targetSelector: '[data-tutorial="audio-export"]',
       placement: 'top'
     },

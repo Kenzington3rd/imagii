@@ -10,7 +10,7 @@ import {
   useVideoStore
 } from './videoStore'
 import type { VideoSource } from './videoStore'
-import { clipRecipe, type Clip } from '@shared/clip'
+import { DEFAULT_COLOR_GRADE, clipRecipe, type Clip } from '@shared/clip'
 import { isValidTextOverlay } from '@shared/projectValidation'
 import { newTextOverlay } from '@shared/textOverlay'
 import { assertOptionalClipRecipe } from '@shared/validators'
@@ -1742,5 +1742,166 @@ describe('videoDiscardMessage - names what is lost, not always "edits" (T-161 (5
     const note = 'The export that is running keeps going; its Cancel stays on screen.'
     expect(videoDiscardMessage(withDerived({ scanCandidates: [] }), 'close', note)).toBe(`Close this video? The scan's results will be discarded. ${note}`)
     expect(videoDiscardMessage(session([pristine()]), 'close', note)).toBe(`Close this video? ${note}`)
+  })
+})
+
+// T-166 (3): a crop, color, range or overlay edit that changes nothing pushed an undo step that undoes nothing (removeClip's guard, T-149 (4), is the same
+// class). Each setter returns before `snapshot` when the stored value already equals the new one: no `set` at all, so `history` is the SAME object afterwards
+// and the coalescing key is untouched. Every "unchanged" case below was red before the guards; every control proves a real change still pushes ONE step.
+describe('T-166 (3): an edit that changes nothing pushes no undo step', () => {
+  let id = ''
+  beforeEach(() => {
+    useVideoStore.setState({
+      source: FAKE_SOURCE,
+      clips: [],
+      selectedClipId: null,
+      history: { past: [], future: [] },
+      historyKey: null
+    })
+    useVideoStore.getState().addClip()
+    id = useVideoStore.getState().clips[0]!.id
+    // addClip is itself a step: the cases below look at what happens AFTER it.
+    useVideoStore.setState({ history: { past: [], future: [] }, historyKey: null })
+  })
+
+  /** Runs `edit` and says whether it left `history` and `historyKey` exactly as they were. */
+  function leavesHistoryAlone(edit: () => void): boolean {
+    const before = useVideoStore.getState()
+    const { history, historyKey, clips } = before
+    edit()
+    const after = useVideoStore.getState()
+    return after.history === history && after.historyKey === historyKey && after.clips === clips
+  }
+
+  const clip = () => useVideoStore.getState().clips[0]!
+
+  it('clearing a crop that is not there (the Crop box ticked then unticked, Reset with no crop) pushes nothing', () => {
+    expect(clip().cropRect).toBeNull()
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipCrop(id, null))).toBe(true)
+    expect(useVideoStore.getState().canUndo()).toBe(false)
+  })
+
+  it('the same crop rectangle again pushes nothing; a different one pushes exactly one step', () => {
+    useVideoStore.getState().setClipCrop(id, { x: 0.1, y: 0.1, w: 0.5, h: 0.5 })
+    useVideoStore.getState().endGesture()
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipCrop(id, { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }))).toBe(true)
+    useVideoStore.getState().setClipCrop(id, { x: 0.1, y: 0.1, w: 0.5, h: 0.6 })
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+    expect(clip().cropRect).toEqual({ x: 0.1, y: 0.1, w: 0.5, h: 0.6 })
+  })
+
+  it('clearing a crop that exists is a real change: one step, and Undo brings the crop back', () => {
+    useVideoStore.getState().setClipCrop(id, { x: 0, y: 0, w: 0.5, h: 0.5 })
+    useVideoStore.getState().endGesture()
+    useVideoStore.getState().setClipCrop(id, null)
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+    useVideoStore.getState().undo()
+    expect(clip().cropRect).toEqual({ x: 0, y: 0, w: 0.5, h: 0.5 })
+  })
+
+  it('the default grade on a clip with no grade (Reset color on an untouched clip), and the current grade again, push nothing', () => {
+    expect(clip().colorGrade).toBeUndefined()
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipColorGrade(id, DEFAULT_COLOR_GRADE))).toBe(true)
+    useVideoStore.getState().setClipColorGrade(id, { ...DEFAULT_COLOR_GRADE, brightness: 0.2 })
+    useVideoStore.getState().endGesture()
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+    const current = clip().colorGrade!
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipColorGrade(id, { ...current }))).toBe(true)
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+  })
+
+  it('a grade that differs in ONE field pushes exactly one step (control); Reset color on a graded clip is a real change', () => {
+    useVideoStore.getState().setClipColorGrade(id, { ...DEFAULT_COLOR_GRADE, temperature: 0.3 })
+    useVideoStore.getState().endGesture()
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+    useVideoStore.getState().setClipColorGrade(id, DEFAULT_COLOR_GRADE)
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+    expect(clip().colorGrade).toEqual(DEFAULT_COLOR_GRADE)
+  })
+
+  it('In at the clip\'s own start, Out at its own end, and the same range again push nothing', () => {
+    expect(clip().startSec).toBe(0)
+    expect(clip().endSec).toBe(60)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipStart(id, 0))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipEnd(id, 60))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipRange(id, 0, 60))).toBe(true)
+    expect(useVideoStore.getState().canUndo()).toBe(false)
+  })
+
+  it('a trimmed clip: its own In and Out again push nothing, a different one pushes exactly one step', () => {
+    useVideoStore.getState().setClipRange(id, 10, 50)
+    useVideoStore.getState().endGesture()
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipStart(id, 10))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipEnd(id, 50))).toBe(true)
+    useVideoStore.getState().setClipStart(id, 12)
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+    expect(clip().startSec).toBe(12)
+    useVideoStore.getState().undo()
+    expect(clip().startSec).toBe(10)
+    // Out alone is a real change too (the start is unchanged, so a guard that compared only the start would swallow it).
+    useVideoStore.getState().endGesture()
+    useVideoStore.getState().setClipEnd(id, 40)
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+    expect(clip().endSec).toBe(40)
+  })
+
+  it('an unknown clip id changes nothing, for each of the guarded setters', () => {
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipCrop('nope', { x: 0, y: 0, w: 0.5, h: 0.5 }))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipColorGrade('nope', { ...DEFAULT_COLOR_GRADE, brightness: 0.4 }))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipRange('nope', 5, 9))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipSpeed('nope', 2))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay('nope', 'x', { text: 'hi' }))).toBe(true)
+  })
+
+  it('speed: Reset to 1x on a clip at normal speed pushes nothing; a real speed pushes one step', () => {
+    expect(clip().speedMultiplier).toBeUndefined()
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipSpeed(id, 1))).toBe(true)
+    useVideoStore.getState().setClipSpeed(id, 2)
+    expect(useVideoStore.getState().history.past).toHaveLength(1)
+    useVideoStore.getState().endGesture()
+    expect(leavesHistoryAlone(() => useVideoStore.getState().setClipSpeed(id, 2))).toBe(true)
+    useVideoStore.getState().setClipSpeed(id, 1)
+    expect(useVideoStore.getState().history.past).toHaveLength(2)
+  })
+
+  it('a text overlay edit that stores what is already stored pushes nothing; a real one pushes one step', () => {
+    useVideoStore.getState().addTextOverlay(id, { text: 'Hello', font: 'Arial', sizePx: 48, colorHex: '#ffffff', x: 0.5, y: 0.5, startSec: 0, endSec: 5 })
+    const overlay = clip().textOverlays[0]!
+    useVideoStore.getState().endGesture()
+    const depth = useVideoStore.getState().history.past.length
+    expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay(id, overlay.id, { colorHex: overlay.colorHex }))).toBe(true)
+    expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay(id, overlay.id, { text: 'Hello', sizePx: overlay.sizePx }))).toBe(true)
+    expect(useVideoStore.getState().history.past).toHaveLength(depth)
+    useVideoStore.getState().updateTextOverlay(id, overlay.id, { text: 'Hello!' })
+    expect(useVideoStore.getState().history.past).toHaveLength(depth + 1)
+    expect(clip().textOverlays[0]!.text).toBe('Hello!')
+    // One field the same and one different is a change (a guard that asked "any field equal" would swallow it).
+    useVideoStore.getState().endGesture()
+    useVideoStore.getState().updateTextOverlay(id, overlay.id, { text: 'Hello!', sizePx: overlay.sizePx + 1 })
+    expect(useVideoStore.getState().history.past).toHaveLength(depth + 2)
+    expect(clip().textOverlays[0]!.sizePx).toBe(overlay.sizePx + 1)
+  })
+
+  // The guard compares the NORMALIZED patch (a color name becomes its hex, a size is clamped), because that is what would be stored: the editor commits
+  // "white" over #ffffff and a size past the ceiling (OVERLAY_SIZE_MAX, 512, projectValidation.ts) over an overlay already at it.
+  it('a color name that normalizes to the stored hex pushes nothing; another color pushes one step', () => {
+    useVideoStore.getState().addTextOverlay(id, { text: 'Hi', font: 'Arial', sizePx: 512, colorHex: '#ffffff', x: 0.5, y: 0.5, startSec: 0, endSec: 5 })
+    const oid = clip().textOverlays[0]!.id
+    useVideoStore.getState().endGesture()
+    const depth = useVideoStore.getState().history.past.length
+    expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay(id, oid, { colorHex: 'white' }))).toBe(true)
+    useVideoStore.getState().updateTextOverlay(id, oid, { colorHex: 'red' })
+    expect(useVideoStore.getState().history.past).toHaveLength(depth + 1)
+    expect(clip().textOverlays[0]!.colorHex).not.toBe('#ffffff')
+  })
+
+  it('a size past the ceiling on an overlay already at it (the clamp stores the same number) pushes nothing', () => {
+    useVideoStore.getState().addTextOverlay(id, { text: 'Hi', font: 'Arial', sizePx: 512, colorHex: '#ffffff', x: 0.5, y: 0.5, startSec: 0, endSec: 5 })
+    const oid = clip().textOverlays[0]!.id
+    useVideoStore.getState().endGesture()
+    expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay(id, oid, { sizePx: 512 + 50 }))).toBe(true)
+    expect(clip().textOverlays[0]!.sizePx).toBe(512)
   })
 })

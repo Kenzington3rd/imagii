@@ -3509,3 +3509,60 @@ test.describe('T-164 (9): Asset Library tile previews line up across a row', () 
     }
   })
 })
+
+// ── T-166 (4): a right-click in a text box offers Cut, Copy, Paste and Select all ──────────────────────────────────────────────────────────
+//
+// Electron has no built-in context menu, so the right-click a Windows streamer reaches for (paste a chat log or a name) showed nothing. The spec is the Reference Search box, the
+// quickest text field to reach, and the end state is the box holding the clipboard's text. Only the native popup itself is not drawn: `Menu.prototype.popup` is wrapped in MAIN to record
+// the items of the menu it was asked to show and to keep it, and the Paste item is then clicked in main exactly as the OS menu would click it (the OS draws and dispatches a native menu
+// outside any page a test can see; this is the OS boundary named in INTERACTION_COVERAGE.md).
+test.describe('T-166 (4): right-click in a text box', () => {
+  test('right-click the focused Search box: Undo, Redo, Cut, Copy, Paste, Select all pop; Paste puts the clipboard in the box; a right-click on bare page pops nothing', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t166-ctx')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ Menu, clipboard }) => {
+        const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }>; __lastMenu?: unknown }
+        g.__ctxMenus = []
+        Menu.prototype.popup = function (this: Electron.Menu) {
+          g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+          g.__lastMenu = this
+          return this
+        } as typeof Menu.prototype.popup
+        clipboard.writeText('a title pasted with the mouse')
+      })
+      const menus = () =>
+        app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus)
+
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.click()
+      await expect(box).toBeFocused()
+      await expect(box).toHaveValue('')
+      await box.click({ button: 'right' })
+      await expect.poll(async () => (await menus()).length, { timeout: 10_000 }).toBe(1)
+      // Electron lowercases a menu item's `role` once the item is built ('selectAll' is read back as 'selectall'), so the order is compared in lower case.
+      expect((await menus())[0]?.roles).toEqual(['undo', 'redo', 'separator', 'cut', 'copy', 'paste', 'separator', 'selectall'])
+
+      // The end state: its Paste item, clicked, puts the clipboard's text in the box.
+      await app.evaluate(({ BrowserWindow }) => {
+        const menu = (globalThis as unknown as { __lastMenu: Electron.Menu }).__lastMenu
+        const win = BrowserWindow.getAllWindows()[0]!
+        const paste = menu.items.find((i) => i.role === 'paste')
+        if (!paste) throw new Error('the popped menu has no Paste item')
+        paste.click(undefined as never, win, win.webContents)
+      })
+      await expect(box, 'Paste put the clipboard text in the box').toHaveValue('a title pasted with the mouse')
+
+      // Control: a right-click on page that is not a text box, with nothing selected, pops no menu (a menu that pops everywhere would fail here).
+      await window.locator('h1', { hasText: 'References' }).click({ button: 'right' })
+      await window.waitForTimeout(500)
+      expect((await menus()).length, 'a right-click on bare page popped a menu').toBe(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

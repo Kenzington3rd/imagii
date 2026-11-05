@@ -14,6 +14,55 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-166 (round 115), Track A: pasted words land whole, inside the picture and readable
+
+The fifty-second sweep, Track A (item 1 and a fold).
+
+### (1) [MED] - Pasted words were sized, placed and inked for the word "Text"
+
+- **Bug.** On "YouTube · Bold thumbnail" (1280 wide) a pasted "Subscribe now for more streams" landed at x=1150, size 29, 446 px wide: its right edge at 1597 on a 1280 page, only "Subscribe" visible. On "Emote · Blank circle" it landed at x=52, 20 px, 308 px wide (right edge 360 on a 112 page), inked 1.00:1 against its real box. The rule "+ Add text" follows (T-140/T-141: wholly inside, inked against what is under it) was bypassed.
+- **Root cause.** T-165's words branch built `{ ...textLayerFor(doc), text: words }`, and `textLayerFor` called `newTextLook(doc, inks)` with no word, though `newTextLook` and `newTextSize` already took one. The layer was made for "Text" and given the person's words afterwards. A second root under it: `estimatedTextBox` was one line tall whatever it was given, so even a caller that passed a pasted two-line title would have been fitted and placed by a box half its height (`surfacesUnder` already knew the longest-line rule for an existing text layer and rebuilt it by hand).
+- **Fix.** `textLayerFor(doc, word?)` hands the word to `newTextLook`; the paste branch passes `words`. `estimatedTextBox` is line-aware (split on `\r?\n`, the longest line's code points wide, one `fontSize` per line tall; a one-line string is the box it was) and `surfacesUnder` calls it instead of rebuilding the box; `newTextSize` fits `min(docWidth / box.width, docHeight / box.height)` at size 1. A `// simplification:` marks the ceiling: a long paragraph is sized down to one canvas line per line it has, with no wrap (the upgrade is a wrap width on text layers). The in-place e2e case that asserted the pasted layer's x equal to "+ Add text"'s now asserts what stays true: the same size, row, ink and face, and the same 60 px margin from the same corner (the right edges agree).
+- **Test.** newText.test.ts (a two-line `estimatedTextBox`; `\r\n` is one break; the height fit; the sentence on the Bold thumbnail's and both emote documents inside and at `READABLE_CONTRAST`; a two-line title inside every page), canvasStore.test.ts (`textLayerFor(doc)` is today's layer; `textLayerFor(doc, sentence)` differs where the sentence needs it), image.spec.ts "T-166 Track A" (the real clipboard and chord; the stage box Konva MEASURED: on the Bold thumbnail the right edge was 1597 of 1280 on 3e30b43 and is 506 now; on the blank emote 360 of 112 and is 96 now; the overlay row). Red on 3e30b43. The one-line `newTextSize` and `newTextLook` cases are green there by design: the module already took a word, and the defect was its caller.
+- **Lesson.** **A rule that takes an argument is only as good as every caller that passes it.** The estimate, the fit and the placement all took the word; the one function between the paste and them dropped it. And a measure that is right for the common input (one line) hides that it was never asked about the other: grep for the second hand-built copy of a rule (`surfacesUnder`'s) when the shared one is wrong.
+
+### Fold - The shortcuts overlay's Ctrl+V row said "Paste image from clipboard"
+
+- **Bug.** Since T-165 Ctrl+V on the canvas also makes a text layer from words.
+- **Fix.** The row reads "Paste a picture, or words as a text layer".
+- **Test.** image.spec.ts "T-166 Track A" (the overlay in Stream Graphics shows the sentence and not the old one). Red on 3e30b43.
+- **Lesson.** **When a key gains a second meaning, its documentation row is part of the change.**
+
+## 2026-11-05 - T-166 (round 115), Track B: Video Studio's Undo records only changes, the Audio tour names what is on screen, and a right-click pastes
+
+The fifty-second sweep, Track B (items 2-4).
+
+### (2) [LOW] - The Audio tour's Export step named a control a video's sound does not show
+
+- **Bug.** "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'." pointed at a Format select that a video's sound (Re-attach ticked, the default) does not show.
+- **Root cause.** T-165 (3) hid Format under Re-attach and updated USER_GUIDE; the tour, which describes the same card, was not in the change.
+- **Fix.** The step's body names both states: Re-attach is checked for a video's sound and puts the cleaned sound back as an .mp4; uncheck it to pick a Format.
+- **Test.** audio.spec.ts "T-166 (2)" (a real mp4, the tour stepped to Export: the sentence, then the card it points at). Red on 3e30b43.
+- **Lesson.** **A change to what a card shows is a change to every sentence that describes the card.** Grep the tour and the guide for the control's name when its visibility changes.
+
+### (3) [LOW] - A crop, color or In/Out edit that changed nothing pushed an undo step that undid nothing
+
+- **Bug.** Ticking then unticking Crop on an uncropped clip, Reset with no crop, Reset color on the default grade, or I or O at the mark's own position each lit Undo on an untouched video; Ctrl+Z visibly did nothing and the dead steps counted against `HISTORY_LIMIT`.
+- **Root cause.** `setClipCrop`, `setClipColorGrade` and `applyRange` called `snapshot()` without comparing the new value with the stored one. `removeClip` guarded the class (T-149 (4)) and the neighbours were not read with it.
+- **Fix.** Each returns before `snapshot` (no `set` at all) when the stored value equals the new one: crop both null or the four fields equal; grade every field equal, where a clip with no grade is the default grade; range the floored start and end equal the clip's. An unknown clip id returns the way `removeClip` does. The other setters were read for a reachable no-op: speed (Reset to 1x at normal speed, where "no speed" is 1) and a text overlay's fields (the Color box retyped as the color it already is) are guarded the same way; the Auto-zoom and Hype shake boxes, the preset toggles, the clip name and removing an overlay cannot be pressed to a no-op.
+- **Test.** videoStore.test.ts "T-166 (3)" (`history`, `historyKey` and `clips` are the same objects after each no-op; a real change is one step) and video-core.spec.ts "T-166 (3)" (Undo stays disabled through Crop on and off, Reset and Reset color). Red on 3e30b43.
+- **Lesson.** **When one setter in a store guards a no-op, read all of them.** A history that records a step per call, not per change, fills with steps that undo nothing, and Undo's enabled state stops meaning "something changed".
+
+### (4) [MED] - Right-click in a text box showed no menu
+
+- **Bug.** Right-click in a chat box, a board field, a name or the search box showed nothing: no Cut, Copy, Paste or Select all, so the mouse path a Windows streamer expects did not exist.
+- **Root cause.** Electron has no built-in context menu, and nothing in `src` handled `context-menu` (the listener count was 0). Chromium's own menu is a browser feature, not an engine one.
+- **Fix.** `shared/contextMenu.ts` is the pure rule (no electron import): an editable target gets Undo, Redo, a line, Cut, Copy, Paste, a line, Select all, each enabled by Chromium's edit flags; selected words in plain text get Copy alone; anything else gets an empty list. `createWindow` builds a native menu from a non-empty list and pops it; an empty list pops nothing. Spellcheck is off, so there are no suggestions.
+- **Test.** contextMenu.test.ts (the three branches, each item's own flag) and references.spec.ts "T-166 (4)" (a real right-click on the focused Search box records the popped menu's items; its Paste item clicked in main fills the box from the clipboard; a right-click on the page heading pops nothing). Red on 3e30b43 (no menu).
+- **Lesson.** **A browser feature is not an Electron feature until it is checked.** Count the listeners on the event before assuming the shell supplies the behaviour a person expects from a text box.
+
+---
+
 ## 2026-11-05 - T-165 (round 114), Track A: Stream Graphics pastes, selects and names things the way a person expects
 
 The fifty-first sweep, Track A (items 1, 6, 7 and a fold).

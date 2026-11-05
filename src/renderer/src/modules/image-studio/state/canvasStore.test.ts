@@ -13,7 +13,7 @@ import {
 } from './canvasStore'
 import { CANVAS_TEMPLATES } from '../templates'
 import { ASSET_CATALOG } from '../../references/assetCatalog'
-import { contrastRatio, estimatedTextBox, surfacesUnder, worstContrast } from '@shared/newText'
+import { READABLE_CONTRAST, contrastRatio, estimatedTextBox, newTextLook, surfacesUnder, worstContrast } from '@shared/newText'
 import { BG_BASE, INK_BASE } from '../../../styles/tokens'
 
 /**
@@ -674,5 +674,110 @@ describe('typed boxes - one burst of typing is one undo step (T-153 (1))', () =>
     expect(stepsBack(), 'a preset closes the typing window').toBe(before + 4)
     useCanvasStore.getState().undo()
     expect(layerNow(id).rotation).toBe(90)
+  })
+})
+
+// T-166 (1): the paste branch built `{ ...textLayerFor(doc), text: words }`, and `textLayerFor` sized, placed and inked for the word "Text" - so a pasted sentence on the Bold
+// thumbnail landed at x=1150 (about 70% off the 1280 page) and on both 112 px emotes was invisible. `textLayerFor(doc, word)` hands the word on to `newTextLook`.
+describe('textLayerFor(doc, word) - a pasted sentence is sized, placed and inked for itself (T-166 (1))', () => {
+  const SENTENCE = 'Subscribe now for more streams'
+  const INKS = { dark: BG_BASE, light: INK_BASE, behind: BG_BASE }
+  const templateDoc = (id: string): CanvasDocument => {
+    const t = CANVAS_TEMPLATES.find((c) => c.id === id)
+    if (!t) throw new Error(`template ${id} is gone from templates.ts`)
+    return t.doc
+  }
+  const look = (t: TextLayer): Pick<TextLayer, 'x' | 'y' | 'fontSize' | 'fill'> => ({ x: t.x, y: t.y, fontSize: t.fontSize, fill: t.fill })
+
+  it('control: with no word it is today\'s layer - the default page, and a dark template (green on base, the word "Text")', () => {
+    expect(look(textLayerFor({ width: 1200, height: 800, background: '#ffffff' }))).toEqual({ x: 60, y: 60, fontSize: 32, fill: BG_BASE })
+    expect(look(textLayerFor(templateDoc('yt-thumb-bold')))).toEqual({ x: 1150.4, y: 60, fontSize: 29, fill: INK_BASE })
+    expect(look(textLayerFor(templateDoc('emote-blank-112')))).toEqual({ x: 52, y: 58, fontSize: 20, fill: BG_BASE })
+    expect(textLayerFor(templateDoc('yt-thumb-bold')).text).toBe('Text')
+  })
+
+  it('"Text" given as the word is the same layer as no word (a fresh id apart)', () => {
+    for (const id of ['yt-thumb-bold', 'emote-blank-112', 'emote-text']) {
+      expect({ ...textLayerFor(templateDoc(id), 'Text'), id: '' }, id).toEqual({ ...textLayerFor(templateDoc(id)), id: '' })
+    }
+  })
+
+  it('the sentence on the Bold thumbnail is not where "Text" went (x 1150.4 put its right edge at 1672 on a 1280 page): the whole box is inside, and it is readable', () => {
+    const doc = templateDoc('yt-thumb-bold')
+    const t = textLayerFor(doc, SENTENCE)
+    const box = estimatedTextBox(SENTENCE, t.fontSize)
+    expect(look(t)).not.toEqual(look(textLayerFor(doc)))
+    expect(t.x + box.width).toBeLessThanOrEqual(doc.width)
+    expect(t.y + box.height).toBeLessThanOrEqual(doc.height)
+    expect(worstContrast(t.fill, surfacesUnder(doc, { x: t.x, y: t.y, ...box }, BG_BASE), INKS)).toBeGreaterThanOrEqual(4.5)
+  })
+
+  for (const id of ['emote-blank-112', 'emote-text']) {
+    it(`the sentence on ${id} is smaller than the 20 px floor (it has to fit 112 px), inside the page, and not the 1.00:1 the word "Text" got`, () => {
+      const doc = templateDoc(id)
+      const t = textLayerFor(doc, SENTENCE)
+      const box = estimatedTextBox(SENTENCE, t.fontSize)
+      expect(t.fontSize).toBeLessThan(textLayerFor(doc).fontSize)
+      expect(t.x).toBeGreaterThanOrEqual(0)
+      expect(t.y).toBeGreaterThanOrEqual(0)
+      expect(t.x + box.width).toBeLessThanOrEqual(doc.width)
+      expect(t.y + box.height).toBeLessThanOrEqual(doc.height)
+      expect(worstContrast(t.fill, surfacesUnder(doc, { x: t.x, y: t.y, ...box }, BG_BASE), INKS)).toBeGreaterThanOrEqual(4.5)
+      expect([BG_BASE, INK_BASE]).toContain(t.fill)
+    })
+  }
+
+  it('a pasted two-line title on the default page is two lines tall inside the page', () => {
+    const doc: CanvasDocument = { width: 1200, height: 800, background: '#ffffff', layers: [] }
+    const t = textLayerFor(doc, 'Subscribe now\nfor more streams')
+    const box = estimatedTextBox('Subscribe now\nfor more streams', t.fontSize)
+    expect(box.height).toBe(2 * t.fontSize)
+    expect(t.y + box.height).toBeLessThanOrEqual(doc.height)
+  })
+})
+
+// (here and not in newText.test.ts: that file is in the node project, which cannot import the renderer's templates.)
+describe('newTextLook with a pasted sentence keeps the whole box inside the page and readable (T-166 (1))', () => {
+  const INKS = { dark: BG_BASE, light: INK_BASE, behind: BG_BASE }
+  const SENTENCE = 'Subscribe now for more streams'
+  const documents: Array<[string, CanvasDocument]> = ['yt-thumb-bold', 'emote-blank-112', 'emote-text'].map((id): [string, CanvasDocument] => {
+    const t = CANVAS_TEMPLATES.find((c) => c.id === id)
+    if (!t) throw new Error(`template ${id} is gone from templates.ts`)
+    return [t.name, t.doc]
+  })
+
+  for (const [name, doc] of documents) {
+    it(`${name}: the sentence's box is wholly inside the ${doc.width}x${doc.height} page and the ink is at least READABLE_CONTRAST against everything under it (a control: \`newTextLook\` already took the word; the defect was its caller)`, () => {
+      const look = newTextLook(doc, INKS, SENTENCE)
+      const box = estimatedTextBox(SENTENCE, look.fontSize)
+      expect(look.x, 'left').toBeGreaterThanOrEqual(0)
+      expect(look.y, 'top').toBeGreaterThanOrEqual(0)
+      expect(look.x + box.width, 'right').toBeLessThanOrEqual(doc.width + 1e-9)
+      expect(look.y + box.height, 'bottom').toBeLessThanOrEqual(doc.height + 1e-9)
+      // (the module's own helpers: what can show under the box, and the worst ratio the ink has against any of it)
+      const under = surfacesUnder(doc, { x: look.x, y: look.y, ...box }, INKS.behind)
+      expect(worstContrast(look.fill, under, INKS), `${look.fill} on ${under.join(', ')}`).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+    })
+
+    // A two-line title is the case the one-line box could not hold. Inside the page is what is promised for any text; READABLE is promised where a place exists (the thumbnail), and
+    // a 106 px x 22 px box on an emote's disc has none (`newTextLook`'s last resort: the best place there is), so the emotes are held to inside only.
+    it(`${name}: a two-line title's whole box (two lines tall) is inside the page`, () => {
+      const word = 'Subscribe now\nfor more streams'
+      const look = newTextLook(doc, INKS, word)
+      const box = estimatedTextBox(word, look.fontSize)
+      expect(box.height).toBe(2 * look.fontSize)
+      expect(look.x).toBeGreaterThanOrEqual(0)
+      expect(look.y).toBeGreaterThanOrEqual(0)
+      expect(look.x + box.width).toBeLessThanOrEqual(doc.width + 1e-9)
+      expect(look.y + box.height).toBeLessThanOrEqual(doc.height + 1e-9)
+    })
+  }
+
+  it('a two-line title on the Bold thumbnail is readable as well as inside', () => {
+    const doc = documents[0]![1]
+    const word = 'Subscribe now\nfor more streams'
+    const look = newTextLook(doc, INKS, word)
+    const under = surfacesUnder(doc, { x: look.x, y: look.y, ...estimatedTextBox(word, look.fontSize) }, INKS.behind)
+    expect(worstContrast(look.fill, under, INKS)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
   })
 })

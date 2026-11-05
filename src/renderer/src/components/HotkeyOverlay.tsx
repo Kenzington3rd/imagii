@@ -40,7 +40,7 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
     { keys: 'O', description: 'Ellipse tool' },
     { keys: 'L', description: 'Line tool' },
     { keys: 'P', description: 'Pencil tool' },
-    { keys: 'Ctrl+V', description: 'Paste image from clipboard' },
+    { keys: 'Ctrl+V', description: 'Paste a picture, or words as a text layer' },
     { keys: 'Shift+drag', description: "Corner handle: resize a picture or text freely; keep a shape's proportions" },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo' },
     { keys: 'Delete / Backspace', description: 'Remove selected layer' },

@@ -577,3 +577,74 @@ describe('newTextLook with layers - where the word goes when its first place can
     expect(look.fontSize).toBe(32)
   })
 })
+
+// T-166 (1): a pasted sentence was sized, placed and inked for the word "Text" because `textLayerFor` did not hand its words to `newTextLook` (canvasStore.test.ts holds that
+// wiring). The other half is here: a box that is only ever one line tall cannot fit a pasted two-line title, so `estimatedTextBox` is line-aware (the longest line wide, one
+// `fontSize` tall per line: Konva's line height is 1 and its width the longest line's, the rule `surfacesUnder` already applied to an existing text layer) and `newTextSize` fits both.
+describe('estimatedTextBox is line-aware - the longest line wide, a line tall each (T-166 (1))', () => {
+  it('"ab\\ncdef" at 10 px is 4 characters wide (the longer line) and two lines tall', () => {
+    expect(estimatedTextBox('ab\ncdef', 10)).toEqual({ width: 4 * 0.6 * 10, height: 20 })
+  })
+
+  it('control: a one-line string is the old box, word for word (width 0.6 em a character, one em tall)', () => {
+    for (const [text, size] of [['Text', 32], ['Subscribe now for more streams', 29], ['', 10], ['\u{1F600}', 10]] as const) {
+      expect(estimatedTextBox(text, size), text).toEqual({ width: [...text].length * 0.6 * size, height: size })
+    }
+  })
+
+  it('a Windows clipboard\'s \\r\\n is one line break, not a character at the end of the line', () => {
+    expect(estimatedTextBox('ab\r\ncdef', 10)).toEqual(estimatedTextBox('ab\ncdef', 10))
+    // (the longer line first: a \r left on it would make it 5 characters, not 4)
+    expect(estimatedTextBox('abcd\r\nef', 10)).toEqual({ width: 4 * 0.6 * 10, height: 20 })
+    expect(estimatedTextBox('a\r\nb\r\nc', 10).height).toBe(30)
+  })
+
+  it('a blank line is a line (the box is as tall as the text is drawn)', () => {
+    expect(estimatedTextBox('a\n\nb', 10)).toEqual({ width: 0.6 * 10, height: 30 })
+  })
+})
+
+describe('newTextSize fits the whole pasted text, not just its width (T-166 (1))', () => {
+  const SENTENCE = 'Subscribe now for more streams'
+
+  it('control: the sentence on a 1280x720 page fits the width (one line was always fitted)', () => {
+    const size = newTextSize(1280, 720, SENTENCE)
+    expect(estimatedTextBox(SENTENCE, size).width).toBeLessThanOrEqual(1280)
+    expect(size).toBe(29)
+  })
+
+  it('control: the sentence on a 112x112 emote fits the width, at the size that fits rather than the floor', () => {
+    const size = newTextSize(112, 112, SENTENCE)
+    expect(size).toBeLessThan(MIN_NEW_TEXT_SIZE)
+    expect(estimatedTextBox(SENTENCE, size).width).toBeLessThanOrEqual(112)
+    expect(estimatedTextBox(SENTENCE, size + 1).width, 'and one px more would not').toBeGreaterThan(112)
+  })
+
+  it('a two-line title fits the height: on a 4000x30 strip each line is 15 px, not the 20 px floor that stacks to 40', () => {
+    const size = newTextSize(4000, 30, 'Subscribe now\nfor more streams')
+    expect(size).toBe(15)
+    expect(estimatedTextBox('Subscribe now\nfor more streams', size).height).toBeLessThanOrEqual(30)
+  })
+
+  it('a title of three short lines on a square emote keeps the proportional size (the floor, 20 px: three lines of it are 60 px, inside 112) - the fit is a ceiling, not a target', () => {
+    expect(newTextSize(112, 112, 'a\nb\nc')).toBe(20)
+    expect(newTextSize(112, 112, 'a\nb\nc\nd\ne\nf\ng')).toBe(16)
+  })
+
+  it('control: a one-line word is sized exactly as before (the default word on every page)', () => {
+    for (const [w, h] of [[1200, 800], [112, 112], [1280, 720], [30, 500], [3840, 2160]] as const) {
+      const old = Math.max(1, Math.min(Math.max(Math.round((DEFAULT_TEXT_SIZE * Math.min(w, h)) / 800), MIN_NEW_TEXT_SIZE), Math.floor(Math.min(w / (4 * 0.6), h))))
+      expect(newTextSize(w, h), `${w}x${h}`).toBe(old)
+    }
+  })
+})
+
+describe('newTextLook with a pasted two-line title stays inside a page too short for the one-line box (T-166 (1))', () => {
+  it('a two-line title on a strip too short for the one-line box stays inside it (4000x30)', () => {
+    const word = 'Subscribe now\nfor more streams'
+    const look = newTextLook({ width: 4000, height: 30, background: 'transparent' }, INKS, word)
+    const box = estimatedTextBox(word, look.fontSize)
+    expect(look.fontSize).toBe(15)
+    expect(look.y + box.height).toBeLessThanOrEqual(30)
+  })
+})

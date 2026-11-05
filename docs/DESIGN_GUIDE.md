@@ -149,6 +149,9 @@ held by this list alone, so a new one must be added below:
   app's own **default marks** — the fill and stroke a freshly drawn
   rect / ellipse / line / text layer comes out in — DO follow the tokens,
   because a user expects new shapes to arrive in imagii's colors.
+  A new word is also placed and inked for what it lands on (T-140/T-141: wholly inside the page, 4.5:1 against what is under it), and the rule is
+  the WORDS' own (T-166 (1)): a pasted sentence gets it too, sized down to fit and measured line by line (the box is the longest line wide and a line
+  tall for each), not the box of the word "Text". The mechanics are in STYLE_GUIDE.
 
 **Text on a wash of its own hue (T-112).** The same check applies to a *translucent*
 fill: an accent or ember wash (`bg-accent/20`, `bg-ember/10`) over a card is a

@@ -1,7 +1,8 @@
-import { app, BrowserWindow, screen, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, screen, session, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { resolveWindowBounds } from '../shared/windowSizing'
+import { contextMenuTemplate } from '../shared/contextMenu'
 import { getSetting, setSetting } from './store'
 import { flushAutosaveOnQuit } from './quitFlush'
 import { rendererGoneAction } from './rendererRecovery'
@@ -34,7 +35,6 @@ import {
   cancelTranscribe,
   cancelBurnIn
 } from './sidecars/whisperManager'
-
 registerPrivilegedSchemes()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -206,6 +206,13 @@ function createWindow(): void {
       (err) => console.warn('[imagii] could not abandon the dead renderer\'s recording sessions:', err)
     )
     loadEntry(win)
+  })
+
+  // T-166 (4): Electron has no built-in context menu, so a right-click in a text box showed nothing (no Cut, Copy, Paste, Select all). The items come from the
+  // pure `contextMenuTemplate`; a target that is not a text box and has no selected words gets an empty list and no menu. Spellcheck is off, so no suggestions.
+  win.webContents.on('context-menu', (_event, params) => {
+    const items = contextMenuTemplate(params)
+    if (items.length > 0) Menu.buildFromTemplate(items).popup({ window: win })
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

@@ -8161,7 +8161,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
   run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 115)
+- **Status:** done (round 115 — see the Done entry)
 
 ---
 
@@ -8734,6 +8734,45 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 115 — T-166, all four counted items and the fold, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+3e30b43, disjoint source files, merged by the expediter. Track A:
+pasted words are sized, placed and inked for themselves
+(`textLayerFor(doc, words)`), so a sentence pasted on the Bold
+thumbnail lands wholly inside the page (its right edge was 1597 of
+1280) and on an emote is readable (it was 1.00:1); the text box
+estimate is line-aware, so a two-line title fits by its height too
+(marked simplification: no wrap, a paragraph is sized down); the
+shortcuts overlay says Ctrl+V pastes a picture, or words as a text
+layer (fold). Track B: the Audio tour's Export step says what a video's
+sound shows (Re-attach checked, uncheck it to pick a Format); a crop,
+color, range, speed or text-overlay edit that changes nothing pushes no
+undo step (one guard per setter, removeClip's class); right-click in a
+text box opens Undo, Redo, Cut, Copy, Paste and Select all, and plain
+selected text offers Copy (`contextMenuTemplate`, src/shared).
+Deviations, accepted: A put the template-built contrast cases in
+canvasStore.test.ts (the node typecheck project cannot import the
+renderer's templates) and the new-word mechanics in STYLE_GUIDE; A
+rewrote one T-165 look case in place (it pinned the old one-line x);
+B wrote "checked/uncheck" where the ticket said "ticked/untick"
+(BRANDING's checkbox verb, enforced by copyConventions); B removed one
+blank line in index.ts so docClaims' line pins hold; B guarded speed
+and text overlays too (reachable no-ops). Ledgers: A 22 mutations (one
+disclosed survivor at e2e, killed at unit), B 32 plus the expediter's
+send-back, all others killed. Found not fixed: a multi-line paste has
+unit coverage only; line-number pins into src/main/index.ts are
+brittle. Expedited personally: one independent mutation per track at a
+seam no ledger row names — A: the pasted layer's ink chosen for "Text"
+while its size and place follow the words → three canvasStore.test.ts
+contrast cases red (a first run of it was invalid, a relative cd from
+inside the clone, and is marked so); B: the overlay guard comparing the
+raw patch instead of the normalized one → SURVIVED, sent back, the
+"white" over #ffffff and the over-ceiling size cases added and now red
+on it — each restored byte-identical, sha256 verified; on the MERGED
+tree: verify x2 (209/6345), test:media 491 passed | 17 skipped of 508 on 7.0.2, FULL
+Playwright 701/701 (43.4 min, no flakes). Applied to 3e30b43 by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 114 — T-165, all seven counted items and the two folds, landed in
 the commit that carries this entry. Two Sonnet workers in fresh clones

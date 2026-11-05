@@ -18,6 +18,7 @@ import {
 } from '../../src/renderer/src/modules/image-studio/templates'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import { ACCENT, BG_BASE, INK_BASE } from '../../src/renderer/src/styles/tokens'
+import { READABLE_CONTRAST, surfacesUnder, worstContrast } from '../../src/shared/newText'
 import { dragThrough, dragTo } from './drag'
 import {
   DEFAULT_WINDOW,
@@ -6580,7 +6581,9 @@ test.describe('Image Studio - pastes, selection frame and emote names (T-165 Tra
 
   // The pasted layer is the "+ Add text" layer with the person's words: sized, placed, inked and set in the face for THE OPEN document (`textLayerFor(doc)`), not a fixed look.
   // The dark "yt-thumb-bold" template is the document: its ink is decided against what is drawn there (light on dark), so a layer made for another document differs.
-  test('a pasted text layer looks exactly like "+ Add text" on the same dark template (size, place, ink, face)', async () => {
+  // T-166 (1): the box it is placed by is the words' own, so the two layers are the same look up to the words' WIDTH: the same size, row, ink and face, and the same 60 px margin from the
+  // same (top-right) corner - the pasted words' left edge is further left by exactly how much wider they are. (This case pinned the one-line "Text" box: it asserted x equal.)
+  test('a pasted text layer looks like "+ Add text" on the same dark template (size, row, ink, face, and the same margin from the same corner)', async () => {
     test.setTimeout(150_000)
     const studio = await openStudio('t165-paste-look')
     const { window } = studio
@@ -6604,7 +6607,111 @@ test.describe('Image Studio - pastes, selection frame and emote names (T-165 Tra
       await expectLayerCount(window, n + 1)
       const added = await lastShape(window)
       expect(added.text).toBe('Text')
-      expect(look(pasted), 'the pasted layer is the "+ Add text" layer, but for its words').toEqual(look(added))
+      const { x: pastedX, ...pastedLook } = look(pasted)
+      const { x: addedX, ...addedLook } = look(added)
+      expect(pastedLook, 'the pasted layer is the "+ Add text" layer, but for its words').toEqual(addedLook)
+      // The right edges agree (by the editor's estimate, 0.6 em a character: the placement's own box): both are 60 px in from the page's right edge.
+      const fontSize = pasted.fontSize as number
+      expect((pastedX as number) + [...WORDS].length * 0.6 * fontSize, 'the pasted words end where "Text" did').toBeCloseTo((addedX as number) + [...'Text'].length * 0.6 * fontSize, 6)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-166 Track A: pasted words land whole, inside the picture and readable ──────────────────────────────────────────────────────────────────
+//
+// (1) T-165's words branch built `{ ...textLayerFor(doc), text: words }`, and `textLayerFor` sized, placed and inked for the word "Text": a pasted "Subscribe now for more
+// streams" on the Bold thumbnail landed at x=1150 (its right edge about 70% off the 1280 page) and on a 112 px emote it was inked 1.00:1. (fold) the shortcuts overlay's
+// Ctrl+V row said "Paste image from clipboard". Every clipboard is REAL (Electron's `clipboard`) and so is every chord; the box is the one Konva MEASURED, not an estimate.
+test.describe('Image Studio - pasted words land whole, inside the page and readable (T-166 Track A)', () => {
+  const SENTENCE = 'Subscribe now for more streams'
+  const INKS = { dark: BG_BASE, light: INK_BASE, behind: BG_BASE }
+
+  async function putTextOnClipboard(studio: Studio, text: string): Promise<void> {
+    await studio.app.evaluate(({ clipboard }, t) => {
+      clipboard.clear()
+      clipboard.writeText(t)
+    }, text)
+    await studio.window.waitForTimeout(800)
+  }
+
+  /** The last text layer's box as the stage DREW it: its own x, y and the width and height Konva measured for it (not the editor's estimate). */
+  function lastTextBox(window: Page): Promise<{ x: number; y: number; width: number; height: number; fontSize: number; fill: string; text: string }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        children: Array<{ children: Array<{ getClassName(): string; attrs: { name?: string; x: number; y: number; fontSize: number; fill: string; text: string }; width(): number; height(): number }> }>
+      }
+      const nodes = stage.children[0]!.children.filter((n) => n.attrs.name !== 'background')
+      const n = nodes[nodes.length - 1]!
+      if (n.getClassName() !== 'Text') throw new Error(`the last node is a ${n.getClassName()}, not a Text`)
+      return { x: n.attrs.x, y: n.attrs.y, width: n.width(), height: n.height(), fontSize: n.attrs.fontSize, fill: n.attrs.fill, text: n.attrs.text }
+    })
+  }
+
+  /** The template open, the canvas focused on a spot of bare paper (a click with the Select tool, no field focused), and the sentence pasted with a real Ctrl+V. */
+  async function pasteOnTemplate(studio: Studio, id: string, paper: { x: number; y: number }): Promise<{ t: CanvasTemplate; box: Awaited<ReturnType<typeof lastTextBox>> }> {
+    const { window } = studio
+    const t = templateById(id)
+    await templateCard(window, t).click()
+    await expectTemplateApplied(window, t)
+    await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+    await clickDoc(window, paper)
+    await expect(field(window, 'Name')).toHaveCount(0)
+    await putTextOnClipboard(studio, SENTENCE)
+    await window.keyboard.press('Control+v')
+    await expectLayerCount(window, t.doc.layers.length + 1)
+    const box = await lastTextBox(window)
+    expect(box.text).toBe(SENTENCE)
+    test.info().annotations.push({ type: `${id} stage box`, description: JSON.stringify({ x: box.x, y: box.y, width: Math.round(box.width), height: box.height, right: Math.round(box.x + box.width), page: `${t.doc.width}x${t.doc.height}`, fontSize: box.fontSize, fill: box.fill }) })
+    return { t, box }
+  }
+
+  function expectWhollyInsideAndReadable(t: CanvasTemplate, box: Awaited<ReturnType<typeof lastTextBox>>): void {
+    expect(box.x, 'left edge').toBeGreaterThanOrEqual(0)
+    expect(box.y, 'top edge').toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width, `right edge ${Math.round(box.x + box.width)} of ${t.doc.width}`).toBeLessThanOrEqual(t.doc.width)
+    expect(box.y + box.height, `bottom edge ${Math.round(box.y + box.height)} of ${t.doc.height}`).toBeLessThanOrEqual(t.doc.height)
+    const under = surfacesUnder(t.doc, { x: box.x, y: box.y, width: box.width, height: box.height }, BG_BASE)
+    expect(worstContrast(box.fill, under, INKS), `${box.fill} on ${under.join(', ')}`).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+  }
+
+  test('"YouTube · Bold thumbnail": the pasted sentence is wholly inside the 1280x720 page, and readable', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t166-paste-thumb')
+    try {
+      const { t, box } = await pasteOnTemplate(studio, 'yt-thumb-bold', { x: 20, y: 450 })
+      expect(t.name).toBe('YouTube · Bold thumbnail')
+      expectWhollyInsideAndReadable(t, box)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('"Emote · Blank circle": the pasted sentence is wholly inside the 112x112 page, and readable (it was inked 1.00:1)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t166-paste-emote')
+    try {
+      const { t, box } = await pasteOnTemplate(studio, 'emote-blank-112', { x: 3, y: 3 })
+      expect(t.name).toBe('Emote · Blank circle')
+      expectWhollyInsideAndReadable(t, box)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the shortcuts overlay in Stream Graphics says what Ctrl+V does: "Paste a picture, or words as a text layer"', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t166-overlay-row')
+    const { window } = studio
+    try {
+      await window.keyboard.press('?')
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toBeVisible({ timeout: 10_000 })
+      await expect(dialog.getByText('Paste a picture, or words as a text layer', { exact: true })).toBeVisible()
+      await expect(dialog.getByText('Paste image from clipboard')).toHaveCount(0)
+      await window.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }

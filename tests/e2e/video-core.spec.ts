@@ -3735,3 +3735,36 @@ test.describe('T-161 (5): Close after a scan with no edits names the scan, not e
     }
   })
 })
+
+// T-166 (3): a crop, color or In/Out edit that changes nothing pushed an undo step that undoes nothing. The witness is the studio's own Undo button: it
+// stays disabled on an untouched video after each no-op, and lights for a real edit (the control, so a button that is always disabled cannot pass).
+test.describe('T-166 (3): an edit that changes nothing does not light Undo', () => {
+  test('open a video, tick then untick Crop, press Reset with no crop, and Reset color on the default grade: Undo stays disabled; a real crop lights it', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t166-noop-undo')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(undo).toBeDisabled()
+      const cropToggle = window.getByRole('checkbox', { name: 'Crop', exact: true })
+
+      await cropToggle.check()
+      await expect(window.getByRole('button', { name: 'Reset', exact: true })).toBeVisible()
+      await cropToggle.uncheck()
+      await expect(cropToggle).not.toBeChecked()
+      await expect(undo, 'ticking then unticking Crop on an uncropped clip changed nothing').toBeDisabled()
+
+      await cropToggle.check()
+      await window.getByRole('button', { name: 'Reset', exact: true }).click()
+      await expect(undo, 'Reset with no crop changed nothing').toBeDisabled()
+
+      await window.getByRole('button', { name: 'Reset color' }).click()
+      await expect(undo, 'Reset color on the default grade changed nothing').toBeDisabled()
+
+      // Control: a real edit lights it.
+      await window.getByRole('button', { name: '16:9', exact: true }).click()
+      await expect(undo).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+})

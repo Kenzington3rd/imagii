@@ -427,6 +427,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
     // no length that every output then refused. The floor is the Timeline drag's own 0.1 s; a source shorter than that keeps the plain clamp
     // (`floorRange`, T-153 (8): the same rule the project restore applies to a saved clip).
     const { startSec: safeStart, endSec: safeEnd } = floorRange(startSec, endSec, duration)
+    // T-166 (3): a range the clip already has (I at the mark's own position, a drag that ended where it began) is not an edit, so it pushes no step -
+    // removeClip's guard (T-149 (4)) for the same class. An unknown id returns the same way.
+    const clip = get().clips.find((c) => c.id === id)
+    if (!clip || (clip.startSec === safeStart && clip.endSec === safeEnd)) return
     set({
       ...snapshot(key),
       clips: get().clips.map((c) =>
@@ -684,7 +688,10 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       // ghost row this prune exists to prevent.
       set({ clips: next })
     },
-    setClipSpeed: (id, speedMultiplier) =>
+    setClipSpeed: (id, speedMultiplier) => {
+      // T-166 (3): Reset to 1x on a clip at normal speed stores nothing new. "No speed" and 1 are the same speed (`clipSpeed`), so they compare equal.
+      const clip = get().clips.find((c) => c.id === id)
+      if (!clip || clipSpeed(clip) === clipSpeed({ speedMultiplier })) return
       // Fired continuously by the speed slider — coalesce.
       set({
         ...snapshot(`speed:${id}`),
@@ -696,13 +703,20 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
               }
             : c
         )
-      }),
-    setClipColorGrade: (id, grade) =>
+      })
+    },
+    setClipColorGrade: (id, grade) => {
+      // T-166 (3): "no grade" (`colorGrade` undefined) is the default grade, so Reset color on an untouched clip compares equal and pushes nothing.
+      const clip = get().clips.find((c) => c.id === id)
+      if (!clip) return
+      const current: ColorGrade = clip.colorGrade ?? DEFAULT_COLOR_GRADE
+      if ((Object.keys(current) as Array<keyof ColorGrade>).every((k) => grade[k] === current[k])) return
       // Fired continuously by the grade sliders — coalesce.
       set({
         ...snapshot(`grade:${id}`),
         clips: get().clips.map((c) => (c.id === id ? { ...c, colorGrade: grade } : c))
-      }),
+      })
+    },
     setClipAutoZoom: (id, on) =>
       set({
         ...snapshot(null),
@@ -713,12 +727,18 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         ...snapshot(null),
         clips: get().clips.map((c) => (c.id === id ? { ...c, hypeShake: on } : c))
       }),
-    setClipCrop: (id, cropRect) =>
+    setClipCrop: (id, cropRect) => {
+      // T-166 (3): clearing a crop that is not there (Crop ticked then unticked, Reset with no crop) or storing the rectangle already stored pushes nothing.
+      const clip = get().clips.find((c) => c.id === id)
+      if (!clip) return
+      const had = clip.cropRect
+      if (had === cropRect || (had && cropRect && had.x === cropRect.x && had.y === cropRect.y && had.w === cropRect.w && had.h === cropRect.h)) return
       // Fired per mousemove while dragging the reframe rectangle — coalesce.
       set({
         ...snapshot(`crop:${id}`),
         clips: get().clips.map((c) => (c.id === id ? { ...c, cropRect } : c))
-      }),
+      })
+    },
     addTextOverlay: (id, overlay) =>
       set({
         ...snapshot(null),
@@ -732,6 +752,9 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       // T-113: a color name becomes its hex and a size is clamped HERE, so no
       // writer can leave an overlay the gates refuse.
       const safe = normalizeOverlayPatch(patch)
+      // T-166 (3): a commit that stores what the overlay already holds (the Color box retyped as "white" over #ffffff) pushes nothing.
+      const current = get().clips.find((c) => c.id === clipId)?.textOverlays.find((o) => o.id === overlayId)
+      if (!current || (Object.keys(safe) as Array<keyof TextOverlay>).every((k) => current[k] === safe[k])) return
       // Fired per keystroke / per drag-move by the overlay editor — coalesce.
       set({
         ...snapshot(`overlay:${clipId}:${overlayId}`),

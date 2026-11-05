@@ -94,6 +94,8 @@ While a tour or any dialog is open the studio's own keys (the tool letters, **De
 **Ctrl+Z**) wait for it, because the canvas behind is covered; **`?`** still opens the
 shortcuts over a tour.
 
+Right-click in any text box for Undo, Redo, Cut, Copy, Paste and Select all; words selected anywhere else offer Copy.
+
 ---
 
 ## Home
@@ -664,7 +666,10 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    and neither color reads against it, the word starts in the next corner that is clear, or the
    nearest clear spot. Change the words, size and color in **Properties**.
    Words you copy elsewhere and paste (Ctrl+V) while the canvas is open, and no text box
-   has focus, become a text layer like that one holding them (one **Undo** removes it);
+   has focus, become a text layer like that one holding them (one **Undo** removes it): sized
+   to fit the canvas (a long sentence is smaller, one canvas line for each line you pasted, and
+   never wider or taller than the page), placed wholly inside it and colored to be read, as
+   **+ Add text** is, whatever the words are;
    on the empty start screen there is no canvas to put them on, so imagii asks you to paste a
    picture or pick a template instead.
    The selected layer has a dashed frame a few pixels outside it, so it never reads as the
