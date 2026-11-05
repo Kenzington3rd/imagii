@@ -5452,3 +5452,55 @@ test.describe('T-160 (3): the volume meter reads the louder channel', () => {
     expect(cool.cls).not.toContain('text-danger')
   })
 })
+
+// T-161 (4): the volume meter folds a 5.1 file's centre in. A ChannelSplitter(2) takes channels 0 and 1 only, so a multichannel file with its voice on the
+// centre read "-60 dB" and never turned red; a speakers down-mix to stereo ahead of the splitter puts the centre into both sides (x0.7071). The fixture is a
+// SIX-channel WAV from the bundled ffmpeg with the sine on FC alone.
+test.describe('T-161 (4): the volume meter folds a 5.1 file\'s centre channel in', () => {
+  type Sample = { text: string; cls: string }
+  /** A 5.1 WAV: the sine at `gain` times its default amplitude (0.125) on the centre channel only, every other channel silent. */
+  async function centreOnly(outPath: string, gain: number): Promise<void> {
+    const r = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-af', `volume=${gain},pan=5.1|FC=c0`, '-ar', '44100', '-c:a', 'pcm_s16le', outPath])
+    if (r.code !== 0) throw new Error(`5.1 tone ffmpeg exit ${r.code}: ${r.stderr.slice(-600)}`)
+    const probe = await runBinary(ffmpegPath, ['-i', outPath])
+    expect(probe.stderr, 'the fixture really has six channels').toMatch(/5\.1|6 channels/)
+  }
+  const label = (window: Page) => window.getByText('Meter', { exact: true }).locator('xpath=following-sibling::span')
+
+  test('a tone on the centre channel only reads its folded level (about 3 dB under its peak), not "-60 dB"', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t161-meter-centre')
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', 'centre-t161.wav')
+      // 7.7 is a peak of 0.9625 (-0.33 dBFS); folded into each side at 0.7071 it is 0.6806 (-3.34 dBFS), which the ceil label prints as "-3 dB".
+      await centreOnly(wav, 7.7)
+      await dropOnImporter(window, wav, 'centre-t161.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(label(window)).toHaveText('-60 dB')
+      await window.evaluate(() => {
+        const w = window as unknown as { __t161: Sample[]; __t161Timer: number }
+        w.__t161 = []
+        const el = Array.from(document.querySelectorAll('span.font-mono')).find((s) => / dB$/.test(s.textContent ?? ''))
+        if (!el) throw new Error('no meter dB label found')
+        w.__t161Timer = window.setInterval(() => w.__t161.push({ text: el.textContent ?? '', cls: el.className }), 16)
+      })
+      await playButton(window).click()
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+      await window.waitForTimeout(3_000)
+      const samples = await window.evaluate(() => {
+        const w = window as unknown as { __t161: Sample[]; __t161Timer: number }
+        window.clearInterval(w.__t161Timer)
+        return w.__t161
+      })
+      expect(samples.length, 'the sampler ran').toBeGreaterThan(50)
+      for (const s of samples.slice(-20)) {
+        expect(s.text, 'the folded centre, 3.3 dB under the tone\'s peak').toBe('-3 dB')
+        expect(s.cls).toContain('text-ink-muted')
+        expect(s.cls).not.toContain('text-danger')
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

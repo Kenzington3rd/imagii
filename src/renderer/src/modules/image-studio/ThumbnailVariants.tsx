@@ -7,7 +7,7 @@ import { Modal } from '../../components/Modal'
 import { basename } from '../../components/OutputDirLabel'
 import { reportFailure } from '../../lib/reportFailure'
 import { countOf } from '@shared/plural'
-import { captureDocument, jpgTransparencyNote, outputPixels, type ExportStage } from './ExportDialog'
+import { captureDocument, jpgTransparencyNote, outputPixels, thumbnailSizeNote, type ExportStage } from './ExportDialog'
 
 interface VariantSpec {
   id: string
@@ -95,6 +95,8 @@ interface ThumbnailVariantsProps {
   format: 'png' | 'jpg'
   quality: number
   scale: number
+  /** T-161 (7): the document is the emote template (112x112 PNG), whose Export button writes the 28/56/112 pack - the variants are not "as the Export card" there. */
+  emotePack: boolean
 }
 
 interface VariantPreview {
@@ -106,7 +108,7 @@ interface VariantPreview {
 /** One empty list, so "no previews" is the same array every render (the focus effect below keys on identity). */
 const NO_PREVIEWS: VariantPreview[] = []
 
-export function ThumbnailVariants({ open, onClose, format, quality, scale }: ThumbnailVariantsProps): JSX.Element | null {
+export function ThumbnailVariants({ open, onClose, format, quality, scale, emotePack }: ThumbnailVariantsProps): JSX.Element | null {
   const doc = useCanvasStore((s) => s.doc)
   // T-46: previews belong to the DOCUMENT they were rendered from. This
   // component only early-returns on `!open`, so its state survives a close —
@@ -130,11 +132,14 @@ export function ThumbnailVariants({ open, onClose, format, quality, scale }: Thu
     previews !== null &&
     previews.doc === doc &&
     previews.format === format &&
-    previews.quality === quality &&
+    // T-161 (7): a PNG ignores the quality, so a quality changed (and changed back) on the way past JPG leaves a PNG preview as it was.
+    (format !== 'jpg' || previews.quality === quality) &&
     previews.scale === scale
   const items = fresh ? previews.items : NO_PREVIEWS
   const out = outputPixels(doc.width, doc.height, scale)
   const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
+  // T-161 (7): the card's second note too ("Bigger than YouTube's thumbnail size"): a HiDPI 2x default writes 2560x1440 variants.
+  const sizeNote = thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
 
   // T-119: the Generate button is swapped for the previews when the render finishes, and the focused button
   // goes with it - keyboard focus fell to the page behind the dialog. It lands on "Save all", the next thing
@@ -256,7 +261,8 @@ export function ThumbnailVariants({ open, onClose, format, quality, scale }: Thu
   // T-160 (4): what the files will be, in the Export card's own words and arithmetic ("Output: W×H"), with the card's JPG note.
   const outputLine = (
     <div className="mb-3 text-xs text-ink-muted" data-testid="variants-output">
-      <p className="font-mono">{`Output: ${out.width}×${out.height} ${format.toUpperCase()}, as the Export card`}</p>
+      <p className="font-mono">{`Output: ${out.width}×${out.height} ${format.toUpperCase()}${emotePack ? '' : ', as the Export card'}`}</p>
+      {sizeNote ? <p>{sizeNote}</p> : null}
       {jpgNote ? <p>{jpgNote}</p> : null}
     </div>
   )

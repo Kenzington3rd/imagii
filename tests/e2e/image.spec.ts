@@ -5952,3 +5952,85 @@ test.describe('Image Studio - Variants follow the Export card (T-160 (4))', () =
     }
   })
 })
+
+// T-161 (7): the Variants dialog says what the Export card says. T-160 (4) added the output line but left out the card's size note, and
+// claimed "as the Export card" on an emote document, whose Export button writes the 28/56/112 pack.
+test.describe('Image Studio - the Variants dialog repeats the card (T-161 (7))', () => {
+  const BIGGER = "Bigger than YouTube's thumbnail size (1280×720)."
+
+  test('the 1280×720 thumbnail at Scale 2× PNG: the dialog shows the card\'s size note before and after Generate', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('variants-sizenote')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('2')
+      await expect(card.getByTestId('export-output-size')).toHaveText('Output: 2560×1440')
+      await expect(card).toContainText(BIGGER)
+
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await expect(dialog.getByTestId('variants-output')).toContainText('Output: 2560×1440 PNG, as the Export card')
+      await expect(dialog.getByTestId('variants-output')).toContainText(BIGGER)
+      await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
+      await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+      await expect(dialog.getByTestId('variants-output')).toContainText(BIGGER)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an emote document: the line names the variants\' own 112×112 PNG and does not say "as the Export card"', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('variants-emote')
+    const { window } = studio
+    try {
+      const t = templateById('emote-blank-112')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const card = window.locator(EXPORT)
+      // The card writes the pack, so "as the Export card" would be false here.
+      await expect(card.getByTestId('export-output-size')).toHaveText('Output: 3 PNGs — 28×28, 56×56, 112×112')
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const line = window.locator('[role="dialog"]').getByTestId('variants-output')
+      await expect(line).toContainText('Output: 112×112 PNG')
+      await expect(line).not.toContainText('as the Export card')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('PNG previews stay fresh when the JPG quality is changed and PNG is chosen again before reopening', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('variants-pngkeep')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('1')
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
+      await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+      await dialog.getByRole('button', { name: 'Close' }).click()
+      await expect(dialog).toHaveCount(0)
+
+      // Through JPG and back: the quality slider only exists at JPG, and a PNG ignores it.
+      await card.getByRole('combobox', { name: 'Export format' }).selectOption('jpg')
+      await card.getByLabel('JPG export quality').fill('0.5')
+      await expect(card.getByLabel('JPG export quality')).toHaveValue('0.5')
+      await card.getByRole('combobox', { name: 'Export format' }).selectOption('png')
+
+      await card.getByRole('button', { name: 'Variants' }).click()
+      await expect(window.locator('[role="dialog"]').locator('img')).toHaveCount(4)
+      await expect(window.locator('[role="dialog"]').getByRole('button', { name: 'Generate 3 variants' })).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

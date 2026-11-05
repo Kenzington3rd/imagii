@@ -7,6 +7,7 @@ import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { assert } from '../../shared/assert'
+import { probeAudioChannels } from './probe'
 
 export interface ExtractedAudio {
   wavPath: string
@@ -28,6 +29,13 @@ export const STUDIO_AUDIO: ExtractFormat = { sampleRate: 48000, channels: 2 }
 
 /** The stage that puts the extracted sound on the container's clock (T-125 (2)); exported for the unit pin. */
 export const EXTRACT_CLOCK_FILTER = 'aresample=async=1:first_pts=0'
+
+/**
+ * T-161 (3): a mono source becomes stereo as a unity duplicate. `-ac 2` alone up-mixes mono the way a down-mix would, centre at -3 dB per side, so a mono take (what
+ * Record makes) came out of Clean audio 3 dB under its own level, against the Levels copy "Otherwise the export keeps your levels as they are". A player puts a
+ * mono track on both speakers at unity (`audio/chain.ts`), and this is that. Stereo and multichannel sources are left to `-ac`.
+ */
+export const MONO_TO_STEREO_FILTER = 'pan=stereo|c0=c0|c1=c0'
 
 /**
  * Every extraction ffmpeg that is running, from its spawn until it closes or
@@ -91,6 +99,10 @@ async function extractUnderRun(
   // A Cancel that lands while the folder is made ends the wait, and no child is spawned (T-98).
   await run.guard(mkdir(dir, { recursive: true }))
   const wavPath = path.join(dir, `${nanoid(10)}.wav`)
+  // T-161 (3): only a stereo target can be a duplicate of a mono source (the transcription's 1-channel extract has no up-mix to correct). A probe that
+  // cannot read the file is null and the extraction is what it was.
+  const sourceChannels = format.channels === 2 ? await run.guard(probeAudioChannels(videoPath)) : null
+  const audioFilter = sourceChannels === 1 ? `${EXTRACT_CLOCK_FILTER},${MONO_TO_STEREO_FILTER}` : EXTRACT_CLOCK_FILTER
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(
@@ -111,7 +123,7 @@ async function extractUnderRun(
         // duration every player and this app's own probe and UI report, so there is no truer length to cap `-t` against. And a timestamp
         // RESET silently drops real audio with no ffmpeg knob to keep it (`first_pts=0` alone behaves the same).
         '-af',
-        EXTRACT_CLOCK_FILTER,
+        audioFilter,
         '-acodec',
         'pcm_s16le',
         '-ar',

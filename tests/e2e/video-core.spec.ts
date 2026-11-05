@@ -3699,3 +3699,39 @@ test.describe('T-157 (3): the Play button follows the element when its src is sw
     }
   })
 })
+
+// T-161 (5): Close names what is lost. A session with only a scan's results is a loss (T-147 (3)), but the question read "1 clip and its edits will be discarded" -
+// of a video whose clip nobody touched. The video is opened, Scan VOD is run over it for real, nothing is edited, and Close is pressed.
+test.describe('T-161 (5): Close after a scan with no edits names the scan, not edits', () => {
+  test('open a video, run Scan VOD, edit nothing, press Close: the question names the scan\'s results; declining keeps the scan, accepting returns the importer', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t161-close-scan')
+    try {
+      const messages: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        messages.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
+      const card = window.locator('[data-tutorial="video-highlights"]')
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      // The scan ends (found or none); its button turns into Re-scan once the results are stored.
+      await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible({ timeout: 60_000 })
+
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
+      expect(messages[0]).toBe("Close this video? The scan's results will be discarded.")
+      expect(messages[0], 'nothing was edited and the question does not say so').not.toMatch(/edit|clip/)
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(card.getByRole('button', { name: 'Re-scan' }), 'declined: the scan is still there').toBeVisible()
+
+      answer = 'accept'
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      expect(messages).toHaveLength(2)
+    } finally {
+      await app.close()
+    }
+  })
+})

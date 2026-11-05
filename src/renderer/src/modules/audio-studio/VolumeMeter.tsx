@@ -14,7 +14,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
   const analyserRef = useRef<AnalyserNode | null>(null)
   // T-160 (3): one analyser per channel. An AnalyserNode analyses its input down-mixed to mono ((L+R)/2), so the one above
   // read a tone on L only 6 dB low and an L = -R signal as silence; the level is the larger of these two peaks.
-  const channelRef = useRef<{ splitter: ChannelSplitterNode; left: AnalyserNode; right: AnalyserNode } | null>(null)
+  const channelRef = useRef<{ fold: GainNode; splitter: ChannelSplitterNode; left: AnalyserNode; right: AnalyserNode } | null>(null)
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
 
   useEffect(() => {
@@ -33,16 +33,23 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
         analyser.fftSize = 1024
         source.connect(analyser)
         analyser.connect(ctx.destination)
-        // Not connected onward: they only read. A mono source up-mixes discretely, so channel 1 is silent and the max is the mono peak.
+        // Not connected onward: they only read. T-161 (4): a ChannelSplitter(2) takes channels 0 and 1 of its input and nothing else, so a 5.1 file with its voice on the
+        // centre (channel 2) read "-60 dB". The gain node ahead of it is a stereo down-mix by the speakers rule: 5.1 folds its centre into both sides (x0.7071) and a
+        // mono source up-mixes to L = R (so the max is still the mono peak). A stereo source passes through unchanged.
+        const fold = ctx.createGain()
+        fold.channelCount = 2
+        fold.channelCountMode = 'explicit'
+        fold.channelInterpretation = 'speakers'
         const splitter = ctx.createChannelSplitter(2)
         const left = ctx.createAnalyser()
         const right = ctx.createAnalyser()
         left.fftSize = 1024
         right.fftSize = 1024
-        source.connect(splitter)
+        source.connect(fold)
+        fold.connect(splitter)
         splitter.connect(left, 0)
         splitter.connect(right, 1)
-        channelRef.current = { splitter, left, right }
+        channelRef.current = { fold, splitter, left, right }
         ctxRef.current = ctx
         analyserRef.current = analyser
         sourceRef.current = source
@@ -94,6 +101,7 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
       try {
         sourceRef.current?.disconnect()
         analyserRef.current?.disconnect()
+        channelRef.current?.fold.disconnect()
         channelRef.current?.splitter.disconnect()
         channelRef.current?.left.disconnect()
         channelRef.current?.right.disconnect()

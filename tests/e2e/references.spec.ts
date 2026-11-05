@@ -452,7 +452,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', dismisser)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items? Ctrl+Z brings it back.'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board"? Ctrl+Z brings it back.'])
       // Cancel means cancel: still two boards, still selected, still on disk.
       await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
       await expect(detailTitle).toHaveText('Alpha board')
@@ -470,7 +470,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', accepter)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items? Ctrl+Z brings it back.'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board"? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
       await expect(window.locator('li', { hasText: 'Alpha board' })).toHaveCount(0)
       // Selection falls back to the surviving board rather than emptying out.
@@ -590,7 +590,7 @@ test.describe('imagii References studio', () => {
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
       await expect
         .poll(() => dialogs)
-        .toEqual(['confirm: Delete "Undo board" and all 1 item? Ctrl+Z brings it back.'])
+        .toEqual(['confirm: Delete "Undo board" and the 1 item in it? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
       await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
       // The confirm still guards a real deletion — but not the picture.
@@ -3426,5 +3426,44 @@ test.describe('T-160 (5): Delete board names Ctrl+Z, and Ctrl+Z brings the board
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
     }
+  })
+})
+
+// T-161 (8): the Delete board question read "and all 0 items" / "and all 1 item". The wording follows the count; the dialog is captured as T-160 (5) does.
+test.describe('T-161 (8): the Delete board question reads right for an empty board and a one-item board', () => {
+  async function questionFor(label: string, id: string, name: string, files: string[]): Promise<string[]> {
+    const fx = makeFixture(label)
+    for (const f of files) writeFileSync(path.join(fx.thumbsDir, f), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify(boardOwning(id, name, fx.thumbsDir, files)), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText(name)
+      const dialogs: string[] = []
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.dismiss()
+      })
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect.poll(() => dialogs).toHaveLength(1)
+      return dialogs
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  }
+
+  test('an empty board\'s question is the bare form', async () => {
+    test.setTimeout(120_000)
+    expect(await questionFor('refs-t161-empty', 't161empty', 'Empty board', [])).toEqual(['confirm: Delete "Empty board"? Ctrl+Z brings it back.'])
+  })
+
+  test('a one-item board\'s question names "the 1 item in it"', async () => {
+    test.setTimeout(120_000)
+    expect(await questionFor('refs-t161-one', 't161one', 'Lone board', ['t161a.png'])).toEqual([
+      'confirm: Delete "Lone board" and the 1 item in it? Ctrl+Z brings it back.'
+    ])
   })
 })

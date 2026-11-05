@@ -8,6 +8,7 @@ import type { CaptionSegment } from '@shared/captions'
 import type { ChatPeak } from '@shared/chatPeaks'
 import type { AudioCandidate } from '@shared/highlights'
 import { countOf } from '@shared/plural'
+import { joinList } from '../../audio-studio/audioClose'
 
 export interface VideoSource {
   /** The file the app plays and ffmpeg reads — for a converted import, the mp4 working copy. */
@@ -297,8 +298,20 @@ export function videoDiscardMessage(state: VideoSessionView, lead: 'close' | 're
   if (clipCount <= 0) return null
   const leadIn = lead === 'close' ? 'Close this video?' : "Replace the video you're editing?"
   if (!videoSessionHasLoss(state)) return jobsNote ? `${leadIn} ${jobsNote}` : null
-  // T-120: "1 clip and their edits" read wrong at one. The possessive agrees with the count, like the noun.
-  const base = `${leadIn} ${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits will be discarded.`
+  // T-161 (5): name what is lost, as Audio Studio's Close does. The clips and their edits are named only when the clips are not the one untouched whole-video clip
+  // (a person who ran the highlight scan and edited nothing was told their edits go); then the scan, the log, the spikes; the undo history only when it is the one loss.
+  const { source, clips, history, derived } = state
+  const parts: string[] = []
+  if (clips.length > 1 || !isPristineWholeVideoClip(clips[0]!, source!.probe.duration)) {
+    // T-120: "1 clip and their edits" read wrong at one. The possessive agrees with the count, like the noun.
+    parts.push(`${countOf(clipCount, 'clip')} and ${clipCount === 1 ? 'its' : 'their'} edits`)
+  }
+  if (derived.scanCandidates !== null) parts.push("the scan's results")
+  if (derived.highlightChat !== '' || derived.spikeChat !== '') parts.push('the pasted chat log')
+  if (derived.spikes !== null) parts.push('the chat spikes found')
+  if (parts.length === 0 && history.past.length > 0) parts.push('your undo history')
+  const list = joinList(parts)
+  const base = `${leadIn} ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
   // T-144: Close takes the panels away and leaves the jobs running; `jobsNote` is the sentence that says so (null when nothing is running).
   return jobsNote ? `${base} ${jobsNote}` : base
 }

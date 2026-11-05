@@ -14,6 +14,85 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-161 (round 110), Track A: the media a person gets is the media they made
+
+The forty-seventh sweep, Track A (items 1 to 3).
+
+### (1) [MED] - A compilation of a source with a text subtitle track came out short, and said "Saved"
+
+- **Bug.** A 10 s MKV with three srt cues, range 1-5 s, compiled to 4.477 s and 119 frames (4.000 s and 120 with the fix); a two-clip compilation read 4.498 s for 5.0 s. The MP4 with a mov_text cue was worse (1.996 s of a 5 s sum).
+- **Root cause.** The segment command had no `-map`, so ffmpeg's default stream selection took the source's text subtitle track along into the Matroska segment. The track's last cue set the segment's length (`-shortest` and the container duration), and the join's concat demuxer offsets the next segment by that length. The picture and the sound were fine; a stream the compilation never meant to carry decided where the next clip started.
+- **Fix.** `-sn` and `-dn` on the segment command. The join's inputs are the segments, which now carry a picture and a sound and nothing else, so there is nothing more to drop there.
+- **Test.** media.spec.ts "T-161 (1)" (an MKV with srt cues and an MP4 with mov_text, two ranges through the real `runConcat`: the output is 5.000 s within a frame, every frame is there, and the file has a video and an audio stream only; a source with no subtitle track is the control), red on the unchanged tree (4.498 s and 1.996 s).
+- **Lesson.** **A command with no `-map` writes whatever the source has.** Every stream the output carries can set its length; name the streams a runner means to write. `-dn` is the same sentence for data tracks; ffmpeg does not select one by default, so no fixture here shows it do anything, and it stays as the statement of intent (a mutation that removes it survives, disclosed).
+
+### (2) [MED] - Whisper's non-speech tags reached the captions
+
+- **Bug.** "[BLANK_AUDIO]", "[MUSIC]", "(upbeat music)" and "♪" cues were saved by Save .srt, drawn by the burn-in and bundled in the Clip Kit's `_captions.srt`, and the panel has no transcript editing.
+- **Root cause.** Nothing between the engine's file and its consumers looked at what a cue said.
+- **Fix.** `cleanTranscriptSrt` (shared/captions.ts) drops a cue whose whole text, across all its lines, is only bracketed or parenthesised tags or only music notes, keeps a cue with words (a tag among them included), and renumbers from 1. whisperManager rewrites the engine's .srt with it once, atomically, before the file is parsed or returned, so every reader of a new transcript reads it clean; `shiftSrtToRange` applies it too, so a transcript saved before this release is clean in a kit and a ranged burn. Not whisper's `--suppress-nst`: the person installs their own whisper-cli, and an older one rejects an argument it does not know.
+- **Test.** captions.test.ts "cleanTranscriptSrt" (tags, tags with words, multi-line cues, renumbering, an empty result, `shiftSrtToRange`); transcribeClean.test.ts (a fake engine writes the tags; the file on disk and the returned segments have none); media.spec.ts "T-161 (2)" (a ranged burn of a flat gray video: the spoken words are drawn, and the frames at the times of "[MUSIC]", "(upbeat music)" and the notes have no text; the kit's SRT has no tag), red on the unchanged tree.
+- **Fold.** A transcription of music or silence now leaves no cue, so `captionsReadyMessage(0)` says "No speech found, so there are no captions." instead of "Captions ready (0 lines)"; a filter that can empty a result has to change the sentence that reports it.
+- **Lesson.** **Filter at the one place a file is written, and again at the one place old files are read.** The engine itself is not installed in any test environment, so the write-back is held by a unit test around a fake engine and the real-media half by the old-transcript path; the two meet at `cleanTranscriptSrt`.
+
+### (3) [LOW] - Clean audio's extract turned a mono take into stereo 3 dB down per channel
+
+- **Bug.** A mono take peaking -23.92 dBFS extracted to L = R = -26.93 dBFS, so with Even volume off a re-attached video played 3 dB quieter than the take, against the Levels copy "Otherwise the export keeps your levels as they are".
+- **Root cause.** `-ac 2` up-mixes mono the way a down-mix folds a centre: -3 dB per side. A player puts a mono track on both speakers at unity (`chain.ts`, the repo's own rule).
+- **Fix.** The studio extract asks `probeAudioChannels` (audio/probe.ts) for the channel count and, when every audio stream is mono, adds `pan=stereo|c0=c0|c1=c0` after the clock stage. Not `probeAudio`: that one refuses a file with no length, and a Record take (a MediaRecorder WebM) has none. Stereo, multichannel and the transcription's 1-channel extract are unchanged; a file with a mono AND a stereo track is left to `-ac 2` as before, because ffmpeg's choice between them is its own rule and a pan aimed at the wrong one would put one side of a stereo track on both speakers.
+- **Test.** media.spec.ts "T-161 (3)" (a mono Opus take reads L = R = its own peak within 0.1 dB, red at -3 dB on the unchanged tree; a stereo file with unequal sides and a 5.1 file are unchanged; the probe on a durationless take, a junk file and a missing one; the mixed-track file against the plain extract); extract.test.ts "a mono source is duplicated".
+- **Lesson.** **"Keeps your levels" is a claim a channel count can break.** A fixture for a level promise needs a source whose channel count differs from the target's, and a measurement per channel.
+
+## 2026-11-05 - T-161 (round 110), Track B: the studios say what is there
+
+The forty-seventh sweep, Track B (items 4-6).
+
+### (4) [LOW] - The meter dropped a 5.1 file's centre channel
+
+- **Bug.** A six-channel file with its voice on the centre read "-60 dB" in Audio Studio's meter and never turned red, where the pre-T-160 mono analyser (a speakers down-mix) read it.
+- **Root cause.** T-160 (3) fed the source straight into `createChannelSplitter(2)`. A splitter's input is explicit and discrete, so it takes channels 0 and 1 (FL, FR) of whatever arrives and nothing else; a 5.1 file's centre is channel 2.
+- **Fix.** A `GainNode` with `channelCount = 2`, `'explicit'` and `'speakers'` sits between the source and the splitter, so the browser's own down-mix rule runs ahead of the split: 5.1 folds its centre into both sides (x0.7071), a mono source becomes L = R, a stereo source passes through unchanged. Playback and the spectrum bars are still on the first analyser; the node is disconnected with the rest.
+- **Test.** audio.spec.ts "T-161 (4)" (a 6-channel WAV from the bundled ffmpeg with the sine on the centre only, played under the built app and sampled every 16 ms: it settles on "-3 dB", the centre's folded level, in the muted colour; red on the unchanged build: "-60 dB"; the T-159 (2) and T-160 (3) cases stay green); interactionWiring.test.ts "T-161" (the node's three properties, its place in the graph, its teardown).
+- **Lesson.** **A Web Audio node's channel rules are part of its contract, so name them.** "Split into two" silently meant "keep the first two"; the speakers rule that folds a layout down is a property you set, not a default you get. When a node narrows a signal, put the fold in front of it, and drive it with a fixture whose signal lives on the channel the narrowing would drop.
+
+### (5) [LOW] - Close named edits that did not exist
+
+- **Bug.** After Scan VOD with nothing edited, Close asked "Close this video? 1 clip and its edits will be discarded." - it told the person their edits would go, and not that the scan would.
+- **Root cause.** T-147 (3) made a scan, a pasted chat log, found spikes and undo steps count as a loss (`videoSessionHasLoss`) but left the sentence the question had always been, which only knew clips.
+- **Fix.** `videoDiscardMessage` builds its list as `audioCloseMessage` does (`joinList`, now exported from `audioClose.ts`, is the one copy): the clips and their edits only when the clips are not the one untouched whole-video clip, then the scan's results, the pasted chat log, the chat spikes found, and "your undo history" only when it is the one loss. The lead-in, the Replace variant and the jobs sentence are as they were; a changed clip keeps its sentence word for word.
+- **Test.** videoStore.test.ts "names what is lost" (each kind alone, two and three together, the clip-edit case, the history only when alone); video-core.spec.ts "T-161 (5)" (Scan VOD run for real, nothing edited, Close: "The scan's results will be discarded.", no "edit" or "clip" in it; declining keeps the scan, accepting returns the importer; red on the unchanged build: "1 clip and its edits"); interactionWiring.test.ts "T-161".
+- **Lesson.** **When a gate widens, the sentence behind it has to widen with it.** T-147 (3) changed what counts as a loss and left the one sentence that describes a loss; a question is a promise about what is lost, and a second reason to ask needs its own words. Build the list from the same conditions as the gate, the way the audio side already did.
+
+### (6) [LOW] - A false "Captions need setup" flashed on the first open
+
+- **Bug.** On the first Video Studio open the ember "Captions need setup" card painted until the status answered, with the engine and model installed too.
+- **Root cause.** The card read `!status?.ready`, and `status` is `null` until `captions:status` answers: "not known yet" evaluated as "not ready".
+- **Fix.** The card renders only for `status !== null && !status.ready`.
+- **Test.** video-pipelines.spec.ts "T-161 (6)" (main's `captions:status` held with a gate: across a second of looking the card is not in the DOM; released as not ready, it shows; red on the unchanged build: it is there while held); interactionWiring.test.ts "T-161".
+- **Lesson.** **`!x?.flag` conflates "no answer" with "answered no".** A value that starts as `null` has three states; a warning must be keyed on the known-bad one. Hold the answer in a test with a gate, as the caption cases already do for the job, so "not yet" lasts as long as the assertion needs.
+
+## 2026-11-05 - T-161 (round 110), Track C: a dialog that repeats a card repeats all of it; a sentence is built from the count
+
+The forty-seventh sweep, Track C (items 7 and 8, and a fold).
+
+### (7) [LOW] - The Variants output line dropped the card's size note and said "as the Export card" for an emote
+
+- **Bug.** On the 1280×720 template at the HiDPI default of 2x, the Export card said "Bigger than YouTube's thumbnail size (1280×720)." and the Variants dialog, which writes the same 2560×1440 files, said nothing. On the emote template the dialog read "112×112 PNG, as the Export card" while the card writes the 28/56/112 pack.
+- **Root cause.** T-160 (4) copied the card's output arithmetic and its JPG note into the dialog but not its second note, and "as the Export card" was written for the cases where the dialog and the card agree. The emote pack is the one place they do not.
+- **Fix.** The dialog shows `thumbnailSizeNote` in the block the JPG note is in; ExportDialog hands it `emotePack`, and the line drops ", as the Export card" there. Fold: the previews' freshness compares the JPG quality only for a JPG (a PNG ignores it, so a quality moved and moved back on the way past JPG left PNG previews thrown away).
+- **Test.** image.spec.ts "T-161 (7)" (the note before and after Generate at 2x PNG; the emote line; PNG previews kept across a JPG quality change; all red on the unchanged build); interactionWiring.test.ts "T-161".
+- **Lesson.** **When a dialog says "as the card", list what the card says and check each against the dialog.** A copied line is a claim about every state of the thing it points at, and the state where the two differ (the emote pack) is the one to test first.
+
+### (8) [LOW] - The Delete board question said "and all 0 items" and "and all 1 item"
+
+- **Bug.** An empty board asked `Delete "X" and all 0 items?`; a board with one picture, `and all 1 item?`.
+- **Root cause.** One template, `countOf` for the noun, and "all" in the fixed words: correct for two or more, wrong for the two counts where "all" means nothing.
+- **Fix.** One function beside the handler builds the question from the count: bare for 0, "and the 1 item in it" for 1, "and all N items" after. Every form ends "Ctrl+Z brings it back."
+- **Test.** references.spec.ts "T-161 (8)" (the captured confirm text for an empty and a one-item board; red on the unchanged build); the older cases that read the old text were edited in place; interactionWiring.test.ts "T-161".
+- **Lesson.** **A plural helper fixes the noun, not the sentence.** `countOf` gets "1 item" right and leaves "all" in place; when a number can be 0 or 1, read the whole sentence at those values.
+
+---
+
 ## 2026-11-05 - T-160 (round 109), Track A: the app offers what it holds
 
 The forty-sixth sweep, Track A (items 1, 2 and 5, and two folds).

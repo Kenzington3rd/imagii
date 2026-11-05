@@ -298,6 +298,12 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
       SEGMENT_AUDIO_CODEC,
       '-r',
       String(fps),
+      // T-161 (1): a segment carries picture and sound ONLY. With no `-map` ffmpeg also takes the source's text subtitle track (srt, ass, mov_text) into the
+      // Matroska segment, the track's LAST cue then set the segment's length (`-shortest` and the container duration: 4.477 s and 119 frames for a 4 s range of a
+      // 10 s MKV, measured on 7.0.2), and the join's concat demuxer offset the next segment by that - a compilation shorter than its clips, "Saved". The join's
+      // inputs are these segments, so there is nothing else to drop there.
+      '-sn',
+      '-dn',
       // T-127 (4): a segment ends where its SHORTER stream does. A length that is not a whole number of frames wrote one or two extra
       // video frames (the fps stage, a fractional -ss, the EOF fill), the join's concat demuxer offsets the next segment by the
       // container's picture-led length, and the join's AAC encode swallows the gap in the sound: the picture fell further behind it at

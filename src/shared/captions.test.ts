@@ -12,6 +12,7 @@ import {
   captionsReadyMessage,
   captionSizeReadout,
   clearedTranscriptsMessage,
+  cleanTranscriptSrt,
   clearTranscriptsQuestion,
   DEFAULT_CAPTION_STYLE,
   effectiveCaptionPx,
@@ -559,7 +560,7 @@ describe('clearTranscriptsQuestion — what the Clear confirm says it will delet
 
 describe('the captions toasts say what happened (T-89)', () => {
   it('a transcription reports lines of caption with the singular handled', () => {
-    expect(captionsReadyMessage(0)).toBe('Captions ready (0 lines)')
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions.')
     expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
     expect(captionsReadyMessage(42)).toBe('Captions ready (42 lines)')
     expect(captionsReadyMessage(42)).not.toMatch(/segment/i)
@@ -604,5 +605,83 @@ describe('staleCaptionsMessage — a transcript that finished for a video that i
 
   it('does not claim another video was opened', () => {
     expect(staleCaptionsMessage('a.mp4')).not.toMatch(/another video/i)
+  })
+})
+
+describe('cleanTranscriptSrt - the engine\'s non-speech cues are not captions (T-161 (2))', () => {
+  const cue = (n: number, from: string, to: string, ...text: string[]): string => `${n}\n00:00:${from} --> 00:00:${to}\n${text.join('\n')}\n`
+  const file = (...cues: string[]): string => cues.join('\n')
+
+  it('drops a cue that is one [tag], one (tag) or only music notes', () => {
+    const out = cleanTranscriptSrt(
+      file(
+        cue(1, '00,000', '01,000', ' [BLANK_AUDIO]'),
+        cue(2, '01,000', '02,000', '[MUSIC]'),
+        cue(3, '02,000', '03,000', '(upbeat music)'),
+        cue(4, '03,000', '04,000', '\u266A \u266A'),
+        cue(5, '04,000', '05,000', '\u266B'),
+        cue(6, '05,000', '06,000', 'hello there')
+      )
+    )
+    expect(out).toBe('1\n00:00:05,000 --> 00:00:06,000\nhello there\n')
+    expect(out).not.toMatch(/BLANK_AUDIO|MUSIC|upbeat|\u266A|\u266B/)
+  })
+
+  it('keeps a cue with words, a tag among them included', () => {
+    const out = cleanTranscriptSrt(
+      file(cue(1, '00,000', '01,000', '[laughs] that was close'), cue(2, '01,000', '02,000', 'wait (pause) what'), cue(3, '02,000', '03,000', '\u266A la la \u266A'))
+    )
+    expect(out).toContain('[laughs] that was close')
+    expect(out).toContain('wait (pause) what')
+    expect(out).toContain('\u266A la la \u266A')
+    expect(out.match(/-->/g)).toHaveLength(3)
+  })
+
+  it('reads a cue by ALL its lines: a tag line beside words stays, two tag lines go', () => {
+    const out = cleanTranscriptSrt(
+      file(
+        cue(1, '00,000', '01,000', '[MUSIC]', '[BLANK_AUDIO]'),
+        cue(2, '01,000', '02,000', '[MUSIC]', 'and we are back'),
+        cue(3, '02,000', '03,000', '(door opens)', '\u266A')
+      )
+    )
+    expect(out).toBe('1\n00:00:01,000 --> 00:00:02,000\n[MUSIC]\nand we are back\n')
+  })
+
+  it('renumbers the cues it keeps from 1, in order, and leaves their times alone', () => {
+    const out = cleanTranscriptSrt(
+      file(cue(7, '00,000', '01,000', '[MUSIC]'), cue(8, '01,500', '02,250', 'first'), cue(9, '02,250', '03,000', '[BLANK_AUDIO]'), cue(10, '04,000', '05,125', 'second'))
+    )
+    expect(out).toBe(file(cue(1, '01,500', '02,250', 'first'), cue(2, '04,000', '05,125', 'second')))
+  })
+
+  it('is empty when nothing is left, and for an empty file', () => {
+    expect(cleanTranscriptSrt(file(cue(1, '00,000', '01,000', '[BLANK_AUDIO]'), cue(2, '01,000', '02,000', '(music)')))).toBe('')
+    expect(cleanTranscriptSrt('')).toBe('')
+  })
+
+  it('reads CRLF files and a byte order mark, and leaves a clean file as it was', () => {
+    const clean = file(cue(1, '00,000', '01,000', 'one'), cue(2, '01,000', '02,000', 'two'))
+    expect(cleanTranscriptSrt(clean)).toBe(clean)
+    expect(cleanTranscriptSrt('\uFEFF' + clean.replace(/\n/g, '\r\n'))).toBe(clean)
+  })
+
+  it('a transcription that leaves no cue says so, and one or more keep the count (the toast after music or silence)', () => {
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions.')
+    expect(captionsReadyMessage(0)).not.toMatch(/ready/i)
+    expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
+    expect(captionsReadyMessage(3)).toBe('Captions ready (3 lines)')
+  })
+
+  it('a block with no readable time line is not a cue and is not carried over', () => {
+    const clean = file(cue(1, '00,000', '01,000', 'one'))
+    expect(cleanTranscriptSrt('7\nsoon --> later\nnot a cue\n\n' + clean)).toBe(clean)
+  })
+
+  it('shiftSrtToRange drops a tag cue inside the range (a transcript saved before this release)', () => {
+    const old = file(cue(1, '10,000', '11,000', 'before'), cue(2, '12,000', '13,000', '[MUSIC]'), cue(3, '14,000', '15,000', 'after'))
+    const shifted = shiftSrtToRange(old, 10, 16)
+    expect(shifted).toBe(file(cue(1, '00,000', '01,000', 'before'), cue(2, '04,000', '05,000', 'after')))
+    expect(shiftSrtToRange(file(cue(1, '12,000', '13,000', '[MUSIC]')), 10, 16)).toBe('')
   })
 })

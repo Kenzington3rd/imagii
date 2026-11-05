@@ -7669,7 +7669,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 110)
+- **Status:** done (round 110 — see the Done entry)
 
 ---
 
@@ -8240,6 +8240,44 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 110 — T-161, all eight counted items and the folds, landed in
+the commit that carries this entry. Three Sonnet workers in fresh
+clones of 7e89968, disjoint source files, merged by the expediter.
+Track A: a compilation's segments carry only picture and sound, so a
+source with a text subtitle track compiles to the sum of its ranges
+(the MKV fixture was 4.498 s for 5.0 s, the MP4 1.996 s); whisper's
+non-speech cues are dropped where the .srt is written and in
+shiftSrtToRange, and a transcript of tags alone says "No speech found,
+so there are no captions." (fold); a mono take extracts for Clean audio
+as a unity duplicate and keeps its level. Track B: the meter folds a
+multichannel file to stereo by the speakers rule before its channel
+split, so a 5.1 centre reads; Close names what is lost; the captions
+setup card waits for a known status. Track C: the Variants dialog
+repeats the card's size note and names an emote's own size; the Delete
+board question reads by count; BRANDING names the "Logged posts (N)"
+header (fold), and a PNG preview survives a JPG-quality change (fold).
+Deviations, accepted: `-sn -dn` sit before `-shortest` (the T-127 (4)
+pin wants `-shortest` last); the cleaner also drops several tags in one
+cue and notes beside a tag; the mono pan applies only when every audio
+stream is mono (a mixed mono-plus-stereo file is pinned as before); a
+new `probeAudioChannels` (extract.ts did no probing and `probeAudio`
+refuses a file with no duration); a fake-engine unit test holds the
+write-back; the T-125 (2) "same bytes" media case and extract.test.ts
+were edited in place. Ledgers: A 2 RED runs / 28 mutations (one
+survivor, `-dn`, which no fixture can fail: ffmpeg selects no data
+stream by default), B 5 RED / 26, C 6 RED / 12, all others killed.
+Found not fixed: a transcript written before this release keeps its
+tags in Save .srt and a whole-video burn (no release has written one).
+Expedited personally: one independent mutation per track at a seam no
+ledger row names — A: the mono pan at 0.7071 per side → the T-161 (3)
+mono case red (-26.91 against -23.90 dBFS); B: the fold node at gain
+0.5 → 7 of 8 meter cases red; C: the dialog's size note computed from
+the document instead of the scaled output → the T-161 (7) size-note
+case red — each restored byte-identical, sha256 verified; on the
+MERGED tree: verify x2 (208/6200), test:media 467 passed | 17 skipped of 484 on 7.0.2, FULL
+Playwright 655/655 (41.9 min). Applied to 7e89968 by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 109 — T-160, all five counted items and the three folds, landed
 in the commit that carries this entry. Two Sonnet workers in fresh

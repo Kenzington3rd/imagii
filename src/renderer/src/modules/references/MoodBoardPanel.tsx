@@ -162,11 +162,15 @@ export function MoodBoardPanel(): JSX.Element {
     })
   }
 
+  // T-161 (8): "and all 0 items" / "and all 1 item" read wrong - an empty board has nothing to name, one item is "the 1 item in it".
+  function deleteQuestion(name: string, count: number): string {
+    const what = count === 0 ? '' : count === 1 ? ' and the 1 item in it' : ` and all ${countOf(count, 'item')}`
+    return `Delete "${name}"${what}? Ctrl+Z brings it back.`
+  }
+
   async function onDelete(): Promise<void> {
     if (!collection) return
-    const ok = confirm(
-      `Delete "${collection.name}" and all ${countOf(collection.items.length, 'item')}? Ctrl+Z brings it back.`
-    )
+    const ok = confirm(deleteQuestion(collection.name, collection.items.length))
     if (!ok) return
     try {
       await deleteCollection(collection.id)

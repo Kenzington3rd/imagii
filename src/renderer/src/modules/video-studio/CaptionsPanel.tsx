@@ -454,7 +454,8 @@ export function CaptionsPanel(): JSX.Element | null {
       {/* T-112: a video with no sound track has nothing to transcribe. */}
       {noSound ? <p className="text-xs text-warn">{NO_SOUND_MESSAGE}</p> : null}
 
-      {!status?.ready ? (
+      {/* T-161 (6): a status that has not answered yet (null) is not a status that says not ready - the card painted on every first open, engine installed or not. */}
+      {status !== null && !status.ready ? (
         // T-112: the links on this ember wash are `text-warn` (10.4:1 on it) and underlined at
         // rest. They were `text-accent`, which measures 4.09:1 on the wash — under AA — and
         // only underlined on hover, so a link was a color and nothing else.

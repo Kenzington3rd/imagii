@@ -18,7 +18,7 @@ import {
 import { buildChain, parseLoudnormJson } from '../../src/main/audio/chain'
 import { outputFolderRefusal } from '../../src/main/ffmpeg/outputPath'
 import { probeVideo } from '../../src/main/ffmpeg/probe'
-import { probeAudio } from '../../src/main/audio/probe'
+import { probeAudio, probeAudioChannels } from '../../src/main/audio/probe'
 import {
   convertForImport,
   convertToMp4,
@@ -6143,10 +6143,12 @@ describe('a sound that starts late in its container stays where it was through t
   }, 120_000)
 
   it('a sound that starts with its picture is extracted to the SAME bytes as before the change', async () => {
-    // The old command line, run directly: no `-af`. For a file whose sound starts at 0 the padding has nothing to do, and the stage
+    // The old command line, run directly: no clock stage. For a file whose sound starts at 0 the padding has nothing to do, and the stage
     // must not touch a sample (the WAV is what every studio, the cache and the transcription read).
+    // T-161 (3): this fixture's sound is MONO, which the studio extract now writes as a unity duplicate (`pan=stereo|c0=c0|c1=c0`), so the
+    // reference carries that pan and nothing else: the bytes are still those of the command without the clock stage.
     const before = path.join(workDir, 't125-extract-before.wav')
-    await ff(['-y', '-i', onTime, '-vn', '-acodec', 'pcm_s16le', '-ar', '48000', '-ac', '2', before])
+    await ff(['-y', '-i', onTime, '-vn', '-af', 'pan=stereo|c0=c0|c1=c0', '-acodec', 'pcm_s16le', '-ar', '48000', '-ac', '2', before])
     const extracted = await extractAudioFromVideo(onTime)
     try {
       expect(await fileSha(extracted.wavPath), 'the WAV of a file whose sound starts at 0').toBe(await fileSha(before))
@@ -12075,4 +12077,256 @@ describe('a recording that changes size keeps its shape (real ffmpeg, T-154 (8))
     const out = path.join(workDir, 't154-junk.mp4')
     await expect(convertToMp4(recordingOwner('take'), junk, out, () => undefined)).rejects.toThrow(/convert-to-mp4 exit/)
   }, 60_000)
+})
+
+describe('a compilation of a source with a text subtitle track is the sum of its ranges (real ffmpeg, T-161 (1))', () => {
+  // A segment was written with no `-map`, so the source's srt/ass/mov_text track rode into the Matroska segment; its LAST cue set `-shortest` and
+  // the container's length, and the concat demuxer offset the next segment by that: a compilation shorter than its clips, "Saved". Executed on
+  // 7.0.2: a 10 s MKV with three srt cues, range 1-5 s, was 4.477 s and 119 frames (4.000 s and 120 with `-sn`). The ranges below are two
+  // segments, so the join's offset is exercised too.
+  const RANGES = [{ startSec: 1, endSec: 5, name: 'a' }, { startSec: 7, endSec: 8, name: 'b' }]
+  const FPS = 30
+  const WANTED_SEC = 5
+  let mkv = ''
+  let mp4 = ''
+
+  async function withSubtitles(file: string, container: 'mkv' | 'mp4', srtText: string): Promise<void> {
+    const srt = file.replace(/\.\w+$/, '.srt')
+    await writeFile(srt, srtText, 'utf8')
+    await ff([
+      '-y',
+      '-f', 'lavfi', '-i', `testsrc2=size=320x180:rate=${FPS}:duration=10`,
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=10',
+      '-i', srt,
+      '-map', '0:v', '-map', '1:a', '-map', '2:s',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+      '-c:s', container === 'mkv' ? 'srt' : 'mov_text',
+      file
+    ])
+  }
+
+  beforeAll(async () => {
+    mkv = path.join(workDir, 't161-1-subs.mkv')
+    mp4 = path.join(workDir, 't161-1-subs.mp4')
+    await withSubtitles(
+      mkv,
+      'mkv',
+      '1\n00:00:00,500 --> 00:00:01,000\none\n\n2\n00:00:02,000 --> 00:00:02,500\ntwo\n\n3\n00:00:06,000 --> 00:00:07,000\nthree\n'
+    )
+    await withSubtitles(mp4, 'mp4', '1\n00:00:00,500 --> 00:00:02,500\nonly cue\n')
+  }, 120_000)
+
+  const compile = async (src: string, jobId: string): Promise<string> =>
+    (await runConcat({ jobId, sourcePath: src, outDir: workDir, segments: RANGES, fadeMs: 0, width: 320, height: 180 })).outputPath
+
+  async function expectWhole(src: string, jobId: string, what: string): Promise<void> {
+    const out = await compile(src, jobId)
+    const info = await ffprobeJson(out)
+    expect(info.streams.map((s) => s.codec_type), `${what}: picture and sound only`).toEqual(['video', 'audio'])
+    near(Number(info.format.duration), WANTED_SEC, 1 / FPS, `${what}: the sum of the ranges`)
+    const frames = (await videoPacketTimes(out)).length
+    expect(Math.abs(frames - WANTED_SEC * FPS), `${what}: ${frames} frames, wanted ${WANTED_SEC * FPS}`).toBeLessThanOrEqual(1)
+  }
+
+  it('the fixtures are what they say: a subtitle track in each, with its cues', async () => {
+    expect((await ffprobeJson(mkv)).streams.find((s) => s.codec_type === 'subtitle')?.codec_name).toBe('subrip')
+    expect((await ffprobeJson(mp4)).streams.find((s) => s.codec_type === 'subtitle')?.codec_name).toBe('mov_text')
+  })
+
+  it('an MKV with srt cues compiles to 5.000 s and every frame, with no subtitle stream', async () => {
+    await expectWhole(mkv, 't161-1-mkv', 'the MKV')
+  }, 180_000)
+
+  it('an MP4 with a mov_text track compiles to 5.000 s and every frame, with no subtitle stream', async () => {
+    await expectWhole(mp4, 't161-1-mp4', 'the MP4')
+  }, 180_000)
+
+  it('a source with no subtitle track is unchanged: the same length and frames', async () => {
+    const plain = path.join(workDir, 't161-1-plain.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', `testsrc2=size=320x180:rate=${FPS}:duration=10`, '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=10',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', plain
+    ])
+    await expectWhole(plain, 't161-1-plain', 'the plain source')
+  }, 180_000)
+})
+
+describe('a transcript\'s non-speech cues are not drawn, and not in a kit (real ffmpeg, T-161 (2))', () => {
+  // A transcript saved before this release holds the engine's "[MUSIC]" / "[BLANK_AUDIO]" cues. `shiftSrtToRange` (the ranged burn and the Clip Kit's
+  // _captions.srt) cleans it. The picture is flat gray, so a caption is any spread of luma in the bottom third of a frame, and "no tag drawn" is a
+  // frame with none where the tag's cue says it was on. (The engine is not installed here, so its write-back is held by transcribeClean.test.ts.)
+  const SRT =
+    '1\n00:00:01,000 --> 00:00:02,500\n [MUSIC]\n\n' +
+    '2\n00:00:03,000 --> 00:00:04,500\n spoken words here\n\n' +
+    '3\n00:00:05,000 --> 00:00:06,000\n (upbeat music)\n\n' +
+    '4\n00:00:06,000 --> 00:00:07,000\n ♪ ♪\n'
+  let gray = ''
+  let srtFile = ''
+
+  beforeAll(async () => {
+    gray = path.join(workDir, 't161-2-gray.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=640x360:r=15:d=8', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', gray
+    ])
+    srtFile = path.join(workDir, 't161-2-transcript.srt')
+    await writeFile(srtFile, SRT, 'utf8')
+  }, 60_000)
+
+  const bottomThird = 'crop=iw:ih/3:0:ih*2/3'
+
+  it('the kit\'s _captions.srt (the helper writeKitSrt calls) has the words and no tag', () => {
+    const kit = shiftSrtToRange(SRT, 0, 8, 1)
+    expect(kit).toBe('1\n00:00:03,000 --> 00:00:04,500\n spoken words here\n')
+    expect(kit).not.toMatch(/MUSIC|upbeat|♪/)
+    // A clip that holds only a tag is a clip with no captions at all (the kit writes no file for '').
+    expect(shiftSrtToRange(SRT, 0.5, 2.8, 1)).toBe('')
+  })
+
+  it('a ranged burn draws the spoken words and nothing at the time of a tag', async () => {
+    const outputPath = path.join(workDir, 't161-2-burn.mp4')
+    const res = await runBurnIn(
+      { jobId: 't161-2-burn', videoPath: gray, srtPath: srtFile, outputPath, fontSizePct: 6, startSec: 0.5, endSec: 7.5 },
+      () => {}
+    )
+    expect(res.captioned, 'the words are a caption').toBe(true)
+    // Clip clock = source - 0.5. The words (source 3.0-4.5) show at 3.0 s of the clip; [MUSIC] (1.0-2.5) is on at 1.0 s, "(upbeat music)" (5.0-6.0) at 5.0 s.
+    const words = await regionLuma(outputPath, 3.0, bottomThird)
+    expect(words.max - words.min, 'the words are drawn (the control)').toBeGreaterThan(40)
+    for (const [at, what] of [[1.0, '[MUSIC]'], [5.0, '(upbeat music)'], [6.2, 'the music notes']] as const) {
+      const f = await regionLuma(outputPath, at, bottomThird)
+      expect(f.max - f.min, `nothing is drawn at the time of ${what}`).toBeLessThanOrEqual(3)
+    }
+  }, 180_000)
+
+  it('a ranged burn of a window holding only a tag is the clip with no captions', async () => {
+    const outputPath = path.join(workDir, 't161-2-burn-tag-only.mp4')
+    const res = await runBurnIn(
+      { jobId: 't161-2-burn-tag-only', videoPath: gray, srtPath: srtFile, outputPath, fontSizePct: 6, startSec: 0.5, endSec: 2.8 },
+      () => {}
+    )
+    expect(res.captioned, 'a tag is not a caption').toBe(false)
+    const f = await regionLuma(outputPath, 0.8, bottomThird)
+    expect(f.max - f.min).toBeLessThanOrEqual(3)
+  }, 120_000)
+})
+
+describe('a mono take keeps its level through Clean audio\'s extract (real ffmpeg, T-161 (3))', () => {
+  // `-ac 2` up-mixed a mono take with the centre at -3 dB per side, so with Even volume off a re-attached video played 3 dB under the take.
+  // Executed on 7.0.2: a mono take peaking -23.92 dBFS extracted to L = R = -26.93 dBFS. A mono source is now a unity duplicate.
+  let monoTake = ''
+  let stereoSrc = ''
+  let surroundSrc = ''
+
+  /** The peak (dBFS) of each channel of `file`, from astats. */
+  async function channelPeaks(file: string): Promise<number[]> {
+    const { stderr } = await ff(['-hide_banner', '-i', file, '-af', 'astats=measure_perchannel=Peak_level:measure_overall=none', '-f', 'null', '-'])
+    const peaks = [...stderr.matchAll(/Channel: \d+[\s\S]*?Peak level dB:\s*(-?[\d.]+)/g)].map((m) => Number(m[1]))
+    if (peaks.length === 0) throw new Error(`no astats peaks in: ${stderr.slice(-400)}`)
+    return peaks
+  }
+
+  beforeAll(async () => {
+    // What Record makes: a mono Opus take in a WebM.
+    monoTake = path.join(workDir, 't161-3-mono.webm')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3,volume=-6dB', '-ac', '1', '-c:a', 'libopus', monoTake])
+    // Different tones and levels on each side, so a channel mix-up cannot pass.
+    stereoSrc = path.join(workDir, 't161-3-stereo.wav')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3,volume=-6dB',
+      '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=48000:duration=3,volume=-14dB',
+      '-filter_complex', '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-c:a', 'pcm_s16le', stereoSrc
+    ])
+    surroundSrc = path.join(workDir, 't161-3-surround.wav')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3,volume=-6dB',
+      '-af', 'pan=5.1|c2=c0', '-c:a', 'pcm_s16le', surroundSrc
+    ])
+  }, 120_000)
+
+  it('the fixtures are what they say: a mono Opus take, a two-channel file with unequal sides, a 5.1 file', async () => {
+    const streamOf = async (f: string) => (await ffprobeJson(f)).streams.find((s) => s.codec_type === 'audio')
+    expect(await streamOf(monoTake)).toMatchObject({ codec_name: 'opus', channels: 1 })
+    expect((await streamOf(stereoSrc))?.channels).toBe(2)
+    expect((await streamOf(surroundSrc))?.channels).toBe(6)
+    const [l, r] = await channelPeaks(stereoSrc)
+    expect(Math.abs((l ?? 0) - (r ?? 0)), 'the sides differ by 8 dB').toBeGreaterThan(5)
+  })
+
+  it('a mono take extracts to L = R = the take\'s own peak, within 0.1 dB', async () => {
+    const [own] = await channelPeaks(monoTake)
+    const extracted = await extractAudioFromVideo(monoTake)
+    try {
+      const info = await ffprobeJson(extracted.wavPath)
+      expect(info.streams[0]).toMatchObject({ codec_name: 'pcm_s16le', channels: 2, sample_rate: '48000' })
+      const [l, r] = await channelPeaks(extracted.wavPath)
+      near(l ?? NaN, own ?? NaN, 0.1, 'the left side against the take (dBFS)')
+      near(r ?? NaN, own ?? NaN, 0.1, 'the right side against the take (dBFS)')
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('a stereo source extracts unchanged: each side keeps its own peak', async () => {
+    const [srcL, srcR] = await channelPeaks(stereoSrc)
+    const extracted = await extractAudioFromVideo(stereoSrc)
+    try {
+      const [l, r] = await channelPeaks(extracted.wavPath)
+      near(l ?? NaN, srcL ?? NaN, 0.1, 'left (dBFS)')
+      near(r ?? NaN, srcR ?? NaN, 0.1, 'right (dBFS)')
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('a 5.1 source still extracts to stereo, with its centre in both sides', async () => {
+    const extracted = await extractAudioFromVideo(surroundSrc)
+    try {
+      expect((await ffprobeJson(extracted.wavPath)).streams[0]?.channels).toBe(2)
+      const [l, r] = await channelPeaks(extracted.wavPath)
+      // The down-mix is the player's own (centre at -3 dB, the whole matrix normalised): the voice on the centre is on both sides, equally, and not silent.
+      expect(l ?? -Infinity, 'the centre is audible on the left').toBeGreaterThan(-45)
+      near(r ?? NaN, l ?? NaN, 0.1, 'and equally on the right (dBFS)')
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('the channel count is read for a durationless take, and is null for a file it cannot read', async () => {
+    expect(await probeAudioChannels(monoTake)).toBe(1)
+    expect(await probeAudioChannels(stereoSrc)).toBe(2)
+    expect(await probeAudioChannels(surroundSrc)).toBe(6)
+    const junk = path.join(workDir, 't161-3-junk.webm')
+    await writeFile(junk, 'this is not a video')
+    expect(await probeAudioChannels(junk)).toBeNull()
+    expect(await probeAudioChannels(path.join(workDir, 't161-3-missing.webm'))).toBeNull()
+  })
+
+  it('a file with a mono track AND a stereo track is extracted as it always was (which one ffmpeg picks is its own rule, so the mono fix does not guess)', async () => {
+    // Only a file whose audio is ALL mono is a unity duplicate: with two kinds of track the probe cannot say which one ffmpeg will pick, and a pan
+    // aimed at the wrong one would put one side of a stereo track on both speakers. The reference is the plain `-ac 2` extraction of the same file.
+    const twoTracks = path.join(workDir, 't161-3-two-tracks.mkv')
+    await ff(['-y', '-i', monoTake, '-i', stereoSrc, '-map', '0:a', '-map', '1:a', '-c:a', 'pcm_s16le', twoTracks])
+    const reference = path.join(workDir, 't161-3-two-tracks-ref.wav')
+    await ff(['-y', '-i', twoTracks, '-vn', '-af', 'aresample=async=1:first_pts=0', '-acodec', 'pcm_s16le', '-ar', '48000', '-ac', '2', reference])
+    const [refL, refR] = await channelPeaks(reference)
+    expect(await probeAudioChannels(twoTracks), 'the most channels of any track').toBe(2)
+    const extracted = await extractAudioFromVideo(twoTracks)
+    try {
+      const [l, r] = await channelPeaks(extracted.wavPath)
+      near(l ?? NaN, refL ?? NaN, 0.1, 'left (dBFS)')
+      near(r ?? NaN, refR ?? NaN, 0.1, 'right (dBFS)')
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('the transcription extract of a mono take is still one channel at 16 kHz', async () => {
+    const extracted = await extractAudioFromVideo(monoTake, undefined, TRANSCRIPTION_AUDIO)
+    try {
+      expect((await ffprobeJson(extracted.wavPath)).streams[0]).toMatchObject({ channels: 1, sample_rate: '16000' })
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
 })

@@ -349,7 +349,7 @@ export function ExportDialog(): JSX.Element {
         {sizeNote ? <p className="text-xs text-ink-muted">{sizeNote}</p> : null}
         {jpgNote ? <p className="text-xs text-ink-muted">{jpgNote}</p> : null}
       </div>
-      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} format={format} quality={quality} scale={variantScale} />
+      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} format={format} quality={quality} scale={variantScale} emotePack={emotePack} />
     </div>
   )
 }

@@ -351,7 +351,7 @@ describe('the sites that once hard-coded a plural all go through countOf', () =>
     ['modules/video-studio/store/videoStore.ts', /countOf\(clipCount, 'clip'\)/],
     // T-112 moved the close message out of the component so Video Studio's Clean audio can ask it.
     ['modules/audio-studio/audioClose.ts', /countOf\(cuts, 'cut'\)/],
-    ['modules/references/MoodBoardPanel.tsx', /countOf\(collection\.items\.length, 'item'\)/],
+    ['modules/references/MoodBoardPanel.tsx', /countOf\(count, 'item'\)/],
     ['components/AutosaveRestore.tsx', /countOf\(Math\.floor\(ms \/ 86400000\), 'day'\)/],
     ['modules/video-studio/CompilationPanel.tsx', /countOf\(clips\.length, 'clip'\)/],
     ['modules/video-studio/ExportPanel.tsx', /countOf\(totalQueued, 'file'\)/],

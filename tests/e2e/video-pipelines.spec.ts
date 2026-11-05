@@ -13167,3 +13167,46 @@ test.describe('T-160 (2): the captions panel with a saved .srt and no transcript
     }
   })
 })
+
+// T-161 (6): no false "Captions need setup" before the status is known. The panel read `!status?.ready`, which is true while the answer has not come, so the ember card
+// painted on every first open - with the engine installed too. Main's captions:status handler is held here (the stub the other caption cases use), so "not known yet" lasts as
+// long as the test wants.
+test.describe('T-161 (6): the setup card waits for the status', () => {
+  test('with the status held the card is not on screen; once it answers "not ready" the card shows', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchHome('t161setup')
+    const { app, window } = studio
+    try {
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { __st: { calls: number; release: () => void } }
+        let release: () => void = () => undefined
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        g.__st = { calls: 0, release }
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', async () => {
+          g.__st.calls += 1
+          await gate
+          return { exeInstalled: false, exePath: 'whisper-cli.exe', modelInstalled: false, modelPath: 'model.bin', modelsDir: 'models', ready: false }
+        })
+      })
+      const calls = (): Promise<number> => app.evaluate(() => (globalThis as unknown as { __st: { calls: number } }).__st.calls)
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      await expect(captionsCard(window).getByText('Auto-captions')).toBeVisible()
+      // The panel has asked, and main has not answered.
+      await expect.poll(calls, { timeout: 15_000, intervals: [100] }).toBeGreaterThanOrEqual(1)
+      // Held, not a frame that happened to pass: the card is absent across a second of looking.
+      for (let i = 0; i < 10; i++) {
+        await expect(window.getByText('Captions need setup'), 'not before the answer').toHaveCount(0)
+        await window.waitForTimeout(100)
+      }
+      await app.evaluate(() => (globalThis as unknown as { __st: { release: () => void } }).__st.release())
+      await expect(window.getByText('Captions need setup'), 'a known not-ready status shows the card').toBeVisible({ timeout: 10_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})

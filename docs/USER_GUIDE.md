@@ -346,8 +346,10 @@ that names the file being converted.)
   open. On a
   vertical or square video the same Size makes the same share of the picture's
   width, so it doesn't swallow the frame.
-  Captions need a one-time setup; see **Captions setup** below. Every
-  transcription also keeps its raw `.srt` transcript in a `captions` folder
+  Captions need a one-time setup; see **Captions setup** below. The engine's
+  notes about sounds that are not speech (**[MUSIC]**, **[BLANK_AUDIO]**, **(upbeat music)**, music notes) are
+  left out of the captions. Every
+  transcription also keeps its `.srt` transcript in a `captions` folder
   inside imagii's own data folder — on your machine only, like everything
   else. The bottom of the panel says how many are kept, and **Clear saved
   transcripts** deletes them all after asking (the question names the video you have open only when
@@ -684,8 +686,11 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    pack and **Variants → Save all (3 + original)** ask for one folder instead
    and write all their files into it. The variants are files of the kind the
    Export card describes: the same format (PNG or JPG), JPG quality and Scale, and
-   the Variants window says so ("Output: 1280×720 JPG, as the Export card"); change
-   the card and the previews are made again. A single **Save** on a variant says **Saved**
+   the Variants window says so ("Output: 1280×720 JPG, as the Export card"), with the card's
+   "Bigger than YouTube's thumbnail size" note when it applies. On the emote template the
+   Export button writes the 28 / 56 / 112 pack, so the window names the variants' own size
+   ("Output: 112×112 PNG") without "as the Export card". Change the card and the previews
+   are made again (the JPG quality counts only while the format is JPG). A single **Save** on a variant says **Saved**
    and the file's name once it is written, and says nothing when you cancel.
 
 ---

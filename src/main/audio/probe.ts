@@ -87,3 +87,25 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
     sizeBytes
   }
 }
+
+/**
+ * T-161 (3): the channel count ffmpeg will extract from a file, or null when it cannot be read. The MOST channels of any audio stream, because that is the stream
+ * ffmpeg picks when it is not told which. Deliberately not `probeAudio`: that one refuses a file with no LENGTH, and a Record take (MediaRecorder WebM) has none.
+ * Any failure is null - the caller extracts as it always did.
+ */
+export async function probeAudioChannels(filePath: string): Promise<number | null> {
+  const args = ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=channels', '-of', 'csv=p=0', filePath]
+  return new Promise<number | null>((resolve) => {
+    let out = ''
+    const p = spawn(ffprobePath, args, { windowsHide: true })
+    p.stdout.on('data', (b) => (out += String(b)))
+    p.on('error', () => resolve(null))
+    p.on('close', (code) => {
+      const counts = out
+        .split(/\r?\n/)
+        .map((l) => Number.parseInt(l.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0)
+      resolve(code === 0 && counts.length > 0 ? Math.max(...counts) : null)
+    })
+  })
+}

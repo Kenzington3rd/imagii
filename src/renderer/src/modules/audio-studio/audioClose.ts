@@ -14,8 +14,8 @@ const LEAD_IN: Record<AudioDiscardLead, string> = {
   replace: "Replace the audio you're editing?"
 }
 
-/** "A", "A and B", "A, B and C". */
-function joinList(parts: readonly string[]): string {
+/** "A", "A and B", "A, B and C". Video Studio's Close (T-161 (5)) builds its list the same way. */
+export function joinList(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join('')
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }

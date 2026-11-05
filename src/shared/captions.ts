@@ -348,6 +348,8 @@ export function clearTranscriptsQuestion(count: number, openVideoHasOne: boolean
 
 /** The toast after a transcription: lines of caption, counted properly. */
 export function captionsReadyMessage(segmentCount: number): string {
+  // T-161 (2) fold: music or silence leaves no cue once the engine's tags are dropped, and "ready (0 lines)" reads as a success that made nothing.
+  if (segmentCount === 0) return 'No speech found, so there are no captions.'
   return `Captions ready (${countOf(segmentCount, 'line')})`
 }
 
@@ -492,6 +494,36 @@ export function isShiftedSrtName(fileName: string): boolean {
 
 const SRT_TIME_LINE = /^\s*(\d+:\d+:\d+[.,]\d+)\s*-->\s*(\d+:\d+:\d+[.,]\d+)/
 
+// The music-note glyphs, as escapes: a literal one in src/ trips the emoji guard (U+2669 to U+266C: quarter note, eighth note, beamed eighth and sixteenth notes).
+const MUSIC_NOTES = /[\u2669-\u266C]/g
+const WHOLE_TAG = /^(?:\s*(?:\[[^\]]*\]|\([^)]*\)))+$/
+
+/** True when a cue's whole text is `[tag]` / `(tag)` and nothing else (one, or several on their own lines) or only music notes (notes beside a tag count as nothing): a sound, not speech. */
+function isNonSpeechText(lines: readonly string[]): boolean {
+  const text = lines.join(' ').replace(MUSIC_NOTES, ' ').replace(/\s+/g, ' ').trim()
+  return text === '' || WHOLE_TAG.test(text)
+}
+
+/**
+ * T-161 (2): a transcript without the engine's non-speech cues. The engine writes a sound it hears but cannot spell as a cue of its own - "[BLANK_AUDIO]",
+ * "[MUSIC]", "(upbeat music)", "[laughs]", music notes - and every one reached Save .srt, the burned video and the Clip Kit's _captions.srt as a caption.
+ * A cue whose WHOLE text (all its lines) is bracketed or parenthesised tags and nothing else, or only music notes, is dropped; a cue with words is kept as it is, a tag
+ * among them included ("[laughs] that was close" is a person's line). The rest are renumbered from 1, their time lines unchanged. Returns '' when nothing is left.
+ * Applied where the engine's file is written (whisperManager) and inside `shiftSrtToRange`, so a transcript saved before this release is clean in a kit and a ranged burn.
+ */
+export function cleanTranscriptSrt(srt: string): string {
+  const cues: string[] = []
+  for (const block of srt.replace(/^\uFEFF/, '').split(/\r?\n[ \t]*\r?\n/)) {
+    const lines = block.split(/\r?\n/)
+    const at = lines.findIndex((l) => l.includes('-->'))
+    if (at === -1 || !SRT_TIME_LINE.test(lines[at] ?? '')) continue
+    const text = lines.slice(at + 1).filter((l) => l.trim() !== '')
+    if (text.length === 0 || isNonSpeechText(text)) continue
+    cues.push(`${cues.length + 1}\n${(lines[at] ?? '').trim()}\n${text.join('\n')}\n`)
+  }
+  return cues.join('\n')
+}
+
 /**
  * T-81: re-express a SOURCE-clock SRT on the clock of a clip cut from
  * [startSec, endSec] of that source. Every cue moves by -startSec; a cue
@@ -525,7 +557,8 @@ export function shiftSrtToRange(srt: string, startSec: number, endSec: number, s
   const startMs = Math.round(startSec * 1000)
   const endMs = Math.round(endSec * 1000)
   const cues: string[] = []
-  for (const block of srt.replace(/^﻿/, '').split(/\r?\n[ \t]*\r?\n/)) {
+  // T-161 (2): the engine's non-speech cues never reach a kit or a burn, whichever release wrote the transcript.
+  for (const block of cleanTranscriptSrt(srt).split(/\r?\n[ \t]*\r?\n/)) {
     const lines = block.split(/\r?\n/)
     const at = lines.findIndex((l) => l.includes('-->'))
     const times = at === -1 ? null : SRT_TIME_LINE.exec(lines[at] ?? '')

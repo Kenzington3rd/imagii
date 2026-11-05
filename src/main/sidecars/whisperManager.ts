@@ -12,6 +12,7 @@ import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
 import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
+import { writeFileAtomic } from '../fsAtomic'
 import { BURN_IN_NO_PICTURE_MESSAGE, FFMPEG_EMPTY_OUTPUT, PictureFrames, wroteNoPicture } from '../ffmpeg/noPicture'
 import {
   captionsOutputDir,
@@ -41,6 +42,7 @@ import {
   burnInLengthSec,
   burnInPercent,
   captionPlayResY,
+  cleanTranscriptSrt,
   isUsableFrame,
   escapeSubtitlesPath,
   shiftedSrtPath,
@@ -301,7 +303,11 @@ async function transcribeUnderRun(
     if (!existsSync(srtPath)) {
       throw new Error(`Whisper did not produce ${srtPath}`)
     }
-    const srtContent = await readFile(srtPath, 'utf8')
+    // T-161 (2): the engine writes its non-speech sounds as cues ("[BLANK_AUDIO]", "[MUSIC]", "(upbeat music)", music notes). The file is rewritten ONCE, clean, so
+    // Save .srt, the burn-in, the Clip Kit and the panel's line count all read the same transcript. (Not whisper's own `--suppress-nst`: the person installs
+    // their own whisper-cli, and an older one rejects an argument it does not know.)
+    const srtContent = cleanTranscriptSrt(await readFile(srtPath, 'utf8'))
+    await run.guard(writeFileAtomic(srtPath, srtContent))
     const segments = parseSrt(srtContent)
 
     onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })

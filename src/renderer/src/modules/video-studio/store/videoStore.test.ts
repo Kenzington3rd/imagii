@@ -1672,3 +1672,75 @@ describe('the I and O keys never make a clip with no length (T-152 (4))', () => 
     expect(range(id)).toEqual([0.05, 0.05])
   })
 })
+
+/**
+ * T-161 (5) - Close names what is lost. Since T-147 (3) a session with only a scan, a pasted log, found spikes or undo steps is a loss, but the question
+ * always read "N clip(s) and its/their edits": a person who ran Scan VOD and edited nothing was told their edits go and not that the scan goes. The list is
+ * built as Audio Studio's Close builds its own: the clips and their edits only when the clips changed, then the scan, the log, the spikes, the undo history
+ * (only when it is the one loss).
+ */
+describe('videoDiscardMessage - names what is lost, not always "edits" (T-161 (5))', () => {
+  function session(clips: Clip[], over: Partial<Pick<Parameters<typeof videoDiscardMessage>[0], 'history' | 'derived'>> = {}): Parameters<typeof videoDiscardMessage>[0] {
+    return {
+      source: FAKE_SOURCE,
+      clips,
+      history: { past: [], future: [] },
+      derived: { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null },
+      ...over
+    }
+  }
+  const base = session([pristine()]).derived
+  const withDerived = (patch: Partial<typeof base>, clips: Clip[] = [pristine()]) => session(clips, { derived: { ...base, ...patch } })
+  const step = { clips: [pristine()], selectedClipId: null }
+
+  it('a scan alone: the scan\'s results, and no mention of edits', () => {
+    const msg = videoDiscardMessage(withDerived({ scanCandidates: [] }))
+    expect(msg).toBe("Close this video? The scan's results will be discarded.")
+    expect(msg).not.toMatch(/edits|clip/)
+  })
+
+  it('a pasted chat log alone, in either finder', () => {
+    expect(videoDiscardMessage(withDerived({ highlightChat: '[0:42] a: POG' }))).toBe('Close this video? The pasted chat log will be discarded.')
+    expect(videoDiscardMessage(withDerived({ spikeChat: '[0:42] a: POG' }))).toBe('Close this video? The pasted chat log will be discarded.')
+    // both boxes filled is still one phrase
+    expect(videoDiscardMessage(withDerived({ highlightChat: 'x', spikeChat: 'y' }))).toBe('Close this video? The pasted chat log will be discarded.')
+  })
+
+  it('the spikes found alone', () => {
+    expect(videoDiscardMessage(withDerived({ spikes: [] }))).toBe('Close this video? The chat spikes found will be discarded.')
+  })
+
+  it('undo steps alone (edits made and undone back to the start): the undo history', () => {
+    expect(videoDiscardMessage(session([pristine()], { history: { past: [step], future: [] } }))).toBe('Close this video? Your undo history will be discarded.')
+  })
+
+  it('the undo history is named only when nothing else is lost', () => {
+    const msg = videoDiscardMessage({ ...withDerived({ scanCandidates: [] }), history: { past: [step], future: [] } })
+    expect(msg).toBe("Close this video? The scan's results will be discarded.")
+    expect(msg).not.toMatch(/undo/)
+  })
+
+  it('two losses read as "A and B", three as "A, B and C", for a replace too', () => {
+    expect(videoDiscardMessage(withDerived({ scanCandidates: [], highlightChat: 'x' }))).toBe("Close this video? The scan's results and the pasted chat log will be discarded.")
+    expect(videoDiscardMessage(withDerived({ scanCandidates: [], highlightChat: 'x', spikes: [] }), 'replace')).toBe(
+      "Replace the video you're editing? The scan's results, the pasted chat log and the chat spikes found will be discarded."
+    )
+  })
+
+  it('changed clips keep their sentence and lead the list', () => {
+    expect(videoDiscardMessage(withDerived({}, [pristine({ startSec: 1 })]))).toBe('Close this video? 1 clip and its edits will be discarded.')
+    expect(videoDiscardMessage(withDerived({ scanCandidates: [] }, [pristine({ startSec: 1 })]))).toBe(
+      "Close this video? 1 clip and its edits and the scan's results will be discarded."
+    )
+    expect(videoDiscardMessage(withDerived({ spikes: [] }, edited2()))).toBe('Close this video? 2 clips and their edits and the chat spikes found will be discarded.')
+  })
+  function edited2(): Clip[] {
+    return [pristine({ id: 'a', startSec: 1 }), pristine({ id: 'b', name: 'Clip 2' })]
+  }
+
+  it('the running-job sentence still follows the list; a job alone is still the lead-in and the sentence', () => {
+    const note = 'The export that is running keeps going; its Cancel stays on screen.'
+    expect(videoDiscardMessage(withDerived({ scanCandidates: [] }), 'close', note)).toBe(`Close this video? The scan's results will be discarded. ${note}`)
+    expect(videoDiscardMessage(session([pristine()]), 'close', note)).toBe(`Close this video? ${note}`)
+  })
+})

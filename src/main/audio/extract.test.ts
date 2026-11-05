@@ -84,6 +84,11 @@ vi.mock('node:child_process', () => ({
   }
 }))
 
+// T-161 (3): the studio extract asks ffprobe how many channels the source has (a mono one is duplicated, not up-mixed). The probe is a spawn of its own, so
+// it is faked here: the ONE child these tests drive is the extraction's. Layer 5 runs the real probe on real files.
+let probedChannels: number | null = null
+vi.mock('./probe', () => ({ probeAudioChannels: async () => probedChannels }))
+
 const { extractAudioFromVideo, cancelAllExtractions, __extractTesting__, EXTRACT_CLOCK_FILTER } = await import('./extract')
 
 let scratch = ''
@@ -99,6 +104,7 @@ beforeEach(() => {
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-extract-'))
   spawned = []
   slowUnlinkMs = 0
+  probedChannels = null
   cancelAllExtractions()
 })
 afterEach(() => {
@@ -309,5 +315,39 @@ describe('the extraction format (T-111)', () => {
       await expect(extractAudioFromVideo('/v.mp4', undefined, bad)).rejects.toThrow(/extract format/)
     }
     expect(spawned).toHaveLength(0)
+  })
+})
+
+describe('a mono source is duplicated, not up-mixed (T-161 (3))', () => {
+  const run = async (channels: number | null, format?: Parameters<typeof extractAudioFromVideo>[2]): Promise<Spawned> => {
+    probedChannels = channels
+    const done = extractAudioFromVideo('/v.webm', undefined, format)
+    await vi.waitFor(() => expect(spawned).toHaveLength(1))
+    const s = spawned[0] as Spawned
+    s.child.emit('close', 0, null)
+    await done
+    return s
+  }
+
+  it('a mono source gets the unity pan after the clock stage, before the codec; -ac 2 stays', async () => {
+    const s = await run(1)
+    expect(ARG(s, '-af')).toBe(`${EXTRACT_CLOCK_FILTER},pan=stereo|c0=c0|c1=c0`)
+    expect(s.args.indexOf('-af')).toBeLessThan(s.args.indexOf('-acodec'))
+    expect(ARG(s, '-ac')).toBe('2')
+  })
+
+  it('stereo, multichannel and an unreadable file are extracted as they were', async () => {
+    for (const channels of [2, 6, 8, null]) {
+      spawned = []
+      const s = await run(channels)
+      expect(ARG(s, '-af'), `${channels}`).toBe(EXTRACT_CLOCK_FILTER)
+      expect(ARG(s, '-ac')).toBe('2')
+    }
+  })
+
+  it('the transcription extract (1 channel) is not probed and is unchanged', async () => {
+    const s = await run(1, TRANSCRIPTION_AUDIO)
+    expect(ARG(s, '-af')).toBe(EXTRACT_CLOCK_FILTER)
+    expect(ARG(s, '-ac')).toBe('1')
   })
 })

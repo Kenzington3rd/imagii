@@ -255,7 +255,10 @@ Repeated UI is a component, not copy-paste:
   its spawn to its close (`cancelAllExtractions`, extract.ts), which the quit sweep and `cancelAllAudioJobs` call
   (T-111) — Audio Studio's own import of a recording's sound had no handle at all — and `format` is Audio Studio's
   48 kHz stereo by default, `TRANSCRIPTION_AUDIO` (16 kHz mono, `@shared/captions`) for the speech engine, whose
-  scratch WAV is a sixth the size.
+  scratch WAV is a sixth the size. T-161 (3): a stereo extract of a source whose audio is all mono adds `pan=stereo|c0=c0|c1=c0`
+  (a unity duplicate, as a player plays a mono track) after the clock stage, by `probeAudioChannels` (`audio/probe.ts`: the
+  most channels of any audio stream, null when unreadable; not `probeAudio`, which refuses a file with no length, and a Record
+  take has none); `-ac 2` alone up-mixes mono 3 dB down per side.
 - **A result belongs to what the job was started on (T-112).** Nothing locks the app while a long job runs, so a
   result can arrive after the person has moved on. A transcription started on video A and finished after video B
   was opened used to attach A's captions to B: the panel captures the source path when the job starts and applies
@@ -736,7 +739,8 @@ Repeated UI is a component, not copy-paste:
   — speed, crop, shake, scale, grade, zoom, overlays — and `buildAudioSpeedFilter` its tempo. A platform
   export calls it with the platform's frame; a compilation segment calls it with the compilation's
   (`buildSegmentFilter`, concat.ts: 1920x1080, 16:9, the source's frame rate up to 60 - `compileFps`, `@shared/compileFps`, T-130 (q)), so a stage added to the export reaches Compile
-  with no second edit. What crosses the IPC bridge for a segment is `CompileSegment` (`@shared/clip`): the
+  with no second edit. A segment carries picture and sound only: its command has `-sn -dn` and no `-map`, because a source's
+  text subtitle track rode into the segment and its last cue set the segment's length and the join's offset (T-161 (1)). What crosses the IPC bridge for a segment is `CompileSegment` (`@shared/clip`): the
   range, the name, and `clipRecipe(clip)` — the fields that decide how a clip looks and sounds, nothing about
   which platforms it is checked for. `clip.test.ts` fails when a field is added to `Clip` and neither carried
   nor listed as not part of the recipe, and `assertOptionalClipRecipe` (`@shared/validators`) checks every

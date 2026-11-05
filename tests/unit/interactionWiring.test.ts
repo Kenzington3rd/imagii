@@ -414,7 +414,7 @@ describe('T-46 — the variants dialog captures the document, not the screen', (
   const variants = read('modules/image-studio/ThumbnailVariants.tsx')
 
   it('renders its base through the shared captureDocument', () => {
-    expect(variants).toMatch(/import \{ captureDocument, jpgTransparencyNote, outputPixels, type ExportStage \} from '\.\/ExportDialog'/)
+    expect(variants).toMatch(/import \{ captureDocument, jpgTransparencyNote, outputPixels, thumbnailSizeNote, type ExportStage \} from '\.\/ExportDialog'/)
     expect(variants).toMatch(/captureDocument\(stage, doc\.width, doc\.height, \{/)
   })
 
@@ -4195,7 +4195,9 @@ describe('T-160 - the captions panel counts a saved .srt; Delete board names Ctr
 
   it('(5) the Delete board question ends with the sentence that brings the board back', () => {
     const board = strip(read('modules/references/MoodBoardPanel.tsx'))
-    expect(board).toContain("`Delete \"${collection.name}\" and all ${countOf(collection.items.length, 'item')}? Ctrl+Z brings it back.`")
+    // T-161 (8) REVISES this pin: the sentence is built from the count (0 and 1 item read their own way), in one function.
+    expect(board).toContain("return `Delete \"${name}\"${what}? Ctrl+Z brings it back.`")
+    expect(board).toContain("confirm(deleteQuestion(collection.name, collection.items.length))")
   })
 })
 
@@ -4206,7 +4208,8 @@ describe('T-160 - the meter reads every channel; the variants are the Export car
   it('(3) the source is split into two channels, one analyser each, and the level is the larger peak; the splitter is torn down with the rest', () => {
     const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
     expect(meter).toMatch(/const splitter = ctx\.createChannelSplitter\(2\)/)
-    expect(meter).toMatch(/source\.connect\(splitter\)/)
+    expect(meter).toMatch(/source\.connect\(fold\)\s*fold\.connect\(splitter\)/) // T-161 (4): the down-mix sits between the source and the splitter
+    expect(meter).not.toMatch(/source\.connect\(splitter\)/)
     expect(meter).toMatch(/splitter\.connect\(left, 0\)/)
     expect(meter).toMatch(/splitter\.connect\(right, 1\)/)
     // Playback and the spectrum bars stay on the first analyser.
@@ -4214,7 +4217,7 @@ describe('T-160 - the meter reads every channel; the variants are the Export car
     expect(meter).toMatch(/for \(const node of channels \? \[channels\.left, channels\.right\] : \[analyser\]\) \{\s*node\.getFloatTimeDomainData\(wave\)/)
     // One running maximum over both channels (not a per-channel reset, not the mono analyser's wave).
     expect(meter).toMatch(/let peak = 0\s*for \(const node of/)
-    expect(meter).toMatch(/channelRef\.current\?\.splitter\.disconnect\(\)\s*channelRef\.current\?\.left\.disconnect\(\)\s*channelRef\.current\?\.right\.disconnect\(\)/)
+    expect(meter).toMatch(/channelRef\.current\?\.fold\.disconnect\(\)\s*channelRef\.current\?\.splitter\.disconnect\(\)\s*channelRef\.current\?\.left\.disconnect\(\)\s*channelRef\.current\?\.right\.disconnect\(\)/)
     expect(meter).toMatch(/channelRef\.current = null/)
   })
 
@@ -4231,7 +4234,7 @@ describe('T-160 - the meter reads every channel; the variants are the Export car
   it('(4) the Export card hands Variants its format, quality and scale, and the emote pack (Scale disabled) is 1x', () => {
     const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/const variantScale = emotePack \? 1 : scale/)
-    expect(dialog).toMatch(/<ThumbnailVariants open=\{showVariants\} onClose=\{\(\) => setShowVariants\(false\)\} format=\{format\} quality=\{quality\} scale=\{variantScale\} \/>/)
+    expect(dialog).toMatch(/<ThumbnailVariants open=\{showVariants\} onClose=\{\(\) => setShowVariants\(false\)\} format=\{format\} quality=\{quality\} scale=\{variantScale\} emotePack=\{emotePack\} \/>/)
   })
 
   it('(4) Variants capture at the card\'s scale, encode every file in its format and quality, and save with the matching extension', () => {
@@ -4250,8 +4253,79 @@ describe('T-160 - the meter reads every channel; the variants are the Export car
     const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
     expect(variants).toMatch(/const out = outputPixels\(doc\.width, doc\.height, scale\)/)
     expect(variants).toMatch(/const jpgNote = jpgTransparencyNote\(format, doc\.background === 'transparent'\)/)
-    expect(variants).toMatch(/`Output: \$\{out\.width\}×\$\{out\.height\} \$\{format\.toUpperCase\(\)\}, as the Export card`/)
+    // T-161 (7) REVISES this pin: ", as the Export card" is left off on the emote document (the card writes the pack there).
+    expect(variants).toMatch(/`Output: \$\{out\.width\}×\$\{out\.height\} \$\{format\.toUpperCase\(\)\}\$\{emotePack \? '' : ', as the Export card'\}`/)
     expect(variants.match(/\{outputLine\}/g), 'shown before and after Generate').toHaveLength(2)
-    expect(variants).toMatch(/previews\.format === format &&\s*previews\.quality === quality &&\s*previews\.scale === scale/)
+    // T-161 (7) REVISES this pin: the quality is compared only for a JPG.
+    expect(variants).toMatch(/previews\.format === format &&\s*\(format !== 'jpg' \|\| previews\.quality === quality\) &&\s*previews\.scale === scale/)
+  })
+})
+
+// T-161 (7), (8): the Variants dialog repeats the Export card (its size note, its emote pack), and the Delete board question follows the count.
+describe('T-161 - the Variants dialog says what the card says; Delete board counts its items', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(7) the dialog shows the card\'s size note beside the JPG note, in the one block both states render', () => {
+    const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
+    expect(variants).toMatch(/import \{[^}]*\bthumbnailSizeNote\b[^}]*\} from '\.\/ExportDialog'/)
+    expect(variants).toMatch(/const sizeNote = thumbnailSizeNote\(out\.width, out\.height, doc\.background === 'transparent'\)/)
+    expect(variants).toMatch(/\{sizeNote \? <p>\{sizeNote\}<\/p> : null\}\s*\{jpgNote \? <p>\{jpgNote\}<\/p> : null\}/)
+    expect(variants.match(/\{outputLine\}/g), 'shown before and after Generate').toHaveLength(2)
+  })
+
+  it('(7) on the emote document the line drops "as the Export card", and the card hands the dialog its emotePack', () => {
+    const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
+    expect(variants).toMatch(/\$\{format\.toUpperCase\(\)\}\$\{emotePack \? '' : ', as the Export card'\}/)
+    expect(variants).toMatch(/scale, emotePack \}: ThumbnailVariantsProps/)
+    const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/scale=\{variantScale\} emotePack=\{emotePack\} \/>/)
+  })
+
+  it('(7) fold: the previews compare the quality only when the format is JPG', () => {
+    const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
+    expect(variants).toMatch(/\(format !== 'jpg' \|\| previews\.quality === quality\) &&/)
+    expect(variants).not.toMatch(/previews\.quality === quality &&\s*previews\.scale/)
+  })
+
+  it('(8) one function builds the Delete question from the count: bare for 0, "the 1 item in it" for 1, "all N items" after', () => {
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(board).toMatch(/const what = count === 0 \? '' : count === 1 \? ' and the 1 item in it' : ` and all \$\{countOf\(count, 'item'\)\}`/)
+    expect(board).toContain('return `Delete \\"${name}\\"${what}? Ctrl+Z brings it back.`'.replace(/\\"/g, '"'))
+    expect(board).toContain('confirm(deleteQuestion(collection.name, collection.items.length))')
+    expect(board).not.toMatch(/and all \$\{countOf\(collection\.items\.length/)
+  })
+})
+
+// T-161 (4), (5), (6): the meter folds a multichannel source to stereo; Close builds its list from what is lost; the setup card waits for a status.
+describe('T-161 - the meter\'s down-mix; the Close list; the setup card\'s condition', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(4) the fold node is a gain with two explicit speaker channels, between the source and the splitter, and is torn down', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/const fold = ctx\.createGain\(\)/)
+    expect(meter).toMatch(/fold\.channelCount = 2/)
+    expect(meter).toMatch(/fold\.channelCountMode = 'explicit'/)
+    expect(meter).toMatch(/fold\.channelInterpretation = 'speakers'/)
+    // Playback and the spectrum analyser stay on the source directly (the down-mix is for the readout only).
+    expect(meter).toMatch(/source\.connect\(analyser\)\s*analyser\.connect\(ctx\.destination\)/)
+    expect(meter).not.toMatch(/fold\.connect\(ctx\.destination\)/)
+    expect(meter).toMatch(/channelRef\.current = \{ fold, splitter, left, right \}/)
+  })
+
+  it('(5) Video Studio\'s Close lists what is lost: the clips only when changed, then the scan, the log, the spikes, the undo history only when alone', () => {
+    const store = strip(read('modules/video-studio/store/videoStore.ts'))
+    expect(store).toMatch(/if \(clips\.length > 1 \|\| !isPristineWholeVideoClip\(clips\[0\]!, source!\.probe\.duration\)\) \{\s*parts\.push\(`\$\{countOf\(clipCount, 'clip'\)\} and \$\{clipCount === 1 \? 'its' : 'their'\} edits`\)/)
+    expect(store).toMatch(/if \(derived\.scanCandidates !== null\) parts\.push\("the scan's results"\)\s*if \(derived\.highlightChat !== '' \|\| derived\.spikeChat !== ''\) parts\.push\('the pasted chat log'\)\s*if \(derived\.spikes !== null\) parts\.push\('the chat spikes found'\)\s*if \(parts\.length === 0 && history\.past\.length > 0\) parts\.push\('your undo history'\)/)
+    expect(store).toMatch(/const list = joinList\(parts\)\s*const base = `\$\{leadIn\} \$\{list\.charAt\(0\)\.toUpperCase\(\)\}\$\{list\.slice\(1\)\} will be discarded\.`/)
+    // The list helper is Audio Studio's, not a second copy.
+    expect(store).toMatch(/import \{ joinList \} from '\.\.\/\.\.\/audio-studio\/audioClose'/)
+    expect(strip(read('modules/audio-studio/audioClose.ts'))).toMatch(/export function joinList/)
+  })
+
+  it('(6) the Captions setup card shows only for a status that is known and not ready', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/\{status !== null && !status\.ready \? \(/)
+    expect(panel).not.toMatch(/\{!status\?\.ready \? \(/)
+    expect(panel).toMatch(/<div className="font-semibold text-warn mb-1">Captions need setup<\/div>/)
   })
 })
