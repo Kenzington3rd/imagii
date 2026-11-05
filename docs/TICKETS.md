@@ -7450,6 +7450,57 @@ IMG-PREC.
 
 ---
 
+## T-159 — sweep-45 fixes (round 108)
+
+- **Spec:** the forty-fifth sweep's verified findings (candidate clean pass #1 on bf84900): design's and
+  streamer's (three readers) one each, and one the expediter found while adjudicating, each confirmed against
+  source. Privacy, QA (both readers, all 214 non-test files), Electron, a11y, UX and audio clean on their whole
+  lens; the ffmpeg reviewer was lost to a container restart and not re-dispatched (the sweep was already not
+  clean, and sweep 46 reviews the whole tree through every lens). Not counted: the audio lens's conditional HIGH (an imagii-file `<audio>` with no
+  `crossOrigin` silencing the MediaElementSource since T-129) — refuted by execution on a build of bf84900
+  under Xvfb: the app's meter followed a full-scale tone and the expediter's own analysers on a blob: URL, the
+  bare imagii-file URL and the same with `crossOrigin='anonymous'` all read a peak of 0.9998, with no CORS
+  console line; no splice fade at audio cuts and no waveform zoom (initiatives, named for the owner); no player
+  volume, no timeline zoom, the audio Save dialog at a bare name, a 4:3 webcam centred in its 16:9 corner box
+  (polish / initiatives); a Discard landing in the milliseconds between the final rename and `run.end()`
+  (disclosed in T-158, the toast says Saved). One track.
+
+  **Track A — the wizard says "sound", the meter says "0 dB", a cleared Filename box stays cleared (items 1-3).**
+  1. **[LOW] Audio Studio's Fix wizard calls the person's sound a "clip"** (FixWizard.tsx:29, "What is this
+     clip mostly?") — BRANDING_GUIDE:108 "clip: A Video Studio unit"; the only "clip" in Audio Studio's copy.
+     Fix: "What is this sound mostly?"; update audio.spec.ts:3745 and :4835 in place.
+  2. **[LOW] The volume meter reads "-0 dB"** (VolumeMeter.tsx:112, `peakDb.toFixed(0)`; found by the
+     expediter while refuting the audio lens's finding): any peak within 0.5 dB of full scale — the clipping
+     case, drawn in the danger colour — prints a negative zero. Fix: print the rounded value with negative
+     zero folded (`Math.round(peakDb) || 0`). The same probe showed the meter IS driven by a sound playing
+     under Xvfb, so the T-153 (5) IC disposition ("needs a sound playing under the built app") is wrong about
+     its boundary: correct it to name the new e2e, and cover the middle band behaviourally if a fixture can
+     light it deterministically (else keep the wiring pin and say why).
+  3. **[LOW] A cleared Filename box is not remembered** (ExportPanel.tsx:333 `if (filenameTemplate)
+     persistSetting(...)`, :224-227 the load): a person who exported with `{date}_{clip}`, then cleared the box
+     (blank means the default — `expandFilenameTemplate`), exports with the default but comes back to
+     `{date}_{clip}`. The watermark beside it forgets a blank by design (T-119). Fix: a blank or
+     whitespace-only box clears the key (`persistSetting('filenameTemplate', undefined)`), so the next visit
+     shows the default, which is what the last export used.
+  Covering tests: e2e (NEW describe in audio.spec.ts): a full-scale tone played -> the meter label reads
+  "0 dB" (never "-0 dB") in the danger colour, and a tone at about -12 dBFS reads within 1 dB of "-12 dB"
+  (red on bf84900: "-0 dB"); the wizard's third question reads "What is this sound mostly?" (the two cases
+  in place). e2e (NEW describe in video-pipelines.spec.ts): export with a template, clear the box, export
+  again (the file carries the default name), Home and back -> the box reads `{source}_{clip}_{preset}` and
+  config.json has no `filenameTemplate` (red on bf84900). Unit: a copy pin that no Audio Studio
+  person-visible string says "clip"; an interactionWiring pin on the blank branch and on the folded zero.
+
+  **Docs:** IC rows (and the T-153 (5) disposition corrected); TESTING paragraph; LESSONS entry at the TOP;
+  USER_GUIDE only where a sentence about these behaviours is now wrong.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 108)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
