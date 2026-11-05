@@ -26,7 +26,7 @@ const QUESTIONS = [
   },
   {
     id: 'use',
-    question: 'What is this clip mostly?',
+    question: 'What is this sound mostly?',
     options: [
       { value: 'voice', label: 'Talking / voice' },
       { value: 'music', label: 'Music' },

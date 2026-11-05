@@ -7497,7 +7497,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 108)
+- **Status:** done (round 108 — see the Done entry)
 
 ---
 
@@ -8068,6 +8068,40 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 108 — T-159, all three counted items and the fold, landed in the
+commit that carries this entry. One Sonnet worker in a fresh clone of
+531c3f3. Item 1: Audio Studio's Fix wizard asks "What is this sound
+mostly?" (a clip is a Video Studio unit), with a copy scan over every
+person-visible string in Audio Studio and its tour. Item 2: the volume
+meter's label is the rounded number, so a peak within half a dB of full
+scale reads "0 dB" where `toFixed(0)` printed "-0 dB"; the meter is now
+driven in the built app by tones and seeded noise (the T-153 (5) row's
+"needs a sound playing" disposition was wrong: Xvfb plays one), so its
+label, its danger colour and its middle band are covered behaviourally.
+Item 3: a blank or whitespace-only Filename box forgets the remembered
+template, as the watermark beside it does (T-119), so the next visit
+shows the default the last export used. Fold: media.spec.ts T-125 (1)'s
+cancel case slept 1.5 s before canceling a join that takes 1.2-1.8 s on
+this host (red 5/5 on the unchanged tree after the container restart);
+it polls for the canceled job's first scratch file now, green 5/5 and
+red with `cancelConcatJob` made a no-op. Deviations, accepted: the
+full-scale fixture sits at -0.33 dBFS (a hard-clipped tone overshoots
+1.0 after the resample and the clamp printed "0 dB" on the old build
+too); the copy scan exempts the limiter's verb "cannot clip" by its
+exact lead-in; the label is sampled in the page every 16 ms. The
+ticket's `|| 0` direction was the expediter's over-specification
+(`String(-0)` is "0"); its equivalent-mutant row is superseded and the
+`toFixed(0)` seam is killed in the browser. Ledger: 6 RED / 18
+mutations plus the fold's two rows, all killed. Found not fixed: none
+new. Expedited personally: one independent mutation at a seam no ledger
+row names — WaveformView never hands the media element to the meter
+(`setMediaEl` dropped) → all three T-159 (2) cases red ("-60 dB", no
+ember bar, -60 against -12) — restored byte-identical, sha256 verified;
+on the landing tree: verify x2 (207/6162), test:media 453 passed | 17
+skipped of 470 on 7.0.2, FULL
+Playwright 636/636 (40.6 min). Applied to 531c3f3 by
+`git apply` with every file byte-identical to the expedited tree.
 
 Round 107 — T-158, all three counted items, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of c1d9e0f; a

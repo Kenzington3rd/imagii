@@ -7349,8 +7349,11 @@ describe('a compilation keeps the sound on its picture across many joins (real f
       () => null,
       (err: unknown) => err
     )
-    // A segment is being written by now (the first spawn follows the probe).
-    await new Promise((r) => setTimeout(r, 1500))
+    // T-159 fold: wait for the thing the comment claims, not for a time. The whole 8-segment join takes 1.2-1.8 s here, so a fixed 1.5 s wait
+    // let it finish before the cancel landed. The job's first scratch file is the first segment being written (the spawn follows the probe).
+    const deadline = Date.now() + 30_000
+    while ((await mine(canceled)).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    expect(await mine(canceled), 'a segment is being written').not.toEqual([])
     cancelConcatJob(canceled)
     const err = await running
     expect(isCancelledError(err), 'the join ended as a cancel').toBe(true)

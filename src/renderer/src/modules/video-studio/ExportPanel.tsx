@@ -330,7 +330,9 @@ export function ExportPanel(): JSX.Element | null {
       void persistSetting('streamerHandle', undefined)
       void persistSetting('watermarkPosition', undefined)
     }
-    if (filenameTemplate) void persistSetting('filenameTemplate', filenameTemplate)
+    // T-159 (3): a blank (or whitespace-only) box means the default pattern (expandFilenameTemplate), so it is the last export and the key is
+    // forgotten, as the watermark's is (T-119): the next visit shows the default instead of the template the person cleared.
+    void persistSetting('filenameTemplate', filenameTemplate.trim() ? filenameTemplate : undefined)
     const sourceBase = source.fileName.replace(/\.[^.]+$/, '')
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []

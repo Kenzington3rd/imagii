@@ -4125,3 +4125,26 @@ describe('T-158 - a finished sound starts over; a Discard that lands says so', (
     expect(discard.match(/discarding: false/g), 'false only on the false answer and the failure').toHaveLength(2)
   })
 })
+
+// T-159 (2), (3): the meter's label is a rounded number (a negative zero prints as "0"); a blank Filename box clears its remembered key.
+describe('T-159 - the meter never prints "-0 dB"; a cleared Filename box is forgotten', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(2) the dB label prints the rounded peak as a number, not toFixed(0) (which prints "-0" within 0.5 dB of full scale)', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/\{Math\.round\(peakDb\)\} dB/)
+    expect(meter).not.toMatch(/toFixed\(0\)/)
+    // The clamp, the clipping colour and the bars are as they were.
+    expect(meter).toMatch(/setPeakDb\(Math\.max\(-60, Math\.min\(0, db\)\)\)/)
+    expect(meter).toMatch(/const clipping = peakDb > -1/)
+    expect(meter).toMatch(/\$\{clipping \? 'text-danger' : 'text-ink-muted'\}/)
+  })
+
+  it('(3) a blank or whitespace-only Filename box clears the key; a filled one stores it as typed', () => {
+    const panel = strip(read('modules/video-studio/ExportPanel.tsx'))
+    expect(panel).toMatch(/void persistSetting\('filenameTemplate', filenameTemplate\.trim\(\) \? filenameTemplate : undefined\)/)
+    expect(panel).not.toMatch(/if \(filenameTemplate\) void persistSetting/)
+    // The load is unchanged: with no key the box keeps its default, which is what the last export used.
+    expect(panel).toMatch(/get<string>\('filenameTemplate'\)\.then\(\(tpl\) => \{\s*if \(cancelled\) return\s*if \(tpl\) setFilenameTemplate\(tpl\)/)
+  })
+})

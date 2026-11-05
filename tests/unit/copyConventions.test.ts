@@ -640,3 +640,44 @@ describe('T-157 Track B: the labels a person reads are spelled out and capitaliz
     }
   })
 })
+
+// T-159 (1): "clip" is a Video Studio unit (BRANDING_GUIDE "One name per concept"); Audio Studio's person has a sound, with cuts.
+describe('T-159 (1): nothing Audio Studio shows its person calls their sound a "clip"', () => {
+  const AUDIO_DIR = path.join(RENDERER_ROOT, 'modules', 'audio-studio')
+  const TOUR = path.join(RENDERER_ROOT, 'tutorials', 'audioTutorial.ts')
+  const UNIT = /\bclips?\b/i
+  // simplification: the one verb use ("a boost cannot clip", the limiter sentence in LevelsPanel) is the audio sense of the word, not the
+  // unit; it is let through by its exact lead-in. Upgrade: a second verb in a person-visible string needs its own entry here.
+  const VERB = /\bcannot clip\b/gi
+
+  /** The person-visible strings in `files` (JSX text, copy attributes and properties, toasts) that name the unit. */
+  const unitNames = (files: string[], read = (f: string) => parseSource(f)): string[] =>
+    files.flatMap((f) =>
+      renderedStrings(read(f))
+        .filter((s) => UNIT.test(s.text.replace(VERB, '')))
+        .map((s) => `${path.relative(RENDERER_ROOT, f)}:${s.line} "${s.text}"`)
+    )
+
+  const FILES = [...sourceFilesUnder(AUDIO_DIR), TOUR]
+
+  it('finds the sources (the scan is not vacuously empty)', () => {
+    const names = FILES.map((f) => path.basename(f))
+    for (const must of ['FixWizard.tsx', 'LevelsPanel.tsx', 'audioTutorial.ts']) expect(names).toContain(must)
+    expect(FILES.flatMap((f) => renderedStrings(parseSource(f))).length).toBeGreaterThan(100)
+  })
+
+  it('no string in Audio Studio or its tour says "clip" for the person\'s sound', () => {
+    expect(unitNames(FILES)).toEqual([])
+  })
+
+  it('discriminates: it fires on the wizard question that shipped, in a toast and in tour copy, and not on clipping or the limiter\'s verb', () => {
+    const run = (src: string): string[] => unitNames(['x.tsx'], () => parseSource('x.tsx', src))
+    expect(run(`const q = { question: 'What is this clip mostly?' }`)).toHaveLength(1)
+    expect(run(`toast.success('Saved the clip')`)).toHaveLength(1)
+    expect(run(`const s = { body: 'Pick a part of the Clip.' }`)).toHaveLength(1)
+    expect(run(`const x = () => <p>Two clips</p>`)).toHaveLength(1)
+    expect(run(`const x = () => <p>so a boost cannot clip.</p>`)).toEqual([])
+    expect(run(`const x = () => <p>Peaks are clipping. Unclipped is fine.</p>`)).toEqual([])
+    expect(run(`// a clip\nconst clip = 1; const clipSeconds = 2; const q = { id: 'clip', question: 'What is this sound mostly?' }`)).toEqual([])
+  })
+})

@@ -109,7 +109,8 @@ export function VolumeMeter({ audioElement }: VolumeMeterProps): JSX.Element {
       <span
         className={`font-mono w-14 shrink-0 whitespace-nowrap text-right ${clipping ? 'text-danger' : 'text-ink-muted'}`}
       >
-        {peakDb.toFixed(0)} dB
+        {/* T-159 (2): a rounded number, not toFixed(0): toFixed returns the string "-0" for any peak within half a dB of full scale, while a number's -0 prints as "0". */}
+        {Math.round(peakDb)} dB
       </span>
     </div>
   )

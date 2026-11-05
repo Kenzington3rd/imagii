@@ -3742,7 +3742,7 @@ test.describe('T-131: review-gate fixes, sweep 17 (Audio Studio)', () => {
       await expect(dialog).toContainText('Quick fix · 3 of 3')
       await window.waitForTimeout(400)
       await expect(dialog, 'nor question 3').toContainText('Quick fix · 3 of 3')
-      await expect(dialog).toContainText('What is this clip mostly?')
+      await expect(dialog).toContainText('What is this sound mostly?')
 
       await dialog.getByRole('button', { name: 'Talking / voice' }).dblclick()
       await expect(dialog).toContainText('Ready to apply')
@@ -4832,7 +4832,7 @@ test.describe('T-147 (6b): the Fix wizard\'s options are grouped under their que
       const steps = [
         { question: 'Is there background noise (HVAC, fan, traffic)?', first: 'None to speak of', options: 3 },
         { question: 'Does the room sound echoy or hollow?', first: 'Sounds dry', options: 2 },
-        { question: 'What is this clip mostly?', first: 'Talking / voice', options: 3 }
+        { question: 'What is this sound mostly?', first: 'Talking / voice', options: 3 }
       ]
       for (const [i, step] of steps.entries()) {
         await expect(dialog).toContainText(`Quick fix · ${i + 1} of 3`)
@@ -5232,6 +5232,133 @@ test.describe('T-158 (1): a sound played to the end comes back at 0:00 and plays
       await playButton(window).click()
       await expect.poll(elementSeconds, { timeout: 2_000, intervals: [100], message: 'the element plays on from the start' }).toBeGreaterThan(0.5)
       await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// T-159 (2): the volume meter's label reads "0 dB" at full scale, never "-0 dB". A sound really plays under the built app (the meter's
+// AudioContext runs on Xvfb), so the label is read as a person reads it, off the screen, sampled from the moment Play is pressed.
+test.describe('T-159 (2): the volume meter reads 0 dB at full scale, never -0 dB', () => {
+  /**
+   * A WAV of the bundled ffmpeg's own sine, `gain` times its default amplitude (0.125): 7.7 is a peak of 0.9625 (-0.33 dBFS, within 0.5 dB of full
+   * scale, where toFixed(0) printed "-0"), 2 is a peak of 0.25 (-12 dBFS). Not a hard-clipped tone: its decoded peaks overshoot 1.0 after the
+   * resample, the meter's clamp turns that into 0, and the old build then prints "0 dB" too - a fixture that cannot tell the builds apart.
+   */
+  async function toneWav(outPath: string, gain: number): Promise<void> {
+    const r = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-af', `volume=${gain}`, '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', outPath])
+    if (r.code !== 0) throw new Error(`tone ffmpeg exit ${r.code}: ${r.stderr.slice(-600)}`)
+  }
+  /** The meter's dB label: the span beside the "Meter" caption. */
+  const label = (window: Page) => window.getByText('Meter', { exact: true }).locator('xpath=following-sibling::span')
+
+  /** Press Play and sample the label's text and class every 16 ms for `ms`, in the page, so no frame is missed. */
+  async function playAndSample(window: Page, ms: number): Promise<Array<{ text: string; cls: string }>> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __t159: Array<{ text: string; cls: string }>; __t159Timer: number }
+      w.__t159 = []
+      const spans = Array.from(document.querySelectorAll('span.font-mono')).filter((s) => / dB$/.test(s.textContent ?? ''))
+      const el = spans[0]
+      if (!el) throw new Error('no meter dB label found')
+      w.__t159Timer = window.setInterval(() => w.__t159.push({ text: el.textContent ?? '', cls: el.className }), 16)
+    })
+    await playButton(window).click()
+    await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+    await window.waitForTimeout(ms)
+    return window.evaluate(() => {
+      const w = window as unknown as { __t159: Array<{ text: string; cls: string }>; __t159Timer: number }
+      window.clearInterval(w.__t159Timer)
+      return w.__t159
+    })
+  }
+
+  test('a tone at full scale (-0.33 dBFS) reads exactly "0 dB" in the danger colour, and no frame of it reads "-0 dB"', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t159-meter-full')
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', 'full-scale-t159.wav')
+      await toneWav(wav, 7.7)
+      await dropOnImporter(window, wav, 'full-scale-t159.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(label(window)).toHaveText('-60 dB')
+
+      const samples = await playAndSample(window, 3_000)
+      expect(samples.length, 'the sampler ran').toBeGreaterThan(50)
+      expect(samples.filter((s) => s.text === '-0 dB'), 'no frame reads a negative zero').toEqual([])
+      const settled = samples.slice(-20)
+      for (const s of settled) {
+        expect(s.text).toBe('0 dB')
+        expect(s.cls).toContain('text-danger')
+        expect(s.cls).not.toContain('text-ink-muted')
+      }
+      await expect(label(window)).toHaveText('0 dB')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // T-153 (5)'s middle band, driven: seeded white noise at amplitude 0.3 holds every spectrum bar at about 69 % (measured 68-70 % over ten
+  // seconds, three amplitudes tried: 0.03 sits at 40 %, 0.1 straddles the 55 % line and flickers), well inside the 55-85 % band with 14 points
+  // to either side, so each bar is the ember mark and none is the danger bar or the ok bar.
+  test('a steady noise holds every spectrum bar in the middle band: ember, not the ok or the danger bar', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t159-meter-band')
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', 'noise-t159.wav')
+      const r = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'anoisesrc=color=white:amplitude=0.3:seed=7:duration=8:sample_rate=44100', '-ac', '1', '-c:a', 'pcm_s16le', wav])
+      if (r.code !== 0) throw new Error(`noise ffmpeg exit ${r.code}: ${r.stderr.slice(-600)}`)
+      await dropOnImporter(window, wav, 'noise-t159.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await playButton(window).click()
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+      const bars = window.locator('div.flex.items-end.h-6 > div')
+      await expect(bars).toHaveCount(12)
+      await expect(window.locator('div.flex.items-end.h-6 > div.bg-ember')).toHaveCount(12, { timeout: 10_000 })
+      // Held, not a frame that happened to cross: every sample across the next 1.5 s is twelve ember bars.
+      const frames = await window.evaluate(async () => {
+        const out: string[][] = []
+        for (let i = 0; i < 10; i++) {
+          out.push(Array.from(document.querySelectorAll('div.flex.items-end.h-6 > div')).map((b) => b.className))
+          await new Promise((res) => setTimeout(res, 150))
+        }
+        return out
+      })
+      for (const frame of frames) {
+        expect(frame).toHaveLength(12)
+        for (const cls of frame) {
+          expect(cls).toContain('bg-ember')
+          expect(cls).not.toContain('bg-danger-strong')
+          expect(cls).not.toContain('bg-ok-strong')
+        }
+      }
+      // And the label is a level, not the clipping mark: white noise at 0.3 peaks near -10 dBFS.
+      await expect(label(window)).not.toHaveClass(/text-danger/)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a tone at about -12 dBFS settles within 1 dB of -12 dB and is not in the danger colour', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t159-meter-quiet')
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', 'quiet-t159.wav')
+      await toneWav(wav, 2)
+      await dropOnImporter(window, wav, 'quiet-t159.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      const samples = await playAndSample(window, 3_000)
+      expect(samples.length, 'the sampler ran').toBeGreaterThan(50)
+      for (const s of samples.slice(-20)) {
+        const db = Number(s.text.replace(' dB', ''))
+        expect(Math.abs(db + 12), `"${s.text}" is within 1 dB of -12`).toBeLessThanOrEqual(1)
+        expect(s.cls).not.toContain('text-danger')
+        expect(s.cls).toContain('text-ink-muted')
+      }
     } finally {
       await closeStudio(studio)
     }

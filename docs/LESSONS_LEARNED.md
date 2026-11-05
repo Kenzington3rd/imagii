@@ -14,6 +14,36 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-159 (round 108): the wizard says "sound", the meter says "0 dB", a cleared Filename box stays cleared
+
+The forty-fifth sweep, one track.
+
+### (1) [LOW] - Audio Studio's Fix wizard called the person's sound a "clip"
+
+- **Bug.** The third question read "What is this clip mostly?". BRANDING_GUIDE reserves "clip" for a Video Studio unit; it was the only "clip" in Audio Studio's copy.
+- **Fix.** "What is this sound mostly?". The two e2e cases that read the question were updated in place.
+- **Test.** copyConventions.test.ts "T-159 (1)" (no person-visible string under `modules/audio-studio/**` or in the Audio tour names the unit, with a discrimination block; the limiter note's verb "cannot clip" is the one exempt phrase); audio.spec.ts "T-131 (4)" and "T-147 (6b)". Red on the unchanged tree.
+- **Lesson.** **A naming rule that a reviewer enforced by eye is a scan.** The one-name table said where "clip" lives, and only the review that happened to read the wizard noticed; the scan names the file and line for the next one, and exempts a different sense of the word by its exact lead-in instead of by a file.
+
+### (2) [LOW] - The volume meter read "-0 dB" at full scale
+
+- **Bug.** Any peak within half a dB of full scale, the clipping case drawn in the danger colour, printed "-0 dB".
+- **Root cause.** The label was `peakDb.toFixed(0)`; `toFixed` keeps the sign of a value that rounds to zero.
+- **Fix.** `{Math.round(peakDb)} dB`: a number's `-0` prints as "0" where `toFixed`'s string "-0" did not. The clamp, the clipping colour and the bars are unchanged.
+- **Test.** audio.spec.ts "T-159 (2)": a tone at -0.33 dBFS played under the built app, the label sampled every 16 ms from the press of Play, reads "0 dB" in the danger colour and never "-0 dB" (red on the unchanged build); a -12 dBFS tone reads within 1 dB of -12 in the muted colour; seeded noise at 0.3 holds all twelve bars `bg-ember` (T-153 (5)'s band, now driven). interactionWiring.test.ts "T-159" holds the rounded form. React prints a number's `-0` as "0", so no extra fold is needed; the browser case kills the `toFixed(0)` mutation.
+- **Lesson.** **A fixture that is too extreme can hide the bug it was made for.** The first full-scale tone was hard-clipped; its decoded samples overshoot 1.0 after the resample, the meter's clamp turns that into exactly 0, and the old build read "0 dB" too. The fixture that tells the builds apart sits just under full scale. And a disposition that says a thing "needs" a harness capability is a claim: here the harness could play a sound all along, and the ledger row said it could not.
+
+### (3) [LOW] - A cleared Filename box was not remembered
+
+- **Bug.** A person who exported with a template, then cleared the box (blank means the default pattern) and exported, came back to the old template.
+- **Root cause.** `if (filenameTemplate) persistSetting(...)` skipped a blank box instead of recording it, so the old key stayed; the watermark beside it already forgot a blank (T-119).
+- **Fix.** `persistSetting('filenameTemplate', filenameTemplate.trim() ? filenameTemplate : undefined)`: a blank or whitespace-only box clears the key, and the next visit shows the default, which is what the last export used. The load is unchanged.
+- **Test.** video-pipelines.spec.ts "T-159 (3)" (config.json seeded with `{clip}-old`, the box cleared, one preset exported: the default-named file lands, the key leaves config.json, Home and back reads `{source}_{clip}_{preset}`; red on the unchanged build, where config kept `{clip}-old`); interactionWiring.test.ts "T-159".
+- **Lesson.** **A "remember the last value" write has to run for the empty value too.** Skipping a blank is not neutral when the stored value is older than the blank: the last thing the person did was clear it. Siblings that persist together should forget together.
+- **Fold: a test that waits a time for a state.** media.spec.ts "the scratch the compilation made is gone..." (T-125 (1)) slept 1.5 s and then canceled, assuming the join was mid-segment; on a fast host the 8-segment join takes 1.2-1.8 s and had already finished, so the cancel found nothing. It polls for the canceled job's first scratch file now. Wait for the state the comment names, not for a duration.
+
+---
+
 ## 2026-11-05 - T-158 (round 107): a finished sound's place is its start; a cancel that marks a run is an answer; a tour names a control as the screen does
 
 The forty-fourth sweep, one track.

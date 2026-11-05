@@ -13060,3 +13060,37 @@ test.describe('T-156 (3): Clip Kit\'s title while an export runs tells the perso
     }
   })
 })
+
+// T-159 (3): a Filename box the person cleared is forgotten, like the watermark beside it (T-119). Blank means the default pattern
+// (expandFilenameTemplate), so the export that used it is the last one; the old template used to come back on the next visit.
+test.describe('T-159 (3): a cleared Filename box is forgotten, and the next visit shows the default pattern', () => {
+  test('seeded {clip}-old -> clear the box and export one preset -> the default-named file lands, config.json loses the key, and Home and back reads the default', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir, userDataDir } = await launchWithVideo('t159-3-cleared-template', clipSrc, { filenameTemplate: '{clip}-old' })
+    try {
+      const card = exportCard(window)
+      const box = card.getByPlaceholder('{source}_{clip}_{preset}')
+      // The remembered template is what the box opens with.
+      await expect(box).toHaveValue('{clip}-old')
+
+      await stubDialogs(app, { open: [outDir] })
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await expect(card.getByRole('button', { name: path.basename(outDir) })).toBeVisible()
+      await box.fill('')
+      await expect(box).toHaveValue('')
+      await card.getByRole('button', { name: /^Export 1/ }).click()
+
+      // Blank means the default pattern: source, clip and preset.
+      await expect.poll(() => mp4sIn(outDir), { timeout: 240_000, intervals: [500] }).toEqual(['pipeline_Clip 1_youtube.mp4'])
+      await expectToast(window, 'Exported')
+      // The key is gone from disk, not left holding the cleared template.
+      await expect.poll(() => 'filenameTemplate' in readConfig(userDataDir), { timeout: 15_000, intervals: [200] }).toBe(false)
+
+      await leaveAndReturn(window)
+      await expect(box).toHaveValue('{source}_{clip}_{preset}')
+      expect('filenameTemplate' in readConfig(userDataDir)).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+})
