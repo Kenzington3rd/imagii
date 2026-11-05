@@ -670,8 +670,8 @@ export function RecordStudio(): JSX.Element {
    * T-88: "Discard recording" kills the running convert (the one thing in the
    * save that can be stopped); the convert's cancel comes back from main as a
    * discard, which `finalizeRecording` announces. If there was nothing to
-   * kill — the click landed before the convert started or after it finished —
-   * the button comes back instead of sitting on "Discarding…" forever.
+   * cancel (no live convert, no open save run: the swap's retries are a run,
+   * T-158 (2)) the button comes back instead of sitting on "Discarding…" forever.
    * T-137 (2): and it is aimed at ONE take, the run's (`takeId`): main cancels that take's convert and no other's, so a Discard here can never
    * reach another take's save. Pressed in the instant before the run begins (the Stop click, the recorder's last chunk) there is no take to name
    * yet and nothing to stop.

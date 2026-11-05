@@ -558,7 +558,7 @@ describe('a cancel that lands on a save\'s run says who asked (T-141 (5))', () =
 
   it('a Discard aimed at the take is a ConvertCancelledError that is not the quit\'s - with no child running at all', () => {
     const run = beginConvertRun(TAKE)
-    expect(cancelConverts(TAKE), 'nothing was running to kill: the child had exited').toBe(false)
+    expect(cancelConverts(TAKE), 'no child to kill, but the save\'s run was open and is now marked: the save will end as the Discard (T-158 (2))').toBe(true)
     const err = thrownBy(run)
     expect(err).toBeInstanceOf(ConvertCancelledError)
     expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
@@ -805,5 +805,56 @@ describe('convertToMp4 - every frame is held to the take\'s first size (T-154 (8
     child.emit('close', 0, null)
     await promise
     expect(vf()).toBe(EVEN_PICTURE)
+  })
+})
+
+// T-158 (2): `cancelConverts` dropped the latch's answer and returned only whether a live CHILD was killed. A Discard pressed while the save has no child
+// (the fallback copy after a failed remux, the swap's rename retries, the instant after the convert exits) marks the open run - the save WILL end as a discard
+// - yet answered false, and the renderer, reading false as "nothing to stop", gave the Discard button back over a take that was about to be deleted. The
+// answer is now "there was something to cancel": a live child or an open run, as every sibling cancel returns its latch result.
+describe('cancelConverts answers true for an open run with no child (T-158 (2))', () => {
+  const thrownBy = (run: { check: () => void }): unknown => {
+    try {
+      run.check()
+    } catch (err) {
+      return err
+    }
+    return null
+  }
+
+  it('a save\'s run is open and no child is alive: the Discard answers true and the run throws the discard (not the quit\'s)', () => {
+    const run = beginConvertRun(recordingOwner('t1'))
+    expect(cancelConverts(recordingOwner('t1')), 'something was cancelled: the open run').toBe(true)
+    const err = thrownBy(run)
+    expect(err).toBeInstanceOf(ConvertCancelledError)
+    expect((err as InstanceType<typeof ConvertCancelledError>).byQuit).toBe(false)
+    run.end()
+  })
+
+  it('an owner with no run and no child answers false (nothing to cancel)', () => {
+    expect(cancelConverts(recordingOwner('t1'))).toBe(false)
+  })
+
+  it('a run that belongs to ANOTHER take does not make this take\'s Discard answer true', () => {
+    const other = beginConvertRun(recordingOwner('t2'))
+    expect(cancelConverts(recordingOwner('t1'))).toBe(false)
+    expect(thrownBy(other), 'the other take\'s run is untouched').toBeNull()
+    other.end()
+  })
+
+  it('a run that has ended is nothing to cancel: a late Discard answers false', () => {
+    const run = beginConvertRun(recordingOwner('t1'))
+    run.end()
+    expect(cancelConverts(recordingOwner('t1'))).toBe(false)
+  })
+
+  it('a live child AND an open run: true, and the child is killed once', async () => {
+    const run = beginConvertRun(TAKE)
+    const { promise, child } = await startConvert(TAKE)
+    expect(cancelConverts(TAKE)).toBe(true)
+    expect(child.signals).toEqual(['SIGKILL'])
+    child.emit('close', null, 'SIGKILL')
+    expect(await promise.catch((e: unknown) => e)).toBeInstanceOf(ConvertCancelledError)
+    run.end()
   })
 })

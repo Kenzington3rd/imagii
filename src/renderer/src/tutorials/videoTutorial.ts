@@ -44,7 +44,7 @@ export const videoTutorial: TutorialDef = {
     {
       id: 'crop',
       title: 'Crop (optional)',
-      body: "Check 'Crop' above the player, then drag the box or pick a shape: free, 16:9, 9:16, 1:1, or 4:5. Each platform takes a centered cut of your crop.",
+      body: "Check 'Crop' above the player, then drag the box or pick a shape: Free, 16:9, 9:16, 1:1, or 4:5. Each platform takes a centered cut of your crop.",
       targetSelector: '[data-tutorial="video-crop"]',
       placement: 'top'
     },

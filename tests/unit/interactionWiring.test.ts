@@ -4101,3 +4101,27 @@ describe('T-157 Track A - the players say where they are and whether they play',
     expect(player).toMatch(/onEnded=\{\(\) => setPlaying\(false\)\}\s*onEmptied=\{\(\) => setPlaying\(false\)\}/)
   })
 })
+
+// T-158 (1), (2): a finished sound's saved place is its start; a Discard that main marked keeps the card on "Discarding...".
+describe('T-158 - a finished sound starts over; a Discard that lands says so', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const readMain = (rel: string): string => readFileSync(path.resolve(RENDERER_ROOT, '../../main', rel), 'utf8')
+
+  it('(1) the finish handler stops Play AND zeroes the store position; the restore and its guard are unchanged', () => {
+    const view = strip(read('modules/audio-studio/WaveformView.tsx'))
+    expect(view).toMatch(/const offFinish = ws\.on\('finish', \(\) => \{\s*setPlaying\(false\)\s*setCurrentTime\(0\)\s*\}\)/)
+    expect(view).toMatch(/if \(resumeAt > 0 && resumeAt < waveform\.duration\) \{\s*ws\.setTime\(resumeAt\)/)
+  })
+
+  it('(2) cancelConverts returns the latch\'s answer as well as the kill\'s', () => {
+    const convert = strip(readMain('ffmpeg/convert.ts'))
+    expect(convert).toMatch(/export function cancelConverts\(owner: ConvertOwner\): boolean \{\s*const marked = convertLatch\.cancel\(owner\)\s*return cancelWhere\(\(active\) => active\.owner === owner\) \|\| marked\s*\}/)
+  })
+
+  it('(2) the renderer gives the Discard button back only when main answers false, and keeps "Discarding..." on true', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    const discard = studio.slice(studio.indexOf('function discardRecording(): void {'), studio.indexOf('const save = saveCard('))
+    expect(discard).toMatch(/\.then\(\(hadConvert\) => \{\s*if \(!hadConvert\) useRecordSave\.getState\(\)\.patch\(\{ discarding: false \}\)\s*\}\)/)
+    expect(discard.match(/discarding: false/g), 'false only on the false answer and the failure').toHaveLength(2)
+  })
+})

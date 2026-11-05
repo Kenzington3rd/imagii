@@ -117,7 +117,12 @@ export function WaveformView(): JSX.Element | null {
     })
     const offPlay = ws.on('play', () => setPlaying(true))
     const offPause = ws.on('pause', () => setPlaying(false))
-    const offFinish = ws.on('finish', () => setPlaying(false))
+    // T-158 (1): a sound that played to the end has no place to come back to but its start. `ended` emits `finish` but not `audioprocess`, so the store still
+    // holds the last timer tick (a frame short of the end) and the restore above would park the fresh player there, where Play plays a frame and finishes.
+    const offFinish = ws.on('finish', () => {
+      setPlaying(false)
+      setCurrentTime(0)
+    })
 
     regions.enableDragSelection({ color: SELECTION_FILL })
     // One drag is one cut, which is what the panel copy below promises.

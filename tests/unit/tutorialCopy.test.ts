@@ -255,3 +255,19 @@ describe('every tour ends by naming the ? key as well as the ? button (T-131 (7)
     expect(overlay).toMatch(/if \(e\.key !== '\?'\) return false/)
   })
 })
+
+// T-158 (3): T-157 (4) renamed the crop shape "free" to "Free" on the button; the Video Studio tour still listed "free". BRANDING_GUIDE: a tutorial step names a
+// control exactly as the screen does.
+describe('the crop step names the shapes as the crop row does (T-158 (3))', () => {
+  const crop = videoTutorial.steps.find((s) => s.id === 'crop')
+
+  it('says "Free", capitalised, and not "free"', () => {
+    expect(crop?.body).toContain('pick a shape: Free, 16:9, 9:16, 1:1, or 4:5.')
+    expect(crop?.body).not.toMatch(/\bfree\b/)
+  })
+
+  it('and the row it describes still has a button that reads Free', () => {
+    const overlay = readAll([path.resolve(__dirname, '../../src/renderer/src/modules/video-studio/CropOverlay.tsx')])
+    expect(overlay).toMatch(/free: 'Free'/)
+  })
+})

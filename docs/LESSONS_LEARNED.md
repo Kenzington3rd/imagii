@@ -14,6 +14,36 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-158 (round 107): a finished sound's place is its start; a cancel that marks a run is an answer; a tour names a control as the screen does
+
+The forty-fourth sweep, one track.
+
+### (1) [LOW] - A sound played to the end came back parked a frame short of it
+
+- **Bug.** After a full listen, leaving Audio Studio and coming back parked the playhead a frame before the end (about 0:19.98 of 0:20.00), and Play played that frame and finished: a Play that seemed dead.
+- **Root cause.** T-157 (1)'s restore seeks to the store's `currentTime` when it is under the duration. The store is written by `audioprocess` and `seeking` only, and wavesurfer's `ended` emits `finish` but not `audioprocess`, so after a sound ended the store held the last timer tick, which can be a frame short of the end.
+- **Fix.** The `finish` handler in `WaveformView` also calls `setCurrentTime(0)`. The restore and its guard are unchanged.
+- **Test.** audio.spec.ts "T-158 (1)" (a 3 s sound played to the end, Home and back: the readout reads 0:00.00 / 0:03.00, the media element sits at the start, Play takes it past 0.5 s within 2 s); red on a build of the unchanged tree (the readout read 0:02.98); interactionWiring.test.ts "T-158". The last tick's value is a race: in the e2e harness (Chromium on Xvfb, no audio device) the last tick reads the exact duration, which the guard already skips, so a plain play-through is green on the old build. The case models the ticket's tick by making the media element's `currentTime` getter report a frame short of the end; the setter and the rest of the element are real.
+- **Lesson.** **A fix that restores state must ask what the state is when the thing it restores has FINISHED.** A value written by a tick is stale at the one moment no tick follows; the event that ends the thing owns the reset. And a race the harness cannot produce is modelled at the narrowest seam, with the model said out loud in the test.
+
+### (2) [LOW] - A Discard that landed on a save with no ffmpeg child gave the button back, then deleted the take
+
+- **Bug.** "Discard recording" pressed while the save had no live child (the fallback copy after a failed remux, the swap's rename retries, the instant after the convert exits) cleared "Discarding..." and brought the button back, and then the save ended as a discard anyway.
+- **Root cause.** `cancelConverts(owner)` called `convertLatch.cancel(owner)` and dropped its answer, returning only whether a live child was killed. The run was marked, so the save would end as the Discard, but `recording:cancelSave` answered false and the renderer read false as "nothing to stop".
+- **Fix.** `const marked = convertLatch.cancel(owner)`, then `return cancelWhere(...) || marked`: true when there was a live child or an open run. The renderer comment's premise is corrected; the existing T-141 (5) row that pinned `false` for an open run with no child was edited in place.
+- **Test.** convertCancel.test.ts "cancelConverts answers true for an open run with no child (T-158 (2))" (an open run for one take: true and `check()` throws the Discard, not the quit's; no run: false; another take's run: false; an ended run: false); record.spec.ts "T-158 (2)" (the swap held at a gate with no child alive, Discard pressed: the card keeps "Discarding the recording..." a second later with the button off, then "Recording discarded", no take and no file left); red on the unchanged tree; interactionWiring.test.ts "T-158".
+- **Lesson.** **A cancel function answers "was there something to cancel", not "did I kill a process".** Every sibling returned its latch result; the one that returned the kill alone was the one whose caller acts on the answer.
+
+### (3) [LOW] - The Video Studio tour named a shape "free" while the button read "Free"
+
+- **Bug.** The Crop step listed "free, 16:9, ..." after T-157 (4) capitalised the button.
+- **Root cause.** The tour is a string no test ties to the row it describes.
+- **Fix.** "pick a shape: Free, 16:9, 9:16, 1:1, or 4:5."
+- **Test.** tutorialCopy.test.ts "T-158 (3)" (the crop step names "Free" and not "free", and the row still has a button reading Free); red on the unchanged tree.
+- **Lesson.** **Renaming a control means grepping the tours for its old name.** BRANDING_GUIDE: a tutorial step names a control exactly as the screen does.
+
+---
+
 ## 2026-11-04 - T-157 (round 106), Track A: the state that outlives a view is read at mount; a control follows the element's own events, and a src change gives only one
 
 The forty-third sweep, Track A (the two players; Track B lands separately).

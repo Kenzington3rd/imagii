@@ -7446,7 +7446,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 107)
+- **Status:** done (round 107 — see the Done entry)
 
 ---
 
@@ -8017,6 +8017,37 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 107 — T-158, all three counted items, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of c1d9e0f; a
+container restart killed it mid-mutation (M5 left WaveformView.tsx with
+its `setCurrentTime(0)` line deleted, the runner holding the original in
+memory) — the expediter reversed the exact one-line deletion from the
+mutation spec, confirmed the worker's unit set green on it (784/784) and
+resumed the same worker. Item 1: a sound that played to the end comes
+back to Audio Studio at 0:00 and plays from the start (the `finish`
+handler zeroes the store, since wavesurfer's `ended` writes no
+`audioprocess`). Item 2: `cancelConverts` answers with the latch as well
+as the kill, so a Discard pressed while the save has no ffmpeg child
+keeps "Discarding the recording…" until the save ends as the discard.
+Item 3: the Video tour's Crop step names "Free" as the row does.
+Deviations, accepted: item 1's e2e wraps the media element's
+`currentTime` getter to report one frame short of the end (Xvfb's audio
+sink reports the exact duration at the last tick, so a plain play-through
+was green on the old build 6 of 6); item 2's e2e gates main's `rename`
+itself so the Discard lands deterministically; the existing T-141 (5)
+unit that pinned the old false answer was edited in place. Ledger: 5
+RED / 12 mutations (M1-M8, E1-E3, and the restart-interrupted first M5,
+re-run), all killed. Found not fixed: none new. Expedited personally:
+one independent mutation at a seam no ledger row names — `return marked
+|| cancelWhere(…)` (the short-circuit skips the kill of a live child
+when the run is open) → 8 cases red (T-158's live child, T-128 (5)
+Discard-is-not-a-quit, T-137 (2) per-take Discard) — restored
+byte-identical, sha256 verified; on the landing tree: verify x2
+(207/6157), test:media 453 passed | 17
+skipped of 470 on 7.0.2, FULL
+Playwright 632/632 (48.8 min). Applied to c1d9e0f by
+`git apply` with every file byte-identical to the expedited tree.
 
 Round 106 — T-157, all six counted items, landed in the commit that
 carries this entry (T-110 gains (bw), an owner call). Two workers in

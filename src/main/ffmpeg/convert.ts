@@ -403,14 +403,16 @@ function cancelWhere(match: (active: ActiveConvert) => boolean, byQuit = false):
 
 /**
  * Abort the in-flight converts started by `owner`, and only those. Returns
- * true when there was something to cancel. Used by the recorder's "Discard
+ * true when there was something to cancel - a live child killed, or an open run marked. Used by the recorder's "Discard
  * recording" path, with that TAKE's owner (T-137 (2)). Each cancelled convert's
  * promise rejects with `ConvertCancelledError` rather than an exit-code error,
  * so callers can tell a deliberate discard from a real failure (T-44).
  */
 export function cancelConverts(owner: ConvertOwner): boolean {
-  convertLatch.cancel(owner)
-  return cancelWhere((active) => active.owner === owner)
+  // T-158 (2): the latch's answer counts. A save whose child has exited (the fallback copy after a failed remux, the swap's rename retries) is still an
+  // OPEN run, now marked: it ends as the discard, so "there was something to cancel" is true and the renderer must keep saying "Discarding...".
+  const marked = convertLatch.cancel(owner)
+  return cancelWhere((active) => active.owner === owner) || marked
 }
 
 /**

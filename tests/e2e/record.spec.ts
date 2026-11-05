@@ -4051,3 +4051,82 @@ test.describe('T-157 (5) / (6): a source tile names its type, and the Corner pic
     }
   })
 })
+
+// ═══════ T-158 (2): a Discard that main marked keeps "Discarding..." on the card ═══════
+// `cancelConverts` answered only whether a live ffmpeg child was killed. Pressed while the save had NO child (the swap's rename retries after the convert
+// exited), the Discard marked the save's run - the save then ends as a discard, the take deleted - yet the answer was false, and the renderer cleared
+// "Discarding..." and gave the button back. Linux has no file Windows would hold, so main's rename onto the chosen name is held at a gate the test controls and
+// then refused (EPERM, the lock code the swap retries): the convert has exited, the run is open, and no child exists. The recorder, the convert, the Save
+// dialog's answer, the swap, the card, the toast and the files are real.
+test.describe('T-158 (2): a Discard pressed while the swap is waiting (no ffmpeg child) is a Discard', () => {
+  test.describe.configure({ timeout: 240_000 })
+
+  test('the card keeps "Discarding the recording..." until the save ends as "Recording discarded", and no take is left', async () => {
+    ensureScreenshots()
+    const root = makeRoot('t158-discard-swap')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'discarded.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, outPath)
+      // The first rename onto the chosen name waits at a gate, then every rename onto it is refused with a lock code.
+      await app.evaluate((_electron, held) => {
+        const g = globalThis as unknown as { __t158Gate?: () => void; __t158Reached?: number }
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const fsp = getBuiltin('node:fs/promises') as { rename: (from: string, to: string) => Promise<void> }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = fsp.rename
+        g.__t158Reached = 0
+        const gate = new Promise<void>((resolve) => {
+          g.__t158Gate = resolve
+        })
+        fsp.rename = async (from: string, to: string): Promise<void> => {
+          if (String(to) !== held) return real(from, to)
+          g.__t158Reached = (g.__t158Reached ?? 0) + 1
+          if (g.__t158Reached === 1) await gate
+          throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', errno: -1, syscall: 'rename', path: from, dest: to })
+        }
+        mod.syncBuiltinESMExports()
+      }, outPath)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+
+      await window.getByRole('checkbox').nth(0).uncheck()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // The convert has finished and the swap is at the gate: no ffmpeg child is alive, the save's run is open.
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as unknown as { __t158Reached?: number }).__t158Reached ?? 0), { timeout: 90_000, intervals: [200] })
+        .toBe(1)
+      const discard = window.getByRole('button', { name: 'Discard recording' })
+      await expect(discard).toBeEnabled()
+      await discard.click()
+
+      // main marked the run and said so: the card stays on "Discarding", with no button to press again.
+      await expect(window.getByText('Discarding the recording…')).toBeVisible({ timeout: 5_000 })
+      await window.waitForTimeout(1_000)
+      await expect(window.getByText('Discarding the recording…'), 'still discarding a second later: the button did not come back').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Discard recording' })).toBeDisabled()
+
+      await app.evaluate(() => (globalThis as unknown as { __t158Gate?: () => void }).__t158Gate?.())
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [200] }).toContain('Recording discarded')
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir), 'the raw take went with the Discard').toEqual([])
+      expect(existsSync(outPath), 'nothing at the chosen name').toBe(false)
+      expect(withEverything(readdirSync(root)), 'and no partial beside it').toEqual(['userData'])
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/kept your take|Windows blocked|EPERM/)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

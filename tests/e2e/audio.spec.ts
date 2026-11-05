@@ -5155,3 +5155,85 @@ test.describe('T-157 (1), (2): Audio Studio keeps its place; a swapped-in sound 
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-158 (1): a sound played to the end starts over after a trip away
+// ═══════════════════════════════════════════════════════════════════════════
+// T-157 (1) restores the store's `currentTime` when the view comes back. After a full listen that holds the last ~16 ms timer tick (wavesurfer's `ended`
+// emits `finish` but not `audioprocess`), so the fresh player parked at ~0:19.98 and Play played 16 ms and finished: a Play that seemed dead. `finish` now
+// sets the stored place to 0: a finished sound's place is its start.
+//
+// The last tick's value is a race: in this harness (Chromium on Xvfb, no audio device) the last tick before `ended` reads the media element's exact duration, which
+// the restore's `< duration` guard already skips, so a plain play-to-the-end is green on the old build too. The case models the tick the ticket describes (one
+// 16 ms frame short of the end) by making the media element's `currentTime` getter report `duration - 16 ms` once the element has ended or is within a frame of
+// it; the setter (the restore's seek) and everything else about the element are real, and the position is read back through the saved original getter.
+test.describe('T-158 (1): a sound played to the end comes back at 0:00 and plays from the start', () => {
+  const readout = (window: Page) => window.locator(`${WAVEFORM} .font-mono`).first()
+
+  test('play a short sound to the end, go Home and back: the readout reads 0:00.00 and Play advances the media element', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t158-finished-restarts')
+    const { window } = studio
+    try {
+      const shortWav = path.join(studio.root, 'source', 'short-t158.wav')
+      writeFileSync(shortWav, squareWav(3, 0.5, -0.5))
+      await dropOnImporter(window, shortWav, 'short-t158.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      await window.evaluate(() => {
+        const proto = HTMLMediaElement.prototype
+        const real = Object.getOwnPropertyDescriptor(proto, 'currentTime') as PropertyDescriptor
+        ;(window as unknown as { __t158RealTime: (el: HTMLMediaElement) => number }).__t158RealTime = (el) => (real.get as () => number).call(el)
+        Object.defineProperty(proto, 'currentTime', {
+          configurable: true,
+          set: real.set,
+          get(this: HTMLMediaElement): number {
+            const v = (real.get as () => number).call(this)
+            return Number.isFinite(this.duration) && v >= this.duration - 0.016 ? this.duration - 0.016 : v
+          }
+        })
+      })
+      await playButton(window).click()
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+      // The sound ends by itself: the button reads Play again, with the readout at the end.
+      await expect(playButton(window)).toBeVisible({ timeout: 15_000 })
+      await expect
+        .poll(async () => parseTimestampPair((await readout(window).textContent()) ?? '')[0], { timeout: 5_000, intervals: [100] })
+        .toBeGreaterThan(2.5)
+
+      await window.evaluate(() => {
+        const w = window as unknown as { __t158Audio?: HTMLAudioElement[] }
+        w.__t158Audio = []
+        const create = document.createElement.bind(document)
+        document.createElement = ((tag: string, options?: ElementCreationOptions) => {
+          const el = create(tag, options)
+          if (tag.toLowerCase() === 'audio') w.__t158Audio!.push(el as HTMLAudioElement)
+          return el
+        }) as typeof document.createElement
+      })
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      // A finished sound's place is its start.
+      await expect(readout(window)).toHaveText(/^0:00\.00 \/ 0:03\.00$/, { timeout: 5_000 })
+      const elementSeconds = (): Promise<number> =>
+        window.evaluate(() => {
+          const list = (window as unknown as { __t158Audio?: HTMLAudioElement[] }).__t158Audio ?? []
+          const a = list[list.length - 1]
+          if (!a) throw new Error('no <audio> element was created after the recorder went in')
+          return (window as unknown as { __t158RealTime: (el: HTMLMediaElement) => number }).__t158RealTime(a)
+        })
+      expect(await elementSeconds(), 'the media element sits at the start').toBeLessThan(0.1)
+
+      // And Play plays: it is past half a second within two, where the old build played ~16 ms and stopped.
+      await playButton(window).click()
+      await expect.poll(elementSeconds, { timeout: 2_000, intervals: [100], message: 'the element plays on from the start' }).toBeGreaterThan(0.5)
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
