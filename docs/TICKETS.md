@@ -7501,6 +7501,82 @@ IMG-PREC.
 
 ---
 
+## T-160 — sweep-46 fixes (round 109)
+
+- **Spec:** the forty-sixth sweep's five verified findings (candidate clean pass #1 on 27a17cf), confirmed by
+  the expediter against source (the meter one by execution on a build). Privacy, Electron, a11y, ffmpeg (24
+  exports and the compile, GIF, thumbnail and peaks paths on 7.0.2 and 6.1.1) and streamer (two readers) clean
+  on their whole lens; QA read all 214 non-test files (two readers); design took two readers and UX two
+  passes. Not counted: a Filename template over 200 characters (the store's cap) raising "Couldn't save your
+  settings." on each export (four reviewers; a contrived trigger — carried as a fold); the References tabs in
+  Title Case (feature names used as proper names everywhere, BRANDING:28 included — a guide line is the fold);
+  no peak-hold on the meter and no "play just the clip" in the Player (initiatives, named for the owner); the
+  tile, dialog-Close and basename duplication (drift only). Two tracks, disjoint files.
+
+  **Track A — the app offers what it holds (items 1, 2, 5 and two folds).**
+  1. **[MED] An autosave older than 7 days is advertised but cannot be restored or cleared**
+     (AutosaveRestore.tsx:26, :66-75, :112-124). The restore branch gates on `ageMs < STALE_THRESHOLD_MS`
+     (7 days); a VALID older file sets no snapshot, so Home prints "Last autosave: 9 days ago" with no Restore
+     and no Clear, and the first edits rotate it away. No doc names the gate (USER_GUIDE:110 "a recent
+     autosave"). Fix direction: offer Restore (and Clear) for any valid autosave whatever its age — the banner
+     already says how old it is; delete the gate and its constant; update the autosaveCorruptInfo.test.ts pin
+     that held it ("a stale project is not offered") in place; USER_GUIDE drops "recent".
+  2. **[LOW] The captions panel says "Transcribe the source video…" while it holds a transcript**
+     (CaptionsPanel.tsx:628, :298-305; ProjectIO.ts:454-456). After a project open or a Restore that carries
+     `srtPath` (loadSource cleared the in-memory transcript), the panel shows Preset, Save .srt and Burn into
+     video AND the first-run hint, and the header reads "Transcribe". Fix direction: the hint shows only when
+     there is no transcript at all (`!segments && !srtPath`), and the header reads "Re-transcribe" when either
+     is present.
+  5. **[LOW] The Delete board question does not say Ctrl+Z brings the board back** (MoodBoardPanel.tsx:166-169)
+     — BRANDING_GUIDE "Destruction verbs": Delete "says so when Ctrl+Z can bring it back" (example: Delete
+     board); `deleteCollection` pushes a history step and the toast after says Ctrl+Z. Fix: the question ends
+     "Ctrl+Z brings it back." (or the house phrasing the guide uses).
+  Folds (not counted): the Filename input takes `maxLength={200}` (the store's cap, store.ts:77, as the
+  watermark box takes 40 under its 80); BRANDING_GUIDE names the three References tabs ("Reference Search",
+  "Mood Boards", "Asset Library") with the proper names that keep their capitals.
+  Covering tests: e2e (NEW describes): home-chrome.spec.ts — an autosave seeded 9 days old on a fresh launch ->
+  the banner offers Restore and Clear, and Restore brings the work back (red on 27a17cf: only the "Last
+  autosave" line); video-pipelines.spec.ts — a project opened with an `srtPath` -> no first-run hint, the header
+  reads "Re-transcribe", Save .srt is offered (red on 27a17cf); references.spec.ts — Delete board's question
+  names Ctrl+Z, and Ctrl+Z after the delete brings the board back (red on 27a17cf). Unit pins on each fold
+  (the input's cap equals the schema's).
+
+  **Track B — a meter that reads every channel, variants that follow the card (items 3, 4 and a fold).**
+  3. **[MED] The volume meter reads the mono down-mix** (VolumeMeter.tsx:30-31, :61-69). The readout is the
+     peak of one AnalyserNode, and an AnalyserNode analyses its input down-mixed to mono ((L+R)/2). Executed on
+     a build of 27a17cf: a full-scale tone with L=R reads "0 dB"; the same tone on L only (a mic on input 1 of a
+     2-input interface) reads "-6 dB" and never turns the danger colour; L = -R reads "-60 dB" while it plays.
+     Playback is unaffected. Fix direction: split the source into its channels (`createChannelSplitter(2)`)
+     into one analyser each and read the larger of the two peaks; the spectrum bars may keep the existing
+     analyser. Fold (design D1, not counted): the label and the colour agree — print `Math.ceil(peakDb)` (a peak
+     meter never under-reads, and `ceil` puts every peak above -1 dBFS on "0 dB", which is the red one), so a
+     "-1 dB" is never red; update the T-159 wiring pin in place.
+  4. **[LOW] Thumbnail Variants ignore the Export card's Scale and format** (ThumbnailVariants.tsx:152-156,
+     :176, :194-197; image-studio/ExportDialog.tsx:318-333; templates.ts:292). The Variants button sits in the
+     Export card right after "Output: W×H", but it captures at `pixelRatio: 1` and saves PNG only: on the 2K
+     thumbnail template (whose own copy says "export at 0.5× to match"), Scale 0.5× and JPG read "Output:
+     1280×720" and Save all writes 2560×1440 PNGs. Fix direction: Variants take the card's format, JPG quality
+     and scale (the emote pack's fixed sizes stay the Export button's; with the scale select disabled Variants
+     use 1×), encode each variant in that format, save with its extension, and say the output size in the
+     dialog.
+  Covering tests: e2e (NEW describes): audio.spec.ts — a stereo L-only tone just under full scale reads "0 dB"
+  in the danger colour (red on 27a17cf: "-6 dB"); an L = -R tone reads near full scale, not "-60 dB" (red); a
+  -0.7 dBFS tone reads "0 dB" in red and a -1.2 dBFS tone "-1 dB" muted (the fold; red on 27a17cf); the T-159
+  mono cases stay green. image.spec.ts — the 2K thumbnail template at 0.5× JPG: Variants -> Save all writes
+  four 1280×720 JPEGs (magic bytes and size; red on 27a17cf). Unit pins on each.
+
+  **Docs (each track its own items):** IC rows (the T-159 (2) meter row revised by item 3); TESTING paragraphs;
+  LESSONS entry at the TOP per track; USER_GUIDE where a sentence is now wrong ("recent autosave"; the
+  Variants' output).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 109)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
