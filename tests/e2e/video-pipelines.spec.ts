@@ -2369,9 +2369,10 @@ test.describe('CaptionsPanel', () => {
       expect(existsSync(path.dirname(unwritable))).toBe(false)
 
       // ── a failed transcription: the sliding bar does not slide forever ──
-      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      // T-160 (2): this project carries an srtPath, so the header already reads "Re-transcribe" (it read "Transcribe" over a held transcript).
+      await card.getByRole('button', { name: 'Re-transcribe', exact: true }).click()
       await expectToast(window, 'Transcription failed.')
-      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeEnabled({
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true })).toBeEnabled({
         timeout: 30_000
       })
       await expect(row).toHaveCount(0)
@@ -13089,6 +13090,78 @@ test.describe('T-159 (3): a cleared Filename box is forgotten, and the next visi
       await leaveAndReturn(window)
       await expect(box).toHaveValue('{source}_{clip}_{preset}')
       expect('filenameTemplate' in readConfig(userDataDir)).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-160 (2): the captions panel says what it holds. A project open or a Restore brings back `srtPath` but not the segments; the panel used to offer Save .srt
+// and Burn into video AND say "Transcribe the source video ..." with a header reading "Transcribe".
+test.describe('T-160 (2): the captions panel with a saved .srt and no transcript in memory', () => {
+  async function engineReady(app: ElectronApplication): Promise<void> {
+    // The engine is not installed in any test environment (HL-whisper): main is told it is, as the other caption cases do.
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => ({
+        exeInstalled: true,
+        exePath: 'whisper-cli.exe',
+        modelInstalled: true,
+        modelPath: 'model.bin',
+        modelsDir: 'models',
+        ready: true
+      }))
+    })
+  }
+
+  test('a project that carries an srtPath: Save .srt is offered, no first-run hint, the header reads Re-transcribe', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchHome('t160srt')
+    const { app, window, userDataDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'held.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:01,000\nfirst line\n', 'utf8')
+      const projectPath = path.join(root, `t160-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath }
+        }),
+        'utf8'
+      )
+      await engineReady(app)
+      await stubDialogs(app, { open: [projectPath] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      const card = captionsCard(window)
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toBeVisible({ timeout: 30_000 })
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toHaveCount(0)
+      await expect(card.getByText(/Transcribe the source video/)).toHaveCount(0)
+      // The panel has settled on its ready state (the setup card is gone): the hint's absence is not just the status still loading.
+      await expect(card.getByText(/Captions are English only/)).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a video with no transcript at all keeps the hint and the Transcribe header', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchHome('t160nosrt')
+    const { app, window } = studio
+    try {
+      await engineReady(app)
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await expect(card.getByText(/Transcribe the source video, then save the text as \.srt/)).toBeVisible({ timeout: 15_000 })
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
     } finally {
       await app.close()
     }

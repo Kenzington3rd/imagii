@@ -209,6 +209,8 @@ export function ExportDialog(): JSX.Element {
   // those sizes whatever Scale says.
   const emotePack = doc.width === 112 && doc.height === 112 && format === 'png'
   const out = outputPixels(doc.width, doc.height, scale)
+  // T-160 (4): the variants are files of the card's format, quality and scale; the emote pack's fixed sizes stay the Export button's, so with Scale disabled they are 1x.
+  const variantScale = emotePack ? 1 : scale
   const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
   const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
 
@@ -347,7 +349,7 @@ export function ExportDialog(): JSX.Element {
         {sizeNote ? <p className="text-xs text-ink-muted">{sizeNote}</p> : null}
         {jpgNote ? <p className="text-xs text-ink-muted">{jpgNote}</p> : null}
       </div>
-      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
+      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} format={format} quality={quality} scale={variantScale} />
     </div>
   )
 }

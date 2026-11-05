@@ -295,12 +295,14 @@ export function CaptionsPanel(): JSX.Element | null {
 
   // T-112: the header button names the job that is running (never "Transcribing…" during a
   // burn-in), and otherwise what pressing it will do.
+  // T-160 (2): a transcript is held when it is in memory OR a saved .srt is (a project open or a Restore brings the path back, not the segments), so the label and
+  // the first-run hint below read both.
   const headerLabel =
     job === 'transcribe'
       ? 'Transcribing…'
       : job === 'burn-in'
         ? 'Burning in…'
-        : segments
+        : segments || srtPath
           ? 'Re-transcribe'
           : 'Transcribe'
   // T-89: a phase main cannot measure sends no percent, and gets an
@@ -623,7 +625,7 @@ export function CaptionsPanel(): JSX.Element | null {
         </div>
       ) : null}
 
-      {!segments && status?.ready ? (
+      {!segments && !srtPath && status?.ready ? (
         <p className="text-xs text-ink-dim">
           Transcribe the source video, then save the text as .srt or burn it into a new MP4.
         </p>

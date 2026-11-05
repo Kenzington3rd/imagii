@@ -3913,3 +3913,58 @@ test.describe('T-153 (3): a double-click on a link opens the page and stops ther
     }
   })
 })
+
+// T-160 (1): an autosave that validates is offered whatever its age. A 9-day-old file used to print "Last autosave: 9 days ago" with no Restore and no Clear.
+test.describe('T-160 (1): an older autosave is offered, restorable and clearable', () => {
+  const NINE_DAYS_MS = 9 * 24 * 60 * 60 * 1000
+
+  function olderProject(layerName: string): Record<string, unknown> {
+    return { ...canvasProject(layerName), savedAt: Date.now() - NINE_DAYS_MS }
+  }
+
+  test('a valid autosave 9 days old offers Restore and Clear, says its age, and Restore brings the work back', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t160-old-restore')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, olderProject('Nine day rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText('imagii autosaved your work 9 days ago. Want to pick up where you left off?')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Clear', exact: true })).toBeVisible()
+      await window.getByRole('button', { name: 'Restore', exact: true }).click()
+      await expect(window.getByText('Restored from autosave')).toBeVisible({ timeout: 20_000 })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByText('Nine day rect')).toBeVisible()
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('Clear on a 9-day-old autosave deletes the file and takes the "Last autosave" line with it', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t160-old-clear')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, olderProject('Nine day rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await expect(window.getByText(/imagii autosaved your work 9 days ago/)).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Clear', exact: true }).click()
+      await expect
+        .poll(() => existsSync(autosaveFile(userDataDir)), { timeout: 20_000, intervals: [250] })
+        .toBe(false)
+      await expect(window.getByText(/imagii autosaved your work/)).toHaveCount(0)
+      await expect(window.getByText(/^Last autosave: /)).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

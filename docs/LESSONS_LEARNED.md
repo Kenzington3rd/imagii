@@ -14,6 +14,60 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-160 (round 109), Track A: the app offers what it holds
+
+The forty-sixth sweep, Track A (items 1, 2 and 5, and two folds).
+
+### (1) [MED] - An autosave older than 7 days was advertised but could not be restored or cleared
+
+- **Bug.** Home printed "Last autosave: 9 days ago" for a valid file that had no Restore and no Clear beside it; the first edits then rotated it away.
+- **Root cause.** Two reads of one file disagreed. The status line comes from the cheap `autosave.info()` probe, which has no age limit; the banner's offer came from `autosave.read()` behind `ageMs < STALE_THRESHOLD_MS` (7 days). A file in the gap was announced and unreachable. No document named the gate (USER_GUIDE said "a recent autosave").
+- **Fix.** Any autosave that validates is offered, whatever its age; the banner already says how long ago it was written. The gate and its constant are deleted. The damaged branch was never gated and is unchanged.
+- **Test.** home-chrome.spec.ts "T-160 (1)" (a valid autosave seeded 9 days old on a fresh launch: the banner says "9 days ago", offers Restore and Clear, Restore brings the layer back to Stream Graphics; Clear deletes the file and the "Last autosave" line goes), red on the unchanged build; autosaveCorruptInfo.test.ts "a valid file of any age" (the pin that held the gate, rewritten in place).
+- **Lesson.** **When a status line and an action read the same thing, give them the same condition.** A line that says a file exists promises a way to deal with it; a second, stricter gate on the button is a promise the screen breaks. Grep for every reader of a resource when one of them carries a limit.
+
+### (2) [LOW] - The captions panel said "Transcribe the source video" while it held a transcript
+
+- **Bug.** After a project open or a Restore, the panel offered Preset, Save .srt and Burn into video, printed the first-run hint, and labelled its header button "Transcribe".
+- **Root cause.** The restore brings back `srtPath`, not the segments (loadSource clears them). The hint and the label asked only about `segments`; the rest of the panel asked about `srtPath`. Two definitions of "has a transcript" in one component.
+- **Fix.** The hint shows only with neither (`!segments && !srtPath`); the idle header reads "Re-transcribe" when either is held.
+- **Test.** video-pipelines.spec.ts "T-160 (2)" (a project carrying an `srtPath`, the engine told it is ready as the other caption cases do: Save .srt offered, no hint, "Re-transcribe"; and a video with no transcript keeps the hint and "Transcribe"), red on the unchanged build; interactionWiring.test.ts "T-160".
+- **Lesson.** **Name a state once.** "Holds a transcript" was written two ways in one file and each sentence on the screen followed whichever its author had in mind.
+
+### (5) [LOW] - The Delete board question did not say Ctrl+Z brings the board back
+
+- **Bug.** BRANDING_GUIDE (Destruction verbs): Delete "says so when Ctrl+Z can bring it back", with Delete board as its example. The question ended at "?"; only the toast after it named Ctrl+Z.
+- **Fix.** `Delete "<name>" and all N items? Ctrl+Z brings it back.` No other confirm in the app carries a fixed sentence for this (the Asset Library's says "Undo in Stream Graphics brings them back", about a different undo).
+- **Test.** references.spec.ts "T-160 (5)" (the question captured, the board accepted away, Ctrl+Z brings it back with both its items on disk), red on the unchanged build; the two older cases that read the old question (three assertions) were updated in place.
+- **Lesson.** **A guide rule with a named example is a test waiting to be written.** The example was the exact element that broke it.
+
+### Folds
+
+- **The Filename box stops at the store's cap.** A template over 200 characters was refused by the settings schema ("Couldn't save your settings.") on each export. The input takes `maxLength={200}`; interactionWiring.test.ts "T-160" reads ExportPanel.tsx and store.ts and pins the input at the schema's cap (and the watermark box at or under the handle's).
+- **The References tabs are proper names.** BRANDING_GUIDE's one-name table names Reference Search, Mood Boards and Asset Library.
+
+## 2026-11-05 - T-160 (round 109), Track B: the meter reads both channels, the variants follow the card
+
+The forty-sixth sweep, Track B.
+
+### (3) [MED] - The volume meter read the mono down-mix
+
+- **Bug.** A full-scale tone on the left channel only (a mic on input 1 of a 2-input interface) read "-6 dB" and never turned the danger colour; the same tone with L = -R read "-60 dB" while it played.
+- **Root cause.** The readout was the peak of one AnalyserNode, and an AnalyserNode analyses its input down-mixed to mono ((L+R)/2).
+- **Fix.** The source also feeds a `createChannelSplitter(2)` into one analyser per channel, and the label is the larger of the two peaks (a mono source up-mixes discretely, so channel 1 is silent and the max is the mono peak). Playback and the spectrum bars stay on the first analyser. Fold: the label prints `Math.ceil(peakDb)`, so every peak above -1 dBFS, the red one, reads "0 dB" and a "-1 dB" is never red; the T-159 wiring pin was updated in place.
+- **Test.** audio.spec.ts "T-160 (3)" (stereo WAVs: L only, R only and L = -R each read "0 dB" in the danger colour; -0.7 dBFS reads "0 dB" in red and -1.2 dBFS "-1 dB" muted; red on the unchanged build: "-6 dB", "-60 dB", "-1 dB"); interactionWiring.test.ts "T-160".
+- **Lesson.** **A node that "sees the signal" may see a summary of it.** The Web Audio analyser down-mixes by design, so a level meter built on one is a mono meter whatever the file holds. A meter has to be driven by a fixture that differs by channel, and the fixture that kills the mono meter (L = -R) is the one a mono source never presents.
+
+### (4) [LOW] - Thumbnail Variants ignored the Export card's Scale and format
+
+- **Bug.** On the 2K thumbnail template, Scale 0.5x and JPG read "Output: 1280×720" on the card, and Variants -> Save all wrote 2560×1440 PNGs.
+- **Root cause.** The Variants button sits in the Export card but the dialog took no props: it captured at `pixelRatio: 1` and encoded with `toDataURL('image/png')`.
+- **Fix.** ExportDialog passes `format`, `quality` and the scale (1 while the emote pack disables the select); the variants capture at that scale, encode every file, the original included, in that format at that quality, save with the matching extension, and the dialog says what the files will be ("Output: 1280×720 JPG, as the Export card") from the card's own `outputPixels` and JPG note. Previews made under other settings are dropped, as they already were for another document.
+- **Test.** image.spec.ts "T-160 (4)" (the 2K template at 0.5x and JPG: four JPEGs of 1280×720, names ending `.jpg`, the dialog line; PNG at 1x on the 1280×720 template still writes 1280×720 PNGs); interactionWiring.test.ts "T-160". Red on the unchanged build.
+- **Lesson.** **A button inside a card inherits the card's promise.** The card's "Output:" line was the person's contract, and a sibling button that did not read it broke that contract silently; passing the card's state down is the fix, and the previews' staleness has to key on it, or the dialog shows one thing and saves another.
+
+---
+
 ## 2026-11-05 - T-159 (round 108): the wizard says "sound", the meter says "0 dB", a cleared Filename box stays cleared
 
 The forty-fifth sweep, one track.

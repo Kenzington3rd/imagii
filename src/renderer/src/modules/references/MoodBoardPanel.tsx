@@ -165,7 +165,7 @@ export function MoodBoardPanel(): JSX.Element {
   async function onDelete(): Promise<void> {
     if (!collection) return
     const ok = confirm(
-      `Delete "${collection.name}" and all ${countOf(collection.items.length, 'item')}?`
+      `Delete "${collection.name}" and all ${countOf(collection.items.length, 'item')}? Ctrl+Z brings it back.`
     )
     if (!ok) return
     try {

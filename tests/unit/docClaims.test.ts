@@ -715,9 +715,9 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     ['Open project', 'Home.tsx:101', home, 101, 101, ['onClick={handleLoad}']],
     ['Save project', 'Home.tsx:107', home, 107, 107, ['onClick={handleSave}']],
     ['NavCard x5', 'Home.tsx:117-151', home, 117, 151, ['<NavCard']],
-    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:251-271', autosave, 251, 271, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
-    // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened.
-    ['AutosaveRestore: Restore / Clear / Later', ':225-238', autosave, 225, 238, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
+    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:245-265', autosave, 245, 265, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
+    // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened; T-160 (1) again (-6 lines above them: the age gate and its constant), not loosened.
+    ['AutosaveRestore: Restore / Clear / Later', ':219-232', autosave, 219, 232, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
   ]
 
   it('the Home table was found, with its rows (a scan that matched nothing would look like a clean table)', () => {

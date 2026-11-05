@@ -7,7 +7,7 @@ import { Modal } from '../../components/Modal'
 import { basename } from '../../components/OutputDirLabel'
 import { reportFailure } from '../../lib/reportFailure'
 import { countOf } from '@shared/plural'
-import { captureDocument, type ExportStage } from './ExportDialog'
+import { captureDocument, jpgTransparencyNote, outputPixels, type ExportStage } from './ExportDialog'
 
 interface VariantSpec {
   id: string
@@ -50,6 +50,8 @@ function applyAdjust(
   ctx.putImageData(img, 0, 0)
 }
 
+const ORIGINAL: VariantSpec = { id: 'original', label: 'Original (unchanged)', apply: () => {} }
+
 const VARIANTS: VariantSpec[] = [
   {
     id: 'punchy',
@@ -89,6 +91,10 @@ const VARIANTS: VariantSpec[] = [
 interface ThumbnailVariantsProps {
   open: boolean
   onClose: () => void
+  /** T-160 (4): the Export card's own format, JPG quality and scale - the variants are files of the same kind the Export button writes. */
+  format: 'png' | 'jpg'
+  quality: number
+  scale: number
 }
 
 interface VariantPreview {
@@ -100,7 +106,7 @@ interface VariantPreview {
 /** One empty list, so "no previews" is the same array every render (the focus effect below keys on identity). */
 const NO_PREVIEWS: VariantPreview[] = []
 
-export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JSX.Element | null {
+export function ThumbnailVariants({ open, onClose, format, quality, scale }: ThumbnailVariantsProps): JSX.Element | null {
   const doc = useCanvasStore((s) => s.doc)
   // T-46: previews belong to the DOCUMENT they were rendered from. This
   // component only early-returns on `!open`, so its state survives a close —
@@ -111,11 +117,24 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
   // an identity check is exactly "is this still what the user is looking at".
   // Keeping the work when nothing changed is the other half of expected: a
   // close and reopen should not throw away a render nobody invalidated.
-  const [previews, setPreviews] = useState<{ doc: CanvasDocument; items: VariantPreview[] } | null>(
-    null
-  )
+  // T-160 (4): and to the card's settings they were rendered with - a preview of a PNG is not what "Save all" writes once the card says JPG.
+  const [previews, setPreviews] = useState<{
+    doc: CanvasDocument
+    format: string
+    quality: number
+    scale: number
+    items: VariantPreview[]
+  } | null>(null)
   const [busy, setBusy] = useState(false)
-  const items = previews !== null && previews.doc === doc ? previews.items : NO_PREVIEWS
+  const fresh =
+    previews !== null &&
+    previews.doc === doc &&
+    previews.format === format &&
+    previews.quality === quality &&
+    previews.scale === scale
+  const items = fresh ? previews.items : NO_PREVIEWS
+  const out = outputPixels(doc.width, doc.height, scale)
+  const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
 
   // T-119: the Generate button is swapped for the previews when the render finishes, and the focused button
   // goes with it - keyboard focus fell to the page behind the dialog. It lands on "Save all", the next thing
@@ -148,11 +167,12 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       // 1:1 with the editor's chrome switched off — in place of the raw stage
       // capture this used to do, which rendered the fit-to-container stage and
       // so saved a 1280x720 thumbnail's variants at whatever size the window
-      // happened to be (956x537). `quality` is ignored for PNG.
+      // happened to be (956x537). T-160 (4): at the card's scale; the capture stays a lossless PNG and each file is encoded once, below, in
+      // the card's format (a JPG capture graded and re-encoded would compress twice).
       const baseUrl = captureDocument(stage, doc.width, doc.height, {
         mimeType: 'image/png',
         quality: 1,
-        pixelRatio: 1
+        pixelRatio: scale
       })
       const img = new Image()
       await new Promise<void>((resolve, reject) => {
@@ -160,10 +180,9 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
         img.onerror = () => reject(new Error('Failed to render base canvas'))
         img.src = baseUrl
       })
-      const out: VariantPreview[] = [
-        { id: 'original', label: 'Original (unchanged)', dataUrl: baseUrl }
-      ]
-      for (const variant of VARIANTS) {
+      const mime = format === 'jpg' ? 'image/jpeg' : 'image/png'
+      const made: VariantPreview[] = []
+      for (const variant of [ORIGINAL, ...VARIANTS]) {
         const c = document.createElement('canvas')
         c.width = img.naturalWidth
         c.height = img.naturalHeight
@@ -173,9 +192,11 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
         const ctx = assertDefined(c.getContext('2d'), '2d canvas context')
         ctx.drawImage(img, 0, 0)
         variant.apply(ctx, c.width, c.height)
-        out.push({ id: variant.id, label: variant.label, dataUrl: c.toDataURL('image/png') })
+        // The PNG original is the capture itself, byte for byte (a canvas round trip rounds the colour of low-alpha pixels).
+        const dataUrl = variant === ORIGINAL && format === 'png' ? baseUrl : c.toDataURL(mime, quality)
+        made.push({ id: variant.id, label: variant.label, dataUrl })
       }
-      setPreviews({ doc, items: out })
+      setPreviews({ doc, format, quality, scale, items: made })
     } catch (err) {
       reportFailure(err, { failed: "Couldn't generate variants." })
     } finally {
@@ -193,8 +214,8 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
     try {
       const saved = await window.api.image.save({
         dataUrl: p.dataUrl,
-        defaultName: `imagii-variant-${p.id}-${Date.now()}.png`,
-        format: 'png'
+        defaultName: `imagii-variant-${p.id}-${Date.now()}.${format}`,
+        format
       })
       // T-123 (9): the answer was discarded, so a single Save was the one save with no word of success (saveAll and the
       // Export button both toast). `null` is the dialog canceled: not a success, not an error, nothing said. The name is
@@ -219,7 +240,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       const saved = await window.api.image.saveMany({
         title: 'Choose a folder for the thumbnail variants',
         files: items.map((p) => ({
-          name: `imagii-variant-${p.id}-${stamp}.png`,
+          name: `imagii-variant-${p.id}-${stamp}.${format}`,
           dataUrl: p.dataUrl
         }))
       })
@@ -231,6 +252,14 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
       startingRef.current = false
     }
   }
+
+  // T-160 (4): what the files will be, in the Export card's own words and arithmetic ("Output: W×H"), with the card's JPG note.
+  const outputLine = (
+    <div className="mb-3 text-xs text-ink-muted" data-testid="variants-output">
+      <p className="font-mono">{`Output: ${out.width}×${out.height} ${format.toUpperCase()}, as the Export card`}</p>
+      {jpgNote ? <p>{jpgNote}</p> : null}
+    </div>
+  )
 
   // INIT-G (round 16): migrated to <Modal> for Escape + focus trap + focus
   // restore. Header chrome stays inside the modal body.
@@ -259,6 +288,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                 Generate three color-graded variants of the current canvas: punchy, warm, and
                 cool. Pick the one that performs best, or A/B test them.
               </p>
+              {outputLine}
               <button
                 className="btn-primary px-4 py-2 disabled:opacity-50"
                 onClick={generate}
@@ -289,6 +319,7 @@ export function ThumbnailVariants({ open, onClose }: ThumbnailVariantsProps): JS
                   </div>
                 ))}
               </div>
+              {outputLine}
               <div className="flex items-center gap-2 text-sm">
                 <button
                   className="btn-ghost px-3 py-1.5 disabled:opacity-50"

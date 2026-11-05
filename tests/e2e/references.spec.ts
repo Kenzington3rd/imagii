@@ -452,7 +452,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', dismisser)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items? Ctrl+Z brings it back.'])
       // Cancel means cancel: still two boards, still selected, still on disk.
       await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
       await expect(detailTitle).toHaveText('Alpha board')
@@ -470,7 +470,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', accepter)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
       await expect(window.locator('li', { hasText: 'Alpha board' })).toHaveCount(0)
       // Selection falls back to the surviving board rather than emptying out.
@@ -590,7 +590,7 @@ test.describe('imagii References studio', () => {
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
       await expect
         .poll(() => dialogs)
-        .toEqual(['confirm: Delete "Undo board" and all 1 item?'])
+        .toEqual(['confirm: Delete "Undo board" and all 1 item? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
       await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
       // The confirm still guards a real deletion — but not the picture.
@@ -3386,6 +3386,42 @@ test.describe('T-156 (4) / (5): the send claim survives a tab change, and a pict
       // A second press is a new send (it fails the same way, once more), not a refusal.
       await toCanvas.click()
       await expect.poll(async () => (await readToastLog(window)).filter((t) => t === FAILED).length, { timeout: 5000 }).toBe(2)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-160 (5): BRANDING_GUIDE, Destruction verbs: Delete "says so when Ctrl+Z can bring it back". The board question used to end at "?" while the toast after it named Ctrl+Z.
+test.describe('T-160 (5): Delete board names Ctrl+Z, and Ctrl+Z brings the board back', () => {
+  test('the question says Ctrl+Z brings it back; after accepting, Ctrl+Z restores the board with both its items', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t160-delete')
+    const board = boardOwning('t160board', 'Two item board', fx.thumbsDir, ['t160a.png', 't160b.png'])
+    for (const f of ['t160a.png', 't160b.png']) writeFileSync(path.join(fx.thumbsDir, f), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 't160board.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Two item board')
+
+      const dialogs: string[] = []
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Two item board" and all 2 items? Ctrl+Z brings it back.'])
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+
+      await window.keyboard.press('Control+z')
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(window.locator('h3.text-lg')).toHaveText('Two item board')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([board])
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

@@ -23,8 +23,6 @@ interface AutosaveSnapshot {
   }
 }
 
-const STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
-
 function formatAge(ms: number): string {
   if (ms < 60 * 1000) return 'just now'
   if (ms < 60 * 60 * 1000) return `${Math.floor(ms / 60000)} min ago`
@@ -65,13 +63,9 @@ export function AutosaveRestore(): JSX.Element | null {
     })
     void window.api.autosave.read().then((result) => {
       if (cancelled) return
-      // Only offer restore if the autosave is fresh AND validates
-      if (
-        result.ok &&
-        result.project &&
-        result.info?.ageMs !== undefined &&
-        result.info.ageMs < STALE_THRESHOLD_MS
-      ) {
+      // T-160 (1): offer restore for any autosave that validates, whatever its age. The banner says how old it is. An age gate here left a valid
+      // older file advertised by "Last autosave: 9 days ago" with no Restore and no Clear, and the first edits rotated it away.
+      if (result.ok && result.project && result.info?.ageMs !== undefined) {
         setSnapshot(result)
       } else if (!result.ok && result.info?.exists) {
         // T-33: a corruption notice, gated on nothing but the file being

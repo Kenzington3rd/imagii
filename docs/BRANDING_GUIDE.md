@@ -109,6 +109,7 @@ shared and preload for the two rules about words alone (US spelling, never "tick
 | **cut** | | An Audio Studio unit: a part removed when you export. |
 | **mark** | cut tag | What a cut looks like on the waveform and in its chip. "Click a mark to put it back": the hint, the tutorial, the shortcut overlay and the refusal for a damaged cut all say so (T-121). |
 | **Mood board** | Moodboard, collection | A saved set of references (two words). |
+| **Reference Search**, **Mood Boards**, **Asset Library** | Reference search, Mood boards, Asset library | The three tabs of References. Feature names used as proper names keep their capitals, as **Reference Search** does in the local-first promise above; a saved set in a sentence is still a "mood board" (T-160). |
 | **Posting log** | posting diary, diary | The list of where a clip was posted. The feature and its list are both "Posting log". |
 | **Title starters** | title ideas, title generator | The posting helper that builds four title drafts. |
 | **Clip Kit** | clip kit, Clip kit | One clip exported for all five platforms plus thumbnails. |

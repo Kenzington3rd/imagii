@@ -107,8 +107,8 @@ controls:
 - **Undo / Redo** — step back and forward through your recent actions across
   the whole app.
 - **Open project / Save project** — a *project* (`.imagii.json`) saves the
-  state of every studio at once. imagii also **autosaves** — if it finds a
-  recent autosave on launch, it offers to pick up where you left off, and
+  state of every studio at once. imagii also **autosaves** — if it finds an
+  autosave on launch, however old (the offer says how long ago it was written), it offers to pick up where you left off, and
   **Restore** takes you back to the studio you were in, with your selections
   and the playhead where you left them (if you have gone to another screen while a long restore was
   still loading, it leaves you where you are, and coming back to Home meanwhile shows the offer as
@@ -682,7 +682,10 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    suggested name), and imagii says "saved" only after the file is written; if
    you cancel the dialog, nothing is saved and nothing is announced. The emote
    pack and **Variants → Save all (3 + original)** ask for one folder instead
-   and write all their files into it. A single **Save** on a variant says **Saved**
+   and write all their files into it. The variants are files of the kind the
+   Export card describes: the same format (PNG or JPG), JPG quality and Scale, and
+   the Variants window says so ("Output: 1280×720 JPG, as the Export card"); change
+   the card and the previews are made again. A single **Save** on a variant says **Saved**
    and the file's name once it is written, and says nothing when you cancel.
 
 ---
@@ -703,8 +706,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
   saves once, with one notice, and one **Undo** takes it back. If a picture's thumbnail will not download (the site is not answering, within 10 seconds, or the file is over 8 MB), it is still saved, and its tile draws the picture from where it came from. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
-- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first; the notice
-  that follows says **Ctrl+Z** brings the board back, and it stays on screen for 8 seconds. Hover an item and click **→ Canvas**
+- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first, and the question says **Ctrl+Z**
+  brings the board back; so does the notice that follows, which stays on screen for 8 seconds. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
   carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail
   cache**, and in a saved project); if the picture takes a

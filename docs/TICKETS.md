@@ -7573,7 +7573,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 109)
+- **Status:** done (round 109 — see the Done entry)
 
 ---
 
@@ -8144,6 +8144,40 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 109 — T-160, all five counted items and the three folds, landed
+in the commit that carries this entry. Two Sonnet workers in fresh
+clones of 6934eef, disjoint source files, merged by the expediter.
+Track A: an autosave that validates is offered (Restore and Clear)
+whatever its age, so Home no longer advertises "Last autosave: 9 days
+ago" over a file it would not restore; the captions panel counts a
+saved .srt as a held transcript (no first-run hint after a project open
+or a Restore, the header reads "Re-transcribe"); the Delete board
+question ends "Ctrl+Z brings it back."; folds: the Filename input stops
+at the store's 200-character cap, and BRANDING_GUIDE names the three
+References tabs as proper names. Track B: the volume meter reads each
+channel (a splitter into one analyser per channel, the larger peak), so
+a tone on one channel reads its peak, not the down-mix's -6 dB, and an
+L = -R signal is not -60 dB; the label is `Math.ceil`, so the number and
+the red agree (fold); Variants follow the Export card's format, quality
+and scale and say what the files will be. Deviations, accepted: the
+existing T-100 burn-in case clicked "Transcribe" on a project with an
+srtPath and was edited in place (the header now reads "Re-transcribe");
+docClaims.test.ts re-pointed two AutosaveRestore cites; the captions
+e2e stubs the engine's ready status (no engine installed in any test
+environment); Track B added a right-only meter case, made the previews
+go stale on the card's settings, and keeps the PNG original as the
+capture's bytes. Ledgers: A 7 RED / 13 mutations, B 10 RED / 24
+mutations, all killed. Found not fixed: none new. Expedited personally:
+one independent mutation per track at a seam no ledger row names — A:
+deleteCollection stops pushing its history step → references.spec
+T-160 (5) red (the board is not back after Ctrl+Z); B: the per-channel
+analysers' window cut from 1024 to 32 samples (under one period of the
+fixture tone) → five meter cases red — each restored byte-identical,
+sha256 verified; on the MERGED tree: verify x2 (207/6171), test:media
+453 passed | 17 skipped of 470 on 7.0.2, FULL Playwright 646/647 (41.6 min; the one failure, video-core.spec.ts "a trimmed video: close asks first", a timeline click then `i` that left the In point unmoved, is outside every file the round touched and passed 5 of 5 standalone on the same build: a load flake, recorded in TESTING).
+Applied to 6934eef by `git apply` with every file byte-identical to
+the expedited merge.
 
 Round 108 — T-159, all three counted items and the fold, landed in the
 commit that carries this entry. One Sonnet worker in a fresh clone of

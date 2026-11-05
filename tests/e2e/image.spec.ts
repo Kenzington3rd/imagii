@@ -5874,3 +5874,81 @@ test.describe('Image Studio - one paste, one add (T-155 (2), (3))', () => {
     }
   })
 })
+
+test.describe('Image Studio - Variants follow the Export card (T-160 (4))', () => {
+  // The Variants button sits in the Export card right after "Output: W×H", but it captured at 1x and saved PNG only: on the 2K thumbnail
+  // template (whose copy says "export at 0.5× to match"), Scale 0.5× and JPG read "Output: 1280×720" and Save all wrote 2560×1440 PNGs.
+  /** The size in a JPEG's first start-of-frame marker (baseline or progressive), or throws. */
+  function jpegSize(buf: Buffer): Size {
+    if (buf[0] !== 0xff || buf[1] !== 0xd8) throw new Error('not a JPEG')
+    let at = 2
+    while (at + 9 < buf.length) {
+      if (buf[at] !== 0xff) throw new Error(`no marker at ${at}`)
+      const marker = buf[at + 1] as number
+      if (marker === 0xc0 || marker === 0xc2) return { w: buf.readUInt16BE(at + 7), h: buf.readUInt16BE(at + 5) }
+      at += 2 + buf.readUInt16BE(at + 2)
+    }
+    throw new Error('no frame header')
+  }
+
+  async function saveAllVariants(studio: Studio): Promise<Buffer[]> {
+    const { window } = studio
+    clearDownloads(studio)
+    await answerDialogs(studio.app, 'save')
+    const dialog = window.locator('[role="dialog"]')
+    await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
+    await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+    await dialog.getByRole('button', { name: 'Save all (3 + original)' }).click()
+    await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Saved 4 thumbnails')
+    return waitForDownloads(studio, 4)
+  }
+
+  test('the 2K thumbnail at 0.5× and JPG: Save all writes four 1280×720 JPEGs, and the dialog says so', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('variants-card')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold-2k')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('0.5')
+      await card.getByRole('combobox', { name: 'Export format' }).selectOption('jpg')
+      await expect(card.getByTestId('export-output-size')).toHaveText('Output: 1280×720')
+
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      const files = await saveAllVariants(studio)
+      expect(savedNames(studio).map((n) => n.replace(/\d{10,}/, 'STAMP'))).toEqual([
+        'imagii-variant-cool-STAMP.jpg',
+        'imagii-variant-original-STAMP.jpg',
+        'imagii-variant-punchy-STAMP.jpg',
+        'imagii-variant-warm-STAMP.jpg'
+      ])
+      for (const buf of files) expect(jpegSize(buf), 'a JPEG of the size the card says').toEqual({ w: 1280, h: 720 })
+      await expect(dialog.getByTestId('variants-output')).toContainText('Output: 1280×720 JPG, as the Export card')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('PNG at 1× on the 1280×720 template still writes four 1280×720 PNGs, and the dialog says PNG', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('variants-card-png')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('1')
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const files = await saveAllVariants(studio)
+      expect(savedNames(studio).every((n) => n.endsWith('.png'))).toBe(true)
+      for (const buf of files) expect(pngSize(buf)).toEqual({ w: 1280, h: 720 })
+      await expect(window.locator('[role="dialog"]').getByTestId('variants-output')).toContainText('Output: 1280×720 PNG, as the Export card')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

@@ -5364,3 +5364,91 @@ test.describe('T-159 (2): the volume meter reads 0 dB at full scale, never -0 dB
     }
   })
 })
+
+// T-160 (3): the volume meter reads every channel, not the mono down-mix. An AnalyserNode analyses its input down-mixed to mono ((L+R)/2), so a tone on L
+// only read 6 dB low and never turned the danger colour, and L = -R read -60 dB while it played. The fixtures are STEREO WAVs from the bundled ffmpeg.
+test.describe('T-160 (3): the volume meter reads the louder channel', () => {
+  type Sample = { text: string; cls: string }
+  /**
+   * A stereo WAV of the bundled ffmpeg's sine at `gain` times its default amplitude (0.125), the channels `left` and `right` times it:
+   * right 0 is L only, left 0 is R only, right -1 is L = -R, 1 is the same on both. 7.7 is a peak of 0.9625 (-0.33 dBFS), 7.38 is -0.7 dBFS, 6.97 is -1.2 dBFS.
+   */
+  async function stereoTone(outPath: string, gain: number, right: number, left = 1): Promise<void> {
+    const r = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-af', `volume=${gain},pan=stereo|c0=${left}*c0|c1=${right}*c0`, '-ar', '44100', '-c:a', 'pcm_s16le', outPath])
+    if (r.code !== 0) throw new Error(`tone ffmpeg exit ${r.code}: ${r.stderr.slice(-600)}`)
+  }
+  const label = (window: Page) => window.getByText('Meter', { exact: true }).locator('xpath=following-sibling::span')
+
+  /** Press Play and sample the label's text and class every 16 ms for `ms`, in the page, so no frame is missed. */
+  async function playAndSample(window: Page, ms: number): Promise<Sample[]> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __t160: Sample[]; __t160Timer: number }
+      w.__t160 = []
+      const el = Array.from(document.querySelectorAll('span.font-mono')).find((s) => / dB$/.test(s.textContent ?? ''))
+      if (!el) throw new Error('no meter dB label found')
+      w.__t160Timer = window.setInterval(() => w.__t160.push({ text: el.textContent ?? '', cls: el.className }), 16)
+    })
+    await playButton(window).click()
+    await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+    await window.waitForTimeout(ms)
+    return window.evaluate(() => {
+      const w = window as unknown as { __t160: Sample[]; __t160Timer: number }
+      window.clearInterval(w.__t160Timer)
+      return w.__t160
+    })
+  }
+
+  /** Drop the tone, play it, and return the label as it settled: the last 20 samples must all be the same text. */
+  async function settledLabel(name: string, gain: number, right: number, left = 1): Promise<Sample> {
+    const studio = await openStudio(`t160-meter-${name}`)
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', `${name}-t160.wav`)
+      await stereoTone(wav, gain, right, left)
+      await dropOnImporter(window, wav, `${name}-t160.wav`)
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      const samples = await playAndSample(window, 3_000)
+      expect(samples.length, 'the sampler ran').toBeGreaterThan(50)
+      const settled = samples.slice(-20)
+      const first = settled[0] as Sample
+      for (const s of settled) expect(s.text, 'the label is steady').toBe(first.text)
+      expect(samples.filter((s) => s.text === '-0 dB'), 'no frame reads a negative zero').toEqual([])
+      return first
+    } finally {
+      await closeStudio(studio)
+    }
+  }
+
+  test('a tone on the left channel only, just under full scale, reads "0 dB" in the danger colour, not "-6 dB"', async () => {
+    test.setTimeout(120_000)
+    const s = await settledLabel('left-only', 7.7, 0)
+    expect(s.text).toBe('0 dB')
+    expect(s.cls).toContain('text-danger')
+    expect(s.cls).not.toContain('text-ink-muted')
+  })
+
+  test('a tone on the right channel only reads "0 dB" in the danger colour too (neither channel is the one that counts)', async () => {
+    test.setTimeout(120_000)
+    const s = await settledLabel('right-only', 7.7, 1, 0)
+    expect(s.text).toBe('0 dB')
+    expect(s.cls).toContain('text-danger')
+  })
+
+  test('a tone with the right channel the inverse of the left (it cancels in a mono down-mix) reads "0 dB", not "-60 dB"', async () => {
+    test.setTimeout(120_000)
+    const s = await settledLabel('inverse', 7.7, -1)
+    expect(s.text).toBe('0 dB')
+    expect(s.cls).toContain('text-danger')
+  })
+
+  test('the label and its colour agree: -0.7 dBFS reads "0 dB" in red, -1.2 dBFS reads "-1 dB" in the muted colour', async () => {
+    test.setTimeout(180_000)
+    const hot = await settledLabel('hot', 7.38, 1)
+    expect(hot.text).toBe('0 dB')
+    expect(hot.cls).toContain('text-danger')
+    const cool = await settledLabel('cool', 6.97, 1)
+    expect(cool.text).toBe('-1 dB')
+    expect(cool.cls).toContain('text-ink-muted')
+    expect(cool.cls).not.toContain('text-danger')
+  })
+})

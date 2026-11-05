@@ -414,7 +414,7 @@ describe('T-46 — the variants dialog captures the document, not the screen', (
   const variants = read('modules/image-studio/ThumbnailVariants.tsx')
 
   it('renders its base through the shared captureDocument', () => {
-    expect(variants).toMatch(/import \{ captureDocument, type ExportStage \} from '\.\/ExportDialog'/)
+    expect(variants).toMatch(/import \{ captureDocument, jpgTransparencyNote, outputPixels, type ExportStage \} from '\.\/ExportDialog'/)
     expect(variants).toMatch(/captureDocument\(stage, doc\.width, doc\.height, \{/)
   })
 
@@ -426,8 +426,9 @@ describe('T-46 — the variants dialog captures the document, not the screen', (
 
   it('ties the previews to the document they were rendered from', () => {
     // T-120: the empty case is one shared array (NO_PREVIEWS), so the focus effect can key on the list's identity.
-    expect(variants).toMatch(/previews !== null && previews\.doc === doc \? previews\.items : NO_PREVIEWS/)
-    expect(variants).toMatch(/setPreviews\(\{ doc, items: out \}\)/)
+    // T-160 (4): and to the card's format, quality and scale they were rendered with.
+    expect(variants).toMatch(/previews !== null &&\s*previews\.doc === doc &&[\s\S]*?const items = fresh \? previews\.items : NO_PREVIEWS/)
+    expect(variants).toMatch(/setPreviews\(\{ doc, format, quality, scale, items: made \}\)/)
   })
 
   it('offers Generate and Regenerate through the same handler', () => {
@@ -4132,7 +4133,7 @@ describe('T-159 - the meter never prints "-0 dB"; a cleared Filename box is forg
 
   it('(2) the dB label prints the rounded peak as a number, not toFixed(0) (which prints "-0" within 0.5 dB of full scale)', () => {
     const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
-    expect(meter).toMatch(/\{Math\.round\(peakDb\)\} dB/)
+    expect(meter).toMatch(/\{Math\.ceil\(peakDb\)\} dB/) // T-160 (3): ceil, was round
     expect(meter).not.toMatch(/toFixed\(0\)/)
     // The clamp, the clipping colour and the bars are as they were.
     expect(meter).toMatch(/setPeakDb\(Math\.max\(-60, Math\.min\(0, db\)\)\)/)
@@ -4146,5 +4147,111 @@ describe('T-159 - the meter never prints "-0 dB"; a cleared Filename box is forg
     expect(panel).not.toMatch(/if \(filenameTemplate\) void persistSetting/)
     // The load is unchanged: with no key the box keeps its default, which is what the last export used.
     expect(panel).toMatch(/get<string>\('filenameTemplate'\)\.then\(\(tpl\) => \{\s*if \(cancelled\) return\s*if \(tpl\) setFilenameTemplate\(tpl\)/)
+  })
+})
+
+// T-160 (fold A): a box that stores into the settings file stops typing at the store's cap. A Filename template over 200 characters was refused by the store's
+// schema ("Couldn't save your settings.") on every export; the watermark box takes 40 under the handle's 80.
+describe('T-160 - the Export panel boxes stop at the settings schema caps', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const panel = strip(read('modules/video-studio/ExportPanel.tsx'))
+  const store = readFileSync(path.resolve(RENDERER_ROOT, '../../main/store.ts'), 'utf8')
+
+  /** The `maxLength` of the <input> whose markup holds `marker`. */
+  function inputCap(marker: string): number {
+    const at = panel.indexOf(marker)
+    expect(at, `${marker} is in the panel`).toBeGreaterThan(-1)
+    const start = panel.lastIndexOf('<input', at)
+    const end = panel.indexOf('/>', at)
+    const m = /maxLength=\{(\d+)\}/.exec(panel.slice(start, end))
+    expect(m, `${marker}'s input has a maxLength`).not.toBeNull()
+    return Number((m as RegExpExecArray)[1])
+  }
+  function schemaCap(key: string): number {
+    const m = new RegExp(`${key}: \\{ type: 'string', maxLength: (\\d+) \\}`).exec(store)
+    expect(m, `${key} has a maxLength in the store schema`).not.toBeNull()
+    return Number((m as RegExpExecArray)[1])
+  }
+
+  it('the Filename input takes no more than the filenameTemplate schema allows (and exactly it: nothing typeable is refused)', () => {
+    expect(inputCap('value={filenameTemplate}')).toBeLessThanOrEqual(schemaCap('filenameTemplate'))
+    expect(inputCap('value={filenameTemplate}')).toBe(200)
+  })
+
+  it('the watermark input takes no more than the streamerHandle schema allows', () => {
+    expect(inputCap('value={watermarkText}')).toBeLessThanOrEqual(schemaCap('streamerHandle'))
+  })
+})
+
+// T-160 (2), (5): the captions panel reads a held .srt as a transcript; the Delete board question names the way back.
+describe('T-160 - the captions panel counts a saved .srt; Delete board names Ctrl+Z', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(2) the first-run hint shows only with no transcript at all, and the idle header reads Re-transcribe for either', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/\{!segments && !srtPath && status\?\.ready \? \(/)
+    expect(panel).toMatch(/: segments \|\| srtPath\s*\? 'Re-transcribe'\s*: 'Transcribe'/)
+  })
+
+  it('(5) the Delete board question ends with the sentence that brings the board back', () => {
+    const board = strip(read('modules/references/MoodBoardPanel.tsx'))
+    expect(board).toContain("`Delete \"${collection.name}\" and all ${countOf(collection.items.length, 'item')}? Ctrl+Z brings it back.`")
+  })
+})
+
+// T-160 (3), (4): the meter reads each channel and prints a peak that never under-reads; Variants follow the Export card.
+describe('T-160 - the meter reads every channel; the variants are the Export card\'s files', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(3) the source is split into two channels, one analyser each, and the level is the larger peak; the splitter is torn down with the rest', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/const splitter = ctx\.createChannelSplitter\(2\)/)
+    expect(meter).toMatch(/source\.connect\(splitter\)/)
+    expect(meter).toMatch(/splitter\.connect\(left, 0\)/)
+    expect(meter).toMatch(/splitter\.connect\(right, 1\)/)
+    // Playback and the spectrum bars stay on the first analyser.
+    expect(meter).toMatch(/source\.connect\(analyser\)\s*analyser\.connect\(ctx\.destination\)/)
+    expect(meter).toMatch(/for \(const node of channels \? \[channels\.left, channels\.right\] : \[analyser\]\) \{\s*node\.getFloatTimeDomainData\(wave\)/)
+    // One running maximum over both channels (not a per-channel reset, not the mono analyser's wave).
+    expect(meter).toMatch(/let peak = 0\s*for \(const node of/)
+    expect(meter).toMatch(/channelRef\.current\?\.splitter\.disconnect\(\)\s*channelRef\.current\?\.left\.disconnect\(\)\s*channelRef\.current\?\.right\.disconnect\(\)/)
+    expect(meter).toMatch(/channelRef\.current = null/)
+  })
+
+  it('(3) the label is the ceiling of the peak, so every peak above -1 dBFS (the red one) prints "0 dB" and "-1 dB" is never red', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/\{Math\.ceil\(peakDb\)\} dB/)
+    expect(meter).not.toMatch(/Math\.round\(peakDb\)|toFixed\(0\)/)
+    expect(meter).toMatch(/const clipping = peakDb > -1/)
+    // The arithmetic the pin stands for: ceil lands every value in (-1, 0] on 0 (React prints a number's -0 as "0") and keeps -1.2 on -1.
+    expect([-0.01, -0.33, -0.7, -0.99].map((v) => String(Math.ceil(v)))).toEqual(['0', '0', '0', '0'])
+    expect([-1.2, -12.04].map(Math.ceil)).toEqual([-1, -12])
+  })
+
+  it('(4) the Export card hands Variants its format, quality and scale, and the emote pack (Scale disabled) is 1x', () => {
+    const dialog = strip(read('modules/image-studio/ExportDialog.tsx'))
+    expect(dialog).toMatch(/const variantScale = emotePack \? 1 : scale/)
+    expect(dialog).toMatch(/<ThumbnailVariants open=\{showVariants\} onClose=\{\(\) => setShowVariants\(false\)\} format=\{format\} quality=\{quality\} scale=\{variantScale\} \/>/)
+  })
+
+  it('(4) Variants capture at the card\'s scale, encode every file in its format and quality, and save with the matching extension', () => {
+    const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
+    expect(variants).toMatch(/pixelRatio: scale/)
+    expect(variants).not.toMatch(/pixelRatio: 1/)
+    expect(variants).toMatch(/const mime = format === 'jpg' \? 'image\/jpeg' : 'image\/png'/)
+    expect(variants).toMatch(/c\.toDataURL\(mime, quality\)/)
+    expect(variants).not.toMatch(/toDataURL\('image\/png'\)/)
+    expect(variants).toMatch(/defaultName: `imagii-variant-\$\{p\.id\}-\$\{Date\.now\(\)\}\.\$\{format\}`,\s*format\s*\}/)
+    expect(variants).toMatch(/name: `imagii-variant-\$\{p\.id\}-\$\{stamp\}\.\$\{format\}`/)
+    expect(variants).not.toMatch(/\.png`/)
+  })
+
+  it('(4) the dialog states the output in the card\'s own arithmetic and JPG note, and the previews go stale when the card changes', () => {
+    const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
+    expect(variants).toMatch(/const out = outputPixels\(doc\.width, doc\.height, scale\)/)
+    expect(variants).toMatch(/const jpgNote = jpgTransparencyNote\(format, doc\.background === 'transparent'\)/)
+    expect(variants).toMatch(/`Output: \$\{out\.width\}×\$\{out\.height\} \$\{format\.toUpperCase\(\)\}, as the Export card`/)
+    expect(variants.match(/\{outputLine\}/g), 'shown before and after Generate').toHaveLength(2)
+    expect(variants).toMatch(/previews\.format === format &&\s*previews\.quality === quality &&\s*previews\.scale === scale/)
   })
 })

@@ -502,6 +502,7 @@ export function ExportPanel(): JSX.Element | null {
             value={filenameTemplate}
             onChange={(e) => setFilenameTemplate(e.target.value)}
             className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
+            maxLength={200}
             placeholder="{source}_{clip}_{preset}"
           />
         </div>
