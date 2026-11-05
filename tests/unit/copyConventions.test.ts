@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT } from './routeSources'
+import { burnInDoneMessage, captionsReadyMessage, clearedTranscriptsMessage, staleCaptionsMessage } from '../../src/shared/captions'
+import { previewCopySkippedMessage } from '../../src/shared/mediaFormats'
 import {
   HOLE,
   allLiterals,
@@ -679,5 +681,38 @@ describe('T-159 (1): nothing Audio Studio shows its person calls their sound a "
     expect(run(`const x = () => <p>so a boost cannot clip.</p>`)).toEqual([])
     expect(run(`const x = () => <p>Peaks are clipping. Unclipped is fine.</p>`)).toEqual([])
     expect(run(`// a clip\nconst clip = 1; const clipSeconds = 2; const q = { id: 'clip', question: 'What is this sound mostly?' }`)).toEqual([])
+  })
+})
+
+// T-163 (3): the scan above reads literal toast ARGUMENTS, so a sentence a shared helper BUILDS escaped it ("No speech found, so there are no captions." and both uncaptioned burn-in sentences
+// shipped with a period that BRANDING_GUIDE "Toasts" forbids on a one-sentence result). These are the helpers' outputs, as an explicit list of calls (not a reflective walk of the module).
+// simplification: the list is hand-kept; a new `*Message` helper that the renderer toasts as a result must be added here. Upgrade: none needed while there are five.
+// Covered: captionsReadyMessage (0, 1, 3), burnInDoneMessage (all four argument pairs), clearedTranscriptsMessage (its two single-sentence successes) and previewCopySkippedMessage (a
+// single-sentence warning toast). Left out, each with its reason: staleCaptionsMessage and clearedTranscriptsMessage's partial branch are TWO sentences (both keep their periods,
+// asserted below); clearedTranscriptsMessage's refusal and `ipcErrorMessage` are failures (a full sentence with its period); `overlayOutsideClipMessage` is an inline note in the editor, not a toast;
+// `clearTranscriptsQuestion` is a confirm's question, not a result.
+describe('T-163 (3): a helper-built single-sentence result toast has no trailing period', () => {
+  const ONE_SENTENCE: Array<[string, string]> = [
+    ['captionsReadyMessage(0)', captionsReadyMessage(0)],
+    ['captionsReadyMessage(1)', captionsReadyMessage(1)],
+    ['captionsReadyMessage(3)', captionsReadyMessage(3)],
+    ['burnInDoneMessage(true, true)', burnInDoneMessage(true, true)],
+    ['burnInDoneMessage(true, false)', burnInDoneMessage(true, false)],
+    ['burnInDoneMessage(false, true)', burnInDoneMessage(false, true)],
+    ['burnInDoneMessage(false, false)', burnInDoneMessage(false, false)],
+    ['clearedTranscriptsMessage(nothing to clear)', clearedTranscriptsMessage({ removed: 0, failed: 0 }).text],
+    ['clearedTranscriptsMessage(cleared 3)', clearedTranscriptsMessage({ removed: 3, failed: 0 }).text],
+    ['previewCopySkippedMessage', previewCopySkippedMessage('a.mkv')]
+  ]
+
+  it.each(ONE_SENTENCE)('%s is one sentence and does not end in a period', (_call, text) => {
+    expect(text.length).toBeGreaterThan(0)
+    expect(text).not.toMatch(/\.\s*$/)
+    expect(text, 'one sentence: no ". " inside').not.toMatch(/\. /)
+  })
+
+  it('the two-sentence toasts keep both periods', () => {
+    expect(staleCaptionsMessage('a.mp4')).toMatch(/\. .*\.$/)
+    expect(clearedTranscriptsMessage({ removed: 1, failed: 2 }).text).toMatch(/\. .*\.$/)
   })
 })

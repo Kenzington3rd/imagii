@@ -14,6 +14,58 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-163 (round 112), Track A: Video Studio says what happened
+
+The forty-ninth sweep, Track A (items 1-3 and a fold).
+
+### (1) [LOW] - A transcription that found no speech left no trace after its 4 s toast
+
+- **Bug.** After a run that found no speech the panel showed the first-run hint and "Transcribe" again, as if the button had never been pressed.
+- **Root cause.** T-162 (1) stored `transcript: null` for the run, the same value as never-run, so the only record of "ran, found nothing" was a toast. Scan VOD (T-149 (3)) and the chat spike finder (T-136 (9)) had each been fixed for the same class.
+- **Fix.** A no-speech run stores `transcript: []` with `srtPath: null`. The panel reads `[]` apart from `null`: the preview renders only for a non-empty transcript, the header says "Re-transcribe" when a transcript is held (`[]` included) or a path is, the first-run hint is for `null` with no path, and a line ("No speech found in this video, so there are no captions.") shows for `[]` with no path, hidden while a transcription runs. The transcript's reset rules (a different video, a Clear that removed files, a new run) already empty it; no new rule.
+- **Test.** video-pipelines.spec.ts "T-163 (1)" (the line once the toast has gone, no preview, "Re-transcribe", kept through Home, gone for a different video and after a run with speech, absent while a run is held); T-162 (1) moved in place; interactionWiring.test.ts T-163 and the T-160 pin moved. Red on 80f05ed.
+- **Lesson.** **When a result can be "nothing", the empty value and the unset value must be different values.** A toast is not a record: if the state that says "it ran" is the same as the state before it ran, the panel can only say it with a message that fades.
+
+### (2) [LOW] - The safe-zone warning's intro contradicted its own rows for a vertical frame
+
+- **Bug.** The intro said "the tall ones keep only the middle of the frame" over rows that, for a 9:16 crop, said "TikTok frame → cut down for YouTube".
+- **Root cause.** The sentence was written for a wide source (T-83 made the rows orientation-aware; the intro was not revisited).
+- **Fix.** "Wide and tall platforms need different shapes. Each platform keeps the middle of the frame in its own shape, and anything outside that shape is lost." is true for either orientation.
+- **Test.** video-pipelines.spec.ts "T-163 (2)" (a 9:16 crop for YouTube and TikTok: the new intro, and the row naming YouTube as cut down); the 4:3 pin moved with the sentence. Red on 80f05ed.
+- **Lesson.** **When a derived row became orientation-aware, the prose above it has to be read against the other orientation.**
+
+### (3) [LOW] - Helper-built single-sentence result toasts ended with a period
+
+- **Bug.** "No speech found, so there are no captions." and both uncaptioned burn-in sentences ended in a period; BRANDING "Toasts" has no trailing period on a one-sentence result.
+- **Root cause.** copyConventions.test.ts reads literal toast arguments; a sentence a shared helper builds is not one.
+- **Fix.** The periods are gone; the panel joins a landed-beside note to the uncaptioned sentence with ". " as the captioned branch does. copyConventions.test.ts now calls the result-toast helpers (captionsReadyMessage, burnInDoneMessage, clearedTranscriptsMessage's single-sentence branches, previewCopySkippedMessage) and asserts no single-sentence output ends in a period; the two-sentence ones (staleCaptionsMessage, the partial clear) are asserted to keep both.
+- **Fold.** The chat spike finder's "+ Clip" toasts Scan VOD's sentence, "Clip added — see the Clips list".
+- **Test.** copyConventions.test.ts "T-163 (3)", captions.test.ts, interactionWiring.test.ts (the ". " join, the two "+ Clip" sentences), video-pipelines.spec.ts (the toast pins moved). Red on 80f05ed for the three captions helpers.
+- **Lesson.** **A rule that is checked on literals is not checked on what a function returns.** Check the outputs of the helpers that build toasts, by an explicit list, and say which helpers were left out and why.
+
+## 2026-11-05 - T-163 (round 112), Track B: a window-level key asks the dialog claim; the empty project is refused at the boundary
+
+The forty-ninth sweep, Track B (items 4 and 5, and a fold).
+
+### (4) [LOW] - Ctrl+V with a picture on the clipboard added a layer behind an open dialog
+
+- **Bug.** With the Variants or the Templates dialog open (or the tutorial coachmark up), Ctrl+V with an image on the clipboard added a layer behind the scrim, and an open Variants dialog lost its previews and the focused button, because the document under it had changed.
+- **Root cause.** T-68 and T-147 made every window-level studio key stand down for `anyDialogClaim()` (ImageStudio's keys, RecordStudio's Escape, the undo/redo hook). ImportPanel's `paste` listener is a window listener too, and was never on that list: nothing enumerated the listeners, so the one added by a different feature (T-154) was missed.
+- **Fix.** `if (anyDialogClaim()) return` is the first statement of `onPaste`, with no `preventDefault`, so a text field inside a dialog still pastes its text. ImportPanel joins the interactionWiring pin of the window-level guards, and a NEW pin holds that the guard comes before any `preventDefault`.
+- **Test.** image.spec.ts "T-163 (4)" (a real clipboard image and a real Ctrl+V: Variants open after Generate, no layer, four previews, Save all still focused, then the chord adds the picture once the dialog is closed; Templates open, no layer; no dialog, a layer), red on the base (`Layers (5)` over four, `Layers (2)` over one; the control passes there); interactionWiring.test.ts "T-163 (4)" and the widened T-147 pin.
+- **Lesson.** **A rule that covers "every window-level key" needs a list a test can enumerate.** The pin names its files, so adding a listener to the list is the review step; grep `addEventListener('(key|paste|...)` on `window` when a new global key lands.
+
+### (5) [LOW] - Save project with nothing open wrote an empty project and said "Project saved"
+
+- **Bug.** Home's Save project with no video, sound or canvas opened the Save dialog, wrote a project with nothing in it, and toasted "Project saved". Opening that file said "Project loaded" and opened nothing, and a person who picked an existing project in the dialog overwrote it with nothing.
+- **Root cause.** `project:save` held the shape rule and the size rule, but not the third rule autosave holds ("only autosave if there is actual user state", `hasStudioState`). The Save button is always enabled, so the handler is the only place the rule can live.
+- **Fix.** After the shape check and before the size rule and the dialog, `project:save` throws `NOTHING_TO_SAVE_MESSAGE` ("Nothing to save yet. Open a video, a sound or a canvas first.", shared/projectValidation.ts beside `hasStudioState`) when `hasStudioState` is false. It is a finished sentence from main, so `userFacingError` tier 2 lets it stand and Home's `handleSave` is unchanged (the e2e reads the toast). It is asked after the shape check so a malformed payload keeps its own refusal.
+- **Test.** projectSave.test.ts "project:save - nothing to save (T-163 (5))" (the real handler: the sentence, `showSaveDialog` never called, `userFacingError` shows it as written; a project with a video reaches the dialog; a malformed project keeps the validator's refusal); home-chrome.spec.ts "T-163 (5)" (no Save dialog, no file, the toast exactly the sentence, never "Project saved"; red on the base; the control with a video open saves).
+- **Lesson.** **A rule two writers share lives in the one function both call, and the one at the trust boundary is not optional.** Autosave and Save are two writers of the same file kind; the second one should have asked `hasStudioState` the day the first did.
+- **Fold (not counted).** USER_GUIDE said a 5.1 or 7.1 file is folded to stereo. True for a video's sound, AIFF and WMA (extracted) and the preview; a WAV, FLAC, MP3, AAC, M4A, OGG or Opus file opens directly and exports with its own channels. The sentence says which.
+
+---
+
 ## 2026-11-05 - T-162 (round 111), Track A: a transcript with no speech, and the sound of a surround file
 
 The forty-eighth sweep, Track A (items 1-2 and a fold).

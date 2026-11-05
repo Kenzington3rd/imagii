@@ -560,7 +560,7 @@ describe('clearTranscriptsQuestion — what the Clear confirm says it will delet
 
 describe('the captions toasts say what happened (T-89)', () => {
   it('a transcription reports lines of caption with the singular handled', () => {
-    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions.')
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions')
     expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
     expect(captionsReadyMessage(42)).toBe('Captions ready (42 lines)')
     expect(captionsReadyMessage(42)).not.toMatch(/segment/i)
@@ -572,7 +572,7 @@ describe('the captions toasts say what happened (T-89)', () => {
 
   it('a burn-in over a range nobody speaks in does NOT claim captions', () => {
     const msg = burnInDoneMessage(false, true)
-    expect(msg).toBe('No captions in this range — exported without captions.')
+    expect(msg).toBe('No captions in this range — exported without captions')
     expect(msg).not.toMatch(/burned in/i)
   })
 })
@@ -667,7 +667,7 @@ describe('cleanTranscriptSrt - the engine\'s non-speech cues are not captions (T
   })
 
   it('a transcription that leaves no cue says so, and one or more keep the count (the toast after music or silence)', () => {
-    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions.')
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions')
     expect(captionsReadyMessage(0)).not.toMatch(/ready/i)
     expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
     expect(captionsReadyMessage(3)).toBe('Captions ready (3 lines)')
@@ -693,13 +693,22 @@ describe('burnInDoneMessage names the burn it answers (T-162 fold)', () => {
   })
 
   it('an uncaptioned burn of a range says the range had none', () => {
-    expect(burnInDoneMessage(false, true)).toBe('No captions in this range — exported without captions.')
+    expect(burnInDoneMessage(false, true)).toBe('No captions in this range — exported without captions')
   })
 
   it('an uncaptioned burn of the whole video says the transcript had no speech, not that a range was empty', () => {
     const msg = burnInDoneMessage(false, false)
-    expect(msg).toBe('No speech in this transcript — exported without captions.')
+    expect(msg).toBe('No speech in this transcript — exported without captions')
     expect(msg).not.toMatch(/range/i)
     expect(msg).not.toMatch(/burned in/i)
+  })
+})
+
+describe('the uncaptioned toast keeps a note as a second sentence (T-163 (3))', () => {
+  it('no helper sentence ends in a period, so the panel can join a note with ". " exactly as the captioned branch does', () => {
+    for (const text of [captionsReadyMessage(0), burnInDoneMessage(false, true), burnInDoneMessage(false, false)]) {
+      expect(text).not.toMatch(/\.$/)
+      expect(`${text}. Saved beside it.`).toMatch(/[^.]\. Saved beside it\.$/)
+    }
   })
 })

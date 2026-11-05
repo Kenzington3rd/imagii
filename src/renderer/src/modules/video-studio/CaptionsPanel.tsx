@@ -165,10 +165,10 @@ export function CaptionsPanel(): JSX.Element | null {
         })
         return
       }
-      // T-162 (1): a run that found no speech has no transcript (srtPath null): the preview is cleared with the path, so the panel is back at its first-run state (the hint, no
-      // preview, no Save .srt, no Burn into video), and the toast is neutral - not a green tick over nothing.
+      // T-162 (1): a run that found no speech has no transcript file (srtPath null): no preview, no Save .srt, no Burn into video, and the toast is neutral - not a green tick over nothing.
+      // T-163 (1): and it is "ran, found nothing" (`[]`), not "never run" (`null`): the panel keeps a line where the preview would be, the way Scan VOD does (T-149 (3)).
       if (result.srtPath === null) {
-        useVideoStore.getState().setDerivedFor(startedFor, { transcript: null })
+        useVideoStore.getState().setDerivedFor(startedFor, { transcript: [] })
         toast(captionsReadyMessage(0), { icon: <Icon name="warning" size={18} /> })
         return
       }
@@ -251,7 +251,7 @@ export function CaptionsPanel(): JSX.Element | null {
         if (result.captioned) {
           toast.success(note ? `${burnInDoneMessage(true, ranged)}. ${note}` : burnInDoneMessage(true, ranged), note ? { duration: ACTION_TOAST_MS } : undefined)
         } else {
-          toast(note ? `${burnInDoneMessage(false, ranged)} ${note}` : burnInDoneMessage(false, ranged), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
+          toast(note ? `${burnInDoneMessage(false, ranged)}. ${note}` : burnInDoneMessage(false, ranged), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
         }
       } catch (err) {
         reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
@@ -304,13 +304,13 @@ export function CaptionsPanel(): JSX.Element | null {
   // T-112: the header button names the job that is running (never "Transcribing…" during a
   // burn-in), and otherwise what pressing it will do.
   // T-160 (2): a transcript is held when it is in memory OR a saved .srt is (a project open or a Restore brings the path back, not the segments), so the label and
-  // the first-run hint below read both.
+  // the first-run hint below read both. T-163 (1): `[]` is held too (a run that found no speech), so only `null` with no path is the first-run state.
   const headerLabel =
     job === 'transcribe'
       ? 'Transcribing…'
       : job === 'burn-in'
         ? 'Burning in…'
-        : segments || srtPath
+        : segments !== null || srtPath
           ? 'Re-transcribe'
           : 'Transcribe'
   // T-89: a phase main cannot measure sends no percent, and gets an
@@ -498,7 +498,7 @@ export function CaptionsPanel(): JSX.Element | null {
         </div>
       ) : null}
 
-      {segments ? (
+      {segments && segments.length > 0 ? (
         // T-113: a scroller must be reachable by keyboard — this Electron (Chromium 126) does not
         // make a scrollable region focusable by itself, and its lines hold nothing to tab to.
         // T-114: and it is a region, so its name is announced when focus lands (a name on a plain
@@ -634,10 +634,15 @@ export function CaptionsPanel(): JSX.Element | null {
         </div>
       ) : null}
 
-      {!segments && !srtPath && status?.ready ? (
+      {segments === null && !srtPath && status?.ready ? (
         <p className="text-xs text-ink-dim">
           Transcribe the source video, then save the text as .srt or burn it into a new MP4.
         </p>
+      ) : null}
+      {/* T-163 (1): a run of THIS video that found no speech (`[]`; null is "never run") says so where the preview would be - the toast fades in about 4 s and the panel was back at the
+          first-run hint. It goes with the transcript's reset rules (a different video, Clear saved transcripts, a new run) and gives way to the progress while a transcription runs. */}
+      {segments !== null && segments.length === 0 && !srtPath && job !== 'transcribe' ? (
+        <p className="text-xs text-ink-dim">No speech found in this video, so there are no captions.</p>
       ) : null}
       {/* T-89: two things the panel never said. The language is fixed (the
           model is English-only), and a burn-in reads the ORIGINAL file — the

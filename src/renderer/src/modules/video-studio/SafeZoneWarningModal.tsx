@@ -44,8 +44,8 @@ export function SafeZoneWarningModal(props: SafeZoneWarningModalProps): JSX.Elem
         <h2 className="text-lg font-semibold">Some platforms will crop the picture</h2>
       </div>
       <p className="text-sm text-ink-base mb-3">
-        Wide and tall platforms need different shapes. When you export one clip for both, the
-        tall ones keep only the middle of the frame, and anything near the edges is lost.
+        Wide and tall platforms need different shapes. Each platform keeps the middle of the frame
+        in its own shape, and anything outside that shape is lost.
       </p>
       <p className="text-xs text-ink-muted mb-1.5">What gets cut down:</p>
       {/* T-113: focusable, so a long list can be scrolled from the keyboard (Chromium 126 does

@@ -7,7 +7,7 @@ import {
   clearAutosave,
   getAutosaveInfo
 } from '../autosave'
-import { MAX_PROJECT_FILE_BYTES, projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { MAX_PROJECT_FILE_BYTES, NOTHING_TO_SAVE_MESSAGE, hasStudioState, projectSizeProblem, serializeProject, validateProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { assertAlways, assertDefined } from '../../shared/assert'
 import { writeFileAtomic } from '../fsAtomic'
 
@@ -35,6 +35,10 @@ export function registerProjectIpc(): void {
       // bad project never reaches disk.
       const valid = validateProject(enriched)
       assertAlways(valid.ok, valid.ok ? 'unreachable' : `project:save invalid project — ${valid.reason}`)
+
+      // T-163 (5): and the rule autosave holds (`isSafeToAutosave`): a project with no video, sound or canvas is not a project to write. Asked after the shape check, so a
+      // malformed payload keeps its own refusal, and before the dialog, so the person is not asked where to save nothing (a finished sentence, shown as written).
+      if (!hasStudioState(enriched)) throw new Error(NOTHING_TO_SAVE_MESSAGE)
 
       // T-137 (6): the SAME size rule Open and autosave hold, on the one serialization they hold it on, asked before the person is asked where to save
       // (a finished sentence, which the Save button's toast shows as written). The file is exactly the text that was measured, so it always opens.

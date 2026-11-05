@@ -3968,3 +3968,70 @@ test.describe('T-160 (1): an older autosave is offered, restorable and clearable
     }
   })
 })
+
+// T-163 (5): Save project with nothing open wrote a project with nothing in it and said "Project saved". The main process refuses it now, before the Save dialog, in a
+// finished sentence the toast shows as written; a person who had picked an existing project in that dialog used to overwrite it with nothing.
+test.describe('T-163 (5): Save project with nothing open', () => {
+  const NOTHING_TO_SAVE = 'Nothing to save yet. Open a video, a sound or a canvas first.'
+
+  test('opens no dialog, writes no file, and the toast reads the sentence (not "Project saved")', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t163-save-empty')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const target = path.join(root, 'never.imagii.json')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await recordSlowChooser(app, { saveAs: target })
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(NOTHING_TO_SAVE)
+      await window.waitForTimeout(800)
+      expect((await chooserCalls(app)).filter((c) => c.save), 'the person was never asked where to save nothing').toHaveLength(0)
+      expect(existsSync(target), 'and no file was written').toBe(false)
+      expect(readdirSync(root).filter((f) => f.endsWith('.json')), 'nowhere else either').toEqual([])
+      expect((await readToastLog(window)).filter((t) => t === 'Project saved'), 'and it never said it saved').toHaveLength(0)
+      expect((await readToastLog(window)).filter((t) => t === NOTHING_TO_SAVE), 'the sentence is shown once, as written').toHaveLength(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: with a video open, Save project still asks where and saves', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t163-save-video')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'save-control.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const target = path.join(root, 'with-video.imagii.json')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'save-control.mp4')
+      await expect(window.locator('header').getByText('save-control.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await window.locator('a[href="#/home"]').first().click()
+      await waitForHome(window)
+      await recordSlowChooser(app, { saveAs: target })
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Project saved')
+      expect((await chooserCalls(app)).filter((c) => c.save), 'one Save dialog').toHaveLength(1)
+      const written = JSON.parse(readFileSync(target, 'utf8')) as { videoStudio?: { sourcePath?: string } }
+      expect(written.videoStudio?.sourcePath, 'and the file holds the open video').toBe(fixture)
+      expect((await readToastLog(window)).filter((t) => t === NOTHING_TO_SAVE)).toHaveLength(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

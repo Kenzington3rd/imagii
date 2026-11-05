@@ -492,6 +492,13 @@ export function hasStudioState(project: ImagiiProject): boolean {
 }
 
 /**
+ * T-163 (5): the sentence Home's Save project shows when nothing is open (a finished sentence from main, so `userFacingError` tier 2 lets it stand). `project:save`
+ * refuses a project without studio state with it, before the Save dialog: it used to write an empty project, say "Project saved", and overwrite a project the person
+ * picked in the dialog with nothing.
+ */
+export const NOTHING_TO_SAVE_MESSAGE = 'Nothing to save yet. Open a video, a sound or a canvas first.'
+
+/**
  * Reject suspicious payloads before they ever reach disk. Renderer-side use.
  */
 export function isSafeToAutosave(project: ImagiiProject): { ok: true } | { ok: false; reason: string } {

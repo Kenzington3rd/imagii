@@ -7863,7 +7863,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 112)
+- **Status:** done (round 112 — see the Done entry)
 
 ---
 
@@ -8434,6 +8434,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 112 — T-163, all five counted items and the folds, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+80f05ed, disjoint source files, merged by the expediter. Track A: a
+transcription that finds no speech stores an empty transcript, so the
+panel keeps "No speech found in this video, so there are no captions."
+where the preview would be (the T-149 (3) pattern), with the header
+"Re-transcribe" and no first-run hint; the safe-zone warning's intro is
+true for a wide or a tall frame; the captions helpers' single-sentence
+result toasts drop their trailing period and copyConventions now checks
+the helpers' outputs; the two "+ Clip" toasts say the same sentence
+(fold). Track B: Stream Graphics' paste stands down for an open dialog
+or the coachmark, as every other window-level studio key does; Save
+project with nothing open is refused at `project:save`, before the
+dialog, with "Nothing to save yet. Open a video, a sound or a canvas
+first."; the USER_GUIDE surround sentence says which files are folded
+(fold). Expediter correction to the ticket: the inline no-speech line
+takes a trailing period like its siblings (panel text, not a toast).
+Deviations, accepted: A ran its reds on the unchanged product code in
+the clone (tests first) instead of a git-archive base; B re-pointed two
+`ImportPanel.tsx:79` cites its import line shifted. Ledgers: A 19 reds
+across unit and e2e / 20 mutations (one equivalent survivor: the
+line's `!srtPath` guard, no path yields `[]` with a path), B 4 RED rows
+/ 9, all others killed. Found not fixed: no e2e drives a text field
+inside a dialog pasting text (the no-`preventDefault` half is pinned
+by wiring only — neither dialog has a text field). Expedited personally:
+one independent mutation per track at a seam no ledger row names — A:
+clearedTranscriptsMessage's single-sentence branch given a period →
+copyConventions "T-163 (3)" and captions.test.ts T-128 (3) red; B: the
+refusal keyed on a video alone → projectSave.test.ts red in five older
+cases (a sound-only or canvas-only project refused) — each restored
+byte-identical, sha256 verified; on the MERGED tree: verify x2
+(208/6241), test:media 480 passed | 17 skipped of 497 on 7.0.2, FULL Playwright 668/668 (42.3 min).
+Applied to 80f05ed by `git apply` with every file byte-identical to the
+expedited merge.
 
 Round 111 — T-162, all six counted items and the folds, landed in
 the commit that carries this entry. Two Sonnet workers in fresh clones

@@ -1981,7 +1981,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:78).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:79).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -6078,6 +6078,87 @@ test.describe('Image Studio — the channel-art sample name is inside its TV-saf
       expect(sample.y, `${where}: top edge`).toBeGreaterThanOrEqual(tv.y)
       expect(sample.y + sample.height, `${where}: bottom edge`).toBeLessThanOrEqual(tv.y + tv.height)
       expect(sample.y, 'clear of the hint line above it').toBeGreaterThanOrEqual(hint.y + hint.height)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-163 (4): Ctrl+V stands down for an open dialog ──────────────────────────────────────────────────────────────────────────────────────────
+//
+// ImportPanel's window-level `paste` listener was the one studio key that did not ask `anyDialogClaim()`: Ctrl+V with a picture on the clipboard while
+// the Variants or the Templates dialog was open added a layer behind the scrim, and an open Variants dialog lost its previews (and the focused button
+// with them) because the document under it had changed. The pastes below are REAL: a picture on Electron's clipboard and a real chord.
+test.describe('Image Studio - Ctrl+V stands down for an open dialog (T-163 (4))', () => {
+  async function putPictureOnClipboard(studio: Studio): Promise<void> {
+    await studio.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+      clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+    }, `data:image/png;base64,${readFileSync(studio.fixturePng).toString('base64')}`)
+    await studio.window.waitForTimeout(800)
+  }
+
+  test('with the Variants dialog open (previews generated), Ctrl+V adds no layer, the previews stay and the focused button keeps focus', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t163-paste-variants')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
+      await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+      const saveAll = dialog.getByRole('button', { name: /^Save all/ })
+      await expect(saveAll).toBeFocused()
+
+      await putPictureOnClipboard(studio)
+      await window.keyboard.press('Control+v')
+      await window.waitForTimeout(1500)
+      await expectLayerCount(window, t.doc.layers.length)
+      await expect(dialog.locator('img'), 'the previews are still there').toHaveCount(4)
+      await expect(saveAll, 'and the button that had focus still has it').toBeFocused()
+
+      // The control, in the same flow: once the dialog is closed the same chord adds the picture.
+      await dialog.getByRole('button', { name: 'Close' }).click()
+      await expect(dialog).toHaveCount(0)
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, t.doc.layers.length + 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('with the Templates dialog open, Ctrl+V adds no layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t163-paste-templates')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(IMPORT).getByRole('button', { name: 'Templates' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await expect(dialog).toBeVisible()
+
+      await putPictureOnClipboard(studio)
+      await window.keyboard.press('Control+v')
+      await window.waitForTimeout(1500)
+      await expectLayerCount(window, 1)
+      await expect(dialog, 'the dialog is still the one on screen').toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: with no dialog open, Ctrl+V still adds the picture as a layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t163-paste-control')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await expect(window.locator('[role="dialog"]')).toHaveCount(0)
+      await putPictureOnClipboard(studio)
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 2)
     } finally {
       await closeStudio(studio)
     }

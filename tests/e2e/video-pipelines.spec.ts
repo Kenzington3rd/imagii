@@ -999,7 +999,7 @@ test.describe('ChatHighlightPanel', () => {
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       await row.getByRole('button', { name: '+ Clip' }).click()
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
-      await expectToast(window, 'Clip added')
+      await expectToast(window, 'Clip added — see the Clips list')
       // start = bucketStart (15), end = bucketStart + bucket + 2 * pad = 55.
       expect(await clipRows(window)).toEqual([{ name: 'Chat spike 1', range: '0:15 → 0:55' }])
 
@@ -2160,7 +2160,7 @@ test.describe('CaptionsPanel', () => {
       // ── the range nobody speaks in: the clip is written, and the toast does
       //    not claim captions (red against "Captions burned in") ──
       await burn.click()
-      await expectToast(window, 'No captions in this range — exported without captions.')
+      await expectToast(window, 'No captions in this range — exported without captions')
       const late = (await readToastEntries(window)).find((e) =>
         e.text.startsWith('No captions in this range')
       )
@@ -2192,7 +2192,7 @@ test.describe('CaptionsPanel', () => {
         (t) => t.startsWith('No captions in this range') || t === 'Captions burned in'
       )
       expect(texts).toEqual([
-        'No captions in this range — exported without captions.',
+        'No captions in this range — exported without captions',
         'Captions burned in'
       ])
     } finally {
@@ -3385,7 +3385,7 @@ test.describe('ExportPanel', () => {
         modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()
       ).toBeVisible()
       await expect(modal).toContainText(
-        'the tall ones keep only the middle of the frame, and anything near the edges is lost'
+        'Each platform keeps the middle of the frame in its own shape, and anything outside that shape is lost'
       )
       await expect(modal).not.toContainText('safe zone')
       await expect(modal).not.toContainText('clips:')
@@ -12946,7 +12946,7 @@ test.describe('T-150 (3): "+ Clip" on a scan row adds one clip however it is pre
       await expect(clipListCard(window).locator('h3')).toHaveText('Clips (1)')
       expect((await clipRows(window)).map((r) => r.name)).toEqual(['Chat spike 1'])
       await window.waitForTimeout(500)
-      expect(await clipToasts(window), 'one press that counts, one toast').toEqual(['Clip added'])
+      expect(await clipToasts(window), 'one press that counts, one toast').toEqual(['Clip added — see the Clips list'])
       expect((await readToastLog(window)).filter((t) => t.includes('Already in the Clips list'))).toEqual([])
 
       await add.focus()
@@ -13219,7 +13219,9 @@ test.describe('T-161 (6): the setup card waits for the status', () => {
 // the product's own: red on 3813431, where `null` was stored with `[]` and the panel showed an empty "Transcript preview", Save .srt, Burn into video, and a green tick on the sentence.
 test.describe('T-162 (1): the captions panel after a run that found no speech', () => {
   const HINT = /Transcribe the source video, then save the text as \.srt/
-  const NO_SPEECH = 'No speech found, so there are no captions.'
+  const NO_SPEECH = 'No speech found, so there are no captions'
+  // T-163 (1): "ran, found nothing" is a state of its own (`[]`), and the panel says it where the preview would be.
+  const NO_SPEECH_LINE = 'No speech found in this video, so there are no captions.'
 
   async function engineReady(app: ElectronApplication): Promise<void> {
     await app.evaluate(({ ipcMain }) => {
@@ -13258,7 +13260,7 @@ test.describe('T-162 (1): the captions panel after a run that found no speech', 
     }, text)
   }
 
-  test('keeps the first-run hint: no preview, no Save .srt and no Burn into video, and the toast is a neutral warning, not a success', async () => {
+  test('no preview, no Save .srt and no Burn into video, and the toast is a neutral warning, not a success (T-163 (1): the hint gives way to the line)', async () => {
     test.setTimeout(180_000)
     const studio = await launchHome('t162empty')
     const { app, window, userDataDir } = studio
@@ -13275,12 +13277,13 @@ test.describe('T-162 (1): the captions panel after a run that found no speech', 
       // ── a run with no speech: the first-run state, and a toast that says nothing was made ──
       await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
       await expectToast(window, NO_SPEECH)
-      await expect(card.getByText(HINT), 'the first-run hint is still there').toBeVisible()
+      await expect(card.getByText(HINT), 'a run that found nothing is not the first-run state (T-163 (1))').toHaveCount(0)
+      await expect(card.getByText(NO_SPEECH_LINE, { exact: true })).toBeVisible()
       await expect(card.getByRole('region', { name: 'Transcript preview' }), 'no empty preview').toHaveCount(0)
       await expect(card.getByText('Transcript preview')).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
-      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the header still reads Transcribe').toBeVisible()
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true }), 'the header says it has been run (T-163 (1))').toBeVisible()
       const none = await toastKind(window, NO_SPEECH)
       expect(none, 'the sentence is on a neutral warning (the app\'s own icon), not react-hot-toast\'s success mark').toEqual({ appIcon: true, drewIcon: true })
 
@@ -13289,12 +13292,13 @@ test.describe('T-162 (1): the captions panel after a run that found no speech', 
       mkdirSync(path.dirname(srtPath), { recursive: true })
       writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,800\nspoken line 1\n\n2\n00:00:01,000 --> 00:00:01,800\nspoken line 2\n', 'utf8')
       await answerWith(app, srtPath, 2)
-      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await card.getByRole('button', { name: 'Re-transcribe', exact: true }).click() // T-163 (1): the header says it has been run
       await expectToast(window, 'Captions ready (2 lines)')
       await expect(card.getByRole('region', { name: 'Transcript preview' })).toBeVisible()
       await expect(card.getByRole('button', { name: 'Save .srt' })).toBeVisible()
       await expect(card.getByRole('button', { name: 'Burn into video' })).toBeVisible()
       await expect(card.getByText(HINT)).toHaveCount(0)
+      await expect(card.getByText(NO_SPEECH_LINE, { exact: true }), 'a run with speech takes the line away').toHaveCount(0)
       const ok = await toastKind(window, 'Captions ready (2 lines)')
       expect(ok, 'a success toast is the mark react-hot-toast draws, not the app\'s warning icon').toEqual({ appIcon: false, drewIcon: true })
 
@@ -13302,11 +13306,12 @@ test.describe('T-162 (1): the captions panel after a run that found no speech', 
       await answerWith(app, null, 0)
       await card.getByRole('button', { name: 'Re-transcribe', exact: true }).click()
       await expect.poll(async () => (await readToastLog(window)).filter((t) => t === NO_SPEECH).length, { timeout: 30_000 }).toBe(2)
-      await expect(card.getByText(HINT)).toBeVisible()
+      await expect(card.getByText(NO_SPEECH_LINE, { exact: true })).toBeVisible()
+      await expect(card.getByText(HINT)).toHaveCount(0)
       await expect(card.getByRole('region', { name: 'Transcript preview' })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
       await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
-      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true })).toBeVisible()
     } finally {
       await app.close()
     }
@@ -13404,7 +13409,7 @@ test.describe('T-162 fold: a whole-video burn of a transcript with no speech', (
       await expect(burn).toBeEnabled({ timeout: 30_000 })
       await expect(card.getByRole('checkbox'), 'the range box is off: this is a whole-video burn').not.toBeChecked()
 
-      const SENTENCE = 'No speech in this transcript — exported without captions.'
+      const SENTENCE = 'No speech in this transcript — exported without captions'
       await burn.click()
       await expectToast(window, SENTENCE)
       const entry = (await readToastEntries(window)).find((e) => e.text === SENTENCE)
@@ -13418,9 +13423,144 @@ test.describe('T-162 fold: a whole-video burn of a transcript with no speech', (
       // ── the ranged burn of the same transcript keeps the range sentence ──
       await card.getByRole('checkbox').check()
       await burn.click()
-      await expectToast(window, 'No captions in this range — exported without captions.')
+      await expectToast(window, 'No captions in this range — exported without captions')
       await expect.poll(() => existsSync(outRange), { timeout: 60_000 }).toBe(true)
       expect((await readToastLog(window)).filter((t) => t === SENTENCE)).toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-163 (1): a transcription that finds no speech stores `transcript: []` (ran, found nothing) with no path, and the panel says so where the preview would be - the toast fades in about 4 s and
+// the panel was back at its first-run hint, as if Transcribe had never been pressed (the class T-149 (3) fixed for Scan VOD). Main's `captions:transcribe` is stubbed as T-162 (1) does.
+test.describe('T-163 (1): the captions panel keeps a line after a run that found no speech', () => {
+  const HINT = /Transcribe the source video, then save the text as \.srt/
+  const NO_SPEECH = 'No speech found, so there are no captions'
+  const LINE = 'No speech found in this video, so there are no captions.'
+
+  async function engineReady(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => ({
+        exeInstalled: true,
+        exePath: 'whisper-cli.exe',
+        modelInstalled: true,
+        modelPath: 'model.bin',
+        modelsDir: 'models',
+        ready: true
+      }))
+    })
+  }
+  async function answerWith(app: ElectronApplication, srtPath: string | null, lines: number, delayMs = 0): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', async (_e, req: { jobId: string }) => {
+          if (arg.delayMs > 0) await new Promise((r) => setTimeout(r, arg.delayMs))
+          return {
+            jobId: req.jobId,
+            srtPath: arg.srtPath,
+            segments: Array.from({ length: arg.lines }, (_v, i) => ({ startSec: i, endSec: i + 0.8, text: `spoken line ${i + 1}` })),
+            durationMs: 5
+          }
+        })
+      },
+      { srtPath, lines, delayMs }
+    )
+  }
+
+  test('the line is there once the toast has gone, outlives a trip to Home, and is gone for a different video and after a run with speech', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('t163empty')
+    const { app, window, userDataDir } = studio
+    try {
+      await engineReady(app)
+      await answerWith(app, null, 0)
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      await installToastLog(window)
+      const card = captionsCard(window)
+      const line = card.getByText(LINE, { exact: true })
+      await expect(card.getByText(HINT)).toBeVisible({ timeout: 15_000 })
+      await expect(line, 'a video that was never transcribed says nothing of the kind').toHaveCount(0)
+
+      // ── a run with no speech: the toast, then (once it has gone) the line, once ──
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectToast(window, NO_SPEECH)
+      await expect(window.getByText(NO_SPEECH, { exact: true }), 'the toast faded').toHaveCount(0, { timeout: 15_000 })
+      await window.waitForTimeout(1_000)
+      await expect(line, 'the line outlives the toast, once').toHaveCount(1)
+      await expect(line).toBeVisible()
+      await expect(card.getByText(HINT), 'it is not the first-run state').toHaveCount(0)
+      await expect(card.getByRole('region', { name: 'Transcript preview' }), 'no empty preview').toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true }), 'the header says it has been run').toBeVisible()
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toHaveCount(0)
+
+      // ── a trip to Home and back keeps it ──
+      await leaveAndReturn(window)
+      await expect(line, 'kept across a visit').toBeVisible()
+      await expect(card.getByRole('button', { name: 'Re-transcribe', exact: true })).toBeVisible()
+      await expect(card.getByText(HINT)).toHaveCount(0)
+
+      // ── a different video starts clean: the first-run hint and "Transcribe" ──
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(line, 'a different video starts clean').toHaveCount(0)
+      await expect(card.getByText(HINT)).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeVisible()
+
+      // ── no speech again, then a run WITH speech takes the line away ──
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(line).toBeVisible({ timeout: 30_000 })
+      const srtPath = path.join(userDataDir, 'captions', 't163-speech.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,800\nspoken line 1\n', 'utf8')
+      // A run is under way (held 6 s): the line gives way to it, as Scan VOD's does, and the header names the job.
+      await answerWith(app, srtPath, 1, 6_000)
+      await card.getByRole('button', { name: 'Re-transcribe', exact: true }).click()
+      await expect(card.getByRole('button', { name: 'Transcribing…' })).toBeVisible()
+      // A short timeout: the run is held for 6 s, and an assertion that waited it out would pass when the run ends.
+      await expect(line, 'not "found nothing" while a transcription is running').toHaveCount(0, { timeout: 1_500 })
+      await expectToast(window, 'Captions ready (1 line)')
+      await expect(card.getByRole('region', { name: 'Transcript preview' })).toBeVisible()
+      await expect(line, 'a run with speech takes the line away').toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-163 (2): the safe-zone dialog's intro said the tall platforms keep the middle ("the tall ones keep only the middle of the frame") over rows that, for a 9:16 crop, name the WIDE platform as the one cut
+// down ("TikTok frame → cut down for YouTube"). The intro is now true for either orientation.
+test.describe('T-163 (2): the safe-zone dialog for a 9:16-cropped clip', () => {
+  test('exporting a 9:16 crop for YouTube and TikTok reads the orientation-neutral intro, and its row names YouTube as the one cut down', async () => {
+    test.setTimeout(240_000)
+    const { app, window, outDir } = await launchWithVideo('t163-safezone', bigSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window.locator('[data-tutorial="video-crop"]').getByRole('button', { name: '9:16', exact: true }).click()
+      await presetBox(window, 'YouTube').check()
+      await presetBox(window, 'TikTok').check()
+      await card.getByRole('button', { name: /^Export \d/ }).click()
+
+      const modal = window.getByRole('dialog')
+      await expect(modal).toBeVisible()
+      await expect(modal.getByText(
+        'Wide and tall platforms need different shapes. Each platform keeps the middle of the frame in its own shape, and anything outside that shape is lost.',
+        { exact: true }
+      )).toBeVisible()
+      await expect(modal).not.toContainText('the tall ones keep only the middle')
+      await expect(modal.locator('li > div'), 'with the crop tall, the wide platform is the one that is cut down').toContainText(['TikTok frame → cut down for YouTube'])
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
     } finally {
       await app.close()
     }

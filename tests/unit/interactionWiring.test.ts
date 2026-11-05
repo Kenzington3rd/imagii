@@ -3314,7 +3314,7 @@ describe('T-140 Track A - a save that landed beside the chosen file is reported 
     const burn = panel.slice(panel.indexOf('async function burnIn()'), panel.indexOf('function updateStyle('))
     expect(burn).toMatch(/const note = landedBesideNote\(outputPath, result\.outputPath, 'burn-in'\)/)
     expect(burn).toMatch(/toast\.success\(note \? `\$\{burnInDoneMessage\(true, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(true, ranged\), note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
-    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false, ranged\)\} \$\{note\}` : burnInDoneMessage\(false, ranged\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
+    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(false, ranged\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
     expect(panel).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
     // T-162 fold: the toast is told whether THIS burn was ranged, by the same value that decided whether the request carried a range.
     expect(burn).toMatch(/const ranged = selectedClip !== null/)
@@ -3612,8 +3612,9 @@ describe('T-147 - Audio Studio: the sliders name their undo step, the cards clos
 describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Properties edits coalesce', () => {
   // E2E: image.spec.ts "T-75" (the coachmark over Stream Graphics) and "T-78" (an opacity drag, one Undo).
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  it('the three window-level guards read the dialog claim stack, not Modal\'s count (the coachmark is not a <Modal>)', () => {
-    for (const rel of ['modules/image-studio/ImageStudio.tsx', 'modules/record-studio/RecordStudio.tsx']) {
+  it('the four window-level guards read the dialog claim stack, not Modal\'s count (the coachmark is not a <Modal>)', () => {
+    // T-163 (4): ImportPanel's `paste` listener joined (it was the one window-level key that did not ask).
+    for (const rel of ['modules/image-studio/ImageStudio.tsx', 'modules/record-studio/RecordStudio.tsx', 'modules/image-studio/ImportPanel.tsx']) {
       const code = strip(read(rel))
       expect(code, rel).toMatch(/if \(anyDialogClaim\(\)\) return/)
       expect(code, rel).not.toMatch(/isModalOpen/)
@@ -4195,8 +4196,9 @@ describe('T-160 - the captions panel counts a saved .srt; Delete board names Ctr
 
   it('(2) the first-run hint shows only with no transcript at all, and the idle header reads Re-transcribe for either', () => {
     const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
-    expect(panel).toMatch(/\{!segments && !srtPath && status\?\.ready \? \(/)
-    expect(panel).toMatch(/: segments \|\| srtPath\s*\? 'Re-transcribe'\s*: 'Transcribe'/)
+    // T-163 (1) REVISES this pin: `[]` (a run that found no speech) is held too, so the hint is for `null` with no path.
+    expect(panel).toMatch(/\{segments === null && !srtPath && status\?\.ready \? \(/)
+    expect(panel).toMatch(/: segments !== null \|\| srtPath\s*\? 'Re-transcribe'\s*: 'Transcribe'/)
   })
 
   it('(5) the Delete board question ends with the sentence that brings the board back', () => {
@@ -4387,5 +4389,43 @@ describe('T-162 - the canceled sentence is chosen by what finished; the 7.1 fold
     const store = read('modules/video-studio/store/videoStore.ts')
     expect(store).toMatch(/WHOLE_VIDEO_DROPPED_MESSAGE =\s*'Removed the whole-video clip now that you have added a clip\. Press Ctrl\+Z to keep it\.'/)
     expect(store).not.toMatch(/the highlights are your clips now/)
+  })
+})
+
+// T-163 (1), fold: the captions panel tells "ran, found nothing" (`[]`) from "never run" (`null`), and the chat finder's "+ Clip" says what Scan VOD's does.
+describe('T-163: the captions panel reads [] apart from null; the chat "+ Clip" toast is Scan VOD\'s sentence', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  it('a no-speech run stores [] (not null) with no path, and the panel branches on it', () => {
+    const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(panel).toMatch(/setDerivedFor\(startedFor, \{ transcript: \[\] \}\)/)
+    expect(panel).not.toMatch(/setDerivedFor\(startedFor, \{ transcript: null \}\)/)
+    expect(panel).toMatch(/segments && segments\.length > 0/)
+    expect(panel).toMatch(/segments === null && !srtPath && status\?\.ready/)
+    expect(panel).toMatch(/segments !== null && segments\.length === 0 && !srtPath && job !== 'transcribe'/)
+    expect(panel).toContain('No speech found in this video, so there are no captions.')
+  })
+
+  it('the chat finder\'s "+ Clip" toasts the Scan VOD sentence', () => {
+    expect(read('modules/video-studio/ChatHighlightPanel.tsx')).toContain("toast.success('Clip added — see the Clips list')")
+    expect(read('modules/video-studio/HighlightPanel.tsx')).toContain("toast.success('Clip added — see the Clips list')")
+  })
+})
+
+describe('T-163 (4) - the paste listener stands down for a dialog before it reads the clipboard', () => {
+  // E2E: image.spec.ts "Ctrl+V stands down for an open dialog (T-163 (4))" (the Variants and Templates dialogs, and the control).
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+
+  it('anyDialogClaim() is the first statement of onPaste, imported from the focus-trap hook', () => {
+    expect(panel).toMatch(/import \{ anyDialogClaim \} from '\.\.\/\.\.\/hooks\/useFocusTrap'/)
+    expect(panel).toMatch(/function onPaste\(e: ClipboardEvent\): void \{\s*if \(anyDialogClaim\(\)\) return\s*\n/)
+  })
+
+  it('the guard does not preventDefault: a text field inside a dialog still pastes its text', () => {
+    const body = panel.slice(panel.indexOf('function onPaste'), panel.indexOf('const releaseHeld'))
+    const guard = body.indexOf('if (anyDialogClaim()) return')
+    expect(guard).toBeGreaterThan(-1)
+    expect(body.slice(guard, guard + 'if (anyDialogClaim()) return'.length + 1)).not.toMatch(/preventDefault/)
+    expect(body.indexOf('preventDefault'), 'every preventDefault comes after the guard').toBeGreaterThan(guard)
   })
 })

@@ -350,7 +350,7 @@ export function clearTranscriptsQuestion(count: number, openVideoHasOne: boolean
 /** The toast after a transcription: lines of caption, counted properly. */
 export function captionsReadyMessage(segmentCount: number): string {
   // T-161 (2) fold: music or silence leaves no cue once the engine's tags are dropped, and "ready (0 lines)" reads as a success that made nothing.
-  if (segmentCount === 0) return 'No speech found, so there are no captions.'
+  if (segmentCount === 0) return 'No speech found, so there are no captions'
   return `Captions ready (${countOf(segmentCount, 'line')})`
 }
 
@@ -376,8 +376,8 @@ export function staleCaptionsMessage(fileName: string): string {
 export function burnInDoneMessage(captioned: boolean, ranged: boolean): string {
   if (captioned) return 'Captions burned in'
   return ranged
-    ? 'No captions in this range — exported without captions.'
-    : 'No speech in this transcript — exported without captions.'
+    ? 'No captions in this range — exported without captions'
+    : 'No speech in this transcript — exported without captions'
 }
 
 /** Phase 4E: Whisper model auto-install progress events. */

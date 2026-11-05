@@ -12,6 +12,7 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { loadImage, storedDataUrl } from '../../lib/boundedImage'
 import { claimFirst } from '../../lib/claimFirst'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
@@ -96,6 +97,9 @@ export function ImportPanel(): JSX.Element {
       if (e.code === 'KeyV' || e.key.toLowerCase() === 'v' || e.key === 'Insert') pasteHeld = false
     }
     function onPaste(e: ClipboardEvent): void {
+      // T-163 (4): a dialog (or the coachmark) is a claim over the window, as for every other studio key (ImageStudio, RecordStudio, undo/redo): a picture pasted behind the
+      // Variants scrim added a layer and dropped the previews. No `preventDefault`, so a text field inside a dialog still pastes its text.
+      if (anyDialogClaim()) return
       if (pasteHeld) {
         e.preventDefault()
         return

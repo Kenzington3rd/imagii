@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, truncateSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { MAX_PROJECT_BYTES, MAX_PROJECT_FILE_BYTES, MAX_SCHEMA_VERSION, projectSizeProblem, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
+import { MAX_PROJECT_BYTES, MAX_PROJECT_FILE_BYTES, MAX_SCHEMA_VERSION, NOTHING_TO_SAVE_MESSAGE, projectSizeProblem, serializeProject, validateProjectJsonString } from '../../shared/projectValidation'
 import { userFacingError } from '../../shared/userFacingError'
 import type { ImagiiProject } from '../../shared/workspace'
 
@@ -352,5 +352,47 @@ describe('project:load - the size is read before the file (T-152 (3))', () => {
   it('a cancelled dialog is still null', async () => {
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
     expect(await load()).toBeNull()
+  })
+})
+
+/**
+ * T-163 (5) - Save project with nothing open is refused, in a sentence, BEFORE the Save dialog.
+ *
+ * `project:save` held the shape and the size rules but not the one autosave holds ("only if there is actual user state"): Home's Save project with no
+ * video, sound or canvas wrote an empty project, said "Project saved", and a person who picked an existing project in the dialog overwrote it with nothing.
+ * The refusal is a finished sentence from main (tier 2 of userFacingError), asked after the shape check (a malformed project keeps its own refusal) and
+ * before the dialog. The end-to-end version (the button, the toast, no file) is in home-chrome.spec.ts.
+ */
+describe('project:save - nothing to save (T-163 (5))', () => {
+  const SENTENCE = 'Nothing to save yet. Open a video, a sound or a canvas first.'
+  const empty = (): ImagiiProject => ({ schemaVersion: MAX_SCHEMA_VERSION, savedAt: NOW, appVersion: '1.2.3' })
+
+  it('a project with no studio state throws the sentence, never opens the dialog, and writes nothing; userFacingError shows it as written', async () => {
+    const err = await save(empty()).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    const message = (err as Error).message
+    expect(message).toBe(SENTENCE)
+    expect(NOTHING_TO_SAVE_MESSAGE).toBe(SENTENCE)
+    expect(showSaveDialog, 'the person is not asked where to save nothing').not.toHaveBeenCalled()
+    expect(existsSync(picked)).toBe(false)
+    const wrapped = new Error(`Error invoking remote method 'project:save': Error: ${message}`)
+    expect(userFacingError(wrapped, "Couldn't save the project.").message).toBe(SENTENCE)
+  })
+
+  it('a project with a video reaches the dialog and is written', async () => {
+    const withVideo: ImagiiProject = {
+      ...empty(),
+      videoStudio: { sourcePath: path.join(scratch, 'clip.mp4'), clips: [], selectedClipId: null, watermark: null, srtPath: null }
+    }
+    expect(await save(withVideo)).toBe(picked)
+    expect(showSaveDialog).toHaveBeenCalledTimes(1)
+    expect(existsSync(picked)).toBe(true)
+  })
+
+  it('a malformed project keeps the validator\'s refusal, not the empty-project sentence', async () => {
+    const err = await save({ ...empty(), schemaVersion: 99 }).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toMatch(/unsupported schemaVersion/)
+    expect((err as Error).message).not.toBe(SENTENCE)
+    expect(showSaveDialog).not.toHaveBeenCalled()
   })
 })

@@ -348,8 +348,10 @@ that names the file being converted.)
   width, so it doesn't swallow the frame.
   Captions need a one-time setup; see **Captions setup** below. The engine's
   notes about sounds that are not speech (**[MUSIC]**, **[BLANK_AUDIO]**, **(upbeat music)**, music notes) are
-  left out of the captions, and a video that has only those says **No speech found, so there are no captions.**,
-  keeps no transcript, and leaves the panel as it was before you transcribed. Every
+  left out of the captions, and a video that has only those says **No speech found, so there are no captions**,
+  keeps no transcript, and the panel keeps the line **No speech found in this video, so there are no captions.**
+  where the preview would be (the header button then reads **Re-transcribe**; the line goes when you open another
+  video, run it again or clear the saved transcripts). Every
   transcription also keeps its `.srt` transcript in a `captions` folder
   inside imagii's own data folder — on your machine only, like everything
   else. The bottom of the panel says how many are kept, and **Clear saved
@@ -547,9 +549,11 @@ never called loaded.
     becomes the nearest edge when you leave the box. imagii measures the whole file
     first, so exports with a loudness target take a little longer. A mono file is
     measured the way stereo speakers play it (the one channel on both sides), so its
-    target is what you hear. A 5.1 or 7.1 file is folded to stereo the way a player
-    does (the centre and the surrounds a little under the fronts, the bass channel left out), so it keeps its
-    level. Whatever you switch on or cut out, peaks above −1 dBFS
+    target is what you hear. A 5.1 or 7.1 sound taken from a video (and an AIFF or
+    WMA file, which imagii extracts) is folded to stereo the way a player does (the centre and the
+    surrounds a little under the fronts, the bass channel left out), so it keeps its level, and so
+    is what you hear in the preview; a 5.1 or 7.1 WAV, FLAC, MP3, AAC, M4A, OGG or Opus file opens as it is
+    and exports with its own channels. Whatever you switch on or cut out, peaks above −1 dBFS
     are limited when you export, so a boost cannot clip; an export with nothing
     switched on and nothing cut keeps the file's levels as they are. If your cuts take out
     everything, **Export** says "Everything is cut out. Click a mark to put a part back." and
@@ -750,7 +754,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
 
 - **Save project** writes a `.imagii.json` you can reopen later. It keeps the
   studios and their layout, and the file paths of your sources. Mood boards
-  live outside projects. A video imagii had to convert when you dropped it
+  live outside projects. With nothing open (no video, no sound, no canvas with a
+  layer) it says "Nothing to save yet. Open a video, a sound or a canvas first."
+  and does not ask where to save. A video imagii had to convert when you dropped it
   (FLV, TS, WMV, MPG, 3GP) is saved as the file you dropped, and converted again
   when you open the project — that can take a while for a long recording, and
   a note says what it is doing while you wait. The same goes for the sound of a

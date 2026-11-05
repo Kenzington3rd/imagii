@@ -82,7 +82,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
       toast(ALREADY_IN_CLIPS_MESSAGE, { id: 'scanned-clip-duplicate', icon: <Icon name="warning" size={18} /> })
       return
     }
-    toast.success('Clip added')
+    toast.success('Clip added — see the Clips list')
     if (added === 'added-dropped-whole-video') {
       toast(WHOLE_VIDEO_DROPPED_MESSAGE, { icon: <Icon name="undo" size={18} />, duration: 8000 })
     }
