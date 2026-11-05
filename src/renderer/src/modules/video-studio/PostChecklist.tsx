@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import type { DiaryEntry } from '@shared/postingDiary'
 import { DIARY_LEGACY_KEY, DIARY_MAX_ENTRIES, migrateDiary } from '@shared/postingDiary'
 import { PanelHeader } from '../../components/PanelHeader'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 
 const HASHTAG_TEMPLATES: Record<string, string[]> = {
   twitch_clip: ['#Twitch', '#TwitchClip', '#StreamHighlight', '#GamingClip'],
@@ -288,7 +288,9 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
             rows={2}
             className="bg-bg-base rounded px-2 py-1 text-xs resize-y"
           />
-          <button className="btn-primary px-3 py-1 text-xs self-start" onClick={add}>
+          {/* T-165 (4): `add` drops a double-click's second press; a HELD Enter is a run of keyboard clicks (detail 0) it cannot see, so the first logs the post, clears the name and each repeat
+              raised "Add a clip name first" (T-141 (4)). A repeat keydown's click is canceled, as on the sibling add buttons. */}
+          <button className="btn-primary px-3 py-1 text-xs self-start" onClick={add} onKeyDown={ignoreHeldEnter}>
             + Log post
           </button>
         </div>

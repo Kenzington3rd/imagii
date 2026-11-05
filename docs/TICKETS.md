@@ -8067,7 +8067,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
   run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 114)
+- **Status:** done (round 114 — see the Done entry)
 
 ---
 
@@ -8638,6 +8638,46 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 114 — T-165, all seven counted items and the two folds, landed in
+the commit that carries this entry. Two Sonnet workers in fresh clones
+of 578ec34, disjoint source files, merged by the expediter. Track A: a
+picture pasted while a text field has focus adds its layer again (the
+T-164 (7) guard now returns only when the clipboard carries text, so
+text AND a picture into a field is still the field's); with a canvas
+open, words pasted with no field focused become the "+ Add text" layer
+holding them (selected, one undo step), and on the empty start screen
+they are refused in one sentence (fold); the selection frame stands
+4 px off the layer and is dashed, so it never reads as the accent
+stroke of a fresh rectangle; the blank emote template is "Emote · Blank
+circle" and both emote tiles say they export the 28, 56 and 112 px
+pack. Track B: Record's webcam hint shows only when a webcam will be
+recorded; Audio Studio's Export card hides Format beside an .mp4
+re-attach (as Bitrate does) and brings it back at the person's pick;
+a held Enter on "+ Log post" is one post; the caption style block says
+its changes show only in the burned-in video, and the preset in use is
+pressed (`captionStyleMatches`, fold).
+Deviations, accepted: A kept the guard order (dialog claim, text field,
+held paste) since a held chord still reaches `pasteHeld` before
+anything is added; A sampled the frame pixel test at a quarter of the
+width (the top midpoint is the handle) and measured the gap and frame
+rows; A and B each edited a wiring pin in place, and B two e2e pins
+(the T-164 (10) hint now ticks a stubbed camera; the video-drop
+Format pin) that asserted the old behavior. Ledgers: A 13 mutations
+(after the expediter's send-back), B 19, all killed (B's one early
+survivor killed by an Outline-colour move). Found not fixed: pasted
+words have no length cap; the T-131 home-chrome flake fails about half
+its standalone runs on the base and the tip alike. Expedited
+personally: one independent mutation per track at a seam no ledger row
+names — A: the pasted layer's look built for a 112×112 transparent
+document → SURVIVED, sent back, a look-equals-"+ Add text" e2e added
+and now red on it; B: Format hidden whenever Re-attach is ticked,
+whatever the source → three audio.spec cases red — each restored
+byte-identical, sha256 verified; on the MERGED tree: verify x2
+(208/6304), test:media 491 passed | 17 skipped of 508 on 7.0.2, FULL
+Playwright 695/695 (43.6 min, no flakes).
+Applied to 578ec34 by `git apply` with every file byte-identical to
+the expedited merge.
 
 Round 113 — T-164, all ten counted items and the fold, landed in the
 commit that carries this entry. Three Sonnet workers in fresh clones of

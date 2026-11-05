@@ -929,14 +929,14 @@ test.describe('imagii Audio Studio', () => {
       await expect(window.locator(WAVEFORM)).toContainText('2 ch')
 
       // fromVideo is set, so the Export panel offers the re-attach path and
-      // locks the format select to mp4 while it is ticked.
+      // T-165 (3): takes the format select off the card (the file is an mp4) while it is ticked.
       const muxBack = window.locator(EXPORT).getByRole('checkbox')
       await expect(muxBack).toBeChecked()
-      await expect(window.locator(EXPORT).getByRole('combobox').first()).toBeDisabled()
+      await expect(window.locator(EXPORT).getByRole('combobox')).toHaveCount(0)
       await muxBack.uncheck()
       await expect(window.locator(EXPORT).getByRole('combobox').first()).toBeEnabled()
       await muxBack.check()
-      await expect(window.locator(EXPORT).getByRole('combobox').first()).toBeDisabled()
+      await expect(window.locator(EXPORT).getByRole('combobox')).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }
@@ -5581,6 +5581,45 @@ test.describe('T-164 (3): the saved-presets load failure is a finished sentence'
         "Couldn't load your saved presets."
       ])
       expect(log, 'and not the old wording').not.toContain('Could not load saved presets')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-165 (3): the Export card's Format select is not shown beside an .mp4 export ────────────────────────────────────────────────────────────
+//
+// With "Re-attach to video (output .mp4)" ticked (Clean audio opens a video's sound in that state) the Format select stayed on screen, disabled at its value ("MP3"), while the
+// file written is an .mp4 (AAC inside); Bitrate already hid there. Format hides under the same condition, and unticking brings it back at the format the person had.
+test.describe('T-165 (3): Re-attach hides the Format select, unticking brings it back at the person\'s format', () => {
+  test('a video\'s sound with Re-attach ticked has no Format select; unticked it is back, and a picked format survives a tick and an untick', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t165-format')
+    const { window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+      const reattach = exportPanel.getByRole('checkbox', { name: 'Re-attach to video (output .mp4)' })
+      const format = exportPanel.locator('label').filter({ hasText: 'Format' }).locator('select')
+
+      await expect(reattach, 'a video opens with Re-attach on').toBeChecked()
+      await expect(format, 'an .mp4 export has no audio format to pick').toHaveCount(0)
+      await expect(exportPanel.locator('label').filter({ hasText: 'Bitrate' }), 'the sibling it now matches').toHaveCount(0)
+
+      await reattach.uncheck()
+      await expect(format).toBeVisible()
+      await expect(format).toBeEnabled()
+      await expect(format).toHaveValue('mp3')
+      await format.selectOption('wav')
+      await expect(format).toHaveValue('wav')
+
+      await reattach.check()
+      await expect(format).toHaveCount(0)
+      await reattach.uncheck()
+      await expect(format, 'back at the format the person picked, not reset').toHaveValue('wav')
     } finally {
       await closeStudio(studio)
     }

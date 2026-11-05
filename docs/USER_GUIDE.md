@@ -341,7 +341,9 @@ that names the file being converted.)
   captions into a new MP4. Captions are English only. They burn into the
   original video, not the platform exports. **Save .srt** keeps the captions for
   the whole video, even with **Burn captions over selected clip range only**
-  checked; only **Burn into video** follows that box. **Size** is a scale, not pixels:
+  checked; only **Burn into video** follows that box. The **Preset** buttons set the style
+  in one click and the one in use shows as pressed (move any dial and none does); a line
+  under them says the style shows up in the burned-in video, not in the preview. **Size** is a scale, not pixels:
   the readout beside it says how tall the text comes out on the video you have
   open. On a
   vertical or square video the same Size makes the same share of the picture's
@@ -601,7 +603,9 @@ never called loaded.
   that holds sound alone, a podcast for example, opens as sound: there is no
   picture to put it back on, so the box is not offered); if you removed parts, or the
   video is in a format an MP4 cannot hold as it is (a `.wmv`, for example), the
-  picture is re-encoded, which takes longer. While it works the row
+  picture is re-encoded, which takes longer. With **Re-attach to video** ticked the **Format**
+  and **Bitrate** choices are not shown, because the sound goes in as AAC; untick it and
+  **Format** is back at the one you had picked. While it works the row
   says which step it is on — "Step 1 of 2 — measuring loudness", then "Step 2
   of 2 — rendering" — because each step has its own progress bar. A re-attach with
   no parts removed keeps the picture exactly as it is, but it still converts the sound
@@ -659,7 +663,12 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    or transparent one. If a sample title, a bar or another word is where the word would start
    and neither color reads against it, the word starts in the next corner that is clear, or the
    nearest clear spot. Change the words, size and color in **Properties**.
-   To resize a layer, drag a corner handle. A picture or text keeps its proportions, so a logo
+   Words you copy elsewhere and paste (Ctrl+V) while the canvas is open, and no text box
+   has focus, become a text layer like that one holding them (one **Undo** removes it);
+   on the empty start screen there is no canvas to put them on, so imagii asks you to paste a
+   picture or pick a template instead.
+   The selected layer has a dashed frame a few pixels outside it, so it never reads as the
+   layer's own outline. To resize a layer, drag a corner handle. A picture or text keeps its proportions, so a logo
    is never stretched by accident; hold **Shift** while you drag to stretch it freely. A
    rectangle or ellipse stretches, and Shift keeps its proportions instead. The handles on the
    sides always stretch. A word's **Size (px)** in Properties is the size it is drawn at, also

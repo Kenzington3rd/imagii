@@ -890,10 +890,14 @@ export function RecordStudio(): JSX.Element {
                   </select>
                 </label>
               ) : null}
-              <p className="text-xs text-ink-dim">
-                Your webcam is added to a corner of the recording. You can see it in the
-                preview while you record.
-              </p>
+              {/* T-165 (2): said only when a webcam WILL be recorded (the box ticked and a camera there), the Corner picker's gate: under the
+                  unticked box or "No camera found" the take is screen-only and the sentence would promise a corner nothing goes in. */}
+              {showCam && cams.length > 0 ? (
+                <p className="text-xs text-ink-dim">
+                  Your webcam is added to a corner of the recording. You can see it in the
+                  preview while you record.
+                </p>
+              ) : null}
             </div>
             <div className="card p-4 flex flex-col gap-3 text-sm">
               <PanelHeader icon="folder">Output</PanelHeader>

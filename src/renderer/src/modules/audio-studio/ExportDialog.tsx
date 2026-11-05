@@ -140,21 +140,24 @@ export function ExportDialog(): JSX.Element | null {
       <PanelHeader icon="download">Export</PanelHeader>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <label className="flex items-center gap-1.5">
-          <span className="text-ink-muted text-xs">Format</span>
-          <select
-            className="bg-bg-base rounded px-2 py-1 disabled:opacity-50"
-            value={format}
-            onChange={(e) => setFormat(e.target.value as AudioOutputFormat)}
-            disabled={Boolean(source.fromVideo && muxBack)}
-          >
-            {FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {AUDIO_FORMAT_LABELS[f]}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/* T-165 (3): an .mp4 re-attach has no audio format to pick (the sound goes in as AAC), so Format hides under the condition Bitrate does; the `format` state is
+            untouched, so unticking brings it back at the person's pick. */}
+        {!(source.fromVideo && muxBack) ? (
+          <label className="flex items-center gap-1.5">
+            <span className="text-ink-muted text-xs">Format</span>
+            <select
+              className="bg-bg-base rounded px-2 py-1"
+              value={format}
+              onChange={(e) => setFormat(e.target.value as AudioOutputFormat)}
+            >
+              {FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {AUDIO_FORMAT_LABELS[f]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {(format === 'mp3' || format === 'aac') &&
         !(source.fromVideo && muxBack) ? (
           <label className="flex items-center gap-1.5">

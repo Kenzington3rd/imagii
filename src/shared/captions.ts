@@ -144,6 +144,17 @@ export const CAPTION_STYLE_PRESETS: readonly CaptionStylePreset[] = [
   }
 ] as const
 
+/**
+ * T-165 fold: is `style` the preset `preset`? True when every key the preset spells has an equal value in the style; a key the preset leaves out is not compared.
+ * `outlineWidth` is optional on a style and absent means `DEFAULT_OUTLINE_WIDTH` (T-164 (2): the weight such a style burns with), so an absent one is read as that
+ * weight on both sides: a style saved without a weight equals a preset that spells the default, and not one that spells 4 or 5. The panel marks the matching preset
+ * pressed; moving any dial off the preset leaves none.
+ */
+export function captionStyleMatches(style: CaptionStyle, preset: CaptionStyle): boolean {
+  const read = (s: CaptionStyle, key: keyof CaptionStyle): unknown => (key === 'outlineWidth' ? (s.outlineWidth ?? DEFAULT_OUTLINE_WIDTH) : s[key])
+  return (Object.keys(preset) as Array<keyof CaptionStyle>).every((key) => read(style, key) === read(preset, key))
+}
+
 export interface BurnInRequest {
   jobId: string
   videoPath: string

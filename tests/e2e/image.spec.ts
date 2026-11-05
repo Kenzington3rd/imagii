@@ -6320,3 +6320,293 @@ test.describe('Image Studio - template tile previews line up across a row (T-164
     }
   })
 })
+
+// ── T-165 Track A: pastes, selects and names things the way a person expects ─────────────────────────────────────────────────────────────────
+//
+// (1) T-164 (7)'s guard returned for ANY text-entry target before it looked at the clipboard, so a snipped picture pasted with focus in Properties' Name box
+// added nothing and said nothing. (fold) A clipboard with words and no picture did nothing beside "Drop, paste (Ctrl+V), or pick a file." (6) The selection
+// frame was the accent on the rectangle tool's own accent stroke. (7) An emote template's name was a description with unitless numbers. Every clipboard
+// here is REAL (Electron's `clipboard`, cleared first) and so is every chord.
+test.describe('Image Studio - pastes, selection frame and emote names (T-165 Track A)', () => {
+  async function putOnClipboard(studio: Studio, what: 'picture' | 'words' | 'both' | 'blank'): Promise<void> {
+    await studio.app.evaluate(
+      async ({ clipboard, nativeImage }, { kind, dataUrl }) => {
+        clipboard.clear()
+        if (kind === 'picture') clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+        else if (kind === 'words') clipboard.writeText('PASTED WORDS')
+        else if (kind === 'both') clipboard.write({ text: 'PASTED WORDS', image: nativeImage.createFromDataURL(dataUrl) })
+        else clipboard.writeText('   \n  ')
+      },
+      { kind: what, dataUrl: `data:image/png;base64,${readFileSync(studio.fixturePng).toString('base64')}` }
+    )
+    await studio.window.waitForTimeout(800)
+  }
+
+  const WORDS = 'PASTED WORDS'
+  const REFUSAL = 'Paste a picture to start from it, or pick a template to add your text to.'
+
+  /** The canvas open with its one text layer, and the focus on the canvas (a click on empty paper) rather than in a field. */
+  async function openCanvasFocusedOnPaper(window: Page): Promise<void> {
+    await startBlank(window)
+    await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+    await clickDoc(window, { x: 1100, y: 750 })
+    await expect(field(window, 'Name')).toHaveCount(0)
+  }
+
+  test('a picture alone on the clipboard, pasted with focus in the Name box, adds the image layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-picture-field')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const name = field(window, 'Name')
+      await expect(name).toBeVisible()
+      await putOnClipboard(studio, 'picture')
+      await name.click()
+      await expect(name).toBeFocused()
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 2)
+      await expectShapeCount(window, 2)
+      expect((await lastShape(window)).cls).toBe('Image')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control (T-164): words AND a picture pasted into the focused Name box put the words in the box and add no layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-both-field')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const name = field(window, 'Name')
+      await putOnClipboard(studio, 'both')
+      await name.click()
+      await window.keyboard.press('Control+a')
+      await window.keyboard.press('Control+v')
+      await expect(name).toHaveValue(WORDS)
+      await window.waitForTimeout(1200)
+      await expectLayerCount(window, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: words alone pasted into the focused Name box fill the box and add no text layer', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-words-field')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const name = field(window, 'Name')
+      await putOnClipboard(studio, 'words')
+      await name.click()
+      await window.keyboard.press('Control+a')
+      await window.keyboard.press('Control+v')
+      await expect(name).toHaveValue(WORDS)
+      await window.waitForTimeout(1200)
+      await expectLayerCount(window, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('words alone on the clipboard, pasted with the canvas open and no field focused, add one selected text layer holding them, and Ctrl+Z removes it', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-words')
+    const { window } = studio
+    try {
+      await openCanvasFocusedOnPaper(window)
+      await putOnClipboard(studio, 'words')
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 2)
+      await expectShapeCount(window, 2)
+      const shapes = await stageShapes(window)
+      expect(shapes.filter((s) => s.text === WORDS), 'exactly one layer holds the pasted words').toHaveLength(1)
+      expect(shapes[1]?.cls).toBe('Text')
+      expect(shapes[1]?.text).toBe(WORDS)
+      // Selected: the Properties card is on it and the Transformer is attached to it.
+      await expect(field(window, 'Text')).toHaveValue(WORDS)
+      expect(await transformerClasses(window)).toEqual(['Text'])
+
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, 1)
+      expect((await stageShapes(window)).some((s) => s.text === WORDS)).toBe(false)
+      expect(await toastsAfterSettling(studio)).toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: a whitespace-only clipboard adds nothing and raises no toast', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-blank')
+    const { window } = studio
+    try {
+      await openCanvasFocusedOnPaper(window)
+      await putOnClipboard(studio, 'blank')
+      await window.keyboard.press('Control+v')
+      await window.waitForTimeout(1500)
+      await expectLayerCount(window, 1)
+      expect(await toastsAfterSettling(studio)).toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('words alone pasted on the empty start screen say what to paste instead, and nothing is added', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-words-start')
+    const { window } = studio
+    try {
+      await putOnClipboard(studio, 'words')
+      await window.keyboard.press('Control+v')
+      await expect.poll(() => readToastLog(window), { timeout: 10_000 }).toEqual([REFUSAL])
+      await window.waitForTimeout(800)
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+      await expect(window.locator('button.card')).toHaveCount(CANVAS_TEMPLATES.length)
+      await expect(window.locator(LAYERS)).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  /** What a person sees of the selection frame: the Transformer's own props, read off the real stage. */
+  function transformerFrame(window: Page): Promise<{ padding: number; borderDash: number[] }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        findOne(sel: string): { padding(): number; borderDash(): number[] } | undefined
+      }
+      const tr = stage.findOne('Transformer')
+      if (!tr) throw new Error('no Transformer on the stage')
+      return { padding: tr.padding(), borderDash: tr.borderDash() }
+    })
+  }
+
+  test('the selection frame stands 4 px off the layer and is dashed', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-frame-props')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await expect.poll(() => transformerNodeCount(window), { timeout: 10_000 }).toBe(1)
+      expect(await transformerFrame(window)).toEqual({ padding: 4, borderDash: [6, 4] })
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a fresh rectangle selected on the white page: the page shows between its stroke and the frame, and the frame is a few pixels out', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-frame-gap')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await window.keyboard.press('r')
+      await expect(window.getByText('Tool: Rectangle')).toBeVisible()
+      await dragOnStage(window, { x: 200, y: 150 }, { x: 400, y: 300 })
+      await expectLayerCount(window, 2)
+      await toolbar.getByRole('button', { name: 'Select' }).click()
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Rect'])
+      // Take the pointer off the canvas so no hover state is painted into the shot.
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(400)
+
+      const rect = await lastShape(window)
+      const geom = await stageGeom(window)
+      // A quarter of the way along the top edge, not its middle: the middle is where the top handle and the rotation handle's stalk sit, and a corner is a handle too.
+      // The span is 30 px wide so it holds a dash of the frame whatever the dash's phase.
+      const x = Math.round(geom.left + (rect.x + (rect.width as number) / 4) * geom.scale) - 15
+      // The stroke is centred on the box's edge: its outer edge is half a stroke above the top. Rows are counted up from there.
+      const edge = Math.round(geom.top + rect.y * geom.scale - ((rect.strokeWidth ?? 0) / 2) * geom.scale)
+      const shot = await window.screenshot()
+      const white = hexRgb('#ffffff')
+      // The gap: the three rows just outside the stroke are the page (the frame stands 4 px off the layer; on the unpadded frame it was ON the stroke).
+      expect(await pixelsOtherThanBackground(studio, shot, { x, y: edge - 3, w: 30, h: 3 }, white), `rows ${edge - 3}-${edge - 1} above the stroke at x ${x}-${x + 29}: the page, no ink`).toBe(0)
+      // The frame: dashes of it, 4 to 7 rows out.
+      expect(await pixelsOtherThanBackground(studio, shot, { x, y: edge - 7, w: 30, h: 4 }, white), `rows ${edge - 7}-${edge - 4} above the stroke at x ${x}-${x + 29}: the frame's dashes`).toBeGreaterThan(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the template grid names the blank emote "Emote · Blank circle", and both emote tiles say they export the 3-PNG pack', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-emote-names')
+    const { window } = studio
+    try {
+      const tiles = window.locator('button.card')
+      const blank = tiles.filter({ has: window.getByText('Emote · Blank circle', { exact: true }) })
+      const text = tiles.filter({ has: window.getByText('Emote · Text "POG"', { exact: true }) })
+      await expect(blank).toHaveCount(1)
+      await expect(text).toHaveCount(1)
+      await expect(blank).toContainText('28, 56, and 112 px')
+      await expect(text).toContainText('28, 56, and 112 px')
+      await expect(window.getByText('auto-exports', { exact: false })).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+
+  // The fold is a second thing a paste can do, so the held-chord guard (T-154 (5)) has to stand in front of it too: a held Ctrl+V is one text layer, not one per key repeat.
+  test('a held Ctrl+V with words on the clipboard adds ONE text layer; a fresh Ctrl+V adds another', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-held-words')
+    const { window } = studio
+    try {
+      await openCanvasFocusedOnPaper(window)
+      await putOnClipboard(studio, 'words')
+      // The first down is the press, the next are the key's auto-repeats.
+      await window.keyboard.down('Control')
+      await window.keyboard.down('v')
+      await window.keyboard.down('v')
+      await window.keyboard.down('v')
+      await window.keyboard.up('v')
+      await window.keyboard.up('Control')
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(800)
+      await expectLayerCount(window, 2)
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 3)
+      await window.waitForTimeout(500)
+      await expectLayerCount(window, 3)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+
+  // The pasted layer is the "+ Add text" layer with the person's words: sized, placed, inked and set in the face for THE OPEN document (`textLayerFor(doc)`), not a fixed look.
+  // The dark "yt-thumb-bold" template is the document: its ink is decided against what is drawn there (light on dark), so a layer made for another document differs.
+  test('a pasted text layer looks exactly like "+ Add text" on the same dark template (size, place, ink, face)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t165-paste-look')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      expect(t.doc.background, 'the document is dark').not.toBe('#ffffff')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const n = t.doc.layers.length
+      const look = (s: ShapeInfo): Record<string, unknown> => ({ cls: s.cls, x: s.x, y: s.y, fontSize: s.fontSize, fill: s.fill, rotation: s.rotation, scaleX: s.scaleX, scaleY: s.scaleY, opacity: s.opacity, fontFamily: (s as ShapeInfo & { fontFamily?: string }).fontFamily })
+
+      await putOnClipboard(studio, 'words')
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, n + 1)
+      const pasted = await lastShape(window)
+      expect(pasted.text).toBe(WORDS)
+
+      await window.keyboard.press('Control+z')
+      await expectLayerCount(window, n)
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, n + 1)
+      const added = await lastShape(window)
+      expect(added.text).toBe('Text')
+      expect(look(pasted), 'the pasted layer is the "+ Add text" layer, but for its words').toEqual(look(added))
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

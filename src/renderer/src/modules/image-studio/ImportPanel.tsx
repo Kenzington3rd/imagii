@@ -103,7 +103,10 @@ export function ImportPanel(): JSX.Element {
       if (anyDialogClaim()) return
       // T-164 (7): a text field the person is typing in owns the paste, as it owns every other studio key (`focusOwnsKey`): a clipboard holding text AND a picture (an
       // office app writes both) added a layer and swallowed the text. No `preventDefault`, so the field gets its text.
-      if (e.target instanceof HTMLElement && isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return
+      // T-165 (1): but only when the clipboard HAS text for the field to take: a snipped screenshot (a picture and no text) pasted with focus back in Properties' Name or Text box
+      // (after an alt-tab) added nothing and said nothing, where before T-164 it added the picture. So the guard asks the clipboard, and a picture alone falls through to the loop below.
+      const clipboardHasText = Array.from(e.clipboardData?.types ?? []).includes('text/plain')
+      if (clipboardHasText && e.target instanceof HTMLElement && isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return
       if (pasteHeld) {
         e.preventDefault()
         return
@@ -119,6 +122,17 @@ export function ImportPanel(): JSX.Element {
             return
           }
         }
+      }
+      // T-165 (fold): a clipboard with words and no picture, and no text field to take them (a field returned above), did nothing and said nothing beside "Drop, paste (Ctrl+V), or
+      // pick a file." With a canvas open the words become the "+ Add text" layer (selected, one undo step); on the empty start screen there is no canvas to put them on, so it says so.
+      // The layer count is read now, not from the render's closure: this listener is installed once.
+      const words = (e.clipboardData?.getData('text/plain') ?? '').trim()
+      if (!words) return
+      if (useCanvasStore.getState().doc.layers.length > 0) {
+        addLayer({ ...textLayerFor(useCanvasStore.getState().doc), text: words })
+        e.preventDefault()
+      } else {
+        toast.error('Paste a picture to start from it, or pick a template to add your text to.')
       }
     }
     const releaseHeld = (): void => {

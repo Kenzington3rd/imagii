@@ -13657,3 +13657,111 @@ test.describe('T-164 (4)-(6): the closed-video card and the Compile card', () =>
     }
   })
 })
+
+// ── T-165 (4): a held Enter on "+ Log post" logs one post ────────────────────────────────────────────────────────────────────────────────────
+//
+// The button refused a double-click's second press (`isRepeatPress`, T-139 (9)) but not a held Enter: the first press logged the post and cleared the name, and each auto-repeat (a
+// keyboard click, `detail` 0) raised "Add a clip name first" - the T-141 (4) class. `onKeyDown={ignoreHeldEnter}`, as the sibling add buttons have.
+test.describe('T-165 (4): a held Enter on "+ Log post" is one post and raises no "Add a clip name first"', () => {
+  test('one keydown and five repeats: exactly one post is logged, on disk, and no red toast', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchWithVideo('t165-log-held')
+    const { app, window, userDataDir } = studio
+    try {
+      const card = postCard(window)
+      await card.getByPlaceholder('Clip name').fill('Held clip')
+      const log = card.getByRole('button', { name: '+ Log post' })
+      await log.focus()
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(card.getByText('Logged posts (1)')).toBeVisible()
+      await window.waitForTimeout(1200)
+      const toasts = await readToastLog(window)
+      expect(toasts.filter((t) => t === 'Added to your posting log'), 'said once').toHaveLength(1)
+      expect(toasts.filter((t) => /Add a clip name first/.test(t)), 'and no error after it').toEqual([])
+      await expect
+        .poll(() => (readConfig(userDataDir).postingDiary as unknown[] | undefined)?.length ?? 0, { timeout: 15_000, intervals: [200] })
+        .toBe(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a fresh Enter after the key is let go is another decision: a second name logs a second post', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchWithVideo('t165-log-fresh')
+    const { app, window } = studio
+    try {
+      const card = postCard(window)
+      const log = card.getByRole('button', { name: '+ Log post' })
+      for (const name of ['First clip', 'Second clip']) {
+        await card.getByPlaceholder('Clip name').fill(name)
+        await log.focus()
+        await window.keyboard.press('Enter')
+      }
+      await expect(card.getByText('Logged posts (2)')).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-165 (5) and fold: the caption style says it has no live preview, and the preset in use is shown pressed ────────────────────────────────
+//
+// BRANDING "say what a control does not do": ColorGradePanel says its changes show in the exported file; the caption dials burn in and show nowhere in the player, and said nothing.
+// One line under the Preset row. And each preset button carries `aria-pressed` (CropOverlay's pressed look) when the style equals it (`captionStyleMatches`): moving any dial leaves none pressed.
+test.describe('T-165 (5): the caption style line and the pressed preset', () => {
+  test('the no-preview line is on screen; a preset click presses that button and no other; moving Size leaves none pressed', async () => {
+    test.setTimeout(120_000)
+    const studio = await launchHome('t165-captions')
+    const { app, window, userDataDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'seeded.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:01,000\nfirst line\n', 'utf8')
+      const projectPath = path.join(root, `captions165-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath }
+        }),
+        'utf8'
+      )
+      await stubDialogs(app, { open: [projectPath], save: [] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+
+      const card = captionsCard(window)
+      await expect(card.getByText('Style changes show up in the burned-in video, not in this preview.', { exact: true })).toBeVisible()
+
+      const names = ['TikTok bold', 'Reels minimal', 'Subtle subtitle', 'Big-outline accessibility']
+      const pressed = async (): Promise<Array<string | null>> =>
+        Promise.all(names.map((n) => card.getByRole('button', { name: n, exact: true }).getAttribute('aria-pressed')))
+      expect(await pressed(), 'the default style is no preset: all four say so').toEqual(['false', 'false', 'false', 'false'])
+      for (let i = 0; i < names.length; i++) {
+        await card.getByRole('button', { name: names[i], exact: true }).click()
+        await expect.poll(pressed).toEqual(names.map((_, j) => (j === i ? 'true' : 'false')))
+      }
+      await expect(card.getByRole('button', { name: 'Big-outline accessibility', exact: true }), 'the pressed look is the accent fill').toHaveClass(/bg-accent/)
+      await expect(card.getByRole('button', { name: 'TikTok bold', exact: true })).not.toHaveClass(/bg-accent/)
+
+      await card.getByRole('slider', { name: 'Caption size' }).fill('72')
+      await expect.poll(pressed, 'Size moved off the preset: none is pressed').toEqual(['false', 'false', 'false', 'false'])
+      await card.getByRole('button', { name: 'TikTok bold', exact: true }).click()
+      await expect.poll(pressed).toEqual(['true', 'false', 'false', 'false'])
+      await card.locator('select').selectOption('top')
+      await expect.poll(pressed, 'Position moved too').toEqual(['false', 'false', 'false', 'false'])
+      await card.getByRole('button', { name: 'Reels minimal', exact: true }).click()
+      await expect.poll(pressed).toEqual(['false', 'true', 'false', 'false'])
+      await card.locator('input[type="color"]').nth(1).fill('#101010')
+      await expect.poll(pressed, 'the Outline colour moved too (it is part of the preset)').toEqual(['false', 'false', 'false', 'false'])
+    } finally {
+      await app.close()
+    }
+  })
+})

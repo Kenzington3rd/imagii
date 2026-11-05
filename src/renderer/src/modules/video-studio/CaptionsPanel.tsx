@@ -10,6 +10,7 @@ import {
   captionPhaseLabel,
   captionSizeReadout,
   captionsReadyMessage,
+  captionStyleMatches,
   clearedTranscriptsMessage,
   clearTranscriptsQuestion,
   staleCaptionsMessage
@@ -527,17 +528,26 @@ export function CaptionsPanel(): JSX.Element | null {
               good preset; the dials below stay editable for fine-tuning. */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-ink-muted">Preset</span>
-            {CAPTION_STYLE_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                title={preset.hint}
-                onClick={() => setStyle(preset.style)}
-                className="px-2 py-0.5 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover text-xs transition-colors"
-              >
-                {preset.label}
-              </button>
-            ))}
+            {CAPTION_STYLE_PRESETS.map((preset) => {
+              // T-165 fold: the preset in use is pressed (CropOverlay's look); a dial moved off it leaves none.
+              const pressed = captionStyleMatches(style, preset.style)
+              return (
+                <button
+                  key={preset.id}
+                  title={preset.hint}
+                  onClick={() => setStyle(preset.style)}
+                  aria-pressed={pressed}
+                  className={`px-2 py-0.5 rounded border text-xs transition-colors ${
+                    pressed ? 'bg-accent text-bg-base border-accent' : 'border-ink-dim/30 hover:border-accent hover:bg-bg-hover'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              )
+            })}
           </div>
+          {/* T-165 (5): BRANDING "say what a control does not do": the player shows the source as imported; the style is applied by the burn. */}
+          <p className="text-ink-dim">Style changes show up in the burned-in video, not in this preview.</p>
           <div className="grid grid-cols-2 gap-2">
             {/* T-89: this was "Font px", and it is not pixels — libass scales
                 the number against a 288-line script, so the default 32 paints

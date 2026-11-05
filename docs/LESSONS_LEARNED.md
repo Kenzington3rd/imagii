@@ -14,6 +14,78 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-165 (round 114), Track A: Stream Graphics pastes, selects and names things the way a person expects
+
+The fifty-first sweep, Track A (items 1, 6, 7 and a fold).
+
+### (1) [MED] - A picture pasted while a text field had focus added nothing and said nothing
+
+- **Bug.** A snipped screenshot pasted with focus back in Properties' Name or Text box (after an alt-tab) added no layer and gave no sign; before T-164 (7) it added the picture.
+- **Root cause.** T-164 (7)'s guard returned for ANY text-entry target before it looked at the clipboard. It was written for a clipboard with text AND a picture, where the field must get the text; a clipboard with a picture and no text has nothing for the field to take.
+- **Fix.** The guard asks the clipboard's types and returns only when the target is a text-entry element AND `text/plain` is among them. A picture alone falls through to the image loop and adds the layer with `preventDefault`, whatever has focus. The order is unchanged (dialog claim, text-field guard, `pasteHeld`, the rest): a held Ctrl+V in a field with text on the clipboard stays the field's, and every other held chord still reaches `pasteHeld` before anything is added.
+- **Test.** image.spec.ts "T-165 Track A" (a real `clipboard.writeImage`, cleared first, pasted with the Name box focused: Layers (2) and an Image on the stage; controls: text AND a picture into the box pastes the text and adds no layer, text alone into the box adds no text layer); interactionWiring.test.ts T-164 (7) (the guard asks `text/plain` before it, in place). Red on 578ec34 (Layers (1)).
+- **Lesson.** **A guard that stands down for a field has to ask what the field can take.** "A text field has focus" is not "this paste is text".
+
+### Fold (UX51-1) - Words pasted with no text field focused did nothing
+
+- **Bug.** Ctrl+V with only words on the clipboard did nothing and said nothing, beside "Drop, paste (Ctrl+V), or pick a file."
+- **Root cause.** The paste listener only knew pictures.
+- **Fix.** After the picture loop, the clipboard's text is trimmed. Empty adds nothing and raises nothing. With layers on the canvas (read from the store when the paste lands: the listener is installed once) it adds `{ ...textLayerFor(doc), text }`, the "+ Add text" layer holding the person's words, selected, one undo step, with `preventDefault`. On the empty start screen there is no canvas, so it raises "Paste a picture to start from it, or pick a template to add your text to." and adds nothing. A held Ctrl+V is still one paste.
+- **Test.** image.spec.ts "T-165 Track A" (one Text layer holding PASTED WORDS, selected, Ctrl+Z removes it; a whitespace-only clipboard adds nothing and toasts nothing; the exact refusal toast on the start screen with no layers; a held chord adds ONE text layer and a fresh one another). Red on 578ec34 except the whitespace control.
+- **Lesson.** **An input the app accepts in one place and ignores in another is a silent gap.** Each state either does the obvious thing or says why not.
+
+### (6) [LOW] - The selection frame sat on the rectangle's own stroke
+
+- **Bug.** `makeRectLayer` strokes in ACCENT and T-164 (8) drew the Transformer's border in ACCENT on the box's edge, so on a fresh rectangle the frame could not be told from the stroke (on the "Accent bar" template layer it vanished into the fill).
+- **Root cause.** T-164 (8) fixed the frame's color against Konva's stock blue and did not ask what else on the canvas is that color.
+- **Fix.** `padding={4}` and `borderDash={[6, 4]}` on the Transformer; the token colors, anchors, ratio rules and `boundBoxFunc` are unchanged. DESIGN_GUIDE's Transformer sentence says so.
+- **Test.** image.spec.ts "T-165 Track A" (`padding()` is 4 and `borderDash()` is [6, 4] on the real stage; a screenshot of a fresh rectangle on the white page, read with the bundled ffmpeg: the three rows just outside the stroke are the page, and dashes of the frame are 4 to 7 rows out). Red on 578ec34: the frame was ON the stroke (30 of 30 pixels in the row just outside it carried ink, none 4 to 7 rows out). The sample is a quarter along the top edge, not its middle, where the top handle and the rotation stalk sit.
+- **Lesson.** **A color fixed against the library's default has to be checked against the app's own.** The fix for "a second accent" made the frame the same accent as the thing it frames.
+
+### (7) [LOW] - An emote template's name was a description with unitless numbers
+
+- **Bug.** "Emote · auto-exports 28/56/112 trio" against BRANDING "A label names the thing"; and every 112x112 PNG export writes the pack, so the name singled out one of two templates that both do it.
+- **Fix.** The blank template is "Emote · Blank circle"; the "Emote · Text "POG"" description gains the blank one's sentence, so both tiles say it; the INIT-B comment says the pack is told by the description and by the export. references.spec.ts follows the name.
+- **Test.** image.spec.ts "T-165 Track A" (the grid names "Emote · Blank circle" and no tile says "auto-exports"; both emote tiles say "28, 56, and 112 px"). Red on 578ec34.
+- **Lesson.** **A fact that holds for a whole family belongs on every member or on none, never in one member's name.**
+
+## 2026-11-05 - T-165 (round 114), Track B: Record, Audio Studio and Video Studio say only what is true
+
+The fifty-first sweep, Track B (items 2-5 and a fold).
+
+### (2) [LOW] - The webcam hint showed when no webcam would be recorded
+
+- **Bug.** "Your webcam is added to a corner of the recording..." read under the unticked box (the default) and under "No camera found", where the take is screen-only.
+- **Root cause.** T-164 (10) rewrote the sentence's words and left it where it was, outside the `showCam` gates the Corner picker and the device select sit behind.
+- **Fix.** It renders with the Corner picker: `showCam && cams.length > 0`. Wording unchanged.
+- **Test.** record.spec.ts "T-165 (2)" (unticked: no hint; ticked with no camera: no hint and "No camera found"; ticked with the suite's `stubCameras`: the hint, and unticking removes it); the T-164 (10) case now ticks a stubbed camera first. Red on 578ec34.
+- **Lesson.** **A fix to a sentence has to re-read the condition it sits under.** A promise is true only where the thing it promises will happen; moving or rewording copy is the moment to ask which states can show it.
+
+### (3) [LOW] - Audio Studio's Export card showed a greyed "MP3" beside an .mp4 export
+
+- **Bug.** With "Re-attach to video (output .mp4)" ticked (the state Clean audio opens a video's sound in) the Format select stayed, disabled, while the file written is an .mp4.
+- **Root cause.** Format was disabled for the state and Bitrate hidden for it: two answers to one question.
+- **Fix.** Format hides under the same condition as Bitrate (`source.fromVideo && muxBack`); the `format` state is untouched, so unticking brings it back at the person's pick.
+- **Test.** audio.spec.ts "T-165 (3)" (no Format with Re-attach ticked; unticked it is back at MP3; pick WAV, tick, untick: WAV). Red on 578ec34.
+- **Lesson.** **A control that cannot act is hidden, not greyed, when its value would read as the result.** A disabled select showing "MP3" is a statement about the output.
+
+### (4) [LOW] - A held Enter on "+ Log post" stacked red toasts
+
+- **Bug.** The first Enter logged the post and cleared the name; each auto-repeat raised "Add a clip name first".
+- **Root cause.** The button dropped a double-click's second press (`isRepeatPress`, T-139 (9)) and not a held key's keyboard clicks (`detail` 0): the T-141 (4) class, missed on this button when its siblings were fixed.
+- **Fix.** `onKeyDown={ignoreHeldEnter}`. `add` already refuses a repeat click, as the siblings do.
+- **Test.** video-pipelines.spec.ts "T-165 (4)" (one keydown and five repeats: one post on disk, one "Added" toast, no red; a fresh press after the key is let go is another post). Red on 578ec34.
+- **Lesson.** **A guard added to one add button belongs on all of them.** T-141 (4) fixed the sibling it was reported on; grep the callers of the repeat helpers when a class of bug is named.
+
+### (5) [LOW] and fold - The caption style had no "no live preview" line and no pressed preset
+
+- **Bug.** The dials burn in and show nowhere in the player, and nothing said so (ColorGradePanel does); the preset buttons never showed which one was in use.
+- **Fix.** One line under the Preset row ("Style changes show up in the burned-in video, not in this preview."); `captionStyleMatches(style, preset)` in shared/captions.ts drives `aria-pressed` and CropOverlay's pressed look on each preset. An absent `outlineWidth` is read as the default weight on both sides (T-164 (2)), so a style saved before the field matches a preset that spells 2 and not one that spells 4 or 5.
+- **Test.** captions.test.ts "captionStyleMatches" (each preset matches itself; a one-field change matches none; no two match one style; the outline rule); video-pipelines.spec.ts "T-165 (5)" (the line; each preset click presses that one only; Size and Position leave none). Red on 578ec34.
+- **Lesson.** **Say what a control does not do, and show which choice is in force.** A preset row that cannot tell you which preset you are on is a row of one-way buttons.
+
+---
+
 ## 2026-11-05 - T-164 (round 113), Track A: the sound and the captions keep their promises
 
 The fiftieth sweep, Track A (items 1-3 and a fold).

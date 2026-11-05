@@ -4144,9 +4144,70 @@ test.describe('T-164 (10): the Record card\'s webcam hint is in plain words', ()
     const app = await launchApp(userDataDir)
     try {
       const window = await app.firstWindow()
-      await gotoRecordFromHome(window)
+      // T-165 (2): the sentence is about a webcam that WILL be recorded, so it shows for a ticked box with a camera (stubbed; none in this container).
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('checkbox').nth(1).check()
       await expect(window.getByText('Your webcam is added to a corner of the recording. You can see it in the preview while you record.', { exact: true })).toBeVisible()
       await expect(window.getByText(/composited|preview overlay|the chosen corner/)).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ═══════ T-165 (2): the webcam hint is said only when a webcam will be recorded ═══════
+// The sentence sat outside the `showCam` gates, so it read under the unticked box (the default) and under "No camera found", where the take is screen-only.
+// It renders with the Corner picker now: ticked AND a camera present. (This container has no camera; `stubCameras` presents two, as the T-42 cases do.)
+test.describe('T-165 (2): the Record card\'s webcam hint shows only when a webcam will be recorded', () => {
+  const HINT = 'Your webcam is added to a corner of the recording. You can see it in the preview while you record.'
+  const CAM_WARNING = 'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
+
+  test('the box unticked (the default): no hint; ticked with no camera: no hint, and "No camera found" is on screen', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t165-hint-none')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      const camBox = window.getByRole('checkbox').nth(1)
+      await expect(camBox).not.toBeChecked()
+      await expect(window.getByText(HINT, { exact: true }), 'unticked: nothing is added to the recording').toHaveCount(0)
+      await camBox.check()
+      await expect(window.getByText(CAM_WARNING), 'ticked with no camera: the take is screen-only, and says so').toBeVisible()
+      await expect(window.getByText(HINT, { exact: true }), 'and the card does not also promise a webcam in a corner').toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('ticked with a camera present: the hint is on screen beside the Corner picker, and unticking takes it away', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t165-hint-cam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await stubCameras(window)
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      const camBox = window.getByRole('checkbox').nth(1)
+      await expect(window.getByText(HINT, { exact: true }), 'a camera is plugged in but not ticked').toHaveCount(0)
+      await camBox.check()
+      await expect(window.getByText('Corner', { exact: true })).toBeVisible()
+      await expect(window.getByText(HINT, { exact: true })).toBeVisible()
+      await camBox.uncheck()
+      await expect(window.getByText(HINT, { exact: true })).toHaveCount(0)
     } finally {
       await app.close()
       cleanup(root)

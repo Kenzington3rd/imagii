@@ -364,10 +364,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   },
   {
     id: 'emote-blank-112',
-    // INIT-B (round 15): explicit name so the user knows exporting this
-    // template produces the full Twitch trio (28/56/112), not just the
-    // one 112×112 PNG.
-    name: 'Emote · auto-exports 28/56/112 trio',
+    // INIT-B (round 15): the user must know exporting this template produces the full Twitch trio (28/56/112), not just the one 112×112 PNG.
+    // T-165 (7): the pack is told by the description and by every 112×112 PNG export (ExportDialog), not by the name: a name names the thing (BRANDING), and the other
+    // emote template exports the pack too.
+    name: 'Emote · Blank circle',
     description:
       'Blank 112×112 emote canvas. Export emits a 3-PNG Twitch pack at 28, 56, and 112 px.',
     category: 'emote',
@@ -383,7 +383,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'emote-text',
     name: 'Emote · Text "POG"',
-    description: 'Text emote starting point.',
+    description: 'Text emote starting point. Export emits a 3-PNG Twitch pack at 28, 56, and 112 px.',
     category: 'emote',
     doc: {
       width: 112,

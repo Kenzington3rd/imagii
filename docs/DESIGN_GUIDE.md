@@ -183,7 +183,10 @@ Graphics' selection frame (T-164 (8)): react-konva's `<Transformer>` draws its b
 Konva's stock `rgb(0, 161, 255)`, so `Canvas.tsx` sets `borderStroke` and `anchorStroke` from `ACCENT`
 and `anchorFill` from `INK_BASE`, all imported from `tokens.ts` (an accent line, light handles with an
 accent edge: 3.6:1 on a white page, which is the number that matters there, and 15.5:1 for the fill on
-the near-black). `designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, a toast
+the near-black). The frame is dashed (`borderDash={[6, 4]}`) and stands 4 px off the layer
+(`padding={4}`, T-165 (6)), so it never reads as the layer's own stroke: the rectangle tool strokes in
+the same accent, and a solid frame on the box's edge could not be told from it.
+`designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, a toast
 mark that is not a token, or a Transformer whose three colors are not those imports.
 
 **What the two properties do not reach (T-126 (16)).** `color-scheme: dark` makes a `<select>`'s

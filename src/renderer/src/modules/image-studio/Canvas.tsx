@@ -542,6 +542,10 @@ export function Canvas(): JSX.Element {
               borderStroke={ACCENT}
               anchorStroke={ACCENT}
               anchorFill={INK_BASE}
+              // T-165 (6): the frame stands 4 px off the layer's box and is dashed, so it reads as UI: `makeRectLayer` strokes in the same ACCENT, and a frame ON that stroke could not be
+              // told from it (on the "Accent bar" template layer it vanished into the fill).
+              padding={4}
+              borderDash={[6, 4]}
               // T-140 (3): a corner drag keeps a picture's and a word's proportions (the export carries whatever scaleX / scaleY they end at), and Shift - `inverted` -
               // frees it. A shape stretches, and Shift keeps ITS ratio (Konva's `default`, which is what it always did). The side handles stretch every layer.
               keepRatio={selectedKeepsRatio}

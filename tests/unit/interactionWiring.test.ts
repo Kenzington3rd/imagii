@@ -3157,9 +3157,9 @@ describe('T-139 Track B - the twenty-fifth sweep', () => {
 
   it('(9) the posting log ignores a repeat press; both preset saves ignore one, are claimed before their first await, and are off while the write is out', () => {
     const log = strip(read('modules/video-studio/PostChecklist.tsx'))
-    expect(log).toMatch(/import \{ isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(log).toMatch(/import \{ ignoreHeldEnter, isRepeatPress \} from '\.\.\/\.\.\/lib\/repeatPress'/) // T-165 (4): + ignoreHeldEnter
     expect(log).toMatch(/function add\(e: \{ detail: number \}\): void \{\s*if \(isRepeatPress\(e\)\) return\s*if \(!outputName\.trim\(\)\) \{/)
-    expect(log).toMatch(/<button className="btn-primary px-3 py-1 text-xs self-start" onClick=\{add\}>\s*\+ Log post/)
+    expect(log).toMatch(/<button className="btn-primary px-3 py-1 text-xs self-start" onClick=\{add\} onKeyDown=\{ignoreHeldEnter\}>\s*\+ Log post/) // T-165 (4): a held Enter too
     for (const [rel, label, btn] of [
       ['modules/audio-studio/PresetPanel.tsx', 'Save current', 'btn-primary px-3 py-1 text-xs aria-disabled:opacity-50'],
       ['modules/video-studio/CustomPresetManager.tsx', '\\+ Save preset', 'btn-primary px-4 py-1\\.5 text-sm self-start aria-disabled:opacity-50']
@@ -4478,14 +4478,17 @@ describe('T-164 (7), (9), (10) - the paste listener stands down for a text field
   // references.spec.ts "Asset Library tile previews line up across a row", record.spec.ts "the Record card's webcam hint is in plain words".
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-  it('onPaste asks isTextEntryTarget (with the input type) right after the dialog guard, before it reads the clipboard or prevents anything', () => {
+  it('onPaste asks isTextEntryTarget (with the input type) right after the dialog guard, and only when the clipboard has text (T-165 (1)), before anything is read or prevented', () => {
     const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
     expect(panel).toMatch(/import \{ inputTypeOf, isTextEntryTarget \} from '\.\.\/\.\.\/lib\/keyOwnership'/)
     const body = panel.slice(panel.indexOf('function onPaste'), panel.indexOf('const releaseHeld'))
     const guard = body.indexOf('isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return')
     expect(guard, 'the text-field guard is in onPaste').toBeGreaterThan(-1)
     expect(body.indexOf('anyDialogClaim()'), 'after the dialog claim').toBeLessThan(guard)
-    expect(body.indexOf('clipboardData'), 'before the clipboard is read').toBeGreaterThan(guard)
+    // T-165 (1): the guard asks the clipboard's TYPES (a picture alone falls through to the loop); the items are read after it.
+    expect(body.indexOf("includes('text/plain')"), 'the guard asks whether the clipboard has text').toBeGreaterThan(-1)
+    expect(body.indexOf("includes('text/plain')"), 'and asks before the guard').toBeLessThan(guard)
+    expect(body.indexOf('clipboardData?.items'), 'before the clipboard items are read').toBeGreaterThan(guard)
     expect(body.indexOf('preventDefault'), 'before any preventDefault (the field gets its text)').toBeGreaterThan(guard)
   })
 

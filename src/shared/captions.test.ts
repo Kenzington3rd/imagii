@@ -25,6 +25,7 @@ import {
   tsToSeconds,
   type CaptionsProgress
 } from './captions'
+import { CAPTION_STYLE_PRESETS, captionStyleMatches, DEFAULT_OUTLINE_WIDTH, type CaptionStyle } from './captions'
 
 describe('tsToSeconds — variable-length fractional seconds (Phase 2.13)', () => {
   it('handles standard 3-digit fractions', () => {
@@ -710,5 +711,57 @@ describe('the uncaptioned toast keeps a note as a second sentence (T-163 (3))', 
       expect(text).not.toMatch(/\.$/)
       expect(`${text}. Saved beside it.`).toMatch(/[^.]\. Saved beside it\.$/)
     }
+  })
+})
+
+describe('captionStyleMatches: which preset the style in use is (T-165 fold)', () => {
+  it('each preset matches itself, and a copy of it', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      expect(captionStyleMatches(preset.style, preset.style), preset.id).toBe(true)
+      expect(captionStyleMatches({ ...preset.style }, preset.style), `${preset.id} copy`).toBe(true)
+    }
+  })
+
+  it('a change to any one field of a preset matches no preset', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      const moved: CaptionStyle[] = [
+        { ...preset.style, fontSize: preset.style.fontSize + 1 },
+        { ...preset.style, position: preset.style.position === 'top' ? 'middle' : 'top' },
+        { ...preset.style, primaryColor: '#010203' },
+        { ...preset.style, outlineColor: '#010203' },
+        { ...preset.style, outlineWidth: (preset.style.outlineWidth ?? DEFAULT_OUTLINE_WIDTH) + 1 }
+      ]
+      for (const style of moved) {
+        for (const other of CAPTION_STYLE_PRESETS) {
+          expect(captionStyleMatches(style, other.style), `${preset.id} moved, against ${other.id}: ${JSON.stringify(style)}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('two presets never both match one style (the presets are pairwise different)', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      const matching = CAPTION_STYLE_PRESETS.filter((p) => captionStyleMatches(preset.style, p.style))
+      expect(matching.map((p) => p.id)).toEqual([preset.id])
+    }
+  })
+
+  it('the default style, which no preset is, matches none', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) expect(captionStyleMatches(DEFAULT_CAPTION_STYLE, preset.style), preset.id).toBe(false)
+  })
+
+  it('an outlineWidth the style leaves out is the default weight (T-164 (2)): it equals a preset that spells that weight, and differs from one that does not', () => {
+    const reels = CAPTION_STYLE_PRESETS.find((p) => p.id === 'reels-minimal')!
+    expect(reels.style.outlineWidth, 'the fixture assumption: this preset spells the default weight').toBe(DEFAULT_OUTLINE_WIDTH)
+    const { outlineWidth: _omitted, ...saved } = reels.style
+    expect(captionStyleMatches(saved, reels.style)).toBe(true)
+    const tiktok = CAPTION_STYLE_PRESETS.find((p) => p.id === 'tiktok-bold')!
+    const { outlineWidth: _o2, ...savedTiktok } = tiktok.style
+    expect(captionStyleMatches(savedTiktok, tiktok.style), 'a style saved without a weight burns at 2, not at the preset\'s 4').toBe(false)
+  })
+
+  it('a key the preset leaves out is not compared', () => {
+    const { outlineWidth: _omitted, ...bare } = CAPTION_STYLE_PRESETS[0]!.style
+    expect(captionStyleMatches({ ...bare, outlineWidth: 9 }, bare)).toBe(true)
   })
 })

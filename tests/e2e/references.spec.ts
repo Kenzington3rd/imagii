@@ -2307,7 +2307,7 @@ test.describe('References - → Canvas places the picture wholly on a small canv
       // The canvas that is open when the reference lands: the emote template (112x112).
       await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
-      await window.locator('button.card').filter({ has: window.getByText('Emote · auto-exports 28/56/112 trio', { exact: true }) }).click()
+      await window.locator('button.card').filter({ has: window.getByText('Emote · Blank circle', { exact: true }) }).click()
       await expect(window.getByText('112 × 112')).toBeVisible()
       await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
 
