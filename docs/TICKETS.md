@@ -7673,6 +7673,118 @@ IMG-PREC.
 
 ---
 
+## T-162 — sweep-48 fixes (round 111)
+
+- **Spec:** the forty-eighth sweep's six verified findings (candidate clean pass #1 on 30dd9ce), each confirmed
+  by the expediter against source; four by execution (the empty transcript's whole-video burn on 7.0.2 and 6.1.1,
+  exit 183 "Unable to open"; the multichannel extraction levels on 7.0.2; the 8-channel fold in the repo's Electron
+  31.7.7 / Chromium 126). Privacy, Electron, a11y clean on their whole lens; design reader 1 and QA renderer reader
+  2 clean on their halves; QA, streamer and design each took two readers. Not counted: Close naming "the scan's
+  results" after a scan that found nothing (T-147 counts any scan as a loss on purpose; pinned); a mono voice in a
+  mix up-mixed at -3 dB per side (the deliberate pan law, media.spec "T-161 (3)" neighbours and the mix pins);
+  "selected clip range only" defaulting off (friction); the Reels length (sources conflict). Two tracks, disjoint
+  files.
+
+  **Track A — a transcript with no speech, and the sound of a surround file (items 1-2 and a fold).**
+  1. **[MED] A transcription that finds only non-speech leaves an empty transcript the panel offers to save and
+     burn** (sidecars/whisperManager.ts:302-319; video-studio/CaptionsPanel.tsx:161-169, :493, :516, :605-618). A
+     NEW consequence of T-161 (2): a run whose every cue is a tag is cleaned to `''` and written as a 0-byte .srt,
+     and the panel still stores `srtPath` and `[]`: a green success tick on "No speech found, so there are no
+     captions.", an empty focusable "Transcript preview", the first-run hint gone, Save .srt writing a 0-byte copy
+     and toasting "SRT saved", and Burn into video (whole video) handing the empty file to `subtitles=`
+     (whisperManager.ts:455), which ffmpeg refuses (exit 183) — "Burn-in failed." mapped through userFacingError to
+     "That file looks damaged…". Fix: (a) main: a transcription whose cleaned transcript has no cue removes the
+     run's own file (its name is per run, `<name>-<timestamp>`) and answers `srtPath: null`, `segments: []` (the
+     shared result type says `string | null`); (b) the panel: a null `srtPath` clears that video's transcript and
+     `srtPath` (`setSrtPathFor(startedFor, null)`, the stale check unchanged), so the panel is in its first-run
+     state with the hint and no preview, Save .srt or Burn into video; the toast is neutral (not `toast.success`;
+     the `warning` icon, as the panel's stale answer has it) and keeps "No speech found, so there are no
+     captions."; (c) the whole-video burn reads the
+     transcript through `cleanTranscriptSrt` the way the ranged burn reads it through `shiftSrtToRange`, with the
+     same empty-result branch (no subtitle stage, `captioned: false`) and the same temporary copy when the cleaned
+     text differs, so a transcript from before T-161 burns without its tags and a cue-less one never reaches
+     `subtitles=`.
+  2. **[LOW] A surround file's sound comes out of the extraction 7.6-10 dB under its own level**
+     (audio/extract.ts:117-131). `-ac 2` down-mixes in the s16 output conversion, where swresample normalises the
+     matrix (5.1: by 1/2.414), so EVERY channel drops: executed on 7.0.2, a centre-only 5.1 tone at -24.1 dBFS
+     extracts at -34.7 per side and a front-left-only one at -31.7 (a player: -27.1 and -24.1); 7.1's centre -37.0.
+     With Even volume off, Clean audio's re-attached video and an Audio Studio import of a 5.1/7.1 recording play
+     far below the source, against the Levels copy "Otherwise the export keeps your levels as they are" (the T-161
+     (3) promise). Fix: for a 2-channel target and a probe of more than 2 channels the filter is
+     `${EXTRACT_CLOCK_FILTER},aformat=sample_fmts=fltp:channel_layouts=stereo` — the down-mix happens in float,
+     where swresample does not normalise: fronts at unity, centre and surrounds at 0.7071, LFE dropped (measured:
+     5.1, 5.1(side), 7.1 and AAC 5.1 all match the Web Audio speakers rule). A loud full-range mix can then pass
+     full scale, as it does in a player: the s16 conversion clips and must not wrap (pin it). Mono keeps T-161 (3)'s
+     pan; stereo and a failed probe are unchanged. The transcription's 1-channel extract is unchanged. Update
+     T-161 (3)'s Layer 5 pin that holds the 5.1 output unchanged.
+  Fold (not counted): the comments at audio/extract.ts:34 and audio/probe.ts:92 say ffmpeg picks the stream with
+  the most channels; ffmpeg 7 prefers a default-flagged stream (the ffmpeg reviewer measured a mono-default +
+  stereo file extracting the mono stream while the probe said 2). Say what is true, and that T-110 (ap) holds the
+  mixed-track case.
+  Covering tests: Layer 5 (NEW describes at the end of media.spec.ts), each red on 30dd9ce: a whole-video burn of a
+  0-byte transcript and of a tag-only transcript writes the video uncaptioned and answers `captioned: false` (red:
+  exit 183 / tags burned); a whole-video burn of a transcript with a tag cue and a speech cue draws only the speech
+  (frames at the tag's time match an uncaptioned frame); a centre-only 5.1 tone, a front-left-only 5.1 tone and a
+  centre-only 7.1 tone extract at -3.01 dB / unity / -3.01 dB of the source within 0.1 dB (red: -10.6 / -7.6 /
+  -12.9); a 5.1 file with full-scale in-phase tones on FL, FC and BL extracts clipped, never sign-flipped; stereo
+  and mono unchanged. e2e (NEW describe at the end of video-pipelines.spec.ts; `captions:transcribe` stubbed in
+  main as the suite does, answering `srtPath: null, segments: []`): the panel keeps the first-run hint, shows no
+  "Transcript preview", no Save .srt and no Burn into video, and the toast is not a success toast (red on 30dd9ce).
+  Unit: the whisperManager empty branch (a tag-only whisper output: the file removed, `srtPath: null`;
+  transcribeClean.test.ts), the extract filter for 6 and 8 channels.
+
+  **Track B — the toasts and the templates say what is there (items 3-6).**
+  3. **[LOW] A canceled export batch says "Files already finished are in your folder." when none finished**
+     (video-studio/store/exportQueue.ts:138-141). A fixed string, where Clip Kit's sibling says it only when a file
+     landed (`kitCanceledMessage`, T-113). Fix: a pure `exportCanceledMessage(finished)` beside `runExportBatch` —
+     0 → "Export canceled.", more → the present sentence — counted from the batch's rows that hold an output path
+     when the cancel settles (main sends each job's complete event before the next job starts, so the rows are
+     current). Update every e2e pin of the old sentence to what its scenario produces; BRANDING:71 keeps the
+     sentence as the "something survived" example and says a cancel with nothing finished says only that it was
+     canceled.
+  4. **[LOW] The channel-art template's sample name sits outside both its safe frames** (image-studio/templates.ts
+     :278-284). "YOUR\nCHANNEL" at y 700, 140 px on two lines (Konva lineHeight 1) runs y 700-980, below the
+     TV-safe frame (551-889) and the all-device frame (508-931), against the template's own hint "TV-safe — keep
+     load-bearing text inside". Fix: one line "YOUR CHANNEL" at 140 px, inside the TV-safe frame and below the
+     hint (y about 650), horizontally inside the frame at the default font.
+  5. **[LOW] The whole-video toast says "the highlights are your clips now" after a chat spike's + Clip**
+     (video-studio/store/videoStore.ts:344-345, ChatHighlightPanel.tsx:86-88). Nothing called highlights was found
+     there; the one-name rule (BRANDING) keeps a name for one thing. Fix: `WHOLE_VIDEO_DROPPED_MESSAGE` = "Removed
+     the whole-video clip now that you have added a clip. Press Ctrl+Z to keep it." (true for both finders).
+  6. **[LOW] A 7.1 file in Audio Studio plays and meters without its centre and surrounds**
+     (audio-studio/VolumeMeter.tsx:30-50). The speakers rule covers 1, 2, 4 and 6 channels; an 8-channel input falls
+     back to discrete, so only FL and FR pass (executed: Electron 31.7.7, OfflineAudioContext, the meter's own fold
+     node). `createMediaElementSource` routes playback through the same graph to a stereo destination, so the
+     person HEARS a 7.1 file without its voice, and the meter reads its fronts only. Fix: `WaveformView` passes
+     `source.probe.channels`; for 8 channels the fold is an explicit matrix (ChannelSplitter(8), gains, a
+     ChannelMerger(2)) with item 2's measured coefficients (FL/FR unity; FC, BL/BR, SL/SR 0.7071; LFE dropped); and
+     playback runs source → fold → destination (the spectrum analyser on the fold's output), so what is heard is
+     what is metered for every channel count (mono, stereo and 5.1 are unchanged by it: the destination applies the
+     same speakers rule). Other counts with no speakers rule (3, 5, 7, more than 8) keep the discrete fold under a
+     `// simplification:` comment naming the ceiling. The fold is rebuilt when the channel count changes; the
+     media-element source node is made once per element. Red-first: if the media element hands a 7.1 file to Web
+     Audio with fewer than 8 channels on the unchanged tree, report it and the item is withdrawn.
+  Covering tests: e2e (NEW describes at the end of the shared files), each red on 30dd9ce:
+  video-pipelines.spec.ts — a cancel during a batch's first job toasts exactly "Export canceled." and one after a
+  file finished keeps the folder sentence; a chat spike's + Clip over the untouched whole-video clip toasts the new
+  sentence (the existing pins at :1157 and :1278 move with it); image.spec.ts — the channel-art template's sample
+  text box (Konva client rect) lies inside the TV-safe frame; audio.spec.ts — a 7.1 file with a tone on the centre
+  only reads near full scale in the meter (red: "-60 dB"), the 5.1 and stereo meter cases stay green. Unit:
+  `exportCanceledMessage` both ways; templateTruth's channel-art geometry (vertical box from fontSize × lines inside
+  the TV-safe frame); the 8-channel fold's matrix.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong; STYLE_GUIDE where a ffmpeg rule changes (the multichannel extract, the
+  whole-video burn's cleaned transcript); BRANDING:71 (Track B).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 111)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
